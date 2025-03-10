@@ -2,9 +2,9 @@ import ChatGPTStorage from '../storage.js'
 import { ChaiteStorage } from 'chaite'
 
 /**
- * @extends {ChaiteStorage<import('chaite').ChatPreset>}
+ * @extends {ChaiteStorage<import('chaite').ToolDTO>}
  */
-class LowDBChatPresetsStorage extends ChaiteStorage {
+class LowDBToolSettingsStorage extends ChaiteStorage {
   /**
    *
    * @param { LowDBStorage } storage
@@ -16,30 +16,30 @@ class LowDBChatPresetsStorage extends ChaiteStorage {
      * 集合
      * @type {LowDBCollection}
      */
-    this.collection = this.storage.collection('chat_presets')
+    this.collection = this.storage.collection('tools')
   }
 
   /**
    *
-   * @param key
-   * @returns {Promise<import('chaite').ChatPreset>}
+   * @param {string} key
+   * @returns {Promise<import('chaite').ToolDTO>}
    */
   async getItem (key) {
-
+    return this.collection.findOne({ id: key })
   }
 
   /**
    *
    * @param {string} id
-   * @param {import('chaite').ChatPreset} preset
+   * @param {import('chaite').ToolDTO} tools
    * @returns {Promise<string>}
    */
-  async setItem (id, preset) {
+  async setItem (id, tools) {
     if (id) {
-      await this.collection.updateById(id, preset)
+      await this.collection.updateById(id, tools)
       return id
     }
-    const result = await this.collection.insert(preset)
+    const result = await this.collection.insert(tools)
     return result.id
   }
 
@@ -54,7 +54,7 @@ class LowDBChatPresetsStorage extends ChaiteStorage {
 
   /**
    *
-   * @returns {Promise<import('chaite').ChatPreset[]>}
+   * @returns {Promise<import('chaite').ToolDTO[]>}
    */
   async listItems () {
     return this.collection.findAll()
@@ -65,4 +65,4 @@ class LowDBChatPresetsStorage extends ChaiteStorage {
   }
 }
 
-export default new LowDBChatPresetsStorage()
+export default new LowDBToolSettingsStorage()

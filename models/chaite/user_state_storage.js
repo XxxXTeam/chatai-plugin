@@ -2,12 +2,12 @@ import ChatGPTStorage from '../storage.js'
 import { ChaiteStorage } from 'chaite'
 
 /**
- * @extends {ChaiteStorage<import('chaite').ChatPreset>}
+ * @extends {ChaiteStorage<import('chaite').UserState>}
  */
-class LowDBChatPresetsStorage extends ChaiteStorage {
+export class LowDBUserStateStorage extends ChaiteStorage {
   /**
    *
-   * @param { LowDBStorage } storage
+   * @param {LowDBStorage} storage
    */
   constructor (storage = ChatGPTStorage) {
     super()
@@ -16,30 +16,30 @@ class LowDBChatPresetsStorage extends ChaiteStorage {
      * 集合
      * @type {LowDBCollection}
      */
-    this.collection = this.storage.collection('chat_presets')
+    this.collection = this.storage.collection('user_states')
   }
 
   /**
    *
-   * @param key
-   * @returns {Promise<import('chaite').ChatPreset>}
+   * @param {string} key
+   * @returns {Promise<import('chaite').UserState>}
    */
   async getItem (key) {
-
+    return this.collection.findOne({ id: key })
   }
 
   /**
    *
    * @param {string} id
-   * @param {import('chaite').ChatPreset} preset
+   * @param {import('chaite').UserState} state
    * @returns {Promise<string>}
    */
-  async setItem (id, preset) {
+  async setItem (id, state) {
     if (id) {
-      await this.collection.updateById(id, preset)
+      await this.collection.updateById(id, state)
       return id
     }
-    const result = await this.collection.insert(preset)
+    const result = await this.collection.insert(state)
     return result.id
   }
 
@@ -54,7 +54,7 @@ class LowDBChatPresetsStorage extends ChaiteStorage {
 
   /**
    *
-   * @returns {Promise<import('chaite').ChatPreset[]>}
+   * @returns {Promise<import('chaite').UserState[]>}
    */
   async listItems () {
     return this.collection.findAll()
@@ -64,5 +64,3 @@ class LowDBChatPresetsStorage extends ChaiteStorage {
     await this.collection.deleteAll()
   }
 }
-
-export default new LowDBChatPresetsStorage()

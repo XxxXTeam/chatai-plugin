@@ -1,7 +1,6 @@
 import fs from 'node:fs'
-import { Config } from './utils/config.js'
-import { createServer, runServer } from './server/index.js'
-
+import ChatGPTConfig from './config/config.js'
+import { initChaite } from './models/chaite/cloud.js'
 logger.info('**************************************')
 logger.info('chatgpt-plugin加载中')
 
@@ -36,17 +35,9 @@ for (let i in files) {
 global.chatgpt = {
 
 }
-// 启动服务器
-if (Config.enableToolbox) {
-  logger.info('开启工具箱配置项，工具箱启动中')
-  await createServer()
-  await runServer()
-  logger.info('工具箱启动成功')
-} else {
-  logger.info('提示：当前配置未开启chatgpt工具箱，可通过锅巴或`#chatgpt开启工具箱`指令开启')
-}
+initChaite()
 logger.info('chatgpt-plugin加载成功')
-logger.info(`当前版本${Config.version}`)
+logger.info(`当前版本${ChatGPTConfig.version}`)
 logger.info('仓库地址 https://github.com/ikechan8370/chatgpt-plugin')
 logger.info('文档地址 https://www.yunzai.chat')
 logger.info('插件群号 559567232')

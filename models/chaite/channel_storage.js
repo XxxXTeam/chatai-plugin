@@ -1,18 +1,13 @@
 import ChatGPTStorage from '../storage.js'
+import { ChaiteStorage } from 'chaite'
 
-/**
- * @returns {import('chaite').ChannelsStorage}
- */
-export async function createChannelsStorage () {
-  return new LowDBChannelStorage(ChatGPTStorage)
-}
-
-class LowDBChannelStorage {
+class LowDBChannelStorage extends ChaiteStorage {
   /**
    *
    * @param { LowDBStorage } storage
    */
-  constructor (storage) {
+  constructor (storage = ChatGPTStorage) {
+    super()
     this.storage = storage
     /**
      * 集合
@@ -21,54 +16,50 @@ class LowDBChannelStorage {
     this.collection = this.storage.collection('channel')
   }
 
-  async saveChannel (channel) {
-    await this.collection.insert(channel)
-  }
-
-  async getChannel (id) {
-    return this.collection.collection()
+  /**
+   *
+   * @param {string} key
+   * @returns {Promise<import('chaite').Channel>}
+   */
+  async getItem (key) {
+    return this.collection.findOne({ id: key })
   }
 
   /**
    *
-   * @param name
-   * @returns {Promise<import('chaite').Channel[]>}
+   * @param {string} id
+   * @param {import('chaite').Channel} channel
+   * @returns {Promise<string>}
    */
-  async getChannelByName (name) {
-    return this.collection.find({ name })
-  }
-
-  async deleteChannel (name) {
-    await this.collection.delete({ name })
+  async setItem (id, channel) {
+    if (id) {
+      await this.collection.updateById(id, channel)
+      return id
+    }
+    const result = await this.collection.insert(channel)
+    return result.id
   }
 
   /**
-   * 获取所有渠道
-   * @param {string?} model
+   *
+   * @param {string} key
+   * @returns {Promise<void>}
+   */
+  async removeItem (key) {
+    await this.collection.deleteById(key)
+  }
+
+  /**
+   *
    * @returns {Promise<import('chaite').Channel[]>}
    */
-  async getAllChannels (model) {
-    if (model) {
-      return this.collection.find({ 'options.model': model })
-    }
+  async listItems () {
     return this.collection.findAll()
   }
 
-  /**
-   *
-   * @param {import('chaite').ClientType} type
-   * @returns {Promise<Object[]>}
-   */
-  async getChannelByType (type) {
-    return this.collection.find({ type })
-  }
-
-  /**
-   *
-   * @param {'enabled' | 'disabled'} status
-   * @returns {Promise<*>}
-   */
-  async getChannelByStatus (status) {
-    return this.collection.find({ status })
+  async clear () {
+    await this.collection.deleteAll()
   }
 }
+
+export default new LowDBChannelStorage()

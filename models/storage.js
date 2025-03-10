@@ -137,7 +137,7 @@ export class LowDBCollection {
   /**
    * 创建新文档
    * @param {Object} doc 要插入的文档
-   * @returns {Promise<Object>} 插入的文档（带ID）
+   * @returns {Promise<Object & {id: string}>} 插入的文档（带ID）
    */
   async insert (doc) {
     // 生成唯一ID，如果没有提供
