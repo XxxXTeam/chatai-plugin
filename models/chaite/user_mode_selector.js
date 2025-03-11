@@ -1,4 +1,4 @@
-import { AbstractUserModeSelector } from '../../../../../../../WebstormProjects/node-chaite/src/types/external.js'
+import { AbstractUserModeSelector } from 'chaite'
 
 export class ChatGPTUserModeSelector extends AbstractUserModeSelector {
   /**

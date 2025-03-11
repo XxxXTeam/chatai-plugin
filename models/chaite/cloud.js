@@ -1,13 +1,16 @@
 import { Chaite, ChannelsManager, ChatPresetManager, DefaultChannelLoadBalancer, GeminiClient, OpenAIClient, ProcessorsManager, RAGManager, ToolManager } from 'chaite'
 import ChatGPTConfig from '../../config/config.js'
-import ChatGPTChannelStorage from './channel_storage.js'
-import ChatPresetStorage from './chat_preset_storage.js'
-import ChatGPTToolStorage from './tools_storage.js'
-import ChatGPTProcessorsStorage from './processors_storage.js'
+import { LowDBChannelStorage } from './channel_storage.js'
+import { LowDBChatPresetsStorage } from './chat_preset_storage.js'
+import { LowDBToolsStorage } from './tools_storage.js'
+import { LowDBProcessorsStorage } from './processors_storage.js'
 import { ChatGPTUserModeSelector } from './user_mode_selector.js'
 import { LowDBUserStateStorage } from './user_state_storage.js'
 import { LowDBHistoryManager } from './history_manager.js'
-import { ChatGPTVectorDatabase } from './vector_database.js'
+import { VectraVectorDatabase } from './vector_database.js'
+import ChatGPTStorage from '../storage.js'
+import path from 'path'
+import fs from 'fs'
 
 /**
  * 认证，以便共享上传
@@ -87,18 +90,33 @@ export async function initRagManager (model, dimensions) {
       return results
     }
   }()
-  const ragManager = new RAGManager(ChatGPTVectorDatabase, vectorizer)
+  const vectorDBPath = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.dataDir, 'vector_index')
+  if (!fs.existsSync(vectorDBPath)) {
+    fs.mkdirSync(vectorDBPath, { recursive: true })
+  }
+  const vectorDB = new VectraVectorDatabase(vectorDBPath)
+  await vectorDB.init()
+  const ragManager = new RAGManager(vectorDB, vectorizer)
   return Chaite.getInstance().setRAGManager(ragManager)
 }
 
 export async function initChaite () {
-  const channelsManager = await ChannelsManager.init(ChatGPTChannelStorage, new DefaultChannelLoadBalancer())
-  const toolsManager = await ToolManager.init(ChatGPTConfig.toolsDirPath, ChatGPTToolStorage)
-  const processorsManager = await ProcessorsManager.init(ChatGPTConfig.processorsDirPath, ChatGPTProcessorsStorage)
-  const chatPresetManager = await ChatPresetManager.init(ChatPresetStorage)
+  await ChatGPTStorage.init()
+  const channelsManager = await ChannelsManager.init(new LowDBChannelStorage(ChatGPTStorage), new DefaultChannelLoadBalancer())
+  const toolsDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.toolsDirPath)
+  if (!fs.existsSync(toolsDir)) {
+    fs.mkdirSync(toolsDir, { recursive: true })
+  }
+  const toolsManager = await ToolManager.init(toolsDir, new LowDBToolsStorage(ChatGPTStorage))
+  const processorsDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.processorsDirPath)
+  if (!fs.existsSync(processorsDir)) {
+    fs.mkdirSync(processorsDir, { recursive: true })
+  }
+  const processorsManager = await ProcessorsManager.init(processorsDir, new LowDBProcessorsStorage(ChatGPTStorage))
+  const chatPresetManager = await ChatPresetManager.init(new LowDBChatPresetsStorage(ChatGPTStorage))
   const userModeSelector = new ChatGPTUserModeSelector()
-  const userStateStorage = new LowDBUserStateStorage()
-  const historyManager = new LowDBHistoryManager()
+  const userStateStorage = new LowDBUserStateStorage(ChatGPTStorage)
+  const historyManager = new LowDBHistoryManager(ChatGPTStorage)
   let chaite = Chaite.init(channelsManager, toolsManager, processorsManager, chatPresetManager,
     userModeSelector, userStateStorage, historyManager, logger)
   logger.info('Chaite 初始化完成')
@@ -130,4 +148,7 @@ export async function initChaite () {
     return ChatGPTConfig
   })
   logger.info('Chaite.RAGManager 初始化完成')
+  const token = chaite.getFrontendAuthHandler().generateToken()
+  logger.info(token)
+  chaite.runApiServer()
 }

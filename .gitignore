@@ -1,2 +1,4 @@
 node_modules/
 data/
+utils/processors
+utils/tools

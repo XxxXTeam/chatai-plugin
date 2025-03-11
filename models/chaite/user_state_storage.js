@@ -1,4 +1,3 @@
-import ChatGPTStorage from '../storage.js'
 import { ChaiteStorage } from 'chaite'
 
 /**
@@ -9,7 +8,7 @@ export class LowDBUserStateStorage extends ChaiteStorage {
    *
    * @param {LowDBStorage} storage
    */
-  constructor (storage = ChatGPTStorage) {
+  constructor (storage) {
     super()
     this.storage = storage
     /**

@@ -1,12 +1,11 @@
 import { AbstractHistoryManager } from 'chaite'
-import ChatGPTStorage from '../storage.js'
 
 export class LowDBHistoryManager extends AbstractHistoryManager {
   /**
    *
    * @param { LowDBStorage } storage
    */
-  constructor (storage = ChatGPTStorage) {
+  constructor (storage) {
     super()
     this.storage = storage
     /**

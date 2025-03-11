@@ -1,15 +1,14 @@
-import ChatGPTStorage from '../storage.js'
 import { ChaiteStorage } from 'chaite'
 
 /**
  * @extends {ChaiteStorage<import('chaite').ChatPreset>}
  */
-class LowDBChatPresetsStorage extends ChaiteStorage {
+export class LowDBChatPresetsStorage extends ChaiteStorage {
   /**
    *
    * @param { LowDBStorage } storage
    */
-  constructor (storage = ChatGPTStorage) {
+  constructor (storage) {
     super()
     this.storage = storage
     /**
@@ -64,5 +63,3 @@ class LowDBChatPresetsStorage extends ChaiteStorage {
     await this.collection.deleteAll()
   }
 }
-
-export default new LowDBChatPresetsStorage()

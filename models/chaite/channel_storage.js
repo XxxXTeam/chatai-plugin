@@ -1,12 +1,11 @@
-import ChatGPTStorage from '../storage.js'
 import { ChaiteStorage } from 'chaite'
 
-class LowDBChannelStorage extends ChaiteStorage {
+export class LowDBChannelStorage extends ChaiteStorage {
   /**
    *
    * @param { LowDBStorage } storage
    */
-  constructor (storage = ChatGPTStorage) {
+  constructor (storage) {
     super()
     this.storage = storage
     /**
@@ -61,5 +60,3 @@ class LowDBChannelStorage extends ChaiteStorage {
     await this.collection.deleteAll()
   }
 }
-
-export default new LowDBChannelStorage()

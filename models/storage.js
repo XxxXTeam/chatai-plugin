@@ -25,7 +25,7 @@ export class LowDBStorage {
 
     this.filePath = path.join(directory, filename)
     this.adapter = new JSONFile(this.filePath)
-    this.db = new Low(this.adapter)
+    this.db = new Low(this.adapter, { collections: {} })
     this.initialized = false
   }
 
@@ -348,11 +348,18 @@ export class LowDBCollection {
   }
 }
 
+const dataDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.dataDir)
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true })
+}
+const storageLocation = path.resolve(dataDir, 'storage.json')
+if (!fs.existsSync(storageLocation)) {
+  fs.writeFileSync(storageLocation, JSON.stringify({ collections: {} }))
+}
+
 const ChatGPTStorage = new LowDBStorage({
   filename: 'storage.json',
-  directory: ChatGPTConfig.dataDir
+  directory: dataDir
 })
-
-ChatGPTStorage.init()
 
 export default ChatGPTStorage

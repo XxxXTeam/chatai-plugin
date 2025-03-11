@@ -3,11 +3,11 @@ import { md5 } from '../../utils/common.js'
 
 /**
  * 基于Vectra实现的简单向量数据库，作为默认实现
+ * @implements { import('chaite').VectorDatabase }
  */
-class VectraVectorDatabase {
+export class VectraVectorDatabase {
   constructor (indexFile) {
     this.index = new LocalIndex(indexFile)
-    this.init()
   }
 
   async init () {
@@ -82,9 +82,3 @@ class VectraVectorDatabase {
     await this.index.deleteIndex()
   }
 }
-
-/**
- * 默认向量库 todo
- * @type {import('chaite').VectorDatabase}
- */
-export const ChatGPTVectorDatabase = new VectraVectorDatabase()
