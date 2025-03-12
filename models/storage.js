@@ -348,7 +348,7 @@ export class LowDBCollection {
   }
 }
 
-const dataDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.dataDir)
+const dataDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.chaite.dataDir)
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true })
 }

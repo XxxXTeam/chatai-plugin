@@ -17,7 +17,7 @@ import fs from 'fs'
  * @param apiKey
  * @returns {Promise<import('chaite').User> | null}
  */
-export async function authCloud (apiKey = ChatGPTConfig.cloudApiKey) {
+export async function authCloud (apiKey = ChatGPTConfig.chaite.cloudApiKey) {
   await Chaite.getInstance().auth(apiKey)
   return Chaite.getInstance().getToolsManager().cloudService.getUser()
 }
@@ -56,7 +56,10 @@ export async function initRagManager (model, dimensions) {
       }
       const channel = channels[0]
       const client = await getIClientByChannel(channel)
-      const result = await client.getEmbedding(text)
+      const result = await client.getEmbedding(text, {
+        model,
+        dimensions
+      })
       return result.embeddings[0]
     }
 
@@ -90,7 +93,7 @@ export async function initRagManager (model, dimensions) {
       return results
     }
   }()
-  const vectorDBPath = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.dataDir, 'vector_index')
+  const vectorDBPath = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.chaite.dataDir, 'vector_index')
   if (!fs.existsSync(vectorDBPath)) {
     fs.mkdirSync(vectorDBPath, { recursive: true })
   }
@@ -103,12 +106,12 @@ export async function initRagManager (model, dimensions) {
 export async function initChaite () {
   await ChatGPTStorage.init()
   const channelsManager = await ChannelsManager.init(new LowDBChannelStorage(ChatGPTStorage), new DefaultChannelLoadBalancer())
-  const toolsDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.toolsDirPath)
+  const toolsDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.chaite.toolsDirPath)
   if (!fs.existsSync(toolsDir)) {
     fs.mkdirSync(toolsDir, { recursive: true })
   }
   const toolsManager = await ToolManager.init(toolsDir, new LowDBToolsStorage(ChatGPTStorage))
-  const processorsDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.processorsDirPath)
+  const processorsDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.chaite.processorsDirPath)
   if (!fs.existsSync(processorsDir)) {
     fs.mkdirSync(processorsDir, { recursive: true })
   }
@@ -120,10 +123,10 @@ export async function initChaite () {
   let chaite = Chaite.init(channelsManager, toolsManager, processorsManager, chatPresetManager,
     userModeSelector, userStateStorage, historyManager, logger)
   logger.info('Chaite 初始化完成')
-  chaite.setCloudService(ChatGPTConfig.cloudBaseUrl)
+  chaite.setCloudService(ChatGPTConfig.chaite.cloudBaseUrl)
   logger.info('Chaite.Cloud 初始化完成')
-  ChatGPTConfig.cloudApiKey && await chaite.auth(ChatGPTConfig.cloudApiKey)
-  await initRagManager(ChatGPTConfig.embeddingModel, ChatGPTConfig.dimensions)
+  ChatGPTConfig.chaite.cloudApiKey && await chaite.auth(ChatGPTConfig.chaite.cloudApiKey)
+  await initRagManager(ChatGPTConfig.llm.embeddingModel, ChatGPTConfig.dimensions)
   // 监听Chaite配置变化，同步需要同步的配置
   chaite.on('config-change', obj => {
     const { key, newVal, oldVal } = obj
