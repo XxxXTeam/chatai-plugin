@@ -18,7 +18,9 @@ class ChatGPTConfig {
     // 触发前缀，仅在前缀触发时有效
     togglePrefix: '#chat',
     // 是否开启调试模式
-    debug: false
+    debug: false,
+    // 一般命令的开头
+    commandPrefix: '^#chatgpt'
   }
 
   /**

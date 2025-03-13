@@ -24,7 +24,7 @@ export class LowDBChatPresetsStorage extends ChaiteStorage {
    * @returns {Promise<import('chaite').ChatPreset>}
    */
   async getItem (key) {
-
+    return this.collection.findOne({ id: key })
   }
 
   /**
