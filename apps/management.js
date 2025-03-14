@@ -18,22 +18,24 @@ export class ChatGPTManagement extends plugin {
         {
           reg: `^${cmdPrefix}结束(全部)?对话$`,
           fnc: 'destroyConversation'
-        },
-        ...createCRUDCommandRules(cmdPrefix, '渠道', 'channels'),
-        ...createCRUDCommandRules(cmdPrefix, '预设', 'presets'),
-        ...createCRUDCommandRules(cmdPrefix, '工具', 'tools'),
-        ...createCRUDCommandRules(cmdPrefix, '处理器', 'processors'),
-        createSwitchCommandRules(cmdPrefix, '(预设切换|其他人切换预设)', 'customPreset', 1),
-        createSwitchCommandRules(cmdPrefix, '(调试|debug)(模式)?', 'debug'),
-        ...createCRUDCommandRules(cmdPrefix, '预设切换黑名单', 'blackCustomPreset', false),
-        ...createCRUDCommandRules(cmdPrefix, '预设切换白名单', 'whiteCustomPreset', false),
-        ...createCRUDCommandRules(cmdPrefix, '输入屏蔽词', 'blackPromptWords', false),
-        ...createCRUDCommandRules(cmdPrefix, '输出屏蔽词', 'blackResponseWords', false),
-        ...createCRUDCommandRules(cmdPrefix, '黑名单群', 'blackGroups', false),
-        ...createCRUDCommandRules(cmdPrefix, '白名单群', 'whiteGroups', false),
-        ...createCRUDCommandRules(cmdPrefix, '黑名单用户', 'blackUsers', false),
-        ...createCRUDCommandRules(cmdPrefix, '白名单用户', 'whiteUsers', false)
+        }
       ]
     })
+    this.rules.push(...[
+      ...createCRUDCommandRules.bind(this)(cmdPrefix, '渠道', 'channels'),
+      ...createCRUDCommandRules.bind(this)(cmdPrefix, '预设', 'presets'),
+      ...createCRUDCommandRules.bind(this)(cmdPrefix, '工具', 'tools'),
+      ...createCRUDCommandRules.bind(this)(cmdPrefix, '处理器', 'processors'),
+      createSwitchCommandRules.bind(this)(cmdPrefix, '(预设切换|其他人切换预设)', 'customPreset', 1),
+      createSwitchCommandRules.bind(this)(cmdPrefix, '(调试|debug)(模式)?', 'debug'),
+      ...createCRUDCommandRules.bind(this)(cmdPrefix, '预设切换黑名单', 'blackCustomPreset', false),
+      ...createCRUDCommandRules.bind(this)(cmdPrefix, '预设切换白名单', 'whiteCustomPreset', false),
+      ...createCRUDCommandRules.bind(this)(cmdPrefix, '输入屏蔽词', 'blackPromptWords', false),
+      ...createCRUDCommandRules.bind(this)(cmdPrefix, '输出屏蔽词', 'blackResponseWords', false),
+      ...createCRUDCommandRules.bind(this)(cmdPrefix, '黑名单群', 'blackGroups', false),
+      ...createCRUDCommandRules.bind(this)(cmdPrefix, '白名单群', 'whiteGroups', false),
+      ...createCRUDCommandRules.bind(this)(cmdPrefix, '黑名单用户', 'blackUsers', false),
+      ...createCRUDCommandRules.bind(this)(cmdPrefix, '白名单用户', 'whiteUsers', false)
+    ])
   }
 }

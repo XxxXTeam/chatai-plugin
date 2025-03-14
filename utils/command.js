@@ -34,6 +34,11 @@ export function createCRUDCommandRules (cmdPrefix, name, variable, detail = true
       fnc: `detail${variable}`
     })
   }
+  // todo
+  // 定义对应的函数
+  this[`list${variable}`] = async function (e) {
+
+  }
   return rules
 }
 const switchCommandPreset = {
