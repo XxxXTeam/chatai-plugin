@@ -1,6 +1,7 @@
 import ChatGPTConfig from '../config/config.js'
 import { createCRUDCommandRules, createSwitchCommandRules } from '../utils/command.js'
-import { Chaite } from '../../../../../../WebstormProjects/node-chaite/src/index.js'
+import { Chaite } from 'chaite'
+import { resolve } from 'eslint-plugin-promise/rules/lib/promise-statics.js'
 
 export class ChatGPTManagement extends plugin {
   constructor () {
@@ -22,7 +23,19 @@ export class ChatGPTManagement extends plugin {
         }
       ]
     })
-    this.rules.push(...[
+    this.initCommand(cmdPrefix)
+  }
+
+  async initCommand (cmdPrefix) {
+    const waitForChaite = async () => {
+      while (!Chaite.getInstance()) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+      return Chaite.getInstance()
+    }
+
+    await waitForChaite()
+    this.rule.push(...[
       ...createCRUDCommandRules.bind(this)(cmdPrefix, '渠道', 'channels'),
       ...createCRUDCommandRules.bind(this)(cmdPrefix, '预设', 'presets'),
       ...createCRUDCommandRules.bind(this)(cmdPrefix, '工具', 'tools'),

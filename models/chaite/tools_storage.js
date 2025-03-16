@@ -1,4 +1,4 @@
-import { ChaiteStorage } from 'chaite'
+import { ChaiteStorage, ToolDTO } from 'chaite'
 
 /**
  * @extends {ChaiteStorage<import('chaite').ToolDTO>}
@@ -24,7 +24,8 @@ export class LowDBToolsStorage extends ChaiteStorage {
    * @returns {Promise<import('chaite').ToolDTO>}
    */
   async getItem (key) {
-    return this.collection.findOne({ id: key })
+    const obj = await this.collection.findOne({ id: key })
+    return new ToolDTO({}).fromString(JSON.stringify(obj))
   }
 
   /**
@@ -56,7 +57,8 @@ export class LowDBToolsStorage extends ChaiteStorage {
    * @returns {Promise<import('chaite').ToolDTO[]>}
    */
   async listItems () {
-    return this.collection.findAll()
+    const list = await this.collection.findAll()
+    return list.map(item => new ToolDTO({}).fromString(JSON.stringify(item)))
   }
 
   async clear () {

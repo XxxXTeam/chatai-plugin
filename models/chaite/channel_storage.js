@@ -1,4 +1,4 @@
-import { ChaiteStorage } from 'chaite'
+import { ChaiteStorage, Channel } from 'chaite'
 
 export class LowDBChannelStorage extends ChaiteStorage {
   /**
@@ -21,7 +21,8 @@ export class LowDBChannelStorage extends ChaiteStorage {
    * @returns {Promise<import('chaite').Channel>}
    */
   async getItem (key) {
-    return this.collection.findOne({ id: key })
+    const obj = await this.collection.findOne({ id: key })
+    return new Channel({}).fromString(JSON.stringify(obj))
   }
 
   /**
@@ -53,7 +54,8 @@ export class LowDBChannelStorage extends ChaiteStorage {
    * @returns {Promise<import('chaite').Channel[]>}
    */
   async listItems () {
-    return this.collection.findAll()
+    const list = await this.collection.findAll()
+    return list.map(item => new Channel({}).fromString(JSON.stringify(item)))
   }
 
   async clear () {

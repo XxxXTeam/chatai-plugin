@@ -1,4 +1,4 @@
-import { ChaiteStorage } from 'chaite'
+import { ChaiteStorage, ProcessorDTO } from 'chaite'
 
 /**
  * @extends {ChaiteStorage<import('chaite').Processor>}
@@ -24,7 +24,8 @@ export class LowDBProcessorsStorage extends ChaiteStorage {
    * @returns {Promise<import('chaite').Processor>}
    */
   async getItem (key) {
-    return this.collection.findOne({ id: key })
+    const obj = await this.collection.findOne({ id: key })
+    return new ProcessorDTO({}).fromString(JSON.stringify(obj))
   }
 
   /**
@@ -56,7 +57,8 @@ export class LowDBProcessorsStorage extends ChaiteStorage {
    * @returns {Promise<import('chaite').Processor[]>}
    */
   async listItems () {
-    return this.collection.findAll()
+    const list = await this.collection.findAll()
+    return list.map(item => new ProcessorDTO({}).fromString(JSON.stringify(item)))
   }
 
   async clear () {

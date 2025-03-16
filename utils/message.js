@@ -81,7 +81,7 @@ export async function intoUserMessage (e, options = {}) {
   if (text) {
     contents.push({
       type: 'text',
-      content: text
+      text
     })
   }
   return {
@@ -134,7 +134,7 @@ export async function getPreset (e, presetId, toggleMode, togglePrefix) {
  * @returns {boolean}
  */
 export function checkChatMsg (e, toggleMode, togglePrefix) {
-  if (toggleMode === 'at' && e.atBot) {
+  if (toggleMode === 'at' && (e.atBot || e.isPrivate)) {
     return true
   }
   const prefixReg = new RegExp(`^#?(图片)?${togglePrefix}[^gpt][sS]*`)

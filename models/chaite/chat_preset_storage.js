@@ -1,4 +1,4 @@
-import { ChaiteStorage } from 'chaite'
+import { ChaiteStorage, ChatPreset } from 'chaite'
 
 /**
  * @extends {ChaiteStorage<import('chaite').ChatPreset>}
@@ -24,7 +24,11 @@ export class LowDBChatPresetsStorage extends ChaiteStorage {
    * @returns {Promise<import('chaite').ChatPreset>}
    */
   async getItem (key) {
-    return this.collection.findOne({ id: key })
+    const obj = await this.collection.findOne({ id: key })
+    if (!obj) {
+      return null
+    }
+    return new ChatPreset({}).fromString(JSON.stringify(obj))
   }
 
   /**
@@ -56,7 +60,8 @@ export class LowDBChatPresetsStorage extends ChaiteStorage {
    * @returns {Promise<import('chaite').ChatPreset[]>}
    */
   async listItems () {
-    return this.collection.findAll()
+    const list = await this.collection.findAll()
+    return list.map(item => new ChatPreset({}).fromString(JSON.stringify(item)))
   }
 
   async clear () {

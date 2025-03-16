@@ -1,3 +1,7 @@
+import fs from 'fs'
+import path from 'path'
+import yaml from 'js-yaml'
+
 class ChatGPTConfig {
   /**
    * 版本号
@@ -105,12 +109,158 @@ class ChatGPTConfig {
     cloudBaseUrl: '',
     // 云端API Key
     cloudApiKey: '',
-    // jwt key，非必要勿修改
+    // jwt key，非必要勿修改，修改需重启
     authKey: '',
     // 管理面板监听地址
     host: '',
     // 管理面板监听端口
     port: 48370
+  }
+
+  constructor () {
+    this.version = '3.0.0'
+    this.basic = {
+      toggleMode: 'at',
+      togglePrefix: '#chat',
+      debug: false,
+      commandPrefix: '^#chatgpt'
+    }
+    this.llm = {
+      defaultModel: '',
+      embeddingModel: 'gemini-embedding-exp-03-07',
+      dimensions: 0,
+      defaultChatPresetId: '',
+      enableCustomPreset: false,
+      customPresetUserWhiteList: [],
+      customPresetUserBlackList: [],
+      promptBlockWords: [],
+      responseBlockWords: [],
+      blockStrategy: 'full',
+      blockWordMask: '***'
+    }
+    this.management = {
+      blackGroups: [],
+      whiteGroups: [],
+      blackUsers: [],
+      whiteUsers: [],
+      defaultRateLimit: 0
+    }
+    this.chaite = {
+      dataDir: 'data',
+      processorsDirPath: 'utils/processors',
+      toolsDirPath: 'utils/tools',
+      cloudBaseUrl: '',
+      cloudApiKey: '',
+      authKey: '',
+      host: '',
+      port: 48370
+    }
+
+    this.watcher = null
+    this.configPath = ''
+  }
+
+  /**
+   * Start config file sync
+   * call once!
+   * @param {string} configDir Directory containing config files
+   */
+  startSync (configDir) {
+    const jsonPath = path.join(configDir, 'config.json')
+    const yamlPath = path.join(configDir, 'config.yaml')
+
+    // Determine which config file to use
+    if (fs.existsSync(jsonPath)) {
+      this.configPath = jsonPath
+    } else if (fs.existsSync(yamlPath)) {
+      this.configPath = yamlPath
+    } else {
+      this.configPath = jsonPath
+      this.saveToFile()
+    }
+
+    // Load initial config
+    this.loadFromFile()
+
+    // Watch for file changes
+    this.watcher = fs.watchFile(this.configPath, (curr, prev) => {
+      if (curr.mtime !== prev.mtime) {
+        this.loadFromFile()
+      }
+    })
+
+    const createDeepProxy = (obj, handler) => {
+      if (obj === null || typeof obj !== 'object') return obj
+
+      for (let key of Object.keys(obj)) {
+        if (typeof obj[key] === 'object' && obj[key] !== null) {
+          obj[key] = createDeepProxy(obj[key], handler)
+        }
+      }
+
+      return new Proxy(obj, handler)
+    }
+
+    // 创建处理器
+    const handler = {
+      set: (target, prop, value) => {
+        if (prop !== 'watcher' && prop !== 'configPath') {
+          target[prop] = typeof value === 'object' && value !== null
+            ? createDeepProxy(value, handler)
+            : value
+          this.saveToFile()
+        }
+        return true
+      }
+    }
+
+    // 为所有嵌套对象创建Proxy
+    this.basic = createDeepProxy(this.basic, handler)
+    this.llm = createDeepProxy(this.llm, handler)
+    this.management = createDeepProxy(this.management, handler)
+    this.chaite = createDeepProxy(this.chaite, handler)
+
+    // 返回最外层的Proxy
+    return new Proxy(this, handler)
+  }
+
+  /**
+   * Load config from file
+   */
+  loadFromFile () {
+    try {
+      const content = fs.readFileSync(this.configPath, 'utf8')
+      const config = this.configPath.endsWith('.json')
+        ? JSON.parse(content)
+        : yaml.load(content)
+
+      Object.assign(this, config)
+    } catch (error) {
+      console.error('Failed to load config:', error)
+    }
+  }
+
+  /**
+   * Save config to file
+   */
+  saveToFile () {
+    try {
+      const config = {
+        version: this.version,
+        basic: this.basic,
+        llm: this.llm,
+        management: this.management,
+        chaite: this.chaite
+      }
+
+      const content = this.configPath.endsWith('.json')
+        ? JSON.stringify(config, null, 2)
+        : yaml.dump(config)
+
+      fs.writeFileSync(this.configPath, content, 'utf8')
+    } catch (error) {
+      console.error('Failed to save config:', error)
+    }
   }
 }
 

@@ -21,8 +21,8 @@ export class Chat extends plugin {
 
   async chat (e) {
     const state = await Chaite.getInstance().getUserStateStorage().getItem(e.sender.user_id + '')
-    const sendMessageOptions = SendMessageOption.create(state.settings)
-    const preset = await getPreset(e, state.settings.preset, Config.basic.toggleMode, Config.basic.togglePrefix)
+    const sendMessageOptions = SendMessageOption.create(state?.settings)
+    const preset = await getPreset(e, state?.settings.preset || Config.llm.defaultChatPresetId, Config.basic.toggleMode, Config.basic.togglePrefix)
     if (!preset) {
       logger.debug('未找到预设，不进入对话')
       return false

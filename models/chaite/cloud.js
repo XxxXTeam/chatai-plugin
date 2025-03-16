@@ -126,7 +126,11 @@ export async function initChaite () {
   chaite.setCloudService(ChatGPTConfig.chaite.cloudBaseUrl)
   logger.info('Chaite.Cloud 初始化完成')
   ChatGPTConfig.chaite.cloudApiKey && await chaite.auth(ChatGPTConfig.chaite.cloudApiKey)
-  await initRagManager(ChatGPTConfig.llm.embeddingModel, ChatGPTConfig.dimensions)
+  await initRagManager(ChatGPTConfig.llm.embeddingModel, ChatGPTConfig.llm.dimensions)
+  if (!ChatGPTConfig.chaite.authKey) {
+    ChatGPTConfig.chaite.authKey = Chaite.getInstance().getFrontendAuthHandler().generateToken(0, true)
+  }
+  chaite.getGlobalConfig().setAuthKey(ChatGPTConfig.chaite.authKey)
   // 监听Chaite配置变化，同步需要同步的配置
   chaite.on('config-change', obj => {
     const { key, newVal, oldVal } = obj
@@ -139,19 +143,33 @@ export async function initChaite () {
   chaite.setUpdateConfigCallback(config => {
     logger.debug('chatgpt-plugin config updated')
     Object.keys(config).forEach(key => {
-      ChatGPTConfig[key] = config[key]
-      // 回传部分需要同步的配置，以防不一致
-      if (key === 'serverAuthKey') {
-        chaite.getGlobalConfig().setAuthKey(config[key])
+      if (typeof config[key] === 'object' && config[key] !== null && ChatGPTConfig[key]) {
+        deepMerge(ChatGPTConfig[key], config[key])
+      } else {
+        ChatGPTConfig[key] = config[key]
       }
     })
+    // 回传部分需要同步的配置，以防不一致
+    chaite.getGlobalConfig().setAuthKey(ChatGPTConfig.chaite.authKey)
   })
   // 授予Chaite获取插件配置的能力以便通过api放出
   chaite.setGetConfig(async () => {
     return ChatGPTConfig
   })
   logger.info('Chaite.RAGManager 初始化完成')
-  const token = chaite.getFrontendAuthHandler().generateToken()
-  logger.info(token)
   chaite.runApiServer()
+}
+
+function deepMerge (target, source) {
+  for (const key in source) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      if (typeof source[key] === 'object' && source[key] !== null && target[key]) {
+        // 如果是对象且目标属性存在，递归合并
+        deepMerge(target[key], source[key])
+      } else {
+        // 否则直接赋值
+        target[key] = source[key]
+      }
+    }
+  }
 }

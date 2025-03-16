@@ -35,6 +35,8 @@ for (let i in files) {
 global.chatgpt = {
 
 }
+
+ChatGPTConfig.startSync('./plugins/chatgpt-plugin/data')
 initChaite()
 logger.info('chatgpt-plugin加载成功')
 logger.info(`当前版本${ChatGPTConfig.version}`)
