@@ -156,6 +156,8 @@ export async function initChaite () {
   chaite.setGetConfig(async () => {
     return ChatGPTConfig
   })
+  chaite.getGlobalConfig().setHost(ChatGPTConfig.chaite.host)
+  chaite.getGlobalConfig().setPort(ChatGPTConfig.chaite.port)
   logger.info('Chaite.RAGManager 初始化完成')
   chaite.runApiServer()
 }
