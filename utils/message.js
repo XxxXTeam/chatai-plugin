@@ -1,4 +1,5 @@
 import { Chaite } from 'chaite'
+import common from '../../../lib/common/common.js'
 
 /**
  * 将e中的消息转换为chaite的UserMessage
@@ -142,4 +143,50 @@ export function checkChatMsg (e, toggleMode, togglePrefix) {
     return true
   }
   return false
+}
+
+/**
+ * 模型响应转为机器人格式
+ * @param e
+ * @param {import('chaite').MessageContent[]} contents
+ * @returns {Promise<{ msgs: (import('icqq').TextElem | import('icqq').ImageElem | import('icqq').AtElem | import('icqq').PttElem | string)[], forward: *[]}>}
+ */
+export async function toYunzai (e, contents) {
+  /**
+   * 要发送的消息
+   * @type {(import('icqq').TextElem | import('icqq').ImageElem | import('icqq').AtElem | import('icqq').PttElem | string)[]}
+   */
+  const msgs = []
+  /**
+   * 要转发的
+   * @type {*[]}
+   */
+  const forward = []
+  for (let content of contents) {
+    switch (content.type) {
+      case 'text': {
+        msgs.push((/** @type {import('chaite').TextContent} **/ content).text)
+        break
+      }
+      case 'image': {
+        msgs.push(segment.image((/** @type {import('chaite').ImageContent} **/ content).image))
+        break
+      }
+      case 'audio': {
+        msgs.push(segment.record((/** @type {import('chaite').AudioContent} **/ content).data))
+        break
+      }
+      case 'reasoning': {
+        const reasoning = await common.makeForwardMsg(e, [(/** @type {import('chaite').ReasoningContent} **/ content).text], '思考过程')
+        forward.push(reasoning)
+        break
+      }
+      default: {
+        logger.warn(`不支持的类型 ${content.type}`)
+      }
+    }
+  }
+  return {
+    msgs, forward
+  }
 }

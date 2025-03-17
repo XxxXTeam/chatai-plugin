@@ -1,7 +1,6 @@
 import ChatGPTConfig from '../config/config.js'
 import { createCRUDCommandRules, createSwitchCommandRules } from '../utils/command.js'
 import { Chaite } from 'chaite'
-import { resolve } from 'eslint-plugin-promise/rules/lib/promise-statics.js'
 
 export class ChatGPTManagement extends plugin {
   constructor () {
@@ -20,6 +19,11 @@ export class ChatGPTManagement extends plugin {
         {
           reg: `^${cmdPrefix}结束(全部)?对话$`,
           fnc: 'destroyConversation'
+        },
+        {
+          reg: `^${cmdPrefix}(bym|伪人)设置默认预设`,
+          fnc: 'setDefaultBymPreset',
+          permission: 'master'
         }
       ]
     })
@@ -49,7 +53,8 @@ export class ChatGPTManagement extends plugin {
       ...createCRUDCommandRules.bind(this)(cmdPrefix, '黑名单群', 'blackGroups', false),
       ...createCRUDCommandRules.bind(this)(cmdPrefix, '白名单群', 'whiteGroups', false),
       ...createCRUDCommandRules.bind(this)(cmdPrefix, '黑名单用户', 'blackUsers', false),
-      ...createCRUDCommandRules.bind(this)(cmdPrefix, '白名单用户', 'whiteUsers', false)
+      ...createCRUDCommandRules.bind(this)(cmdPrefix, '白名单用户', 'whiteUsers', false),
+      createSwitchCommandRules(cmdPrefix, '(伪人|bym)', 'bym')
     ])
   }
 
@@ -58,6 +63,17 @@ export class ChatGPTManagement extends plugin {
     // this.reply(`(todo)管理面板地址：http://${ChatGPTConfig.chaite.host}:${ChatGPTConfig.chaite.host}`)
     const token = Chaite.getInstance().getFrontendAuthHandler().generateToken(300)
     this.reply(`token: ${token}, 有效期300秒`, true)
+  }
+
+  async setDefaultBymPreset (e) {
+    const presetId = e.msg.replace(`${ChatGPTConfig.basic.commandPrefix}伪人设置默认预设`, '')
+    const preset = await Chaite.getInstance().getChatPresetManager().getInstance(presetId)
+    if (preset) {
+      ChatGPTConfig.bym.defaultPreset = presetId
+      this.reply(`伪人模式默认预设已切换为${presetId}(${preset.name})`)
+    } else {
+      this.reply(`未找到预设${presetId}`)
+    }
   }
 
   async destroyConversation (e) {

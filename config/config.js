@@ -28,6 +28,47 @@ class ChatGPTConfig {
   }
 
   /**
+   * 伪人模式，基于框架实现，因此机器人开启前缀后依然需要带上前缀。
+   * @type {{
+   *   enable: boolean,
+   *   hit: string[],
+   *   probability: number,
+   *   defaultPreset: string,
+   *   presetPrefix?: string,
+   *   presetMap: Array<{
+   *     keywords: string[],
+   *     presetId: string,
+   *     priority: number,
+   *     recall?: boolean
+   *   }>,
+   *   maxTokens: number,
+   *   temperature: number,
+   *   sendReasoning: boolean
+   * }}
+   * }}
+   */
+  bym = {
+    // 开关
+    enable: false,
+    // 伪人必定触发词
+    hit: ['bym'],
+    // 不包含伪人必定触发词时的概率
+    probability: 0.02,
+    // 伪人模式的默认预设
+    defaultPreset: '',
+    // 伪人模式的预设前缀，会加在在所有其他预设前。例如此处可以用于配置通用的伪人发言风格（随意、模仿群友等），presetMap中专心配置角色设定即可
+    presetPrefix: '',
+    // 包含关键词与预设的对应关系。包含特定触发词使用特定的预设，按照优先级排序
+    presetMap: [],
+    // 如果大于0，会覆盖preset中的maxToken，用于控制伪人模式发言长度
+    maxTokens: 0,
+    // 如果大于等于0，会覆盖preset中的temperature，用于控制伪人模式发言随机性
+    temperature: -1,
+    // 是否发送思考内容
+    sendReasoning: false
+  }
+
+  /**
    * 模型和对话相关配置
    * @type {{
    *   defaultModel: string,
@@ -119,43 +160,6 @@ class ChatGPTConfig {
 
   constructor () {
     this.version = '3.0.0'
-    this.basic = {
-      toggleMode: 'at',
-      togglePrefix: '#chat',
-      debug: false,
-      commandPrefix: '^#chatgpt'
-    }
-    this.llm = {
-      defaultModel: '',
-      embeddingModel: 'gemini-embedding-exp-03-07',
-      dimensions: 0,
-      defaultChatPresetId: '',
-      enableCustomPreset: false,
-      customPresetUserWhiteList: [],
-      customPresetUserBlackList: [],
-      promptBlockWords: [],
-      responseBlockWords: [],
-      blockStrategy: 'full',
-      blockWordMask: '***'
-    }
-    this.management = {
-      blackGroups: [],
-      whiteGroups: [],
-      blackUsers: [],
-      whiteUsers: [],
-      defaultRateLimit: 0
-    }
-    this.chaite = {
-      dataDir: 'data',
-      processorsDirPath: 'utils/processors',
-      toolsDirPath: 'utils/tools',
-      cloudBaseUrl: '',
-      cloudApiKey: '',
-      authKey: '',
-      host: '',
-      port: 48370
-    }
-
     this.watcher = null
     this.configPath = ''
   }
@@ -216,6 +220,7 @@ class ChatGPTConfig {
 
     // 为所有嵌套对象创建Proxy
     this.basic = createDeepProxy(this.basic, handler)
+    this.bym = createDeepProxy(this.bym, handler)
     this.llm = createDeepProxy(this.llm, handler)
     this.management = createDeepProxy(this.management, handler)
     this.chaite = createDeepProxy(this.chaite, handler)
@@ -248,6 +253,7 @@ class ChatGPTConfig {
       const config = {
         version: this.version,
         basic: this.basic,
+        bym: this.bym,
         llm: this.llm,
         management: this.management,
         chaite: this.chaite
