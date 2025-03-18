@@ -103,7 +103,7 @@ export async function getPreset (e, presetId, toggleMode, togglePrefix) {
   const isValidChat = checkChatMsg(e, toggleMode, togglePrefix)
   const manager = Chaite.getInstance().getChatPresetManager()
   const presets = await manager.getAllPresets()
-  const prefixHitPresets = presets.filter(p => e.msg.startsWith(p.prefix))
+  const prefixHitPresets = presets.filter(p => e.msg?.startsWith(p.prefix))
   if (!isValidChat && prefixHitPresets.length === 0) {
     return null
   }

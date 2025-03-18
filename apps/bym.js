@@ -2,6 +2,7 @@ import ChatGPTConfig from '../config/config.js'
 import { Chaite } from 'chaite'
 import { intoUserMessage, toYunzai } from '../utils/message.js'
 import common from '../../../lib/common/common.js'
+import { getGroupContextPrompt } from '../utils/group.js'
 
 export class bym extends plugin {
   constructor () {
@@ -9,11 +10,12 @@ export class bym extends plugin {
       name: 'ChatGPT-Plugin伪人模式',
       dsc: 'ChatGPT-Plugin伪人模式',
       event: 'message',
-      priority: -150,
+      priority: 6000,
       rule: [
         {
-          reg: '^#chatgpt伪人模式$',
-          fnc: 'bym'
+          reg: '^[^#][sS]*',
+          fnc: 'bym',
+          log: false
         }
       ]
     })
@@ -23,11 +25,19 @@ export class bym extends plugin {
     if (!ChatGPTConfig.bym.enable) {
       return false
     }
+    let prob = ChatGPTConfig.bym.probability
+    if (ChatGPTConfig.bym.hit.find(keyword => e.msg?.includes(keyword))) {
+      prob = 1
+    }
+    if (Math.random() > prob) {
+      return false
+    }
+    logger.info('伪人模式触发')
     let recall = false
     let presetId = ChatGPTConfig.bym.defaultPreset
     if (ChatGPTConfig.bym.presetMap && ChatGPTConfig.bym.presetMap.length > 0) {
       const option = ChatGPTConfig.bym.presetMap.sort((a, b) => a.priority - b.priority)
-        .find(item => item.keywords.find(keyword => e.msg.includes(keyword)))
+        .find(item => item.keywords.find(keyword => e.msg?.includes(keyword)))
       if (option) {
         presetId = option.presetId
       }
@@ -48,6 +58,12 @@ export class bym extends plugin {
         preset.sendMessageOption.systemOverride = ''
       }
       preset.sendMessageOption.systemOverride = ChatGPTConfig.bym.presetPrefix + preset.sendMessageOption.systemOverride
+    }
+    if (ChatGPTConfig.bym.temperature >= 0) {
+      preset.sendMessageOption.temperature = ChatGPTConfig.bym.temperature
+    }
+    if (ChatGPTConfig.bym.maxTokens > 0) {
+      preset.sendMessageOption.maxTokens = ChatGPTConfig.bym.maxTokens
     }
     const userMessage = await intoUserMessage(e, {
       handleReplyText: true,
@@ -70,6 +86,10 @@ export class bym extends plugin {
       for (let forwardElement of forward) {
         this.reply(forwardElement)
       }
+    }
+    if (ChatGPTConfig.llm.enableGroupContext && e.isGroup) {
+      const contextPrompt = await getGroupContextPrompt(e, ChatGPTConfig.llm.groupContextLength)
+      preset.sendMessageOption.systemOverride = preset.sendMessageOption.systemOverride ? preset.sendMessageOption.systemOverride + '\n' + contextPrompt : contextPrompt
     }
     // 发送
     const response = await Chaite.getInstance().sendMessage(userMessage, e, {

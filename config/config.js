@@ -24,7 +24,7 @@ class ChatGPTConfig {
     // 是否开启调试模式
     debug: false,
     // 一般命令的开头
-    commandPrefix: '^#chatgpt'
+    commandPrefix: '#chatgpt'
   }
 
   /**
@@ -80,7 +80,12 @@ class ChatGPTConfig {
    *   promptBlockWords: string[],
    *   responseBlockWords: string[],
    *   blockStrategy: 'full' | 'mask',
-   *   blockWordMask: string
+   *   blockWordMask: string,
+   *   enableGroupContext: boolean,
+   *   groupContextLength: number,
+   *   groupContextTemplatePrefix: string,
+   *   groupContextTemplateMessage: string,
+   *   groupContextTemplateSuffix: string
    * }}
    */
   llm = {
@@ -105,7 +110,21 @@ class ChatGPTConfig {
     // 触发屏蔽词的策略，完全屏蔽或仅屏蔽关键词
     blockStrategy: 'full',
     // 如果blockStrategy为mask，屏蔽词的替换字符
-    blockWordMask: '***'
+    blockWordMask: '***',
+    // 是否开启群组上下文
+    enableGroupContext: false,
+    // 群组上下文长度
+    groupContextLength: 20,
+    // 用于组装群聊上下文提示词的模板前缀
+    groupContextTemplatePrefix: 'Latest several messages in the group chat:\n' +
+      '| sender.card | sender.nickname | sender.user_id | sender.role | sender.title | time | messageId | raw_message |\n' +
+      '|---|---|---|---|---|---|---|---|',
+    // 用于组装群聊上下文提示词的模板内容部分，每一条消息作为message，仿照示例填写
+    // eslint-disable-next-line no-template-curly-in-string
+    groupContextTemplateMessage: '| ${message.sender.card} | ${message.sender.nickname} | ${message.sender.user_id} | ${message.sender.role} | ${message.sender.title} | ${message.time} | ${message.messageId} | ${message.raw_message} |',
+    // 用于组装群聊上下文提示词的模板后缀
+    groupContextTemplateSuffix: '\n'
+
   }
 
   /**

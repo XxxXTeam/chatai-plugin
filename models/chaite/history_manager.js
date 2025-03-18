@@ -37,13 +37,13 @@ export class LowDBHistoryManager extends AbstractHistoryManager {
         const message = await this.collection.findOne({ id: currentId })
         if (!message) break
         messages.unshift(message)
-        currentId = message.parentMessageId
+        currentId = message.parentId
       }
       return messages
     } else if (conversationId) {
       return this.collection.find({ conversationId })
     }
-    return this.collection.findAll()
+    return []
   }
 
   async deleteConversation (conversationId) {

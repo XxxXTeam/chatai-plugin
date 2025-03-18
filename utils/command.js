@@ -1,6 +1,7 @@
 import { Chaite } from 'chaite'
 import common from '../../../lib/common/common.js'
 import ChatGPTConfig from '../config/config.js'
+import { getBotFramework } from './bot.js'
 /**
  * 模板
  * @param cmdPrefix
@@ -33,7 +34,7 @@ export function createCRUDCommandRules (cmdPrefix, name, variable, detail = true
   const manager = getManagerByName(upperVariable)
   if (detail) {
     rules.push({
-      reg: cmdPrefix + `${name}详情$`,
+      reg: cmdPrefix + `${name}详情`,
       fnc: `detail${upperVariable}`
     })
     this[`detail${upperVariable}`] = async function (e) {
@@ -130,6 +131,11 @@ export function createCRUDCommandRules (cmdPrefix, name, variable, detail = true
       }
     }
   }
+  if (getBotFramework() === 'trss') {
+    rules.forEach(rule => {
+      rule.reg = new RegExp(rule.reg)
+    })
+  }
   return rules
 }
 
@@ -161,8 +167,12 @@ const switchCommandPreset = {
 }
 export function createSwitchCommandRules (cmdPrefix, name, variable, preset = 0) {
   const upperVariable = variable.charAt(0).toUpperCase() + variable.slice(1)
-  return {
+  const rule = {
     reg: cmdPrefix + `(${switchCommandPreset[preset][0]}|${switchCommandPreset[preset][1]})${name}$`,
     fnc: `switch${upperVariable}`
   }
+  if (getBotFramework() === 'trss') {
+    rule.reg = new RegExp(rule.reg)
+  }
+  return rule
 }

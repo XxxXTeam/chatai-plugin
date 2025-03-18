@@ -1,4 +1,22 @@
 import { ChaiteStorage } from 'chaite'
+import * as crypto from 'node:crypto'
+
+/**
+ * 继承UserState
+ */
+export class YunzaiUserState {
+  constructor (userId, nickname, card, conversationId = crypto.randomUUID()) {
+    this.userId = userId
+    this.nickname = nickname
+    this.card = card
+    this.conversations = []
+    this.settings = {}
+    this.current = {
+      conversationId,
+      messageId: ''
+    }
+  }
+}
 
 /**
  * @extends {ChaiteStorage<import('chaite').UserState>}
@@ -35,9 +53,12 @@ export class LowDBUserStateStorage extends ChaiteStorage {
    */
   async setItem (id, state) {
     if (id) {
-      await this.collection.updateById(id, state)
-      return id
+      if (await this.getItem(id)) {
+        await this.collection.updateById(id, state)
+        return id
+      }
     }
+    state.id = id
     const result = await this.collection.insert(state)
     return result.id
   }

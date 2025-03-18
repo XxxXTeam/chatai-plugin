@@ -1,6 +1,7 @@
 import ChatGPTConfig from '../config/config.js'
 import { createCRUDCommandRules, createSwitchCommandRules } from '../utils/command.js'
 import { Chaite } from 'chaite'
+import * as crypto from 'node:crypto'
 
 export class ChatGPTManagement extends plugin {
   constructor () {
@@ -17,7 +18,7 @@ export class ChatGPTManagement extends plugin {
           permission: 'master'
         },
         {
-          reg: `^${cmdPrefix}结束(全部)?对话$`,
+          reg: `^(${cmdPrefix})?#?结束(全部)?对话$`,
           fnc: 'destroyConversation'
         },
         {
@@ -27,18 +28,22 @@ export class ChatGPTManagement extends plugin {
         }
       ]
     })
-    this.initCommand(cmdPrefix)
+    if (!Chaite.getInstance()) {
+      const waitForChaite = async () => {
+        while (!Chaite.getInstance()) {
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
+        return Chaite.getInstance()
+      }
+      waitForChaite().then(() => {
+        this.initCommand(cmdPrefix)
+      })
+    } else {
+      this.initCommand(cmdPrefix)
+    }
   }
 
-  async initCommand (cmdPrefix) {
-    const waitForChaite = async () => {
-      while (!Chaite.getInstance()) {
-        await new Promise(resolve => setTimeout(resolve, 1000))
-      }
-      return Chaite.getInstance()
-    }
-
-    await waitForChaite()
+  initCommand (cmdPrefix) {
     this.rule.push(...[
       ...createCRUDCommandRules.bind(this)(cmdPrefix, '渠道', 'channels'),
       ...createCRUDCommandRules.bind(this)(cmdPrefix, '预设', 'presets'),
@@ -94,7 +99,11 @@ export class ChatGPTManagement extends plugin {
       this.reply(`已结束${num}个用户的对话`)
     } else {
       const state = await Chaite.getInstance().getUserStateStorage().getItem(e.sender.user_id + '')
-      state.current.conversationId = ''
+      if (!state) {
+        this.reply('当前未开启对话')
+        return false
+      }
+      state.current.conversationId = crypto.randomUUID()
       state.current.messageId = ''
       await Chaite.getInstance().getUserStateStorage().setItem(e.sender.user_id + '', state)
       this.reply('已结束当前对话')
