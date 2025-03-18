@@ -44,9 +44,11 @@ export async function intoUserMessage (e, options = {}) {
         if (val.type === 'image' && handleReplyImage) {
           const res = await fetch(val.url)
           if (res.ok) {
+            const mimeType = res.headers.get('content-type') || 'image/jpeg'
             contents.push({
               type: 'image',
-              image: Buffer.from(await res.arrayBuffer()).toString('base64')
+              image: Buffer.from(await res.arrayBuffer()).toString('base64'),
+              mimeType
             })
           } else {
             logger.warn(`fetch image ${val.url} failed: ${res.status}`)
@@ -83,9 +85,11 @@ export async function intoUserMessage (e, options = {}) {
   for (let element of e.message?.filter(element => element.type === 'image')) {
     const res = await fetch(element.url)
     if (res.ok) {
+      const mimeType = res.headers.get('content-type') || 'image/jpeg'
       contents.push({
         type: 'image',
-        image: Buffer.from(await res.arrayBuffer()).toString('base64')
+        image: Buffer.from(await res.arrayBuffer()).toString('base64'),
+        mimeType
       })
     } else {
       logger.warn(`fetch image ${element.url} failed: ${res.status}`)
