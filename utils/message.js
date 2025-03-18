@@ -1,5 +1,6 @@
 import { Chaite } from 'chaite'
 import common from '../../../lib/common/common.js'
+import fetch from 'node-fetch'
 
 /**
  * 将e中的消息转换为chaite的UserMessage
@@ -28,18 +29,28 @@ export async function intoUserMessage (e, options = {}) {
   } = options
   const contents = []
   let text = ''
-  if (e.source && (handleReplyImage || handleReplyText)) {
-    let seq = e.isGroup ? e.source.seq : e.source.time
-    let reply = e.isGroup
-      ? (await e.group.getChatHistory(seq, 1)).pop()?.message
-      : (await e.friend.getChatHistory(seq, 1)).pop()?.message
+  if ((e.source || e.reply_id) && (handleReplyImage || handleReplyText)) {
+    let seq = e.isGroup ? (e.source?.seq || e.reply_id) : (e.source?.time || e.source?.time)
+    let reply
+    if (e.getReply && typeof e.getReply === 'function') {
+      reply = (await e.getReply()).message
+    } else {
+      reply = e.isGroup
+        ? (await e.group.getChatHistory(seq, 1)).pop()?.message
+        : (await e.friend.getChatHistory(seq, 1)).pop()?.message
+    }
     if (reply) {
       for (let val of reply) {
         if (val.type === 'image' && handleReplyImage) {
-          contents.push({
-            type: 'image',
-            url: val.url
-          })
+          const res = await fetch(val.url)
+          if (res.ok) {
+            contents.push({
+              type: 'image',
+              image: Buffer.from(await res.arrayBuffer()).toString('base64')
+            })
+          } else {
+            logger.warn(`fetch image ${val.url} failed: ${res.status}`)
+          }
         } else if (val.type === 'text' && handleReplyText) {
           text = `本条消息对以下消息进行了引用回复：${val.text}\n\n本条消息内容：\n`
         }
@@ -69,12 +80,18 @@ export async function intoUserMessage (e, options = {}) {
       }
     }
   }
-  e.message?.filter(element => element.type === 'image').forEach(element => {
-    contents.push({
-      type: 'image',
-      url: element.url
-    })
-  })
+  for (let element of e.message?.filter(element => element.type === 'image')) {
+    const res = await fetch(element.url)
+    if (res.ok) {
+      contents.push({
+        type: 'image',
+        image: Buffer.from(await res.arrayBuffer()).toString('base64')
+      })
+    } else {
+      logger.warn(`fetch image ${element.url} failed: ${res.status}`)
+    }
+  }
+
   if (toggleMode === 'prefix') {
     const regex = new RegExp(`^#?(图片)?${togglePrefix}[^gpt]`)
     text = text.replace(regex, '')
