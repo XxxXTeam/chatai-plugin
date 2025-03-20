@@ -76,8 +76,8 @@ export class bym extends plugin {
       togglePrefix: ChatGPTConfig.basic.togglePrefix
     })
     // 伪人不记录历史
-    sendMessageOption.disableHistoryRead = true
-    sendMessageOption.disableHistorySave = true
+    // sendMessageOption.disableHistoryRead = true
+    // sendMessageOption.disableHistorySave = true
     // 设置多轮调用回掉
     sendMessageOption.onMessageWithToolCall = async content => {
       const { msgs, forward } = await toYunzai(e, [content])
