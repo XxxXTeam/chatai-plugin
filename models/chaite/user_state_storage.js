@@ -52,11 +52,9 @@ export class LowDBUserStateStorage extends ChaiteStorage {
    * @returns {Promise<string>}
    */
   async setItem (id, state) {
-    if (id) {
-      if (await this.getItem(id)) {
-        await this.collection.updateById(id, state)
-        return id
-      }
+    if (id && await this.getItem(id)) {
+      await this.collection.updateById(id, state)
+      return id
     }
     state.id = id
     const result = await this.collection.insert(state)

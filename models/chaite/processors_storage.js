@@ -25,7 +25,10 @@ export class LowDBProcessorsStorage extends ChaiteStorage {
    */
   async getItem (key) {
     const obj = await this.collection.findOne({ id: key })
-    return new ProcessorDTO({}).fromString(JSON.stringify(obj))
+    if (!obj) {
+      return null
+    }
+    return new ProcessorDTO(obj)
   }
 
   /**
@@ -35,7 +38,7 @@ export class LowDBProcessorsStorage extends ChaiteStorage {
    * @returns {Promise<string>}
    */
   async setItem (id, processor) {
-    if (id) {
+    if (id && await this.getItem(id)) {
       await this.collection.updateById(id, processor)
       return id
     }

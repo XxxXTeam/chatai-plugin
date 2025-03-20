@@ -22,7 +22,10 @@ export class LowDBChannelStorage extends ChaiteStorage {
    */
   async getItem (key) {
     const obj = await this.collection.findOne({ id: key })
-    return new Channel({}).fromString(JSON.stringify(obj))
+    if (!obj) {
+      return null
+    }
+    return new Channel(obj)
   }
 
   /**
@@ -32,7 +35,7 @@ export class LowDBChannelStorage extends ChaiteStorage {
    * @returns {Promise<string>}
    */
   async setItem (id, channel) {
-    if (id) {
+    if (id && await this.getItem(id)) {
       await this.collection.updateById(id, channel)
       return id
     }

@@ -85,6 +85,7 @@ export class ChatGPTManagement extends plugin {
     if (e.msg.includes('全部')) {
       if (!e.isMaster) {
         this.reply('仅限主人使用')
+        return false
       }
       const userStates = await Chaite.getInstance().getUserStateStorage().listItems()
       let num = 0
@@ -99,7 +100,7 @@ export class ChatGPTManagement extends plugin {
       this.reply(`已结束${num}个用户的对话`)
     } else {
       const state = await Chaite.getInstance().getUserStateStorage().getItem(e.sender.user_id + '')
-      if (!state) {
+      if (!state || !state.current.conversationId || !state.current.messageId) {
         this.reply('当前未开启对话')
         return false
       }

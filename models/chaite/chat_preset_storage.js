@@ -28,7 +28,7 @@ export class LowDBChatPresetsStorage extends ChaiteStorage {
     if (!obj) {
       return null
     }
-    return new ChatPreset({}).fromString(JSON.stringify(obj))
+    return new ChatPreset(obj)
   }
 
   /**
@@ -38,7 +38,7 @@ export class LowDBChatPresetsStorage extends ChaiteStorage {
    * @returns {Promise<string>}
    */
   async setItem (id, preset) {
-    if (id) {
+    if (id && await this.getItem(id)) {
       await this.collection.updateById(id, preset)
       return id
     }

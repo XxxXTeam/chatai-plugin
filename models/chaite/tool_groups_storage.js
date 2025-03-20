@@ -1,9 +1,9 @@
-import { ChaiteStorage, ToolDTO } from 'chaite'
+import { ChaiteStorage, ToolsGroupDTO } from 'chaite'
 
 /**
- * @extends {ChaiteStorage<import('chaite').ToolDTO>}
+ * @extends {ChaiteStorage<import('chaite').ToolsGroupDTO>}
  */
-export class LowDBToolsStorage extends ChaiteStorage {
+export class LowDBToolsGroupDTOsStorage extends ChaiteStorage {
   /**
    *
    * @param { LowDBStorage } storage
@@ -15,34 +15,34 @@ export class LowDBToolsStorage extends ChaiteStorage {
      * 集合
      * @type {LowDBCollection}
      */
-    this.collection = this.storage.collection('tools')
+    this.collection = this.storage.collection('tool_groups')
   }
 
   /**
    *
-   * @param {string} key
-   * @returns {Promise<import('chaite').ToolDTO>}
+   * @param key
+   * @returns {Promise<import('chaite').ToolsGroupDTO>}
    */
   async getItem (key) {
     const obj = await this.collection.findOne({ id: key })
     if (!obj) {
       return null
     }
-    return new ToolDTO(obj)
+    return new ToolsGroupDTO(obj)
   }
 
   /**
    *
    * @param {string} id
-   * @param {import('chaite').ToolDTO} tools
+   * @param {import('chaite').ToolsGroupDTO} preset
    * @returns {Promise<string>}
    */
-  async setItem (id, tools) {
+  async setItem (id, preset) {
     if (id && await this.getItem(id)) {
-      await this.collection.updateById(id, tools)
+      await this.collection.updateById(id, preset)
       return id
     }
-    const result = await this.collection.insert(tools)
+    const result = await this.collection.insert(preset)
     return result.id
   }
 
@@ -57,11 +57,11 @@ export class LowDBToolsStorage extends ChaiteStorage {
 
   /**
    *
-   * @returns {Promise<import('chaite').ToolDTO[]>}
+   * @returns {Promise<import('chaite').ToolsGroupDTO[]>}
    */
   async listItems () {
     const list = await this.collection.findAll()
-    return list.map(item => new ToolDTO({}).fromString(JSON.stringify(item)))
+    return list.map(item => new ToolsGroupDTO({}).fromString(JSON.stringify(item)))
   }
 
   async clear () {

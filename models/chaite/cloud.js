@@ -1,4 +1,15 @@
-import { Chaite, ChannelsManager, ChatPresetManager, DefaultChannelLoadBalancer, GeminiClient, OpenAIClient, ProcessorsManager, RAGManager, ToolManager } from 'chaite'
+import {
+  Chaite,
+  ChannelsManager,
+  ChatPresetManager,
+  DefaultChannelLoadBalancer,
+  GeminiClient,
+  OpenAIClient,
+  ProcessorsManager,
+  RAGManager,
+  ToolManager,
+  ToolsGroupManager
+} from 'chaite'
 import ChatGPTConfig from '../../config/config.js'
 import { LowDBChannelStorage } from './channel_storage.js'
 import { LowDBChatPresetsStorage } from './chat_preset_storage.js'
@@ -11,6 +22,8 @@ import { VectraVectorDatabase } from './vector_database.js'
 import ChatGPTStorage from '../storage.js'
 import path from 'path'
 import fs from 'fs'
+import { migrateDatabase } from '../../utils/initDB.js'
+import { LowDBToolsGroupDTOsStorage } from './tool_groups_storage.js'
 
 /**
  * 认证，以便共享上传
@@ -117,14 +130,16 @@ export async function initChaite () {
   }
   const processorsManager = await ProcessorsManager.init(processorsDir, new LowDBProcessorsStorage(ChatGPTStorage))
   const chatPresetManager = await ChatPresetManager.init(new LowDBChatPresetsStorage(ChatGPTStorage))
+  const toolsGroupManager = await ToolsGroupManager.init(new LowDBToolsGroupDTOsStorage(ChatGPTStorage))
   const userModeSelector = new ChatGPTUserModeSelector()
   const userStateStorage = new LowDBUserStateStorage(ChatGPTStorage)
   const historyManager = new LowDBHistoryManager(ChatGPTStorage)
-  let chaite = Chaite.init(channelsManager, toolsManager, processorsManager, chatPresetManager,
+  let chaite = Chaite.init(channelsManager, toolsManager, processorsManager, chatPresetManager, toolsGroupManager,
     userModeSelector, userStateStorage, historyManager, logger)
   logger.info('Chaite 初始化完成')
   chaite.setCloudService(ChatGPTConfig.chaite.cloudBaseUrl)
   logger.info('Chaite.Cloud 初始化完成')
+  await migrateDatabase()
   ChatGPTConfig.chaite.cloudApiKey && await chaite.auth(ChatGPTConfig.chaite.cloudApiKey)
   await initRagManager(ChatGPTConfig.llm.embeddingModel, ChatGPTConfig.llm.dimensions)
   if (!ChatGPTConfig.chaite.authKey) {

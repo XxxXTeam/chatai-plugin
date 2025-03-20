@@ -53,17 +53,18 @@ export class bym extends plugin {
       logger.debug('未找到预设，请检查配置文件')
       return false
     }
+    const sendMessageOption = JSON.parse(JSON.stringify(preset.sendMessageOption))
     if (ChatGPTConfig.bym.presetPrefix) {
-      if (!preset.sendMessageOption.systemOverride) {
-        preset.sendMessageOption.systemOverride = ''
+      if (!sendMessageOption.systemOverride) {
+        sendMessageOption.systemOverride = ''
       }
-      preset.sendMessageOption.systemOverride = ChatGPTConfig.bym.presetPrefix + preset.sendMessageOption.systemOverride
+      sendMessageOption.systemOverride = ChatGPTConfig.bym.presetPrefix + sendMessageOption.systemOverride
     }
     if (ChatGPTConfig.bym.temperature >= 0) {
-      preset.sendMessageOption.temperature = ChatGPTConfig.bym.temperature
+      sendMessageOption.temperature = ChatGPTConfig.bym.temperature
     }
     if (ChatGPTConfig.bym.maxTokens > 0) {
-      preset.sendMessageOption.maxTokens = ChatGPTConfig.bym.maxTokens
+      sendMessageOption.maxToken = ChatGPTConfig.bym.maxTokens
     }
     const userMessage = await intoUserMessage(e, {
       handleReplyText: true,
@@ -75,10 +76,10 @@ export class bym extends plugin {
       togglePrefix: ChatGPTConfig.basic.togglePrefix
     })
     // 伪人不记录历史
-    preset.sendMessageOption.disableHistoryRead = true
-    preset.sendMessageOption.disableHistorySave = true
+    sendMessageOption.disableHistoryRead = true
+    sendMessageOption.disableHistorySave = true
     // 设置多轮调用回掉
-    preset.sendMessageOption.onMessageWithToolCall = async content => {
+    sendMessageOption.onMessageWithToolCall = async content => {
       const { msgs, forward } = await toYunzai(e, [content])
       if (msgs.length > 0) {
         await e.reply(msgs)
@@ -89,11 +90,11 @@ export class bym extends plugin {
     }
     if (ChatGPTConfig.llm.enableGroupContext && e.isGroup) {
       const contextPrompt = await getGroupContextPrompt(e, ChatGPTConfig.llm.groupContextLength)
-      preset.sendMessageOption.systemOverride = preset.sendMessageOption.systemOverride ? preset.sendMessageOption.systemOverride + '\n' + contextPrompt : contextPrompt
+      sendMessageOption.systemOverride = sendMessageOption.systemOverride ? sendMessageOption.systemOverride + '\n' + contextPrompt : contextPrompt
     }
     // 发送
     const response = await Chaite.getInstance().sendMessage(userMessage, e, {
-      ...preset.sendMessageOption,
+      ...sendMessageOption,
       chatPreset: preset
     })
     const { msgs, forward } = await toYunzai(e, response.contents)
