@@ -90,7 +90,7 @@ export class ChatGPTManagement extends plugin {
       const userStates = await Chaite.getInstance().getUserStateStorage().listItems()
       let num = 0
       for (const userState of userStates) {
-        if (userState.current.conversationId) {
+        if (userState.current.conversationId && userState.current.messageId) {
           num++
         }
         userState.current.conversationId = ''
