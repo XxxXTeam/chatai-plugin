@@ -92,10 +92,10 @@ export class ChatGPTManagement extends plugin {
       for (const userState of userStates) {
         if (userState.current.conversationId && userState.current.messageId) {
           num++
+          userState.current.conversationId = ''
+          userState.current.messageId = ''
+          await Chaite.getInstance().getUserStateStorage().setItem(userState.userId + '', userState)
         }
-        userState.current.conversationId = ''
-        userState.current.messageId = ''
-        await Chaite.getInstance().getUserStateStorage().setItem(userState.userId + '', userState)
       }
       this.reply(`已结束${num}个用户的对话`)
     } else {
