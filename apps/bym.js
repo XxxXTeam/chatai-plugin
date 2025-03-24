@@ -53,6 +53,9 @@ export class bym extends plugin {
       logger.debug('未找到预设，请检查配置文件')
       return false
     }
+    /**
+     * @type {import('chaite').SendMessageOption}
+     */
     const sendMessageOption = JSON.parse(JSON.stringify(preset.sendMessageOption))
     if (ChatGPTConfig.bym.presetPrefix) {
       if (!sendMessageOption.systemOverride) {
@@ -76,8 +79,9 @@ export class bym extends plugin {
       togglePrefix: ChatGPTConfig.basic.togglePrefix
     })
     // 伪人不记录历史
-    sendMessageOption.disableHistoryRead = true
-    sendMessageOption.disableHistorySave = true
+    // sendMessageOption.disableHistoryRead = true
+    // sendMessageOption.disableHistorySave = true
+    sendMessageOption.conversationId = 'bym' + e.user_id + Date.now()
     // 设置多轮调用回掉
     sendMessageOption.onMessageWithToolCall = async content => {
       const { msgs, forward } = await toYunzai(e, [content])
