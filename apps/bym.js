@@ -40,8 +40,8 @@ export class bym extends plugin {
         .find(item => item.keywords.find(keyword => e.msg?.includes(keyword)))
       if (option) {
         presetId = option.presetId
+        recall = !!option.recall
       }
-      recall = !!option.recall
     }
 
     const presetManager = Chaite.getInstance().getChatPresetManager()

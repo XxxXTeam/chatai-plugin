@@ -3,6 +3,7 @@ import { Chaite, SendMessageOption } from 'chaite'
 import { getPreset, intoUserMessage, toYunzai } from '../utils/message.js'
 import { YunzaiUserState } from '../models/chaite/user_state_storage.js'
 import { getGroupContextPrompt, getGroupHistory } from '../utils/group.js'
+import * as crypto from 'node:crypto'
 
 export class Chat extends plugin {
   constructor () {
@@ -30,6 +31,9 @@ export class Chat extends plugin {
     if (!state) {
       state = new YunzaiUserState(e.sender.user_id, e.sender.nickname, e.sender.card)
       await Chaite.getInstance().getUserStateStorage().setItem(e.sender.user_id + '', state)
+    }
+    if (!state.current.conversationId) {
+      state.current.conversationId = crypto.randomUUID()
     }
     const preset = await getPreset(e, state?.settings.preset || Config.llm.defaultChatPresetId, Config.basic.toggleMode, Config.basic.togglePrefix)
     if (!preset) {

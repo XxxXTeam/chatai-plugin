@@ -186,7 +186,7 @@ export async function toYunzai (e, contents) {
   for (let content of contents) {
     switch (content.type) {
       case 'text': {
-        msgs.push((/** @type {import('chaite').TextContent} **/ content).text)
+        msgs.push((/** @type {import('chaite').TextContent} **/ content).text?.trim() || '')
         break
       }
       case 'image': {
@@ -208,6 +208,6 @@ export async function toYunzai (e, contents) {
     }
   }
   return {
-    msgs, forward
+    msgs: msgs.filter(i => !!i), forward
   }
 }
