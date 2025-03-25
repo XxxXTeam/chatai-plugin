@@ -165,6 +165,7 @@ export async function initChaite () {
       }
     })
     // 回传部分需要同步的配置，以防不一致
+    chaite.getGlobalConfig().setDebug(ChatGPTConfig.basic.debug)
     chaite.getGlobalConfig().setAuthKey(ChatGPTConfig.chaite.authKey)
   })
   // 授予Chaite获取插件配置的能力以便通过api放出
