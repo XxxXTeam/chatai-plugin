@@ -22,6 +22,9 @@ export class bym extends plugin {
   }
 
   async bym (e) {
+    if (!Chaite.getInstance()) {
+      return false
+    }
     if (!ChatGPTConfig.bym.enable) {
       return false
     }
@@ -82,6 +85,7 @@ export class bym extends plugin {
     // sendMessageOption.disableHistoryRead = true
     // sendMessageOption.disableHistorySave = true
     sendMessageOption.conversationId = 'bym' + e.user_id + Date.now()
+    sendMessageOption.parentMessageId = undefined
     // 设置多轮调用回掉
     sendMessageOption.onMessageWithToolCall = async content => {
       const { msgs, forward } = await toYunzai(e, [content])

@@ -27,6 +27,9 @@ export class Chat extends plugin {
   }
 
   async chat (e) {
+    if (!Chaite.getInstance()) {
+      return false
+    }
     let state = await Chaite.getInstance().getUserStateStorage().getItem(e.sender.user_id + '')
     if (!state) {
       state = new YunzaiUserState(e.sender.user_id, e.sender.nickname, e.sender.card)
@@ -61,6 +64,8 @@ export class Chat extends plugin {
       toggleMode: Config.basic.toggleMode,
       togglePrefix: Config.basic.togglePrefix
     })
+    sendMessageOptions.conversationId = state?.current?.conversationId
+    sendMessageOptions.parentMessageId = state?.current?.messageId || state?.conversations.find(c => c.id === sendMessageOptions.conversationId)?.lastMessageId
     if (Config.llm.enableGroupContext && e.isGroup) {
       const contextPrompt = await getGroupContextPrompt(e, Config.llm.groupContextLength)
       sendMessageOptions.systemOverride = sendMessageOptions.systemOverride ? sendMessageOptions.systemOverride + '\n' + contextPrompt : (preset.sendMessageOption.systemOverride + contextPrompt)

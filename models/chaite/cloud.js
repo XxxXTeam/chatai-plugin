@@ -173,6 +173,7 @@ export async function initChaite () {
   })
   chaite.getGlobalConfig().setHost(ChatGPTConfig.chaite.host)
   chaite.getGlobalConfig().setPort(ChatGPTConfig.chaite.port)
+  chaite.getGlobalConfig().setDebug(ChatGPTConfig.basic.debug)
   logger.info('Chaite.RAGManager 初始化完成')
   chaite.runApiServer()
 }
