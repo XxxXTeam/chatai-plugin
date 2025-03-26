@@ -133,6 +133,7 @@ export async function initChaite () {
   const toolsGroupManager = await ToolsGroupManager.init(new LowDBToolsGroupDTOsStorage(ChatGPTStorage))
   const userModeSelector = new ChatGPTUserModeSelector()
   const userStateStorage = new LowDBUserStateStorage(ChatGPTStorage)
+  await ChatGPTHistoryStorage.init()
   const historyManager = new LowDBHistoryManager(ChatGPTHistoryStorage)
   let chaite = Chaite.init(channelsManager, toolsManager, processorsManager, chatPresetManager, toolsGroupManager,
     userModeSelector, userStateStorage, historyManager, logger)
