@@ -254,11 +254,42 @@ class ChatGPTConfig {
   loadFromFile () {
     try {
       const content = fs.readFileSync(this.configPath, 'utf8')
-      const config = this.configPath.endsWith('.json')
+      const loadedConfig = this.configPath.endsWith('.json')
         ? JSON.parse(content)
         : yaml.load(content)
 
-      Object.assign(this, config)
+      // Deep merge function that preserves default values
+      const deepMerge = (target, source) => {
+        // Skip non-object properties or special properties
+        if (!source || typeof source !== 'object' ||
+          !target || typeof target !== 'object') {
+          return
+        }
+
+        for (const key in source) {
+          // Skip internal properties
+          if (key === 'watcher' || key === 'configPath') continue
+
+          if (typeof source[key] === 'object' && source[key] !== null &&
+            typeof target[key] === 'object' && target[key] !== null) {
+            // Recursively merge nested objects
+            deepMerge(target[key], source[key])
+          } else if (source[key] !== undefined) {
+            // Only update if the value exists in the loaded config
+            target[key] = source[key]
+          }
+          // If source[key] is undefined, keep the default value in target
+        }
+      }
+
+      // Apply loaded config to this object, preserving defaults
+      deepMerge(this, loadedConfig)
+
+      // Save the file to persist any new default values
+      const hasChanges = JSON.stringify(this.toJSON()) !== content
+      if (hasChanges) {
+        this.saveToFile()
+      }
     } catch (error) {
       console.error('Failed to load config:', error)
     }
@@ -285,6 +316,17 @@ class ChatGPTConfig {
       fs.writeFileSync(this.configPath, content, 'utf8')
     } catch (error) {
       console.error('Failed to save config:', error)
+    }
+  }
+
+  toJSON () {
+    return {
+      version: this.version,
+      basic: this.basic,
+      bym: this.bym,
+      llm: this.llm,
+      management: this.management,
+      chaite: this.chaite
     }
   }
 }
