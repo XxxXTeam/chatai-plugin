@@ -362,4 +362,17 @@ const ChatGPTStorage = new LowDBStorage({
   directory: dataDir
 })
 
+if (ChatGPTStorage.db.data.collections.history) {
+  ChatGPTStorage.dropCollection('history').then(() => {
+    logger.debug('drop older version history collection')
+  }).catch(err => {
+    logger.warn('failed to drop older version history collection', err)
+  })
+}
+
+export const ChatGPTHistoryStorage = new LowDBStorage({
+  filename: 'history.json',
+  directory: dataDir
+})
+
 export default ChatGPTStorage

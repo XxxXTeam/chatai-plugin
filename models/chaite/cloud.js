@@ -19,7 +19,7 @@ import { ChatGPTUserModeSelector } from './user_mode_selector.js'
 import { LowDBUserStateStorage } from './user_state_storage.js'
 import { LowDBHistoryManager } from './history_manager.js'
 import { VectraVectorDatabase } from './vector_database.js'
-import ChatGPTStorage from '../storage.js'
+import ChatGPTStorage, {ChatGPTHistoryStorage} from '../storage.js'
 import path from 'path'
 import fs from 'fs'
 import { migrateDatabase } from '../../utils/initDB.js'
@@ -133,7 +133,7 @@ export async function initChaite () {
   const toolsGroupManager = await ToolsGroupManager.init(new LowDBToolsGroupDTOsStorage(ChatGPTStorage))
   const userModeSelector = new ChatGPTUserModeSelector()
   const userStateStorage = new LowDBUserStateStorage(ChatGPTStorage)
-  const historyManager = new LowDBHistoryManager(ChatGPTStorage)
+  const historyManager = new LowDBHistoryManager(ChatGPTHistoryStorage)
   let chaite = Chaite.init(channelsManager, toolsManager, processorsManager, chatPresetManager, toolsGroupManager,
     userModeSelector, userStateStorage, historyManager, logger)
   logger.info('Chaite 初始化完成')
