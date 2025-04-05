@@ -19,7 +19,7 @@ import { ChatGPTUserModeSelector } from './user_mode_selector.js'
 import { LowDBUserStateStorage } from './user_state_storage.js'
 import { LowDBHistoryManager } from './history_manager.js'
 import { VectraVectorDatabase } from './vector_database.js'
-import ChatGPTStorage, {ChatGPTHistoryStorage} from '../storage.js'
+import ChatGPTStorage, { ChatGPTHistoryStorage } from '../storage.js'
 import path from 'path'
 import fs from 'fs'
 import { migrateDatabase } from '../../utils/initDB.js'
@@ -28,11 +28,15 @@ import { LowDBToolsGroupDTOsStorage } from './tool_groups_storage.js'
 /**
  * 认证，以便共享上传
  * @param apiKey
- * @returns {Promise<import('chaite').User> | null}
+ * @returns {Promise<import('chaite').User | null>}
  */
 export async function authCloud (apiKey = ChatGPTConfig.chaite.cloudApiKey) {
-  await Chaite.getInstance().auth(apiKey)
-  return Chaite.getInstance().getToolsManager().cloudService.getUser()
+  try {
+    await Chaite.getInstance().auth(apiKey)
+    return Chaite.getInstance().getToolsManager().cloudService.getUser()
+  } catch (err) {
+
+  }
 }
 
 /**
@@ -141,7 +145,10 @@ export async function initChaite () {
   chaite.setCloudService(ChatGPTConfig.chaite.cloudBaseUrl)
   logger.info('Chaite.Cloud 初始化完成')
   await migrateDatabase()
-  ChatGPTConfig.chaite.cloudApiKey && await chaite.auth(ChatGPTConfig.chaite.cloudApiKey)
+  if (ChatGPTConfig.chaite.cloudApiKey) {
+    const user = await authCloud(ChatGPTConfig.chaite.cloudApiKey)
+    logger.info(`Chaite.Cloud 认证成功, 当前用户${user.username || user.email} (${user.user_id})`)
+  }
   await initRagManager(ChatGPTConfig.llm.embeddingModel, ChatGPTConfig.llm.dimensions)
   if (!ChatGPTConfig.chaite.authKey) {
     ChatGPTConfig.chaite.authKey = Chaite.getInstance().getFrontendAuthHandler().generateToken(0, true)

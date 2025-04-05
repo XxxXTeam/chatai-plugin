@@ -47,6 +47,70 @@ export function createCRUDCommandRules (cmdPrefix, name, variable, detail = true
         e.reply(`${name}不存在`)
       }
     }
+    rules.push({
+      reg: cmdPrefix + `上传${name}(.*)`,
+      fnc: `upload${upperVariable}`
+    })
+    this[`upload${upperVariable}`] = async function (e) {
+      const match = e.msg.match(new RegExp(cmdPrefix + `上传${name}(.*)`))
+      if (match) {
+        const id = match[1].trim()
+        console.log(id)
+        const instance = await manager.getInstanceT(id)
+        if (instance) {
+          const result = await manager.shareToCloud(id)
+          if (result) {
+            e.reply(`上传成功，云端${name}ID为：${result}`)
+          } else {
+            e.reply('上传失败')
+          }
+        } else {
+          e.reply(`${name}不存在`)
+        }
+      }
+    }
+    rules.push({
+      reg: cmdPrefix + `浏览云端${name}(.*?)(页码(\\d+))?$`,
+      fnc: `listCloud${upperVariable}`
+    })
+    this[`listCloud${upperVariable}`] = async function (e) {
+      const match = e.msg.match(new RegExp(cmdPrefix + `浏览云端${name}(.*?)(页码(\\d+))?$`))
+      if (match) {
+        const query = match[1].trim()
+        const page = match[3] ? parseInt(match[3]) : 1 // 如果没有指定页码，默认为第1页
+
+        const result = await manager?.listFromCloud({}, query, {
+          page,
+          pageSize: 10,
+          searchFields: ['name', 'description']
+        })
+
+        logger.debug(result)
+        if (result.items && result.items.length > 0) {
+          const msgs = result.items.map(i => i.toFormatedString(!e.isGroup))
+
+          // 构建分页信息
+          const { currentPage, totalPages, totalItems, pageSize } = result.pagination
+          const pageInfo = `云端${name}查询结果 - 第${currentPage}/${totalPages}页，共${totalItems}条，每页${pageSize}条`
+
+          // 添加翻页提示
+          let pageHint = ''
+          if (result.pagination.hasNextPage) {
+            pageHint += `\n发送 ${cmdPrefix}浏览云端${name}${query || ''}页码${currentPage + 1} 查看下一页`
+          }
+          if (result.pagination.hasPreviousPage) {
+            pageHint += `\n发送 ${cmdPrefix}浏览云端${name}${query || ''}页码${currentPage - 1} 查看上一页`
+          }
+
+          const forwardedMsg = await common.makeForwardMsg(e, msgs, pageInfo + pageHint)
+          e.reply(forwardedMsg)
+        } else {
+          e.reply(`未找到相关的云端${name}或页码超出范围`)
+        }
+      } else {
+        e.reply(`格式错误，正确格式：${cmdPrefix}浏览云端${name}[关键词][页码数字]`)
+      }
+    }
   }
   // todo
   // 定义对应的函数
@@ -72,10 +136,10 @@ export function createCRUDCommandRules (cmdPrefix, name, variable, detail = true
     if (manager) {
       this.reply(`暂不支持添加${name}，请使用后台管理面板添加`)
     } else {
+      const id = e.msg.replace(new RegExp(cmdPrefix + `(添加|新增)${name}`), '')
       if (variable in ChatGPTConfig.llm) {
         /** @type {string[]} */
         const list = ChatGPTConfig.llm[variable]
-        const id = e.msg.replace(new RegExp(cmdPrefix + `(添加|新增)${name}`), '')
         if (list.indexOf(id) > 0) {
           e.reply(`${name}已存在`)
         } else {
