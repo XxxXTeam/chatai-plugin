@@ -1,5 +1,6 @@
 import { getBotFramework } from './bot.js'
 import ChatGPTConfig from '../config/config.js'
+import {formatTimeToBeiJing} from './common.js'
 
 export class GroupContextCollector {
   /**
@@ -132,7 +133,7 @@ export async function getGroupContextPrompt (e, length) {
       // eslint-disable-next-line no-template-curly-in-string
       .replace('${message.sender.title}', sender.title || '-')
       // eslint-disable-next-line no-template-curly-in-string
-      .replace('${message.time}', chat.time || '-')
+      .replace('${message.time}', formatTimeToBeiJing(chat.time) || '-')
       // eslint-disable-next-line no-template-curly-in-string
       .replace('${message.messageId}', chat.messageId || '-')
       // eslint-disable-next-line no-template-curly-in-string

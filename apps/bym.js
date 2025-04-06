@@ -3,6 +3,7 @@ import { Chaite } from 'chaite'
 import { intoUserMessage, toYunzai } from '../utils/message.js'
 import common from '../../../lib/common/common.js'
 import { getGroupContextPrompt } from '../utils/group.js'
+import {formatTimeToBeiJing} from '../utils/common.js'
 
 export class bym extends plugin {
   constructor () {
@@ -66,6 +67,7 @@ export class bym extends plugin {
       }
       sendMessageOption.systemOverride = ChatGPTConfig.bym.presetPrefix + sendMessageOption.systemOverride
     }
+    sendMessageOption.systemOverride = `Current Time: ${formatTimeToBeiJing(new Date().getTime())}\n` + sendMessageOption.systemOverride
     if (ChatGPTConfig.bym.temperature >= 0) {
       sendMessageOption.temperature = ChatGPTConfig.bym.temperature
     }
