@@ -16,26 +16,31 @@ export function createCRUDCommandRules (cmdPrefix, name, variable, detail = true
   const rules = [
     {
       reg: cmdPrefix + `${name}列表$`,
-      fnc: `list${upperVariable}`
+      fnc: `list${upperVariable}`,
+      permission: 'master'
     },
     {
       reg: cmdPrefix + `(编辑|修改)${name}`,
-      fnc: `edit${upperVariable}`
+      fnc: `edit${upperVariable}`,
+      permission: 'master'
     },
     {
       reg: cmdPrefix + `(添加|新增)${name}$`,
-      fnc: `add${upperVariable}`
+      fnc: `add${upperVariable}`,
+      permission: 'master'
     },
     {
       reg: cmdPrefix + `删除${name}`,
-      fnc: `remove${upperVariable}`
+      fnc: `remove${upperVariable}`,
+      permission: 'master'
     }
   ]
   const manager = getManagerByName(upperVariable)
   if (detail) {
     rules.push({
       reg: cmdPrefix + `${name}详情`,
-      fnc: `detail${upperVariable}`
+      fnc: `detail${upperVariable}`,
+      permission: 'master'
     })
     this[`detail${upperVariable}`] = async function (e) {
       const verbose = !e.isGroup
@@ -49,7 +54,8 @@ export function createCRUDCommandRules (cmdPrefix, name, variable, detail = true
     }
     rules.push({
       reg: cmdPrefix + `上传${name}(.*)`,
-      fnc: `upload${upperVariable}`
+      fnc: `upload${upperVariable}`,
+      permission: 'master'
     })
     this[`upload${upperVariable}`] = async function (e) {
       const match = e.msg.match(new RegExp(cmdPrefix + `上传${name}(.*)`))
@@ -109,6 +115,29 @@ export function createCRUDCommandRules (cmdPrefix, name, variable, detail = true
         }
       } else {
         e.reply(`格式错误，正确格式：${cmdPrefix}浏览云端${name}[关键词][页码数字]`)
+      }
+    }
+    rules.push({
+      reg: cmdPrefix + `导入${name}`,
+      fnc: `importCloud${upperVariable}`
+    })
+    this[`importCloud${upperVariable}`] = async function (e) {
+      const match = e.msg.match(new RegExp(cmdPrefix + `导入${name}`))
+      if (match) {
+        const id = match[1].trim()
+        const instance = await manager.getInstanceByCloudId(id)
+        if (instance) {
+          e.reply(`${name}已存在，尝试导入最新版本`, true)
+        }
+        const result = await manager.getFromCloud(id)
+        if (result) {
+          result.cloudId = result.id
+          delete result.id
+          const newId = await manager.addInstance(result)
+          e.reply(`导入成功，${name}ID为：${newId}`, true)
+        } else {
+          e.reply(`获取${name}失败，请检查id是否正确`, true)
+        }
       }
     }
   }
