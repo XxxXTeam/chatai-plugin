@@ -124,7 +124,7 @@ export function createCRUDCommandRules (cmdPrefix, name, variable, detail = true
     this[`importCloud${upperVariable}`] = async function (e) {
       const id = e.msg.replace(new RegExp(cmdPrefix + `导入${name}`), '')
       if (id) {
-        const instance = await manager.getInstanceByCloudId(id)
+        const instance = manager.getInstanceByCloudId ? (await manager.getInstanceByCloudId(id)) : (await manager.getInstanceTByCloudId(id))
         if (instance) {
           e.reply(`${name}已存在，尝试导入最新版本`, true)
         }

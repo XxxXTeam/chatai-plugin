@@ -133,7 +133,7 @@ export async function getGroupContextPrompt (e, length) {
       // eslint-disable-next-line no-template-curly-in-string
       .replace('${message.sender.title}', sender.title || '-')
       // eslint-disable-next-line no-template-curly-in-string
-      .replace('${message.time}', formatTimeToBeiJing(chat.time) || '-')
+      .replace('${message.time}', chat.time ? formatTimeToBeiJing(chat.time) : '-')
       // eslint-disable-next-line no-template-curly-in-string
       .replace('${message.messageId}', chat.messageId || '-')
       // eslint-disable-next-line no-template-curly-in-string
