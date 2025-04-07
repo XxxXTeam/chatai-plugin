@@ -138,6 +138,8 @@ export function createCRUDCommandRules (cmdPrefix, name, variable, detail = true
         } else {
           e.reply(`获取${name}失败，请检查id是否正确`, true)
         }
+      } else {
+        e.reply(`格式错误，正确格式：${cmdPrefix}导入${name}[id]`)
       }
     }
   }
