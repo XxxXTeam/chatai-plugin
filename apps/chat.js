@@ -33,7 +33,7 @@ export class Chat extends plugin {
     let state = await Chaite.getInstance().getUserStateStorage().getItem(e.sender.user_id + '')
     if (!state) {
       state = new YunzaiUserState(e.sender.user_id, e.sender.nickname, e.sender.card)
-      await Chaite.getInstance().getUserStateStorage().setItem(e.sender.user_id + '', state)
+      // await Chaite.getInstance().getUserStateStorage().setItem(e.sender.user_id + '', state)
     }
     if (!state.current.conversationId) {
       state.current.conversationId = crypto.randomUUID()
@@ -76,6 +76,17 @@ export class Chat extends plugin {
     })
     // 更新当前聊天进度
     state.current.messageId = response.id
+    const conversations = state.conversations
+    if (conversations.find(c => c.id === sendMessageOptions.conversationId)) {
+      conversations.find(c => c.id === sendMessageOptions.conversationId).lastMessageId = response.id
+    } else {
+      conversations.push({
+        id: sendMessageOptions.conversationId,
+        lastMessageId: response.id,
+        // todo
+        name: 'New Conversation'
+      })
+    }
     await Chaite.getInstance().getUserStateStorage().setItem(e.sender.user_id + '', state)
     const { msgs, forward } = await toYunzai(e, response.contents)
     if (msgs.length > 0) {

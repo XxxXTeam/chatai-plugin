@@ -1,7 +1,8 @@
 import ChatGPTConfig from '../config/config.js'
 import { createCRUDCommandRules, createSwitchCommandRules } from '../utils/command.js'
-import { Chaite } from 'chaite'
+import { Chaite, VERSION } from 'chaite'
 import * as crypto from 'node:crypto'
+import common from '../../../lib/common/common.js'
 
 export class ChatGPTManagement extends plugin {
   constructor () {
@@ -24,6 +25,11 @@ export class ChatGPTManagement extends plugin {
         {
           reg: `^${cmdPrefix}(bym|伪人)设置默认预设`,
           fnc: 'setDefaultBymPreset',
+          permission: 'master'
+        },
+        {
+          reg: `^${cmdPrefix}(查看)?(当前)?(配置|信息|统计信息|状态)$`,
+          fnc: 'currentStatus',
           permission: 'master'
         }
       ]
@@ -109,5 +115,58 @@ export class ChatGPTManagement extends plugin {
       await Chaite.getInstance().getUserStateStorage().setItem(e.sender.user_id + '', state)
       this.reply('已结束当前对话')
     }
+  }
+
+  async currentStatus (e) {
+    const msgs = []
+    let basic = `Chaite版本：${VERSION}\n`
+    const user = Chaite.getInstance().getToolsManager().cloudService?.getUser()
+    if (user) {
+      basic += `Chaite Cloud：已认证 @${user.username}`
+    } else if (ChatGPTConfig.chaite.cloudBaseUrl) {
+      basic += 'Chaite Cloud: 未认证'
+    } else {
+      basic += 'Chaite Cloud: 未接入'
+    }
+    msgs.push(basic)
+
+    const allChannels = await Chaite.getInstance().getChannelsManager().getAllChannels()
+    let channelMsg = `渠道总数：${allChannels.length}\n`
+    channelMsg += `请使用 ${ChatGPTConfig.basic.commandPrefix}渠道列表 查看全部渠道\n\n`
+    allChannels.map(c => c.models).reduce((acc, cur) => {
+      acc.push(...cur)
+      return acc
+    }, []).forEach(m => {
+      channelMsg += `${m}：${allChannels.filter(c => c.models.includes(m)).length}个\n`
+    })
+    msgs.push(channelMsg)
+
+    const allPresets = await Chaite.getInstance().getChatPresetManager().getAllPresets()
+    let presetMsg = `预设总数：${allPresets.length}\n`
+    presetMsg += `请使用 ${ChatGPTConfig.basic.commandPrefix}预设列表 查看全部预设`
+    msgs.push(presetMsg)
+
+    const defaultChatPresetId = ChatGPTConfig.llm.defaultChatPresetId
+    const currentPreset = await Chaite.getInstance().getChatPresetManager().getInstance(defaultChatPresetId)
+    msgs.push(`当前预设：${currentPreset?.name || '未设置'}${currentPreset ? ('\n\n' + currentPreset.toFormatedString(false)) : ''}`)
+
+    const allTools = await Chaite.getInstance().getToolsManager().listInstances()
+    let toolsMsg = `工具总数：${allTools.length}\n`
+    toolsMsg += `请使用 ${ChatGPTConfig.basic.commandPrefix}工具列表 查看全部工具`
+    msgs.push(toolsMsg)
+
+    const allProcessors = await Chaite.getInstance().getProcessorsManager().listInstances()
+    let processorsMsg = `处理器总数：${allProcessors.length}\n`
+    processorsMsg += `请使用 ${ChatGPTConfig.basic.commandPrefix}处理器列表 查看全部处理器`
+    msgs.push(processorsMsg)
+
+    const userStatesManager = Chaite.getInstance().getUserStateStorage()
+    const allUsers = await userStatesManager.listItems()
+    const currentUserNums = allUsers.filter(u => u.current.conversationId && u.current.messageId).length
+    const historyUserNums = allUsers.length
+    msgs.push(`用户总数：${historyUserNums}\n当前对话用户数：${currentUserNums}`)
+
+    const m = await common.makeForwardMsg(e, msgs, e.msg)
+    e.reply(m)
   }
 }
