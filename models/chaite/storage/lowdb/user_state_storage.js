@@ -13,7 +13,7 @@ export class YunzaiUserState {
     this.settings = {}
     this.current = {
       conversationId,
-      messageId: ''
+      messageId: crypto.randomUUID()
     }
   }
 }

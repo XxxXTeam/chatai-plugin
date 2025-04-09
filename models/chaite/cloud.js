@@ -30,6 +30,7 @@ import { SQLiteProcessorsStorage } from './storage/sqlite/processors_storage.js'
 import { SQLiteUserStateStorage } from './storage/sqlite/user_state_storage.js'
 import { SQLiteToolsGroupStorage } from './storage/sqlite/tool_groups_storage.js'
 import { checkMigrate } from './storage/sqlite/migrate.js'
+import { SQLiteHistoryManager } from './storage/sqlite/history_manager.js'
 
 /**
  * 认证，以便共享上传
@@ -144,6 +145,7 @@ export async function initChaite () {
       await userStateStorage.initialize()
       toolsGroupStorage = new SQLiteToolsGroupStorage(dbPath)
       await toolsGroupStorage.initialize()
+      historyStorage = new SQLiteHistoryManager(dbPath, path.join(dataDir, 'images'))
       await checkMigrate()
       break
     }
