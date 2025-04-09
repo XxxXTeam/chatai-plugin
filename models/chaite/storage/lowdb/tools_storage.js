@@ -4,6 +4,10 @@ import { ChaiteStorage, ToolDTO } from 'chaite'
  * @extends {ChaiteStorage<import('chaite').ToolDTO>}
  */
 export class LowDBToolsStorage extends ChaiteStorage {
+  getName () {
+    return 'LowDBToolsStorage'
+  }
+
   /**
    *
    * @param { LowDBStorage } storage

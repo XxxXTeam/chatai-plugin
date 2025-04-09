@@ -11,19 +11,25 @@ import {
   ToolsGroupManager
 } from 'chaite'
 import ChatGPTConfig from '../../config/config.js'
-import { LowDBChannelStorage } from './channel_storage.js'
-import { LowDBChatPresetsStorage } from './chat_preset_storage.js'
-import { LowDBToolsStorage } from './tools_storage.js'
-import { LowDBProcessorsStorage } from './processors_storage.js'
+import { LowDBChannelStorage } from './storage/lowdb/channel_storage.js'
+import { LowDBChatPresetsStorage } from './storage/lowdb/chat_preset_storage.js'
+import { LowDBToolsStorage } from './storage/lowdb/tools_storage.js'
+import { LowDBProcessorsStorage } from './storage/lowdb/processors_storage.js'
 import { ChatGPTUserModeSelector } from './user_mode_selector.js'
-import { LowDBUserStateStorage } from './user_state_storage.js'
-import { LowDBHistoryManager } from './history_manager.js'
+import { LowDBUserStateStorage } from './storage/lowdb/user_state_storage.js'
+import { LowDBHistoryManager } from './storage/lowdb/history_manager.js'
 import { VectraVectorDatabase } from './vector_database.js'
-import ChatGPTStorage, { ChatGPTHistoryStorage } from '../storage.js'
 import path from 'path'
 import fs from 'fs'
 import { migrateDatabase } from '../../utils/initDB.js'
-import { LowDBToolsGroupDTOsStorage } from './tool_groups_storage.js'
+import { SQLiteChannelStorage } from './storage/sqlite/channel_storage.js'
+import { dataDir } from '../../utils/common.js'
+import { SQLiteChatPresetStorage } from './storage/sqlite/chat_preset_storage.js'
+import { SQLiteToolsStorage } from './storage/sqlite/tools_storage.js'
+import { SQLiteProcessorsStorage } from './storage/sqlite/processors_storage.js'
+import { SQLiteUserStateStorage } from './storage/sqlite/user_state_storage.js'
+import { SQLiteToolsGroupStorage } from './storage/sqlite/tool_groups_storage.js'
+import { checkMigrate } from './storage/sqlite/migrate.js'
 
 /**
  * 认证，以便共享上传
@@ -35,7 +41,7 @@ export async function authCloud (apiKey = ChatGPTConfig.chaite.cloudApiKey) {
     await Chaite.getInstance().auth(apiKey)
     return Chaite.getInstance().getToolsManager().cloudService.getUser()
   } catch (err) {
-
+    logger.error(err)
   }
 }
 
@@ -121,26 +127,56 @@ export async function initRagManager (model, dimensions) {
 }
 
 export async function initChaite () {
-  await ChatGPTStorage.init()
-  const channelsManager = await ChannelsManager.init(new LowDBChannelStorage(ChatGPTStorage), new DefaultChannelLoadBalancer())
+  const storage = ChatGPTConfig.chaite.storage
+  let channelsStorage, chatPresetsStorage, toolsStorage, processorsStorage, userStateStorage, historyStorage, toolsGroupStorage
+  switch (storage) {
+    case 'sqlite': {
+      const dbPath = path.join(dataDir, 'data.db')
+      channelsStorage = new SQLiteChannelStorage(dbPath)
+      await channelsStorage.initialize()
+      chatPresetsStorage = new SQLiteChatPresetStorage(dbPath)
+      await chatPresetsStorage.initialize()
+      toolsStorage = new SQLiteToolsStorage(dbPath)
+      await toolsStorage.initialize()
+      processorsStorage = new SQLiteProcessorsStorage(dbPath)
+      await processorsStorage.initialize()
+      userStateStorage = new SQLiteUserStateStorage(dbPath)
+      await userStateStorage.initialize()
+      toolsGroupStorage = new SQLiteToolsGroupStorage(dbPath)
+      await toolsGroupStorage.initialize()
+      await checkMigrate()
+      break
+    }
+    case 'lowdb': {
+      const ChatGPTStorage = (await import('storage/lowdb/storage.js')).default
+      await ChatGPTStorage.init()
+      channelsStorage = new LowDBChannelStorage(ChatGPTStorage)
+      chatPresetsStorage = new LowDBChatPresetsStorage(ChatGPTStorage)
+      toolsStorage = new LowDBToolsStorage(ChatGPTStorage)
+      processorsStorage = new LowDBProcessorsStorage(ChatGPTStorage)
+      userStateStorage = new LowDBUserStateStorage(ChatGPTStorage)
+      const ChatGPTHistoryStorage = (await import('storage/lowdb/storage.js')).ChatGPTHistoryStorage
+      await ChatGPTHistoryStorage.init()
+      historyStorage = new LowDBHistoryManager(ChatGPTHistoryStorage)
+      break
+    }
+  }
+  const channelsManager = await ChannelsManager.init(channelsStorage, new DefaultChannelLoadBalancer())
   const toolsDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.chaite.toolsDirPath)
   if (!fs.existsSync(toolsDir)) {
     fs.mkdirSync(toolsDir, { recursive: true })
   }
-  const toolsManager = await ToolManager.init(toolsDir, new LowDBToolsStorage(ChatGPTStorage))
+  const toolsManager = await ToolManager.init(toolsDir, toolsStorage)
   const processorsDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.chaite.processorsDirPath)
   if (!fs.existsSync(processorsDir)) {
     fs.mkdirSync(processorsDir, { recursive: true })
   }
-  const processorsManager = await ProcessorsManager.init(processorsDir, new LowDBProcessorsStorage(ChatGPTStorage))
-  const chatPresetManager = await ChatPresetManager.init(new LowDBChatPresetsStorage(ChatGPTStorage))
-  const toolsGroupManager = await ToolsGroupManager.init(new LowDBToolsGroupDTOsStorage(ChatGPTStorage))
+  const processorsManager = await ProcessorsManager.init(processorsDir, processorsStorage)
+  const chatPresetManager = await ChatPresetManager.init(chatPresetsStorage)
+  const toolsGroupManager = await ToolsGroupManager.init(toolsGroupStorage)
   const userModeSelector = new ChatGPTUserModeSelector()
-  const userStateStorage = new LowDBUserStateStorage(ChatGPTStorage)
-  await ChatGPTHistoryStorage.init()
-  const historyManager = new LowDBHistoryManager(ChatGPTHistoryStorage)
   let chaite = Chaite.init(channelsManager, toolsManager, processorsManager, chatPresetManager, toolsGroupManager,
-    userModeSelector, userStateStorage, historyManager, logger)
+    userModeSelector, userStateStorage, historyStorage, logger)
   logger.info('Chaite 初始化完成')
   chaite.setCloudService(ChatGPTConfig.chaite.cloudBaseUrl)
   logger.info('Chaite.Cloud 初始化完成')

@@ -3,7 +3,7 @@ import { Low } from 'lowdb'
 import { JSONFile } from 'lowdb/node'
 import path from 'path'
 import fs from 'fs'
-import ChatGPTConfig from '../config/config.js'
+import { dataDir } from '../../../../utils/common.js'
 
 /**
  * 基于 LowDB 的简单存储类，提供 CRUD 和条件查询功能
@@ -348,10 +348,6 @@ export class LowDBCollection {
   }
 }
 
-export const dataDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.chaite.dataDir)
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true })
-}
 const storageLocation = path.resolve(dataDir, 'storage.json')
 if (!fs.existsSync(storageLocation)) {
   fs.writeFileSync(storageLocation, JSON.stringify({ collections: {} }))

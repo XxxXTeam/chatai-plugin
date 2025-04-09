@@ -166,15 +166,17 @@ class ChatGPTConfig {
     // 工具目录，相对于插件目录下
     toolsDirPath: 'utils/tools',
     // 云端API url
-    cloudBaseUrl: '',
+    cloudBaseUrl: 'https://api.chaite.cloud',
     // 云端API Key
     cloudApiKey: '',
     // jwt key，非必要勿修改，修改需重启
     authKey: '',
     // 管理面板监听地址
-    host: '',
+    host: '0.0.0.0',
     // 管理面板监听端口
-    port: 48370
+    port: 48370,
+    // 存储实现 sqlite lowdb
+    storage: 'sqlite'
   }
 
   constructor () {
@@ -212,26 +214,59 @@ class ChatGPTConfig {
       }
     })
 
-    const createDeepProxy = (obj, handler) => {
+    const createDeepProxy = (obj, handler, seen = new WeakMap()) => {
+      // 基本类型或非对象直接返回
       if (obj === null || typeof obj !== 'object') return obj
 
+      // 检查循环引用
+      if (seen.has(obj)) {
+        return seen.get(obj)
+      }
+
+      // 创建代理对象
+      const proxy = new Proxy(obj, handler)
+
+      // 记录已创建的代理，避免循环引用
+      seen.set(obj, proxy)
+
+      // 处理子对象
       for (let key of Object.keys(obj)) {
         if (typeof obj[key] === 'object' && obj[key] !== null) {
-          obj[key] = createDeepProxy(obj[key], handler)
+          obj[key] = createDeepProxy(obj[key], handler, seen)
         }
       }
 
-      return new Proxy(obj, handler)
+      return proxy
     }
 
-    // 创建处理器
     const handler = {
       set: (target, prop, value) => {
         if (prop !== 'watcher' && prop !== 'configPath') {
-          target[prop] = typeof value === 'object' && value !== null
-            ? createDeepProxy(value, handler)
-            : value
-          this.saveToFile()
+          // 避免递归创建代理
+          if (typeof value === 'object' && value !== null) {
+            // 检查 value 是否已经是代理
+            if (!value.__isProxy) {
+              const newProxy = createDeepProxy(value, handler)
+              // 标记为代理对象
+              Object.defineProperty(newProxy, '__isProxy', {
+                value: true,
+                enumerable: false,
+                configurable: false
+              })
+              target[prop] = newProxy
+            } else {
+              target[prop] = value
+            }
+          } else {
+            target[prop] = value
+          }
+
+          // 避免在代理对象保存时再次触发
+          if (!target.__isSaving) {
+            target.__isSaving = true
+            this.saveToFile()
+            target.__isSaving = false
+          }
         }
         return true
       }

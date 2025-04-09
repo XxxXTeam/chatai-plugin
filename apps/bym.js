@@ -40,7 +40,7 @@ export class bym extends plugin {
     let recall = false
     let presetId = ChatGPTConfig.bym.defaultPreset
     if (ChatGPTConfig.bym.presetMap && ChatGPTConfig.bym.presetMap.length > 0) {
-      const option = ChatGPTConfig.bym.presetMap.sort((a, b) => a.priority - b.priority)
+      const option = ChatGPTConfig.bym.presetMap.sort((a, b) => b.priority - a.priority)
         .find(item => item.keywords.find(keyword => e.msg?.includes(keyword)))
       if (option) {
         presetId = option.presetId
