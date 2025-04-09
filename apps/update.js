@@ -68,59 +68,65 @@ export class Update extends plugin {
    * @returns
    */
   async runUpdate (isForce) {
-    let command = 'git -C ./plugins/chatgpt-plugin/ pull --no-rebase'
-    if (isForce) {
-      command = `git -C ./plugins/chatgpt-plugin/ checkout . && ${command}`
-      this.e.reply('正在执行强制更新操作，请稍等')
-    } else {
-      this.e.reply('正在执行更新操作，请稍等')
-    }
-    /** 获取上次提交的commitId，用于获取日志时判断新增的更新日志 */
-    this.oldCommitId = await this.getcommitId('chatgpt-plugin')
-    uping = true
-    let ret = await this.execSync(command)
+    try {
+      let command = 'git -C ./plugins/chatgpt-plugin/ pull --no-rebase'
+      if (isForce) {
+        command = `git -C ./plugins/chatgpt-plugin/ checkout . && ${command}`
+        this.e.reply('正在执行强制更新操作，请稍等')
+      } else {
+        this.e.reply('正在执行更新操作，请稍等')
+      }
+      /** 获取上次提交的commitId，用于获取日志时判断新增的更新日志 */
+      this.oldCommitId = await this.getcommitId('chatgpt-plugin')
+      uping = true
+      let ret = await this.execSync(command)
 
-    if (ret.error) {
-      logger.mark(`${this.e.logFnc} 更新失败：chatgpt-plugin`)
-      this.gitErr(ret.error, ret.stdout)
-      return false
-    }
-
-    // Check if pnpm is available
-    let packageManager = await this.checkPnpm()
-    await this.reply(`正在使用 ${packageManager} 更新 chaite 依赖...`)
-    let npmRet = await this.execSync(`cd ./plugins/chatgpt-plugin/ && ${packageManager} update chaite`)
-    logger.info(JSON.stringify(npmRet))
-    if (npmRet.error) {
-      logger.mark(`${this.e.logFnc} 更新失败：chaite 依赖`)
-      await this.reply(`chaite 依赖更新失败：\n${npmRet.error.toString()}`)
-      uping = false
-      return false
-    }
-    uping = false
-    /** 获取插件提交的最新时间 */
-    let time = await this.getTime('chatgpt-plugin')
-
-    if (/(Already up[ -]to[ -]date|已经是最新的)/.test(ret.stdout)) {
-      await this.reply(`chatgpt-plugin已经是最新版本\n最后更新时间：${time}`)
-    } else {
-      let updateMsg = `chatgpt-plugin\n最后更新时间：${time}`
-
-      // Add npm update information if available
-      if (npmRet.stdout.includes('chaite')) {
-        updateMsg += `\n已使用${packageManager}更新chaite依赖`
+      if (ret.error) {
+        logger.mark(`${this.e.logFnc} 更新失败：chatgpt-plugin`)
+        this.gitErr(ret.error, ret.stdout)
+        return false
       }
 
-      await this.reply(updateMsg)
-      this.isUp = true
-      /** 获取chatgpt组件的更新日志 */
-      let log = await this.getLog('chatgpt-plugin')
-      await this.reply(log)
+      // Check if pnpm is available
+      let packageManager = await this.checkPnpm()
+      await this.reply(`正在使用 ${packageManager} 更新 chaite 依赖...`)
+      let npmRet = await this.execSync(`cd ./plugins/chatgpt-plugin/ && ${packageManager} update chaite`)
+      logger.info(JSON.stringify(npmRet))
+      if (npmRet.error) {
+        logger.mark(`${this.e.logFnc} 更新失败：chaite 依赖`)
+        await this.reply(`chaite 依赖更新失败：\n${npmRet.error.toString()}`)
+        return false
+      }
+      /** 获取插件提交的最新时间 */
+      let time = await this.getTime('chatgpt-plugin')
+
+      if (/(Already up[ -]to[ -]date|已经是最新的)/.test(ret.stdout)) {
+        await this.reply(`chatgpt-plugin已经是最新版本\n最后更新时间：${time}`)
+      } else {
+        let updateMsg = `chatgpt-plugin\n最后更新时间：${time}`
+
+        // Add npm update information if available
+        if (npmRet.stdout.includes('chaite')) {
+          updateMsg += `\n已使用${packageManager}更新chaite依赖`
+        }
+
+        await this.reply(updateMsg)
+        this.isUp = true
+        /** 获取chatgpt组件的更新日志 */
+        let log = await this.getLog('chatgpt-plugin')
+        await this.reply(log)
+      }
+
+      logger.mark(`${this.e.logFnc} 最后更新时间：${time}`)
+
+      return true
+    } catch (err) {
+      logger.error(err)
+      await this.reply(`更新失败：\n${err.toString()}`)
+      return false
+    } finally {
+      uping = false
     }
-
-    logger.mark(`${this.e.logFnc} 最后更新时间：${time}`)
-
-    return true
   }
 
   /**
