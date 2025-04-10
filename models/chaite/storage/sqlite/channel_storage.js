@@ -249,7 +249,16 @@ export class SQLiteChannelStorage extends ChaiteStorage {
    */
   async setItem (id, channel) {
     await this.ensureInitialized()
+    if (!id) {
+      id = this._generateId()
+    }
 
+    // 加上时间戳
+    if (!channel.createdAt) {
+      channel.createdAt = new Date().toISOString()
+    }
+
+    channel.updatedAt = new Date().toISOString()
     // 转换为数据库记录
     const record = this._channelToRecord(channel)
     record.id = id // 确保ID是指定的ID

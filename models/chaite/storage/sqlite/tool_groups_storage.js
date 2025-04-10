@@ -100,7 +100,16 @@ export class SQLiteToolsGroupStorage extends ChaiteStorage {
    */
   async setItem (id, data) {
     await this.ensureInitialized()
+    if (!id) {
+      id = this._generateId()
+    }
 
+    // 加上时间戳
+    if (!data.createdAt) {
+      data.createdAt = new Date().toISOString()
+    }
+
+    data.updatedAt = new Date().toISOString()
     // 提取工具组数据
     const { name, description, tools } = data
     const updatedAt = Date.now()

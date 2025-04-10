@@ -185,7 +185,16 @@ export class SQLiteProcessorsStorage extends ChaiteStorage {
    */
   async setItem (id, processor) {
     await this.ensureInitialized()
+    if (!id) {
+      id = this._generateId()
+    }
 
+    // 加上时间戳
+    if (!processor.createdAt) {
+      processor.createdAt = new Date().toISOString()
+    }
+
+    processor.updatedAt = new Date().toISOString()
     // 转换为数据库记录
     const record = this._processorToRecord(processor)
     record.id = id // 确保ID是指定的ID

@@ -211,6 +211,17 @@ export class SQLiteToolsStorage extends ChaiteStorage {
   async setItem (id, tool) {
     await this.ensureInitialized()
 
+    if (!id) {
+      id = this._generateId()
+    }
+
+    // 加上时间戳
+    if (!tool.createdAt) {
+      tool.createdAt = new Date().toISOString()
+    }
+
+    tool.updatedAt = new Date().toISOString()
+
     // 转换为数据库记录
     const record = this._toolToRecord(tool)
     record.id = id // 确保ID是指定的ID

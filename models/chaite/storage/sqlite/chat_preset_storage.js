@@ -221,7 +221,16 @@ export class SQLiteChatPresetStorage extends ChaiteStorage {
    */
   async setItem (id, preset) {
     await this.ensureInitialized()
+    if (!id) {
+      id = this._generateId()
+    }
 
+    // 加上时间戳
+    if (!preset.createdAt) {
+      preset.createdAt = new Date().toISOString()
+    }
+
+    preset.updatedAt = new Date().toISOString()
     // 转换为数据库记录
     const record = this._presetToRecord(preset)
     record.id = id // 确保ID是指定的ID

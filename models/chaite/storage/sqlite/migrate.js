@@ -24,6 +24,45 @@ export async function checkMigrate () {
 
     const dbPath = path.join(dataDir, 'data.db')
 
+    // 删除所有id为空的行
+    logger.debug('开始修复id为空的数据行...')
+    const collectionsToClean = ['channel', 'chat_presets', 'tools', 'processors']
+    for (const collectionName of collectionsToClean) {
+      try {
+        const collection = ChatGPTStorage.collection(collectionName)
+        const allItems = await collection.findAll()
+        const invalidItems = allItems.filter(item => !item.id)
+
+        if (invalidItems.length > 0) {
+          logger.info(`在${collectionName}中发现${invalidItems.length}条id为空的数据，正在修复...`)
+
+          for (const item of invalidItems) {
+            // 生成一个新的唯一ID
+            const newId = `generated_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
+            // 更新时间戳
+            const now = new Date().toISOString()
+
+            // 更新项目
+            item.id = newId
+            item.createdAt = now
+            item.updatedAt = now
+
+            // 保存更新后的项目
+            await collection.set(newId, item)
+
+            // 移除旧的无ID项
+            await collection.remove(item)
+          }
+
+          logger.info(`已成功修复${collectionName}中的${invalidItems.length}条无效数据`)
+        } else {
+          logger.debug(`${collectionName}中没有发现id为空的数据`)
+        }
+      } catch (err) {
+        logger.error(`修复${collectionName}中id为空的数据时出错:`, err)
+      }
+    }
+
     // 定义要检查的存储对
     const storagePairs = [
       {
