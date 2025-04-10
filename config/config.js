@@ -264,8 +264,11 @@ class ChatGPTConfig {
           // 避免在代理对象保存时再次触发
           if (!target.__isSaving) {
             target.__isSaving = true
-            this.saveToFile()
-            target.__isSaving = false
+            try {
+              this.saveToFile()
+            } finally {
+              target.__isSaving = false
+            }
           }
         }
         return true
@@ -287,6 +290,7 @@ class ChatGPTConfig {
    * Load config from file
    */
   loadFromFile () {
+    this.__isSaving = false;
     try {
       const content = fs.readFileSync(this.configPath, 'utf8')
       const loadedConfig = this.configPath.endsWith('.json')
