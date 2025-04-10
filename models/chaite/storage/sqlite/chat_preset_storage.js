@@ -2,6 +2,7 @@ import { ChaiteStorage, ChatPreset } from 'chaite'
 import sqlite3 from 'sqlite3'
 import path from 'path'
 import fs from 'fs'
+import { generateId } from '../../../../utils/common.js'
 
 /**
  * @extends {ChaiteStorage<import('chaite').ChatPreset>}
@@ -222,7 +223,7 @@ export class SQLiteChatPresetStorage extends ChaiteStorage {
   async setItem (id, preset) {
     await this.ensureInitialized()
     if (!id) {
-      id = this._generateId()
+      id = generateId()
     }
 
     // 加上时间戳

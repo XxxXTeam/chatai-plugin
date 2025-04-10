@@ -2,6 +2,7 @@ import { ChaiteStorage, ToolDTO } from 'chaite'
 import sqlite3 from 'sqlite3'
 import path from 'path'
 import fs from 'fs'
+import { generateId } from '../../../../utils/common.js'
 
 /**
  * @extends {ChaiteStorage<import('chaite').ToolDTO>}
@@ -212,7 +213,7 @@ export class SQLiteToolsStorage extends ChaiteStorage {
     await this.ensureInitialized()
 
     if (!id) {
-      id = this._generateId()
+      id = generateId()
     }
 
     // 加上时间戳

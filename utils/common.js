@@ -71,3 +71,7 @@ export const dataDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.ch
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true })
 }
+
+export function generateId () {
+  return Date.now().toString(36) + Math.random().toString(36).substring(2, 15)
+}
