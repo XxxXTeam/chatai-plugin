@@ -203,16 +203,28 @@ export async function initChaite () {
   // 监听通过chaite对插件配置修改
   chaite.setUpdateConfigCallback(config => {
     logger.debug('chatgpt-plugin config updated')
-    Object.keys(config).forEach(key => {
-      if (typeof config[key] === 'object' && config[key] !== null && ChatGPTConfig[key]) {
-        deepMerge(ChatGPTConfig[key], config[key])
-      } else {
-        ChatGPTConfig[key] = config[key]
-      }
-    })
-    // 回传部分需要同步的配置，以防不一致
-    chaite.getGlobalConfig().setDebug(ChatGPTConfig.basic.debug)
-    chaite.getGlobalConfig().setAuthKey(ChatGPTConfig.chaite.authKey)
+
+    // 设置保存来源标记，而不是使用 _isSaving
+    ChatGPTConfig._saveOrigin = 'chaite'
+
+    try {
+      Object.keys(config).forEach(key => {
+        if (typeof config[key] === 'object' && config[key] !== null && ChatGPTConfig[key]) {
+          deepMerge(ChatGPTConfig[key], config[key])
+        } else {
+          ChatGPTConfig[key] = config[key]
+        }
+      })
+
+      // 回传部分需要同步的配置
+      chaite.getGlobalConfig().setDebug(ChatGPTConfig.basic.debug)
+      chaite.getGlobalConfig().setAuthKey(ChatGPTConfig.chaite.authKey)
+
+      // 使用新的触发保存方法，而不是直接调用saveToFile
+      ChatGPTConfig._triggerSave('chaite')
+    } finally {
+      // 不需要在这里清除标记，_triggerSave已经处理了延迟清除
+    }
   })
   // 授予Chaite获取插件配置的能力以便通过api放出
   chaite.setGetConfig(async () => {

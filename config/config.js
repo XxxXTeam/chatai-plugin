@@ -191,10 +191,10 @@ class ChatGPTConfig {
    * @param {string} configDir Directory containing config files
    */
   startSync (configDir) {
+    // 配置路径设置
     const jsonPath = path.join(configDir, 'config.json')
     const yamlPath = path.join(configDir, 'config.yaml')
 
-    // Determine which config file to use
     if (fs.existsSync(jsonPath)) {
       this.configPath = jsonPath
     } else if (fs.existsSync(yamlPath)) {
@@ -204,140 +204,178 @@ class ChatGPTConfig {
       this.saveToFile()
     }
 
-    // Load initial config
+    // 加载初始配置
     this.loadFromFile()
 
-    // Watch for file changes
+    // 文件变更标志和保存定时器
+    this._saveOrigin = null
+    this._saveTimer = null
+
+    // 监听文件变化
     this.watcher = fs.watchFile(this.configPath, (curr, prev) => {
-      if (curr.mtime !== prev.mtime) {
+      if (curr.mtime !== prev.mtime && this._saveOrigin !== 'code') {
         this.loadFromFile()
       }
     })
 
-    const createDeepProxy = (obj, handler, seen = new WeakMap()) => {
-      // 基本类型或非对象直接返回
-      if (obj === null || typeof obj !== 'object') return obj
+    // 处理所有嵌套对象
+    return this._createProxyRecursively(this)
+  }
 
-      // 检查循环引用
-      if (seen.has(obj)) {
-        return seen.get(obj)
-      }
+  // 递归创建代理
+  _createProxyRecursively (obj, path = []) {
+    if (obj === null || typeof obj !== 'object' || obj instanceof Date) {
+      return obj
+    }
 
-      // 创建代理对象
-      const proxy = new Proxy(obj, handler)
+    // 处理数组和对象
+    if (Array.isArray(obj)) {
+      // 创建一个新数组，递归地处理每个元素
+      const proxiedArray = [...obj].map((item, index) =>
+        this._createProxyRecursively(item, [...path, index])
+      )
 
-      // 记录已创建的代理，避免循环引用
-      seen.set(obj, proxy)
+      // 代理数组，捕获数组方法调用
+      return new Proxy(proxiedArray, {
+        set: (target, prop, value) => {
+          // 处理数字属性（数组索引）和数组长度
+          if (typeof prop !== 'symbol' &&
+            ((!isNaN(prop) && prop !== 'length') ||
+              prop === 'length')) {
+            // 直接设置值
+            target[prop] = value
 
-      // 处理子对象
-      for (let key of Object.keys(obj)) {
-        if (typeof obj[key] === 'object' && obj[key] !== null) {
-          obj[key] = createDeepProxy(obj[key], handler, seen)
+            // 触发保存
+            this._triggerSave('array')
+          } else {
+            target[prop] = value
+          }
+          return true
+        },
+
+        // 拦截数组方法调用
+        get: (target, prop) => {
+          const val = target[prop]
+
+          // 处理数组修改方法
+          if (typeof val === 'function' &&
+            ['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse'].includes(prop)) {
+            return function (...args) {
+              const result = Array.prototype[prop].apply(target, args)
+
+              // 方法调用后触发保存
+              this._triggerSave('array-method')
+              return result
+            }.bind(this)
+          }
+
+          return val
+        }
+      })
+    } else {
+      // 对普通对象的处理
+      const proxiedObj = {}
+
+      // 处理所有属性
+      for (const key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+          // 跳过内部属性
+          if (key === 'watcher' || key === 'configPath' ||
+            key.startsWith('_save') || key === '_isSaving') {
+            proxiedObj[key] = obj[key]
+          } else {
+            // 递归处理嵌套对象
+            proxiedObj[key] = this._createProxyRecursively(
+              obj[key], [...path, key]
+            )
+          }
         }
       }
 
-      return proxy
-    }
+      // 创建对象的代理
+      return new Proxy(proxiedObj, {
+        set: (target, prop, value) => {
+          // 跳过内部属性的处理
+          if (prop === 'watcher' || prop === 'configPath' ||
+            prop.startsWith('_save') || prop === '_isSaving') {
+            target[prop] = value
+            return true
+          }
 
-    const handler = {
-      set: (target, prop, value) => {
-        if (prop !== 'watcher' && prop !== 'configPath') {
-          // 避免递归创建代理
-          if (typeof value === 'object' && value !== null) {
-            // 检查 value 是否已经是代理
-            if (!value.__isProxy) {
-              const newProxy = createDeepProxy(value, handler)
-              // 标记为代理对象
-              Object.defineProperty(newProxy, '__isProxy', {
-                value: true,
-                enumerable: false,
-                configurable: false
-              })
-              target[prop] = newProxy
-            } else {
-              target[prop] = value
-            }
+          // 设置新值，如果是对象则递归创建代理
+          if (value !== null && typeof value === 'object') {
+            target[prop] = this._createProxyRecursively(
+              value, [...path, prop]
+            )
           } else {
             target[prop] = value
           }
 
-          // 避免在代理对象保存时再次触发
-          if (!target.__isSaving) {
-            target.__isSaving = true
-            try {
-              this.saveToFile()
-            } finally {
-              target.__isSaving = false
-            }
-          }
+          // 触发保存
+          this._triggerSave('object')
+          return true
         }
-        return true
-      }
+      })
     }
-
-    // 为所有嵌套对象创建Proxy
-    this.basic = createDeepProxy(this.basic, handler)
-    this.bym = createDeepProxy(this.bym, handler)
-    this.llm = createDeepProxy(this.llm, handler)
-    this.management = createDeepProxy(this.management, handler)
-    this.chaite = createDeepProxy(this.chaite, handler)
-
-    // 返回最外层的Proxy
-    return new Proxy(this, handler)
   }
 
-  /**
-   * Load config from file
-   */
   loadFromFile () {
-    this.__isSaving = false;
     try {
+      if (!fs.existsSync(this.configPath)) {
+        // 如果文件不存在，直接返回
+        return
+      }
+
       const content = fs.readFileSync(this.configPath, 'utf8')
       const loadedConfig = this.configPath.endsWith('.json')
         ? JSON.parse(content)
         : yaml.load(content)
 
-      // Deep merge function that preserves default values
-      const deepMerge = (target, source) => {
-        // Skip non-object properties or special properties
-        if (!source || typeof source !== 'object' ||
-          !target || typeof target !== 'object') {
-          return
-        }
-
-        for (const key in source) {
-          // Skip internal properties
-          if (key === 'watcher' || key === 'configPath') continue
-
-          if (typeof source[key] === 'object' && source[key] !== null &&
-            typeof target[key] === 'object' && target[key] !== null) {
-            // Recursively merge nested objects
-            deepMerge(target[key], source[key])
-          } else if (source[key] !== undefined) {
-            // Only update if the value exists in the loaded config
-            target[key] = source[key]
+      // 只更新存在的配置项
+      if (loadedConfig) {
+        Object.keys(loadedConfig).forEach(key => {
+          if (key === 'version' || key === 'basic' || key === 'bym' || key === 'llm' ||
+            key === 'management' || key === 'chaite') {
+            if (typeof loadedConfig[key] === 'object' && loadedConfig[key] !== null) {
+              // 对象的合并
+              if (!this[key]) this[key] = {}
+              Object.assign(this[key], loadedConfig[key])
+            } else {
+              // 基本类型直接赋值
+              this[key] = loadedConfig[key]
+            }
           }
-          // If source[key] is undefined, keep the default value in target
-        }
+        })
       }
 
-      // Apply loaded config to this object, preserving defaults
-      deepMerge(this, loadedConfig)
-
-      // Save the file to persist any new default values
-      const hasChanges = JSON.stringify(this.toJSON()) !== content
-      if (hasChanges) {
-        this.saveToFile()
-      }
+      logger.debug('Config loaded successfully')
     } catch (error) {
-      console.error('Failed to load config:', error)
+      logger.error('Failed to load config:', error)
     }
   }
 
-  /**
-   * Save config to file
-   */
+  // 合并触发保存，防抖处理
+  _triggerSave (origin) {
+    // 清除之前的定时器
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer)
+    }
+
+    // 记录保存来源
+    this._saveOrigin = origin || 'code'
+
+    // 设置定时器延迟保存
+    this._saveTimer = setTimeout(() => {
+      this.saveToFile()
+      // 保存完成后延迟一下再清除来源标记
+      setTimeout(() => {
+        this._saveOrigin = null
+      }, 100)
+    }, 200)
+  }
+
   saveToFile () {
+    logger.debug('Saving config to file...')
     try {
       const config = {
         version: this.version,
