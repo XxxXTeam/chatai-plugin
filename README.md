@@ -14,7 +14,7 @@
 
 
 
-> 插件v3大幅重构中，[核心](https://github.com/ikechan8370/node-chaite)已完成，插件进度10%。alpha阶段请勿使用。
+> 插件v3大幅重构中，[核心](https://github.com/ikechan8370/node-chaite)已完成，插件基本功能可用，持续完善中。
 
 
 ## 赞助
