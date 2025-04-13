@@ -38,24 +38,215 @@ export class SQLiteToolsGroupStorage extends ChaiteStorage {
       this.db = new sqlite3.Database(this.dbPath, async (err) => {
         if (err) return reject(err)
 
-        this.db.run(`CREATE TABLE IF NOT EXISTS ${this.tableName} (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          description TEXT,
-          tools TEXT NOT NULL,
-          createdAt TEXT,
-          updatedAt TEXT
-        )`, (err) => {
-          if (err) return reject(err)
+        try {
+          // 首先检查表是否存在
+          const tableExists = await this.checkTableExists()
 
-          this.db.run(`CREATE INDEX IF NOT EXISTS idx_tools_groups_name ON ${this.tableName} (name)`, (err) => {
-            if (err) return reject(err)
-            this.initialized = true
-            resolve()
-          })
-        })
+          if (tableExists) {
+            // 如果表存在，检查并迁移旧结构
+            await this.migrateTableIfNeeded()
+          } else {
+            // 如果表不存在，创建新表
+            await this.createTable()
+          }
+
+          // 确保索引存在
+          await this.ensureIndex()
+
+          this.initialized = true
+          resolve()
+        } catch (error) {
+          reject(error)
+        }
       })
     })
+  }
+
+  /**
+   * 检查表是否存在
+   */
+  async checkTableExists () {
+    return new Promise((resolve, reject) => {
+      this.db.get(
+        'SELECT name FROM sqlite_master WHERE type=\'table\' AND name=?',
+        [this.tableName],
+        (err, row) => {
+          if (err) return reject(err)
+          resolve(!!row)
+        }
+      )
+    })
+  }
+
+  /**
+   * 创建新表
+   */
+  async createTable () {
+    return new Promise((resolve, reject) => {
+      this.db.run(`CREATE TABLE IF NOT EXISTS ${this.tableName} (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      toolIds TEXT NOT NULL,
+      isDefault INTEGER DEFAULT 0,
+      createdAt TEXT,
+      updatedAt TEXT
+    )`, (err) => {
+        if (err) return reject(err)
+        resolve()
+      })
+    })
+  }
+
+  /**
+   * 确保索引存在
+   */
+  async ensureIndex () {
+    return new Promise((resolve, reject) => {
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_tools_groups_name ON ${this.tableName} (name)`, (err) => {
+        if (err) return reject(err)
+        resolve()
+      })
+    })
+  }
+
+  /**
+   * 检查并迁移表结构
+   */
+  async migrateTableIfNeeded () {
+    // 检查表结构
+    const columns = await this.getTableColumns()
+
+    // 检查是否有旧版本的结构（有tools字段而不是toolIds）
+    const hasOldStructure = columns.includes('tools') && !columns.includes('toolIds')
+    const needsDefaultColumn = !columns.includes('isDefault')
+
+    if (hasOldStructure || needsDefaultColumn) {
+      console.log(`检测到旧表结构，开始迁移 ${this.tableName} 表...`)
+
+      // 备份所有数据
+      const allData = await this.backupData()
+
+      // 重命名旧表
+      await this.renameTable(`${this.tableName}_old`)
+
+      // 创建新表
+      await this.createTable()
+      await this.ensureIndex()
+
+      // 恢复数据到新表
+      if (allData.length > 0) {
+        await this.restoreData(allData, hasOldStructure)
+      }
+
+      // 删除旧表
+      await this.dropTable(`${this.tableName}_old`)
+
+      console.log(`表 ${this.tableName} 迁移完成，共迁移 ${allData.length} 条数据`)
+    }
+  }
+
+  /**
+   * 获取表的所有列名
+   */
+  async getTableColumns () {
+    return new Promise((resolve, reject) => {
+      this.db.all(`PRAGMA table_info(${this.tableName})`, (err, rows) => {
+        if (err) return reject(err)
+
+        const columns = rows.map(row => row.name)
+        resolve(columns)
+      })
+    })
+  }
+
+  /**
+   * 备份表数据
+   */
+  async backupData () {
+    return new Promise((resolve, reject) => {
+      this.db.all(`SELECT * FROM ${this.tableName}`, (err, rows) => {
+        if (err) return reject(err)
+        resolve(rows)
+      })
+    })
+  }
+
+  /**
+   * 重命名表
+   */
+  async renameTable (newName) {
+    return new Promise((resolve, reject) => {
+      this.db.run(`ALTER TABLE ${this.tableName} RENAME TO ${newName}`, (err) => {
+        if (err) return reject(err)
+        resolve()
+      })
+    })
+  }
+
+  /**
+   * 删除表
+   */
+  async dropTable (tableName) {
+    return new Promise((resolve, reject) => {
+      this.db.run(`DROP TABLE IF EXISTS ${tableName}`, (err) => {
+        if (err) return reject(err)
+        resolve()
+      })
+    })
+  }
+
+  /**
+   * 恢复数据到新表
+   */
+  async restoreData (data, hasOldStructure) {
+    const promises = data.map(row => {
+      return new Promise((resolve, reject) => {
+        // 处理数据转换
+        const newRow = { ...row }
+
+        if (hasOldStructure && row.tools) {
+          try {
+            // 从旧的tools结构提取toolIds
+            const tools = JSON.parse(row.tools)
+            newRow.toolIds = JSON.stringify(tools.map(t => t.id || t))
+            delete newRow.tools
+          } catch (e) {
+            console.error(`解析工具组数据错误: ${row.id}`, e)
+            newRow.toolIds = JSON.stringify([])
+            delete newRow.tools
+          }
+        }
+
+        // 添加isDefault字段
+        if (newRow.isDefault === undefined) {
+          newRow.isDefault = 0
+        }
+
+        // 添加时间戳
+        if (!newRow.createdAt) {
+          newRow.createdAt = new Date().toISOString()
+        }
+        if (!newRow.updatedAt) {
+          newRow.updatedAt = new Date().toISOString()
+        }
+
+        const fields = Object.keys(newRow)
+        const placeholders = fields.map(() => '?').join(',')
+        const values = fields.map(field => newRow[field])
+
+        this.db.run(
+          `INSERT INTO ${this.tableName} (${fields.join(',')}) VALUES (${placeholders})`,
+          values,
+          (err) => {
+            if (err) return reject(err)
+            resolve()
+          }
+        )
+      })
+    })
+
+    return Promise.all(promises)
   }
 
   async ensureInitialized () {
@@ -80,14 +271,16 @@ export class SQLiteToolsGroupStorage extends ChaiteStorage {
         try {
           const toolsGroup = {
             ...row,
-            tools: JSON.parse(row.tools)
+            toolIds: JSON.parse(row.toolIds),
+            isDefault: Boolean(row.isDefault)
           }
           resolve(toolsGroup)
         } catch (e) {
           console.error(`解析工具组数据错误: ${key}`, e)
           resolve({
             ...row,
-            tools: []
+            toolIds: [],
+            isDefault: Boolean(row.isDefault)
           })
         }
       })
@@ -112,11 +305,12 @@ export class SQLiteToolsGroupStorage extends ChaiteStorage {
 
     data.updatedAt = new Date().toISOString()
     // 提取工具组数据
-    const { name, description, tools } = data
-    const updatedAt = Date.now()
+    const { name, description, toolIds, isDefault } = data
+    const updatedAt = new Date().toISOString()
 
-    // 将工具列表序列化为JSON字符串
-    const toolsJson = JSON.stringify(tools || [])
+    // 将工具ID列表序列化为JSON字符串
+    const toolIdsJson = JSON.stringify(toolIds || [])
+    const isDefaultValue = isDefault ? 1 : 0
 
     return new Promise((resolve, reject) => {
       // 检查工具组是否已存在
@@ -128,8 +322,8 @@ export class SQLiteToolsGroupStorage extends ChaiteStorage {
         if (row) {
           // 更新现有工具组
           this.db.run(
-            `UPDATE ${this.tableName} SET name = ?, description = ?, tools = ?, updatedAt = ? WHERE id = ?`,
-            [name, description, toolsJson, updatedAt, id],
+            `UPDATE ${this.tableName} SET name = ?, description = ?, toolIds = ?, isDefault = ?, updatedAt = ? WHERE id = ?`,
+            [name, description, toolIdsJson, isDefaultValue, updatedAt, id],
             (err) => {
               if (err) {
                 return reject(err)
@@ -140,8 +334,8 @@ export class SQLiteToolsGroupStorage extends ChaiteStorage {
         } else {
           // 插入新工具组
           this.db.run(
-            `INSERT INTO ${this.tableName} (id, name, description, tools, updatedAt) VALUES (?, ?, ?, ?, ?)`,
-            [id, name, description, toolsJson, updatedAt],
+            `INSERT INTO ${this.tableName} (id, name, description, toolIds, isDefault, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [id, name, description, toolIdsJson, isDefaultValue, data.createdAt, updatedAt],
             (err) => {
               if (err) {
                 return reject(err)
@@ -187,13 +381,15 @@ export class SQLiteToolsGroupStorage extends ChaiteStorage {
           try {
             return {
               ...row,
-              tools: JSON.parse(row.tools)
+              toolIds: JSON.parse(row.toolIds),
+              isDefault: Boolean(row.isDefault)
             }
           } catch (e) {
             console.error(`解析工具组数据错误: ${row.id}`, e)
             return {
               ...row,
-              tools: []
+              toolIds: [],
+              isDefault: Boolean(row.isDefault)
             }
           }
         })
@@ -222,6 +418,9 @@ export class SQLiteToolsGroupStorage extends ChaiteStorage {
       if (directFields.includes(key)) {
         conditions.push(`${key} = ?`)
         params.push(filter[key])
+      } else if (key === 'isDefault') {
+        conditions.push('isDefault = ?')
+        params.push(filter[key] ? 1 : 0)
       }
     }
 
@@ -237,12 +436,15 @@ export class SQLiteToolsGroupStorage extends ChaiteStorage {
           try {
             const group = {
               ...row,
-              tools: JSON.parse(row.tools || '[]')
+              toolIds: JSON.parse(row.toolIds || '[]'),
+              isDefault: Boolean(row.isDefault)
             }
 
-            // 过滤非直接字段
+            // 过滤其他字段
             for (const key in filter) {
-              if (!directFields.includes(key) && group[key] !== filter[key]) {
+              if (!directFields.includes(key) &&
+                key !== 'isDefault' &&
+                JSON.stringify(group[key]) !== JSON.stringify(filter[key])) {
                 return null
               }
             }
@@ -280,6 +482,11 @@ export class SQLiteToolsGroupStorage extends ChaiteStorage {
         const placeholders = item.values.map(() => '?').join(',')
         conditions.push(`${item.field} IN (${placeholders})`)
         params.push(...item.values)
+      } else if (item.field === 'isDefault' && Array.isArray(item.values) && item.values.length > 0) {
+        const boolValues = item.values.map(v => v ? 1 : 0)
+        const placeholders = boolValues.map(() => '?').join(',')
+        conditions.push(`isDefault IN (${placeholders})`)
+        params.push(...boolValues)
       } else if (item.values.length > 0) {
         memoryQueries.push(item)
       }
@@ -297,7 +504,8 @@ export class SQLiteToolsGroupStorage extends ChaiteStorage {
           try {
             return {
               ...row,
-              tools: JSON.parse(row.tools || '[]')
+              toolIds: JSON.parse(row.toolIds || '[]'),
+              isDefault: Boolean(row.isDefault)
             }
           } catch (e) {
             console.error(`解析工具组数据错误: ${row.id}`, e)
@@ -309,7 +517,11 @@ export class SQLiteToolsGroupStorage extends ChaiteStorage {
         if (memoryQueries.length > 0) {
           toolsGroups = toolsGroups.filter(group => {
             for (const { field, values } of memoryQueries) {
-              if (!values.includes(group[field])) {
+              // 对于toolIds字段做特殊处理
+              if (field === 'toolIds') {
+                const hasMatch = values.some(toolId => group.toolIds.includes(toolId))
+                if (!hasMatch) return false
+              } else if (!values.includes(group[field])) {
                 return false
               }
             }
