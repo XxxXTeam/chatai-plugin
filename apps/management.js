@@ -99,7 +99,7 @@ export class ChatGPTManagement extends plugin {
         if (userState.current.conversationId && userState.current.messageId) {
           num++
           userState.current.conversationId = crypto.randomUUID()
-          userState.current.messageId = ''
+          userState.current.messageId = crypto.randomUUID()
           await Chaite.getInstance().getUserStateStorage().setItem(userState.userId + '', userState)
         }
       }
@@ -111,7 +111,7 @@ export class ChatGPTManagement extends plugin {
         return false
       }
       state.current.conversationId = crypto.randomUUID()
-      state.current.messageId = ''
+      state.current.messageId = crypto.randomUUID()
       await Chaite.getInstance().getUserStateStorage().setItem(e.sender.user_id + '', state)
       this.reply('已结束当前对话')
     }

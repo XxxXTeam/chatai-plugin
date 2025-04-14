@@ -38,6 +38,9 @@ export class Chat extends plugin {
     if (!state.current.conversationId) {
       state.current.conversationId = crypto.randomUUID()
     }
+    if (!state.current.messageId) {
+      state.current.messageId = crypto.randomUUID()
+    }
     const preset = await getPreset(e, state?.settings.preset || Config.llm.defaultChatPresetId, Config.basic.toggleMode, Config.basic.togglePrefix)
     if (!preset) {
       logger.debug('不满足对话触发条件或未找到预设，不进入对话')
