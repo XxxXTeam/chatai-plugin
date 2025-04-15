@@ -116,7 +116,10 @@ class ChatGPTConfig {
     // 群组上下文长度
     groupContextLength: 20,
     // 用于组装群聊上下文提示词的模板前缀
-    groupContextTemplatePrefix: 'Latest several messages in the group chat:\n' +
+    groupContextTemplatePrefix: '<settings>\n' +
+      // eslint-disable-next-line no-template-curly-in-string
+      'You are  a member of a chat group, whose name is ${group.name}, and the group id is ${group.id}.\n' +
+      '</settings>Latest several messages in the group chat:\n' +
       '｜ 群名片 | 昵称 | qq号 | 群角色 | 群头衔 | 时间 | messageId | 消息内容 |\n' +
       '|---|---|---|---|---|---|---|---|',
     // 用于组装群聊上下文提示词的模板内容部分，每一条消息作为message，仿照示例填写

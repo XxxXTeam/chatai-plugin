@@ -1,6 +1,6 @@
 import { getBotFramework } from './bot.js'
 import ChatGPTConfig from '../config/config.js'
-import {formatTimeToBeiJing} from './common.js'
+import { formatTimeToBeiJing } from './common.js'
 
 export class GroupContextCollector {
   /**
@@ -114,33 +114,39 @@ export async function getGroupHistory (e, length = 20) {
  */
 export async function getGroupContextPrompt (e, length) {
   const {
-    groupContextTemplatePrefix,
-    groupContextTemplateMessage,
-    groupContextTemplateSuffix
+    groupContextTemplatePrefix = '',
+    groupContextTemplateMessage = '',
+    groupContextTemplateSuffix = ''
   } = ChatGPTConfig.llm
   const chats = await getGroupHistory(e, length)
-  const rows = chats.map(chat => {
-    const sender = chat.sender || {}
-    return groupContextTemplateMessage
+  const rows = chats
+    .filter(chat => chat)
+    .map(chat => {
+      const sender = chat.sender || {}
+      return groupContextTemplateMessage
       // eslint-disable-next-line no-template-curly-in-string
-      .replace('${message.sender.card}', sender.card || '-')
+        .replace('${message.sender.card}', sender.card || '-')
       // eslint-disable-next-line no-template-curly-in-string
-      .replace('${message.sender.nickname}', sender.nickname || '-')
+        .replace('${message.sender.nickname}', sender.nickname || '-')
       // eslint-disable-next-line no-template-curly-in-string
-      .replace('${message.sender.user_id}', sender.user_id || '-')
+        .replace('${message.sender.user_id}', sender.user_id || '-')
       // eslint-disable-next-line no-template-curly-in-string
-      .replace('${message.sender.role}', sender.role || '-')
+        .replace('${message.sender.role}', sender.role || '-')
       // eslint-disable-next-line no-template-curly-in-string
-      .replace('${message.sender.title}', sender.title || '-')
+        .replace('${message.sender.title}', sender.title || '-')
       // eslint-disable-next-line no-template-curly-in-string
-      .replace('${message.time}', chat.time ? formatTimeToBeiJing(chat.time) : '-')
+        .replace('${message.time}', chat.time ? formatTimeToBeiJing(chat.time) : '-')
       // eslint-disable-next-line no-template-curly-in-string
-      .replace('${message.messageId}', chat.messageId || '-')
+        .replace('${message.messageId}', chat.messageId || '-')
       // eslint-disable-next-line no-template-curly-in-string
-      .replace('${message.raw_message}', chat.raw_message || '-')
-  }).join('\n')
+        .replace('${message.raw_message}', chat.raw_message || '-')
+    }).join('\n')
   return [
-    groupContextTemplatePrefix,
+    groupContextTemplatePrefix
+      // eslint-disable-next-line no-template-curly-in-string
+      .replace('${group.group_id}', e.group.group_id || e.group_id || 'unknown')
+      // eslint-disable-next-line no-template-curly-in-string
+      .replace('${group.name}', e.group.name || e.group_name || 'unknown'),
     rows,
     groupContextTemplateSuffix
   ].join('\n')

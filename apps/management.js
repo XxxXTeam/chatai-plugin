@@ -94,16 +94,16 @@ export class ChatGPTManagement extends plugin {
         return false
       }
       const userStates = await Chaite.getInstance().getUserStateStorage().listItems()
-      let num = 0
+      // let num = 0
       for (const userState of userStates) {
         if (userState.current.conversationId && userState.current.messageId) {
-          num++
+          // num++
           userState.current.conversationId = crypto.randomUUID()
           userState.current.messageId = crypto.randomUUID()
           await Chaite.getInstance().getUserStateStorage().setItem(userState.userId + '', userState)
         }
       }
-      this.reply(`已结束${num}个用户的对话`)
+      this.reply('已结束全部对话')
     } else {
       const state = await Chaite.getInstance().getUserStateStorage().getItem(e.sender.user_id + '')
       if (!state || !state.current.conversationId || !state.current.messageId) {
