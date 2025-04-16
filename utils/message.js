@@ -1,6 +1,7 @@
 import { Chaite } from 'chaite'
 import common from '../../../lib/common/common.js'
 import fetch from 'node-fetch'
+import res from 'express/lib/response.js'
 
 /**
  * 将e中的消息转换为chaite的UserMessage
@@ -9,6 +10,7 @@ import fetch from 'node-fetch'
  * @param {{
  *   handleReplyText: boolean,
  *   handleReplyImage: boolean,
+ *   handleReplyFile: boolean,
  *   useRawMessage: boolean,
  *   handleAtMsg: boolean,
  *   excludeAtBot: boolean,
@@ -21,6 +23,7 @@ export async function intoUserMessage (e, options = {}) {
   const {
     handleReplyText = false,
     handleReplyImage = true,
+    handleReplyFile = true,
     useRawMessage = false,
     handleAtMsg = true,
     excludeAtBot = false,
@@ -29,7 +32,7 @@ export async function intoUserMessage (e, options = {}) {
   } = options
   const contents = []
   let text = ''
-  if ((e.source || e.reply_id) && (handleReplyImage || handleReplyText)) {
+  if ((e.source || e.reply_id) && (handleReplyImage || handleReplyText || handleReplyFile)) {
     let seq = e.isGroup ? (e.source?.seq || e.reply_id) : (e.source?.time || e.source?.time)
     let reply
     if (e.getReply && typeof e.getReply === 'function') {
@@ -55,6 +58,14 @@ export async function intoUserMessage (e, options = {}) {
           }
         } else if (val.type === 'text' && handleReplyText) {
           text = `本条消息对以下消息进行了引用回复：${val.text}\n\n本条消息内容：\n`
+        } else if (val.type === 'file' && handleReplyFile) {
+          let fileUrl = '获取失败'
+          if (e.group?.getFileUrl) {
+            fileUrl = await e.group.getFileUrl(val.fid)
+          } else if (e.friend?.getFileUrl) {
+            fileUrl = await e.friend.getFileUrl(val.fid)
+          }
+          text = `本条消息对一个文件进行了引用回复：该文件的下载地址为${fileUrl}\n\n本条消息内容：\n`
         }
       }
     }
