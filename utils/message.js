@@ -1,7 +1,6 @@
 import { Chaite } from 'chaite'
 import common from '../../../lib/common/common.js'
 import fetch from 'node-fetch'
-import res from 'express/lib/response.js'
 
 /**
  * 将e中的消息转换为chaite的UserMessage

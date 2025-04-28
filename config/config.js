@@ -166,6 +166,8 @@ class ChatGPTConfig {
     dataDir: 'data',
     // 处理器目录，相对于插件下
     processorsDirPath: 'utils/processors',
+    // 触发器目录，相对于插件目录下
+    triggersDir: 'utils/triggers',
     // 工具目录，相对于插件目录下
     toolsDirPath: 'utils/tools',
     // 云端API url

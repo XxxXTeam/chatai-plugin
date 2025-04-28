@@ -8,7 +8,8 @@ import {
   ProcessorsManager,
   RAGManager,
   ToolManager,
-  ToolsGroupManager
+  ToolsGroupManager,
+  TriggerManager
 } from 'chaite'
 import ChatGPTConfig from '../../config/config.js'
 import { LowDBChannelStorage } from './storage/lowdb/channel_storage.js'
@@ -31,6 +32,8 @@ import { SQLiteUserStateStorage } from './storage/sqlite/user_state_storage.js'
 import { SQLiteToolsGroupStorage } from './storage/sqlite/tool_groups_storage.js'
 import { checkMigrate } from './storage/sqlite/migrate.js'
 import { SQLiteHistoryManager } from './storage/sqlite/history_manager.js'
+import SQLiteTriggerStorage from './storage/sqlite/trigger_storage.js'
+import LowDBTriggerStorage from './storage/lowdb/trigger_storage,.js'
 
 /**
  * 认证，以便共享上传
@@ -129,7 +132,7 @@ export async function initRagManager (model, dimensions) {
 
 export async function initChaite () {
   const storage = ChatGPTConfig.chaite.storage
-  let channelsStorage, chatPresetsStorage, toolsStorage, processorsStorage, userStateStorage, historyStorage, toolsGroupStorage
+  let channelsStorage, chatPresetsStorage, toolsStorage, processorsStorage, userStateStorage, historyStorage, toolsGroupStorage, triggerStorage
   switch (storage) {
     case 'sqlite': {
       const dbPath = path.join(dataDir, 'data.db')
@@ -145,6 +148,8 @@ export async function initChaite () {
       await userStateStorage.initialize()
       toolsGroupStorage = new SQLiteToolsGroupStorage(dbPath)
       await toolsGroupStorage.initialize()
+      triggerStorage = new SQLiteTriggerStorage(dbPath)
+      await triggerStorage.initialize()
       historyStorage = new SQLiteHistoryManager(dbPath, path.join(dataDir, 'images'))
       await checkMigrate()
       break
@@ -157,6 +162,7 @@ export async function initChaite () {
       toolsStorage = new LowDBToolsStorage(ChatGPTStorage)
       processorsStorage = new LowDBProcessorsStorage(ChatGPTStorage)
       userStateStorage = new LowDBUserStateStorage(ChatGPTStorage)
+      triggerStorage = new LowDBTriggerStorage(ChatGPTStorage)
       const ChatGPTHistoryStorage = (await import('storage/lowdb/storage.js')).ChatGPTHistoryStorage
       await ChatGPTHistoryStorage.init()
       historyStorage = new LowDBHistoryManager(ChatGPTHistoryStorage)
@@ -176,8 +182,14 @@ export async function initChaite () {
   const processorsManager = await ProcessorsManager.init(processorsDir, processorsStorage)
   const chatPresetManager = await ChatPresetManager.init(chatPresetsStorage)
   const toolsGroupManager = await ToolsGroupManager.init(toolsGroupStorage)
+  const triggersDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.chaite.triggersDir)
+  if (!fs.existsSync(triggersDir)) {
+    fs.mkdirSync(triggersDir, { recursive: true })
+  }
+  const triggerManager = new TriggerManager(triggersDir, triggerStorage)
+  await triggerManager.initialize()
   const userModeSelector = new ChatGPTUserModeSelector()
-  let chaite = Chaite.init(channelsManager, toolsManager, processorsManager, chatPresetManager, toolsGroupManager,
+  let chaite = Chaite.init(channelsManager, toolsManager, processorsManager, chatPresetManager, toolsGroupManager, triggerManager,
     userModeSelector, userStateStorage, historyStorage, logger)
   logger.info('Chaite 初始化完成')
   chaite.setCloudService(ChatGPTConfig.chaite.cloudBaseUrl)
