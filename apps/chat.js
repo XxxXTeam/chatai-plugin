@@ -17,10 +17,6 @@ export class Chat extends plugin {
           reg: '^[^#][sS]*',
           fnc: 'chat',
           log: false
-        },
-        {
-          reg: '#hi',
-          fnc: 'history'
         }
       ]
     })
@@ -69,7 +65,8 @@ export class Chat extends plugin {
     })
     sendMessageOptions.conversationId = state?.current?.conversationId
     sendMessageOptions.parentMessageId = state?.current?.messageId || state?.conversations.find(c => c.id === sendMessageOptions.conversationId)?.lastMessageId
-    if (Config.llm.enableGroupContext && e.isGroup) {
+    const enableGroupContext = (preset.groupContext === 'use_system' || !preset.groupContext) ? Config.llm.enableGroupContext : (preset.groupContext === 'enabled')
+    if (enableGroupContext && e.isGroup) {
       const contextPrompt = await getGroupContextPrompt(e, Config.llm.groupContextLength)
       sendMessageOptions.systemOverride = sendMessageOptions.systemOverride ? sendMessageOptions.systemOverride + '\n' + contextPrompt : (preset.sendMessageOption.systemOverride + contextPrompt)
     }
@@ -98,10 +95,5 @@ export class Chat extends plugin {
     for (let forwardElement of forward) {
       this.reply(forwardElement)
     }
-  }
-
-  async history (e) {
-    const history = await getGroupHistory(e, 10)
-    e.reply(JSON.stringify(history))
   }
 }
