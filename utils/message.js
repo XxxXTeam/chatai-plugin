@@ -203,10 +203,10 @@ export async function toYunzai (e, contents) {
         const imageContent = (/** @type {import('chaite').ImageContent} **/ content).image
         if (imageContent.startsWith('http')) {
           msgs.push(segment.image(imageContent))
-        } else if (!imageContent.startsWith('base64')) {
-          msgs.push(`base64://${imageContent}`)
-        } else {
+        } else if (!mageContent.startsWith('base64')) {
           msgs.push(segment.image(imageContent))
+        } else {
+          msgs.push(segment.image(`base64://${imageContent}`))
         }
         break
       }
