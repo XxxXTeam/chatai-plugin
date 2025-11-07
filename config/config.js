@@ -184,6 +184,123 @@ class ChatGPTConfig {
     storage: 'sqlite'
   }
 
+  /**
+   * 记忆系统配置
+   * @type {{
+   *   database: string,
+   *   vectorDimensions: number,
+   *   group: {
+   *     enable: boolean,
+   *     enabledGroups: string[],
+   *     extractionModel: string,
+   *     extractionPresetId: string,
+   *     minMessageCount: number,
+   *     maxMessageWindow: number,
+   *     retrievalMode: 'vector' | 'keyword' | 'hybrid',
+   *     hybridPrefer: 'vector-first' | 'keyword-first',
+   *     historyPollInterval: number,
+   *     historyBatchSize: number,
+   *     promptHeader: string,
+   *     promptItemTemplate: string,
+   *     promptFooter: string,
+   *     extractionSystemPrompt: string,
+   *     extractionUserPrompt: string,
+   *     vectorMaxDistance: number,
+   *     textMaxBm25Score: number,
+   *     maxFactsPerInjection: number,
+   *     minImportanceForInjection: number
+   *   },
+   *   user: {
+   *     enable: boolean,
+   *     whitelist: string[],
+   *     blacklist: string[],
+   *     extractionModel: string,
+   *     extractionPresetId: string,
+   *     maxItemsPerInjection: number,
+   *     maxRelevantItemsPerQuery: number,
+   *     minImportanceForInjection: number,
+   *     promptHeader: string,
+   *     promptItemTemplate: string,
+   *     promptFooter: string,
+   *     extractionSystemPrompt: string,
+   *     extractionUserPrompt: string
+   *   },
+   *   extensions: {
+   *     simple: {
+   *       enable: boolean,
+   *       libraryPath: string,
+   *       dictPath: string,
+   *       useJieba: boolean
+   *     }
+   *   }
+   * }}
+   */
+  memory = {
+    database: 'data/memory.db',
+    vectorDimensions: 1536,
+    group: {
+      enable: false,
+      enabledGroups: [],
+      extractionModel: '',
+      extractionPresetId: '',
+      minMessageCount: 80,
+      maxMessageWindow: 300,
+      retrievalMode: 'hybrid',
+      hybridPrefer: 'vector-first',
+      historyPollInterval: 300,
+      historyBatchSize: 120,
+      promptHeader: '# 以下是一些该群聊中可能相关的事实，你可以参考，但不要主动透露这些事实。',
+      promptItemTemplate: '- ${fact}${topicSuffix}${timeSuffix}',
+      promptFooter: '',
+      extractionSystemPrompt: `You are a knowledge extraction assistant that specialises in summarising long-term facts from group chat transcripts.
+Read the provided conversation and identify statements that should be stored as long-term knowledge for the group.
+Return a JSON array. Each element must contain:
+{
+  "fact": 事实内容，必须完整包含事件的各个要素而不能是简单的短语（比如谁参与了事件、做了什么事情、背景时间是什么）（同一件事情尽可能整合为同一条而非拆分，以便利于检索）, 
+  "topic": 主题关键词，字符串，如 "活动"、"成员信息",
+  "importance": 一个介于0和1之间的小数，数值越大表示越重要,
+  "source_message_ids": 原始消息ID数组,
+  "source_messages": 对应原始消息的简要摘录或合并文本,
+  "involved_users": 出现或相关的用户ID数组
+}
+Only include meaningful, verifiable group-specific information that is useful for future conversations. Do not record incomplete information. Do not include general knowledge or unrelated facts. Do not wrap the JSON array in code fences.`,
+      extractionUserPrompt: `以下是群聊中的一些消息，请根据系统说明提取值得长期记忆的事实，以JSON数组形式返回，不要输出额外说明。
+
+\${messages}`,
+      vectorMaxDistance: 0,
+      textMaxBm25Score: 0,
+      maxFactsPerInjection: 5,
+      minImportanceForInjection: 0.3
+    },
+    user: {
+      enable: false,
+      whitelist: [],
+      blacklist: [],
+      extractionModel: '',
+      extractionPresetId: '',
+      maxItemsPerInjection: 5,
+      maxRelevantItemsPerQuery: 3,
+      minImportanceForInjection: 0,
+      promptHeader: '# 用户画像',
+      promptItemTemplate: '- ${value}${timeSuffix}',
+      promptFooter: '',
+      extractionSystemPrompt: `You are an assistant that extracts long-term personal preferences or persona details about a user.
+Given a conversation snippet between the user and the bot, identify durable information such as preferences, nicknames, roles, speaking style, habits, or other facts that remain valid over time.
+Return a JSON array of **strings**, and nothing else, without any other characters including \`\`\` or \`\`\`json. Each string must be a short sentence (in the same language as the conversation) describing one piece of long-term memory. Do not include keys, JSON objects, or additional metadata. Ignore temporary topics or uncertain information.`,
+      extractionUserPrompt: `下面是用户与机器人的对话，请根据系统提示提取可长期记忆的个人信息。
+
+\${messages}`
+    },
+    extensions: {
+      simple: {
+        enable: false,
+        libraryPath: '',
+        dictPath: '',
+        useJieba: false
+      }
+    }
+  }
+
   constructor () {
     this.version = '3.0.0'
     this.watcher = null
@@ -336,27 +453,81 @@ class ChatGPTConfig {
         ? JSON.parse(content)
         : yaml.load(content)
 
-      // 只更新存在的配置项
+      // 处理加载的配置并和默认值合并
       if (loadedConfig) {
-        Object.keys(loadedConfig).forEach(key => {
-          if (key === 'version' || key === 'basic' || key === 'bym' || key === 'llm' ||
-            key === 'management' || key === 'chaite') {
-            if (typeof loadedConfig[key] === 'object' && loadedConfig[key] !== null) {
-              // 对象的合并
-              if (!this[key]) this[key] = {}
-              Object.assign(this[key], loadedConfig[key])
-            } else {
-              // 基本类型直接赋值
-              this[key] = loadedConfig[key]
-            }
-          }
-        })
+        const mergeResult = this._mergeConfig(loadedConfig)
+        if (mergeResult.changed) {
+          logger?.debug?.('[Config] merged new defaults into persisted config; scheduling save')
+          this._triggerSave('code')
+        }
       }
 
       logger.debug('Config loaded successfully')
     } catch (error) {
       logger.error('Failed to load config:', error)
     }
+  }
+
+  _mergeConfig (loadedConfig) {
+    let changed = false
+
+    const mergeInto = (target, source) => {
+      if (!source || typeof source !== 'object') {
+        return target
+      }
+      if (!target || typeof target !== 'object') {
+        target = Array.isArray(source) ? [] : {}
+      }
+      const result = Array.isArray(source) ? [] : { ...target }
+
+      if (Array.isArray(source)) {
+        return source.slice()
+      }
+
+      const targetKeys = target && typeof target === 'object'
+        ? Object.keys(target)
+        : []
+      for (const key of targetKeys) {
+        if (!Object.prototype.hasOwnProperty.call(source, key)) {
+          changed = true
+        }
+      }
+
+      for (const key of Object.keys(source)) {
+        const sourceValue = source[key]
+        const targetValue = target[key]
+        if (sourceValue && typeof sourceValue === 'object' && !Array.isArray(sourceValue)) {
+          result[key] = mergeInto(targetValue, sourceValue)
+        } else {
+          if (targetValue === undefined || targetValue !== sourceValue) {
+            changed = true
+          }
+          result[key] = sourceValue
+        }
+      }
+      return result
+    }
+
+    const sections = ['version', 'basic', 'bym', 'llm', 'management', 'chaite', 'memory']
+    for (const key of sections) {
+      const loadedValue = loadedConfig[key]
+      if (loadedValue === undefined) {
+        continue
+      }
+      if (typeof loadedValue === 'object' && loadedValue !== null) {
+        const merged = mergeInto(this[key], loadedValue)
+        if (merged !== this[key]) {
+          this[key] = merged
+        }
+      } else {
+        if (this[key] !== loadedValue) {
+          changed = true
+        }
+        this[key] = loadedValue
+      }
+    }
+
+    return { changed }
   }
 
   // 合并触发保存，防抖处理
@@ -366,20 +537,18 @@ class ChatGPTConfig {
       clearTimeout(this._saveTimer)
     }
 
-    // 记录保存来源
-    this._saveOrigin = origin || 'code'
-
-    // 设置定时器延迟保存
+    const originLabel = origin || 'code'
+    this._saveOrigin = originLabel
     this._saveTimer = setTimeout(() => {
-      this.saveToFile()
-      // 保存完成后延迟一下再清除来源标记
-      setTimeout(() => {
-        this._saveOrigin = null
-      }, 100)
+      this.saveToFile(originLabel)
+      this._saveOrigin = null
     }, 200)
   }
 
-  saveToFile () {
+  saveToFile (origin = 'code') {
+    if (origin !== 'code') {
+      this._saveOrigin = 'external'
+    }
     logger.debug('Saving config to file...')
     try {
       const config = {
@@ -388,7 +557,8 @@ class ChatGPTConfig {
         bym: this.bym,
         llm: this.llm,
         management: this.management,
-        chaite: this.chaite
+        chaite: this.chaite,
+        memory: this.memory
       }
 
       const content = this.configPath.endsWith('.json')
@@ -408,7 +578,8 @@ class ChatGPTConfig {
       bym: this.bym,
       llm: this.llm,
       management: this.management,
-      chaite: this.chaite
+      chaite: this.chaite,
+      memory: this.memory
     }
   }
 }

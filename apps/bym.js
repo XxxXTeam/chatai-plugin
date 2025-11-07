@@ -3,7 +3,9 @@ import { Chaite } from 'chaite'
 import { intoUserMessage, toYunzai } from '../utils/message.js'
 import common from '../../../lib/common/common.js'
 import { getGroupContextPrompt } from '../utils/group.js'
-import {formatTimeToBeiJing} from '../utils/common.js'
+import { formatTimeToBeiJing } from '../utils/common.js'
+import { extractTextFromUserMessage, processUserMemory } from '../models/memory/userMemoryManager.js'
+import { buildMemoryPrompt } from '../models/memory/prompt.js'
 
 export class bym extends plugin {
   constructor () {
@@ -83,6 +85,7 @@ export class bym extends plugin {
       toggleMode: ChatGPTConfig.basic.toggleMode,
       togglePrefix: ChatGPTConfig.basic.togglePrefix
     })
+    const userText = extractTextFromUserMessage(userMessage) || e.msg || ''
     // 伪人不记录历史
     // sendMessageOption.disableHistoryRead = true
     // sendMessageOption.disableHistorySave = true
@@ -98,9 +101,29 @@ export class bym extends plugin {
         this.reply(forwardElement)
       }
     }
+    const systemSegments = []
+    if (sendMessageOption.systemOverride) {
+      systemSegments.push(sendMessageOption.systemOverride)
+    }
+    if (userText) {
+      const memoryPrompt = await buildMemoryPrompt({
+        userId: e.sender.user_id + '',
+        groupId: e.isGroup ? e.group_id + '' : null,
+        queryText: userText
+      })
+      if (memoryPrompt) {
+        systemSegments.push(memoryPrompt)
+        logger.debug(`[Memory] bym memory prompt: ${memoryPrompt}`)
+      }
+    }
     if (ChatGPTConfig.llm.enableGroupContext && e.isGroup) {
       const contextPrompt = await getGroupContextPrompt(e, ChatGPTConfig.llm.groupContextLength)
-      sendMessageOption.systemOverride = sendMessageOption.systemOverride ? sendMessageOption.systemOverride + '\n' + contextPrompt : contextPrompt
+      if (contextPrompt) {
+        systemSegments.push(contextPrompt)
+      }
+    }
+    if (systemSegments.length > 0) {
+      sendMessageOption.systemOverride = systemSegments.join('\n\n')
     }
     // 发送
     const response = await Chaite.getInstance().sendMessage(userMessage, e, {
@@ -120,5 +143,13 @@ export class bym extends plugin {
         await e.reply(forwardElement, false, { recallMsg: recall ? 10 : 0 })
       }
     }
+    await processUserMemory({
+      event: e,
+      userMessage,
+      userText,
+      conversationId: sendMessageOption.conversationId,
+      assistantContents: response.contents,
+      assistantMessageId: response.id
+    })
   }
 }
