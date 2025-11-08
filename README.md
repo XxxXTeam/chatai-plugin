@@ -48,14 +48,14 @@ ChatGPT-Plugin 以 Chaite 为内核，将多模型渠道、工具、处理器、
    ```bash
    cd chatgpt-plugin
    pnpm install
-   # 或使用 npm/yarn，亦可在项目根目录执行 `pnpm install --filter chatgpt-plugin...`
    ```
+   若安装日志出现 `Ignored build scripts: better-sqlite3` 或运行时报错找不到 `better-sqlite3` bindings，可执行 `pnpm approve-builds`，在交互列表中勾选全部或仅 `better-sqlite3` 以允许编译。然后再次 `pnpm install`
 3. **在 Yunzai 中启用插件**
-   - 重启机器人或运行 `node app` 让插件自动加载。
-   - 首次启动会在 `plugins/chatgpt-plugin/config/` 下生成 `config.json / config.yaml`。
+    - 重启机器人或运行 `node app` 让插件自动加载。
+    - 首次启动会在 `plugins/chatgpt-plugin/config/` 下生成 `config.json / config.yaml`。
 4. **保持更新**
-   - 主人账号发送 `#chatgpt更新` 获取最新版本。
-   - `#chatgpt强制更新` 会放弃本地修改后重新拉取，请谨慎使用。
+    - 主人账号发送 `#chatgpt更新` 获取最新版本。
+    - `#chatgpt强制更新` 会放弃本地修改后重新拉取，请谨慎使用。
 
 ## 配置指引
 
@@ -165,5 +165,4 @@ https://afdian.net/a/ikechan8370
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=ikechan8370/chatgpt-plugin&type=Date)](https://star-history.com/#ikechan8370/chatgpt-plugin&Date)
-
 
