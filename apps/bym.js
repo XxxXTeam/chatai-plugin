@@ -1,155 +1,120 @@
-import ChatGPTConfig from '../config/config.js'
-import { Chaite } from 'chaite'
-import { intoUserMessage, toYunzai } from '../utils/message.js'
-import common from '../../../lib/common/common.js'
-import { getGroupContextPrompt } from '../utils/group.js'
-import { formatTimeToBeiJing } from '../utils/common.js'
-import { extractTextFromUserMessage, processUserMemory } from '../models/memory/userMemoryManager.js'
-import { buildMemoryPrompt } from '../models/memory/prompt.js'
+import config from '../config/config.js'
 
+/**
+ * 伪人模式 (BYM - Be Yourself Mode)
+ * 让Bot像真人一样随机回复消息
+ */
 export class bym extends plugin {
-  constructor () {
-    super({
-      name: 'ChatGPT-Plugin伪人模式',
-      dsc: 'ChatGPT-Plugin伪人模式',
-      event: 'message',
-      priority: 6000,
-      rule: [
-        {
-          reg: '^[^#][sS]*',
-          fnc: 'bym',
-          log: false
-        }
-      ]
-    })
-  }
-
-  async bym (e) {
-    if (!Chaite.getInstance()) {
-      return false
-    }
-    if (!ChatGPTConfig.bym.enable) {
-      return false
-    }
-    let prob = ChatGPTConfig.bym.probability
-    if (ChatGPTConfig.bym.hit.find(keyword => e.msg?.includes(keyword))) {
-      prob = 1
-    }
-    if (Math.random() > prob) {
-      return false
-    }
-    logger.info('伪人模式触发')
-    let recall = false
-    let presetId = ChatGPTConfig.bym.defaultPreset
-    if (ChatGPTConfig.bym.presetMap && ChatGPTConfig.bym.presetMap.length > 0) {
-      const option = ChatGPTConfig.bym.presetMap.sort((a, b) => b.priority - a.priority)
-        .find(item => item.keywords.find(keyword => e.msg?.includes(keyword)))
-      if (option) {
-        presetId = option.presetId
-        recall = !!option.recall
-      }
+    constructor() {
+        super({
+            name: 'AI-伪人模式',
+            dsc: 'AI伪人模式',
+            event: 'message',
+            priority: 6000,
+            rule: [
+                {
+                    reg: '^[^#].*',  // 匹配非命令消息
+                    fnc: 'bym',
+                    log: false
+                }
+            ]
+        })
     }
 
-    const presetManager = Chaite.getInstance().getChatPresetManager()
-    let preset = await presetManager.getInstance(presetId)
-    if (!preset) {
-      preset = await presetManager.getInstance(ChatGPTConfig.bym.defaultPreset)
-    }
-    if (!preset) {
-      logger.debug('未找到预设，请检查配置文件')
-      return false
-    }
     /**
-     * @type {import('chaite').SendMessageOption}
+     * 伪人模式触发logic
+     * @param {*} e
      */
-    const sendMessageOption = JSON.parse(JSON.stringify(preset.sendMessageOption))
-    if (ChatGPTConfig.bym.presetPrefix) {
-      if (!sendMessageOption.systemOverride) {
-        sendMessageOption.systemOverride = ''
-      }
-      sendMessageOption.systemOverride = ChatGPTConfig.bym.presetPrefix + sendMessageOption.systemOverride
+    async bym(e) {
+        // 检查是否启用
+        const enabled = config.get('bym.enable')
+        if (!enabled) {
+            return false
+        }
+
+        // 随机触发概率
+        const probability = config.get('bym.probability') || 0.02
+        if (Math.random() > probability) {
+            return false
+        }
+
+        // Check if OpenAI is configured
+        const apiKey = config.get('openai.apiKey')
+        if (!apiKey) {
+            logger.warn('[BYM] OpenAI API Key not configured')
+            return false
+        }
+
+        try {
+            logger.info('[BYM] 伪人模式触发')
+
+            // Use LlmService to create client
+            const { LlmService } = await import('../src/services/LlmService.js')
+            // BYM usually doesn't need tools, but we can enable them if needed
+            const client = await LlmService.createClient({ enableTools: false })
+
+            // Get message text
+            const messageText = e.msg || ''
+            if (!messageText.trim()) {
+                return false
+            }
+
+            // Determine system prompt based on preset map
+            let systemPrompt = config.get('bym.systemPrompt') ||
+                '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。'
+
+            const presetMap = config.get('bym.presetMap') || {}
+            for (const [keyword, presetId] of Object.entries(presetMap)) {
+                if (messageText.includes(keyword)) {
+                    // Use LlmService to get preset prompt
+                    const presetPrompt = LlmService.getSystemPrompt(presetId)
+                    if (presetPrompt) {
+                        systemPrompt = presetPrompt
+                        logger.info(`[BYM] Matched keyword "${keyword}", using preset "${presetId}"`)
+                    }
+                    break
+                }
+            }
+
+            const userMessage = {
+                role: 'user',
+                content: [{ type: 'text', text: messageText }],
+            }
+
+            // Context management: include sender info
+            if (e.sender) {
+                systemPrompt += `\n当前对话者: ${e.sender.card || e.sender.nickname || '未知用户'}`
+            }
+            if (e.group_name) {
+                systemPrompt += `\n当前群聊: ${e.group_name}`
+            }
+
+            const response = await client.sendMessage(userMessage, {
+                model: config.get('bym.model') || LlmService.getDefaultModel(),
+                conversationId: `bym_${e.group_id || e.user_id}_${Date.now()}`, // Use group_id for context if available
+                systemOverride: systemPrompt,
+                temperature: config.get('bym.temperature') || 0.9,
+                maxToken: config.get('bym.maxTokens') || 100,
+            })
+
+            const replyText = response.contents
+                .filter(c => c.type === 'text')
+                .map(c => c.text)
+                .join('\n')
+
+            if (replyText) {
+                // 添加延迟模拟打字
+                await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 500))
+
+                // 是否撤回
+                const recall = config.get('bym.recall')
+                await e.reply(replyText, false, { recallMsg: recall ? 10 : 0 })
+            }
+
+            return true
+        } catch (error) {
+            logger.error('[BYM] Error:', error)
+            return false
+        }
     }
-    sendMessageOption.systemOverride = `Current Time: ${formatTimeToBeiJing(new Date().getTime())}\n` + sendMessageOption.systemOverride
-    if (ChatGPTConfig.bym.temperature >= 0) {
-      sendMessageOption.temperature = ChatGPTConfig.bym.temperature
-    }
-    if (ChatGPTConfig.bym.maxTokens > 0) {
-      sendMessageOption.maxToken = ChatGPTConfig.bym.maxTokens
-    }
-    const userMessage = await intoUserMessage(e, {
-      handleReplyText: true,
-      handleReplyImage: true,
-      useRawMessage: true,
-      handleAtMsg: true,
-      excludeAtBot: false,
-      toggleMode: ChatGPTConfig.basic.toggleMode,
-      togglePrefix: ChatGPTConfig.basic.togglePrefix
-    })
-    const userText = extractTextFromUserMessage(userMessage) || e.msg || ''
-    // 伪人不记录历史
-    // sendMessageOption.disableHistoryRead = true
-    // sendMessageOption.disableHistorySave = true
-    sendMessageOption.conversationId = 'bym' + e.user_id + Date.now()
-    sendMessageOption.parentMessageId = undefined
-    // 设置多轮调用回掉
-    sendMessageOption.onMessageWithToolCall = async content => {
-      const { msgs, forward } = await toYunzai(e, [content])
-      if (msgs.length > 0) {
-        await e.reply(msgs)
-      }
-      for (let forwardElement of forward) {
-        this.reply(forwardElement)
-      }
-    }
-    const systemSegments = []
-    if (sendMessageOption.systemOverride) {
-      systemSegments.push(sendMessageOption.systemOverride)
-    }
-    if (userText) {
-      const memoryPrompt = await buildMemoryPrompt({
-        userId: e.sender.user_id + '',
-        groupId: e.isGroup ? e.group_id + '' : null,
-        queryText: userText
-      })
-      if (memoryPrompt) {
-        systemSegments.push(memoryPrompt)
-        logger.debug(`[Memory] bym memory prompt: ${memoryPrompt}`)
-      }
-    }
-    if (ChatGPTConfig.llm.enableGroupContext && e.isGroup) {
-      const contextPrompt = await getGroupContextPrompt(e, ChatGPTConfig.llm.groupContextLength)
-      if (contextPrompt) {
-        systemSegments.push(contextPrompt)
-      }
-    }
-    if (systemSegments.length > 0) {
-      sendMessageOption.systemOverride = systemSegments.join('\n\n')
-    }
-    // 发送
-    const response = await Chaite.getInstance().sendMessage(userMessage, e, {
-      ...sendMessageOption,
-      chatPreset: preset
-    })
-    const { msgs, forward } = await toYunzai(e, response.contents)
-    if (msgs.length > 0) {
-      // await e.reply(msgs, false, { recallMsg: recall })
-      for (let msg of msgs) {
-        await e.reply(msg, false, { recallMsg: recall ? 10 : 0 })
-        await common.sleep(Math.floor(Math.random() * 2000) + 1000)
-      }
-    }
-    if (ChatGPTConfig.bym.sendReasoning) {
-      for (let forwardElement of forward) {
-        await e.reply(forwardElement, false, { recallMsg: recall ? 10 : 0 })
-      }
-    }
-    await processUserMemory({
-      event: e,
-      userMessage,
-      userText,
-      conversationId: sendMessageOption.conversationId,
-      assistantContents: response.contents,
-      assistantMessageId: response.id
-    })
-  }
 }

@@ -1,7 +1,11 @@
 import * as crypto from 'node:crypto'
 import path from 'path'
-import ChatGPTConfig from '../config/config.js'
+import { fileURLToPath } from 'url'
+import config from '../config/config.js'
 import fs from 'fs'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 export function md5 (str) {
   return crypto.createHash('md5').update(str).digest('hex')
 }

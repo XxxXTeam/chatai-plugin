@@ -1,0 +1,10 @@
+[
+  {
+    "id": "fa6ce456-044d-4562-a9c6-9706a007c005",
+    "name": "test",
+    "description": "",
+    "systemPrompt": "你是一个机器人",
+    "model": "gpt-5-chat",
+    "temperature": 0.7
+  }
+]

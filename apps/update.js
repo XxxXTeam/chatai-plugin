@@ -1,350 +1,278 @@
-// modified from StarRail-plugin | 已经过StarRail-plugin作者本人同意
 import plugin from '../../../lib/plugins/plugin.js'
 import { createRequire } from 'module'
-import _ from 'lodash'
-import { Restart } from '../../other/restart.js'
-import ChatGPTConfig from '../config/config.js'
+import config from '../config/config.js'
 
 const require = createRequire(import.meta.url)
 const { exec, execSync } = require('child_process')
 
-// 是否在更新中
 let uping = false
 
 /**
- * 处理插件更新
+ * 插件更新
  */
-export class Update extends plugin {
-  constructor () {
-    const cmdPrefix = ChatGPTConfig.basic.commandPrefix
-    super({
-      name: 'chatgpt更新插件',
-      event: 'message',
-      priority: 1000,
-      rule: [
-        {
-          reg: `^${cmdPrefix}?(强制)?更新$`,
-          fnc: 'update'
-        }
-      ]
-    })
-  }
-
-  /**
-   * rule - 更新chatgpt插件
-   * @returns
-   */
-  async update () {
-    if (!this.e.isMaster) return false
-
-    /** 检查是否正在更新中 */
-    if (uping) {
-      await this.reply('已有命令更新中..请勿重复操作')
-      return
+export class update extends plugin {
+    constructor() {
+        const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
+        super({
+            name: 'AI-更新',
+            event: 'message',
+            priority: 1000,
+            rule: [
+                {
+                    reg: `^${cmdPrefix}?(强制)?更新$`,
+                    fnc: 'update',
+                    permission: 'master'
+                }
+            ]
+        })
     }
 
-    /** 检查git安装 */
-    if (!(await this.checkGit())) return
+    /**
+     * 更新插件
+     */
+    async update(e) {
+        if (!e.isMaster) return false
 
-    const isForce = this.e.msg.includes('强制')
-
-    /** 执行更新 */
-    await this.runUpdate(isForce)
-
-    /** 是否需要重启 */
-    if (this.isUp) {
-      // await this.reply("更新完毕，请重启云崽后生效")
-      setTimeout(() => this.restart(), 2000)
-    }
-  }
-
-  restart () {
-    new Restart(this.e).restart()
-  }
-
-  /**
-   * chatgpt插件更新函数
-   * @param {boolean} isForce 是否为强制更新
-   * @returns
-   */
-  async runUpdate (isForce) {
-    try {
-      let command = 'git -C ./plugins/chatgpt-plugin/ pull --no-rebase'
-      if (isForce) {
-        command = `git -C ./plugins/chatgpt-plugin/ checkout . && ${command}`
-        this.e.reply('正在执行强制更新操作，请稍等')
-      } else {
-        this.e.reply('正在执行更新操作，请稍等')
-      }
-      /** 获取上次提交的commitId，用于获取日志时判断新增的更新日志 */
-      this.oldCommitId = await this.getcommitId('chatgpt-plugin')
-      uping = true
-      let ret = await this.execSync(command)
-
-      if (ret.error) {
-        logger.mark(`${this.e.logFnc} 更新失败：chatgpt-plugin`)
-        this.gitErr(ret.error, ret.stdout)
-        return false
-      }
-
-      // Check if pnpm is available
-      let packageManager = await this.checkPnpm()
-      await this.reply(`正在使用 ${packageManager} 更新 chaite 依赖...`)
-      let npmRet = await this.execSync(`cd ./plugins/chatgpt-plugin/ && ${packageManager} update chaite`)
-      logger.info(JSON.stringify(npmRet))
-      if (npmRet.error) {
-        logger.mark(`${this.e.logFnc} 更新失败：chaite 依赖`)
-        await this.reply(`chaite 依赖更新失败：\n${npmRet.error.toString()}`)
-        return false
-      }
-      /** 获取插件提交的最新时间 */
-      let time = await this.getTime('chatgpt-plugin')
-
-      if (/(Already up[ -]to[ -]date|已经是最新的)/.test(ret.stdout)) {
-        await this.reply(`chatgpt-plugin已经是最新版本\n最后更新时间：${time}`)
-      } else {
-        let updateMsg = `chatgpt-plugin\n最后更新时间：${time}`
-
-        // Add npm update information if available
-        if (npmRet.stdout.includes('chaite')) {
-          updateMsg += `\n已使用${packageManager}更新chaite依赖`
+        if (uping) {
+            await e.reply('已有命令更新中..请勿重复操作')
+            return false
         }
 
-        await this.reply(updateMsg)
-        this.isUp = true
-        /** 获取chatgpt组件的更新日志 */
-        let log = await this.getLog('chatgpt-plugin')
-        await this.reply(log)
-      }
+        // 检查git
+        if (!(await this.checkGit())) return false
 
-      logger.mark(`${this.e.logFnc} 最后更新时间：${time}`)
+        const isForce = e.msg.includes('强制')
+        await this.runUpdate(isForce)
 
-      return true
-    } catch (err) {
-      logger.error(err)
-      await this.reply(`更新失败：\n${err.toString()}`)
-      return false
-    } finally {
-      uping = false
-    }
-  }
-
-  /**
-   * 获取chatgpt插件的更新日志
-   * @param {string} plugin 插件名称
-   * @returns
-   */
-  async getLog (plugin = '') {
-    let cm = `cd ./plugins/${plugin}/ && git log  -20 --oneline --pretty=format:"%h||[%cd]  %s" --date=format:"%m-%d %H:%M"`
-
-    let logAll
-    try {
-      logAll = await execSync(cm, { encoding: 'utf-8' })
-    } catch (error) {
-      logger.error(error.toString())
-      this.reply(error.toString())
+        return true
     }
 
-    if (!logAll) return false
+    /**
+     * 执行更新
+     */
+    async runUpdate(isForce) {
+        try {
+            let command = 'git -C ./plugins/new-plugin/ pull --no-rebase'
+            if (isForce) {
+                command = `git -C ./plugins/new-plugin/ checkout . && ${command}`
+                await this.e.reply('正在执行强制更新操作，请稍等')
+            } else {
+                await this.e.reply('正在执行更新操作，请稍等')
+            }
 
-    logAll = logAll.split('\n')
+            this.oldCommitId = await this.getcommitId('new-plugin')
+            uping = true
 
-    let log = []
-    for (let str of logAll) {
-      str = str.split('||')
-      if (str[0] == this.oldCommitId) break
-      if (str[1].includes('Merge branch')) continue
-      log.push(str[1])
-    }
-    let line = log.length
-    log = log.join('\n\n')
+            let ret = await this.execSync(command)
 
-    if (log.length <= 0) return ''
+            if (ret.error) {
+                logger.mark(`${this.e.logFnc} 更新失败：new-plugin`)
+                this.gitErr(ret.error, ret.stdout)
+                return false
+            }
 
-    let end = ''
-    end =
-      '更多详细信息，请前往github查看\nhttps://github.com/ikechan8370/chatgpt-plugin'
+            // 检查包管理器
+            let packageManager = await this.checkPnpm()
+            await this.reply(`正在使用 ${packageManager} 更新依赖...`)
 
-    log = await this.makeForwardMsg(`chatgpt-plugin更新日志，共${line}条`, log, end)
+            let npmRet = await this.execSync(`cd ./plugins/new-plugin/ && ${packageManager} install`)
 
-    return log
-  }
+            if (npmRet.error) {
+                logger.mark(`${this.e.logFnc} 依赖更新失败`)
+                await this.reply(`依赖更新失败：\n${npmRet.error.toString()}`)
+                return false
+            }
 
-  /**
-   * 获取上次提交的commitId
-   * @param {string} plugin 插件名称
-   * @returns
-   */
-  async getcommitId (plugin = '') {
-    let cm = `git -C ./plugins/${plugin}/ rev-parse --short HEAD`
+            let time = await this.getTime('new-plugin')
 
-    let commitId = await execSync(cm, { encoding: 'utf-8' })
-    commitId = _.trim(commitId)
+            if (/(Already up[ -]to[ -]date|已经是最新的)/.test(ret.stdout)) {
+                await this.reply(`new-plugin已经是最新版本\n最后更新时间：${time}`)
+            } else {
+                await this.reply(`new-plugin更新成功\n最后更新时间：${time}`)
+                let log = await this.getLog('new-plugin')
+                if (log) {
+                    await this.reply(log)
+                }
 
-    return commitId
-  }
+                // 提示重启
+                await this.reply('更新完成，请重启云崽后生效')
+            }
 
-  /**
-   * 获取本次更新插件的最后一次提交时间
-   * @param {string} plugin 插件名称
-   * @returns
-   */
-  async getTime (plugin = '') {
-    let cm = `cd ./plugins/${plugin}/ && git log -1 --oneline --pretty=format:"%cd" --date=format:"%m-%d %H:%M"`
-
-    let time = ''
-    try {
-      time = await execSync(cm, { encoding: 'utf-8' })
-      time = _.trim(time)
-    } catch (error) {
-      logger.error(error.toString())
-      time = '获取时间失败'
-    }
-    return time
-  }
-
-  /**
-   * 制作转发消息
-   * @param {string} title 标题 - 首条消息
-   * @param {string} msg 日志信息
-   * @param {string} end 最后一条信息
-   * @returns
-   */
-  async makeForwardMsg (title, msg, end) {
-    const _bot = this.e.bot ?? Bot
-    let nickname = _bot.nickname
-    if (this.e.isGroup) {
-      let info = await _bot?.pickMember?.(this.e.group_id, _bot.uin) || await _bot?.getGroupMemberInfo?.(this.e.group_id, _bot.uin)
-      nickname = info.card || info.nickname
-    }
-    let userInfo = {
-      user_id: _bot.uin,
-      nickname
+            return true
+        } catch (err) {
+            logger.error(err)
+            await this.reply(`更新失败：\n${err.toString()}`)
+            return false
+        } finally {
+            uping = false
+        }
     }
 
-    let forwardMsg = [
-      {
-        ...userInfo,
-        message: title
-      },
-      {
-        ...userInfo,
-        message: msg
-      }
-    ]
+    /**
+     * 获取更新日志
+     */
+    async getLog(plugin = '') {
+        let cm = `cd ./plugins/${plugin}/ && git log -20 --oneline --pretty=format:"%h||[%cd]  %s" --date=format:"%m-%d %H:%M"`
 
-    if (end) {
-      forwardMsg.push({
-        ...userInfo,
-        message: end
-      })
+        let logAll
+        try {
+            logAll = await execSync(cm, { encoding: 'utf-8' })
+        } catch (error) {
+            logger.error(error.toString())
+            return false
+        }
+
+        if (!logAll) return false
+
+        logAll = logAll.split('\n')
+        let log = []
+
+        for (let str of logAll) {
+            str = str.split('||')
+            if (str[0] == this.oldCommitId) break
+            if (str[1].includes('Merge branch')) continue
+            log.push(str[1])
+        }
+
+        if (log.length <= 0) return ''
+
+        let line = log.length
+        log = log.join('\n\n')
+
+        let end = '更多详细信息，请前往github查看'
+        log = await this.makeForwardMsg(`new-plugin更新日志，共${line}条`, log, end)
+
+        return log
     }
 
-    /** 制作转发内容 */
-    if (this.e.group?.makeForwardMsg) {
-      forwardMsg = await this.e.group.makeForwardMsg(forwardMsg)
-    } else if (this.e?.friend?.makeForwardMsg) {
-      forwardMsg = await this.e.friend.makeForwardMsg(forwardMsg)
-    } else {
-      return msg.join('\n')
+    /**
+     * 获取commit ID
+     */
+    async getcommitId(plugin = '') {
+        let cm = `git -C ./plugins/${plugin}/ rev-parse --short HEAD`
+        let commitId = await execSync(cm, { encoding: 'utf-8' })
+        return commitId.trim()
     }
 
-    let dec = 'chatgpt-plugin 更新日志'
-    /** 处理描述 */
-    if (typeof (forwardMsg.data) === 'object') {
-      let detail = forwardMsg.data?.meta?.detail
-      if (detail) {
-        detail.news = [{ text: dec }]
-      }
-    } else {
-      forwardMsg.data = forwardMsg.data
-        .replace(/\n/g, '')
-        .replace(/<title color="#777777" size="26">(.+?)<\/title>/g, '___')
-        .replace(/___+/, `<title color="#777777" size="26">${dec}</title>`)
+    /**
+     * 获取最后提交时间
+     */
+    async getTime(plugin = '') {
+        let cm = `cd ./plugins/${plugin}/ && git log -1 --oneline --pretty=format:"%cd" --date=format:"%m-%d %H:%M"`
+
+        try {
+            let time = await execSync(cm, { encoding: 'utf-8' })
+            return time.trim()
+        } catch (error) {
+            logger.error(error.toString())
+            return '获取时间失败'
+        }
     }
 
-    return forwardMsg
-  }
+    /**
+     * 制作转发消息
+     */
+    async makeForwardMsg(title, msg, end) {
+        const _bot = this.e.bot ?? Bot
+        let nickname = _bot.nickname
 
-  /**
-   * 检查是否安装pnpm
-   * @returns {Promise<string>} 返回 'pnpm' 或 'npm'
-   */
-  async checkPnpm () {
-    let npm = 'npm'
-    let ret = await this.execSync('pnpm -v')
-    if (ret.stdout) npm = 'pnpm'
-    return npm
-  }
+        if (this.e.isGroup) {
+            let info = await _bot?.pickMember?.(this.e.group_id, _bot.uin) ||
+                await _bot?.getGroupMemberInfo?.(this.e.group_id, _bot.uin)
+            nickname = info.card || info.nickname
+        }
 
-  /**
-   * 处理更新失败的相关函数
-   * @param {string} err
-   * @param {string} stdout
-   * @returns
-   */
-  async gitErr (err, stdout) {
-    let msg = '更新失败！'
-    let errMsg = err.toString()
-    stdout = stdout.toString()
+        let userInfo = {
+            user_id: _bot.uin,
+            nickname
+        }
 
-    if (errMsg.includes('Timed out')) {
-      let remote = errMsg.match(/'(.+?)'/g)[0].replace(/'/g, '')
-      await this.reply(msg + `\n连接超时：${remote}`)
-      return
+        let forwardMsg = [
+            { ...userInfo, message: title },
+            { ...userInfo, message: msg }
+        ]
+
+        if (end) {
+            forwardMsg.push({ ...userInfo, message: end })
+        }
+
+        if (this.e.group?.makeForwardMsg) {
+            forwardMsg = await this.e.group.makeForwardMsg(forwardMsg)
+        } else if (this.e?.friend?.makeForwardMsg) {
+            forwardMsg = await this.e.friend.makeForwardMsg(forwardMsg)
+        } else {
+            return msg
+        }
+
+        return forwardMsg
     }
 
-    if (/Failed to connect|unable to access/g.test(errMsg)) {
-      let remote = errMsg.match(/'(.+?)'/g)[0].replace(/'/g, '')
-      await this.reply(msg + `\n连接失败：${remote}`)
-      return
+    /**
+     * 检查pnpm
+     */
+    async checkPnpm() {
+        let npm = 'npm'
+        let ret = await this.execSync('pnpm -v')
+        if (ret.stdout) npm = 'pnpm'
+        return npm
     }
 
-    if (errMsg.includes('be overwritten by merge')) {
-      await this.reply(
-        msg +
-        `存在冲突：\n${errMsg}\n` +
-        '请解决冲突后再更新，或者执行#强制更新，放弃本地修改'
-      )
-      return
+    /**
+     * Git错误处理
+     */
+    async gitErr(err, stdout) {
+        let msg = '更新失败！'
+        let errMsg = err.toString()
+        stdout = stdout.toString()
+
+        if (errMsg.includes('Timed out')) {
+            let remote = errMsg.match(/'(.+?)'/g)?.[0].replace(/'/g, '') || 'unknown'
+            await this.reply(msg + `\n连接超时：${remote}`)
+            return
+        }
+
+        if (/Failed to connect|unable to access/g.test(errMsg)) {
+            let remote = errMsg.match(/'(.+?)'/g)?.[0].replace(/'/g, '') || 'unknown'
+            await this.reply(msg + `\n连接失败：${remote}`)
+            return
+        }
+
+        if (errMsg.includes('be overwritten by merge')) {
+            await this.reply(
+                msg + `存在冲突：\n${errMsg}\n` +
+                '请解决冲突后再更新，或者执行#强制更新，放弃本地修改'
+            )
+            return
+        }
+
+        await this.reply([errMsg, stdout])
     }
 
-    if (stdout.includes('CONFLICT')) {
-      await this.reply([
-        msg + '存在冲突\n',
-        errMsg,
-        stdout,
-        '\n请解决冲突后再更新，或者执行#强制更新，放弃本地修改'
-      ])
-      return
+    /**
+     * 异步执行命令
+     */
+    async execSync(cmd) {
+        return new Promise((resolve, reject) => {
+            exec(cmd, { windowsHide: true }, (error, stdout, stderr) => {
+                resolve({ error, stdout, stderr })
+            })
+        })
     }
 
-    await this.reply([errMsg, stdout])
-  }
-
-  /**
-   * 异步执行git相关命令
-   * @param {string} cmd git命令
-   * @returns
-   */
-  async execSync (cmd) {
-    return new Promise((resolve, reject) => {
-      exec(cmd, { windowsHide: true }, (error, stdout, stderr) => {
-        resolve({ error, stdout, stderr })
-      })
-    })
-  }
-
-  /**
-   * 检查git是否安装
-   * @returns
-   */
-  async checkGit () {
-    let ret = await execSync('git --version', { encoding: 'utf-8' })
-    if (!ret || !ret.includes('git version')) {
-      await this.reply('请先安装git')
-      return false
+    /**
+     * 检查git
+     */
+    async checkGit() {
+        try {
+            let ret = await execSync('git --version', { encoding: 'utf-8' })
+            if (!ret || !ret.includes('git version')) {
+                await this.reply('请先安装git')
+                return false
+            }
+            return true
+        } catch (error) {
+            await this.reply('请先安装git')
+            return false
+        }
     }
-    return true
-  }
 }

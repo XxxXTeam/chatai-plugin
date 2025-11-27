@@ -1,132 +1,157 @@
-import Config from '../config/config.js'
-import { Chaite, SendMessageOption } from 'chaite'
-import { getPreset, intoUserMessage, toYunzai } from '../utils/message.js'
-import { YunzaiUserState } from '../models/chaite/storage/lowdb/user_state_storage.js'
-import { getGroupContextPrompt } from '../utils/group.js'
-import { buildMemoryPrompt } from '../models/memory/prompt.js'
-import { extractTextFromUserMessage, processUserMemory } from '../models/memory/userMemoryManager.js'
-import * as crypto from 'node:crypto'
+import config from '../config/config.js'
 
+/**
+ * AI Chat plugin for Yunzai
+ */
 export class Chat extends plugin {
-  constructor () {
+  constructor() {
     super({
-      name: 'ChatGPT-Plugin对话',
-      dsc: 'ChatGPT-Plugin对话',
+      name: 'AI-Chat',
+      dsc: 'AI对话功能',
       event: 'message',
-      // 应🥑要求降低优先级
-      priority: 555500,
+      priority: 5000,
       rule: [
         {
-          reg: '^[^#][sS]*',
-          fnc: 'chat',
-          log: false
+          reg: '^#chat\\s*(.*)$',
+          fnc: 'chat'
+        },
+        {
+          reg: '^#clear$',
+          fnc: 'clearHistory'
         }
       ]
     })
   }
 
-  async chat (e) {
-    if (!Chaite.getInstance()) {
-      return false
+  /**
+   * Handle chat messages
+   * @param {*} e Yunzai event
+   */
+  async chat(e) {
+    const msg = e.msg.replace(/^#chat\s*/, '').trim()
+
+    if (!msg && (!e.img || e.img.length === 0)) {
+      await e.reply('请输入要说的内容或发送图片', true)
+      return true
     }
-    let state = await Chaite.getInstance().getUserStateStorage().getItem(e.sender.user_id + '')
-    if (!state) {
-      state = new YunzaiUserState(e.sender.user_id, e.sender.nickname, e.sender.card)
-      // await Chaite.getInstance().getUserStateStorage().setItem(e.sender.user_id + '', state)
-    }
-    if (!state.current.conversationId) {
-      state.current.conversationId = crypto.randomUUID()
-    }
-    if (!state.current.messageId) {
-      state.current.messageId = crypto.randomUUID()
-    }
-    const preset = await getPreset(e, state?.settings.preset || Config.llm.defaultChatPresetId, Config.basic.toggleMode, Config.basic.togglePrefix)
-    if (!preset) {
-      logger.debug('不满足对话触发条件或未找到预设，不进入对话')
-      return false
-    } else {
-      logger.info('进入对话, prompt: ' + e.msg)
-    }
-    const sendMessageOptions = SendMessageOption.create(state?.settings)
-    sendMessageOptions.onMessageWithToolCall = async content => {
-      const { msgs, forward } = await toYunzai(e, [content])
-      if (msgs.length > 0) {
-        await e.reply(msgs)
+
+    try {
+      // Import services
+      const { chatService } = await import('../src/services/ChatService.js')
+      const { imageService } = await import('../src/services/ImageService.js')
+      const { presetManager } = await import('../src/services/PresetManager.js')
+      const { channelManager } = await import('../src/services/ChannelManager.js')
+
+      // Check if any channel is configured and enabled
+      await channelManager.init()
+      const channels = channelManager.getAll().filter(ch => ch.enabled)
+      if (channels.length === 0) {
+        await e.reply('请先在管理面板中配置至少一个启用的渠道', true)
+        return true
       }
-      for (let forwardElement of forward) {
-        this.reply(forwardElement)
+
+      // User Identification
+      const userId = e.user_id || e.sender?.user_id || 'unknown'
+      const groupId = e.group_id || (e.isGroup ? e.group_id : null)
+
+      // Build unique user ID (combine user + group if in group)
+      const fullUserId = groupId ? `${groupId}_${userId}` : userId
+
+      // Process images if any
+      let imageIds = []
+      if (e.img && e.img.length > 0) {
+        for (const img of e.img) {
+          try {
+            let imageUrl = img.file || img.url
+
+            // Handle different image formats
+            if (imageUrl && imageUrl.startsWith('base64://')) {
+              const base64Data = imageUrl.replace('base64://', '')
+              const buffer = Buffer.from(base64Data, 'base64')
+              const uploaded = await imageService.uploadImage(buffer, 'yunzai_image.png')
+              imageIds.push(uploaded.id)
+            } else if (imageUrl && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'))) {
+              const downloaded = await imageService.downloadImage(imageUrl)
+              imageIds.push(downloaded.id)
+            } else if (imageUrl && require('fs').existsSync(imageUrl)) {
+              const buffer = require('fs').readFileSync(imageUrl)
+              const uploaded = await imageService.uploadImage(buffer, require('path').basename(imageUrl))
+              imageIds.push(uploaded.id)
+            }
+          } catch (imgError) {
+            logger.warn('[AI-Chat] Failed to process image:', imgError)
+          }
+        }
       }
-    }
-    const userMessage = await intoUserMessage(e, {
-      handleReplyText: false,
-      handleReplyImage: true,
-      useRawMessage: false,
-      handleAtMsg: true,
-      excludeAtBot: false,
-      toggleMode: Config.basic.toggleMode,
-      togglePrefix: Config.basic.togglePrefix
-    })
-    const userText = extractTextFromUserMessage(userMessage) || e.msg || ''
-    sendMessageOptions.conversationId = state?.current?.conversationId
-    sendMessageOptions.parentMessageId = state?.current?.messageId || state?.conversations.find(c => c.id === sendMessageOptions.conversationId)?.lastMessageId
-    const systemSegments = []
-    const baseSystem = sendMessageOptions.systemOverride || preset.sendMessageOption?.systemOverride || ''
-    if (baseSystem) {
-      systemSegments.push(baseSystem)
-    }
-    if (userText) {
-      const memoryPrompt = await buildMemoryPrompt({
-        userId: e.sender.user_id + '',
-        groupId: e.isGroup ? e.group_id + '' : null,
-        queryText: userText
+
+      // Get preset if configured
+      const presetId = config.get('llm.defaultChatPresetId')
+      let preset = null
+      if (presetId) {
+        preset = presetManager.get(presetId)
+      }
+
+      // Determine model (use chatModel if configured, otherwise defaultModel)
+      const model = config.get('llm.chatModel') || config.get('llm.defaultModel')
+
+      // Send message using ChatService
+      await e.reply('思考中...', true)
+
+      const result = await chatService.sendMessage({
+        userId: fullUserId,
+        message: msg,
+        images: imageIds,
+        model: model,
+        preset: preset
       })
-      if (memoryPrompt) {
-        systemSegments.push(memoryPrompt)
-        logger.debug(`[Memory] memory prompt: ${memoryPrompt}`)
+
+      // Extract text response
+      let replyText = ''
+      if (result.response && Array.isArray(result.response)) {
+        replyText = result.response
+          .filter(c => c.type === 'text')
+          .map(c => c.text)
+          .join('\n')
       }
-    }
-    const enableGroupContext = (preset.groupContext === 'use_system' || !preset.groupContext) ? Config.llm.enableGroupContext : (preset.groupContext === 'enabled')
-    if (enableGroupContext && e.isGroup) {
-      const contextPrompt = await getGroupContextPrompt(e, Config.llm.groupContextLength)
-      if (contextPrompt) {
-        systemSegments.push(contextPrompt)
+
+      // Add usage info if available
+      let usageInfo = ''
+      if (result.usage) {
+        const { promptTokens, completionTokens, totalTokens } = result.usage
+        if (totalTokens) {
+          usageInfo = `\n\n[用量: ${totalTokens} tokens]`
+        }
       }
+
+      await e.reply(replyText + usageInfo || '抱歉，我没有理解你的问题', true)
+
+    } catch (error) {
+      logger.error('[AI-Chat] Error:', error)
+      await e.reply(`出错了: ${error.message}`, true)
     }
-    if (systemSegments.length > 0) {
-      sendMessageOptions.systemOverride = systemSegments.join('\n\n')
+
+    return true
+  }
+
+  /**
+   * Clear chat history
+   * @param {*} e Yunzai event
+   */
+  async clearHistory(e) {
+    try {
+      const { chatService } = await import('../src/services/ChatService.js')
+
+      const userId = e.user_id || e.sender?.user_id || 'unknown'
+      const groupId = e.group_id || (e.isGroup ? e.group_id : null)
+      const fullUserId = groupId ? `${groupId}_${userId}` : userId
+
+      await chatService.clearHistory(fullUserId)
+      await e.reply('已清除对话历史', true)
+    } catch (error) {
+      logger.error('[AI-Chat] Clear history error:', error)
+      await e.reply('清除历史失败: ' + error.message, true)
     }
-    const response = await Chaite.getInstance().sendMessage(userMessage, e, {
-      ...sendMessageOptions,
-      chatPreset: preset
-    })
-    // 更新当前聊天进度
-    state.current.messageId = response.id
-    const conversations = state.conversations
-    if (conversations.find(c => c.id === sendMessageOptions.conversationId)) {
-      conversations.find(c => c.id === sendMessageOptions.conversationId).lastMessageId = response.id
-    } else {
-      conversations.push({
-        id: sendMessageOptions.conversationId,
-        lastMessageId: response.id,
-        // todo
-        name: 'New Conversation'
-      })
-    }
-    await Chaite.getInstance().getUserStateStorage().setItem(e.sender.user_id + '', state)
-    const { msgs, forward } = await toYunzai(e, response.contents)
-    if (msgs.length > 0) {
-      await e.reply(msgs, true)
-    }
-    for (let forwardElement of forward) {
-      this.reply(forwardElement)
-    }
-    await processUserMemory({
-      event: e,
-      userMessage,
-      userText,
-      conversationId: sendMessageOptions.conversationId,
-      assistantContents: response.contents,
-      assistantMessageId: response.id
-    })
+
+    return true
   }
 }

@@ -1,21 +1,25 @@
 {
-  "name": "chatgpt-plugin",
-  "version": "3.0.0",
+  "name": "new-plugin",
+  "version": "1.0.0",
   "type": "module",
-  "author": "ikechan8370",
+  "description": "New Yunzai Plugin with Embedded Chaite & MCP",
+  "main": "index.js",
   "dependencies": {
-    "better-sqlite3": "^9.4.3",
-    "adm-zip": "^0.5.10",
-    "chaite": "^1.8.2",
-    "js-yaml": "^4.1.0",
-    "keyv": "^5.3.1",
-    "keyv-file": "^5.1.2",
-    "lowdb": "^7.0.1",
-    "sqlite-vec": "^0.1.7-alpha.2",
-    "vectra": "^0.9.0"
-  },
-  "peerDependencies": {
-    "sqlite3": ">=5.1.6"
-  },
-  "pnpm": {}
+    "@anthropic-ai/sdk": "^0.37.0",
+    "@google/generative-ai": "^0.21.0",
+    "axios": "^1.13.2",
+    "better-sqlite3": "^11.8.1",
+    "eventsource": "^4.1.0",
+    "express": "^4.21.2",
+    "express-rate-limit": "^8.2.1",
+    "ioredis": "^5.8.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.2",
+    "openai": "^4.77.0",
+    "sharp": "^0.34.5",
+    "tesseract.js": "^6.0.1",
+    "uuid": "^11.0.3",
+    "vectra": "^0.9.0",
+    "yaml": "^2.6.1"
+  }
 }

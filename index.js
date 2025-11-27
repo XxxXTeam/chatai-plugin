@@ -1,9 +1,16 @@
 import fs from 'node:fs'
-import ChatGPTConfig from './config/config.js'
-import { initChaite } from './models/chaite/cloud.js'
-logger.info('**************************************')
-logger.info('chatgpt-plugin加载中')
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import config from './config/config.js'
+import { getWebServer } from './src/services/webServer.js'
 
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+logger.info('**************************************')
+logger.info('加载中...')
+
+// Initialize global object if needed
 if (!global.segment) {
   try {
     global.segment = (await import('icqq')).segment
@@ -12,37 +19,39 @@ if (!global.segment) {
   }
 }
 
-const files = fs.readdirSync('./plugins/chatgpt-plugin/apps').filter(file => file.endsWith('.js'))
-
-let ret = []
-
-files.forEach((file) => {
-  ret.push(import(`./apps/${file}`))
-})
-
-ret = await Promise.allSettled(ret)
-
-let apps = {}
-for (let i in files) {
-  let name = files[i].replace('.js', '')
-  if (ret[i].status !== 'fulfilled') {
-    logger.error(`载入插件错误：${logger.red(name)}`)
-    logger.error(ret[i].reason)
-    continue
-  }
-  apps[name] = ret[i].value[Object.keys(ret[i].value)[0]]
+// Initialize configuration
+const dataDir = path.join(__dirname, 'data')
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true })
 }
-global.chatgpt = {
+config.startSync(dataDir)
 
+// Start web server
+const webServer = getWebServer()
+webServer.start()
+
+const apps = {}
+
+// Load apps
+const appsDir = path.join(__dirname, 'apps')
+if (fs.existsSync(appsDir)) {
+  const files = fs.readdirSync(appsDir).filter(file => file.endsWith('.js'))
+
+  const loadedApps = await Promise.allSettled(files.map(file => import(`./apps/${file}`)))
+
+  files.forEach((file, index) => {
+    const name = file.replace('.js', '')
+    const result = loadedApps[index]
+
+    if (result.status === 'fulfilled') {
+      apps[name] = result.value[Object.keys(result.value)[0]]
+    } else {
+      logger.error(`[NewPlugin] Failed to load app ${name}:`, result.reason)
+    }
+  })
 }
 
-ChatGPTConfig.startSync('./plugins/chatgpt-plugin/data')
-initChaite()
-logger.info('chatgpt-plugin加载成功')
-logger.info(`当前版本${ChatGPTConfig.version}`)
-logger.info('仓库地址 https://github.com/ikechan8370/chatgpt-plugin')
-logger.info('文档地址 https://www.yunzai.chat')
-logger.info('插件群号 559567232')
+logger.info(' 加载成功')
 logger.info('**************************************')
 
 export { apps }
