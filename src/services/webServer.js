@@ -10,9 +10,20 @@ import { mcpManager } from '../mcp/McpManager.js'
 import { presetManager } from './PresetManager.js'
 import { channelManager } from './ChannelManager.js'
 import { imageService } from './ImageService.js'
+import { databaseService } from './DatabaseService.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+/**
+ * 获取已初始化的数据库服务
+ */
+function getDatabase() {
+    if (!databaseService.initialized) {
+        databaseService.init()
+    }
+    return databaseService
+}
 
 // ChaiteResponse helper class
 class ChaiteResponse {
@@ -947,6 +958,12 @@ export class WebServer {
             }
         })
 
+        // GET /api/tools/custom - List custom tools (protected)
+        this.app.get('/api/tools/custom', this.authMiddleware.bind(this), (req, res) => {
+            const customTools = config.get('customTools') || []
+            res.json(ChaiteResponse.ok(customTools))
+        })
+
         // POST /api/tools/custom - Add custom tool (protected)
         this.app.post('/api/tools/custom', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -1546,8 +1563,8 @@ export class WebServer {
         // GET /api/users/list - List all users with stats
         this.app.get('/api/users/list', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { databaseService } = await import('./DatabaseService.js')
-                const users = databaseService.getUsers()
+                const db = getDatabase()
+                const users = db.getUsers()
                 res.json(ChaiteResponse.ok(users))
             } catch (error) {
                 res.json(ChaiteResponse.ok([]))
@@ -1557,8 +1574,8 @@ export class WebServer {
         // GET /api/users/:userId - Get user details
         this.app.get('/api/users/:userId', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { databaseService } = await import('./DatabaseService.js')
-                const user = databaseService.getUser(req.params.userId)
+                const db = getDatabase()
+                const user = db.getUser(req.params.userId)
                 if (user) {
                     res.json(ChaiteResponse.ok(user))
                 } else {
@@ -1572,8 +1589,8 @@ export class WebServer {
         // PUT /api/users/:userId/settings - Update user settings
         this.app.put('/api/users/:userId/settings', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { databaseService } = await import('./DatabaseService.js')
-                databaseService.updateUserSettings(req.params.userId, req.body)
+                const db = getDatabase()
+                db.updateUserSettings(req.params.userId, req.body)
                 res.json(ChaiteResponse.ok({ success: true }))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -1583,8 +1600,8 @@ export class WebServer {
         // DELETE /api/users/:userId/data - Clear user data
         this.app.delete('/api/users/:userId/data', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { databaseService } = await import('./DatabaseService.js')
-                databaseService.clearUserData(req.params.userId)
+                const db = getDatabase()
+                db.clearUserData(req.params.userId)
                 
                 // 也清除记忆
                 try {
@@ -1602,8 +1619,8 @@ export class WebServer {
         // GET /api/conversations/list - List all conversations
         this.app.get('/api/conversations/list', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { databaseService } = await import('./DatabaseService.js')
-                const conversations = databaseService.getConversations()
+                const db = getDatabase()
+                const conversations = db.getConversations()
                 res.json(ChaiteResponse.ok(conversations))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -1613,8 +1630,8 @@ export class WebServer {
         // GET /api/conversations/:id/messages - Get messages for a conversation
         this.app.get('/api/conversations/:id/messages', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { databaseService } = await import('./DatabaseService.js')
-                const messages = databaseService.getMessages(req.params.id, 100)
+                const db = getDatabase()
+                const messages = db.getMessages(req.params.id, 100)
                 res.json(ChaiteResponse.ok(messages))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -1624,8 +1641,8 @@ export class WebServer {
         // DELETE /api/conversations/:id - Delete a conversation
         this.app.delete('/api/conversations/:id', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { databaseService } = await import('./DatabaseService.js')
-                databaseService.deleteConversation(req.params.id)
+                const db = getDatabase()
+                db.deleteConversation(req.params.id)
                 res.json(ChaiteResponse.ok({ success: true }))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))

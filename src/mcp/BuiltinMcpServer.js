@@ -3,6 +3,86 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { getBotFramework } from '../../utils/bot.js'
 import config from '../../config/config.js'
+import puppeteer from 'puppeteer-extra'
+import StealthPlugin from 'puppeteer-extra-plugin-stealth'
+import TurndownService from 'turndown'
+import common from '../../../../lib/common/common.js'
+import fetch from 'node-fetch'
+
+puppeteer.use(StealthPlugin())
+
+/**
+ * 清理HTML，移除不需要的标签和属性
+ * @param html
+ * @returns {string}
+ */
+function cleanHTML(html) {
+    // 保留原有的清理逻辑
+    html = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<link[^>]*>/gi, '')
+        .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, '')
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/<figure[^>]*>[\s\S]*?<\/figure>/gi, '')
+
+    // 其余清理逻辑保持不变
+    const allowedTags = ['title', 'meta', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'img', 'video', 'audio', 'source', 'a']
+    
+    html = html.replace(/<\/?([a-zA-Z0-9]+)(\s[^>]*)?>/g, (match, tagName, attrs) => {
+        tagName = tagName.toLowerCase()
+        if (allowedTags.includes(tagName)) {
+            if (tagName === 'meta') {
+                return match.replace(/<(meta)([^>]*)>/gi, (_, tag, attributes) => {
+                    let allowedAttrs = attributes.match(/(charset|name|content)=["'][^"']+["']/gi)
+                    return `<${tag} ${allowedAttrs ? allowedAttrs.join(' ') : ''}>`
+                })
+            } else if (tagName === 'img' || tagName === 'video' || tagName === 'audio' || tagName === 'source') {
+                return match.replace(/<(img|video|audio|source)([^>]*)>/gi, (_, tag, attributes) => {
+                    let srcMatch = attributes.match(/\bsrc=["'](?!data:)[^"']+["']/i)
+                    return srcMatch ? `<${tag} ${srcMatch[0]}>` : ''
+                })
+            } else if (tagName === 'a') {
+                return match.replace(/<a([^>]*)>/gi, (_, attributes) => {
+                    let hrefMatch = attributes.match(/\bhref=["'](?!data:)[^"']+["']/i)
+                    return hrefMatch ? `<a ${hrefMatch[0]}>` : ''
+                })
+            }
+            return match
+        }
+        return ''
+    })
+
+    return html.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * 将HTML转换为Markdown
+ * @param html 清理后的HTML内容
+ * @returns {string} Markdown文本
+ */
+function convertToMarkdown(html) {
+    // 配置Turndown
+    const turndownService = new TurndownService({
+        headingStyle: 'atx',
+        hr: '---',
+        bulletListMarker: '-',
+        codeBlockStyle: 'fenced',
+        emDelimiter: '_'
+    })
+    
+    // 自定义规则，保留图片和链接
+    turndownService.addRule('images', {
+        filter: ['img'],
+        replacement: function (content, node) {
+            const alt = node.alt || ''
+            const src = node.getAttribute('src') || ''
+            return src ? `![${alt}](${src})` : ''
+        }
+    })
+    
+    // 转换HTML为Markdown
+    return turndownService.turndown(html)
+}
 
 /**
  * 工具执行上下文
@@ -91,41 +171,109 @@ export class BuiltinMcpServer {
     }
 
     /**
+     * 获取自定义工具列表
+     */
+    getCustomTools() {
+        const customTools = config.get('customTools') || []
+        return customTools.map(t => ({
+            name: t.name,
+            description: t.description,
+            inputSchema: t.parameters || { type: 'object', properties: {} },
+            isCustom: true,
+            handler: t.handler
+        }))
+    }
+
+    /**
      * 获取所有工具定义
      */
     listTools() {
         const builtinConfig = config.get('builtinTools') || { enabled: true }
-        if (!builtinConfig.enabled) return []
+        
+        let tools = []
+        
+        // 添加内置工具
+        if (builtinConfig.enabled) {
+            let builtinTools = [...this.tools]
 
-        let tools = [...this.tools]
+            // 过滤允许的工具
+            if (builtinConfig.allowedTools?.length > 0) {
+                builtinTools = builtinTools.filter(t => builtinConfig.allowedTools.includes(t.name))
+            }
 
-        // 过滤允许的工具
-        if (builtinConfig.allowedTools?.length > 0) {
-            tools = tools.filter(t => builtinConfig.allowedTools.includes(t.name))
+            // 过滤禁用的工具
+            if (builtinConfig.disabledTools?.length > 0) {
+                builtinTools = builtinTools.filter(t => !builtinConfig.disabledTools.includes(t.name))
+            }
+
+            // 过滤危险工具
+            if (!builtinConfig.allowDangerous) {
+                const dangerous = builtinConfig.dangerousTools || []
+                builtinTools = builtinTools.filter(t => !dangerous.includes(t.name))
+            }
+
+            tools = builtinTools.map(t => ({
+                name: t.name,
+                description: t.description,
+                inputSchema: t.inputSchema
+            }))
         }
 
-        // 过滤禁用的工具
-        if (builtinConfig.disabledTools?.length > 0) {
-            tools = tools.filter(t => !builtinConfig.disabledTools.includes(t.name))
+        // 添加自定义工具
+        const customTools = this.getCustomTools()
+        for (const ct of customTools) {
+            tools.push({
+                name: ct.name,
+                description: ct.description,
+                inputSchema: ct.inputSchema,
+                isCustom: true
+            })
         }
 
-        // 过滤危险工具
-        if (!builtinConfig.allowDangerous) {
-            const dangerous = builtinConfig.dangerousTools || []
-            tools = tools.filter(t => !dangerous.includes(t.name))
-        }
+        return tools
+    }
 
-        return tools.map(t => ({
-            name: t.name,
-            description: t.description,
-            inputSchema: t.inputSchema
-        }))
+    /**
+     * 执行自定义工具代码
+     */
+    async executeCustomHandler(handlerCode, args, ctx) {
+        // 创建一个安全的执行环境
+        const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor
+        
+        try {
+            // 构建执行函数，提供 args 和 ctx
+            const fn = new AsyncFunction('args', 'ctx', 'fetch', handlerCode)
+            const result = await fn(args, ctx, fetch)
+            return result
+        } catch (error) {
+            logger.error('[BuiltinMCP] Custom tool execution error:', error)
+            throw error
+        }
     }
 
     /**
      * 调用工具
      */
     async callTool(name, args) {
+        // 先检查是否是自定义工具
+        const customTools = this.getCustomTools()
+        const customTool = customTools.find(t => t.name === name)
+        
+        if (customTool) {
+            logger.info(`[BuiltinMCP] Calling custom tool: ${name}`, args)
+            try {
+                const result = await this.executeCustomHandler(customTool.handler, args, toolContext)
+                return this.formatResult(result)
+            } catch (error) {
+                logger.error(`[BuiltinMCP] Custom tool error: ${name}`, error)
+                return {
+                    content: [{ type: 'text', text: `Error: ${error.message}` }],
+                    isError: true
+                }
+            }
+        }
+
+        // 内置工具
         const tool = this.tools.find(t => t.name === name)
         if (!tool) {
             throw new Error(`Tool not found: ${name}`)
@@ -235,7 +383,8 @@ export class BuiltinMcpServer {
                         image: ['parse_image', 'send_image', 'parse_video', 'send_video', 'get_avatar', 'image_ocr'],
                         admin: ['set_group_card', 'mute_member', 'kick_member', 'set_group_whole_ban', 'set_group_admin', 'set_group_name', 'set_group_special_title', 'send_group_notice', 'set_essence_message', 'remove_essence_message', 'handle_friend_request', 'handle_group_request'],
                         context: ['get_current_context', 'get_reply_message', 'get_at_members'],
-                        bot: ['get_bot_status', 'set_online_status', 'send_poke']
+                        bot: ['get_bot_status', 'set_online_status', 'send_poke'],
+                        web: ['website']
                     }
                     
                     let tools = allTools
@@ -2007,6 +2156,108 @@ export class BuiltinMcpServer {
                     await group.fs.mkdir(args.folder_name, args.parent_id || '/')
                     
                     return { success: true, group_id: groupId, folder_name: args.folder_name }
+                }
+            },
+
+            // ==================== 网页浏览工具 ====================
+            {
+                name: 'website',
+                description: '访问网页并获取内容，支持HTML页面和API接口。使用Puppeteer模拟浏览器访问，可绕过反爬虫机制。返回Markdown格式的页面内容。',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        url: { type: 'string', description: '要访问的网站网址' }
+                    },
+                    required: ['url']
+                },
+                handler: async (args, ctx) => {
+                    const e = ctx.getEvent()
+                    const { url } = args
+
+                    let browser
+                    try {
+                        // 访问前的提示
+                        if (e) {
+                            const visitMessage = [`正在访问网站: ${url}...`]
+                            let visitForward = await common.makeForwardMsg(e, visitMessage)
+                            e.reply(visitForward)
+                        }
+                        
+                        // 启动浏览器
+                        browser = await puppeteer.launch({
+                            headless: true,
+                            args: [
+                                '--no-sandbox',
+                                '--disable-setuid-sandbox',
+                                '--disable-dev-shm-usage',
+                                '--disable-accelerated-2d-canvas',
+                                '--disable-gpu',
+                                '--window-size=1920x1080',
+                                '--proxy-server=http://127.0.0.1:10808'
+                            ]
+                        })
+                        
+                        // 创建新页面
+                        const page = await browser.newPage()
+                        
+                        // 设置用户代理
+                        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36')
+                        
+                        // 访问URL
+                        await page.goto(url, {
+                            waitUntil: 'networkidle2',
+                            timeout: 30000
+                        })
+                        
+                        // 获取页面标题
+                        const title = await page.title()
+                        
+                        // 获取页面内容
+                        let html = await page.content()
+                        
+                        // 关闭页面
+                        await page.close()
+                        
+                        // 清理HTML
+                        const cleanedHtml = cleanHTML(html)
+                        
+                        // 将HTML转换为Markdown
+                        const markdown = convertToMarkdown(cleanedHtml)
+                        
+                        // 将内容分段，以便于在消息中展示
+                        const parts = []
+                        
+                        // 先添加页面标题信息
+                        parts.push(`${title || '未知标题'}`)
+                        parts.push(`网站地址: ${url}`)
+                        parts.push(`---`) // 分隔线
+                        parts.push(markdown)
+                        
+                        // 制作转发消息并发送
+                        if (e) {
+                            const forwardMsg = await common.makeForwardMsg(e, parts)
+                            e.reply(forwardMsg)
+                        }
+                        
+                        return {
+                            text: `The title of the website is: "${title}". The content has been converted to Markdown for better readability:\n\n${markdown}`
+                        }
+                    } catch (err) {
+                        // 出错时也制作转发消息
+                        if (e) {
+                            const errorMsg = [`访问网站 ${url} 失败，错误: ${err.toString()}`]
+                            const errorForward = await common.makeForwardMsg(e, errorMsg)
+                            e.reply(errorForward)
+                        }
+                        
+                        return { error: `Failed to visit the website: ${err.toString()}` }
+                    } finally {
+                        if (browser) {
+                            try {
+                                await browser.close()
+                            } catch (err) {}
+                        }
+                    }
                 }
             }
         ]

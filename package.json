@@ -16,8 +16,11 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
     "openai": "^4.77.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "sharp": "^0.34.5",
     "tesseract.js": "^6.0.1",
+    "turndown": "^7.2.2",
     "uuid": "^11.0.3",
     "vectra": "^0.9.0",
     "yaml": "^2.6.1"

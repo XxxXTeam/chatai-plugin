@@ -513,16 +513,28 @@ onMounted(() => {
     </n-modal>
 
     <!-- 模板库 Modal -->
-    <n-modal v-model:show="showTemplateModal" preset="card" title="预设模板库" style="width: 700px">
-      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
-        <n-card v-for="tpl in presetTemplates" :key="tpl.id" size="small" hoverable style="cursor: pointer" @click="useTemplate(tpl)">
+    <n-modal v-model:show="showTemplateModal" preset="card" title="预设模板库" style="width: 750px">
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;">
+        <n-card 
+          v-for="tpl in presetTemplates" 
+          :key="tpl.id" 
+          size="small" 
+          hoverable 
+          style="cursor: pointer;" 
+          @click="useTemplate(tpl)"
+        >
           <template #header>
-            <span style="font-weight: 600">{{ tpl.name }}</span>
+            <div style="font-weight: 600; font-size: 15px;">{{ tpl.name }}</div>
           </template>
-          <p style="color: #666; font-size: 13px; margin: 0">{{ tpl.description }}</p>
-          <p style="color: #999; font-size: 12px; margin: 8px 0 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-            {{ tpl.systemPrompt.substring(0, 50) }}...
-          </p>
+          <template #header-extra>
+            <n-tag size="small" type="info">点击使用</n-tag>
+          </template>
+          <div style="min-height: 60px;">
+            <p style="color: #666; font-size: 13px; margin: 0 0 8px 0;">{{ tpl.description }}</p>
+            <p style="color: #999; font-size: 12px; margin: 0; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
+              {{ tpl.systemPrompt }}
+            </p>
+          </div>
         </n-card>
       </div>
       <template #footer>

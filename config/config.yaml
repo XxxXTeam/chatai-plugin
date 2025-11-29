@@ -5,7 +5,7 @@ basic:
   debug: false
 llm:
   defaultModel: qwen3-max
-  defaultChatPresetId: fa6ce456-044d-4562-a9c6-9706a007c005
+  defaultChatPresetId: 7ecdcf79-852f-4a76-9b6b-ccc9b98ced36
   embeddingModel: qwen3-max
   dimensions: 1536
   models:
@@ -91,7 +91,7 @@ memory:
   enabled: true
   storage: file
 presets:
-  defaultId: fa6ce456-044d-4562-a9c6-9706a007c005
+  defaultId: 7ecdcf79-852f-4a76-9b6b-ccc9b98ced36
   allowUserSwitch: true
   perUserPreset: false
   perGroupPreset: false

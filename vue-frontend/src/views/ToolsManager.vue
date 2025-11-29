@@ -4,7 +4,8 @@ import {
   NSpace, NCard, NDataTable, NButton, NTag, NInput, NSelect, 
   NModal, NForm, NFormItem, NSpin, useMessage, NPopconfirm, NCode, 
   NSwitch, NDynamicTags, NAlert, NTabs, NTabPane, NInputNumber,
-  NGrid, NGridItem, NStatistic, NDivider, NCollapse, NCollapseItem
+  NGrid, NGridItem, NStatistic, NDivider, NCollapse, NCollapseItem,
+  NText, NScrollbar
 } from 'naive-ui'
 import axios from 'axios'
 
@@ -50,6 +51,155 @@ const builtinConfig = ref({
   dangerousTools: ['kick_member', 'mute_member', 'recall_message', 'set_group_ban', 'set_group_whole_ban'],
   allowDangerous: false
 })
+
+// 自定义工具
+const customTools = ref([])
+const showCustomToolModal = ref(false)
+const isEditCustomTool = ref(false)
+const customToolForm = ref({
+  name: '',
+  description: '',
+  parameters: '{}',
+  handler: ''
+})
+
+// 示例工具模板
+const toolTemplates = [
+  {
+    name: 'hello_world',
+    label: 'Hello World (基础示例)',
+    description: '一个简单的问候工具，返回问候语',
+    parameters: JSON.stringify({
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '要问候的名字' }
+      },
+      required: ['name']
+    }, null, 2),
+    handler: `// 这是一个简单的示例工具
+// args 包含用户传入的参数
+// ctx 包含上下文信息（bot, event 等）
+
+const { name } = args
+return {
+  text: \`你好，\${name}！欢迎使用自定义工具。\`,
+  greeting: true,
+  timestamp: Date.now()
+}`
+  },
+  {
+    name: 'random_number',
+    label: '随机数生成器',
+    description: '生成指定范围内的随机数',
+    parameters: JSON.stringify({
+      type: 'object',
+      properties: {
+        min: { type: 'number', description: '最小值', default: 1 },
+        max: { type: 'number', description: '最大值', default: 100 }
+      }
+    }, null, 2),
+    handler: `const min = args.min || 1
+const max = args.max || 100
+const result = Math.floor(Math.random() * (max - min + 1)) + min
+
+return {
+  text: \`生成的随机数是: \${result}\`,
+  number: result,
+  range: { min, max }
+}`
+  },
+  {
+    name: 'fetch_api',
+    label: 'API 请求工具',
+    description: '发送 HTTP 请求获取数据',
+    parameters: JSON.stringify({
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: '请求的 URL' },
+        method: { type: 'string', description: '请求方法', enum: ['GET', 'POST'], default: 'GET' }
+      },
+      required: ['url']
+    }, null, 2),
+    handler: `// 使用 fetch 发送请求
+const { url, method = 'GET' } = args
+
+try {
+  const response = await fetch(url, { method })
+  const data = await response.json()
+  return {
+    text: \`请求成功，状态码: \${response.status}\`,
+    data,
+    status: response.status
+  }
+} catch (error) {
+  return {
+    error: \`请求失败: \${error.message}\`,
+    url
+  }
+}`
+  },
+  {
+    name: 'send_message_tool',
+    label: '发送消息工具',
+    description: '使用 Bot 发送消息到指定群',
+    parameters: JSON.stringify({
+      type: 'object',
+      properties: {
+        group_id: { type: 'string', description: '群号' },
+        message: { type: 'string', description: '消息内容' }
+      },
+      required: ['group_id', 'message']
+    }, null, 2),
+    handler: `// 使用 ctx.getBot() 获取 Bot 实例
+const bot = ctx.getBot()
+const { group_id, message } = args
+
+try {
+  const group = bot.pickGroup(parseInt(group_id))
+  const result = await group.sendMsg(message)
+  return {
+    text: \`消息已发送到群 \${group_id}\`,
+    success: true,
+    message_id: result.message_id
+  }
+} catch (error) {
+  return {
+    error: \`发送失败: \${error.message}\`
+  }
+}`
+  },
+  {
+    name: 'current_time',
+    label: '当前时间',
+    description: '获取当前时间信息',
+    parameters: JSON.stringify({
+      type: 'object',
+      properties: {
+        format: { type: 'string', description: '时间格式', enum: ['full', 'date', 'time'], default: 'full' }
+      }
+    }, null, 2),
+    handler: `const now = new Date()
+const format = args.format || 'full'
+
+let result
+switch (format) {
+  case 'date':
+    result = now.toLocaleDateString('zh-CN')
+    break
+  case 'time':
+    result = now.toLocaleTimeString('zh-CN')
+    break
+  default:
+    result = now.toLocaleString('zh-CN')
+}
+
+return {
+  text: \`当前时间: \${result}\`,
+  timestamp: now.getTime(),
+  formatted: result
+}`
+  }
+]
 
 // ==================== 计算属性 ====================
 const serverOptions = computed(() => {
@@ -460,10 +610,150 @@ async function refreshBuiltinTools() {
   }
 }
 
+// ==================== 自定义工具方法 ====================
+async function fetchCustomTools() {
+  try {
+    const res = await axios.get('/api/tools/custom')
+    if (res.data.code === 0) {
+      customTools.value = res.data.data || []
+    }
+  } catch (err) {
+    console.error('Failed to fetch custom tools', err)
+  }
+}
+
+function addCustomTool() {
+  isEditCustomTool.value = false
+  customToolForm.value = {
+    name: '',
+    description: '',
+    parameters: JSON.stringify({ type: 'object', properties: {}, required: [] }, null, 2),
+    handler: `// 在这里编写工具逻辑
+// args: 用户传入的参数对象
+// ctx: 上下文对象，包含 getBot(), getEvent() 等方法
+
+return {
+  text: '工具执行成功',
+  data: args
+}`
+  }
+  showCustomToolModal.value = true
+}
+
+function editCustomTool(tool) {
+  isEditCustomTool.value = true
+  customToolForm.value = {
+    name: tool.name,
+    description: tool.description,
+    parameters: typeof tool.parameters === 'string' ? tool.parameters : JSON.stringify(tool.parameters || {}, null, 2),
+    handler: tool.handler || ''
+  }
+  showCustomToolModal.value = true
+}
+
+function applyTemplate(template) {
+  customToolForm.value = {
+    name: template.name,
+    description: template.description,
+    parameters: template.parameters,
+    handler: template.handler
+  }
+  message.success(`已应用模板: ${template.label}`)
+}
+
+async function saveCustomTool() {
+  if (!customToolForm.value.name || !customToolForm.value.description) {
+    message.error('名称和描述不能为空')
+    return
+  }
+
+  try {
+    // 验证 JSON
+    let params
+    try {
+      params = JSON.parse(customToolForm.value.parameters)
+    } catch (e) {
+      message.error('参数格式错误，请输入有效的 JSON')
+      return
+    }
+
+    const data = {
+      name: customToolForm.value.name,
+      description: customToolForm.value.description,
+      parameters: params,
+      handler: customToolForm.value.handler
+    }
+
+    const url = isEditCustomTool.value 
+      ? `/api/tools/custom/${customToolForm.value.name}`
+      : '/api/tools/custom'
+    const method = isEditCustomTool.value ? 'put' : 'post'
+
+    const res = await axios[method](url, data)
+    if (res.data.code === 0) {
+      message.success(isEditCustomTool.value ? '更新成功' : '创建成功')
+      showCustomToolModal.value = false
+      await fetchCustomTools()
+      await fetchTools()
+    } else {
+      message.error(res.data.message)
+    }
+  } catch (err) {
+    message.error('保存失败: ' + err.message)
+  }
+}
+
+async function deleteCustomTool(name) {
+  try {
+    const res = await axios.delete(`/api/tools/custom/${name}`)
+    if (res.data.code === 0) {
+      message.success('删除成功')
+      await fetchCustomTools()
+      await fetchTools()
+    } else {
+      message.error(res.data.message)
+    }
+  } catch (err) {
+    message.error('删除失败')
+  }
+}
+
+// 自定义工具表格列
+const customToolColumns = [
+  { title: '名称', key: 'name', width: 150 },
+  { title: '描述', key: 'description', ellipsis: { tooltip: true } },
+  { 
+    title: '创建时间', 
+    key: 'createdAt',
+    width: 180,
+    render: (row) => row.createdAt ? new Date(row.createdAt).toLocaleString('zh-CN') : '-'
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 200,
+    render: (row) => {
+      return h(NSpace, { size: 'small' }, {
+        default: () => [
+          h(NButton, { size: 'small', onClick: () => editCustomTool(row) }, { default: () => '编辑' }),
+          h(NButton, { size: 'small', type: 'primary', onClick: () => openTestModal(row) }, { default: () => '测试' }),
+          h(NPopconfirm, {
+            onPositiveClick: () => deleteCustomTool(row.name)
+          }, {
+            trigger: () => h(NButton, { size: 'small', type: 'error' }, { default: () => '删除' }),
+            default: () => '确定要删除吗？'
+          })
+        ]
+      })
+    }
+  }
+]
+
 onMounted(() => {
   fetchTools()
   fetchServers()
   fetchBuiltinConfig()
+  fetchCustomTools()
 })
 </script>
 
@@ -560,6 +850,38 @@ onMounted(() => {
             </n-form>
           </n-space>
         </n-tab-pane>
+
+        <!-- 自定义工具 -->
+        <n-tab-pane name="custom" tab="自定义工具">
+          <n-space vertical :size="16">
+            <n-alert type="info">
+              自定义工具允许你使用 JavaScript 编写自己的 MCP 工具。工具代码在服务端执行，可以访问 Bot API 和网络请求。
+            </n-alert>
+
+            <n-space justify="space-between">
+              <n-text>共 {{ customTools.length }} 个自定义工具</n-text>
+              <n-button type="primary" @click="addCustomTool">创建工具</n-button>
+            </n-space>
+
+            <n-data-table :columns="customToolColumns" :data="customTools" size="small" />
+
+            <!-- 示例模板 -->
+            <n-collapse>
+              <n-collapse-item title="📚 示例模板 (点击展开)" name="templates">
+                <n-grid :cols="2" :x-gap="12" :y-gap="12">
+                  <n-grid-item v-for="tpl in toolTemplates" :key="tpl.name">
+                    <n-card size="small" hoverable @click="() => { addCustomTool(); applyTemplate(tpl) }">
+                      <template #header>
+                        <n-text strong>{{ tpl.label }}</n-text>
+                      </template>
+                      <n-text depth="3">{{ tpl.description }}</n-text>
+                    </n-card>
+                  </n-grid-item>
+                </n-grid>
+              </n-collapse-item>
+            </n-collapse>
+          </n-space>
+        </n-tab-pane>
       </n-tabs>
     </n-card>
 
@@ -639,6 +961,112 @@ onMounted(() => {
         <n-space justify="end">
           <n-button @click="showServerModal = false">取消</n-button>
           <n-button type="primary" @click="handleSubmitServer">保存</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- 自定义工具编辑 Modal -->
+    <n-modal v-model:show="showCustomToolModal" preset="card" :title="isEditCustomTool ? '编辑自定义工具' : '创建自定义工具'" style="width: 900px; max-height: 90vh">
+      <n-scrollbar style="max-height: calc(90vh - 120px)">
+        <n-space vertical :size="16">
+          <!-- 基本信息 -->
+          <n-form label-placement="left" label-width="80">
+            <n-form-item label="工具名称" required>
+              <n-input v-model:value="customToolForm.name" placeholder="使用英文和下划线，如: my_tool" :disabled="isEditCustomTool" />
+            </n-form-item>
+            <n-form-item label="描述" required>
+              <n-input v-model:value="customToolForm.description" type="textarea" :rows="2" placeholder="描述工具的功能，AI 会根据描述决定何时使用此工具" />
+            </n-form-item>
+          </n-form>
+
+          <!-- 模板选择 -->
+          <n-collapse v-if="!isEditCustomTool">
+            <n-collapse-item title="🎯 快速选择模板" name="tpl">
+              <n-space>
+                <n-button v-for="tpl in toolTemplates" :key="tpl.name" size="small" @click="applyTemplate(tpl)">
+                  {{ tpl.label }}
+                </n-button>
+              </n-space>
+            </n-collapse-item>
+          </n-collapse>
+
+          <!-- 参数定义 -->
+          <n-card size="small" title="参数定义 (JSON Schema)">
+            <template #header-extra>
+              <n-text depth="3" style="font-size: 12px">定义工具接收的参数</n-text>
+            </template>
+            <n-input 
+              v-model:value="customToolForm.parameters" 
+              type="textarea" 
+              :rows="8" 
+              placeholder='{
+  "type": "object",
+  "properties": {
+    "param1": { "type": "string", "description": "参数说明" }
+  },
+  "required": ["param1"]
+}'
+              style="font-family: monospace"
+            />
+          </n-card>
+
+          <!-- 代码编辑器 -->
+          <n-card size="small" title="工具代码 (JavaScript)">
+            <template #header-extra>
+              <n-space>
+                <n-text depth="3" style="font-size: 12px">可用变量: args, ctx</n-text>
+              </n-space>
+            </template>
+            <n-input 
+              v-model:value="customToolForm.handler" 
+              type="textarea" 
+              :rows="15" 
+              placeholder="// 编写工具逻辑
+// args: 用户传入的参数
+// ctx: 上下文对象
+//   - ctx.getBot(): 获取 Bot 实例
+//   - ctx.getEvent(): 获取当前事件
+
+return { text: '结果', data: {} }"
+              style="font-family: monospace"
+            />
+          </n-card>
+
+          <!-- 帮助信息 -->
+          <n-collapse>
+            <n-collapse-item title="📖 编写指南" name="help">
+              <n-space vertical>
+                <n-alert type="info" title="可用变量">
+                  <ul style="margin: 0; padding-left: 20px">
+                    <li><code>args</code> - 用户传入的参数对象</li>
+                    <li><code>ctx.getBot()</code> - 获取 Bot 实例，可调用 QQ API</li>
+                    <li><code>ctx.getEvent()</code> - 获取当前消息事件</li>
+                    <li><code>fetch</code> - 发送 HTTP 请求</li>
+                  </ul>
+                </n-alert>
+                <n-alert type="success" title="返回格式">
+                  <p style="margin: 0">返回一个对象，建议包含 <code>text</code> 字段作为文本结果：</p>
+                  <n-code :code="`return {
+  text: '操作结果描述',
+  data: { ... }  // 其他数据
+}`" language="javascript" />
+                </n-alert>
+                <n-alert type="warning" title="注意事项">
+                  <ul style="margin: 0; padding-left: 20px">
+                    <li>代码在服务端执行，请注意安全性</li>
+                    <li>支持 async/await 语法</li>
+                    <li>错误会被捕获并返回给 AI</li>
+                  </ul>
+                </n-alert>
+              </n-space>
+            </n-collapse-item>
+          </n-collapse>
+        </n-space>
+      </n-scrollbar>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showCustomToolModal = false">取消</n-button>
+          <n-button type="primary" @click="saveCustomTool">保存工具</n-button>
         </n-space>
       </template>
     </n-modal>
