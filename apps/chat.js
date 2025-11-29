@@ -1,6 +1,13 @@
 import config from '../config/config.js'
 
 /**
+ * 转义正则特殊字符
+ */
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
  * AI Chat plugin for Yunzai
  */
 export class Chat extends plugin {
@@ -12,8 +19,9 @@ export class Chat extends plugin {
       priority: 5000,
       rule: [
         {
-          reg: '^#chat\\s*(.*)$',
-          fnc: 'chat'
+          reg: '',  // 匹配所有消息，动态判断
+          fnc: 'handleMessage',
+          log: false
         },
         {
           reg: '^#(结束对话|结束会话|新对话|新会话)$',
@@ -36,12 +44,45 @@ export class Chat extends plugin {
   }
 
   /**
-   * Handle chat messages
+   * 统一消息入口，动态判断触发方式
    * @param {*} e Yunzai event
    */
-  async chat(e) {
-    const msg = e.msg.replace(/^#chat\s*/, '').trim()
+  async handleMessage(e) {
+    // 实时读取配置
+    const toggleMode = config.get('basic.toggleMode') || 'at'
+    const togglePrefix = config.get('basic.togglePrefix') || '#chat'
+    
+    let msg = null
+    let shouldTrigger = false
 
+    // 检查 @ 触发
+    if ((toggleMode === 'at' || toggleMode === 'both') && e.atBot) {
+      msg = e.msg?.trim() || ''
+      shouldTrigger = true
+    }
+
+    // 检查前缀触发
+    if (!shouldTrigger && (toggleMode === 'prefix' || toggleMode === 'both')) {
+      const rawMsg = e.msg || ''
+      if (rawMsg.startsWith(togglePrefix)) {
+        msg = rawMsg.slice(togglePrefix.length).trim()
+        shouldTrigger = true
+      }
+    }
+
+    if (!shouldTrigger) {
+      return false
+    }
+
+    return this.processChat(e, msg)
+  }
+
+  /**
+   * 统一的消息处理逻辑
+   * @param {*} e Yunzai event
+   * @param {string} msg 处理后的消息内容
+   */
+  async processChat(e, msg) {
     if (!msg && (!e.img || e.img.length === 0)) {
       await e.reply('请输入要说的内容或发送图片', true)
       return true

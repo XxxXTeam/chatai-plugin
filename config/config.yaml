@@ -1,6 +1,6 @@
 basic:
-  toggleMode: at
-  togglePrefix: "#chat"
+  toggleMode: both
+  togglePrefix: "#111"
   commandPrefix: "#ai"
   debug: false
 llm:
@@ -99,6 +99,6 @@ loadBalancing:
   strategy: round-robin
 thinking:
   defaultLevel: low
-  enableReasoning: false
+  enableReasoning: true
 streaming:
-  enabled: false
+  enabled: true

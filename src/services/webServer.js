@@ -373,8 +373,9 @@ export class WebServer {
 
         // POST /api/config - Update configuration (protected)
         this.app.post('/api/config', this.authMiddleware.bind(this), (req, res) => {
-            const { llm, bym, thinking, streaming } = req.body
+            const { basic, llm, bym, thinking, streaming } = req.body
 
+            if (basic) config.set('basic', { ...config.get('basic'), ...basic })
             if (llm) config.set('llm', { ...config.get('llm'), ...llm })
             if (bym) config.set('bym', { ...config.get('bym'), ...bym })
             if (thinking) config.set('thinking', { ...config.get('thinking'), ...thinking })

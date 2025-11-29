@@ -22,10 +22,9 @@ export class LlmService {
         const adapterType = options.adapterType || config.get('llm.defaultAdapter') || 'openai'
         const enableTools = options.enableTools !== false
 
-        // Get thinking config
-        const thinkingConfig = config.get('thinking') || {}
-        const enableReasoning = options.enableReasoning ?? thinkingConfig.enableReasoning
-        const reasoningEffort = options.reasoningEffort || thinkingConfig.defaultLevel || 'low'
+        // 使用传入的选项，不再读取全局thinking配置
+        const enableReasoning = options.enableReasoning || false
+        const reasoningEffort = options.reasoningEffort || 'low'
 
         // Load configuration based on adapter type
         let apiKey, baseUrl, ClientClass

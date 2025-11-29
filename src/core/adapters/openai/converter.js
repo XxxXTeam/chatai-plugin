@@ -83,8 +83,30 @@ registerFromChaiteConverter('openai', (source) => {
                 content: tcr.content,
             }))
         }
+        case 'system': {
+            // Handle system messages
+            const systemContent = source.content || []
+            const systemText = Array.isArray(systemContent)
+                ? systemContent.filter(t => t && t.type === 'text').map(t => t.text).join('\n')
+                : (typeof systemContent === 'string' ? systemContent : '')
+            return {
+                role: 'system',
+                content: systemText
+            }
+        }
+        case 'developer': {
+            // Handle developer messages (for thinking models)
+            const devContent = source.content || []
+            const devText = Array.isArray(devContent)
+                ? devContent.filter(t => t && t.type === 'text').map(t => t.text).join('\n')
+                : (typeof devContent === 'string' ? devContent : '')
+            return {
+                role: 'developer',
+                content: devText
+            }
+        }
         default: {
-            throw new Error('Unknown type')
+            throw new Error(`Unknown role: ${source.role}`)
         }
     }
 })

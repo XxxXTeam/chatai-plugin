@@ -2,7 +2,8 @@
 import { ref, onMounted, reactive } from 'vue'
 import { 
   NCard, NForm, NFormItem, NInput, NButton, NInputNumber,
-  NSpace, NSwitch, useMessage, NAlert, NDivider, NSlider, NModal
+  NSpace, NSwitch, useMessage, NAlert, NDivider, NSlider, NModal,
+  NSelect, NTooltip
 } from 'naive-ui'
 import axios from 'axios'
 import ModelSelector from '../components/ModelSelector.vue'
@@ -12,6 +13,12 @@ const loading = ref(false)
 const saving = ref(false)
 
 const config = reactive({
+  basic: {
+    toggleMode: 'at',
+    togglePrefix: '#chat',
+    commandPrefix: '#ai',
+    debug: false
+  },
   llm: {
     defaultModel: '',
     embeddingModel: 'text-embedding-3-small',
@@ -36,13 +43,6 @@ const config = reactive({
     recall: false,
     model: '',
     systemPrompt: ''
-  },
-  thinking: {
-    enableReasoning: false,
-    defaultLevel: 'low'
-  },
-  streaming: {
-    enabled: true
   }
 })
 
@@ -58,6 +58,7 @@ async function fetchConfig() {
       const data = res.data.data
       
       // Merge data into reactive config
+      if (data.basic) Object.assign(config.basic, data.basic)
       if (data.llm) {
         Object.assign(config.llm, data.llm)
         if (data.llm.models) {
@@ -65,8 +66,6 @@ async function fetchConfig() {
         }
       }
       if (data.bym) Object.assign(config.bym, data.bym)
-      if (data.thinking) Object.assign(config.thinking, data.thinking)
-      if (data.streaming) Object.assign(config.streaming, data.streaming)
 
       // Fetch channels to get all models for selector
       const channelsRes = await axios.get('/api/channels/list')
@@ -92,10 +91,9 @@ async function saveConfig() {
   saving.value = true
   try {
     const payload = {
+      basic: { ...config.basic },
       llm: { ...config.llm },
-      bym: { ...config.bym },
-      thinking: { ...config.thinking },
-      streaming: { ...config.streaming }
+      bym: { ...config.bym }
     }
 
     const res = await axios.post('/api/config', payload)
@@ -133,6 +131,13 @@ function handleModelSelect(models) {
   showModelSelector.value = false
 }
 
+// 触发模式选项
+const triggerModeOptions = [
+  { label: '仅@触发', value: 'at' },
+  { label: '仅前缀触发', value: 'prefix' },
+  { label: '@和前缀都触发', value: 'both' }
+]
+
 onMounted(() => {
   fetchConfig()
 })
@@ -143,6 +148,42 @@ onMounted(() => {
     <n-alert type="info" title="提示" style="margin-bottom: 16px">
       API Key 和渠道配置请前往「渠道管理」页面进行设置
     </n-alert>
+
+    <!-- 触发模式配置 -->
+    <n-card title="触发模式">
+      <n-form label-placement="left" label-width="140">
+        <n-form-item label="触发方式">
+          <n-select 
+            v-model:value="config.basic.toggleMode" 
+            :options="triggerModeOptions"
+            placeholder="选择触发方式"
+          />
+        </n-form-item>
+        <n-form-item label="触发前缀">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-input 
+                v-model:value="config.basic.togglePrefix" 
+                placeholder="#chat"
+                :disabled="config.basic.toggleMode === 'at'"
+              />
+            </template>
+            当触发方式包含前缀时，用户发送此前缀开头的消息会触发AI对话
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="命令前缀">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-input v-model:value="config.basic.commandPrefix" placeholder="#ai" />
+            </template>
+            管理命令的前缀，如 #ai帮助、#ai状态 等
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="调试模式">
+          <n-switch v-model:value="config.basic.debug" />
+        </n-form-item>
+      </n-form>
+    </n-card>
 
     <!-- 模型配置 -->
     <n-card title="模型配置">
@@ -238,19 +279,11 @@ onMounted(() => {
       </n-form>
     </n-card>
 
-    <!-- 全局设置 -->
-    <n-card title="全局设置">
-      <n-form label-placement="left" label-width="140">
-        <n-form-item label="启用推理 (Thinking)">
-          <n-switch v-model:value="config.thinking.enableReasoning" />
-        </n-form-item>
-        <n-form-item label="流式传输 (Streaming)">
-          <n-switch v-model:value="config.streaming.enabled" />
-        </n-form-item>
-      </n-form>
-    </n-card>
+    <n-alert type="warning" title="提示" style="margin-top: 8px">
+      流式传输、推理模式等高级设置请在「渠道管理」中配置每个渠道的独立参数
+    </n-alert>
 
-    <n-space justify="end">
+    <n-space justify="end" style="margin-top: 16px">
       <n-button type="primary" size="large" @click="saveConfig" :loading="saving">
         保存配置
       </n-button>

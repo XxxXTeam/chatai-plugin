@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import { LlmService } from './LlmService.js'
 import { imageService } from './ImageService.js'
 import { contextManager } from './ContextManager.js'
@@ -108,10 +109,17 @@ export class ChatService {
         // Get preset ID
         const effectivePresetId = presetId || preset?.id || config.get('llm.defaultChatPresetId') || 'default'
 
+        // 获取渠道的 advanced 配置
+        const channelAdvanced = channel?.advanced || {}
+        const channelLlm = channelAdvanced.llm || {}
+        const channelThinking = channelAdvanced.thinking || {}
+        const channelStreaming = channelAdvanced.streaming || {}
+
         // Create LLM client with tool context
         const clientOptions = {
             enableTools: true,
-            enableReasoning: preset?.enableReasoning,
+            enableReasoning: preset?.enableReasoning ?? channelThinking.enableReasoning,
+            reasoningEffort: channelThinking.defaultLevel || 'low',
             adapterType: adapterType,
             event,
             presetId: effectivePresetId
@@ -148,16 +156,66 @@ export class ChatService {
             userMessage
         ]
 
+        // 确定是否使用流式请求
+        const useStreaming = channelStreaming.enabled === true
+
         let response
         try {
-            // Send to LLM
-            response = await client.sendMessage(userMessage, {
+            // 根据渠道配置选择流式或非流式
+            const requestOptions = {
                 model: llmModel,
-                maxToken: config.get('llm.maxTokens') || 4000,
-                temperature: config.get('llm.temperature') || 0.7,
+                maxToken: channelLlm.maxTokens || 4000,
+                temperature: channelLlm.temperature ?? 0.7,
+                topP: channelLlm.topP,
+                frequencyPenalty: channelLlm.frequencyPenalty,
+                presencePenalty: channelLlm.presencePenalty,
                 conversationId,
                 history: messages.slice(0, -1) // All messages except the current one
-            })
+            }
+
+            if (useStreaming) {
+                // 流式请求
+                logger.info('[ChatService] 使用流式请求')
+                const stream = await client.streamMessage(messages, requestOptions)
+                
+                // 收集流式响应
+                let fullText = ''
+                let reasoningText = ''
+                for await (const chunk of stream) {
+                    if (typeof chunk === 'string') {
+                        fullText += chunk
+                    } else if (chunk.type === 'reasoning') {
+                        reasoningText += chunk.text
+                    } else if (chunk.type === 'text') {
+                        fullText += chunk.text
+                    }
+                }
+                
+                // 构造响应格式
+                const contents = []
+                if (reasoningText) {
+                    contents.push({ type: 'reasoning', text: reasoningText })
+                }
+                if (fullText) {
+                    contents.push({ type: 'text', text: fullText })
+                }
+                
+                response = {
+                    id: crypto.randomUUID(),
+                    contents,
+                    usage: {} // 流式请求通常没有精确的 usage 信息
+                }
+                
+                // 保存历史记录
+                await historyManager.saveHistory(userMessage, conversationId)
+                await historyManager.saveHistory({
+                    role: 'assistant',
+                    content: contents
+                }, conversationId)
+            } else {
+                // 非流式请求
+                response = await client.sendMessage(userMessage, requestOptions)
+            }
         } finally {
             if (channel) {
                 channelManager.endRequest(channel.id)
