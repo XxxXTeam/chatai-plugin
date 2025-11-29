@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { NSpace, NInput, NButton, NCollapse, NCollapseItem, NCheckbox, NCheckboxGroup, NTag, NText, NIcon, NDivider } from 'naive-ui'
+import { NSpace, NInput, NButton, NTag, NText, NIcon, NDivider, NEmpty } from 'naive-ui'
 import { SearchOutlined, CheckCircleOutlined } from '@vicons/material'
 
 const props = defineProps({
@@ -21,15 +21,20 @@ const props = defineProps({
 const emit = defineEmits(['update:value'])
 
 const searchQuery = ref('')
-const selectedModels = ref([...props.value])
+// 展开的分组名称
+const expandedGroup = ref('')
 
+// 选中数量 - 简单的 ref
+const selectedCount = ref(props.value.length)
+
+// 内部用普通 Set，不是响应式的
+let selectedSet = new Set(props.value)
+
+// 同步 props
 watch(() => props.value, (newVal) => {
-  selectedModels.value = [...newVal]
-})
-
-watch(selectedModels, (newVal) => {
-  emit('update:value', newVal)
-})
+  selectedSet = new Set(newVal)
+  selectedCount.value = newVal.length
+}, { deep: false })
 
 // 模型分组计算属性
 const groupedModels = computed(() => {
@@ -98,46 +103,83 @@ const groupedModels = computed(() => {
     .map(([name, models]) => ({ name, models }))
 })
 
+// 提交选择结果
+function emitChange() {
+  emit('update:value', Array.from(selectedSet))
+}
+
 // 全选所有模型
 function selectAll() {
-  selectedModels.value = [...props.allModels]
+  selectedSet = new Set(props.allModels)
+  selectedCount.value = selectedSet.size
+  emitChange()
 }
 
 // 取消所有选择
 function deselectAll() {
-  selectedModels.value = []
+  selectedSet = new Set()
+  selectedCount.value = 0
+  emitChange()
 }
 
 // 全选某个分组
-function selectAllInGroup(group) {
-  group.models.forEach(model => {
-    if (!selectedModels.value.includes(model)) {
-      selectedModels.value.push(model)
-    }
-  })
+function selectAllInGroup(group, event) {
+  event?.stopPropagation()
+  for (const model of group.models) {
+    selectedSet.add(model)
+  }
+  selectedCount.value = selectedSet.size
+  emitChange()
+  // 强制刷新当前分组
+  if (expandedGroup.value === group.name) {
+    expandedGroup.value = ''
+    setTimeout(() => expandedGroup.value = group.name, 0)
+  }
 }
 
 // 取消选择某个分组
-function deselectAllInGroup(group) {
-  selectedModels.value = selectedModels.value.filter(m => !group.models.includes(m))
+function deselectAllInGroup(group, event) {
+  event?.stopPropagation()
+  for (const model of group.models) {
+    selectedSet.delete(model)
+  }
+  selectedCount.value = selectedSet.size
+  emitChange()
+  // 强制刷新当前分组
+  if (expandedGroup.value === group.name) {
+    expandedGroup.value = ''
+    setTimeout(() => expandedGroup.value = group.name, 0)
+  }
 }
 
-// 检查分组是否全选
-function isGroupFullySelected(group) {
-  return group.models.every(model => selectedModels.value.includes(model))
+// 切换分组展开 - 只能展开一个
+function toggleGroup(groupName) {
+  expandedGroup.value = expandedGroup.value === groupName ? '' : groupName
 }
 
-// 检查分组是否部分选中
-function isGroupPartiallySelected(group) {
-  const selectedCount = group.models.filter(model => selectedModels.value.includes(model)).length
-  return selectedCount > 0 && selectedCount < group.models.length
+// 获取分组选中数量
+function getGroupSelectedCount(group) {
+  let count = 0
+  for (const model of group.models) {
+    if (selectedSet.has(model)) count++
+  }
+  return count
 }
 
-// 单选处理
-function handleSingleSelect(model) {
-    if (!props.multiple) {
-        selectedModels.value = [model]
-    }
+// 切换单个模型
+function toggleModel(model, event) {
+  if (selectedSet.has(model)) {
+    selectedSet.delete(model)
+  } else {
+    selectedSet.add(model)
+  }
+  selectedCount.value = selectedSet.size
+  emitChange()
+}
+
+// 检查模型是否选中
+function isSelected(model) {
+  return selectedSet.has(model)
 }
 </script>
 
@@ -152,7 +194,7 @@ function handleSingleSelect(model) {
               <CheckCircleOutlined />
             </n-icon>
           </template>
-          已选择 ({{ selectedModels.length }})
+          已选择 ({{ selectedCount }})
         </n-tag>
       </n-space>
     </n-space>
@@ -174,7 +216,7 @@ function handleSingleSelect(model) {
     <!-- 全局操作按钮 (仅多选时显示) -->
     <n-space justify="space-between" align="center" v-if="multiple">
       <n-text depth="3">
-        已选择 {{ selectedModels.length }} / {{ allModels.length }}
+        已选择 {{ selectedCount }} / {{ allModels.length }}
       </n-text>
       <n-space :size="8">
         <n-button size="small" @click="selectAll">全选</n-button>
@@ -185,126 +227,179 @@ function handleSingleSelect(model) {
     <n-divider style="margin: 0" />
 
     <!-- 模型分组列表 -->
-    <div style="max-height: 50vh; overflow-y: auto; padding-right: 4px;">
-      <n-collapse arrow-placement="right" :default-expanded-names="groupedModels.map(g => g.name)">
-        <n-collapse-item 
+    <div class="model-list-container">
+      <n-empty v-if="groupedModels.length === 0" description="没有找到模型" />
+      
+      <!-- 简化的分组列表 -->
+      <div v-else class="group-list">
+        <div 
           v-for="group in groupedModels" 
           :key="group.name"
-          :name="group.name"
+          class="group-item"
         >
-          <template #header>
-            <n-space align="center" :size="12">
-              <n-checkbox
-                v-if="multiple"
-                :checked="isGroupFullySelected(group)"
-                :indeterminate="isGroupPartiallySelected(group)"
-                @update:checked="(checked) => checked ? selectAllInGroup(group) : deselectAllInGroup(group)"
-                @click.stop
-              />
-              <n-text strong>{{ group.name }}</n-text>
-              <n-tag 
-                :type="isGroupFullySelected(group) ? 'success' : 'default'" 
-                size="small" 
-                :bordered="false"
-                round
-              >
-                {{ group.models.filter(m => selectedModels.includes(m)).length }} / {{ group.models.length }}
-              </n-tag>
-            </n-space>
-          </template>
+          <!-- 分组头部 -->
+          <div class="group-header" @click="toggleGroup(group.name)">
+            <span class="group-name">{{ group.name }}</span>
+            <span class="group-count">
+              {{ getGroupSelectedCount(group) }}/{{ group.models.length }}
+            </span>
+            <button 
+              v-if="multiple" 
+              class="group-btn"
+              @click="getGroupSelectedCount(group) === group.models.length ? deselectAllInGroup(group, $event) : selectAllInGroup(group, $event)"
+            >
+              {{ getGroupSelectedCount(group) === group.models.length ? '取消' : '全选' }}
+            </button>
+            <span class="expand-icon">{{ expandedGroup === group.name ? '▲' : '▼' }}</span>
+          </div>
           
-          <n-checkbox-group v-model:value="selectedModels">
-            <n-space vertical :size="8" style="padding-left: 32px;">
-              <n-checkbox 
-                v-for="model in group.models" 
-                :key="model" 
-                :value="model"
-                :label="model"
-                @update:checked="() => handleSingleSelect(model)"
+          <!-- 展开的模型列表 -->
+          <div v-if="expandedGroup === group.name" class="model-list">
+            <label 
+              v-for="model in group.models" 
+              :key="model"
+              class="model-item"
+            >
+              <input 
+                type="checkbox" 
+                :checked="isSelected(model)"
+                @change="toggleModel(model, $event)"
               />
-            </n-space>
-          </n-checkbox-group>
-        </n-collapse-item>
-      </n-collapse>
+              <span class="model-name" :title="model">{{ model }}</span>
+            </label>
+          </div>
+        </div>
+      </div>
     </div>
   </n-space>
 </template>
 
 <style scoped>
-/* 美化滚动条 */
-:deep(.n-scrollbar-content) {
-  padding-right: 8px;
+.model-list-container {
+  max-height: 55vh;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
-/* 自定义滚动条样式 */
-div::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+.group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-div::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.05);
+.group-item {
+  border-radius: 6px;
+  background: #fafafa;
+  overflow: hidden;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.group-header:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.group-checkbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.group-name {
+  font-weight: 600;
+  font-size: 14px;
+  flex: 1;
+}
+
+.group-count {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #e8e8e8;
+  color: #666;
+}
+
+.group-btn {
+  padding: 2px 8px;
+  font-size: 12px;
+  border: 1px solid #ddd;
   border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
 }
 
-div::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
-  transition: all 0.3s;
+.group-btn:hover {
+  background: #f5f5f5;
 }
 
-div::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.3);
+.expand-icon {
+  font-size: 10px;
+  color: #999;
 }
 
-/* 暗色模式滚动条 */
-html.dark div::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.05);
+.model-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 8px;
+  padding: 4px 12px 8px 36px;
+  background: #fff;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
-html.dark div::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
+.model-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
 }
 
-html.dark div::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
+.model-item:hover {
+  background: rgba(0, 0, 0, 0.04);
 }
 
-/* 折叠面板过渡效果 */
-:deep(.n-collapse-item) {
-  transition: all 0.3s ease;
+.model-item input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
-:deep(.n-collapse-item:hover) {
-  background: rgba(0, 0, 0, 0.02);
+.model-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-html.dark :deep(.n-collapse-item:hover) {
-  background: rgba(255, 255, 255, 0.02);
+/* 滚动条 */
+.model-list-container::-webkit-scrollbar,
+.model-list::-webkit-scrollbar {
+  width: 5px;
 }
 
-/* 复选框美化 */
-:deep(.n-checkbox) {
-  transition: all 0.2s ease;
+.model-list-container::-webkit-scrollbar-track,
+.model-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-:deep(.n-checkbox:hover) {
-  transform: translateX(2px);
+.model-list-container::-webkit-scrollbar-thumb,
+.model-list::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
 }
 
-/* 标签动画 */
-:deep(.n-tag) {
-  transition: all 0.3s ease;
-}
-
-/* 按钮组美化 */
-:deep(.n-space) {
-  gap: 8px;
-}
-
-/* 模型列表项间距 */
-:deep(.n-collapse-item__content-wrapper) {
-  padding-top: 12px;
-  padding-bottom: 12px;
+.model-list-container::-webkit-scrollbar-thumb:hover,
+.model-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
 }
 </style>

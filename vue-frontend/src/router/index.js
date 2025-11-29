@@ -37,9 +37,9 @@ const router = createRouter({
             component: () => import('../views/Settings.vue')
         },
         {
-            path: '/mcp-servers',
-            name: 'mcp-servers',
-            component: () => import('../views/McpServers.vue')
+            path: '/tools',
+            name: 'tools',
+            component: () => import('../views/ToolsManager.vue')
         },
         {
             path: '/context',
@@ -50,6 +50,21 @@ const router = createRouter({
             path: '/memory',
             name: 'memory',
             component: () => import('../views/MemoryView.vue')
+        },
+        {
+            path: '/history',
+            name: 'history',
+            component: () => import('../views/ChatHistory.vue')
+        },
+        {
+            path: '/tool-logs',
+            name: 'tool-logs',
+            component: () => import('../views/ToolLogs.vue')
+        },
+        {
+            path: '/users',
+            name: 'users',
+            component: () => import('../views/Users.vue')
         }
     ]
 })

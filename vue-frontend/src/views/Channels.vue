@@ -78,10 +78,25 @@ const columns = [
     key: 'status',
     width: 80,
     render(row) {
-      return h(NTag, {
-        type: row.status === 'active' ? 'success' : row.status === 'error' ? 'error' : 'default',
-        size: 'small'
-      }, { default: () => row.status || 'idle' })
+      // 根据 enabled 和 lastError 判断状态
+      let status = 'idle'
+      let type = 'default'
+      
+      if (!row.enabled) {
+        status = '已禁用'
+        type = 'warning'
+      } else if (row.lastError) {
+        status = '错误'
+        type = 'error'
+      } else if (row.lastUsed) {
+        status = '正常'
+        type = 'success'
+      } else {
+        status = '待测试'
+        type = 'info'
+      }
+      
+      return h(NTag, { type, size: 'small' }, { default: () => status })
     }
   },
   { 
@@ -89,6 +104,16 @@ const columns = [
     key: 'priority',
     width: 80,
     sorter: (row1, row2) => row1.priority - row2.priority
+  },
+  {
+    title: '调用次数',
+    key: 'stats.totalCalls',
+    width: 90,
+    render(row) {
+      const stats = row.stats || {}
+      return h(NTag, { size: 'small', type: stats.totalCalls > 0 ? 'success' : 'default' }, 
+        { default: () => stats.totalCalls || 0 })
+    }
   },
   { 
     title: '操作', 
@@ -140,7 +165,7 @@ async function handleToggleEnabled(row, enabled) {
 
 async function fetchChannels() {
   try {
-    const res = await axios.get('/api/channels/list')
+    const res = await axios.get('/api/channels/list?withStats=true')
     if (res.data.code === 0) {
       channels.value = res.data.data
     }
@@ -311,7 +336,72 @@ function onCreateKey() {
   }
 }
 
+// 导出所有渠道
+function exportChannels() {
+  // 过滤敏感信息
+  const exportData = channels.value.map(ch => ({
+    name: ch.name,
+    adapterType: ch.adapterType,
+    baseUrl: ch.baseUrl,
+    models: ch.models,
+    priority: ch.priority,
+    enabled: ch.enabled,
+    advanced: ch.advanced,
+    strategy: ch.strategy,
+    // 不导出 apiKey 和 apiKeys
+  }))
+  
+  const data = JSON.stringify(exportData, null, 2)
+  const blob = new Blob([data], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `channels_${new Date().toISOString().slice(0, 10)}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+  message.success('导出成功（不含 API Key）')
+}
 
+// 导入渠道
+function importChannels() {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.json'
+  input.onchange = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    
+    try {
+      const text = await file.text()
+      const data = JSON.parse(text)
+      
+      if (!Array.isArray(data)) {
+        message.error('无效的渠道文件格式')
+        return
+      }
+      
+      let imported = 0
+      for (const channel of data) {
+        try {
+          // 需要用户手动填写 API Key
+          if (!channel.apiKey) {
+            channel.apiKey = 'PLEASE_FILL_YOUR_API_KEY'
+          }
+          await axios.post('/api/channels', channel)
+          imported++
+        } catch (err) {
+          console.error('导入渠道失败:', channel.name, err)
+        }
+      }
+      
+      message.success(`成功导入 ${imported} 个渠道，请编辑填写 API Key`)
+      fetchChannels()
+    } catch (err) {
+      message.error('导入失败: ' + err.message)
+    }
+  }
+  input.click()
+}
 
 async function handleSubmit() {
   formRef.value?.validate(async (errors) => {
@@ -347,7 +437,11 @@ onMounted(() => {
   <n-space vertical>
     <n-card title="渠道管理">
       <template #header-extra>
-        <n-button type="primary" @click="addChannel">添加渠道</n-button>
+        <n-space>
+          <n-button @click="importChannels">导入</n-button>
+          <n-button @click="exportChannels">导出</n-button>
+          <n-button type="primary" @click="addChannel">添加渠道</n-button>
+        </n-space>
       </template>
       <n-data-table :columns="columns" :data="channels" />
     </n-card>

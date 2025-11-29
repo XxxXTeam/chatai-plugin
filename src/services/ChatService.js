@@ -4,6 +4,8 @@ import { contextManager } from './ContextManager.js'
 import { channelManager } from './ChannelManager.js'
 import historyManager from '../core/utils/history.js'
 import config from '../../config/config.js'
+import { setToolContext } from '../core/utils/toolAdapter.js'
+import { presetManager } from './PresetManager.js'
 
 /**
  * Chat Service - Unified chat message handling
@@ -28,7 +30,9 @@ export class ChatService {
             model,
             stream = false,
             preset,
-            adapterType  // Add adapter type support
+            presetId,
+            adapterType,
+            event  // Yunzai event for tool context
         } = options
 
         if (!userId || !message) {
@@ -88,19 +92,29 @@ export class ChatService {
 
         // Get context and history
         const context = await contextManager.getContext(conversationId)
-        const history = await historyManager.getHistory(conversationId, 10) // Last 10 messages
+        const history = await historyManager.getHistory(undefined, conversationId) // Get all history for this conversation
 
         // Determine model
         const llmModel = model || LlmService.getModel(options.mode || 'chat')
 
+        // Set tool context if event is provided
+        if (event) {
+            setToolContext({ event, bot: event.bot || Bot })
+        }
+
         // Get best channel
         const channel = channelManager.getBestChannel(llmModel)
 
-        // Create LLM client
+        // Get preset ID
+        const effectivePresetId = presetId || preset?.id || config.get('llm.defaultChatPresetId') || 'default'
+
+        // Create LLM client with tool context
         const clientOptions = {
             enableTools: true,
             enableReasoning: preset?.enableReasoning,
-            adapterType: adapterType // Default/Fallback
+            adapterType: adapterType,
+            event,
+            presetId: effectivePresetId
         }
 
         if (channel) {
@@ -112,8 +126,20 @@ export class ChatService {
 
         const client = await LlmService.createClient(clientOptions)
 
-        // Get system prompt
-        const systemPrompt = preset?.systemPrompt || LlmService.getSystemPrompt()
+        // Get full system prompt with persona and variables
+        await presetManager.init()
+        
+        // 构建变量上下文
+        const promptContext = {}
+        if (event) {
+            promptContext.user_name = event.sender?.card || event.sender?.nickname || '用户'
+            promptContext.user_id = event.user_id?.toString() || userId
+            promptContext.group_name = event.group_name || ''
+            promptContext.group_id = event.group_id?.toString() || ''
+            promptContext.bot_name = event.bot?.nickname || 'AI助手'
+        }
+        
+        const systemPrompt = preset?.systemPrompt || presetManager.buildSystemPrompt(effectivePresetId, promptContext)
 
         // Build messages array
         const messages = [
@@ -142,14 +168,8 @@ export class ChatService {
             }
         }
 
-        // Save to history
-        await historyManager.saveHistory(userMessage, conversationId)
-
-        const assistantMessage = {
-            role: 'assistant',
-            content: response.contents
-        }
-        await historyManager.saveHistory(assistantMessage, conversationId)
+        // Note: History is already saved by AbstractClient, no need to save again here
+        // The AbstractClient saves both user message and assistant response automatically
 
         // Update context with key information
         if (response.contents) {

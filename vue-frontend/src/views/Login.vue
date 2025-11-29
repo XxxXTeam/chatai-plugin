@@ -1,10 +1,11 @@
 <script setup>
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { NCard, NForm, NFormItem, NInput, NButton, NAlert, useMessage } from 'naive-ui'
 import axios from 'axios'
 
 const router = useRouter()
+const route = useRoute()
 const message = useMessage()
 
 const formValue = ref({
@@ -12,6 +13,22 @@ const formValue = ref({
 })
 
 const loading = ref(false)
+
+// 检查 URL 中是否有 auth_token（从 /login/token 重定向过来）
+onMounted(() => {
+  const urlParams = new URLSearchParams(window.location.search)
+  const authToken = urlParams.get('auth_token')
+  
+  if (authToken) {
+    // 保存 token 并跳转
+    localStorage.setItem('token', authToken)
+    message.success('登录成功')
+    
+    // 清除 URL 中的 token
+    window.history.replaceState({}, document.title, '/')
+    router.push('/')
+  }
+})
 
 async function handleLogin() {
   if (!formValue.value.token) {

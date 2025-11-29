@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import config from '../../config/config.js'
 import { McpClient } from './McpClient.js'
+import { builtinMcpServer, setBuiltinToolContext } from './BuiltinMcpServer.js'
 
 export class McpManager {
     constructor() {
@@ -10,6 +11,8 @@ export class McpManager {
         this.resources = new Map()
         this.prompts = new Map()
         this.toolResultCache = new Map()
+        this.toolLogs = []  // 工具调用日志
+        this.maxLogs = 1000 // 最大日志数量
         this.initialized = false
     }
 
@@ -19,9 +22,12 @@ export class McpManager {
     async init() {
         if (this.initialized) return
 
+        // 初始化内置 MCP 服务器
+        await this.initBuiltinServer()
+
         const mcpConfig = config.get('mcp')
         if (!mcpConfig?.enabled) {
-            logger.info('[MCP] MCP is disabled')
+            logger.info('[MCP] External MCP is disabled, using builtin only')
             this.initialized = true
             return
         }
@@ -29,6 +35,48 @@ export class McpManager {
         await this.loadServers()
         this.initialized = true
         logger.info('[MCP] Manager initialized')
+    }
+
+    /**
+     * 初始化内置 MCP 服务器
+     */
+    async initBuiltinServer() {
+        try {
+            await builtinMcpServer.init()
+            
+            // 注册内置工具
+            const tools = builtinMcpServer.listTools()
+            for (const tool of tools) {
+                this.tools.set(tool.name, {
+                    ...tool,
+                    serverName: 'builtin',
+                    isBuiltin: true
+                })
+            }
+
+            // 注册内置服务器
+            this.servers.set('builtin', {
+                status: 'connected',
+                config: { type: 'builtin' },
+                client: null,
+                tools,
+                resources: [],
+                prompts: [],
+                connectedAt: Date.now(),
+                isBuiltin: true
+            })
+
+            logger.info(`[MCP] Builtin server initialized with ${tools.length} tools`)
+        } catch (error) {
+            logger.error('[MCP] Failed to initialize builtin server:', error)
+        }
+    }
+
+    /**
+     * 设置工具上下文（用于内置工具）
+     */
+    setToolContext(ctx) {
+        setBuiltinToolContext(ctx)
     }
 
     /**
@@ -162,7 +210,90 @@ export class McpManager {
         }
     }
 
-    // ... (reload, add, update, remove servers remain same)
+    /**
+     * Reload/reconnect a server
+     */
+    async reloadServer(name) {
+        const server = this.servers.get(name)
+        if (!server) {
+            throw new Error(`Server not found: ${name}`)
+        }
+
+        // 内置服务器不需要重连
+        if (server.isBuiltin) {
+            await this.refreshBuiltinTools()
+            return { success: true, message: 'Builtin server refreshed' }
+        }
+
+        const serverConfig = server.config
+        await this.disconnectServer(name)
+        await this.connectServer(name, serverConfig)
+        return { success: true }
+    }
+
+    /**
+     * Add a new server
+     */
+    async addServer(name, serverConfig) {
+        if (this.servers.has(name)) {
+            throw new Error(`Server already exists: ${name}`)
+        }
+
+        // Save to config
+        const mcpConfig = config.get('mcp') || { enabled: true, servers: {} }
+        mcpConfig.servers[name] = serverConfig
+        config.set('mcp', mcpConfig)
+
+        // Connect
+        await this.connectServer(name, serverConfig)
+        return this.getServer(name)
+    }
+
+    /**
+     * Update server config
+     */
+    async updateServer(name, serverConfig) {
+        const server = this.servers.get(name)
+        if (!server) {
+            throw new Error(`Server not found: ${name}`)
+        }
+
+        if (server.isBuiltin) {
+            throw new Error('Cannot update builtin server')
+        }
+
+        // Update config
+        const mcpConfig = config.get('mcp') || { enabled: true, servers: {} }
+        mcpConfig.servers[name] = serverConfig
+        config.set('mcp', mcpConfig)
+
+        // Reconnect
+        await this.reloadServer(name)
+        return this.getServer(name)
+    }
+
+    /**
+     * Remove a server
+     */
+    async removeServer(name) {
+        const server = this.servers.get(name)
+        if (!server) {
+            throw new Error(`Server not found: ${name}`)
+        }
+
+        if (server.isBuiltin) {
+            throw new Error('Cannot remove builtin server')
+        }
+
+        await this.disconnectServer(name)
+
+        // Remove from config
+        const mcpConfig = config.get('mcp') || { enabled: true, servers: {} }
+        delete mcpConfig.servers[name]
+        config.set('mcp', mcpConfig)
+
+        return true
+    }
 
     /**
      * Get all available tools
@@ -309,11 +440,6 @@ export class McpManager {
             throw new Error(`Tool not found: ${name}`)
         }
 
-        const server = this.servers.get(tool.serverName)
-        if (!server || !server.client) {
-            throw new Error(`Server not available for tool: ${name}`)
-        }
-
         // Check cache if enabled
         if (options.useCache) {
             const cacheKey = `${name}:${JSON.stringify(args)}`
@@ -324,9 +450,33 @@ export class McpManager {
             }
         }
 
+        const startTime = Date.now()
+        const logEntry = {
+            toolName: name,
+            arguments: args,
+            timestamp: startTime,
+            userId: options.userId || null,
+            success: false,
+            duration: 0,
+            result: null,
+            error: null
+        }
+
         try {
-            logger.info(`[MCP] Calling tool: ${name}`)
-            const result = await server.client.callTool(name, args)
+            logger.info(`[MCP] Calling tool: ${name}`, args)
+            let result
+
+            // 内置工具使用内置服务器处理
+            if (tool.isBuiltin || tool.serverName === 'builtin') {
+                result = await builtinMcpServer.callTool(name, args)
+            } else {
+                // 外部 MCP 服务器
+                const server = this.servers.get(tool.serverName)
+                if (!server || !server.client) {
+                    throw new Error(`Server not available for tool: ${name}`)
+                }
+                result = await server.client.callTool(name, args)
+            }
 
             // Cache result if enabled
             if (options.useCache) {
@@ -337,11 +487,95 @@ export class McpManager {
                 })
             }
 
+            // 记录成功日志
+            logEntry.success = true
+            logEntry.duration = Date.now() - startTime
+            logEntry.result = result
+            this.addToolLog(logEntry)
+
             return result
         } catch (error) {
+            // 记录失败日志
+            logEntry.success = false
+            logEntry.duration = Date.now() - startTime
+            logEntry.error = error.message
+            this.addToolLog(logEntry)
+
             logger.error(`[MCP] Tool call failed: ${name}`, error)
             throw error
         }
+    }
+
+    /**
+     * 添加工具调用日志
+     */
+    addToolLog(entry) {
+        this.toolLogs.unshift(entry)
+        // 限制日志数量
+        if (this.toolLogs.length > this.maxLogs) {
+            this.toolLogs = this.toolLogs.slice(0, this.maxLogs)
+        }
+    }
+
+    /**
+     * 获取工具调用日志
+     */
+    getToolLogs(toolFilter, searchQuery) {
+        let logs = this.toolLogs
+
+        if (toolFilter) {
+            logs = logs.filter(l => l.toolName === toolFilter)
+        }
+
+        if (searchQuery) {
+            const query = searchQuery.toLowerCase()
+            logs = logs.filter(l => 
+                l.toolName.toLowerCase().includes(query) ||
+                l.userId?.toLowerCase().includes(query) ||
+                JSON.stringify(l.arguments).toLowerCase().includes(query)
+            )
+        }
+
+        return logs.slice(0, 500) // 最多返回 500 条
+    }
+
+    /**
+     * 清空工具调用日志
+     */
+    clearToolLogs() {
+        this.toolLogs = []
+        logger.info('[MCP] Tool logs cleared')
+    }
+
+    /**
+     * 刷新内置工具列表
+     */
+    async refreshBuiltinTools() {
+        // 移除旧的内置工具
+        for (const [name, tool] of this.tools) {
+            if (tool.isBuiltin) {
+                this.tools.delete(name)
+            }
+        }
+
+        // 重新加载
+        const tools = builtinMcpServer.listTools()
+        for (const tool of tools) {
+            this.tools.set(tool.name, {
+                ...tool,
+                serverName: 'builtin',
+                isBuiltin: true
+            })
+        }
+
+        // 更新服务器信息
+        const server = this.servers.get('builtin')
+        if (server) {
+            server.tools = tools
+        }
+
+        logger.info(`[MCP] Refreshed builtin tools: ${tools.length}`)
+        return tools
     }
 
     /**

@@ -6,5 +6,37 @@
     "systemPrompt": "你是一个机器人",
     "model": "gpt-5-chat",
     "temperature": 0.7
+  },
+  {
+    "id": "default",
+    "name": "默认预设",
+    "description": "通用助手预设",
+    "systemPrompt": "你是一个有帮助的AI助手。",
+    "model": "",
+    "temperature": 0.7,
+    "persona": {
+      "name": "AI助手",
+      "personality": "友好、专业、乐于助人",
+      "speakingStyle": "礼貌、清晰、简洁",
+      "traits": [
+        "helpful",
+        "friendly",
+        "professional"
+      ],
+      "likes": [],
+      "dislikes": [],
+      "customFields": {}
+    },
+    "context": {
+      "maxMessages": 20,
+      "maxTokens": 8000,
+      "includeGroupContext": false,
+      "groupContextLength": 10
+    },
+    "tools": {
+      "enableBuiltinTools": true,
+      "allowedTools": [],
+      "disabledTools": []
+    }
   }
 ]

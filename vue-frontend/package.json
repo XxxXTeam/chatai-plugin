@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build ; cp -r dist ../resources/web",
+    "build": "vite build ; cp -r dist/* ../resources/web",
     "preview": "vite preview"
   },
   "dependencies": {
     "@vicons/material": "^0.13.0",
     "@vicons/utils": "^0.1.4",
+    "@vueuse/core": "^14.1.0",
     "axios": "^1.13.2",
     "dompurify": "^3.3.0",
     "marked": "^17.0.1",

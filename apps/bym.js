@@ -89,8 +89,11 @@ export class bym extends plugin {
                 systemPrompt += `\n当前群聊: ${e.group_name}`
             }
 
+            // 使用伪人模型或配置的模型
+            const bymModel = config.get('bym.model') || LlmService.selectModel({ isRoleplay: true })
+
             const response = await client.sendMessage(userMessage, {
-                model: config.get('bym.model') || LlmService.getDefaultModel(),
+                model: bymModel,
                 conversationId: `bym_${e.group_id || e.user_id}_${Date.now()}`, // Use group_id for context if available
                 systemOverride: systemPrompt,
                 temperature: config.get('bym.temperature') || 0.9,

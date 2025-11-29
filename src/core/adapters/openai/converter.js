@@ -6,41 +6,59 @@ import { registerFromChaiteConverter, registerFromChaiteToolConverter, registerI
 registerFromChaiteConverter('openai', (source) => {
     switch (source.role) {
         case 'assistant': {
-            const text = source.content
-                .filter(t => t.type === 'text')
-                .map(t => t.text)
-                .join('')
+            // Handle null/undefined content safely
+            const content = source.content || []
+            const text = Array.isArray(content) 
+                ? content.filter(t => t && t.type === 'text').map(t => t.text).join('')
+                : ''
 
-            return {
+            const hasToolCalls = source.toolCalls && source.toolCalls.length > 0
+
+            // Build the message object
+            const msg = {
                 role: 'assistant',
-                content: text || undefined,
-                tool_calls: (source.toolCalls && source.toolCalls.length > 0) ? source.toolCalls.map(t => ({
+                content: text || '',  // Always use empty string, never null (some APIs reject null)
+            }
+
+            // Only add tool_calls if present
+            if (hasToolCalls) {
+                msg.tool_calls = source.toolCalls.map(t => ({
                     id: t.id,
-                    type: t.type,
+                    type: t.type || 'function',
                     function: {
-                        arguments: JSON.stringify(t.function.arguments),
+                        arguments: typeof t.function.arguments === 'string' 
+                            ? t.function.arguments 
+                            : JSON.stringify(t.function.arguments),
                         name: t.function.name,
                     },
-                })) : undefined,
+                }))
             }
+
+            return msg
         }
         case 'user': {
+            // Handle null/undefined content
+            const userContent = source.content || []
+            if (!Array.isArray(userContent) || userContent.length === 0) {
+                return { role: 'user', content: '' }
+            }
+            
             // Check if content is simple text only (for better compatibility with proxy APIs)
-            const hasOnlyText = source.content.every(t => t.type === 'text')
-            const isSingleText = source.content.length === 1 && source.content[0].type === 'text'
+            const hasOnlyText = userContent.every(t => t.type === 'text')
+            const isSingleText = userContent.length === 1 && userContent[0].type === 'text'
 
             // For simple text-only messages, use string format for better compatibility
             if (isSingleText) {
                 return {
                     role: 'user',
-                    content: source.content[0].text
+                    content: userContent[0].text
                 }
             }
 
             // For multimodal content or multiple text items, use array format
             return {
                 role: 'user',
-                content: source.content.map(t => {
+                content: userContent.map(t => {
                     switch (t.type) {
                         case 'text':
                             return { type: 'text', text: t.text }

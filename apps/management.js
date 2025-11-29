@@ -48,22 +48,34 @@ export class management extends plugin {
     }
 
     /**
-   * 管理面板 - 生成临时token
+   * 管理面板 - 生成临时token和登录链接
    */
     async managementPanel(e) {
         const webServer = getWebServer()
-        const token = webServer.generateToken(300)
-        const port = config.get('web.port') || 3000
+        const addresses = webServer.getAddresses()
+        
+        // 生成登录链接
+        const localUrl = webServer.generateLoginUrl(false)
+        const publicUrl = addresses.public ? webServer.generateLoginUrl(true) : null
 
-        await e.reply([
+        const messages = [
             '=== AI插件管理面板 ===',
             '',
-            `访问地址: http://localhost:${port}`,
-            `临时Token: ${token}`,
-            `有效期: 5分钟`,
-            '',
-            '请在浏览器中打开管理面板并使用Token登录'
-        ].join('\n'), true)
+            '【本地访问】',
+            localUrl
+        ]
+        
+        if (publicUrl) {
+            messages.push('')
+            messages.push('【公网访问】')
+            messages.push(publicUrl)
+        }
+        
+        messages.push('')
+        messages.push('链接有效期: 5分钟')
+        messages.push('点击链接即可自动登录')
+
+        await e.reply(messages.join('\n'), true)
         return true
     }
 

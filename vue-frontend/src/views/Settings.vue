@@ -14,10 +14,19 @@ const saving = ref(false)
 const config = reactive({
   llm: {
     defaultModel: '',
+    embeddingModel: 'text-embedding-3-small',
+    // 模型分类
+    models: {
+      chat: '',        // 对话模型
+      roleplay: '',    // 伪人模型
+      toolCall: '',    // 工具调用模型
+      search: '',      // 搜索模型
+      reasoning: ''    // 思考模型
+    },
+    // 旧配置兼容
     chatModel: '',
     codeModel: '',
     translationModel: '',
-    embeddingModel: 'text-embedding-3-small',
   },
   bym: {
     enable: false,
@@ -49,7 +58,12 @@ async function fetchConfig() {
       const data = res.data.data
       
       // Merge data into reactive config
-      if (data.llm) Object.assign(config.llm, data.llm)
+      if (data.llm) {
+        Object.assign(config.llm, data.llm)
+        if (data.llm.models) {
+          Object.assign(config.llm.models, data.llm.models)
+        }
+      }
       if (data.bym) Object.assign(config.bym, data.bym)
       if (data.thinking) Object.assign(config.thinking, data.thinking)
       if (data.streaming) Object.assign(config.streaming, data.streaming)
@@ -105,10 +119,15 @@ function openModelSelector(target) {
 
 function handleModelSelect(models) {
   if (models.length > 0) {
-    if (currentModelTarget.value === 'bymModel') {
+    const target = currentModelTarget.value
+    if (target === 'bymModel') {
       config.bym.model = models[0]
+    } else if (target.startsWith('models.')) {
+      // 新的模型分类配置
+      const key = target.replace('models.', '')
+      config.llm.models[key] = models[0]
     } else {
-      config.llm[currentModelTarget.value] = models[0]
+      config.llm[target] = models[0]
     }
   }
   showModelSelector.value = false
@@ -136,29 +155,46 @@ onMounted(() => {
           </n-input>
         </n-form-item>
         
-        <n-divider title-placement="left">场景模式模型 (可选)</n-divider>
+        <n-divider title-placement="left">模型分类 (可选，留空使用默认模型)</n-divider>
         
-        <n-form-item label="对话模式">
-          <n-input v-model:value="config.llm.chatModel" placeholder="留空使用默认模型" readonly @click="openModelSelector('chatModel')">
+        <n-form-item label="对话模型">
+          <n-input v-model:value="config.llm.models.chat" placeholder="普通聊天使用的模型" readonly @click="openModelSelector('models.chat')">
              <template #suffix>
-                <n-button size="small" @click.stop="openModelSelector('chatModel')">选择</n-button>
+                <n-button size="small" @click.stop="openModelSelector('models.chat')">选择</n-button>
              </template>
           </n-input>
         </n-form-item>
-        <n-form-item label="代码模式">
-          <n-input v-model:value="config.llm.codeModel" placeholder="留空使用默认模型" readonly @click="openModelSelector('codeModel')">
+        <n-form-item label="伪人模型">
+          <n-input v-model:value="config.llm.models.roleplay" placeholder="模拟真人回复的模型" readonly @click="openModelSelector('models.roleplay')">
              <template #suffix>
-                <n-button size="small" @click.stop="openModelSelector('codeModel')">选择</n-button>
+                <n-button size="small" @click.stop="openModelSelector('models.roleplay')">选择</n-button>
              </template>
           </n-input>
         </n-form-item>
-        <n-form-item label="翻译模式">
-          <n-input v-model:value="config.llm.translationModel" placeholder="留空使用默认模型" readonly @click="openModelSelector('translationModel')">
+        <n-form-item label="工具调用模型">
+          <n-input v-model:value="config.llm.models.toolCall" placeholder="Function Calling 模型" readonly @click="openModelSelector('models.toolCall')">
              <template #suffix>
-                <n-button size="small" @click.stop="openModelSelector('translationModel')">选择</n-button>
+                <n-button size="small" @click.stop="openModelSelector('models.toolCall')">选择</n-button>
              </template>
           </n-input>
         </n-form-item>
+        <n-form-item label="搜索模型">
+          <n-input v-model:value="config.llm.models.search" placeholder="联网搜索使用的模型" readonly @click="openModelSelector('models.search')">
+             <template #suffix>
+                <n-button size="small" @click.stop="openModelSelector('models.search')">选择</n-button>
+             </template>
+          </n-input>
+        </n-form-item>
+        <n-form-item label="思考模型">
+          <n-input v-model:value="config.llm.models.reasoning" placeholder="深度推理使用的模型" readonly @click="openModelSelector('models.reasoning')">
+             <template #suffix>
+                <n-button size="small" @click.stop="openModelSelector('models.reasoning')">选择</n-button>
+             </template>
+          </n-input>
+        </n-form-item>
+        
+        <n-divider title-placement="left">其他配置</n-divider>
+        
         <n-form-item label="嵌入模型">
           <n-input v-model:value="config.llm.embeddingModel" placeholder="text-embedding-3-small" />
         </n-form-item>

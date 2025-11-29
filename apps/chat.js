@@ -16,6 +16,18 @@ export class Chat extends plugin {
           fnc: 'chat'
         },
         {
+          reg: '^#(结束对话|结束会话|新对话|新会话)$',
+          fnc: 'endConversation'
+        },
+        {
+          reg: '^#(清除记忆|清理记忆|删除记忆)$',
+          fnc: 'clearMemory'
+        },
+        {
+          reg: '^#(对话状态|会话状态)$',
+          fnc: 'conversationStatus'
+        },
+        {
           reg: '^#clear$',
           fnc: 'clearHistory'
         }
@@ -85,14 +97,21 @@ export class Chat extends plugin {
       }
 
       // Get preset if configured
-      const presetId = config.get('llm.defaultChatPresetId')
+      const presetId = config.get('llm.defaultChatPresetId') || 'default'
       let preset = null
       if (presetId) {
         preset = presetManager.get(presetId)
       }
 
-      // Determine model (use chatModel if configured, otherwise defaultModel)
-      const model = config.get('llm.chatModel') || config.get('llm.defaultModel')
+      // Import LlmService for model selection
+      const { LlmService } = await import('../src/services/LlmService.js')
+
+      // 使用 selectModel 自动选择最佳模型
+      const model = LlmService.selectModel({
+        needsTools: preset?.enableTools !== false,  // 根据预设决定是否需要工具
+        needsReasoning: preset?.enableReasoning,
+        isRoleplay: false
+      })
 
       // Send message using ChatService
       await e.reply('思考中...', true)
@@ -102,7 +121,10 @@ export class Chat extends plugin {
         message: msg,
         images: imageIds,
         model: model,
-        preset: preset
+        mode: 'chat',  // 指定模式
+        preset: preset,
+        presetId: presetId,
+        event: e  // Pass event for tool context
       })
 
       // Extract text response
@@ -134,10 +156,18 @@ export class Chat extends plugin {
   }
 
   /**
-   * Clear chat history
+   * Clear chat history (alias for endConversation)
    * @param {*} e Yunzai event
    */
   async clearHistory(e) {
+    return this.endConversation(e)
+  }
+
+  /**
+   * 结束当前对话/开始新对话
+   * @param {*} e Yunzai event
+   */
+  async endConversation(e) {
     try {
       const { chatService } = await import('../src/services/ChatService.js')
 
@@ -146,10 +176,88 @@ export class Chat extends plugin {
       const fullUserId = groupId ? `${groupId}_${userId}` : userId
 
       await chatService.clearHistory(fullUserId)
-      await e.reply('已清除对话历史', true)
+      await e.reply('✅ 已结束当前对话，下次对话将开始新会话', true)
     } catch (error) {
-      logger.error('[AI-Chat] Clear history error:', error)
-      await e.reply('清除历史失败: ' + error.message, true)
+      logger.error('[AI-Chat] End conversation error:', error)
+      await e.reply('操作失败: ' + error.message, true)
+    }
+
+    return true
+  }
+
+  /**
+   * 清除用户记忆
+   * @param {*} e Yunzai event
+   */
+  async clearMemory(e) {
+    try {
+      const { memoryManager } = await import('../src/services/MemoryManager.js')
+
+      const userId = e.user_id || e.sender?.user_id || 'unknown'
+      const groupId = e.group_id || (e.isGroup ? e.group_id : null)
+      const fullUserId = groupId ? `${groupId}_${userId}` : String(userId)
+
+      await memoryManager.init()
+      await memoryManager.clearMemory(fullUserId)
+      await e.reply('✅ 已清除你的所有记忆数据', true)
+    } catch (error) {
+      logger.error('[AI-Chat] Clear memory error:', error)
+      await e.reply('清除记忆失败: ' + error.message, true)
+    }
+
+    return true
+  }
+
+  /**
+   * 查看对话状态
+   * @param {*} e Yunzai event
+   */
+  async conversationStatus(e) {
+    try {
+      const { databaseService } = await import('../src/services/DatabaseService.js')
+      const { memoryManager } = await import('../src/services/MemoryManager.js')
+
+      const userId = e.user_id || e.sender?.user_id || 'unknown'
+      const groupId = e.group_id || (e.isGroup ? e.group_id : null)
+      const fullUserId = groupId ? `${groupId}_${userId}` : userId
+
+      databaseService.init()
+      await memoryManager.init()
+
+      // 获取对话历史
+      const messages = databaseService.getMessages(fullUserId, 100)
+      const messageCount = messages.length
+
+      // 获取记忆数量
+      const memories = await memoryManager.getMemories(String(userId))
+      const memoryCount = memories?.length || 0
+
+      // 获取最后活动时间
+      let lastActive = '无'
+      if (messages.length > 0) {
+        const lastMsg = messages[messages.length - 1]
+        if (lastMsg?.timestamp) {
+          const date = new Date(lastMsg.timestamp)
+          lastActive = date.toLocaleString('zh-CN')
+        }
+      }
+
+      const status = [
+        '📊 对话状态',
+        `━━━━━━━━━━━━`,
+        `💬 当前会话消息: ${messageCount} 条`,
+        `🧠 记忆条目: ${memoryCount} 条`,
+        `⏰ 最后活动: ${lastActive}`,
+        `━━━━━━━━━━━━`,
+        `💡 提示:`,
+        `  #结束对话 - 开始新会话`,
+        `  #清除记忆 - 清除记忆数据`
+      ].join('\n')
+
+      await e.reply(status, true)
+    } catch (error) {
+      logger.error('[AI-Chat] Status error:', error)
+      await e.reply('获取状态失败: ' + error.message, true)
     }
 
     return true

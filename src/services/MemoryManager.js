@@ -181,6 +181,79 @@ export class MemoryManager {
             return false
         }
     }
+
+    /**
+     * Get all memories for a user (alias for getAllMemories)
+     * @param {string} userId
+     */
+    async getMemories(userId) {
+        return this.getAllMemories(userId)
+    }
+
+    /**
+     * Clear all memories for a user
+     * @param {string} userId
+     */
+    async clearMemory(userId) {
+        try {
+            const indexDir = path.join(this.dataDir, userId)
+            
+            if (fs.existsSync(indexDir)) {
+                // 删除整个用户记忆目录
+                fs.rmSync(indexDir, { recursive: true, force: true })
+                // 从缓存中移除
+                this.indices.delete(userId)
+                logger.info(`[MemoryManager] Cleared all memories for user ${userId}`)
+            }
+            
+            return true
+        } catch (e) {
+            logger.error(`[MemoryManager] Failed to clear memory for user ${userId}`, e)
+            return false
+        }
+    }
+
+    /**
+     * Get memory statistics for a user
+     * @param {string} userId
+     */
+    async getStats(userId) {
+        const memories = await this.getAllMemories(userId)
+        return {
+            count: memories.length,
+            oldest: memories.length > 0 ? memories[memories.length - 1]?.timestamp : null,
+            newest: memories.length > 0 ? memories[0]?.timestamp : null
+        }
+    }
+
+    /**
+     * List all users with memories
+     * @returns {Promise<string[]>}
+     */
+    async listUsers() {
+        try {
+            if (!fs.existsSync(this.dataDir)) {
+                return []
+            }
+            const dirs = fs.readdirSync(this.dataDir, { withFileTypes: true })
+            return dirs
+                .filter(d => d.isDirectory())
+                .map(d => d.name)
+        } catch (e) {
+            logger.error('[MemoryManager] Failed to list users', e)
+            return []
+        }
+    }
+
+    /**
+     * Add a memory (alias for saveMemory)
+     * @param {string} userId
+     * @param {string} content
+     * @param {Object} metadata
+     */
+    async addMemory(userId, content, metadata = {}) {
+        return this.saveMemory(userId, content, metadata)
+    }
 }
 
 export const memoryManager = new MemoryManager()

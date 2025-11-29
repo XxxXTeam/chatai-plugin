@@ -72,6 +72,20 @@ class Config {
                 defaultChatPresetId: 'default',
                 embeddingModel: 'text-embedding-3-small',
                 dimensions: 1536,
+                // 模型分类配置
+                models: {
+                    // 对话模型 - 用于普通聊天
+                    chat: '',
+                    // 伪人模型 - 用于模拟真人回复
+                    roleplay: '',
+                    // 工具调用模型 - 用于 function calling
+                    toolCall: '',
+                    // 搜索模型 - 用于联网搜索
+                    search: '',
+                    // 思考模型 - 用于深度推理
+                    reasoning: ''
+                },
+                // 旧配置兼容
                 chatModel: '',
                 codeModel: '',
                 translationModel: '',
@@ -85,6 +99,17 @@ class Config {
                 model: '',
                 systemPrompt: '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。',
             },
+            builtinTools: {
+                enabled: true,
+                // 允许的工具列表，空数组表示允许所有
+                allowedTools: [],
+                // 禁用的工具列表
+                disabledTools: [],
+                // 危险工具需要确认
+                dangerousTools: ['kick_member', 'mute_member', 'recall_message'],
+                // 是否允许危险操作
+                allowDangerous: false
+            },
             channels: [],
             mcp: {
                 enabled: true,
@@ -92,7 +117,7 @@ class Config {
                     filesystem: {
                         type: 'stdio',
                         command: 'npx',
-                        args: ['-y', '@modelcontextprotocol/server-filesystem', '/home/chen/Desktop']
+                        args: ['-y', '@modelcontextprotocol/server-filesystem', '/']
                     }
                 }
             },
@@ -119,6 +144,15 @@ class Config {
             memory: {
                 enabled: false,
                 storage: 'file', // 'file', 'redis'
+            },
+            presets: {
+                // 默认预设 ID
+                defaultId: 'default',
+                // 是否允许用户切换预设
+                allowUserSwitch: true,
+                // 每个用户/群可以有独立的预设
+                perUserPreset: false,
+                perGroupPreset: false
             },
             loadBalancing: {
                 strategy: 'priority', // 'priority', 'round-robin', 'random'

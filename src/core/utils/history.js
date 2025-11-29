@@ -46,16 +46,10 @@ class DefaultHistoryManager {
         }
 
         // Find the message and return history up to that point
-        // Note: messageId matching might be tricky if we don't store original IDs or if they are generated.
-        // The current implementation assumes message objects have IDs.
-        // DatabaseService stores content as JSON, so if ID is in content/metadata, we need to check.
-        // But the previous implementation assumed 'msg.id'.
-        // Let's assume the message object passed to saveHistory had an ID and it's preserved in the JSON content or we need to look at DB ID.
-        // For now, let's filter the returned array.
-
         const index = history.findIndex(msg => msg.id === messageId)
         if (index === -1) {
-            return []
+            // If messageId not found, return full history (might be a new message just saved)
+            return history
         }
 
         return history.slice(0, index + 1)

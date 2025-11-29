@@ -37,27 +37,21 @@ let authKey = crypto.randomUUID()
 // Frontend Authentication Handler for temporary token-based auth
 class FrontendAuthHandler {
     constructor() {
-        this.currentToken = null
-        this.tokenExpiry = null
+        this.tokens = new Map() // 支持多个 token
     }
 
-    generateToken(timeout = 5 * 60, onetime = false) {
+    generateToken(timeout = 5 * 60) {
         const timestamp = Math.floor(Date.now() / 1000)
         const randomString = Math.random().toString(36).substring(2, 15)
         const token = `${timestamp}-${randomString}`
+        const expiry = Date.now() + timeout * 1000
 
-        if (!onetime) {
-            this.currentToken = token
-            this.tokenExpiry = Date.now() + timeout * 1000
+        this.tokens.set(token, expiry)
 
-            setTimeout(() => {
-                if (this.currentToken === token) {
-                    this.currentToken = null
-                    this.tokenExpiry = null
-                    logger.warn('[Auth] Token expired')
-                }
-            }, timeout * 1000)
-        }
+        // 自动清理过期 token
+        setTimeout(() => {
+            this.tokens.delete(token)
+        }, timeout * 1000)
 
         return token
     }
@@ -65,11 +59,10 @@ class FrontendAuthHandler {
     validateToken(token) {
         if (!token) return false
 
-        // Check if token matches and hasn't expired
-        if (this.currentToken === token && Date.now() < this.tokenExpiry) {
-            // One-time use - clear after validation
-            this.currentToken = null
-            this.tokenExpiry = null
+        const expiry = this.tokens.get(token)
+        if (expiry && Date.now() < expiry) {
+            // 验证成功后删除（一次性使用）
+            this.tokens.delete(token)
             return true
         }
 
@@ -79,12 +72,84 @@ class FrontendAuthHandler {
 
 const authHandler = new FrontendAuthHandler()
 
+// 获取本地和公网地址
+async function getServerAddresses(port) {
+    const addresses = {
+        local: [],
+        public: null
+    }
+    
+    // 获取本地地址
+    try {
+        const os = await import('node:os')
+        const interfaces = os.networkInterfaces()
+        for (const name of Object.keys(interfaces)) {
+            for (const iface of interfaces[name]) {
+                if (iface.family === 'IPv4' && !iface.internal) {
+                    addresses.local.push(`http://${iface.address}:${port}`)
+                }
+            }
+        }
+        // 添加 localhost
+        addresses.local.unshift(`http://127.0.0.1:${port}`)
+    } catch (e) {
+        addresses.local = [`http://127.0.0.1:${port}`]
+    }
+    
+    // 获取公网地址
+    try {
+        const https = await import('node:https')
+        const http = await import('node:http')
+        
+        const getPublicIP = () => new Promise((resolve) => {
+            const services = [
+                { url: 'https://api.ipify.org', https: true },
+                { url: 'https://icanhazip.com', https: true },
+                { url: 'http://ip-api.com/line/?fields=query', https: false }
+            ]
+            
+            let resolved = false
+            const timeout = setTimeout(() => {
+                if (!resolved) {
+                    resolved = true
+                    resolve(null)
+                }
+            }, 5000)
+            
+            for (const service of services) {
+                const client = service.https ? https : http
+                client.get(service.url, { timeout: 3000 }, (res) => {
+                    let data = ''
+                    res.on('data', chunk => data += chunk)
+                    res.on('end', () => {
+                        if (!resolved && data.trim()) {
+                            resolved = true
+                            clearTimeout(timeout)
+                            resolve(data.trim())
+                        }
+                    })
+                }).on('error', () => {})
+            }
+        })
+        
+        const publicIP = await getPublicIP()
+        if (publicIP && /^\d+\.\d+\.\d+\.\d+$/.test(publicIP)) {
+            addresses.public = `http://${publicIP}:${port}`
+        }
+    } catch (e) {
+        // 忽略公网获取失败
+    }
+    
+    return addresses
+}
+
 // Web server for management panel
 export class WebServer {
     constructor() {
         this.app = express()
         this.port = config.get('web.port') || 3000
         this.server = null
+        this.addresses = { local: [], public: null }
 
         this.setupMiddleware()
         this.setupRoutes()
@@ -165,6 +230,36 @@ export class WebServer {
 
     setupRoutes() {
         // ==================== Auth Routes ====================
+        // GET /login/token - Token-based login via URL (兼容方式)
+        this.app.get('/login/token', async (req, res) => {
+            const { token } = req.query
+
+            if (!token) {
+                return res.status(400).send('Token is required')
+            }
+
+            try {
+                const success = authHandler.validateToken(token)
+                if (success) {
+                    // Generate JWT for session
+                    const jwtToken = jwt.sign({
+                        authenticated: true,
+                        loginTime: Date.now()
+                    }, authKey, { expiresIn: '30d' })
+
+                    logger.info('[Auth] Login successful via URL token')
+                    
+                    // 重定向到前端，带上 token
+                    res.redirect(`/?auth_token=${jwtToken}`)
+                } else {
+                    res.status(401).send('Invalid or expired token. Please request a new login link.')
+                }
+            } catch (error) {
+                logger.error('[Auth] URL token login error:', error)
+                res.status(500).send('Login failed: ' + error.message)
+            }
+        })
+
         // POST /api/auth/login - Temporary token authentication
         this.app.post('/api/auth/login', async (req, res) => {
             const { token } = req.body
@@ -432,13 +527,65 @@ export class WebServer {
             }
         })
 
+        // GET /api/preset/:id/prompt - Get built system prompt for preset
+        this.app.get('/api/preset/:id/prompt', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                await presetManager.init()
+                const prompt = presetManager.buildSystemPrompt(req.params.id)
+                res.json(ChaiteResponse.ok({ prompt }))
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
+        })
+
+        // GET /api/presets/config - Get presets configuration
+        this.app.get('/api/presets/config', this.authMiddleware.bind(this), (req, res) => {
+            const presetsConfig = config.get('presets') || {
+                defaultId: 'default',
+                allowUserSwitch: true,
+                perUserPreset: false,
+                perGroupPreset: false
+            }
+            res.json(ChaiteResponse.ok(presetsConfig))
+        })
+
+        // PUT /api/presets/config - Update presets configuration
+        this.app.put('/api/presets/config', this.authMiddleware.bind(this), (req, res) => {
+            try {
+                const { defaultId, allowUserSwitch, perUserPreset, perGroupPreset } = req.body
+                
+                if (defaultId !== undefined) config.set('presets.defaultId', defaultId)
+                if (allowUserSwitch !== undefined) config.set('presets.allowUserSwitch', allowUserSwitch)
+                if (perUserPreset !== undefined) config.set('presets.perUserPreset', perUserPreset)
+                if (perGroupPreset !== undefined) config.set('presets.perGroupPreset', perGroupPreset)
+
+                // Also update llm.defaultChatPresetId for compatibility
+                if (defaultId !== undefined) config.set('llm.defaultChatPresetId', defaultId)
+
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
         // ==================== Channels API (Enhanced) ====================
         // GET /api/channels/list - List all channels
         this.app.get('/api/channels/list', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 await channelManager.init()
-                const channels = channelManager.getAll()
+                const channels = req.query.withStats ? channelManager.getAllWithStats() : channelManager.getAll()
                 res.json(ChaiteResponse.ok(channels))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/channels/stats - Get channel statistics
+        this.app.get('/api/channels/stats', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                await channelManager.init()
+                const stats = channelManager.getStats(req.query.id)
+                res.json(ChaiteResponse.ok(stats))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
@@ -747,6 +894,59 @@ export class WebServer {
             }
         })
 
+        // GET /api/tools/builtin/config - Get builtin tools configuration
+        this.app.get('/api/tools/builtin/config', this.authMiddleware.bind(this), (req, res) => {
+            const builtinConfig = config.get('builtinTools') || {
+                enabled: true,
+                allowedTools: [],
+                disabledTools: [],
+                dangerousTools: ['kick_member', 'mute_member', 'recall_message'],
+                allowDangerous: false
+            }
+            res.json(ChaiteResponse.ok(builtinConfig))
+        })
+
+        // PUT /api/tools/builtin/config - Update builtin tools configuration
+        this.app.put('/api/tools/builtin/config', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { enabled, allowedTools, disabledTools, dangerousTools, allowDangerous } = req.body
+                
+                if (enabled !== undefined) config.set('builtinTools.enabled', enabled)
+                if (allowedTools !== undefined) config.set('builtinTools.allowedTools', allowedTools)
+                if (disabledTools !== undefined) config.set('builtinTools.disabledTools', disabledTools)
+                if (dangerousTools !== undefined) config.set('builtinTools.dangerousTools', dangerousTools)
+                if (allowDangerous !== undefined) config.set('builtinTools.allowDangerous', allowDangerous)
+
+                // Refresh builtin tools
+                await mcpManager.refreshBuiltinTools()
+
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/tools/builtin/list - List only builtin tools
+        this.app.get('/api/tools/builtin/list', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                await mcpManager.init()
+                const tools = mcpManager.getTools().filter(t => t.isBuiltin)
+                res.json(ChaiteResponse.ok(tools))
+            } catch (error) {
+                res.json(ChaiteResponse.ok([]))
+            }
+        })
+
+        // POST /api/tools/builtin/refresh - Refresh builtin tools
+        this.app.post('/api/tools/builtin/refresh', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const tools = await mcpManager.refreshBuiltinTools()
+                res.json(ChaiteResponse.ok({ count: tools.length, tools }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
         // POST /api/tools/custom - Add custom tool (protected)
         this.app.post('/api/tools/custom', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -843,6 +1043,26 @@ export class WebServer {
                     result,
                     executedAt: Date.now()
                 }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/tools/logs - Get tool call logs
+        this.app.get('/api/tools/logs', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const logs = mcpManager.getToolLogs(req.query.tool, req.query.search)
+                res.json(ChaiteResponse.ok(logs))
+            } catch (error) {
+                res.json(ChaiteResponse.ok([]))
+            }
+        })
+
+        // DELETE /api/tools/logs - Clear tool logs
+        this.app.delete('/api/tools/logs', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                mcpManager.clearToolLogs()
+                res.json(ChaiteResponse.ok({ success: true }))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
@@ -955,6 +1175,66 @@ export class WebServer {
                 res.json(ChaiteResponse.ok(result))
             } catch (error) {
                 res.json(ChaiteResponse.error(error))
+            }
+        })
+
+        // ==================== Memory API ====================
+        // GET /api/memory/users - Get all users with memories
+        this.app.get('/api/memory/users', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { memoryManager } = await import('./MemoryManager.js')
+                const users = await memoryManager.listUsers()
+                res.json(ChaiteResponse.ok(users))
+            } catch (error) {
+                res.json(ChaiteResponse.ok([]))
+            }
+        })
+
+        // GET /api/memory/:userId - Get memories for a user
+        this.app.get('/api/memory/:userId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { memoryManager } = await import('./MemoryManager.js')
+                const memories = await memoryManager.getAllMemories(req.params.userId)
+                res.json(ChaiteResponse.ok(memories))
+            } catch (error) {
+                res.json(ChaiteResponse.ok([]))
+            }
+        })
+
+        // POST /api/memory - Add a memory
+        this.app.post('/api/memory', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { userId, content, metadata } = req.body
+                if (!userId || !content) {
+                    return res.status(400).json(ChaiteResponse.fail(null, 'userId and content are required'))
+                }
+                const { memoryManager } = await import('./MemoryManager.js')
+                const id = await memoryManager.addMemory(userId, content, metadata)
+                res.json(ChaiteResponse.ok({ id }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/memory/:userId/:memoryId - Delete a specific memory
+        this.app.delete('/api/memory/:userId/:memoryId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { memoryManager } = await import('./MemoryManager.js')
+                await memoryManager.deleteMemory(req.params.userId, req.params.memoryId)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/memory/:userId - Clear all memories for a user
+        this.app.delete('/api/memory/:userId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { memoryManager } = await import('./MemoryManager.js')
+                await memoryManager.clearMemory(req.params.userId)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
 
@@ -1196,114 +1476,6 @@ export class WebServer {
         })
 
 
-        // ==================== Chat API ====================
-        // POST /api/chat/send - Send chat message (protected)
-        this.app.post('/api/chat/send', this.authMiddleware.bind(this), async (req, res) => {
-            try {
-                const { chatService } = await import('./ChatService.js')
-                const { userId, message, images, model, preset } = req.body
-
-                if (!userId || !message) {
-                    return res.status(400).json(ChaiteResponse.fail(null, 'userId and message are required'))
-                }
-
-                const result = await chatService.sendMessage({
-                    userId,
-                    message,
-                    images: images || [],
-                    model,
-                    preset
-                })
-
-                res.json(ChaiteResponse.ok(result))
-            } catch (error) {
-                res.status(500).json(ChaiteResponse.fail(null, error.message))
-            }
-        })
-
-        // POST /api/chat/stream - Stream chat message (protected)
-        this.app.post('/api/chat/stream', this.authMiddleware.bind(this), async (req, res) => {
-            try {
-                const { chatService } = await import('./ChatService.js')
-                const { userId, message, images, model, preset } = req.body
-
-                if (!userId || !message) {
-                    return res.status(400).json(ChaiteResponse.fail(null, 'userId and message are required'))
-                }
-
-                // Set headers for SSE
-                res.setHeader('Content-Type', 'text/event-stream')
-                res.setHeader('Cache-Control', 'no-cache')
-                res.setHeader('Connection', 'keep-alive')
-                res.flushHeaders()
-
-                const stream = await chatService.streamMessage({
-                    userId,
-                    message,
-                    images: images || [],
-                    model,
-                    preset
-                })
-
-                for await (const chunk of stream) {
-                    res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`)
-                }
-
-                res.write('data: [DONE]\n\n')
-                res.end()
-            } catch (error) {
-                // If headers sent, we can't send JSON error, so we send SSE error
-                if (res.headersSent) {
-                    res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`)
-                    res.end()
-                } else {
-                    res.status(500).json(ChaiteResponse.fail(null, error.message))
-                }
-            }
-        })
-        this.app.get('/api/chat/history/:userId', this.authMiddleware.bind(this), async (req, res) => {
-            try {
-                const { chatService } = await import('./ChatService.js')
-                const limit = parseInt(req.query.limit) || 20
-                const history = await chatService.getHistory(req.params.userId, limit)
-                res.json(ChaiteResponse.ok(history))
-            } catch (error) {
-                res.status(500).json(ChaiteResponse.fail(null, error.message))
-            }
-        })
-
-        // DELETE /api/chat/history/:userId - Clear chat history (protected)
-        this.app.delete('/api/chat/history/:userId', this.authMiddleware.bind(this), async (req, res) => {
-            try {
-                const { chatService } = await import('./ChatService.js')
-                await chatService.clearHistory(req.params.userId)
-                res.json(ChaiteResponse.ok({ success: true, message: 'History cleared' }))
-            } catch (error) {
-                res.status(500).json(ChaiteResponse.fail(null, error.message))
-            }
-        })
-
-        // GET /api/chat/export/:userId - Export chat history (protected)
-        this.app.get('/api/chat/export/:userId', this.authMiddleware.bind(this), async (req, res) => {
-            try {
-                const { chatService } = await import('./ChatService.js')
-                const format = req.query.format || 'json'
-                const exported = await chatService.exportHistory(req.params.userId, format)
-
-                if (format === 'json') {
-                    res.setHeader('Content-Type', 'application/json')
-                    res.setHeader('Content-Disposition', `attachment; filename="chat_history_${req.params.userId}.json"`)
-                } else {
-                    res.setHeader('Content-Type', 'text/plain')
-                    res.setHeader('Content-Disposition', `attachment; filename="chat_history_${req.params.userId}.txt"`)
-                }
-
-                res.send(exported)
-            } catch (error) {
-                res.status(500).json(ChaiteResponse.fail(null, error.message))
-            }
-        })
-
         // ==================== Load Balancing Stats API ====================
         // GET /api/stats/load-balancing - Get load balancing stats
         this.app.get('/api/stats/load-balancing', this.authMiddleware.bind(this), async (req, res) => {
@@ -1370,6 +1542,96 @@ export class WebServer {
             }
         })
 
+        // ==================== Users API ====================
+        // GET /api/users/list - List all users with stats
+        this.app.get('/api/users/list', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { databaseService } = await import('./DatabaseService.js')
+                const users = databaseService.getUsers()
+                res.json(ChaiteResponse.ok(users))
+            } catch (error) {
+                res.json(ChaiteResponse.ok([]))
+            }
+        })
+
+        // GET /api/users/:userId - Get user details
+        this.app.get('/api/users/:userId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { databaseService } = await import('./DatabaseService.js')
+                const user = databaseService.getUser(req.params.userId)
+                if (user) {
+                    res.json(ChaiteResponse.ok(user))
+                } else {
+                    res.status(404).json(ChaiteResponse.fail(null, 'User not found'))
+                }
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // PUT /api/users/:userId/settings - Update user settings
+        this.app.put('/api/users/:userId/settings', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { databaseService } = await import('./DatabaseService.js')
+                databaseService.updateUserSettings(req.params.userId, req.body)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/users/:userId/data - Clear user data
+        this.app.delete('/api/users/:userId/data', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { databaseService } = await import('./DatabaseService.js')
+                databaseService.clearUserData(req.params.userId)
+                
+                // 也清除记忆
+                try {
+                    const { memoryManager } = await import('./MemoryManager.js')
+                    await memoryManager.clearMemory(req.params.userId)
+                } catch (e) {}
+                
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // ==================== Conversations API ====================
+        // GET /api/conversations/list - List all conversations
+        this.app.get('/api/conversations/list', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { databaseService } = await import('./DatabaseService.js')
+                const conversations = databaseService.getConversations()
+                res.json(ChaiteResponse.ok(conversations))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/conversations/:id/messages - Get messages for a conversation
+        this.app.get('/api/conversations/:id/messages', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { databaseService } = await import('./DatabaseService.js')
+                const messages = databaseService.getMessages(req.params.id, 100)
+                res.json(ChaiteResponse.ok(messages))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/conversations/:id - Delete a conversation
+        this.app.delete('/api/conversations/:id', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { databaseService } = await import('./DatabaseService.js')
+                databaseService.deleteConversation(req.params.id)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
         // ==================== Catch-all Route ====================
         // Serve index.html for all other routes
         this.app.get('*', (req, res) => {
@@ -1395,6 +1657,27 @@ export class WebServer {
     }
 
     /**
+     * Get server addresses
+     * @returns {{ local: string[], public: string | null }}
+     */
+    getAddresses() {
+        return this.addresses
+    }
+
+    /**
+     * Generate login URL with token
+     * @param {boolean} usePublic - 是否使用公网地址
+     * @returns {string}
+     */
+    generateLoginUrl(usePublic = false) {
+        const token = authHandler.generateToken(5 * 60, false)
+        const baseUrl = usePublic && this.addresses.public 
+            ? this.addresses.public 
+            : (this.addresses.local[0] || `http://127.0.0.1:${this.port}`)
+        return `${baseUrl}/login/token?token=${token}`
+    }
+
+    /**
      * Start web server
      */
     async start() {
@@ -1403,7 +1686,6 @@ export class WebServer {
                 const server = this.app.listen(port, () => {
                     this.port = port
                     this.server = server
-                    logger.info('[WebServer] 管理面板已启动: http://localhost:' + this.port)
                     resolve()
                 })
 
@@ -1419,7 +1701,16 @@ export class WebServer {
             })
         }
 
-        return tryListen(this.port)
+        await tryListen(this.port)
+        
+        // 获取服务器地址
+        this.addresses = await getServerAddresses(this.port)
+        
+        logger.info('[WebServer] 管理面板已启动')
+        logger.info(`[WebServer] 本地地址: ${this.addresses.local.join(', ')}`)
+        if (this.addresses.public) {
+            logger.info(`[WebServer] 公网地址: ${this.addresses.public}`)
+        }
     }
 
     /**

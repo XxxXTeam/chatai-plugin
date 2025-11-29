@@ -1,4 +1,5 @@
 import { mcpManager } from '../../mcp/McpManager.js'
+import config from '../../../config/config.js'
 
 /**
  * Convert MCP tools to Chaite tool format
@@ -64,41 +65,81 @@ export function convertMcpTools(mcpTools) {
 }
 
 /**
- * Get tools from multiple sources
- * @returns {Promise<Array>} - Combined tools from MCP and custom sources
+ * Get all tools from MCP Manager (including builtin tools)
+ * @param {Object} [options] - Options
+ * @param {Object} [options.event] - Yunzai event for context
+ * @returns {Promise<Array>} - All tools in Chaite format
  */
-export async function getAllTools() {
-    const tools = []
+export async function getAllTools(options = {}) {
+    const { event } = options
 
-    // Get MCP tools
+    // Set tool context if event is provided
+    if (event) {
+        mcpManager.setToolContext({ event, bot: event.bot || Bot })
+    }
+
+    // Initialize and get all tools (builtin + external MCP)
     try {
         await mcpManager.init()
         const mcpTools = mcpManager.getTools()
-        tools.push(...convertMcpTools(mcpTools))
+        return convertMcpTools(mcpTools)
     } catch (error) {
-        logger.error('[ToolAdapter] Failed to load MCP tools:', error)
+        logger.error('[ToolAdapter] Failed to load tools:', error)
+        return []
     }
-
-    // Add custom tools here if needed
-    // tools.push(...customTools)
-
-    return tools
 }
 
 /**
- * Execute a tool by name
+ * Execute a tool by name (directly through MCP Manager)
  * @param {string} toolName - Name of the tool
  * @param {Object} args - Tool arguments
  * @param {Object} context - Execution context
- * @returns {Promise<string>} - Tool result
+ * @param {Object} [options] - Options including event for context
+ * @returns {Promise<Object>} - Tool result in MCP format
  */
-export async function executeTool(toolName, args, context) {
-    const tools = await getAllTools()
-    const tool = tools.find(t => t.function.name === toolName)
+export async function executeTool(toolName, args, context, options = {}) {
+    const { event } = options
 
-    if (!tool) {
-        throw new Error(`Tool not found: ${toolName}`)
+    // Set tool context if event is provided
+    if (event) {
+        mcpManager.setToolContext({ event, bot: event.bot || Bot })
     }
 
-    return await tool.run(args, context)
+    await mcpManager.init()
+    return await mcpManager.callTool(toolName, args, options)
+}
+
+/**
+ * Get builtin tools only (for display/documentation)
+ * @returns {Array}
+ */
+export function getBuiltinToolsList() {
+    const tools = mcpManager.getTools()
+    return tools.filter(t => t.isBuiltin)
+}
+
+/**
+ * Check if a tool is dangerous
+ * @param {string} toolName 
+ * @returns {boolean}
+ */
+export function isDangerousTool(toolName) {
+    const builtinConfig = config.get('builtinTools') || {}
+    const dangerousTools = builtinConfig.dangerousTools || []
+    return dangerousTools.includes(toolName)
+}
+
+/**
+ * Set tool context for builtin tools
+ * @param {Object} ctx - Context with event and bot
+ */
+export function setToolContext(ctx) {
+    mcpManager.setToolContext(ctx)
+}
+
+/**
+ * Refresh builtin tools
+ */
+export async function refreshBuiltinTools() {
+    return await mcpManager.refreshBuiltinTools()
 }

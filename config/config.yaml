@@ -4,13 +4,19 @@ basic:
   commandPrefix: "#ai"
   debug: false
 llm:
-  defaultModel: gpt-4o-mini
-  defaultChatPresetId: default
-  embeddingModel: text-embedding-3-small
+  defaultModel: qwen3-max
+  defaultChatPresetId: fa6ce456-044d-4562-a9c6-9706a007c005
+  embeddingModel: qwen3-max
   dimensions: 1536
-  chatModel: ""
-  codeModel: ""
-  translationModel: ""
+  models:
+    chat: ""
+    roleplay: ""
+    toolCall: ""
+    search: ""
+    reasoning: ""
+  chatModel: qwen3-max
+  codeModel: qwen3-max
+  translationModel: qwen3-max
 bym:
   enable: false
   probability: 0.02
@@ -19,171 +25,23 @@ bym:
   recall: false
   model: ""
   systemPrompt: 你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。
+builtinTools:
+  enabled: true
+  allowedTools: []
+  disabledTools: []
+  dangerousTools:
+    - kick_member
+    - mute_member
+    - recall_message
+  allowDangerous: false
 channels:
   - id: openai-44dc5dab
     name: my
     adapterType: openai
     baseUrl: http://103.109.22.74:3000/v1
     apiKey: sk-lgrpDhWB7Mm5L521zGdwDO6JescMn9m7xtmQLkAgL0iMXf4h
-    apiKeys: []
-    strategy: round-robin
     models:
-      - qwen/qwq-32b
-      - AkashChat/openai-gpt-oss-120b
-      - Cerebras/gpt-oss-120b
-      - Deepinfra/openai/gpt-oss-120b
-      - GPT-5 Codex
-      - Groq/openai/gpt-oss-120b
-      - Groq/openai/gpt-oss-20b
-      - Highlight/gpt-4.1
-      - Highlight/gpt-4o
-      - Highlight/gpt-5
-      - Highlight/gpt-5-chat
-      - Highlight/gpt-5-mini
-      - Highlight/gpt-5-model-router
-      - Highlight/o3
-      - Highlight/o3-mini
-      - OpenAI/gpt-4.1-mini
-      - OpenAI/gpt-4.1-nano
-      - OpenAI/gpt-4o-mini
-      - Openrouter/openai/gpt-oss-20b
-      - Warp/gpt-4.1
-      - Warp/gpt-4o
-      - Warp/gpt-5
-      - Warp/gpt-5 (high reasoning)
-      - Warp/o3
-      - chatgpt-4o-latest
-      - davinci-002
-      - gpt-3.5-turbo
-      - gpt-3.5-turbo-0125
-      - gpt-3.5-turbo-0301
-      - gpt-3.5-turbo-0613
-      - gpt-3.5-turbo-1106
-      - gpt-3.5-turbo-16k
-      - gpt-3.5-turbo-16k-0613
-      - gpt-3.5-turbo-instruct
-      - gpt-3.5-turbo-instruct-0914
-      - gpt-4
-      - gpt-4-0125-preview
-      - gpt-4-0613
-      - gpt-4-1
-      - gpt-4-1-mini
-      - gpt-4-1106-preview
-      - gpt-4-5
-      - gpt-4-turbo
-      - gpt-4-turbo-2024-04-09
-      - gpt-4-turbo-preview
-      - gpt-4-vision-preview
-      - gpt-4.1
-      - gpt-4.1-2025-04-14
-      - gpt-4.1-mini
-      - gpt-4.1-mini-2025-04-14
-      - gpt-4.1-nano
-      - gpt-4.1-nano-2025-04-14
-      - gpt-4o
-      - gpt-4o-2024-05-13
-      - gpt-4o-2024-08-06
-      - gpt-4o-2024-11-20
-      - gpt-4o-audio-preview
-      - gpt-4o-audio-preview-2024-10-01
-      - gpt-4o-audio-preview-2024-12-17
-      - gpt-4o-audio-preview-2025-06-03
-      - gpt-4o-image
-      - gpt-4o-mini
-      - gpt-4o-mini-2024-07-18
-      - gpt-4o-mini-audio-preview
-      - gpt-4o-mini-audio-preview-2024-12-17
-      - gpt-4o-mini-search-preview
-      - gpt-4o-mini-search-preview-2025-03-11
-      - gpt-4o-mini-transcribe
-      - gpt-4o-mini-tts
-      - gpt-4o-search-preview
-      - gpt-4o-search-preview-2025-03-11
-      - gpt-4o-transcribe
-      - gpt-4o-transcribe-diarize
-      - gpt-5
-      - gpt-5 (high reasoning)
-      - gpt-5-2025-08-07
-      - gpt-5-chat
-      - gpt-5-chat-latest
-      - gpt-5-codex
-      - gpt-5-codex-high
-      - gpt-5-codex-low
-      - gpt-5-codex-low-low
-      - gpt-5-codex-medium
-      - gpt-5-codex-medium-medium
-      - gpt-5-codex-mini
-      - gpt-5-codex-mini-high
-      - gpt-5-codex-mini-medium
-      - gpt-5-high
-      - gpt-5-low
-      - gpt-5-medium
-      - gpt-5-mini
-      - gpt-5-mini-2025-08-07
-      - gpt-5-minimal
-      - gpt-5-nano
-      - gpt-5-nano-2025-08-07
-      - gpt-5-pro
-      - gpt-5-pro-2025-10-06
-      - gpt-5-search-api
-      - gpt-5-search-api-2025-10-14
-      - gpt-5-thinking
-      - gpt-5.1
-      - gpt-5.1-2025-11-13
-      - gpt-5.1-chat-latest
-      - gpt-5.1-codex
-      - gpt-5.1-codex-high
-      - gpt-5.1-codex-low
-      - gpt-5.1-codex-max
-      - gpt-5.1-codex-medium
-      - gpt-5.1-codex-mini
-      - gpt-5.1-codex-mini-high
-      - gpt-5.1-codex-mini-medium
-      - gpt-5.1-high
-      - gpt-5.1-low
-      - gpt-5.1-medium
-      - gpt-5.1-none
-      - gpt-audio
-      - gpt-audio-2025-08-28
-      - gpt-audio-mini
-      - gpt-audio-mini-2025-10-06
-      - gpt-image-1
-      - gpt-image-1-mini
-      - gpt-oss-120b
-      - gpt-oss-120b-medium
-      - gpt-oss-20b
-      - gpt-oss:120b
-      - gpt3.5-turbo
-      - gpt4.1
-      - gpt4.1-mini
-      - gpt4.1-nano
-      - gpt4o
-      - gpt4o-mini
-      - o1
-      - o1-2024-12-17
-      - o1-mini
-      - o1-mini-2024-09-12
-      - o1-pro
-      - o3
-      - o3-2025-04-16
-      - o3-mini
-      - o3-mini-2025-01-31
-      - o3-mini-2025-01-31-high
-      - o3-mini-all
-      - o3-mini-high
-      - o3-pro
-      - openai-gpt-4o
-      - openai-gpt4.1
-      - openai-o1
-      - openai-o3
-      - openai-o3-mini
-      - openai/gpt-5
-      - openai/gpt-oss-120b
-      - openai/gpt-oss-20b
-      - openai/gpt-oss-20b:free
-      - opengpt-x/teuken-7b-instruct-commercial-v0.4
-      - veo3
-      - veo3-pro-frames
+      - qwen3-max
     priority: 1
     enabled: true
     advanced:
@@ -201,6 +59,10 @@ channels:
         topP: 1
         frequencyPenalty: 0
         presencePenalty: 0
+    apiKeys:
+      - key: sk-lgrpDhWB7Mm5L521zGdwDO6JescMn9m7xtmQLkAgL0iMXf4h
+        enabled: true
+    strategy: round-robin
 mcp:
   enabled: true
   servers: []
@@ -228,6 +90,11 @@ context:
 memory:
   enabled: true
   storage: file
+presets:
+  defaultId: fa6ce456-044d-4562-a9c6-9706a007c005
+  allowUserSwitch: true
+  perUserPreset: false
+  perGroupPreset: false
 loadBalancing:
   strategy: round-robin
 thinking:

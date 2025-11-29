@@ -9,6 +9,7 @@ export class ChannelManager {
     constructor() {
         this.channels = new Map()
         this.activeRequests = new Map()
+        this.channelStats = new Map() // 渠道使用统计
         this.initialized = false
     }
 
@@ -482,6 +483,78 @@ export class ChannelManager {
             }))
 
         config.set('channels', channelsArray)
+    }
+
+    /**
+     * 记录渠道使用
+     * @param {string} channelId 
+     * @param {Object} usage { tokens, success, duration }
+     */
+    recordUsage(channelId, usage = {}) {
+        let stats = this.channelStats.get(channelId)
+        if (!stats) {
+            stats = {
+                totalCalls: 0,
+                successCalls: 0,
+                failedCalls: 0,
+                totalTokens: 0,
+                totalDuration: 0,
+                lastUsed: null
+            }
+            this.channelStats.set(channelId, stats)
+        }
+
+        stats.totalCalls++
+        if (usage.success !== false) {
+            stats.successCalls++
+        } else {
+            stats.failedCalls++
+        }
+        if (usage.tokens) {
+            stats.totalTokens += usage.tokens
+        }
+        if (usage.duration) {
+            stats.totalDuration += usage.duration
+        }
+        stats.lastUsed = Date.now()
+    }
+
+    /**
+     * 获取渠道统计
+     * @param {string} channelId 
+     */
+    getStats(channelId) {
+        if (channelId) {
+            return this.channelStats.get(channelId) || null
+        }
+        // 返回所有统计
+        const allStats = {}
+        for (const [id, stats] of this.channelStats) {
+            allStats[id] = stats
+        }
+        return allStats
+    }
+
+    /**
+     * 获取所有渠道及其统计
+     */
+    getAllWithStats() {
+        return Array.from(this.channels.values()).map(ch => ({
+            ...ch,
+            stats: this.channelStats.get(ch.id) || {
+                totalCalls: 0,
+                successCalls: 0,
+                failedCalls: 0,
+                totalTokens: 0
+            }
+        }))
+    }
+
+    /**
+     * 清空统计
+     */
+    clearStats() {
+        this.channelStats.clear()
     }
 }
 
