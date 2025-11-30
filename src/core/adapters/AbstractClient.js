@@ -107,7 +107,7 @@ export class AbstractClient {
             if (modelResponse.toolCalls && modelResponse.toolCalls.length > 0) {
                 // 初始化工具调用追踪
                 if (!options.toolCallDepth) options.toolCallDepth = 0
-                if (!options.toolCallHistory) options.toolCallHistory = new Set()
+                if (!options.toolCallHistory) options.toolCallHistory = new Map() // 存储调用签名 -> 结果
                 if (!options.toolCallLogs) options.toolCallLogs = []
                 
                 options.toolCallDepth++
@@ -139,17 +139,17 @@ export class AbstractClient {
                     
                     // 检查是否重复调用（相同工具+相同参数）
                     if (options.toolCallHistory.has(callSignature)) {
-                        this.logger.warn(`[Tool] 检测到重复调用: ${fcName}，跳过`)
+                        const previousResult = options.toolCallHistory.get(callSignature)
+                        this.logger.warn(`[Tool] 检测到重复调用: ${fcName}，返回缓存结果`)
                         toolCallResults.push({
                             tool_call_id: toolCall.id,
-                            content: '[重复调用已跳过]',
+                            content: `[此工具已调用过，以下是之前的结果]\n${previousResult}`,
                             type: 'tool',
                             name: fcName,
                         })
                         continue
                     }
                     
-                    options.toolCallHistory.add(callSignature)
                     hasNewToolCall = true
 
                     if (tool) {
@@ -178,6 +178,9 @@ export class AbstractClient {
                             isError
                         })
                         
+                        // 存储工具调用结果用于重复检测
+                        options.toolCallHistory.set(callSignature, toolResult)
+                        
                         toolCallResults.push({
                             tool_call_id: toolCall.id,
                             content: toolResult,
@@ -197,16 +200,9 @@ export class AbstractClient {
 
                 options.toolCallLogs.push(...toolCallLogs)
 
-                // 如果没有新的工具调用（全部重复），直接返回
+                // 如果没有新的工具调用（全部重复），仍需推送结果给LLM让其生成最终回复
                 if (!hasNewToolCall) {
-                    this.logger.warn('[Tool] 所有工具调用均为重复，停止递归')
-                    return {
-                        id: modelResponse.id,
-                        model: options.model,
-                        contents: [{ type: 'text', text: '检测到重复的工具调用，已自动停止。' }],
-                        usage: modelResponse.usage,
-                        toolCallLogs: options.toolCallLogs,
-                    }
+                    this.logger.warn('[Tool] 所有工具调用均为重复，推送跳过结果给LLM并禁用工具')
                 }
 
                 const tcMsgId = crypto.randomUUID()
@@ -219,8 +215,12 @@ export class AbstractClient {
                 options.parentMessageId = tcMsgId
                 await this.historyManager.saveHistory(toolCallResultMessage, options.conversationId)
 
-                // Reset toolChoice to auto
-                options.toolChoice = { type: 'auto' }
+                // 如果全部重复，禁用工具调用强制LLM生成文本回复；否则重置为auto
+                if (!hasNewToolCall) {
+                    options.toolChoice = { type: 'none' }
+                } else {
+                    options.toolChoice = { type: 'auto' }
+                }
                 return await this.sendMessage(undefined, options)
             }
 

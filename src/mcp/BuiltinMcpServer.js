@@ -568,6 +568,7 @@ export class BuiltinMcpServer {
                     const friend = bot.fl?.get(userId)
                     if (friend) {
                         return {
+                            success: true,
                             user_id: userId,
                             nickname: friend.nickname,
                             remark: friend.remark || '',
@@ -582,6 +583,7 @@ export class BuiltinMcpServer {
                         const stranger = await bot.getStrangerInfo(userId)
                         if (stranger) {
                             return {
+                                success: true,
                                 user_id: userId,
                                 nickname: stranger.nickname,
                                 sex: stranger.sex,
@@ -594,7 +596,12 @@ export class BuiltinMcpServer {
                         // ignore
                     }
 
-                    return { error: '无法获取用户信息', user_id: userId }
+                    return { 
+                        success: false, 
+                        error: '无法获取用户信息，QQ号可能不存在', 
+                        user_id: userId,
+                        avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
+                    }
                 }
             },
 
@@ -624,14 +631,14 @@ export class BuiltinMcpServer {
                         count++
                     }
 
-                    return { total: fl.size, returned: friends.length, friends }
+                    return { success: true, total: fl.size, returned: friends.length, friends }
                 }
             },
 
             // ==================== 群组信息工具 ====================
             {
                 name: 'get_group_info',
-                description: '获取群组的基本信息',
+                description: '获取群组的基本信息，包括群名、成员数量等。如果机器人不在该群，将返回有限信息。',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -643,31 +650,49 @@ export class BuiltinMcpServer {
                     const bot = ctx.getBot()
                     const groupId = parseInt(args.group_id)
                     
-                    // 从群列表获取信息
+                    // 从群列表获取信息（机器人已加入的群）
                     const groupInfo = bot.gl?.get(groupId)
-                    if (!groupInfo) {
-                        // 尝试通过 pickGroup 获取
-                        const group = bot.pickGroup(groupId)
-                        // group.info 是同步属性
-                        const info = group.info || {}
+                    if (groupInfo) {
                         return {
+                            success: true,
                             group_id: groupId,
-                            group_name: info.group_name || '未知',
-                            member_count: info.member_count,
-                            max_member_count: info.max_member_count,
-                            owner_id: info.owner_id,
-                            avatar_url: `https://p.qlogo.cn/gh/${groupId}/${groupId}/640`
+                            group_name: groupInfo.group_name,
+                            member_count: groupInfo.member_count,
+                            max_member_count: groupInfo.max_member_count,
+                            owner_id: groupInfo.owner_id,
+                            admin_flag: groupInfo.admin_flag,
+                            create_time: groupInfo.create_time,
+                            avatar_url: `https://p.qlogo.cn/gh/${groupId}/${groupId}/640`,
+                            bot_in_group: true
                         }
                     }
-
+                    
+                    // 机器人不在该群，尝试获取有限信息
+                    try {
+                        const group = bot.pickGroup(groupId)
+                        const info = group.info || {}
+                        if (info.group_name || info.member_count) {
+                            return {
+                                success: true,
+                                group_id: groupId,
+                                group_name: info.group_name || '未知',
+                                member_count: info.member_count || null,
+                                max_member_count: info.max_member_count || null,
+                                owner_id: info.owner_id || null,
+                                avatar_url: `https://p.qlogo.cn/gh/${groupId}/${groupId}/640`,
+                                bot_in_group: false,
+                                note: '机器人不在此群内，信息可能不完整'
+                            }
+                        }
+                    } catch (e) {
+                        // ignore
+                    }
+                    
+                    // 无法获取群信息
                     return {
+                        success: false,
                         group_id: groupId,
-                        group_name: groupInfo.group_name,
-                        member_count: groupInfo.member_count,
-                        max_member_count: groupInfo.max_member_count,
-                        owner_id: groupInfo.owner_id,
-                        admin_flag: groupInfo.admin_flag,
-                        create_time: groupInfo.create_time,
+                        error: '无法获取群信息，机器人可能不在此群内或群号不存在',
                         avatar_url: `https://p.qlogo.cn/gh/${groupId}/${groupId}/640`
                     }
                 }
@@ -699,13 +724,13 @@ export class BuiltinMcpServer {
                         count++
                     }
 
-                    return { total: gl.size, returned: groups.length, groups }
+                    return { success: true, total: gl.size, returned: groups.length, groups }
                 }
             },
 
             {
                 name: 'get_group_member_list',
-                description: '获取群成员列表',
+                description: '获取群成员列表。注意：只有机器人已加入的群才能获取成员列表。',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -718,6 +743,19 @@ export class BuiltinMcpServer {
                     const bot = ctx.getBot()
                     const groupId = parseInt(args.group_id)
                     const limit = args.limit || 100
+                    
+                    // 首先检查机器人是否在该群内
+                    const groupInfo = bot.gl?.get(groupId)
+                    if (!groupInfo) {
+                        return {
+                            success: false,
+                            group_id: groupId,
+                            total: 0,
+                            returned: 0,
+                            members: [],
+                            error: '机器人不在此群内，无法获取成员列表。请确认群号正确且机器人已加入该群。'
+                        }
+                    }
                     
                     // 兼容多种 API
                     let memberList = []
@@ -738,7 +776,14 @@ export class BuiltinMcpServer {
                             }
                         }
                     } catch (e) {
-                        return { error: `获取群成员列表失败: ${e.message}`, group_id: groupId }
+                        return { 
+                            success: false, 
+                            error: `获取群成员列表失败: ${e.message}`, 
+                            group_id: groupId,
+                            total: 0,
+                            returned: 0,
+                            members: []
+                        }
                     }
 
                     const members = memberList.slice(0, limit).map(m => ({
@@ -749,13 +794,20 @@ export class BuiltinMcpServer {
                         title: m.title || '',
                     }))
 
-                    return { group_id: groupId, total: memberList.length, returned: members.length, members }
+                    return { 
+                        success: true,
+                        group_id: groupId, 
+                        group_name: groupInfo.group_name,
+                        total: memberList.length, 
+                        returned: members.length, 
+                        members 
+                    }
                 }
             },
 
             {
                 name: 'get_group_member_info',
-                description: '获取群成员的详细信息',
+                description: '获取群成员的详细信息。需要机器人在该群内才能获取。',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -768,6 +820,19 @@ export class BuiltinMcpServer {
                     const bot = ctx.getBot()
                     const groupId = parseInt(args.group_id)
                     const userId = parseInt(args.user_id)
+                    
+                    // 检查机器人是否在群内
+                    const groupInfo = bot.gl?.get(groupId)
+                    if (!groupInfo) {
+                        return {
+                            success: false,
+                            group_id: groupId,
+                            user_id: userId,
+                            error: '机器人不在此群内，无法获取成员信息',
+                            avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
+                        }
+                    }
+                    
                     const group = bot.pickGroup(groupId)
                     
                     // 使用 pickMember 获取成员信息
@@ -786,8 +851,20 @@ export class BuiltinMcpServer {
                             // ignore
                         }
                     }
+                    
+                    // 检查是否获取到有效信息
+                    if (!member.nickname && !member.card) {
+                        return {
+                            success: false,
+                            group_id: groupId,
+                            user_id: userId,
+                            error: '该用户可能不在此群内',
+                            avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
+                        }
+                    }
 
                     return {
+                        success: true,
                         group_id: groupId,
                         user_id: userId,
                         nickname: member.nickname || '未知',

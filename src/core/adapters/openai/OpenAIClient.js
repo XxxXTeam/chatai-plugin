@@ -69,6 +69,9 @@ export class OpenAIClient extends AbstractClient {
             switch (options.toolChoice.type) {
                 case 'auto':
                     break
+                case 'none':
+                    toolChoice = 'none'
+                    break
                 case 'any':
                     toolChoice = 'required'
                     break
@@ -87,7 +90,9 @@ export class OpenAIClient extends AbstractClient {
             }
         }
 
-        const tools = this.tools.map(toolConvert)
+        // 当 toolChoice 为 'none' 时，完全不传递 tools 参数，强制LLM只生成文本
+        const shouldDisableTools = toolChoice === 'none'
+        const tools = shouldDisableTools ? [] : this.tools.map(toolConvert)
 
         const requestPayload = {
             temperature: options.temperature,
@@ -226,13 +231,43 @@ export class OpenAIClient extends AbstractClient {
         }
 
         const toolConvert = getFromChaiteToolConverter('openai')
-        const tools = this.tools.map(toolConvert)
+        let toolChoice = 'auto'
+
+        if (options.toolChoice?.type) {
+            switch (options.toolChoice.type) {
+                case 'auto':
+                    break
+                case 'none':
+                    toolChoice = 'none'
+                    break
+                case 'any':
+                    toolChoice = 'required'
+                    break
+                case 'specified': {
+                    if (!options.toolChoice.tools || options.toolChoice.tools.length === 0) {
+                        throw new Error('`toolChoice.tools` must be set if `toolChoice.type` is set to `specified`')
+                    }
+                    toolChoice = {
+                        type: 'function',
+                        function: {
+                            name: options.toolChoice.tools[0],
+                        },
+                    }
+                    break
+                }
+            }
+        }
+
+        // 当 toolChoice 为 'none' 时，完全不传递 tools 参数，强制LLM只生成文本
+        const shouldDisableTools = toolChoice === 'none'
+        const tools = shouldDisableTools ? [] : this.tools.map(toolConvert)
 
         const requestPayload = {
             temperature: options.temperature,
             messages,
             model,
             tools: tools.length > 0 ? tools : undefined,
+            tool_choice: tools.length > 0 ? toolChoice : undefined,
             stream: true,
         }
 
