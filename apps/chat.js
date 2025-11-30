@@ -119,16 +119,16 @@ export class Chat extends plugin {
       const userId = e.user_id || e.sender?.user_id || 'unknown'
       const groupId = e.group_id || (e.isGroup ? e.group_id : null)
 
-      // 检查用户是否被封禁
+      // Build unique user ID (combine user + group if in group)
+      const fullUserId = groupId ? `${groupId}_${userId}` : String(userId)
+
+      // 检查用户是否被封禁（检查 userId 和 fullUserId）
       const { databaseService } = await import('../src/services/DatabaseService.js')
       databaseService.init()
-      if (databaseService.isUserBlocked(String(userId))) {
-        logger.info(`[AI-Chat] 用户 ${userId} 已被封禁`)
+      if (databaseService.isUserBlocked(String(userId)) || databaseService.isUserBlocked(fullUserId)) {
+        logger.info(`[AI-Chat] 用户 ${fullUserId} 已被封禁`)
         return false // 静默忽略
       }
-
-      // Build unique user ID (combine user + group if in group)
-      const fullUserId = groupId ? `${groupId}_${userId}` : userId
 
       // Process images - 直接使用图片URL
       let imageUrls = []

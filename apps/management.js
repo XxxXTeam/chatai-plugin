@@ -48,8 +48,51 @@ export class management extends plugin {
     }
 
     /**
-   * 管理面板 - 生成临时token和登录链接
-   */
+     * 检查是否是主人
+     */
+    isMasterUser(userId) {
+        // 优先使用插件配置的主人列表
+        const pluginMasters = config.get('admin.masterQQ') || []
+        if (pluginMasters.length > 0) {
+            return pluginMasters.includes(String(userId)) || pluginMasters.includes(Number(userId))
+        }
+        // 回退到 Yunzai 全局配置
+        const yunzaiMasters = global.Bot?.config?.master || []
+        return yunzaiMasters.includes(String(userId)) || yunzaiMasters.includes(Number(userId))
+    }
+
+    /**
+     * 获取主人 QQ 列表
+     */
+    getMasterList() {
+        const pluginMasters = config.get('admin.masterQQ') || []
+        if (pluginMasters.length > 0) {
+            return pluginMasters
+        }
+        return global.Bot?.config?.master || []
+    }
+
+    /**
+     * 私聊发送消息给主人
+     */
+    async sendPrivateToMaster(bot, message) {
+        const masters = this.getMasterList()
+        for (const masterId of masters) {
+            try {
+                if (bot.pickFriend) {
+                    await bot.pickFriend(masterId).sendMsg(message)
+                } else if (bot.sendPrivateMsg) {
+                    await bot.sendPrivateMsg(masterId, message)
+                }
+            } catch (err) {
+                logger.warn(`[AI-管理] 私聊推送给 ${masterId} 失败:`, err.message)
+            }
+        }
+    }
+
+    /**
+     * 管理面板 - 生成临时token和登录链接
+     */
     async managementPanel(e) {
         const webServer = getWebServer()
         const addresses = webServer.getAddresses()
@@ -75,7 +118,16 @@ export class management extends plugin {
         messages.push('链接有效期: 5分钟')
         messages.push('点击链接即可自动登录')
 
-        await e.reply(messages.join('\n'), true)
+        const loginNotifyPrivate = config.get('admin.loginNotifyPrivate') !== false
+        
+        // 如果配置了私聊推送且在群聊中触发
+        if (loginNotifyPrivate && e.isGroup) {
+            await e.reply('登录链接已私聊发送，请查收', true)
+            await this.sendPrivateToMaster(e.bot, messages.join('\n'))
+        } else {
+            await e.reply(messages.join('\n'), true)
+        }
+        
         return true
     }
 

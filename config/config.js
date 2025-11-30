@@ -75,10 +75,15 @@ class Config {
                     recallError: true,     // 是否撤回错误消息
                 },
             },
+            admin: {
+                masterQQ: [],              // 主人QQ列表，留空使用Yunzai配置
+                loginNotifyPrivate: true,  // 登录链接私聊推送
+                sensitiveCommandMasterOnly: true, // 敏感命令仅主人可用
+            },
             llm: {
-                defaultModel: 'gpt-4o-mini',
+                defaultModel: 'gemini-3-pro-preview',
                 defaultChatPresetId: 'default',
-                embeddingModel: 'text-embedding-3-small',
+                embeddingModel: 'gemini-3-pro-preview',
                 dimensions: 1536,
                 // 模型分类配置
                 models: {

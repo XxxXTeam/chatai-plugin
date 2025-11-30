@@ -273,11 +273,31 @@ class DatabaseService {
     }
 
     /**
-     * 获取所有用户列表（从会话中提取）
+     * 获取所有用户列表（从会话和用户设置中提取）
      */
     getUsers() {
-        // 从 conversation_id 中提取用户信息
-        // conversation_id 格式通常是 userId 或 groupId_userId
+        const userMap = new Map()
+        
+        // 1. 先从 user_settings 文件加载所有已设置的用户
+        const allSettings = this._loadUserSettings()
+        for (const [key, settings] of Object.entries(allSettings)) {
+            // 移除 user: 前缀获取真实 userId
+            const userId = key.startsWith('user:') ? key.slice(5) : key
+            if (!userMap.has(userId)) {
+                userMap.set(userId, {
+                    userId,
+                    nickname: null,
+                    conversationCount: 0,
+                    messageCount: 0,
+                    firstActivity: null,
+                    lastActivity: null,
+                    blocked: settings.blocked || false,
+                    settings
+                })
+            }
+        }
+        
+        // 2. 从数据库消息中提取用户信息
         const stmt = this.db.prepare(`
             SELECT 
                 conversation_id,
@@ -290,7 +310,6 @@ class DatabaseService {
         `)
         
         const rows = stmt.all()
-        const userMap = new Map()
         
         for (const row of rows) {
             // 解析 userId
@@ -298,7 +317,6 @@ class DatabaseService {
             const userId = parts.length > 1 ? parts[parts.length - 1] : parts[0]
             
             if (!userMap.has(userId)) {
-                const userSettings = this.getUserSettings(userId)
                 userMap.set(userId, {
                     userId,
                     nickname: null,
@@ -306,18 +324,18 @@ class DatabaseService {
                     messageCount: 0,
                     firstActivity: row.first_activity,
                     lastActivity: row.last_activity,
-                    blocked: userSettings.blocked || false,
-                    settings: userSettings
+                    blocked: this.isUserBlocked(userId),
+                    settings: {}
                 })
             }
             
             const user = userMap.get(userId)
             user.conversationCount++
             user.messageCount += row.message_count
-            if (row.last_activity > user.lastActivity) {
+            if (!user.lastActivity || row.last_activity > user.lastActivity) {
                 user.lastActivity = row.last_activity
             }
-            if (row.first_activity < user.firstActivity) {
+            if (!user.firstActivity || row.first_activity < user.firstActivity) {
                 user.firstActivity = row.first_activity
             }
         }
@@ -392,8 +410,20 @@ class DatabaseService {
      * 检查用户是否被封禁
      */
     isUserBlocked(userId) {
-        const settings = this.getUserSettings(userId)
-        return settings.blocked === true
+        // 检查多种可能的 key 格式
+        const keysToCheck = [
+            userId,
+            `user:${userId}`,
+            userId.replace('user:', '')  // 如果传入的是带前缀的
+        ]
+        
+        for (const key of keysToCheck) {
+            const settings = this.getUserSettings(key)
+            if (settings.blocked === true) {
+                return true
+            }
+        }
+        return false
     }
 
     /**

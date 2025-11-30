@@ -27,9 +27,13 @@ const config = reactive({
       recallError: true
     }
   },
+  admin: {
+    masterQQ: [],
+    loginNotifyPrivate: true,
+    sensitiveCommandMasterOnly: true
+  },
   llm: {
     defaultModel: '',
-    embeddingModel: 'text-embedding-3-small',
     models: {
       chat: '',
       roleplay: '',
@@ -78,6 +82,22 @@ const config = reactive({
 const allModels = ref([])
 const showModelSelector = ref(false)
 const currentModelTarget = ref('defaultModel') // 当前选择模型的目标字段
+const masterQQInput = ref('') // 主人QQ输入框
+
+// 解析主人QQ输入
+function parseMasterQQ() {
+  const input = masterQQInput.value.trim()
+  if (!input) {
+    config.admin.masterQQ = []
+  } else {
+    config.admin.masterQQ = input.split(/[,，\s]+/).filter(Boolean)
+  }
+}
+
+// 格式化主人QQ显示
+function formatMasterQQ() {
+  masterQQInput.value = (config.admin.masterQQ || []).join(', ')
+}
 
 async function fetchConfig() {
   loading.value = true
@@ -99,6 +119,7 @@ async function fetchConfig() {
           Object.assign(config.llm.models, data.llm.models)
         }
       }
+      if (data.admin) Object.assign(config.admin, data.admin)
       if (data.bym) Object.assign(config.bym, data.bym)
       if (data.tools) Object.assign(config.tools, data.tools)
       if (data.thinking) Object.assign(config.thinking, data.thinking)
@@ -120,6 +141,9 @@ async function fetchConfig() {
         })
         allModels.value = Array.from(models).sort()
       }
+      
+      // 格式化主人QQ显示
+      formatMasterQQ()
     }
   } catch (err) {
     message.error('加载配置失败: ' + err.message)
@@ -133,6 +157,7 @@ async function saveConfig() {
   try {
     const payload = {
       basic: { ...config.basic },
+      admin: { ...config.admin },
       llm: { ...config.llm },
       bym: { ...config.bym },
       tools: { ...config.tools },
@@ -276,6 +301,31 @@ onMounted(() => {
       </n-form>
     </n-card>
 
+    <!-- 管理配置 -->
+    <n-card title="管理配置">
+      <n-form label-placement="left" label-width="140">
+        <n-form-item label="主人QQ">
+          <n-input v-model:value="masterQQInput" placeholder="多个用逗号分隔，留空使用Yunzai配置" @blur="parseMasterQQ" />
+        </n-form-item>
+        <n-form-item label="登录链接私聊推送">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.admin.loginNotifyPrivate" />
+            </template>
+            开启后，群聊中触发管理面板命令时会私聊推送登录链接
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="敏感命令仅主人">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.admin.sensitiveCommandMasterOnly" />
+            </template>
+            开启后，敏感命令（如管理面板）仅限主人使用
+          </n-tooltip>
+        </n-form-item>
+      </n-form>
+    </n-card>
+
     <!-- 模型配置 -->
     <n-card title="模型配置">
       <n-form label-placement="left" label-width="140">
@@ -325,11 +375,6 @@ onMounted(() => {
           </n-input>
         </n-form-item>
         
-        <n-divider title-placement="left">其他配置</n-divider>
-        
-        <n-form-item label="嵌入模型">
-          <n-input v-model:value="config.llm.embeddingModel" placeholder="text-embedding-3-small" />
-        </n-form-item>
       </n-form>
     </n-card>
 

@@ -85,22 +85,33 @@ export class LlmService {
     }
 
     /**
-     * Create a client for embeddings
+     * Create a client for embeddings (使用默认模型的渠道)
      */
     static async getEmbeddingClient() {
-        // Use OpenAI config for embeddings for now
-        const apiKey = config.get('openai.apiKey')
-        const baseUrl = config.get('openai.baseUrl')
-
-        if (!apiKey) {
-            throw new Error('OpenAI API Key not configured for embeddings')
+        // 从 channelManager 获取可用的 API 配置
+        const { channelManager } = await import('./ChannelManager.js')
+        await channelManager.init() // 确保已初始化
+        
+        const defaultModel = config.get('llm.defaultModel')
+        
+        // 查找包含默认模型的渠道
+        const channels = channelManager.getAll()
+        let channel = channels.find(c => c.enabled && c.models?.includes(defaultModel))
+        
+        // 回退：使用第一个可用的启用渠道
+        if (!channel) {
+            channel = channels.find(c => c.enabled && c.apiKey)
+        }
+        
+        if (channel) {
+            return new OpenAIClient({
+                apiKey: channel.apiKey,
+                baseUrl: channel.baseUrl,
+                features: ['embedding']
+            })
         }
 
-        return new OpenAIClient({
-            apiKey,
-            baseUrl,
-            features: ['embedding']
-        })
+        throw new Error('未找到可用的 API 渠道配置，请先配置渠道')
     }
 
     /**

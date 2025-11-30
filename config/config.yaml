@@ -5,15 +5,19 @@ basic:
   debug: true
   showThinkingMessage: false
   debugToConsoleOnly: true
-  quoteReply: true
+  quoteReply: false
   autoRecall:
     enabled: false
     delay: 60
     recallError: true
   showTokenUsage: true
+admin:
+  masterQQ: []
+  loginNotifyPrivate: true
+  sensitiveCommandMasterOnly: true
 llm:
   defaultModel: gemini-3-pro-preview
-  defaultChatPresetId: 7ecdcf79-852f-4a76-9b6b-ccc9b98ced36
+  defaultChatPresetId: ef51d9f6-e69c-447b-accf-fb7808782ed2
   embeddingModel: gemini-3-pro-preview
   dimensions: 1536
   models:
@@ -108,7 +112,7 @@ memory:
   autoExtract: true
   minScore: 0.7
 presets:
-  defaultId: 7ecdcf79-852f-4a76-9b6b-ccc9b98ced36
+  defaultId: ef51d9f6-e69c-447b-accf-fb7808782ed2
   allowUserSwitch: true
   perUserPreset: false
   perGroupPreset: false
