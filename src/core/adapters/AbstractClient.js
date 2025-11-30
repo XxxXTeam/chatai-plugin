@@ -284,7 +284,15 @@ export class AbstractClient {
      * @returns {boolean}
      */
     hasMeaningfulContent(message) {
-        if (!message || !Array.isArray(message.content) || message.content.length === 0) {
+        if (!message || !message.content) {
+            return false
+        }
+        // 处理字符串格式的 content
+        if (typeof message.content === 'string') {
+            return message.content.trim().length > 0
+        }
+        // 处理数组格式的 content
+        if (!Array.isArray(message.content) || message.content.length === 0) {
             return false
         }
         return message.content.some(part => this.isMessagePartMeaningful(part))

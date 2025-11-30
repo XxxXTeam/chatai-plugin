@@ -291,11 +291,34 @@ export class OpenAIClient extends AbstractClient {
             let hasReasoningField = false  // 是否检测到reasoning_content字段
             let checkedThinkTag = false    // 是否已检查<think>标签
             let hasThinkTag = false        // 是否有<think>标签
+            
+            // Tool calls 累积
+            const toolCallsMap = new Map() // id -> {id, type, function: {name, arguments}}
+            let hasToolCalls = false
 
             for await (const chunk of stream) {
                 const delta = chunk.choices[0]?.delta || {}
                 const content = delta.content || ''
                 const reasoningContent = delta.reasoning_content || ''
+                const toolCallsDelta = delta.tool_calls || []
+                const finishReason = chunk.choices[0]?.finish_reason
+
+                // 处理 tool_calls（流式累积）
+                for (const tc of toolCallsDelta) {
+                    hasToolCalls = true
+                    const idx = tc.index
+                    if (!toolCallsMap.has(idx)) {
+                        toolCallsMap.set(idx, {
+                            id: tc.id || '',
+                            type: tc.type || 'function',
+                            function: { name: '', arguments: '' }
+                        })
+                    }
+                    const existing = toolCallsMap.get(idx)
+                    if (tc.id) existing.id = tc.id
+                    if (tc.function?.name) existing.function.name += tc.function.name
+                    if (tc.function?.arguments) existing.function.arguments += tc.function.arguments
+                }
 
                 // 处理 reasoning_content 字段（优先）
                 if (reasoningContent) {
@@ -332,9 +355,23 @@ export class OpenAIClient extends AbstractClient {
                         }
                     }
                 }
+                
+                // 日志：检测到 finish_reason
+                if (finishReason) {
+                    logger.debug(`[OpenAI适配器] Stream finish_reason: ${finishReason}`)
+                }
             }
 
             // 处理完所有 chunk 后
+            
+            // 输出 tool_calls
+            if (hasToolCalls) {
+                const toolCalls = Array.from(toolCallsMap.values())
+                logger.info(`[OpenAI适配器] 流式检测到 ${toolCalls.length} 个工具调用:`, 
+                    toolCalls.map(t => t.function.name).join(', '))
+                yield { type: 'tool_calls', toolCalls }
+            }
+            
             if (hasReasoningField) {
                 // 有 reasoning_content 字段，最后输出思考内容
                 if (allReasoning.trim()) {
@@ -360,6 +397,9 @@ export class OpenAIClient extends AbstractClient {
                     yield { type: 'text', text: allContent }
                 }
             }
+            
+            // 日志：流式结束
+            logger.debug(`[OpenAI适配器] Stream完成: content=${allContent.length}字符, toolCalls=${hasToolCalls}`)
         }
 
         return generator()

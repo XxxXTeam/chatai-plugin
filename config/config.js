@@ -81,7 +81,7 @@ class Config {
                 sensitiveCommandMasterOnly: true, // 敏感命令仅主人可用
             },
             llm: {
-                defaultModel: 'gemini-3-pro-preview',
+                defaultModel: 'qwen/qwen3-next-80b-a3b-instruct',
                 defaultChatPresetId: 'default',
                 embeddingModel: 'text-embedding-004',  // Gemini embedding 模型
                 dimensions: 1536,
@@ -163,9 +163,10 @@ class Config {
             },
             memory: {
                 enabled: false,
-                storage: 'file', // 'file', 'redis'
-                autoExtract: true, // 自动从对话提取记忆
-                minScore: 0.7,     // 记忆相关性最低分数
+                storage: 'database', // 使用数据库存储
+                autoExtract: true,   // 自动从对话提取记忆
+                pollInterval: 5,     // 轮询间隔（分钟）
+                maxMemories: 50,     // 每用户最大记忆数
             },
             presets: {
                 // 默认预设 ID

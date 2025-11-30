@@ -163,19 +163,34 @@ export class ChatService {
             }
         }
 
-        // Build messages array
+        // Build messages array (过滤空的 assistant 消息)
+        const validHistory = history.filter(msg => {
+            if (msg.role === 'assistant') {
+                // 过滤空内容的 assistant 消息
+                if (!msg.content || msg.content.length === 0) return false
+                if (Array.isArray(msg.content) && msg.content.every(c => !c.text?.trim())) return false
+                if (typeof msg.content === 'string' && !msg.content.trim()) return false
+            }
+            return true
+        })
+        
         const messages = [
             { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
-            ...history,
+            ...validHistory,
             userMessage
         ]
 
-        // 确定是否使用流式请求
+        const hasTools = client.tools && client.tools.length > 0
+        // 流式支持工具调用，检测到 tool_calls 时自动切换到非流式处理
         const useStreaming = channelStreaming.enabled === true
+
+        // 请求日志
+        logger.info(`[ChatService] 请求配置: model=${llmModel}, streaming=${useStreaming}, tools=${hasTools ? client.tools.length : 0}`)
+        logger.debug(`[ChatService] System Prompt: ${systemPrompt.substring(0, 100)}...`)
+        logger.debug(`[ChatService] User Message: ${message.substring(0, 100)}...`)
 
         let response
         try {
-            // 根据渠道配置选择流式或非流式
             const requestOptions = {
                 model: llmModel,
                 maxToken: channelLlm.maxTokens || 4000,
@@ -184,17 +199,20 @@ export class ChatService {
                 frequencyPenalty: channelLlm.frequencyPenalty,
                 presencePenalty: channelLlm.presencePenalty,
                 conversationId,
-                history: messages.slice(0, -1) // All messages except the current one
+                systemOverride: systemPrompt,
+                history: messages.slice(0, -1)
             }
 
             if (useStreaming) {
-                // 流式请求
                 logger.info('[ChatService] 使用流式请求')
-                const stream = await client.streamMessage(messages, requestOptions)
+                // 流式请求：不传 system message，通过 systemOverride 传递
+                const streamMessages = [...validHistory, userMessage]
+                const stream = await client.streamMessage(streamMessages, requestOptions)
                 
-                // 收集流式响应
                 let fullText = ''
                 let reasoningText = ''
+                let streamToolCalls = null
+                
                 for await (const chunk of stream) {
                     if (typeof chunk === 'string') {
                         fullText += chunk
@@ -202,33 +220,51 @@ export class ChatService {
                         reasoningText += chunk.text
                     } else if (chunk.type === 'text') {
                         fullText += chunk.text
+                    } else if (chunk.type === 'tool_calls') {
+                        streamToolCalls = chunk.toolCalls
+                        logger.info(`[ChatService] 流式检测到工具调用: ${streamToolCalls.map(t => t.function?.name).join(', ')}`)
                     }
                 }
                 
-                // 构造响应格式
-                const contents = []
-                if (reasoningText) {
-                    contents.push({ type: 'reasoning', text: reasoningText })
-                }
-                if (fullText) {
-                    contents.push({ type: 'text', text: fullText })
+                // 如果流式返回了 tool_calls，转为非流式处理工具调用链
+                if (streamToolCalls && streamToolCalls.length > 0) {
+                    logger.info('[ChatService] 流式检测到工具调用，切换到非流式处理')
+                    response = await client.sendMessage(userMessage, requestOptions)
+                } else {
+                    const contents = []
+                    if (reasoningText) {
+                        contents.push({ type: 'reasoning', text: reasoningText })
+                    }
+                    if (fullText) {
+                        contents.push({ type: 'text', text: fullText })
+                    }
+                    
+                    response = {
+                        id: crypto.randomUUID(),
+                        contents,
+                        usage: {}
+                    }
+                    
+                    await historyManager.saveHistory(userMessage, conversationId)
+                    await historyManager.saveHistory({
+                        role: 'assistant',
+                        content: contents
+                    }, conversationId)
                 }
                 
-                response = {
-                    id: crypto.randomUUID(),
-                    contents,
-                    usage: {} // 流式请求通常没有精确的 usage 信息
-                }
-                
-                // 保存历史记录
-                await historyManager.saveHistory(userMessage, conversationId)
-                await historyManager.saveHistory({
-                    role: 'assistant',
-                    content: contents
-                }, conversationId)
+                // 响应日志
+                const respText = response.contents?.filter(c => c.type === 'text').map(c => c.text).join('') || fullText
+                logger.info(`[ChatService] 流式响应完成: ${respText.length} 字符, toolCalls=${response.toolCalls?.length || 0}`)
             } else {
-                // 非流式请求
+                logger.info('[ChatService] 使用非流式请求')
                 response = await client.sendMessage(userMessage, requestOptions)
+                
+                // 响应日志
+                const respText = response.contents?.filter(c => c.type === 'text').map(c => c.text).join('') || ''
+                logger.info(`[ChatService] 非流式响应完成: ${respText.length} 字符, toolCalls=${response.toolCalls?.length || 0}`)
+                if (response.toolCalls?.length > 0) {
+                    logger.info(`[ChatService] 工具调用: ${response.toolCalls.map(t => t.function?.name).join(', ')}`)
+                }
             }
         } finally {
             if (channel) {

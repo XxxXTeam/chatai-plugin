@@ -108,8 +108,10 @@ context:
   cleaningStrategy: auto
 memory:
   enabled: true
-  storage: file
+  storage: true
   autoExtract: true
+  pollInterval: 5
+  maxMemories: 50
   minScore: 0.7
 presets:
   defaultId: ef51d9f6-e69c-447b-accf-fb7808782ed2

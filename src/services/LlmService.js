@@ -113,7 +113,7 @@ export class LlmService {
         }
         
         // 根据渠道适配器类型返回正确的客户端
-        const adapterType = channel.adapter || 'openai'
+        const adapterType = channel.adapterType || 'openai'
         const ClientClass = adapterType === 'gemini' ? GeminiClient :
                            adapterType === 'claude' ? ClaudeClient : OpenAIClient
         
@@ -121,6 +121,37 @@ export class LlmService {
             apiKey: channel.apiKey,
             baseUrl: channel.baseUrl,
             features: ['embedding']
+        })
+    }
+
+    /**
+     * Create a simple chat client (无工具，用于内部任务如记忆提取)
+     */
+    static async getChatClient() {
+        const { channelManager } = await import('./ChannelManager.js')
+        await channelManager.init()
+        
+        const defaultModel = config.get('llm.defaultModel')
+        const channels = channelManager.getAll()
+        let channel = channels.find(c => c.enabled && c.models?.includes(defaultModel))
+        
+        if (!channel) {
+            channel = channels.find(c => c.enabled && c.apiKey)
+        }
+        
+        if (!channel) {
+            throw new Error('未找到可用的 API 渠道配置')
+        }
+        
+        const adapterType = channel.adapterType || 'openai'
+        const ClientClass = adapterType === 'gemini' ? GeminiClient :
+                           adapterType === 'claude' ? ClaudeClient : OpenAIClient
+        
+        return new ClientClass({
+            apiKey: channel.apiKey,
+            baseUrl: channel.baseUrl,
+            features: ['chat'],
+            tools: [] // 无工具
         })
     }
 

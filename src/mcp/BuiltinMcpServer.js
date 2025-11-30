@@ -718,26 +718,38 @@ export class BuiltinMcpServer {
                     const bot = ctx.getBot()
                     const groupId = parseInt(args.group_id)
                     const limit = args.limit || 100
-                    const group = bot.pickGroup(groupId)
-                    const memberMap = await group.getMemberMap()
-
-                    const members = []
-                    let count = 0
-                    for (const [uid, member] of memberMap) {
-                        if (count >= limit) break
-                        members.push({
-                            user_id: uid,
-                            nickname: member.nickname,
-                            card: member.card || '',
-                            role: member.role,
-                            title: member.title || '',
-                            join_time: member.join_time,
-                            last_sent_time: member.last_sent_time
-                        })
-                        count++
+                    
+                    // 兼容多种 API
+                    let memberList = []
+                    try {
+                        // 尝试 getGroupMemberList API
+                        if (bot.getGroupMemberList) {
+                            memberList = await bot.getGroupMemberList(groupId) || []
+                        } else {
+                            // 尝试 pickGroup + getMemberMap
+                            const group = bot.pickGroup?.(groupId)
+                            if (group?.getMemberMap) {
+                                const memberMap = await group.getMemberMap()
+                                for (const [uid, member] of memberMap) {
+                                    memberList.push({ user_id: uid, ...member })
+                                }
+                            } else if (group?.getMemberList) {
+                                memberList = await group.getMemberList() || []
+                            }
+                        }
+                    } catch (e) {
+                        return { error: `获取群成员列表失败: ${e.message}`, group_id: groupId }
                     }
 
-                    return { group_id: groupId, total: memberMap.size, returned: members.length, members }
+                    const members = memberList.slice(0, limit).map(m => ({
+                        user_id: m.user_id || m.uid,
+                        nickname: m.nickname || m.nick || '',
+                        card: m.card || '',
+                        role: m.role || 'member',
+                        title: m.title || '',
+                    }))
+
+                    return { group_id: groupId, total: memberList.length, returned: members.length, members }
                 }
             },
 

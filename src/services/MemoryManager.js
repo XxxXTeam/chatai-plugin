@@ -1,26 +1,16 @@
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { LocalIndex } from 'vectra'
 import config from '../../config/config.js'
-import { redisClient } from '../core/cache/RedisClient.js'
+import { databaseService } from './DatabaseService.js'
 import { LlmService } from './LlmService.js'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-
 /**
- * Memory Manager - Manages long-term memory using Vector Database (Vectra)
- * 优化版本：添加缓存、自动提取、批量操作
+ * Memory Manager - 使用数据库存储记忆
+ * 支持周期性轮询分析对话历史并提取记忆
  */
 export class MemoryManager {
     constructor() {
         this.initialized = false
-        this.dataDir = path.join(__dirname, '../../data/memory')
-        this.indices = new Map() // userId -> LocalIndex
-        this.memoryCache = new Map() // userId -> { memories: [], lastUpdate: number }
-        this.pendingEmbeddings = new Map() // userId -> pending items
-        this.cacheExpiry = 5 * 60 * 1000 // 5分钟缓存过期
+        this.pollInterval = null
+        this.lastPollTime = new Map() // userId -> timestamp
     }
 
     /**
@@ -28,14 +18,160 @@ export class MemoryManager {
      */
     async init() {
         if (this.initialized) return
-
-        if (!fs.existsSync(this.dataDir)) {
-            fs.mkdirSync(this.dataDir, { recursive: true })
-        }
-
-        await redisClient.init()
+        databaseService.init()
         this.initialized = true
-        logger.info('[MemoryManager] Initialized')
+        
+        // 启动周期性轮询
+        this.startPolling()
+        logger.info('[MemoryManager] Initialized with database')
+    }
+    
+    /**
+     * 启动周期性轮询
+     */
+    startPolling() {
+        if (!config.get('memory.enabled')) return
+        
+        const intervalMinutes = config.get('memory.pollInterval') || 5
+        const intervalMs = intervalMinutes * 60 * 1000
+        
+        // 清除旧的定时器
+        if (this.pollInterval) {
+            clearInterval(this.pollInterval)
+        }
+        
+        // 启动新的定时器
+        this.pollInterval = setInterval(() => {
+            this.pollAndSummarize().catch(e => 
+                logger.warn('[MemoryManager] 轮询分析失败:', e.message)
+            )
+        }, intervalMs)
+        
+        logger.info(`[MemoryManager] 启动周期轮询，间隔 ${intervalMinutes} 分钟`)
+    }
+    
+    /**
+     * 停止轮询
+     */
+    stopPolling() {
+        if (this.pollInterval) {
+            clearInterval(this.pollInterval)
+            this.pollInterval = null
+            logger.info('[MemoryManager] 停止周期轮询')
+        }
+    }
+    
+    /**
+     * 轮询所有活跃用户，分析对话并提取记忆
+     */
+    async pollAndSummarize() {
+        if (!config.get('memory.enabled')) return
+        
+        try {
+            // 获取最近有对话的用户
+            const conversations = databaseService.getConversations()
+            const processedUsers = new Set()
+            
+            for (const conv of conversations) {
+                const userId = conv.userId
+                if (processedUsers.has(userId)) continue
+                processedUsers.add(userId)
+                
+                // 检查是否需要处理（距离上次处理超过间隔）
+                const lastPoll = this.lastPollTime.get(userId) || 0
+                const pollInterval = (config.get('memory.pollInterval') || 5) * 60 * 1000
+                if (Date.now() - lastPoll < pollInterval) continue
+                
+                // 分析该用户的最近对话
+                await this.analyzeUserConversations(userId)
+                this.lastPollTime.set(userId, Date.now())
+            }
+        } catch (error) {
+            logger.warn('[MemoryManager] 轮询处理失败:', error.message)
+        }
+    }
+    
+    /**
+     * 分析用户最近的对话，提取并总结记忆
+     * @param {string} userId
+     */
+    async analyzeUserConversations(userId) {
+        try {
+            // 获取用户最近的对话
+            const conversations = databaseService.listUserConversations(userId)
+            if (conversations.length === 0) return
+            
+            // 获取最近的消息
+            const recentConv = conversations[0]
+            const messages = databaseService.getMessages(recentConv.conversationId, 20)
+            if (messages.length < 2) return
+            
+            // 构建对话文本
+            const dialogText = messages
+                .filter(m => m.role === 'user' || m.role === 'assistant')
+                .map(m => {
+                    const content = Array.isArray(m.content) 
+                        ? m.content.filter(c => c.type === 'text').map(c => c.text).join('')
+                        : (typeof m.content === 'string' ? m.content : '')
+                    return `${m.role === 'user' ? '用户' : '助手'}: ${content.substring(0, 200)}`
+                })
+                .join('\n')
+            
+            if (dialogText.length < 50) return
+            
+            // 获取已有记忆，避免重复
+            const existingMemories = databaseService.getMemories(userId, 20)
+            const existingText = existingMemories.map(m => m.content).join('\n')
+            
+            // 使用 LLM 分析并提取新记忆
+            const prompt = `分析以下对话，提取关于用户的重要信息（如：个人信息、偏好、习惯、重要事件等）。
+每条记忆一行，不超过50字。只输出新信息，不要重复已有记忆。如果没有新信息，返回"无"。
+
+【已有记忆】
+${existingText || '暂无'}
+
+【最近对话】
+${dialogText}
+
+【新记忆】（每行一条，最多3条）：`
+
+            const client = await LlmService.getChatClient()
+            const result = await client.sendMessage(
+                { role: 'user', content: [{ type: 'text', text: prompt }] },
+                { 
+                    model: config.get('llm.defaultModel'), 
+                    maxToken: 200, 
+                    disableHistorySave: true,
+                    temperature: 0.3
+                }
+            )
+            
+            const responseText = result.contents?.[0]?.text?.trim() || ''
+            if (!responseText || responseText === '无' || responseText.length < 5) return
+            
+            // 解析并保存新记忆
+            const newMemories = responseText
+                .split('\n')
+                .map(line => line.replace(/^[-•\d.)\s]+/, '').trim())
+                .filter(line => line.length > 5 && line.length < 200 && line !== '无')
+                .slice(0, 3)
+            
+            for (const memory of newMemories) {
+                // 检查是否与已有记忆重复
+                const isDuplicate = existingMemories.some(m => 
+                    m.content.includes(memory) || memory.includes(m.content)
+                )
+                if (!isDuplicate) {
+                    await this.saveMemory(userId, memory, { 
+                        source: 'poll_summary',
+                        importance: 6
+                    })
+                    logger.info(`[MemoryManager] 轮询提取记忆 [${userId}]: ${memory}`)
+                }
+            }
+        } catch (error) {
+            logger.debug(`[MemoryManager] 分析用户 ${userId} 对话失败:`, error.message)
+        }
     }
 
     /**
@@ -96,160 +232,77 @@ export class MemoryManager {
      * @returns {string} 格式化的记忆上下文
      */
     async getMemoryContext(userId, query) {
-        const memories = await this.searchMemory(userId, query, 3)
+        if (!config.get('memory.enabled')) return ''
+        
+        await this.init()
+        
+        // 优先搜索相关记忆，否则获取最近记忆
+        let memories = query 
+            ? databaseService.searchMemories(userId, query, 5)
+            : databaseService.getMemories(userId, 10)
+        
         if (memories.length === 0) return ''
 
-        const memoryText = memories
-            .filter(m => m.score > 0.7) // 只保留相关性高的
-            .map(m => `- ${m.content}`)
-            .join('\n')
-
-        if (!memoryText) return ''
+        const memoryText = memories.map(m => `- ${m.content}`).join('\n')
         return `\n【用户记忆】\n${memoryText}\n`
     }
 
     /**
-     * Get or create vector index for a user
-     * @param {string} userId 
-     * @returns {Promise<LocalIndex>}
-     */
-    async getIndex(userId) {
-        if (this.indices.has(userId)) {
-            return this.indices.get(userId)
-        }
-
-        const indexDir = path.join(this.dataDir, userId)
-        if (!fs.existsSync(indexDir)) {
-            fs.mkdirSync(indexDir, { recursive: true })
-        }
-
-        const index = new LocalIndex(path.join(indexDir, 'index.json'))
-
-        if (!await index.isIndexCreated()) {
-            await index.createIndex()
-        }
-
-        this.indices.set(userId, index)
-        return index
-    }
-
-    /**
-     * Save a fact or memory for a user
+     * 保存记忆
      * @param {string} userId
      * @param {string} content
-     * @param {Object} metadata
+     * @param {Object} options
      */
-    async saveMemory(userId, content, metadata = {}) {
-        if (!config.get('memory.enabled')) return
+    async saveMemory(userId, content, options = {}) {
+        if (!config.get('memory.enabled')) return null
 
         try {
-            const client = await LlmService.getEmbeddingClient()
-            const embeddingModel = config.get('llm.embeddingModel') || 'text-embedding-3-small'
-            const { embeddings } = await client.getEmbedding(content, {
-                model: embeddingModel
+            await this.init()
+            const id = databaseService.saveMemory(userId, content, {
+                source: options.source || 'manual',
+                importance: options.importance || 5,
+                metadata: options.metadata || options
             })
-            const vector = embeddings[0]
-
-            const index = await this.getIndex(userId)
-            const memoryId = Date.now().toString()
-
-            await index.insertItem({
-                id: memoryId,
-                vector,
-                metadata: {
-                    ...metadata,
-                    content,
-                    timestamp: Date.now()
-                }
-            })
-
-            return {
-                id: memoryId,
-                content,
-                metadata,
-                timestamp: Date.now()
-            }
+            
+            logger.debug(`[MemoryManager] 保存记忆: userId=${userId}, id=${id}`)
+            return { id, content, timestamp: Date.now() }
         } catch (error) {
-            logger.error(`[MemoryManager] Failed to save memory for user ${userId}`, error)
-            throw error
+            logger.error(`[MemoryManager] 保存记忆失败:`, error.message)
+            return null
         }
     }
 
     /**
-     * Retrieve relevant memories for a user
+     * 搜索记忆
      * @param {string} userId
      * @param {string} query
      * @param {number} limit
-     * @returns {Promise<Array>}
      */
     async searchMemory(userId, query, limit = 5) {
         if (!config.get('memory.enabled')) return []
-
-        try {
-            const client = await LlmService.getEmbeddingClient()
-            const embeddingModel = config.get('llm.embeddingModel') || 'text-embedding-3-small'
-            const { embeddings } = await client.getEmbedding(query, {
-                model: embeddingModel
-            })
-            const vector = embeddings[0]
-
-            const index = await this.getIndex(userId)
-            const results = await index.queryItems(vector, limit)
-
-            return results.map(item => ({
-                id: item.item.id,
-                content: item.item.metadata.content,
-                metadata: item.item.metadata,
-                timestamp: item.item.metadata.timestamp,
-                score: item.score
-            }))
-        } catch (error) {
-            logger.error(`[MemoryManager] Failed to search memory for user ${userId}`, error)
-            return []
-        }
+        
+        await this.init()
+        return databaseService.searchMemories(userId, query, limit)
     }
 
     /**
-     * Get all memories for a user
+     * 获取用户所有记忆
      * @param {string} userId
      */
     async getAllMemories(userId) {
-        // Vectra doesn't support "get all" easily without query, but we can iterate the index file if needed.
-        // Or just query with a generic vector? No, that's inefficient.
-        // We can list items from the index if the library exposes it.
-        // Checking Vectra docs (mental model): LocalIndex stores items in memory/file.
-        // We can access `index.listItems()` if available, or just return empty for now as "All Memories" view might need pagination.
-        // Actually, let's try to read the index file directly for "getAll" since it's just JSON.
-
-        const indexDir = path.join(this.dataDir, userId)
-        const indexPath = path.join(indexDir, 'index.json')
-
-        if (!fs.existsSync(indexPath)) return []
-
-        try {
-            // Vectra format: { version, metadata, items: [...] }
-            const data = JSON.parse(fs.readFileSync(indexPath, 'utf-8'))
-            return data.items.map(item => ({
-                id: item.id,
-                content: item.metadata.content,
-                metadata: item.metadata,
-                timestamp: item.metadata.timestamp
-            })).sort((a, b) => b.timestamp - a.timestamp)
-        } catch (e) {
-            return []
-        }
+        await this.init()
+        return databaseService.getMemories(userId, 100)
     }
 
     /**
-     * Delete a specific memory
+     * 删除记忆
      * @param {string} userId
-     * @param {string} memoryId
+     * @param {number} memoryId
      */
     async deleteMemory(userId, memoryId) {
         try {
-            const index = await this.getIndex(userId)
-            await index.deleteItem(memoryId)
-            return true
+            await this.init()
+            return databaseService.deleteMemory(memoryId)
         } catch (e) {
             logger.error(`[MemoryManager] Failed to delete memory ${memoryId}`, e)
             return false
@@ -257,29 +310,21 @@ export class MemoryManager {
     }
 
     /**
-     * Get all memories for a user (alias for getAllMemories)
-     * @param {string} userId
+     * 获取用户所有记忆（别名）
      */
     async getMemories(userId) {
         return this.getAllMemories(userId)
     }
 
     /**
-     * Clear all memories for a user
+     * 清空用户所有记忆
      * @param {string} userId
      */
     async clearMemory(userId) {
         try {
-            const indexDir = path.join(this.dataDir, userId)
-            
-            if (fs.existsSync(indexDir)) {
-                // 删除整个用户记忆目录
-                fs.rmSync(indexDir, { recursive: true, force: true })
-                // 从缓存中移除
-                this.indices.delete(userId)
-                logger.info(`[MemoryManager] Cleared all memories for user ${userId}`)
-            }
-            
+            await this.init()
+            const count = databaseService.clearMemories(userId)
+            logger.info(`[MemoryManager] 清除 ${userId} 的 ${count} 条记忆`)
             return true
         } catch (e) {
             logger.error(`[MemoryManager] Failed to clear memory for user ${userId}`, e)
@@ -288,31 +333,21 @@ export class MemoryManager {
     }
 
     /**
-     * Get memory statistics for a user
+     * 获取记忆统计
      * @param {string} userId
      */
     async getStats(userId) {
-        const memories = await this.getAllMemories(userId)
-        return {
-            count: memories.length,
-            oldest: memories.length > 0 ? memories[memories.length - 1]?.timestamp : null,
-            newest: memories.length > 0 ? memories[0]?.timestamp : null
-        }
+        await this.init()
+        return databaseService.getMemoryStats(userId)
     }
 
     /**
-     * List all users with memories
-     * @returns {Promise<string[]>}
+     * 获取所有有记忆的用户
      */
     async listUsers() {
         try {
-            if (!fs.existsSync(this.dataDir)) {
-                return []
-            }
-            const dirs = fs.readdirSync(this.dataDir, { withFileTypes: true })
-            return dirs
-                .filter(d => d.isDirectory())
-                .map(d => d.name)
+            await this.init()
+            return databaseService.getMemoryUsers().map(u => u.userId)
         } catch (e) {
             logger.error('[MemoryManager] Failed to list users', e)
             return []
@@ -320,10 +355,7 @@ export class MemoryManager {
     }
 
     /**
-     * Add a memory (alias for saveMemory)
-     * @param {string} userId
-     * @param {string} content
-     * @param {Object} metadata
+     * 添加记忆（别名）
      */
     async addMemory(userId, content, metadata = {}) {
         return this.saveMemory(userId, content, metadata)

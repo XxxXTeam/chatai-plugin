@@ -56,7 +56,133 @@ class DatabaseService {
             );
             CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
             CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+            
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                source TEXT DEFAULT 'manual',
+                importance INTEGER DEFAULT 5,
+                timestamp INTEGER NOT NULL,
+                metadata TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id);
+            CREATE INDEX IF NOT EXISTS idx_memories_timestamp ON memories(timestamp);
         `)
+    }
+    
+    // ==================== 记忆相关方法 ====================
+    
+    /**
+     * 保存记忆
+     */
+    saveMemory(userId, content, options = {}) {
+        const stmt = this.db.prepare(`
+            INSERT INTO memories (user_id, content, source, importance, timestamp, metadata)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `)
+        const result = stmt.run(
+            userId,
+            content,
+            options.source || 'manual',
+            options.importance || 5,
+            Date.now(),
+            options.metadata ? JSON.stringify(options.metadata) : null
+        )
+        return result.lastInsertRowid
+    }
+    
+    /**
+     * 获取用户的所有记忆
+     */
+    getMemories(userId, limit = 50) {
+        const stmt = this.db.prepare(`
+            SELECT * FROM memories 
+            WHERE user_id = ? 
+            ORDER BY timestamp DESC 
+            LIMIT ?
+        `)
+        return stmt.all(userId, limit).map(row => ({
+            id: row.id,
+            userId: row.user_id,
+            content: row.content,
+            source: row.source,
+            importance: row.importance,
+            timestamp: row.timestamp,
+            metadata: row.metadata ? JSON.parse(row.metadata) : null
+        }))
+    }
+    
+    /**
+     * 搜索记忆（简单文本匹配）
+     */
+    searchMemories(userId, query, limit = 10) {
+        const stmt = this.db.prepare(`
+            SELECT * FROM memories 
+            WHERE user_id = ? AND content LIKE ? 
+            ORDER BY importance DESC, timestamp DESC 
+            LIMIT ?
+        `)
+        return stmt.all(userId, `%${query}%`, limit).map(row => ({
+            id: row.id,
+            userId: row.user_id,
+            content: row.content,
+            source: row.source,
+            importance: row.importance,
+            timestamp: row.timestamp,
+            metadata: row.metadata ? JSON.parse(row.metadata) : null
+        }))
+    }
+    
+    /**
+     * 删除记忆
+     */
+    deleteMemory(memoryId) {
+        const stmt = this.db.prepare('DELETE FROM memories WHERE id = ?')
+        return stmt.run(memoryId).changes > 0
+    }
+    
+    /**
+     * 清空用户所有记忆
+     */
+    clearMemories(userId) {
+        const stmt = this.db.prepare('DELETE FROM memories WHERE user_id = ?')
+        return stmt.run(userId).changes
+    }
+    
+    /**
+     * 获取记忆统计
+     */
+    getMemoryStats(userId) {
+        if (userId) {
+            const stmt = this.db.prepare(`
+                SELECT COUNT(*) as count, MIN(timestamp) as oldest, MAX(timestamp) as newest
+                FROM memories WHERE user_id = ?
+            `)
+            return stmt.get(userId)
+        }
+        const stmt = this.db.prepare(`
+            SELECT COUNT(*) as count, COUNT(DISTINCT user_id) as users
+            FROM memories
+        `)
+        return stmt.get()
+    }
+    
+    /**
+     * 获取所有有记忆的用户
+     */
+    getMemoryUsers() {
+        const stmt = this.db.prepare(`
+            SELECT user_id, COUNT(*) as count, MAX(timestamp) as last_update
+            FROM memories
+            GROUP BY user_id
+            ORDER BY last_update DESC
+        `)
+        return stmt.all().map(row => ({
+            userId: row.user_id,
+            count: row.count,
+            lastUpdate: row.last_update
+        }))
     }
 
     /**
