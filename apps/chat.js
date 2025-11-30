@@ -222,7 +222,11 @@ export class Chat extends plugin {
         }
       }
 
-      const finalReply = replyText || '抱歉，我没有理解你的问题'
+      if (!replyText) {
+        // 没有回复内容时不发送任何消息
+        return true
+      }
+      const finalReply = replyText
       const showThinking = config.get('thinking.showThinkingContent') !== false
       const thinkingUseForward = config.get('thinking.useForwardMsg') !== false
       const showToolLogs = config.get('tools.showCallLogs') !== false

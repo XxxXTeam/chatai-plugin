@@ -2,6 +2,14 @@ import config from '../config/config.js'
 import crypto from 'node:crypto'
 import { getWebServer } from '../src/services/webServer.js'
 
+// 缓存 Yunzai 主人配置
+let yunzaiCfg = null
+try {
+    yunzaiCfg = (await import('../../../lib/config/config.js')).default
+} catch (e) {
+    // Yunzai 配置不可用
+}
+
 /**
  * 管理面板
  */
@@ -51,24 +59,24 @@ export class management extends plugin {
      * 检查是否是主人
      */
     isMasterUser(userId) {
-        // 优先使用插件配置的主人列表
-        const pluginMasters = config.get('admin.masterQQ') || []
-        if (pluginMasters.length > 0) {
-            return pluginMasters.includes(String(userId)) || pluginMasters.includes(Number(userId))
-        }
-        // 回退到 Yunzai 全局配置
-        const yunzaiMasters = global.Bot?.config?.master || []
-        return yunzaiMasters.includes(String(userId)) || yunzaiMasters.includes(Number(userId))
+        const masters = this.getMasterList()
+        return masters.includes(String(userId)) || masters.includes(Number(userId))
     }
 
     /**
      * 获取主人 QQ 列表
      */
     getMasterList() {
+        // 优先使用插件配置的主人列表
         const pluginMasters = config.get('admin.masterQQ') || []
         if (pluginMasters.length > 0) {
             return pluginMasters
         }
+        // 从 Yunzai lib/config/config.js 读取
+        if (yunzaiCfg?.masterQQ?.length > 0) {
+            return yunzaiCfg.masterQQ
+        }
+        // 最后回退到全局 Bot 配置
         return global.Bot?.config?.master || []
     }
 

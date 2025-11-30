@@ -144,9 +144,9 @@ export class MemoryManager {
 
         try {
             const client = await LlmService.getEmbeddingClient()
-            const defaultModel = config.get('llm.defaultModel')
+            const embeddingModel = config.get('llm.embeddingModel') || 'text-embedding-3-small'
             const { embeddings } = await client.getEmbedding(content, {
-                model: defaultModel
+                model: embeddingModel
             })
             const vector = embeddings[0]
 
@@ -187,9 +187,9 @@ export class MemoryManager {
 
         try {
             const client = await LlmService.getEmbeddingClient()
-            const defaultModel = config.get('llm.defaultModel')
+            const embeddingModel = config.get('llm.embeddingModel') || 'text-embedding-3-small'
             const { embeddings } = await client.getEmbedding(query, {
-                model: defaultModel
+                model: embeddingModel
             })
             const vector = embeddings[0]
 

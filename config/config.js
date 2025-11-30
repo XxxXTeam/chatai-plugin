@@ -83,7 +83,7 @@ class Config {
             llm: {
                 defaultModel: 'gemini-3-pro-preview',
                 defaultChatPresetId: 'default',
-                embeddingModel: 'gemini-3-pro-preview',
+                embeddingModel: 'text-embedding-004',  // Gemini embedding 模型
                 dimensions: 1536,
                 // 模型分类配置
                 models: {
