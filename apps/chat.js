@@ -155,7 +155,9 @@ export class Chat extends plugin {
       })
 
       // Send message using ChatService
-      await e.reply('思考中...', true)
+      if (config.get('basic.showThinkingMessage') !== false) {
+        await e.reply('思考中...', true)
+      }
 
       const result = await chatService.sendMessage({
         userId: fullUserId,
@@ -168,11 +170,16 @@ export class Chat extends plugin {
         event: e  // Pass event for tool context
       })
 
-      // Extract text response
+      // Extract text and reasoning response
       let replyText = ''
+      let reasoningText = ''
       if (result.response && Array.isArray(result.response)) {
         replyText = result.response
           .filter(c => c.type === 'text')
+          .map(c => c.text)
+          .join('\n')
+        reasoningText = result.response
+          .filter(c => c.type === 'reasoning')
           .map(c => c.text)
           .join('\n')
       }
@@ -186,7 +193,31 @@ export class Chat extends plugin {
         }
       }
 
-      await e.reply(replyText + usageInfo || '抱歉，我没有理解你的问题', true)
+      // 如果有思考内容，使用转发消息发送
+      if (reasoningText && e.group_id && e.bot?.pickGroup) {
+        try {
+          const forwardMsg = [
+            {
+              user_id: e.bot.uin || e.self_id,
+              nickname: '思考过程',
+              time: Math.floor(Date.now() / 1000),
+              message: [reasoningText]
+            },
+            {
+              user_id: e.bot.uin || e.self_id,
+              nickname: 'AI回复',
+              time: Math.floor(Date.now() / 1000) + 1,
+              message: [replyText + usageInfo || '抱歉，我没有理解你的问题']
+            }
+          ]
+          await e.bot.pickGroup(e.group_id).sendForwardMsg(forwardMsg)
+        } catch (forwardErr) {
+          logger.warn('[AI-Chat] 转发消息发送失败，使用普通回复:', forwardErr.message)
+          await e.reply(replyText + usageInfo || '抱歉，我没有理解你的问题', true)
+        }
+      } else {
+        await e.reply(replyText + usageInfo || '抱歉，我没有理解你的问题', true)
+      }
 
     } catch (error) {
       logger.error('[AI-Chat] Error:', error)

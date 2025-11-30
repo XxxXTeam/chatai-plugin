@@ -17,7 +17,8 @@ const config = reactive({
     toggleMode: 'at',
     togglePrefix: '#chat',
     commandPrefix: '#ai',
-    debug: false
+    debug: false,
+    showThinkingMessage: true
   },
   llm: {
     defaultModel: '',
@@ -181,6 +182,14 @@ onMounted(() => {
         </n-form-item>
         <n-form-item label="调试模式">
           <n-switch v-model:value="config.basic.debug" />
+        </n-form-item>
+        <n-form-item label="思考提示">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.basic.showThinkingMessage" />
+            </template>
+            开启后，AI处理时会先发送"思考中..."提示
+          </n-tooltip>
         </n-form-item>
       </n-form>
     </n-card>

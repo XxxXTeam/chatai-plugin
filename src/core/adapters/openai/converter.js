@@ -119,10 +119,21 @@ registerIntoChaiteConverter('openai', (msg) => {
         case 'assistant': {
             const content = msg.content ? (Array.isArray(msg.content) ? msg.content : [{ type: 'text', text: msg.content }]) : []
 
-            const contents = content.map(t => ({
+            const contents = []
+            
+            // 处理 reasoning_content 字段（思考内容）
+            if (msg.reasoning_content) {
+                contents.push({
+                    type: 'reasoning',
+                    text: msg.reasoning_content
+                })
+            }
+            
+            // 处理普通 content
+            contents.push(...content.map(t => ({
                 type: 'text',
                 text: t.type === 'text' ? t.text : t.refusal || '',
-            }))
+            })))
 
             return {
                 role: 'assistant',

@@ -2,14 +2,15 @@ basic:
   toggleMode: both
   togglePrefix: "#111"
   commandPrefix: "#ai"
-  debug: false
+  debug: true
+  showThinkingMessage: false
 llm:
-  defaultModel: qwen3-max
+  defaultModel: qwen/qwen3-next-80b-a3b-thinking
   defaultChatPresetId: 7ecdcf79-852f-4a76-9b6b-ccc9b98ced36
-  embeddingModel: qwen3-max
+  embeddingModel: qwen/qwen3-next-80b-a3b-thinking
   dimensions: 1536
   models:
-    chat: ""
+    chat: qwen/qwen3-next-80b-a3b-thinking
     roleplay: ""
     toolCall: ""
     search: ""
@@ -41,7 +42,8 @@ channels:
     baseUrl: http://103.109.22.74:3000/v1
     apiKey: sk-lgrpDhWB7Mm5L521zGdwDO6JescMn9m7xtmQLkAgL0iMXf4h
     models:
-      - qwen3-max
+      - qwen/qwen3-next-80b-a3b-instruct
+      - qwen/qwen3-next-80b-a3b-thinking
     priority: 1
     enabled: true
     advanced:

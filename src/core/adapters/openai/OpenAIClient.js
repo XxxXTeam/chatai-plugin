@@ -286,67 +286,78 @@ export class OpenAIClient extends AbstractClient {
 
 
         async function* generator() {
-            let buffer = ''
-            let allContent = '' // 累积所有内容，直到遇到</think>
-            let foundThinkEnd = false
+            let allReasoning = ''  // 累积所有reasoning_content
+            let allContent = ''    // 累积content用于<think>标签解析
+            let hasReasoningField = false  // 是否检测到reasoning_content字段
+            let checkedThinkTag = false    // 是否已检查<think>标签
+            let hasThinkTag = false        // 是否有<think>标签
 
             for await (const chunk of stream) {
-                const content = chunk.choices[0]?.delta?.content || ''
-                if (!content) continue
+                const delta = chunk.choices[0]?.delta || {}
+                const content = delta.content || ''
+                const reasoningContent = delta.reasoning_content || ''
 
-                buffer += content
+                // 处理 reasoning_content 字段（优先）
+                if (reasoningContent) {
+                    hasReasoningField = true
+                    allReasoning += reasoningContent
+                }
 
-                // 检查是否包含</think>结束标签
-                const thinkEndMatch = buffer.match(/<\/think>/i)
-
-                if (thinkEndMatch && !foundThinkEnd) {
-                    // 找到了</think>标签
-                    foundThinkEnd = true
-
-                    // 将之前累积的所有内容加上</think>之前的部分，作为thinking内容
-                    const thinkContent = allContent + buffer.substring(0, thinkEndMatch.index)
-
-                    if (thinkContent.trim()) {
-                        logger.info('[OpenAI适配器] 检测到</think>，输出思考内容，长度:', thinkContent.length)
-                        yield { type: 'reasoning', text: thinkContent.trim() }
+                // 处理 content 字段
+                if (content) {
+                    // 如果已经有 reasoning_content 字段，content 就是普通文本，实时输出
+                    if (hasReasoningField) {
+                        yield { type: 'text', text: content }
+                        continue
                     }
-
-                    // 剩余部分继续作为普通文本
-                    buffer = buffer.substring(thinkEndMatch.index + thinkEndMatch[0].length)
-                    allContent = ''
-
-                    // 如果剩余buffer有内容，输出
-                    if (buffer.trim()) {
-                        yield { type: 'text', text: buffer }
-                        buffer = ''
+                    
+                    // 已确认没有<think>标签，实时输出
+                    if (checkedThinkTag && !hasThinkTag) {
+                        yield { type: 'text', text: content }
+                        continue
                     }
-                } else if (!foundThinkEnd) {
-                    // 还没找到</think>，继续累积
-                    // 保留最后10个字符防止</think>被分割
-                    const safeLength = Math.max(0, buffer.length - 10)
-                    if (safeLength > 0) {
-                        allContent += buffer.substring(0, safeLength)
-                        buffer = buffer.substring(safeLength)
+                    
+                    // 累积内容用于检查<think>标签
+                    allContent += content
+                    
+                    // 首次检查是否有<think>标签
+                    if (!checkedThinkTag && allContent.length >= 10) {
+                        checkedThinkTag = true
+                        hasThinkTag = /^\s*<think>/i.test(allContent)
+                        
+                        // 没有<think>标签，立即输出已累积的内容
+                        if (!hasThinkTag) {
+                            yield { type: 'text', text: allContent }
+                            allContent = ''
+                        }
                     }
-                } else {
-                    // 已经过了</think>，之后的都是正常内容
-                    yield { type: 'text', text: content }
                 }
             }
 
-            // 处理剩余内容
-            if (buffer || allContent) {
-                logger.info('[OpenAI适配器] 处理剩余缓冲区, foundThinkEnd:', foundThinkEnd, 'allContent长度:', allContent.length, 'buffer长度:', buffer.length)
+            // 处理完所有 chunk 后
+            if (hasReasoningField) {
+                // 有 reasoning_content 字段，最后输出思考内容
+                if (allReasoning.trim()) {
+                    logger.info('[OpenAI适配器] 输出reasoning_content，长度:', allReasoning.length)
+                    yield { type: 'reasoning', text: allReasoning.trim() }
+                }
+            } else if (allContent) {
+                // 检查 <think> 标签
+                const thinkMatch = allContent.match(/^\s*<think>([\s\S]*?)<\/think>\s*/i)
+                if (thinkMatch) {
+                    const thinkContent = thinkMatch[1].trim()
+                    const restContent = allContent.substring(thinkMatch[0].length).trim()
 
-                if (!foundThinkEnd && (allContent || buffer)) {
-                    // 没有找到</think>，说明整段都是思考内容
-                    const finalContent = allContent + buffer
-                    if (finalContent.trim()) {
-                        yield { type: 'reasoning', text: finalContent.trim() }
+                    if (thinkContent) {
+                        logger.info('[OpenAI适配器] 检测到<think>标签，输出思考内容，长度:', thinkContent.length)
+                        yield { type: 'reasoning', text: thinkContent }
                     }
-                } else if (buffer) {
-                    // 有剩余的正常内容
-                    yield { type: 'text', text: buffer }
+                    if (restContent) {
+                        yield { type: 'text', text: restContent }
+                    }
+                } else if (!checkedThinkTag) {
+                    // 内容太短，没检查过<think>，直接作为text输出
+                    yield { type: 'text', text: allContent }
                 }
             }
         }

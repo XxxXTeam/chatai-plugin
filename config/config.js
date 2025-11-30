@@ -66,6 +66,7 @@ class Config {
                 togglePrefix: '#chat',
                 commandPrefix: '#ai',
                 debug: false,
+                showThinkingMessage: true, // 是否发送"思考中..."提示
             },
             llm: {
                 defaultModel: 'gpt-4o-mini',
