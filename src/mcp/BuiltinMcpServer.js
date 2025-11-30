@@ -538,6 +538,7 @@ export class BuiltinMcpServer {
                     }
                     
                     return {
+                        success: true,
                         total: allTools.length,
                         filtered: tools.length,
                         categories: Object.keys(categories),
@@ -895,30 +896,34 @@ export class BuiltinMcpServer {
                     required: ['user_id']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const userId = parseInt(args.user_id)
-                    const friend = bot.pickFriend(userId)
+                    try {
+                        const bot = ctx.getBot()
+                        const userId = parseInt(args.user_id)
+                        const friend = bot.pickFriend(userId)
 
-                    const msgParts = []
+                        const msgParts = []
 
-                    if (args.message) {
-                        msgParts.push(args.message)
+                        if (args.message) {
+                            msgParts.push(args.message)
+                        }
+
+                        if (args.image_url) {
+                            msgParts.push(segment.image(args.image_url))
+                        }
+
+                        if (args.video_url) {
+                            msgParts.push(segment.video(args.video_url))
+                        }
+
+                        if (msgParts.length === 0) {
+                            return { success: false, error: '消息内容不能为空' }
+                        }
+
+                        const result = await friend.sendMsg(msgParts.length === 1 ? msgParts[0] : msgParts)
+                        return { success: true, message_id: result.message_id, user_id: userId }
+                    } catch (err) {
+                        return { success: false, error: `发送私聊消息失败: ${err.message}` }
                     }
-
-                    if (args.image_url) {
-                        msgParts.push(segment.image(args.image_url))
-                    }
-
-                    if (args.video_url) {
-                        msgParts.push(segment.video(args.video_url))
-                    }
-
-                    if (msgParts.length === 0) {
-                        return { error: '消息内容不能为空' }
-                    }
-
-                    const result = await friend.sendMsg(msgParts.length === 1 ? msgParts[0] : msgParts)
-                    return { success: true, message_id: result.message_id, user_id: userId }
                 }
             },
 
@@ -937,39 +942,50 @@ export class BuiltinMcpServer {
                     required: ['group_id']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const groupId = parseInt(args.group_id)
-                    const group = bot.pickGroup(groupId)
-
-                    const msgParts = []
-
-                    if (args.at_user) {
-                        if (args.at_user === 'all') {
-                            msgParts.push(segment.at('all'))
-                        } else {
-                            msgParts.push(segment.at(parseInt(args.at_user)))
+                    try {
+                        const bot = ctx.getBot()
+                        const groupId = parseInt(args.group_id)
+                        
+                        // 检查机器人是否在群内
+                        const groupInfo = bot.gl?.get(groupId)
+                        if (!groupInfo) {
+                            return { success: false, error: '机器人不在此群内，无法发送消息' }
                         }
-                        msgParts.push(' ')
-                    }
+                        
+                        const group = bot.pickGroup(groupId)
 
-                    if (args.message) {
-                        msgParts.push(args.message)
-                    }
+                        const msgParts = []
 
-                    if (args.image_url) {
-                        msgParts.push(segment.image(args.image_url))
-                    }
+                        if (args.at_user) {
+                            if (args.at_user === 'all') {
+                                msgParts.push(segment.at('all'))
+                            } else {
+                                msgParts.push(segment.at(parseInt(args.at_user)))
+                            }
+                            msgParts.push(' ')
+                        }
 
-                    if (args.video_url) {
-                        msgParts.push(segment.video(args.video_url))
-                    }
+                        if (args.message) {
+                            msgParts.push(args.message)
+                        }
 
-                    if (msgParts.length === 0) {
-                        return { error: '消息内容不能为空' }
-                    }
+                        if (args.image_url) {
+                            msgParts.push(segment.image(args.image_url))
+                        }
 
-                    const result = await group.sendMsg(msgParts)
-                    return { success: true, message_id: result.message_id, group_id: groupId }
+                        if (args.video_url) {
+                            msgParts.push(segment.video(args.video_url))
+                        }
+
+                        if (msgParts.length === 0) {
+                            return { success: false, error: '消息内容不能为空' }
+                        }
+
+                        const result = await group.sendMsg(msgParts)
+                        return { success: true, message_id: result.message_id, group_id: groupId, group_name: groupInfo.group_name }
+                    } catch (err) {
+                        return { success: false, error: `发送群消息失败: ${err.message}` }
+                    }
                 }
             },
 
@@ -988,42 +1004,46 @@ export class BuiltinMcpServer {
                     }
                 },
                 handler: async (args, ctx) => {
-                    const e = ctx.getEvent()
-                    if (!e) {
-                        return { error: '没有可用的会话上下文' }
+                    try {
+                        const e = ctx.getEvent()
+                        if (!e) {
+                            return { success: false, error: '没有可用的会话上下文' }
+                        }
+
+                        const msgParts = []
+
+                        // 处理 @全体
+                        if (args.at_all && e.group_id) {
+                            msgParts.push(segment.at('all'))
+                        }
+
+                        // 处理 @用户
+                        if (args.at_user) {
+                            const targetId = args.at_user === 'sender' ? e.user_id : args.at_user
+                            msgParts.push(segment.at(targetId))
+                        }
+
+                        if (args.message) {
+                            msgParts.push(args.message)
+                        }
+
+                        if (args.image_url) {
+                            msgParts.push(segment.image(args.image_url))
+                        }
+
+                        if (args.video_url) {
+                            msgParts.push(segment.video(args.video_url))
+                        }
+
+                        if (msgParts.length === 0) {
+                            return { success: false, error: '消息内容不能为空' }
+                        }
+
+                        const result = await e.reply(msgParts, args.quote || false)
+                        return { success: true, message_id: result?.message_id }
+                    } catch (err) {
+                        return { success: false, error: `回复消息失败: ${err.message}` }
                     }
-
-                    const msgParts = []
-
-                    // 处理 @全体
-                    if (args.at_all && e.group_id) {
-                        msgParts.push(segment.at('all'))
-                    }
-
-                    // 处理 @用户
-                    if (args.at_user) {
-                        const targetId = args.at_user === 'sender' ? e.user_id : args.at_user
-                        msgParts.push(segment.at(targetId))
-                    }
-
-                    if (args.message) {
-                        msgParts.push(args.message)
-                    }
-
-                    if (args.image_url) {
-                        msgParts.push(segment.image(args.image_url))
-                    }
-
-                    if (args.video_url) {
-                        msgParts.push(segment.video(args.video_url))
-                    }
-
-                    if (msgParts.length === 0) {
-                        return { error: '消息内容不能为空' }
-                    }
-
-                    const result = await e.reply(msgParts, args.quote || false)
-                    return { success: true, message_id: result?.message_id }
                 }
             },
 
@@ -1039,34 +1059,38 @@ export class BuiltinMcpServer {
                     required: ['user_id']
                 },
                 handler: async (args, ctx) => {
-                    const e = ctx.getEvent()
-                    if (!e) {
-                        return { error: '没有可用的会话上下文' }
-                    }
-
-                    const msgParts = []
-                    
-                    // 确定要@的用户
-                    let targetId = args.user_id
-                    if (targetId === 'sender') {
-                        targetId = e.user_id
-                    }
-                    
-                    if (targetId === 'all') {
-                        if (!e.group_id) {
-                            return { error: '@全体仅在群聊中有效' }
+                    try {
+                        const e = ctx.getEvent()
+                        if (!e) {
+                            return { success: false, error: '没有可用的会话上下文' }
                         }
-                        msgParts.push(segment.at('all'))
-                    } else {
-                        msgParts.push(segment.at(targetId))
-                    }
 
-                    if (args.message) {
-                        msgParts.push(' ' + args.message)
-                    }
+                        const msgParts = []
+                        
+                        // 确定要@的用户
+                        let targetId = args.user_id
+                        if (targetId === 'sender') {
+                            targetId = e.user_id
+                        }
+                        
+                        if (targetId === 'all') {
+                            if (!e.group_id) {
+                                return { success: false, error: '@全体仅在群聊中有效' }
+                            }
+                            msgParts.push(segment.at('all'))
+                        } else {
+                            msgParts.push(segment.at(targetId))
+                        }
 
-                    const result = await e.reply(msgParts)
-                    return { success: true, message_id: result?.message_id, at_target: targetId }
+                        if (args.message) {
+                            msgParts.push(' ' + args.message)
+                        }
+
+                        const result = await e.reply(msgParts)
+                        return { success: true, message_id: result?.message_id, at_target: targetId }
+                    } catch (err) {
+                        return { success: false, error: `@用户失败: ${err.message}` }
+                    }
                 }
             },
 
@@ -1106,7 +1130,9 @@ export class BuiltinMcpServer {
                             }
                         }
                         return {
+                            success: true,
                             text: `解析到 ${images.length} 张图片`,
+                            count: images.length,
                             images
                         }
                     }
@@ -1120,6 +1146,7 @@ export class BuiltinMcpServer {
                             const contentType = response.headers.get('content-type') || 'image/png'
 
                             return {
+                                success: true,
                                 text: '图片解析成功',
                                 image: {
                                     url: args.image_url,
@@ -1129,11 +1156,11 @@ export class BuiltinMcpServer {
                                 }
                             }
                         } catch (err) {
-                            return { error: `图片解析失败: ${err.message}` }
+                            return { success: false, error: `图片解析失败: ${err.message}` }
                         }
                     }
 
-                    return { error: '没有可解析的图片' }
+                    return { success: false, error: '没有可解析的图片' }
                 }
             },
 
@@ -1152,34 +1179,40 @@ export class BuiltinMcpServer {
                     required: ['target_type']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const e = ctx.getEvent()
+                    try {
+                        const bot = ctx.getBot()
+                        const e = ctx.getEvent()
 
-                    let imageSource = args.image_url || args.image_base64 || args.image_path
-                    if (!imageSource) {
-                        return { error: '需要提供图片来源' }
+                        let imageSource = args.image_url || args.image_base64 || args.image_path
+                        if (!imageSource) {
+                            return { success: false, error: '需要提供图片来源（image_url/image_base64/image_path）' }
+                        }
+
+                        const imgSegment = segment.image(imageSource)
+
+                        if (args.target_type === 'current' && e) {
+                            const result = await e.reply(imgSegment)
+                            return { success: true, message_id: result?.message_id }
+                        }
+
+                        if (args.target_type === 'private') {
+                            if (!args.target_id) return { success: false, error: '私聊需要提供 target_id' }
+                            const friend = bot.pickFriend(parseInt(args.target_id))
+                            const result = await friend.sendMsg(imgSegment)
+                            return { success: true, message_id: result.message_id, user_id: args.target_id }
+                        }
+
+                        if (args.target_type === 'group') {
+                            if (!args.target_id) return { success: false, error: '群聊需要提供 target_id' }
+                            const group = bot.pickGroup(parseInt(args.target_id))
+                            const result = await group.sendMsg(imgSegment)
+                            return { success: true, message_id: result.message_id, group_id: args.target_id }
+                        }
+
+                        return { success: false, error: '无效的目标类型，应为 private/group/current' }
+                    } catch (err) {
+                        return { success: false, error: `发送图片失败: ${err.message}` }
                     }
-
-                    const imgSegment = segment.image(imageSource)
-
-                    if (args.target_type === 'current' && e) {
-                        const result = await e.reply(imgSegment)
-                        return { success: true, message_id: result?.message_id }
-                    }
-
-                    if (args.target_type === 'private') {
-                        const friend = bot.pickFriend(parseInt(args.target_id))
-                        const result = await friend.sendMsg(imgSegment)
-                        return { success: true, message_id: result.message_id }
-                    }
-
-                    if (args.target_type === 'group') {
-                        const group = bot.pickGroup(parseInt(args.target_id))
-                        const result = await group.sendMsg(imgSegment)
-                        return { success: true, message_id: result.message_id }
-                    }
-
-                    return { error: '无效的目标类型' }
                 }
             },
 
@@ -1201,6 +1234,7 @@ export class BuiltinMcpServer {
                         for (const msg of e.message) {
                             if (msg.type === 'video') {
                                 return {
+                                    success: true,
                                     text: '解析到视频',
                                     video: {
                                         url: msg.url || msg.file,
@@ -1214,6 +1248,7 @@ export class BuiltinMcpServer {
 
                     if (args.video_url) {
                         return {
+                            success: true,
                             text: '视频信息',
                             video: {
                                 url: args.video_url,
@@ -1222,7 +1257,7 @@ export class BuiltinMcpServer {
                         }
                     }
 
-                    return { error: '没有可解析的视频' }
+                    return { success: false, error: '没有可解析的视频' }
                 }
             },
 
@@ -1240,34 +1275,40 @@ export class BuiltinMcpServer {
                     required: ['target_type']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const e = ctx.getEvent()
+                    try {
+                        const bot = ctx.getBot()
+                        const e = ctx.getEvent()
 
-                    let videoSource = args.video_url || args.video_path
-                    if (!videoSource) {
-                        return { error: '需要提供视频来源' }
+                        let videoSource = args.video_url || args.video_path
+                        if (!videoSource) {
+                            return { success: false, error: '需要提供视频来源（video_url/video_path）' }
+                        }
+
+                        const videoSegment = segment.video(videoSource)
+
+                        if (args.target_type === 'current' && e) {
+                            const result = await e.reply(videoSegment)
+                            return { success: true, message_id: result?.message_id }
+                        }
+
+                        if (args.target_type === 'private') {
+                            if (!args.target_id) return { success: false, error: '私聊需要提供 target_id' }
+                            const friend = bot.pickFriend(parseInt(args.target_id))
+                            const result = await friend.sendMsg(videoSegment)
+                            return { success: true, message_id: result.message_id, user_id: args.target_id }
+                        }
+
+                        if (args.target_type === 'group') {
+                            if (!args.target_id) return { success: false, error: '群聊需要提供 target_id' }
+                            const group = bot.pickGroup(parseInt(args.target_id))
+                            const result = await group.sendMsg(videoSegment)
+                            return { success: true, message_id: result.message_id, group_id: args.target_id }
+                        }
+
+                        return { success: false, error: '无效的目标类型，应为 private/group/current' }
+                    } catch (err) {
+                        return { success: false, error: `发送视频失败: ${err.message}` }
                     }
-
-                    const videoSegment = segment.video(videoSource)
-
-                    if (args.target_type === 'current' && e) {
-                        const result = await e.reply(videoSegment)
-                        return { success: true, message_id: result?.message_id }
-                    }
-
-                    if (args.target_type === 'private') {
-                        const friend = bot.pickFriend(parseInt(args.target_id))
-                        const result = await friend.sendMsg(videoSegment)
-                        return { success: true, message_id: result.message_id }
-                    }
-
-                    if (args.target_type === 'group') {
-                        const group = bot.pickGroup(parseInt(args.target_id))
-                        const result = await group.sendMsg(videoSegment)
-                        return { success: true, message_id: result.message_id }
-                    }
-
-                    return { error: '无效的目标类型' }
                 }
             },
 
@@ -1282,7 +1323,7 @@ export class BuiltinMcpServer {
                 handler: async (args, ctx) => {
                     const e = ctx.getEvent()
                     if (!e?.message) {
-                        return { error: '没有可解析的消息' }
+                        return { success: false, error: '没有可解析的消息' }
                     }
 
                     const files = []
@@ -1298,10 +1339,10 @@ export class BuiltinMcpServer {
                     }
 
                     if (files.length === 0) {
-                        return { error: '消息中没有文件' }
+                        return { success: false, error: '消息中没有文件' }
                     }
 
-                    return { text: `解析到 ${files.length} 个文件`, files }
+                    return { success: true, text: `解析到 ${files.length} 个文件`, count: files.length, files }
                 }
             },
 
@@ -1317,25 +1358,39 @@ export class BuiltinMcpServer {
                     required: ['group_id']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const groupId = parseInt(args.group_id)
-                    const group = bot.pickGroup(groupId)
-                    const gfs = group.fs
+                    try {
+                        const bot = ctx.getBot()
+                        const groupId = parseInt(args.group_id)
+                        
+                        // 检查机器人是否在群内
+                        const groupInfo = bot.gl?.get(groupId)
+                        if (!groupInfo) {
+                            return { success: false, error: '机器人不在此群内，无法获取群文件' }
+                        }
+                        
+                        const group = bot.pickGroup(groupId)
+                        const gfs = group.fs
 
-                    const folderId = args.folder_id || '/'
-                    const files = await gfs.dir(folderId)
+                        const folderId = args.folder_id || '/'
+                        const files = await gfs.dir(folderId)
 
-                    return {
-                        group_id: groupId,
-                        folder_id: folderId,
-                        files: files.map(f => ({
-                            id: f.fid,
-                            name: f.name,
-                            size: f.size,
-                            upload_time: f.upload_time,
-                            uploader: f.uploader,
-                            is_folder: f.is_dir
-                        }))
+                        return {
+                            success: true,
+                            group_id: groupId,
+                            group_name: groupInfo.group_name,
+                            folder_id: folderId,
+                            count: files.length,
+                            files: files.map(f => ({
+                                id: f.fid,
+                                name: f.name,
+                                size: f.size,
+                                upload_time: f.upload_time,
+                                uploader: f.uploader,
+                                is_folder: f.is_dir
+                            }))
+                        }
+                    } catch (err) {
+                        return { success: false, error: `获取群文件列表失败: ${err.message}` }
                     }
                 }
             },
@@ -1352,12 +1407,22 @@ export class BuiltinMcpServer {
                     required: ['group_id', 'file_id']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const groupId = parseInt(args.group_id)
-                    const group = bot.pickGroup(groupId)
-                    const url = await group.fs.download(args.file_id)
+                    try {
+                        const bot = ctx.getBot()
+                        const groupId = parseInt(args.group_id)
+                        
+                        const groupInfo = bot.gl?.get(groupId)
+                        if (!groupInfo) {
+                            return { success: false, error: '机器人不在此群内' }
+                        }
+                        
+                        const group = bot.pickGroup(groupId)
+                        const url = await group.fs.download(args.file_id)
 
-                    return { group_id: groupId, file_id: args.file_id, url }
+                        return { success: true, group_id: groupId, file_id: args.file_id, url }
+                    } catch (err) {
+                        return { success: false, error: `获取文件下载链接失败: ${err.message}` }
+                    }
                 }
             },
 
@@ -1374,45 +1439,56 @@ export class BuiltinMcpServer {
                     }
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const e = ctx.getEvent()
-                    const count = args.count || 20
+                    try {
+                        const bot = ctx.getBot()
+                        const e = ctx.getEvent()
+                        const count = args.count || 20
 
-                    let target
-                    let targetId
+                        let target
+                        let targetId
+                        let chatType
 
-                    if (args.type === 'current' && e) {
-                        if (e.group_id) {
-                            target = bot.pickGroup(e.group_id)
-                            targetId = e.group_id
+                        if (args.type === 'current' && e) {
+                            if (e.group_id) {
+                                target = bot.pickGroup(e.group_id)
+                                targetId = e.group_id
+                                chatType = 'group'
+                            } else {
+                                target = bot.pickFriend(e.user_id)
+                                targetId = e.user_id
+                                chatType = 'private'
+                            }
+                        } else if (args.type === 'group') {
+                            if (!args.target_id) return { success: false, error: '群聊需要提供 target_id' }
+                            targetId = parseInt(args.target_id)
+                            target = bot.pickGroup(targetId)
+                            chatType = 'group'
+                        } else if (args.type === 'private') {
+                            if (!args.target_id) return { success: false, error: '私聊需要提供 target_id' }
+                            targetId = parseInt(args.target_id)
+                            target = bot.pickFriend(targetId)
+                            chatType = 'private'
                         } else {
-                            target = bot.pickFriend(e.user_id)
-                            targetId = e.user_id
+                            return { success: false, error: '无效的聊天类型，应为 group/private/current' }
                         }
-                    } else if (args.type === 'group') {
-                        targetId = parseInt(args.target_id)
-                        target = bot.pickGroup(targetId)
-                    } else if (args.type === 'private') {
-                        targetId = parseInt(args.target_id)
-                        target = bot.pickFriend(targetId)
-                    } else {
-                        return { error: '无效的聊天类型' }
+
+                        const history = await target.getChatHistory(0, count)
+
+                        const messages = history.map(msg => ({
+                            message_id: msg.message_id,
+                            user_id: msg.sender?.user_id,
+                            nickname: msg.sender?.nickname,
+                            card: msg.sender?.card || '',
+                            time: msg.time,
+                            raw_message: msg.raw_message,
+                            has_image: msg.message?.some(m => m.type === 'image'),
+                            has_video: msg.message?.some(m => m.type === 'video')
+                        }))
+
+                        return { success: true, chat_type: chatType, target_id: targetId, count: messages.length, messages }
+                    } catch (err) {
+                        return { success: false, error: `获取聊天记录失败: ${err.message}` }
                     }
-
-                    const history = await target.getChatHistory(0, count)
-
-                    const messages = history.map(msg => ({
-                        message_id: msg.message_id,
-                        user_id: msg.sender?.user_id,
-                        nickname: msg.sender?.nickname,
-                        card: msg.sender?.card || '',
-                        time: msg.time,
-                        raw_message: msg.raw_message,
-                        has_image: msg.message?.some(m => m.type === 'image'),
-                        has_video: msg.message?.some(m => m.type === 'video')
-                    }))
-
-                    return { target_id: targetId, count: messages.length, messages }
                 }
             },
 
@@ -1430,13 +1506,23 @@ export class BuiltinMcpServer {
                     required: ['group_id', 'user_id', 'card']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const groupId = parseInt(args.group_id)
-                    const userId = parseInt(args.user_id)
-                    const group = bot.pickGroup(groupId)
-                    await group.setCard(userId, args.card)
+                    try {
+                        const bot = ctx.getBot()
+                        const groupId = parseInt(args.group_id)
+                        const userId = parseInt(args.user_id)
+                        
+                        const groupInfo = bot.gl?.get(groupId)
+                        if (!groupInfo) {
+                            return { success: false, error: '机器人不在此群内' }
+                        }
+                        
+                        const group = bot.pickGroup(groupId)
+                        await group.setCard(userId, args.card)
 
-                    return { success: true, group_id: groupId, user_id: userId, card: args.card }
+                        return { success: true, group_id: groupId, user_id: userId, card: args.card }
+                    } catch (err) {
+                        return { success: false, error: `设置群名片失败: ${err.message}` }
+                    }
                 }
             },
 
@@ -1453,19 +1539,30 @@ export class BuiltinMcpServer {
                     required: ['group_id', 'user_id', 'duration']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const groupId = parseInt(args.group_id)
-                    const userId = parseInt(args.user_id)
-                    const group = bot.pickGroup(groupId)
-                    
-                    // icqq: group.muteMember(user_id, duration) 或 pickMember(uid).mute(duration)
-                    if (typeof group.muteMember === 'function') {
-                        await group.muteMember(userId, args.duration)
-                    } else {
-                        await group.pickMember(userId).mute(args.duration)
-                    }
+                    try {
+                        const bot = ctx.getBot()
+                        const groupId = parseInt(args.group_id)
+                        const userId = parseInt(args.user_id)
+                        
+                        const groupInfo = bot.gl?.get(groupId)
+                        if (!groupInfo) {
+                            return { success: false, error: '机器人不在此群内' }
+                        }
+                        
+                        const group = bot.pickGroup(groupId)
+                        
+                        // icqq: group.muteMember(user_id, duration) 或 pickMember(uid).mute(duration)
+                        if (typeof group.muteMember === 'function') {
+                            await group.muteMember(userId, args.duration)
+                        } else {
+                            await group.pickMember(userId).mute(args.duration)
+                        }
 
-                    return { success: true, group_id: groupId, user_id: userId, duration: args.duration }
+                        const action = args.duration > 0 ? `禁言 ${args.duration} 秒` : '解除禁言'
+                        return { success: true, group_id: groupId, user_id: userId, duration: args.duration, action }
+                    } catch (err) {
+                        return { success: false, error: `禁言操作失败: ${err.message}` }
+                    }
                 }
             },
 
@@ -1482,19 +1579,29 @@ export class BuiltinMcpServer {
                     required: ['group_id', 'user_id']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const groupId = parseInt(args.group_id)
-                    const userId = parseInt(args.user_id)
-                    const group = bot.pickGroup(groupId)
-                    
-                    // icqq: group.kickMember(user_id, block) 或 pickMember(uid).kick(block)
-                    if (typeof group.kickMember === 'function') {
-                        await group.kickMember(userId, args.reject_add || false)
-                    } else {
-                        await group.pickMember(userId).kick(args.reject_add || false)
-                    }
+                    try {
+                        const bot = ctx.getBot()
+                        const groupId = parseInt(args.group_id)
+                        const userId = parseInt(args.user_id)
+                        
+                        const groupInfo = bot.gl?.get(groupId)
+                        if (!groupInfo) {
+                            return { success: false, error: '机器人不在此群内' }
+                        }
+                        
+                        const group = bot.pickGroup(groupId)
+                        
+                        // icqq: group.kickMember(user_id, block) 或 pickMember(uid).kick(block)
+                        if (typeof group.kickMember === 'function') {
+                            await group.kickMember(userId, args.reject_add || false)
+                        } else {
+                            await group.pickMember(userId).kick(args.reject_add || false)
+                        }
 
-                    return { success: true, group_id: groupId, user_id: userId }
+                        return { success: true, group_id: groupId, user_id: userId, reject_add: args.reject_add || false }
+                    } catch (err) {
+                        return { success: false, error: `踢出成员失败: ${err.message}` }
+                    }
                 }
             },
 
@@ -1509,18 +1616,22 @@ export class BuiltinMcpServer {
                     required: ['message_id']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    
-                    // icqq: bot.deleteMsg 或 bot.recallMsg
-                    if (typeof bot.deleteMsg === 'function') {
-                        await bot.deleteMsg(args.message_id)
-                    } else if (typeof bot.recallMsg === 'function') {
-                        await bot.recallMsg(args.message_id)
-                    } else {
-                        return { error: '不支持撤回消息' }
-                    }
+                    try {
+                        const bot = ctx.getBot()
+                        
+                        // icqq: bot.deleteMsg 或 bot.recallMsg
+                        if (typeof bot.deleteMsg === 'function') {
+                            await bot.deleteMsg(args.message_id)
+                        } else if (typeof bot.recallMsg === 'function') {
+                            await bot.recallMsg(args.message_id)
+                        } else {
+                            return { success: false, error: '当前协议不支持撤回消息' }
+                        }
 
-                    return { success: true, message_id: args.message_id }
+                        return { success: true, message_id: args.message_id }
+                    } catch (err) {
+                        return { success: false, error: `撤回消息失败: ${err.message}` }
+                    }
                 }
             },
 
@@ -1535,10 +1646,11 @@ export class BuiltinMcpServer {
                 handler: async (args, ctx) => {
                     const e = ctx.getEvent()
                     if (!e) {
-                        return { error: '没有可用的会话上下文' }
+                        return { success: false, error: '没有可用的会话上下文' }
                     }
 
                     const context = {
+                        success: true,
                         // 基本信息
                         user_id: e.user_id,
                         nickname: e.sender?.nickname,
@@ -1649,11 +1761,11 @@ export class BuiltinMcpServer {
                 handler: async (args, ctx) => {
                     const e = ctx.getEvent()
                     if (!e) {
-                        return { error: '没有可用的会话上下文' }
+                        return { success: false, error: '没有可用的会话上下文' }
                     }
 
                     if (!e.source) {
-                        return { error: '当前消息没有引用其他消息', has_reply: false }
+                        return { success: true, has_reply: false, message: '当前消息没有引用其他消息' }
                     }
 
                     const bot = ctx.getBot()
@@ -1674,6 +1786,7 @@ export class BuiltinMcpServer {
                     }
 
                     return {
+                        success: true,
                         has_reply: true,
                         message_id: source.message_id || source.seq,
                         user_id: source.user_id,
@@ -1710,12 +1823,12 @@ export class BuiltinMcpServer {
                     const bot = ctx.getBot()
                     
                     if (!e?.message) {
-                        return { error: '没有可用的消息', at_count: 0 }
+                        return { success: false, error: '没有可用的消息' }
                     }
 
                     const atList = e.message.filter(m => m.type === 'at')
                     if (atList.length === 0) {
-                        return { at_count: 0, members: [], atme: e.atme || false, atall: e.atall || false }
+                        return { success: true, at_count: 0, members: [], atme: e.atme || false, atall: e.atall || false }
                     }
 
                     const members = []
@@ -1743,6 +1856,7 @@ export class BuiltinMcpServer {
                     }
 
                     return {
+                        success: true,
                         at_count: members.length,
                         atme: e.atme || false,
                         atall: e.atall || false,
@@ -1788,10 +1902,11 @@ export class BuiltinMcpServer {
                         }
 
                         if (!msg) {
-                            return { error: '消息不存在或已过期' }
+                            return { success: false, error: '消息不存在或已过期' }
                         }
 
                         return {
+                            success: true,
                             message_id: msg.message_id,
                             user_id: msg.sender?.user_id,
                             nickname: msg.sender?.nickname,
@@ -1802,7 +1917,7 @@ export class BuiltinMcpServer {
                             message: msg.message
                         }
                     } catch (err) {
-                        return { error: '获取消息失败: ' + err.message }
+                        return { success: false, error: '获取消息失败: ' + err.message }
                     }
                 }
             },
@@ -1824,6 +1939,7 @@ export class BuiltinMcpServer {
                         const msgs = await bot.getForwardMsg(args.res_id)
                         
                         return {
+                            success: true,
                             count: msgs.length,
                             messages: msgs.map(m => ({
                                 user_id: m.user_id,
@@ -1834,7 +1950,7 @@ export class BuiltinMcpServer {
                             }))
                         }
                     } catch (err) {
-                        return { error: '获取转发消息失败: ' + err.message }
+                        return { success: false, error: '获取转发消息失败: ' + err.message }
                     }
                 }
             },
@@ -1862,7 +1978,7 @@ export class BuiltinMcpServer {
                     } else if (args.type === 'group') {
                         url = `https://p.qlogo.cn/gh/${id}/${id}/${size}`
                     } else {
-                        return { error: '无效的类型' }
+                        return { success: false, error: '无效的类型，应为 user/group' }
                     }
 
                     if (args.as_base64) {
@@ -1873,6 +1989,7 @@ export class BuiltinMcpServer {
                             const contentType = response.headers.get('content-type') || 'image/png'
 
                             return {
+                                success: true,
                                 url,
                                 image: {
                                     base64: `data:${contentType};base64,${base64}`,
@@ -1880,11 +1997,11 @@ export class BuiltinMcpServer {
                                 }
                             }
                         } catch (err) {
-                            return { url, error: err.message }
+                            return { success: false, url, error: `获取头像失败: ${err.message}` }
                         }
                     }
 
-                    return { url }
+                    return { success: true, url }
                 }
             },
 
@@ -1901,18 +2018,30 @@ export class BuiltinMcpServer {
                     required: ['group_id', 'enable']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const groupId = parseInt(args.group_id)
-                    const group = bot.pickGroup(groupId)
-                    
-                    // icqq: group.muteAll(enable) 或 group.muteAnonymous(enable)
-                    if (typeof group.muteAll === 'function') {
-                        await group.muteAll(args.enable)
-                    } else if (typeof group.setMuteAll === 'function') {
-                        await group.setMuteAll(args.enable)
+                    try {
+                        const bot = ctx.getBot()
+                        const groupId = parseInt(args.group_id)
+                        
+                        const groupInfo = bot.gl?.get(groupId)
+                        if (!groupInfo) {
+                            return { success: false, error: '机器人不在此群内' }
+                        }
+                        
+                        const group = bot.pickGroup(groupId)
+                        
+                        // icqq: group.muteAll(enable) 或 group.muteAnonymous(enable)
+                        if (typeof group.muteAll === 'function') {
+                            await group.muteAll(args.enable)
+                        } else if (typeof group.setMuteAll === 'function') {
+                            await group.setMuteAll(args.enable)
+                        } else {
+                            return { success: false, error: '当前协议不支持全群禁言' }
+                        }
+                        
+                        return { success: true, group_id: groupId, whole_ban: args.enable, action: args.enable ? '开启全群禁言' : '关闭全群禁言' }
+                    } catch (err) {
+                        return { success: false, error: `全群禁言操作失败: ${err.message}` }
                     }
-                    
-                    return { success: true, group_id: groupId, whole_ban: args.enable }
                 }
             },
 
@@ -1929,12 +2058,22 @@ export class BuiltinMcpServer {
                     required: ['group_id', 'user_id', 'enable']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const groupId = parseInt(args.group_id)
-                    const userId = parseInt(args.user_id)
-                    const group = bot.pickGroup(groupId)
-                    await group.setAdmin(userId, args.enable)
-                    return { success: true, group_id: groupId, user_id: userId, is_admin: args.enable }
+                    try {
+                        const bot = ctx.getBot()
+                        const groupId = parseInt(args.group_id)
+                        const userId = parseInt(args.user_id)
+                        
+                        const groupInfo = bot.gl?.get(groupId)
+                        if (!groupInfo) {
+                            return { success: false, error: '机器人不在此群内' }
+                        }
+                        
+                        const group = bot.pickGroup(groupId)
+                        await group.setAdmin(userId, args.enable)
+                        return { success: true, group_id: groupId, user_id: userId, is_admin: args.enable, action: args.enable ? '设置为管理员' : '取消管理员' }
+                    } catch (err) {
+                        return { success: false, error: `设置管理员失败: ${err.message}` }
+                    }
                 }
             },
 
@@ -1950,11 +2089,21 @@ export class BuiltinMcpServer {
                     required: ['group_id', 'name']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const groupId = parseInt(args.group_id)
-                    const group = bot.pickGroup(groupId)
-                    await group.setName(args.name)
-                    return { success: true, group_id: groupId, name: args.name }
+                    try {
+                        const bot = ctx.getBot()
+                        const groupId = parseInt(args.group_id)
+                        
+                        const groupInfo = bot.gl?.get(groupId)
+                        if (!groupInfo) {
+                            return { success: false, error: '机器人不在此群内' }
+                        }
+                        
+                        const group = bot.pickGroup(groupId)
+                        await group.setName(args.name)
+                        return { success: true, group_id: groupId, new_name: args.name }
+                    } catch (err) {
+                        return { success: false, error: `修改群名称失败: ${err.message}` }
+                    }
                 }
             },
 
@@ -1972,12 +2121,22 @@ export class BuiltinMcpServer {
                     required: ['group_id', 'user_id', 'title']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const groupId = parseInt(args.group_id)
-                    const userId = parseInt(args.user_id)
-                    const group = bot.pickGroup(groupId)
-                    await group.setTitle(userId, args.title, args.duration || -1)
-                    return { success: true, group_id: groupId, user_id: userId, title: args.title }
+                    try {
+                        const bot = ctx.getBot()
+                        const groupId = parseInt(args.group_id)
+                        const userId = parseInt(args.user_id)
+                        
+                        const groupInfo = bot.gl?.get(groupId)
+                        if (!groupInfo) {
+                            return { success: false, error: '机器人不在此群内' }
+                        }
+                        
+                        const group = bot.pickGroup(groupId)
+                        await group.setTitle(userId, args.title, args.duration || -1)
+                        return { success: true, group_id: groupId, user_id: userId, title: args.title }
+                    } catch (err) {
+                        return { success: false, error: `设置专属头衔失败: ${err.message}` }
+                    }
                 }
             },
 
@@ -1993,20 +2152,30 @@ export class BuiltinMcpServer {
                     required: ['group_id', 'content']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const groupId = parseInt(args.group_id)
-                    const group = bot.pickGroup(groupId)
-                    
-                    // icqq: group.announce(content) 或 bot.sendGroupNotice
-                    if (typeof group.announce === 'function') {
-                        await group.announce(args.content)
-                    } else if (typeof bot.sendGroupNotice === 'function') {
-                        await bot.sendGroupNotice(groupId, args.content)
-                    } else {
-                        return { error: '不支持发送群公告' }
+                    try {
+                        const bot = ctx.getBot()
+                        const groupId = parseInt(args.group_id)
+                        
+                        const groupInfo = bot.gl?.get(groupId)
+                        if (!groupInfo) {
+                            return { success: false, error: '机器人不在此群内' }
+                        }
+                        
+                        const group = bot.pickGroup(groupId)
+                        
+                        // icqq: group.announce(content) 或 bot.sendGroupNotice
+                        if (typeof group.announce === 'function') {
+                            await group.announce(args.content)
+                        } else if (typeof bot.sendGroupNotice === 'function') {
+                            await bot.sendGroupNotice(groupId, args.content)
+                        } else {
+                            return { success: false, error: '当前协议不支持发送群公告' }
+                        }
+                        
+                        return { success: true, group_id: groupId, content: args.content }
+                    } catch (err) {
+                        return { success: false, error: `发送群公告失败: ${err.message}` }
                     }
-                    
-                    return { success: true, group_id: groupId }
                 }
             },
 
@@ -2161,9 +2330,13 @@ export class BuiltinMcpServer {
                     required: ['flag', 'approve']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    await bot.setFriendAddRequest(args.flag, args.approve, args.remark || '')
-                    return { success: true, approved: args.approve }
+                    try {
+                        const bot = ctx.getBot()
+                        await bot.setFriendAddRequest(args.flag, args.approve, args.remark || '')
+                        return { success: true, approved: args.approve, action: args.approve ? '已同意' : '已拒绝' }
+                    } catch (err) {
+                        return { success: false, error: `处理好友请求失败: ${err.message}` }
+                    }
                 }
             },
 
@@ -2180,9 +2353,13 @@ export class BuiltinMcpServer {
                     required: ['flag', 'approve']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    await bot.setGroupAddRequest(args.flag, args.approve, args.reason || '')
-                    return { success: true, approved: args.approve }
+                    try {
+                        const bot = ctx.getBot()
+                        await bot.setGroupAddRequest(args.flag, args.approve, args.reason || '')
+                        return { success: true, approved: args.approve, action: args.approve ? '已同意' : '已拒绝' }
+                    } catch (err) {
+                        return { success: false, error: `处理加群请求失败: ${err.message}` }
+                    }
                 }
             },
 
@@ -2211,35 +2388,45 @@ export class BuiltinMcpServer {
                     required: ['target_type', 'messages']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const e = ctx.getEvent()
+                    try {
+                        const bot = ctx.getBot()
+                        const e = ctx.getEvent()
 
-                    const nodes = args.messages.map(msg => ({
-                        user_id: parseInt(msg.user_id) || bot.uin,
-                        nickname: msg.nickname || '消息',
-                        message: msg.content
-                    }))
+                        if (!args.messages || args.messages.length === 0) {
+                            return { success: false, error: '消息列表不能为空' }
+                        }
 
-                    const forwardMsg = await bot.makeForwardMsg(nodes)
+                        const nodes = args.messages.map(msg => ({
+                            user_id: parseInt(msg.user_id) || bot.uin,
+                            nickname: msg.nickname || '消息',
+                            message: msg.content
+                        }))
 
-                    if (args.target_type === 'current' && e) {
-                        await e.reply(forwardMsg)
-                        return { success: true }
+                        const forwardMsg = await bot.makeForwardMsg(nodes)
+
+                        if (args.target_type === 'current' && e) {
+                            await e.reply(forwardMsg)
+                            return { success: true, message_count: nodes.length }
+                        }
+
+                        if (args.target_type === 'group') {
+                            if (!args.target_id) return { success: false, error: '群聊需要提供 target_id' }
+                            const group = bot.pickGroup(parseInt(args.target_id))
+                            await group.sendMsg(forwardMsg)
+                            return { success: true, group_id: args.target_id, message_count: nodes.length }
+                        }
+
+                        if (args.target_type === 'private') {
+                            if (!args.target_id) return { success: false, error: '私聊需要提供 target_id' }
+                            const friend = bot.pickFriend(parseInt(args.target_id))
+                            await friend.sendMsg(forwardMsg)
+                            return { success: true, user_id: args.target_id, message_count: nodes.length }
+                        }
+
+                        return { success: false, error: '无效的目标类型，应为 group/private/current' }
+                    } catch (err) {
+                        return { success: false, error: `发送转发消息失败: ${err.message}` }
                     }
-
-                    if (args.target_type === 'group') {
-                        const group = bot.pickGroup(parseInt(args.target_id))
-                        await group.sendMsg(forwardMsg)
-                        return { success: true, group_id: args.target_id }
-                    }
-
-                    if (args.target_type === 'private') {
-                        const friend = bot.pickFriend(parseInt(args.target_id))
-                        await friend.sendMsg(forwardMsg)
-                        return { success: true, user_id: args.target_id }
-                    }
-
-                    return { error: '无效的目标类型' }
                 }
             },
 
@@ -2255,20 +2442,23 @@ export class BuiltinMcpServer {
                     required: ['image_url']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
                     try {
+                        const bot = ctx.getBot()
                         // icqq: bot.imageOcr(image) 或不支持
                         if (typeof bot.imageOcr === 'function') {
                             const result = await bot.imageOcr(args.image_url)
+                            const texts = result?.texts || result?.wordslist?.map(w => w.words) || []
                             return {
-                                texts: result?.texts || result?.wordslist?.map(w => w.words) || [],
+                                success: true,
+                                texts,
+                                text: texts.join('\n'),
                                 language: result?.language
                             }
                         } else {
-                            return { error: '当前协议不支持OCR功能' }
+                            return { success: false, error: '当前协议不支持OCR功能' }
                         }
                     } catch (err) {
-                        return { error: 'OCR识别失败: ' + err.message }
+                        return { success: false, error: 'OCR识别失败: ' + err.message }
                     }
                 }
             },
@@ -2284,6 +2474,7 @@ export class BuiltinMcpServer {
                 handler: async (args, ctx) => {
                     const bot = ctx.getBot()
                     return {
+                        success: true,
                         uin: bot.uin,
                         nickname: bot.nickname,
                         status: bot.status,
@@ -2338,14 +2529,28 @@ export class BuiltinMcpServer {
                     required: ['group_id', 'file_path']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const groupId = parseInt(args.group_id)
-                    const group = bot.pickGroup(groupId)
-                    
-                    const fileName = args.file_name || path.basename(args.file_path)
-                    await group.fs.upload(args.file_path, args.folder_id || '/', fileName)
-                    
-                    return { success: true, group_id: groupId, file_name: fileName }
+                    try {
+                        const bot = ctx.getBot()
+                        const groupId = parseInt(args.group_id)
+                        
+                        const groupInfo = bot.gl?.get(groupId)
+                        if (!groupInfo) {
+                            return { success: false, error: '机器人不在此群内' }
+                        }
+                        
+                        // 检查文件是否存在
+                        if (!fs.existsSync(args.file_path)) {
+                            return { success: false, error: `文件不存在: ${args.file_path}` }
+                        }
+                        
+                        const group = bot.pickGroup(groupId)
+                        const fileName = args.file_name || path.basename(args.file_path)
+                        await group.fs.upload(args.file_path, args.folder_id || '/', fileName)
+                        
+                        return { success: true, group_id: groupId, file_name: fileName }
+                    } catch (err) {
+                        return { success: false, error: `上传群文件失败: ${err.message}` }
+                    }
                 }
             },
 
@@ -2361,12 +2566,22 @@ export class BuiltinMcpServer {
                     required: ['group_id', 'file_id']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const groupId = parseInt(args.group_id)
-                    const group = bot.pickGroup(groupId)
-                    await group.fs.rm(args.file_id)
-                    
-                    return { success: true, group_id: groupId, file_id: args.file_id }
+                    try {
+                        const bot = ctx.getBot()
+                        const groupId = parseInt(args.group_id)
+                        
+                        const groupInfo = bot.gl?.get(groupId)
+                        if (!groupInfo) {
+                            return { success: false, error: '机器人不在此群内' }
+                        }
+                        
+                        const group = bot.pickGroup(groupId)
+                        await group.fs.rm(args.file_id)
+                        
+                        return { success: true, group_id: groupId, file_id: args.file_id }
+                    } catch (err) {
+                        return { success: false, error: `删除群文件失败: ${err.message}` }
+                    }
                 }
             },
 
@@ -2383,12 +2598,22 @@ export class BuiltinMcpServer {
                     required: ['group_id', 'folder_name']
                 },
                 handler: async (args, ctx) => {
-                    const bot = ctx.getBot()
-                    const groupId = parseInt(args.group_id)
-                    const group = bot.pickGroup(groupId)
-                    await group.fs.mkdir(args.folder_name, args.parent_id || '/')
-                    
-                    return { success: true, group_id: groupId, folder_name: args.folder_name }
+                    try {
+                        const bot = ctx.getBot()
+                        const groupId = parseInt(args.group_id)
+                        
+                        const groupInfo = bot.gl?.get(groupId)
+                        if (!groupInfo) {
+                            return { success: false, error: '机器人不在此群内' }
+                        }
+                        
+                        const group = bot.pickGroup(groupId)
+                        await group.fs.mkdir(args.folder_name, args.parent_id || '/')
+                        
+                        return { success: true, group_id: groupId, folder_name: args.folder_name }
+                    } catch (err) {
+                        return { success: false, error: `创建群文件夹失败: ${err.message}` }
+                    }
                 }
             },
 
