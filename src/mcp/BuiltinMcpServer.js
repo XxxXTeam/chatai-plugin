@@ -235,19 +235,163 @@ export class BuiltinMcpServer {
 
     /**
      * 执行自定义工具代码
+     * 提供完整的内部 API 访问
      */
     async executeCustomHandler(handlerCode, args, ctx) {
-        // 创建一个安全的执行环境
         const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor
         
         try {
-            // 构建执行函数，提供 args 和 ctx
-            const fn = new AsyncFunction('args', 'ctx', 'fetch', handlerCode)
-            const result = await fn(args, ctx, fetch)
+            // 构建丰富的执行环境
+            const runtime = await this.buildToolRuntime(ctx)
+            
+            // 构建执行函数，提供完整的 API 访问
+            const fn = new AsyncFunction(
+                'args', 'ctx', 'fetch', 'runtime',
+                'Redis', 'config', 'logger', 'Bot', 'fs', 'path', 'crypto',
+                handlerCode
+            )
+            
+            const result = await fn(
+                args,
+                ctx,
+                fetch,
+                runtime,
+                runtime.Redis,
+                runtime.config,
+                runtime.logger,
+                runtime.Bot,
+                fs,
+                path,
+                crypto
+            )
             return result
         } catch (error) {
             logger.error('[BuiltinMCP] Custom tool execution error:', error)
             throw error
+        }
+    }
+
+    /**
+     * 构建工具运行时环境
+     */
+    async buildToolRuntime(ctx) {
+        // 动态导入服务
+        const { redisClient } = await import('../core/cache/RedisClient.js')
+        const { chatService } = await import('../services/ChatService.js')
+        const { databaseService } = await import('../services/DatabaseService.js')
+        const { memoryManager } = await import('../services/MemoryManager.js')
+        const { channelManager } = await import('../services/ChannelManager.js')
+        
+        return {
+            // 核心服务
+            Redis: redisClient,
+            config: config,
+            logger: logger,
+            Bot: ctx?.getBot?.() || global.Bot,
+            
+            // 服务访问
+            services: {
+                chat: chatService,
+                database: databaseService,
+                memory: memoryManager,
+                channel: channelManager
+            },
+            
+            // 工具函数
+            utils: {
+                // 发送群消息
+                sendGroupMsg: async (groupId, msg) => {
+                    const bot = ctx?.getBot?.() || global.Bot
+                    if (!bot) throw new Error('Bot not available')
+                    return bot.pickGroup(parseInt(groupId)).sendMsg(msg)
+                },
+                // 发送私聊消息
+                sendPrivateMsg: async (userId, msg) => {
+                    const bot = ctx?.getBot?.() || global.Bot
+                    if (!bot) throw new Error('Bot not available')
+                    return bot.pickFriend(parseInt(userId)).sendMsg(msg)
+                },
+                // HTTP 请求
+                http: {
+                    get: async (url, options = {}) => {
+                        const res = await fetch(url, { method: 'GET', ...options })
+                        return res.json()
+                    },
+                    post: async (url, data, options = {}) => {
+                        const res = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', ...options.headers },
+                            body: JSON.stringify(data),
+                            ...options
+                        })
+                        return res.json()
+                    }
+                },
+                // 延迟
+                sleep: (ms) => new Promise(r => setTimeout(r, ms)),
+                // 生成 UUID
+                uuid: () => crypto.randomUUID(),
+                // 读取文件
+                readFile: (filePath) => fs.readFileSync(filePath, 'utf-8'),
+                // 写入文件
+                writeFile: (filePath, content) => fs.writeFileSync(filePath, content),
+                // 执行 shell 命令（受限）
+                exec: async (cmd) => {
+                    // 危险命令黑名单
+                    const dangerousPatterns = [
+                        /rm\s+(-[rf]+\s+)*[\/~]/, // rm -rf / 或 rm ~/
+                        /rm\s+-rf/, // rm -rf
+                        /mkfs/, // 格式化
+                        /dd\s+if=/, // dd 磁盘操作
+                        /:\(\)\s*\{/, // fork 炸弹
+                        /chmod\s+(-R\s+)?[0-7]{3,4}\s+[\/~]/, // chmod 根目录
+                        /chown\s+(-R\s+)?.*[\/~]/, // chown 根目录
+                        />\s*\/dev\/sd/, // 写入磁盘设备
+                        /curl.*\|\s*(ba)?sh/, // curl | sh 管道执行
+                        /wget.*\|\s*(ba)?sh/, // wget | sh 管道执行
+                        /eval\s/, // eval 执行
+                        /sudo\s/, // sudo 提权
+                        /su\s+-/, // su 切换用户
+                        /shutdown/, // 关机
+                        /reboot/, // 重启
+                        /init\s+[0-6]/, // init 运行级别
+                        /systemctl\s+(stop|disable|mask)/, // systemctl 停止服务
+                        /kill\s+-9\s+(-1|1)/, // kill -9 -1 杀死所有进程
+                        /pkill\s+-9/, // pkill -9
+                        /history\s+-c/, // 清除历史
+                        /shred/, // 安全删除
+                        /wipefs/, // 擦除文件系统
+                    ]
+                    
+                    for (const pattern of dangerousPatterns) {
+                        if (pattern.test(cmd)) {
+                            throw new Error('检测到危险命令，已拒绝执行')
+                        }
+                    }
+                    
+                    const { exec } = await import('child_process')
+                    return new Promise((resolve, reject) => {
+                        exec(cmd, { timeout: 10000 }, (err, stdout, stderr) => {
+                            if (err) reject(err)
+                            else resolve({ stdout, stderr })
+                        })
+                    })
+                }
+            },
+            
+            // MCP 相关
+            mcp: {
+                // 调用其他工具
+                callTool: async (name, toolArgs) => {
+                    const mcpManager = (await import('./McpManager.js')).default
+                    return mcpManager.callTool(name, toolArgs)
+                },
+                // 获取所有工具
+                listTools: async () => {
+                    const mcpManager = (await import('./McpManager.js')).default
+                    return mcpManager.getTools()
+                }
+            }
         }
     }
 

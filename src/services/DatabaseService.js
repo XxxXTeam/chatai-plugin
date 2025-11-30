@@ -298,6 +298,7 @@ class DatabaseService {
             const userId = parts.length > 1 ? parts[parts.length - 1] : parts[0]
             
             if (!userMap.has(userId)) {
+                const userSettings = this.getUserSettings(userId)
                 userMap.set(userId, {
                     userId,
                     nickname: null,
@@ -305,8 +306,8 @@ class DatabaseService {
                     messageCount: 0,
                     firstActivity: row.first_activity,
                     lastActivity: row.last_activity,
-                    blocked: false,
-                    settings: {}
+                    blocked: userSettings.blocked || false,
+                    settings: userSettings
                 })
             }
             
@@ -333,16 +334,66 @@ class DatabaseService {
     }
 
     /**
+     * 获取用户设置文件路径
+     */
+    _getUserSettingsPath() {
+        const settingsDir = path.join(this.dataDir, 'user_settings')
+        if (!fs.existsSync(settingsDir)) {
+            fs.mkdirSync(settingsDir, { recursive: true })
+        }
+        return path.join(settingsDir, 'settings.json')
+    }
+
+    /**
+     * 加载所有用户设置
+     */
+    _loadUserSettings() {
+        const settingsPath = this._getUserSettingsPath()
+        try {
+            if (fs.existsSync(settingsPath)) {
+                return JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
+            }
+        } catch (e) {
+            safeLogger.warn('[DB] 加载用户设置失败:', e.message)
+        }
+        return {}
+    }
+
+    /**
+     * 保存所有用户设置
+     */
+    _saveUserSettings(settings) {
+        const settingsPath = this._getUserSettingsPath()
+        try {
+            fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2))
+        } catch (e) {
+            safeLogger.error('[DB] 保存用户设置失败:', e.message)
+        }
+    }
+
+    /**
      * 更新用户设置
      */
     updateUserSettings(userId, settings) {
-        // 用户设置存储在单独的表或配置文件中
-        // 这里简化处理，实际可以创建 user_settings 表
-        // 暂时使用内存存储
-        if (!this._userSettings) {
-            this._userSettings = new Map()
-        }
-        this._userSettings.set(userId, settings)
+        const allSettings = this._loadUserSettings()
+        allSettings[userId] = { ...allSettings[userId], ...settings }
+        this._saveUserSettings(allSettings)
+    }
+
+    /**
+     * 获取用户设置
+     */
+    getUserSettings(userId) {
+        const allSettings = this._loadUserSettings()
+        return allSettings[userId] || {}
+    }
+
+    /**
+     * 检查用户是否被封禁
+     */
+    isUserBlocked(userId) {
+        const settings = this.getUserSettings(userId)
+        return settings.blocked === true
     }
 
     /**

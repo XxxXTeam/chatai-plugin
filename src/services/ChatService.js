@@ -7,6 +7,7 @@ import historyManager from '../core/utils/history.js'
 import config from '../../config/config.js'
 import { setToolContext } from '../core/utils/toolAdapter.js'
 import { presetManager } from './PresetManager.js'
+import { memoryManager } from './MemoryManager.js'
 
 /**
  * Chat Service - Unified chat message handling
@@ -147,7 +148,20 @@ export class ChatService {
             promptContext.bot_name = event.bot?.nickname || 'AI助手'
         }
         
-        const systemPrompt = preset?.systemPrompt || presetManager.buildSystemPrompt(effectivePresetId, promptContext)
+        let systemPrompt = preset?.systemPrompt || presetManager.buildSystemPrompt(effectivePresetId, promptContext)
+
+        // 添加记忆上下文（如果启用）
+        if (config.get('memory.enabled')) {
+            try {
+                await memoryManager.init()
+                const memoryContext = await memoryManager.getMemoryContext(userId, message)
+                if (memoryContext) {
+                    systemPrompt += memoryContext
+                }
+            } catch (err) {
+                logger.warn('[ChatService] 获取记忆上下文失败:', err.message)
+            }
+        }
 
         // Build messages array
         const messages = [
@@ -242,13 +256,20 @@ export class ChatService {
                     recentTopics: [message.substring(0, 100)]
                 })
             }
+
+            // 自动提取记忆（异步执行，不阻塞返回）
+            if (config.get('memory.enabled') && config.get('memory.autoExtract') !== false) {
+                memoryManager.extractMemoryFromConversation(userId, message, textContent)
+                    .catch(err => logger.warn('[ChatService] 自动记忆提取失败:', err.message))
+            }
         }
 
         return {
             conversationId,
             response: response.contents,
             usage: response.usage,
-            model: llmModel
+            model: llmModel,
+            toolCallLogs: response.toolCallLogs || []
         }
     }
 

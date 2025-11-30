@@ -1,6 +1,7 @@
 import express from 'express'
 import { rateLimit } from 'express-rate-limit'
 import multer from 'multer'
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import crypto from 'node:crypto'
@@ -993,6 +994,9 @@ export class WebServer {
                 customTools.push(newTool)
                 config.set('customTools', customTools)
 
+                // 刷新工具列表
+                await mcpManager.refreshBuiltinTools()
+
                 res.status(201).json(ChaiteResponse.ok(newTool))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -1018,6 +1022,9 @@ export class WebServer {
 
                 config.set('customTools', customTools)
 
+                // 刷新工具列表
+                await mcpManager.refreshBuiltinTools()
+
                 res.json(ChaiteResponse.ok(customTools[toolIndex]))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -1036,6 +1043,9 @@ export class WebServer {
 
                 config.set('customTools', filteredTools)
 
+                // 刷新工具列表
+                await mcpManager.refreshBuiltinTools()
+
                 res.json(ChaiteResponse.ok({ success: true }))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -1051,9 +1061,8 @@ export class WebServer {
                     return res.status(400).json(ChaiteResponse.fail(null, 'toolName is required'))
                 }
 
+                // 统一通过 mcpManager 调用（包括内置工具和自定义工具）
                 await mcpManager.init()
-
-                // Try to call the tool
                 const result = await mcpManager.callTool(toolName, args || {})
 
                 res.json(ChaiteResponse.ok({
@@ -1696,9 +1705,30 @@ export class WebServer {
     }
 
     /**
+     * 检查前端是否已构建
+     */
+    checkFrontendBuild() {
+        const webDir = path.join(__dirname, '../../resources/web')
+        const indexFile = path.join(webDir, 'index.html')
+        
+        if (!fs.existsSync(webDir) || !fs.existsSync(indexFile)) {
+            logger.warn('═══════════════════════════════════════════════════════════════')
+            logger.warn('[WebServer] ⚠️  前端文件未构建！')
+            logger.warn('[WebServer] 请执行以下命令构建前端:')
+            logger.warn('[WebServer]   cd plugins/new-plugin/vue-frontend && npm install && npm run build')
+            logger.warn('═══════════════════════════════════════════════════════════════')
+            return false
+        }
+        return true
+    }
+
+    /**
      * Start web server
      */
     async start() {
+        // 检查前端是否已构建
+        this.checkFrontendBuild()
+        
         const tryListen = (port) => {
             return new Promise((resolve, reject) => {
                 const server = this.app.listen(port, () => {

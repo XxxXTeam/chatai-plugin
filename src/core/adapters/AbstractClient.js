@@ -105,31 +105,107 @@ export class AbstractClient {
 
             // Handle tool calls
             if (modelResponse.toolCalls && modelResponse.toolCalls.length > 0) {
+                // 初始化工具调用追踪
+                if (!options.toolCallDepth) options.toolCallDepth = 0
+                if (!options.toolCallHistory) options.toolCallHistory = new Set()
+                if (!options.toolCallLogs) options.toolCallLogs = []
+                
+                options.toolCallDepth++
+                const maxDepth = 10 // 最大递归深度
+                
+                // 检查是否超过最大深度
+                if (options.toolCallDepth > maxDepth) {
+                    this.logger.warn(`[Tool] 工具调用深度超过限制(${maxDepth})，停止递归`)
+                    return {
+                        id: modelResponse.id,
+                        model: options.model,
+                        contents: [{ type: 'text', text: '工具调用次数过多，已自动停止。' }],
+                        usage: modelResponse.usage,
+                        toolCallLogs: options.toolCallLogs,
+                    }
+                }
+
                 const toolCallResults = []
+                const toolCallLogs = []
+                let hasNewToolCall = false
 
                 for (const toolCall of modelResponse.toolCalls) {
                     const fcName = toolCall.function.name
                     const fcArgs = toolCall.function.arguments
                     const tool = this.tools.find(t => t.function.name === fcName)
+                    
+                    // 生成工具调用签名用于去重
+                    const callSignature = `${fcName}:${JSON.stringify(fcArgs)}`
+                    
+                    // 检查是否重复调用（相同工具+相同参数）
+                    if (options.toolCallHistory.has(callSignature)) {
+                        this.logger.warn(`[Tool] 检测到重复调用: ${fcName}，跳过`)
+                        toolCallResults.push({
+                            tool_call_id: toolCall.id,
+                            content: '[重复调用已跳过]',
+                            type: 'tool',
+                            name: fcName,
+                        })
+                        continue
+                    }
+                    
+                    options.toolCallHistory.add(callSignature)
+                    hasNewToolCall = true
 
                     if (tool) {
-                        this.logger.info(`run tool ${fcName} with args ${JSON.stringify(fcArgs)}`)
+                        this.logger.info(`[Tool] 执行: ${fcName}`)
+                        const startTime = Date.now()
                         let toolResult
+                        let isError = false
                         try {
                             toolResult = await tool.run(fcArgs, this.context)
                             if (typeof toolResult !== 'string') {
                                 toolResult = JSON.stringify(toolResult)
                             }
                         } catch (err) {
-                            toolResult = err.message
+                            toolResult = `执行失败: ${err.message}`
+                            isError = true
+                            this.logger.error(`[Tool] ${fcName} 执行错误:`, err.message)
                         }
-                        this.logger.info(`tool ${fcName} result ${toolResult}`)
+                        const duration = Date.now() - startTime
+                        this.logger.info(`[Tool] ${fcName} 完成，耗时 ${duration}ms`)
+                        
+                        toolCallLogs.push({
+                            name: fcName,
+                            args: fcArgs,
+                            result: toolResult.substring(0, 500),
+                            duration,
+                            isError
+                        })
+                        
                         toolCallResults.push({
                             tool_call_id: toolCall.id,
                             content: toolResult,
                             type: 'tool',
-                            name: toolCall.function.name,
+                            name: fcName,
                         })
+                    } else {
+                        this.logger.warn(`[Tool] 未找到工具: ${fcName}`)
+                        toolCallResults.push({
+                            tool_call_id: toolCall.id,
+                            content: `工具 ${fcName} 不存在`,
+                            type: 'tool',
+                            name: fcName,
+                        })
+                    }
+                }
+
+                options.toolCallLogs.push(...toolCallLogs)
+
+                // 如果没有新的工具调用（全部重复），直接返回
+                if (!hasNewToolCall) {
+                    this.logger.warn('[Tool] 所有工具调用均为重复，停止递归')
+                    return {
+                        id: modelResponse.id,
+                        model: options.model,
+                        contents: [{ type: 'text', text: '检测到重复的工具调用，已自动停止。' }],
+                        usage: modelResponse.usage,
+                        toolCallLogs: options.toolCallLogs,
                     }
                 }
 
@@ -143,7 +219,7 @@ export class AbstractClient {
                 options.parentMessageId = tcMsgId
                 await this.historyManager.saveHistory(toolCallResultMessage, options.conversationId)
 
-                // Reset toolChoice to auto to avoid infinite loops
+                // Reset toolChoice to auto
                 options.toolChoice = { type: 'auto' }
                 return await this.sendMessage(undefined, options)
             }
@@ -157,6 +233,7 @@ export class AbstractClient {
                 model: options.model,
                 contents: modelResponse.content,
                 usage: modelResponse.usage,
+                toolCallLogs: options.toolCallLogs || [], // 返回工具调用日志
             }
         }
 

@@ -4,20 +4,27 @@ basic:
   commandPrefix: "#ai"
   debug: true
   showThinkingMessage: false
+  debugToConsoleOnly: true
+  quoteReply: true
+  autoRecall:
+    enabled: false
+    delay: 60
+    recallError: true
+  showTokenUsage: true
 llm:
-  defaultModel: qwen/qwen3-next-80b-a3b-thinking
+  defaultModel: gemini-3-pro-preview
   defaultChatPresetId: 7ecdcf79-852f-4a76-9b6b-ccc9b98ced36
-  embeddingModel: qwen/qwen3-next-80b-a3b-thinking
+  embeddingModel: gemini-3-pro-preview
   dimensions: 1536
   models:
-    chat: qwen/qwen3-next-80b-a3b-thinking
+    chat: gemini-3-pro-preview
     roleplay: ""
     toolCall: ""
     search: ""
     reasoning: ""
-  chatModel: qwen3-max
-  codeModel: qwen3-max
-  translationModel: qwen3-max
+  chatModel: gemini-3-pro-preview
+  codeModel: gemini-3-pro-preview
+  translationModel: gemini-3-pro-preview
 bym:
   enable: false
   probability: 0.02
@@ -26,6 +33,12 @@ bym:
   recall: false
   model: ""
   systemPrompt: 你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。
+  exclusiveFeatures:
+    - groupSummary
+    - userPortrait
+tools:
+  showCallLogs: true
+  useForwardMsg: true
 builtinTools:
   enabled: true
   allowedTools: []
@@ -43,7 +56,7 @@ channels:
     apiKey: sk-lgrpDhWB7Mm5L521zGdwDO6JescMn9m7xtmQLkAgL0iMXf4h
     models:
       - qwen/qwen3-next-80b-a3b-instruct
-      - qwen/qwen3-next-80b-a3b-thinking
+      - gemini-3-pro-preview
     priority: 1
     enabled: true
     advanced:
@@ -92,6 +105,8 @@ context:
 memory:
   enabled: true
   storage: file
+  autoExtract: true
+  minScore: 0.7
 presets:
   defaultId: 7ecdcf79-852f-4a76-9b6b-ccc9b98ced36
   allowUserSwitch: true
@@ -102,5 +117,83 @@ loadBalancing:
 thinking:
   defaultLevel: low
   enableReasoning: true
+  showThinkingContent: true
+  useForwardMsg: true
+features:
+  groupSummary:
+    enabled: true
+    maxMessages: 100
+    autoTrigger: false
+  userPortrait:
+    enabled: true
+    minMessages: 10
 streaming:
   enabled: true
+customTools:
+  - name: execute_command
+    description: 执行shell命令（注意安全）
+    parameters:
+      type: object
+      properties:
+        command:
+          type: string
+          description: 要执行的命令
+      required:
+        - command
+    handler: |-
+      const { command } = args
+
+      // 安全检查 - 禁止危险命令
+      const dangerous = ['rm -rf', 'mkfs', 'dd if=', ':(){', 'chmod -R 777']
+      if (dangerous.some(d => command.includes(d))) {
+        return { error: '检测到危险命令，已拒绝执行' }
+      }
+
+      try {
+        const { stdout, stderr } = await runtime.utils.exec(command)
+        return {
+          text: stdout || '命令执行完成',
+          stdout,
+          stderr
+        }
+      } catch (error) {
+        return { error: `执行失败: ${error.message}` }
+      }
+    custom: true
+    createdAt: 1764500123529
+  - name: current_time
+    description: 获取当前时间信息
+    parameters:
+      type: object
+      properties:
+        format:
+          type: string
+          description: 时间格式
+          enum:
+            - full
+            - date
+            - time
+          default: full
+    handler: |-
+      const now = new Date()
+      const format = args.format || 'full'
+
+      let result
+      switch (format) {
+        case 'date':
+          result = now.toLocaleDateString('zh-CN')
+          break
+        case 'time':
+          result = now.toLocaleTimeString('zh-CN')
+          break
+        default:
+          result = now.toLocaleString('zh-CN')
+      }
+
+      return {
+        text: `当前时间: ${result}`,
+        timestamp: now.getTime(),
+        formatted: result
+      }
+    custom: true
+    createdAt: 1764500190207

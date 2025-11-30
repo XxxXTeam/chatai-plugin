@@ -14,9 +14,6 @@ const showSettingsModal = ref(false)
 
 // 用户设置表单
 const userSettings = ref({
-  maxTokensPerDay: 100000,
-  maxMessagesPerDay: 100,
-  allowedModels: [],
   blocked: false
 })
 
@@ -119,9 +116,6 @@ function viewUser(user) {
 function openSettings(user) {
   selectedUser.value = user
   userSettings.value = {
-    maxTokensPerDay: user.settings?.maxTokensPerDay || 100000,
-    maxMessagesPerDay: user.settings?.maxMessagesPerDay || 100,
-    allowedModels: user.settings?.allowedModels || [],
     blocked: user.blocked || false
   }
   showSettingsModal.value = true
@@ -215,16 +209,11 @@ onMounted(() => {
     </n-modal>
 
     <!-- 用户设置弹窗 -->
-    <n-modal v-model:show="showSettingsModal" preset="card" title="用户设置" style="width: 450px">
-      <n-form label-placement="left" label-width="120">
-        <n-form-item label="每日Token限制">
-          <n-input-number v-model:value="userSettings.maxTokensPerDay" :min="0" :max="10000000" style="width: 100%" />
-        </n-form-item>
-        <n-form-item label="每日消息限制">
-          <n-input-number v-model:value="userSettings.maxMessagesPerDay" :min="0" :max="10000" style="width: 100%" />
-        </n-form-item>
+    <n-modal v-model:show="showSettingsModal" preset="card" title="用户设置" style="width: 350px">
+      <n-form label-placement="left" label-width="80">
         <n-form-item label="封禁用户">
           <n-switch v-model:value="userSettings.blocked" />
+          <span style="margin-left: 10px; color: #999">{{ userSettings.blocked ? '已封禁' : '正常' }}</span>
         </n-form-item>
       </n-form>
       <template #footer>

@@ -38,6 +38,18 @@ export class Chat extends plugin {
         {
           reg: '^#clear$',
           fnc: 'clearHistory'
+        },
+        {
+          reg: '^#(群聊总结|总结群聊|群消息总结)$',
+          fnc: 'groupSummary'
+        },
+        {
+          reg: '^#(个人画像|用户画像|分析我)$',
+          fnc: 'userPortrait'
+        },
+        {
+          reg: '^#(分析|画像)\\s*\\[CQ:at',
+          fnc: 'userPortraitAt'
         }
       ]
     })
@@ -107,33 +119,52 @@ export class Chat extends plugin {
       const userId = e.user_id || e.sender?.user_id || 'unknown'
       const groupId = e.group_id || (e.isGroup ? e.group_id : null)
 
+      // 检查用户是否被封禁
+      const { databaseService } = await import('../src/services/DatabaseService.js')
+      databaseService.init()
+      if (databaseService.isUserBlocked(String(userId))) {
+        logger.info(`[AI-Chat] 用户 ${userId} 已被封禁`)
+        return false // 静默忽略
+      }
+
       // Build unique user ID (combine user + group if in group)
       const fullUserId = groupId ? `${groupId}_${userId}` : userId
 
-      // Process images if any
-      let imageIds = []
+      // Process images - 直接使用图片URL
+      let imageUrls = []
+      
+      // 方式1: 从 e.img 获取 (Yunzai 解析的图片URL数组)
       if (e.img && e.img.length > 0) {
-        for (const img of e.img) {
-          try {
-            let imageUrl = img.file || img.url
-
-            // Handle different image formats
-            if (imageUrl && imageUrl.startsWith('base64://')) {
-              const base64Data = imageUrl.replace('base64://', '')
-              const buffer = Buffer.from(base64Data, 'base64')
-              const uploaded = await imageService.uploadImage(buffer, 'yunzai_image.png')
-              imageIds.push(uploaded.id)
-            } else if (imageUrl && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'))) {
-              const downloaded = await imageService.downloadImage(imageUrl)
-              imageIds.push(downloaded.id)
-            } else if (imageUrl && require('fs').existsSync(imageUrl)) {
-              const buffer = require('fs').readFileSync(imageUrl)
-              const uploaded = await imageService.uploadImage(buffer, require('path').basename(imageUrl))
-              imageIds.push(uploaded.id)
-            }
-          } catch (imgError) {
-            logger.warn('[AI-Chat] Failed to process image:', imgError)
+        for (const imgUrl of e.img) {
+          if (typeof imgUrl === 'string' && imgUrl.startsWith('http')) {
+            imageUrls.push(imgUrl)
           }
+        }
+      }
+      
+      // 方式2: 从 e.message 获取 (icqq 原始消息)
+      if (imageUrls.length === 0 && e.message) {
+        for (const seg of e.message) {
+          if (seg.type === 'image') {
+            // icqq 图片消息格式
+            const url = seg.url || seg.file
+            if (url && url.startsWith('http')) {
+              imageUrls.push(url)
+            }
+          }
+        }
+      }
+      
+      // 转换为图片内容格式
+      let imageIds = []
+      for (const url of imageUrls) {
+        try {
+          const downloaded = await imageService.downloadImage(url)
+          imageIds.push(downloaded.id)
+        } catch (imgError) {
+          logger.warn('[AI-Chat] 图片下载失败，直接使用URL:', imgError.message)
+          // 下载失败时直接使用URL
+          imageIds.push({ type: 'url', url })
         }
       }
 
@@ -144,7 +175,6 @@ export class Chat extends plugin {
         preset = presetManager.get(presetId)
       }
 
-      // Import LlmService for model selection
       const { LlmService } = await import('../src/services/LlmService.js')
 
       // 使用 selectModel 自动选择最佳模型
@@ -184,47 +214,166 @@ export class Chat extends plugin {
           .join('\n')
       }
 
-      // Add usage info if available
-      let usageInfo = ''
+      // Log usage info to console only
       if (result.usage) {
         const { promptTokens, completionTokens, totalTokens } = result.usage
         if (totalTokens) {
-          usageInfo = `\n\n[用量: ${totalTokens} tokens]`
+          logger.info(`[AI-Chat] Token用量 - 输入: ${promptTokens || 0}, 输出: ${completionTokens || 0}, 总计: ${totalTokens}`)
         }
       }
 
-      // 如果有思考内容，使用转发消息发送
-      if (reasoningText && e.group_id && e.bot?.pickGroup) {
+      const finalReply = replyText || '抱歉，我没有理解你的问题'
+      const showThinking = config.get('thinking.showThinkingContent') !== false
+      const thinkingUseForward = config.get('thinking.useForwardMsg') !== false
+      const showToolLogs = config.get('tools.showCallLogs') !== false
+      const toolsUseForward = config.get('tools.useForwardMsg') !== false
+      const quoteReply = config.get('basic.quoteReply') !== false
+      
+      // 获取工具调用日志
+      const toolCallLogs = result.toolCallLogs || []
+      const hasToolLogs = toolCallLogs.length > 0 && showToolLogs
+      const hasThinking = reasoningText && showThinking
+      const canForward = e.group_id && e.bot?.pickGroup
+
+      // 1. 先发送工具调用日志（合并转发）
+      if (hasToolLogs && toolsUseForward && canForward) {
         try {
-          const forwardMsg = [
-            {
-              user_id: e.bot.uin || e.self_id,
-              nickname: '思考过程',
-              time: Math.floor(Date.now() / 1000),
-              message: [reasoningText]
-            },
-            {
-              user_id: e.bot.uin || e.self_id,
-              nickname: 'AI回复',
-              time: Math.floor(Date.now() / 1000) + 1,
-              message: [replyText + usageInfo || '抱歉，我没有理解你的问题']
-            }
-          ]
+          const toolLogText = toolCallLogs.map(log => 
+            `🔧 ${log.name}\n` +
+            `参数: ${JSON.stringify(log.args, null, 2)}\n` +
+            `结果: ${log.result}\n` +
+            `耗时: ${log.duration}ms ${log.isError ? '❌' : '✅'}`
+          ).join('\n\n')
+          
+          const forwardMsg = [{
+            user_id: e.bot.uin || e.self_id,
+            nickname: '工具调用日志',
+            time: Math.floor(Date.now() / 1000),
+            message: [toolLogText]
+          }]
           await e.bot.pickGroup(e.group_id).sendForwardMsg(forwardMsg)
-        } catch (forwardErr) {
-          logger.warn('[AI-Chat] 转发消息发送失败，使用普通回复:', forwardErr.message)
-          await e.reply(replyText + usageInfo || '抱歉，我没有理解你的问题', true)
+        } catch (err) {
+          logger.warn('[AI-Chat] 工具日志转发失败:', err.message)
         }
-      } else {
-        await e.reply(replyText + usageInfo || '抱歉，我没有理解你的问题', true)
       }
+
+      // 2. 发送思考内容（合并转发）
+      if (hasThinking && thinkingUseForward && canForward) {
+        try {
+          const forwardMsg = [{
+            user_id: e.bot.uin || e.self_id,
+            nickname: '思考过程',
+            time: Math.floor(Date.now() / 1000),
+            message: [reasoningText]
+          }]
+          await e.bot.pickGroup(e.group_id).sendForwardMsg(forwardMsg)
+        } catch (err) {
+          logger.warn('[AI-Chat] 思考内容转发失败:', err.message)
+        }
+      }
+
+      // 3. 直接发送AI回复（普通消息）
+      const replyResult = await e.reply(finalReply, quoteReply)
+      
+      // 自动撤回处理
+      this.handleAutoRecall(e, replyResult, false)
 
     } catch (error) {
+      // 详细错误记录到控制台
       logger.error('[AI-Chat] Error:', error)
-      await e.reply(`出错了: ${error.message}`, true)
+      
+      // 给用户显示简化的错误信息
+      const userFriendlyError = this.formatErrorForUser(error)
+      const errorResult = await e.reply(userFriendlyError, true)
+      
+      // 错误消息也支持自动撤回
+      this.handleAutoRecall(e, errorResult, true)
     }
 
     return true
+  }
+
+  /**
+   * 处理自动撤回
+   * @param {*} e 事件对象
+   * @param {*} replyResult 回复结果
+   * @param {boolean} isError 是否是错误消息
+   */
+  handleAutoRecall(e, replyResult, isError = false) {
+    const autoRecall = config.get('basic.autoRecall') || {}
+    if (!autoRecall.enabled) return
+    if (isError && !autoRecall.recallError) return
+    
+    const delay = (autoRecall.delay || 60) * 1000
+    const messageId = replyResult?.message_id || replyResult?.data?.message_id
+    
+    if (!messageId) {
+      logger.debug('[AI-Chat] 无法获取消息ID，跳过自动撤回')
+      return
+    }
+    
+    setTimeout(async () => {
+      try {
+        const bot = e.bot || global.Bot
+        if (typeof bot?.deleteMsg === 'function') {
+          await bot.deleteMsg(messageId)
+          logger.debug(`[AI-Chat] 已撤回消息: ${messageId}`)
+        } else if (typeof bot?.recallMsg === 'function') {
+          await bot.recallMsg(messageId)
+          logger.debug(`[AI-Chat] 已撤回消息: ${messageId}`)
+        }
+      } catch (err) {
+        logger.debug(`[AI-Chat] 撤回消息失败: ${err.message}`)
+      }
+    }, delay)
+  }
+
+  /**
+   * 将错误信息格式化为用户友好的提示
+   */
+  formatErrorForUser(error) {
+    const msg = error.message || String(error)
+    
+    // API 配额/限流错误
+    if (msg.includes('429') || msg.includes('Too Many Requests') || msg.includes('quota')) {
+      const retryMatch = msg.match(/retry in ([\d.]+)s/i)
+      const retryTime = retryMatch ? Math.ceil(parseFloat(retryMatch[1])) : 60
+      return `⚠️ API 请求过于频繁，请 ${retryTime} 秒后重试`
+    }
+    
+    // 认证错误
+    if (msg.includes('401') || msg.includes('Unauthorized') || msg.includes('API key')) {
+      return '⚠️ API 认证失败，请检查 API Key 配置'
+    }
+    
+    // 模型不存在
+    if (msg.includes('404') || msg.includes('not found') || msg.includes('does not exist')) {
+      return '⚠️ 模型不存在或不可用，请检查模型配置'
+    }
+    
+    // 余额不足
+    if (msg.includes('insufficient') || msg.includes('balance') || msg.includes('billing')) {
+      return '⚠️ API 余额不足，请检查账户'
+    }
+    
+    // 超时
+    if (msg.includes('timeout') || msg.includes('ETIMEDOUT') || msg.includes('ECONNRESET')) {
+      return '⚠️ 请求超时，请稍后重试'
+    }
+    
+    // 网络错误
+    if (msg.includes('ENOTFOUND') || msg.includes('network') || msg.includes('fetch')) {
+      return '⚠️ 网络连接失败，请检查网络'
+    }
+    
+    // 内容过滤
+    if (msg.includes('content') && (msg.includes('filter') || msg.includes('block') || msg.includes('safety'))) {
+      return '⚠️ 内容被安全过滤，请换个话题'
+    }
+    
+    // 默认：截取简短错误
+    const shortMsg = msg.split('\n')[0].substring(0, 100)
+    return `出错了: ${shortMsg}${msg.length > 100 ? '...' : ''}`
   }
 
   /**
@@ -330,6 +479,238 @@ export class Chat extends plugin {
     } catch (error) {
       logger.error('[AI-Chat] Status error:', error)
       await e.reply('获取状态失败: ' + error.message, true)
+    }
+
+    return true
+  }
+
+  /**
+   * 检查功能是否可用（伪人模式限制）
+   */
+  checkFeatureAvailable(featureName, e) {
+    const exclusiveFeatures = config.get('bym.exclusiveFeatures') || []
+    const bymEnabled = config.get('bym.enable')
+    
+    if (exclusiveFeatures.includes(featureName) && !bymEnabled) {
+      return { available: false, reason: '此功能需要开启伪人模式' }
+    }
+    return { available: true }
+  }
+
+  /**
+   * 群聊总结
+   * @param {*} e Yunzai event
+   */
+  async groupSummary(e) {
+    if (!e.group_id) {
+      await e.reply('此功能仅支持群聊', true)
+      return true
+    }
+
+    // 检查功能是否启用
+    if (!config.get('features.groupSummary.enabled')) {
+      await e.reply('群聊总结功能未启用', true)
+      return true
+    }
+
+    // 检查伪人模式限制
+    const check = this.checkFeatureAvailable('groupSummary', e)
+    if (!check.available) {
+      await e.reply(check.reason, true)
+      return true
+    }
+
+    try {
+      await e.reply('正在分析群聊消息...', true)
+      
+      const { chatService } = await import('../src/services/ChatService.js')
+      const { databaseService } = await import('../src/services/DatabaseService.js')
+      
+      databaseService.init()
+      
+      const maxMessages = config.get('features.groupSummary.maxMessages') || 100
+      const groupKey = `group_${e.group_id}`
+      
+      // 获取群聊历史消息
+      const messages = databaseService.getMessages(groupKey, maxMessages)
+      
+      if (messages.length < 5) {
+        await e.reply('群聊消息太少，无法生成总结', true)
+        return true
+      }
+
+      // 构造总结请求
+      const summaryPrompt = `请总结以下群聊对话的主要内容，提取关键话题和讨论要点：\n\n${
+        messages.map(m => `${m.role}: ${
+          Array.isArray(m.content) 
+            ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') 
+            : m.content
+        }`).join('\n')
+      }\n\n请用简洁的方式总结：
+1. 主要讨论话题
+2. 关键观点
+3. 参与度分析`
+
+      const result = await chatService.sendMessage({
+        userId: `summary_${e.group_id}`,
+        message: summaryPrompt,
+        mode: 'chat'
+      })
+
+      let summaryText = ''
+      if (result.response && Array.isArray(result.response)) {
+        summaryText = result.response
+          .filter(c => c.type === 'text')
+          .map(c => c.text)
+          .join('\n')
+      }
+
+      if (summaryText) {
+        // 使用合并转发发送
+        if (e.bot?.pickGroup) {
+          try {
+            const forwardMsg = [{
+              user_id: e.bot.uin || e.self_id,
+              nickname: '群聊总结',
+              time: Math.floor(Date.now() / 1000),
+              message: [`📊 群聊总结 (最近${messages.length}条消息)\n\n${summaryText}`]
+            }]
+            await e.bot.pickGroup(e.group_id).sendForwardMsg(forwardMsg)
+          } catch {
+            await e.reply(`📊 群聊总结\n\n${summaryText}`, true)
+          }
+        } else {
+          await e.reply(`📊 群聊总结\n\n${summaryText}`, true)
+        }
+      } else {
+        await e.reply('总结生成失败', true)
+      }
+    } catch (error) {
+      logger.error('[AI-Chat] Group summary error:', error)
+      await e.reply('群聊总结失败: ' + error.message, true)
+    }
+
+    return true
+  }
+
+  /**
+   * 个人画像分析（分析自己）
+   * @param {*} e Yunzai event
+   */
+  async userPortrait(e) {
+    return this._generatePortrait(e, e.user_id, e.sender?.nickname || '用户')
+  }
+
+  /**
+   * 个人画像分析（@指定用户）
+   * @param {*} e Yunzai event
+   */
+  async userPortraitAt(e) {
+    const atUser = e.message?.find(m => m.type === 'at')
+    if (!atUser) {
+      await e.reply('请@要分析的用户', true)
+      return true
+    }
+    return this._generatePortrait(e, atUser.qq, atUser.text?.replace('@', '') || '用户')
+  }
+
+  /**
+   * 生成用户画像
+   */
+  async _generatePortrait(e, targetUserId, nickname) {
+    // 检查功能是否启用
+    if (!config.get('features.userPortrait.enabled')) {
+      await e.reply('个人画像功能未启用', true)
+      return true
+    }
+
+    // 检查伪人模式限制
+    const check = this.checkFeatureAvailable('userPortrait', e)
+    if (!check.available) {
+      await e.reply(check.reason, true)
+      return true
+    }
+
+    try {
+      await e.reply('正在分析用户画像...', true)
+      
+      const { chatService } = await import('../src/services/ChatService.js')
+      const { databaseService } = await import('../src/services/DatabaseService.js')
+      
+      databaseService.init()
+
+      const groupId = e.group_id
+      const minMessages = config.get('features.userPortrait.minMessages') || 10
+      
+      // 获取用户在群里的消息
+      const userKey = groupId ? `${groupId}_${targetUserId}` : String(targetUserId)
+      const messages = databaseService.getMessages(userKey, 200)
+      
+      // 过滤出用户发送的消息
+      const userMessages = messages.filter(m => m.role === 'user')
+      
+      if (userMessages.length < minMessages) {
+        await e.reply(`消息数量不足（需要至少${minMessages}条），无法生成画像`, true)
+        return true
+      }
+
+      // 构造画像分析请求
+      const portraitPrompt = `请根据以下用户的发言记录，分析并生成用户画像：
+
+用户昵称：${nickname}
+发言记录：
+${userMessages.slice(-50).map(m => {
+  const text = Array.isArray(m.content) 
+    ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') 
+    : m.content
+  return text
+}).join('\n')}
+
+请从以下维度分析：
+1. 🎭 性格特点
+2. 💬 说话风格
+3. 🎯 兴趣爱好
+4. 🧠 思维方式
+5. 📊 活跃度评估
+6. 🏷️ 标签总结（3-5个关键词）`
+
+      const result = await chatService.sendMessage({
+        userId: `portrait_${targetUserId}`,
+        message: portraitPrompt,
+        mode: 'chat'
+      })
+
+      let portraitText = ''
+      if (result.response && Array.isArray(result.response)) {
+        portraitText = result.response
+          .filter(c => c.type === 'text')
+          .map(c => c.text)
+          .join('\n')
+      }
+
+      if (portraitText) {
+        // 使用合并转发发送
+        if (e.group_id && e.bot?.pickGroup) {
+          try {
+            const forwardMsg = [{
+              user_id: e.bot.uin || e.self_id,
+              nickname: '用户画像分析',
+              time: Math.floor(Date.now() / 1000),
+              message: [`👤 ${nickname} 的用户画像\n\n${portraitText}`]
+            }]
+            await e.bot.pickGroup(e.group_id).sendForwardMsg(forwardMsg)
+          } catch {
+            await e.reply(`👤 ${nickname} 的用户画像\n\n${portraitText}`, true)
+          }
+        } else {
+          await e.reply(`👤 ${nickname} 的用户画像\n\n${portraitText}`, true)
+        }
+      } else {
+        await e.reply('画像生成失败', true)
+      }
+    } catch (error) {
+      logger.error('[AI-Chat] User portrait error:', error)
+      await e.reply('用户画像分析失败: ' + error.message, true)
     }
 
     return true

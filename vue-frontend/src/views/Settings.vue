@@ -18,20 +18,25 @@ const config = reactive({
     togglePrefix: '#chat',
     commandPrefix: '#ai',
     debug: false,
-    showThinkingMessage: true
+    showThinkingMessage: true,
+    debugToConsoleOnly: true,
+    quoteReply: true,
+    autoRecall: {
+      enabled: false,
+      delay: 60,
+      recallError: true
+    }
   },
   llm: {
     defaultModel: '',
     embeddingModel: 'text-embedding-3-small',
-    // 模型分类
     models: {
-      chat: '',        // 对话模型
-      roleplay: '',    // 伪人模型
-      toolCall: '',    // 工具调用模型
-      search: '',      // 搜索模型
-      reasoning: ''    // 思考模型
+      chat: '',
+      roleplay: '',
+      toolCall: '',
+      search: '',
+      reasoning: ''
     },
-    // 旧配置兼容
     chatModel: '',
     codeModel: '',
     translationModel: '',
@@ -43,7 +48,30 @@ const config = reactive({
     maxTokens: 100,
     recall: false,
     model: '',
-    systemPrompt: ''
+    systemPrompt: '',
+    exclusiveFeatures: ['groupSummary', 'userPortrait']
+  },
+  tools: {
+    showCallLogs: true,
+    useForwardMsg: true
+  },
+  thinking: {
+    showThinkingContent: true,
+    useForwardMsg: true
+  },
+  features: {
+    groupSummary: {
+      enabled: true,
+      maxMessages: 100
+    },
+    userPortrait: {
+      enabled: true,
+      minMessages: 10
+    }
+  },
+  memory: {
+    enabled: false,
+    autoExtract: true
   }
 })
 
@@ -59,7 +87,12 @@ async function fetchConfig() {
       const data = res.data.data
       
       // Merge data into reactive config
-      if (data.basic) Object.assign(config.basic, data.basic)
+      if (data.basic) {
+        Object.assign(config.basic, data.basic)
+        if (data.basic.autoRecall) {
+          Object.assign(config.basic.autoRecall, data.basic.autoRecall)
+        }
+      }
       if (data.llm) {
         Object.assign(config.llm, data.llm)
         if (data.llm.models) {
@@ -67,6 +100,13 @@ async function fetchConfig() {
         }
       }
       if (data.bym) Object.assign(config.bym, data.bym)
+      if (data.tools) Object.assign(config.tools, data.tools)
+      if (data.thinking) Object.assign(config.thinking, data.thinking)
+      if (data.features) {
+        if (data.features.groupSummary) Object.assign(config.features.groupSummary, data.features.groupSummary)
+        if (data.features.userPortrait) Object.assign(config.features.userPortrait, data.features.userPortrait)
+      }
+      if (data.memory) Object.assign(config.memory, data.memory)
 
       // Fetch channels to get all models for selector
       const channelsRes = await axios.get('/api/channels/list')
@@ -94,7 +134,11 @@ async function saveConfig() {
     const payload = {
       basic: { ...config.basic },
       llm: { ...config.llm },
-      bym: { ...config.bym }
+      bym: { ...config.bym },
+      tools: { ...config.tools },
+      thinking: { ...config.thinking },
+      features: { ...config.features },
+      memory: { ...config.memory }
     }
 
     const res = await axios.post('/api/config', payload)
@@ -189,6 +233,44 @@ onMounted(() => {
               <n-switch v-model:value="config.basic.showThinkingMessage" />
             </template>
             开启后，AI处理时会先发送"思考中..."提示
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="调试仅控制台">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.basic.debugToConsoleOnly" />
+            </template>
+            开启后，调试信息仅输出到控制台，不发送到聊天
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="引用回复">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.basic.quoteReply" />
+            </template>
+            开启后，AI回复会引用触发消息
+          </n-tooltip>
+        </n-form-item>
+        
+        <n-divider title-placement="left">自动撤回</n-divider>
+        
+        <n-form-item label="启用自动撤回">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.basic.autoRecall.enabled" />
+            </template>
+            开启后，AI回复会在指定时间后自动撤回
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="撤回延迟(秒)" v-if="config.basic.autoRecall.enabled">
+          <n-input-number v-model:value="config.basic.autoRecall.delay" :min="5" :max="300" />
+        </n-form-item>
+        <n-form-item label="撤回错误消息" v-if="config.basic.autoRecall.enabled">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.basic.autoRecall.recallError" />
+            </template>
+            开启后，错误提示也会自动撤回
           </n-tooltip>
         </n-form-item>
       </n-form>
@@ -288,8 +370,103 @@ onMounted(() => {
       </n-form>
     </n-card>
 
-    <n-alert type="warning" title="提示" style="margin-top: 8px">
-      流式传输、推理模式等高级设置请在「渠道管理」中配置每个渠道的独立参数
+    <!-- 工具调用配置 -->
+    <n-card title="工具调用">
+      <n-form label-placement="left" label-width="140">
+        <n-form-item label="显示调用日志">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.tools.showCallLogs" />
+            </template>
+            开启后，显示工具调用的详细日志
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="日志合并转发">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.tools.useForwardMsg" />
+            </template>
+            开启后，工具调用日志使用合并转发发送
+          </n-tooltip>
+        </n-form-item>
+      </n-form>
+    </n-card>
+
+    <!-- 深度思考配置 -->
+    <n-card title="深度思考">
+      <n-form label-placement="left" label-width="140">
+        <n-form-item label="显示思考内容">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.thinking.showThinkingContent" />
+            </template>
+            开启后，显示AI的思考过程
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="思考合并转发">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.thinking.useForwardMsg" />
+            </template>
+            开启后，思考内容使用合并转发发送
+          </n-tooltip>
+        </n-form-item>
+      </n-form>
+    </n-card>
+
+    <!-- 高级功能配置 -->
+    <n-card title="高级功能">
+      <n-form label-placement="left" label-width="140">
+        <n-divider title-placement="left">群聊总结</n-divider>
+        <n-form-item label="启用">
+          <n-switch v-model:value="config.features.groupSummary.enabled" />
+        </n-form-item>
+        <n-form-item label="最大消息数">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-input-number v-model:value="config.features.groupSummary.maxMessages" :min="10" :max="500" :step="10" style="width: 150px" />
+            </template>
+            总结时分析的最大消息数量
+          </n-tooltip>
+        </n-form-item>
+
+        <n-divider title-placement="left">个人画像</n-divider>
+        <n-form-item label="启用">
+          <n-switch v-model:value="config.features.userPortrait.enabled" />
+        </n-form-item>
+        <n-form-item label="最少消息数">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-input-number v-model:value="config.features.userPortrait.minMessages" :min="5" :max="100" :step="5" style="width: 150px" />
+            </template>
+            生成画像需要的最少消息数量
+          </n-tooltip>
+        </n-form-item>
+
+        <n-divider title-placement="left">长期记忆</n-divider>
+        <n-form-item label="启用记忆">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.memory.enabled" />
+            </template>
+            启用后，AI会记住用户透露的个人信息和偏好
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="自动提取">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.memory.autoExtract" :disabled="!config.memory.enabled" />
+            </template>
+            自动从对话中提取值得记忆的信息
+          </n-tooltip>
+        </n-form-item>
+      </n-form>
+    </n-card>
+
+    <n-alert type="info" title="命令提示" style="margin-top: 8px">
+      <div>• <strong>#群聊总结</strong> - 总结群聊消息</div>
+      <div>• <strong>#个人画像</strong> - 分析自己的用户画像</div>
+      <div>• <strong>#分析 @用户</strong> - 分析指定用户的画像</div>
     </n-alert>
 
     <n-space justify="end" style="margin-top: 16px">

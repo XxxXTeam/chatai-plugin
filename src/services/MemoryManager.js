@@ -11,12 +11,16 @@ const __dirname = path.dirname(__filename)
 
 /**
  * Memory Manager - Manages long-term memory using Vector Database (Vectra)
+ * 优化版本：添加缓存、自动提取、批量操作
  */
 export class MemoryManager {
     constructor() {
         this.initialized = false
         this.dataDir = path.join(__dirname, '../../data/memory')
         this.indices = new Map() // userId -> LocalIndex
+        this.memoryCache = new Map() // userId -> { memories: [], lastUpdate: number }
+        this.pendingEmbeddings = new Map() // userId -> pending items
+        this.cacheExpiry = 5 * 60 * 1000 // 5分钟缓存过期
     }
 
     /**
@@ -32,6 +36,76 @@ export class MemoryManager {
         await redisClient.init()
         this.initialized = true
         logger.info('[MemoryManager] Initialized')
+    }
+
+    /**
+     * 从对话中自动提取记忆
+     * @param {string} userId
+     * @param {string} userMessage
+     * @param {string} assistantResponse
+     */
+    async extractMemoryFromConversation(userId, userMessage, assistantResponse) {
+        if (!config.get('memory.enabled')) return
+
+        try {
+            // 判断是否包含值得记忆的信息
+            const importantPatterns = [
+                /我(是|叫|住在|喜欢|讨厌|今年|的生日|工作)/,
+                /我的(名字|职业|年龄|爱好|家人)/,
+                /记住/,
+                /别忘了/,
+                /以后/,
+            ]
+
+            const shouldExtract = importantPatterns.some(p => p.test(userMessage))
+            if (!shouldExtract) return null
+
+            // 构造提取提示
+            const extractPrompt = `分析以下对话，提取用户透露的个人信息或偏好，生成一条简短的记忆（不超过50字）。如果没有值得记忆的信息，返回空。
+
+用户说：${userMessage}
+助手回复：${assistantResponse}
+
+记忆内容（直接输出，无需解释）：`
+
+            const client = await LlmService.getChatClient()
+            const result = await client.sendMessage(
+                { role: 'user', content: [{ type: 'text', text: extractPrompt }] },
+                { model: config.get('llm.defaultModel'), maxToken: 100, disableHistorySave: true }
+            )
+
+            const memoryContent = result.contents?.[0]?.text?.trim()
+            if (memoryContent && memoryContent.length > 5 && memoryContent.length < 200) {
+                await this.saveMemory(userId, memoryContent, { 
+                    source: 'auto_extract',
+                    originalMessage: userMessage.substring(0, 100)
+                })
+                logger.info(`[MemoryManager] 自动提取记忆: ${memoryContent}`)
+                return memoryContent
+            }
+        } catch (error) {
+            logger.warn('[MemoryManager] 自动提取记忆失败:', error.message)
+        }
+        return null
+    }
+
+    /**
+     * 获取与查询相关的记忆上下文
+     * @param {string} userId
+     * @param {string} query
+     * @returns {string} 格式化的记忆上下文
+     */
+    async getMemoryContext(userId, query) {
+        const memories = await this.searchMemory(userId, query, 3)
+        if (memories.length === 0) return ''
+
+        const memoryText = memories
+            .filter(m => m.score > 0.7) // 只保留相关性高的
+            .map(m => `- ${m.content}`)
+            .join('\n')
+
+        if (!memoryText) return ''
+        return `\n【用户记忆】\n${memoryText}\n`
     }
 
     /**

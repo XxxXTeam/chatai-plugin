@@ -67,6 +67,13 @@ class Config {
                 commandPrefix: '#ai',
                 debug: false,
                 showThinkingMessage: true, // 是否发送"思考中..."提示
+                debugToConsoleOnly: true,  // 调试信息仅输出到控制台
+                quoteReply: true,          // 是否引用触发消息
+                autoRecall: {
+                    enabled: false,        // 是否启用自动撤回
+                    delay: 60,             // 撤回延迟（秒）
+                    recallError: true,     // 是否撤回错误消息
+                },
             },
             llm: {
                 defaultModel: 'gpt-4o-mini',
@@ -99,6 +106,13 @@ class Config {
                 recall: false,
                 model: '',
                 systemPrompt: '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。',
+                // 仅伪人模式可用的功能
+                exclusiveFeatures: ['groupSummary', 'userPortrait']
+            },
+            // 工具调用配置
+            tools: {
+                showCallLogs: true,    // 显示工具调用日志
+                useForwardMsg: true,   // 工具日志使用合并转发
             },
             builtinTools: {
                 enabled: true,
@@ -145,6 +159,8 @@ class Config {
             memory: {
                 enabled: false,
                 storage: 'file', // 'file', 'redis'
+                autoExtract: true, // 自动从对话提取记忆
+                minScore: 0.7,     // 记忆相关性最低分数
             },
             presets: {
                 // 默认预设 ID
@@ -161,6 +177,20 @@ class Config {
             thinking: {
                 defaultLevel: 'low', // 'low', 'medium', 'high'
                 enableReasoning: false,
+                showThinkingContent: true,  // 显示思考内容
+                useForwardMsg: true,        // 思考内容使用合并转发
+            },
+            // 高级功能
+            features: {
+                groupSummary: {
+                    enabled: true,           // 群聊总结功能
+                    maxMessages: 100,        // 总结最近N条消息
+                    autoTrigger: false,      // 自动触发（伪人模式下）
+                },
+                userPortrait: {
+                    enabled: true,           // 个人画像分析
+                    minMessages: 10,         // 最少需要N条消息才能分析
+                },
             },
             streaming: {
                 enabled: true,

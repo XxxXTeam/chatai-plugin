@@ -198,6 +198,95 @@ return {
   timestamp: now.getTime(),
   formatted: result
 }`
+  },
+  {
+    name: 'redis_cache',
+    label: 'Redis 缓存操作',
+    description: '使用 Redis 存取数据',
+    parameters: JSON.stringify({
+      type: 'object',
+      properties: {
+        action: { type: 'string', description: '操作类型', enum: ['get', 'set', 'del'] },
+        key: { type: 'string', description: '缓存键名' },
+        value: { type: 'string', description: '缓存值（set时需要）' },
+        ttl: { type: 'number', description: '过期时间（秒）', default: 3600 }
+      },
+      required: ['action', 'key']
+    }, null, 2),
+    handler: `const { action, key, value, ttl = 3600 } = args
+
+await runtime.Redis.init()
+
+switch (action) {
+  case 'get': {
+    const data = await runtime.Redis.get(key)
+    return { text: data ? \`获取成功: \${data}\` : '键不存在', data }
+  }
+  case 'set': {
+    await runtime.Redis.set(key, value, ttl)
+    return { text: \`已设置 \${key}，有效期 \${ttl} 秒\` }
+  }
+  case 'del': {
+    await runtime.Redis.del(key)
+    return { text: \`已删除 \${key}\` }
+  }
+  default:
+    return { error: '未知操作' }
+}`
+  },
+  {
+    name: 'call_other_tool',
+    label: '调用其他工具',
+    description: '链式调用其他MCP工具',
+    parameters: JSON.stringify({
+      type: 'object',
+      properties: {
+        tool_name: { type: 'string', description: '要调用的工具名称' },
+        tool_args: { type: 'object', description: '传递给工具的参数' }
+      },
+      required: ['tool_name']
+    }, null, 2),
+    handler: `const { tool_name, tool_args = {} } = args
+
+try {
+  const result = await runtime.mcp.callTool(tool_name, tool_args)
+  return {
+    text: \`工具 \${tool_name} 执行完成\`,
+    result
+  }
+} catch (error) {
+  return { error: \`调用失败: \${error.message}\` }
+}`
+  },
+  {
+    name: 'execute_command',
+    label: '执行系统命令',
+    description: '执行shell命令（注意安全）',
+    parameters: JSON.stringify({
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: '要执行的命令' }
+      },
+      required: ['command']
+    }, null, 2),
+    handler: `const { command } = args
+
+// 安全检查 - 禁止危险命令
+const dangerous = ['rm -rf', 'mkfs', 'dd if=', ':(){', 'chmod -R 777']
+if (dangerous.some(d => command.includes(d))) {
+  return { error: '检测到危险命令，已拒绝执行' }
+}
+
+try {
+  const { stdout, stderr } = await runtime.utils.exec(command)
+  return {
+    text: stdout || '命令执行完成',
+    stdout,
+    stderr
+  }
+} catch (error) {
+  return { error: \`执行失败: \${error.message}\` }
+}`
   }
 ]
 
@@ -1036,12 +1125,29 @@ return { text: '结果', data: {} }"
           <n-collapse>
             <n-collapse-item title="📖 编写指南" name="help">
               <n-space vertical>
-                <n-alert type="info" title="可用变量">
+                <n-alert type="info" title="基础变量">
                   <ul style="margin: 0; padding-left: 20px">
                     <li><code>args</code> - 用户传入的参数对象</li>
-                    <li><code>ctx.getBot()</code> - 获取 Bot 实例，可调用 QQ API</li>
-                    <li><code>ctx.getEvent()</code> - 获取当前消息事件</li>
+                    <li><code>ctx</code> - 上下文对象 (getBot, getEvent)</li>
                     <li><code>fetch</code> - 发送 HTTP 请求</li>
+                    <li><code>Bot</code> - Bot 实例</li>
+                    <li><code>logger</code> - 日志记录器</li>
+                    <li><code>config</code> - 配置管理器</li>
+                  </ul>
+                </n-alert>
+                <n-alert type="info" title="runtime 对象（完整 API）">
+                  <ul style="margin: 0; padding-left: 20px">
+                    <li><code>runtime.Redis</code> - Redis 客户端</li>
+                    <li><code>runtime.services.chat</code> - 聊天服务</li>
+                    <li><code>runtime.services.database</code> - 数据库服务</li>
+                    <li><code>runtime.services.memory</code> - 记忆管理</li>
+                    <li><code>runtime.utils.http.get/post</code> - HTTP 请求</li>
+                    <li><code>runtime.utils.sendGroupMsg()</code> - 发送群消息</li>
+                    <li><code>runtime.utils.sendPrivateMsg()</code> - 发送私聊</li>
+                    <li><code>runtime.utils.sleep(ms)</code> - 延迟</li>
+                    <li><code>runtime.utils.exec(cmd)</code> - 执行命令</li>
+                    <li><code>runtime.mcp.callTool()</code> - 调用其他工具</li>
+                    <li><code>runtime.mcp.listTools()</code> - 获取工具列表</li>
                   </ul>
                 </n-alert>
                 <n-alert type="success" title="返回格式">
@@ -1056,6 +1162,7 @@ return { text: '结果', data: {} }"
                     <li>代码在服务端执行，请注意安全性</li>
                     <li>支持 async/await 语法</li>
                     <li>错误会被捕获并返回给 AI</li>
+                    <li>exec 命令有 10 秒超时限制</li>
                   </ul>
                 </n-alert>
               </n-space>
