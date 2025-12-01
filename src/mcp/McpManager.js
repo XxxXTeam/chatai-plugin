@@ -431,7 +431,7 @@ export class McpManager {
      * Execute a tool
      * @param {string} name Tool name
      * @param {Object} args Tool arguments
-     * @param {Object} options Execution options
+     * @param {Object} options Execution options (including context for request isolation)
      * @returns {Promise} Tool result
      */
     async callTool(name, args, options = {}) {
@@ -466,9 +466,9 @@ export class McpManager {
             logger.info(`[MCP] Calling tool: ${name}`, args)
             let result
 
-            // 内置工具使用内置服务器处理
+            // 内置工具使用内置服务器处理，传递请求级上下文
             if (tool.isBuiltin || tool.serverName === 'builtin') {
-                result = await builtinMcpServer.callTool(name, args)
+                result = await builtinMcpServer.callTool(name, args, options.context)
             } else {
                 // 外部 MCP 服务器
                 const server = this.servers.get(tool.serverName)

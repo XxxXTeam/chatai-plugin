@@ -4,9 +4,10 @@ import config from '../../../config/config.js'
 /**
  * Convert MCP tools to Chaite tool format
  * @param {Array} mcpTools - MCP tools from McpManager
+ * @param {Object} requestContext - Request-level context for concurrent isolation {event, bot}
  * @returns {Array} - Chaite format tools with run method
  */
-export function convertMcpTools(mcpTools) {
+export function convertMcpTools(mcpTools, requestContext = null) {
     return mcpTools.map(mcpTool => ({
         function: {
             name: mcpTool.name,
@@ -27,9 +28,11 @@ export function convertMcpTools(mcpTools) {
             try {
                 logger.info(`[MCP Tool] Running ${mcpTool.name}`, args)
 
+                // 使用闭包捕获的请求级上下文，实现并发隔离
                 const result = await mcpManager.callTool(mcpTool.name, args, {
                     useCache: true,
-                    cacheTTL: 60000 // 1 minute cache
+                    cacheTTL: 60000, // 1 minute cache
+                    context: requestContext // 传递请求级上下文
                 })
 
                 // Format result
@@ -73,16 +76,20 @@ export function convertMcpTools(mcpTools) {
 export async function getAllTools(options = {}) {
     const { event } = options
 
-    // Set tool context if event is provided
-    if (event) {
-        mcpManager.setToolContext({ event, bot: event.bot || Bot })
+    // 创建请求级上下文（用于并发隔离）
+    const requestContext = event ? { event, bot: event.bot || Bot } : null
+
+    // 仍然设置全局上下文以兼容旧代码
+    if (requestContext) {
+        mcpManager.setToolContext(requestContext)
     }
 
     // Initialize and get all tools (builtin + external MCP)
     try {
         await mcpManager.init()
         const mcpTools = mcpManager.getTools()
-        return convertMcpTools(mcpTools)
+        // 传递请求级上下文到工具，通过闭包捕获实现并发隔离
+        return convertMcpTools(mcpTools, requestContext)
     } catch (error) {
         logger.error('[ToolAdapter] Failed to load tools:', error)
         return []
@@ -100,13 +107,20 @@ export async function getAllTools(options = {}) {
 export async function executeTool(toolName, args, context, options = {}) {
     const { event } = options
 
-    // Set tool context if event is provided
-    if (event) {
-        mcpManager.setToolContext({ event, bot: event.bot || Bot })
+    // 创建请求级上下文
+    const requestContext = event ? { event, bot: event.bot || Bot } : null
+
+    // 仍然设置全局上下文以兼容旧代码
+    if (requestContext) {
+        mcpManager.setToolContext(requestContext)
     }
 
     await mcpManager.init()
-    return await mcpManager.callTool(toolName, args, options)
+    // 传递请求级上下文实现并发隔离
+    return await mcpManager.callTool(toolName, args, {
+        ...options,
+        context: requestContext
+    })
 }
 
 /**

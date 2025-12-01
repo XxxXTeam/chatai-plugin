@@ -50,7 +50,13 @@ export class ChatService {
         } = options
 
         // 调试信息收集
-        const debugInfo = debugMode ? { request: {}, response: {} } : null
+        const debugInfo = debugMode ? { 
+            request: {}, 
+            response: {}, 
+            context: {},
+            toolCalls: [],
+            timing: { start: Date.now() }
+        } : null
 
         if (!userId) {
             throw new Error('userId is required')
@@ -280,6 +286,20 @@ export class ChatService {
                         topP: requestOptions.topP
                     }
                 }
+                // 上下文历史摘要
+                debugInfo.context = {
+                    historyMessages: validHistory.slice(-5).map(msg => ({
+                        role: msg.role,
+                        contentPreview: Array.isArray(msg.content) 
+                            ? msg.content.filter(c => c.type === 'text').map(c => c.text?.substring(0, 100)).join('').substring(0, 150)
+                            : (typeof msg.content === 'string' ? msg.content.substring(0, 150) : ''),
+                        hasToolCalls: !!msg.toolCalls?.length
+                    })),
+                    systemPromptPreview: systemPrompt.substring(0, 300) + (systemPrompt.length > 300 ? '...' : ''),
+                    totalHistoryLength: validHistory.length
+                }
+                // 工具列表
+                debugInfo.availableTools = hasTools ? client.tools.map(t => t.function?.name || t.name).slice(0, 20) : []
             }
 
             // --- 2. 统一使用 Client 发送消息，工具调用由 AbstractClient 内部处理 ---
@@ -291,12 +311,28 @@ export class ChatService {
             
             // 收集响应调试信息
             if (debugInfo) {
+                debugInfo.timing.end = Date.now()
+                debugInfo.timing.duration = debugInfo.timing.end - debugInfo.timing.start
+                
                 debugInfo.response = {
                     contentsCount: finalResponse?.length || 0,
                     toolCallLogsCount: allToolLogs.length,
                     hasText: finalResponse?.some(c => c.type === 'text'),
                     hasReasoning: finalResponse?.some(c => c.type === 'reasoning'),
+                    durationMs: debugInfo.timing.duration
                 }
+                
+                // 工具调用详情
+                debugInfo.toolCalls = allToolLogs.map((log, idx) => ({
+                    index: idx + 1,
+                    name: log.name,
+                    args: log.args,
+                    resultPreview: typeof log.result === 'string' 
+                        ? log.result.substring(0, 300) + (log.result.length > 300 ? '...' : '')
+                        : JSON.stringify(log.result).substring(0, 300),
+                    duration: log.duration,
+                    success: !log.isError
+                }))
             }
             
         } finally {

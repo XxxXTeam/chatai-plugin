@@ -254,6 +254,30 @@ export class Chat extends plugin {
         addDebugLog('📤 请求信息', result.debugInfo.request || '无')
         addDebugLog('📥 响应信息', result.debugInfo.response || '无')
         addDebugLog('📊 Token用量', result.usage || '无')
+        
+        // 添加上下文信息
+        if (result.debugInfo.context) {
+          addDebugLog('📜 上下文摘要', {
+            systemPromptPreview: result.debugInfo.context.systemPromptPreview,
+            historyLength: result.debugInfo.context.totalHistoryLength,
+            recentMessages: result.debugInfo.context.historyMessages
+          })
+        }
+        
+        // 添加可用工具列表
+        if (result.debugInfo.availableTools?.length > 0) {
+          addDebugLog('🛠️ 可用工具', result.debugInfo.availableTools.join(', '))
+        }
+        
+        // 添加工具调用详情（多轮）
+        if (result.debugInfo.toolCalls?.length > 0) {
+          addDebugLog('🔧 工具调用详情', result.debugInfo.toolCalls)
+        }
+        
+        // 添加耗时信息
+        if (result.debugInfo.timing) {
+          addDebugLog('⏱️ 耗时', `${result.debugInfo.timing.duration}ms`)
+        }
       }
 
       // Extract text and reasoning response
@@ -328,21 +352,22 @@ export class Chat extends plugin {
       // 4. Debug模式：发送调试信息（合并转发）
       if (debugMode && debugLogs.length > 0) {
         try {
-          // 添加工具调用日志
-          if (toolCallLogs.length > 0) {
-            addDebugLog('🔧 工具调用', toolCallLogs)
-          }
           // 添加思考内容
           if (reasoningText) {
-            addDebugLog('💭 思考过程', reasoningText)
+            addDebugLog('� 思考过程', reasoningText.substring(0, 500) + (reasoningText.length > 500 ? '...' : ''))
           }
           // 添加最终回复
           addDebugLog('💬 最终回复', replyText.substring(0, 500) + (replyText.length > 500 ? '...' : ''))
           
-          // 构建调试消息
-          const debugMessages = debugLogs.map(log => 
-            `【${log.title}】\n${log.content}`
-          )
+          // 构建调试消息（格式化输出）
+          const debugMessages = debugLogs.map(log => {
+            let content = log.content
+            // 格式化对象/数组类型的内容
+            if (typeof content === 'object') {
+              content = JSON.stringify(content, null, 2)
+            }
+            return `【${log.title}】\n${content}`
+          })
           
           await this.sendForwardMsg('🔍 Debug调试信息', debugMessages)
         } catch (err) {

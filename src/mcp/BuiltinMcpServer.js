@@ -382,10 +382,14 @@ export class BuiltinMcpServer {
             
             // MCP 相关
             mcp: {
-                // 调用其他工具
+                // 调用其他工具（传递当前请求上下文实现并发隔离）
                 callTool: async (name, toolArgs) => {
                     const mcpManager = (await import('./McpManager.js')).default
-                    return mcpManager.callTool(name, toolArgs)
+                    // 从当前上下文提取 event 和 bot 构建请求级上下文
+                    const event = ctx?.getEvent?.()
+                    const bot = ctx?.getBot?.()
+                    const requestContext = event ? { event, bot } : null
+                    return mcpManager.callTool(name, toolArgs, { context: requestContext })
                 },
                 // 获取所有工具
                 listTools: async () => {
@@ -398,8 +402,14 @@ export class BuiltinMcpServer {
 
     /**
      * 调用工具
+     * @param {string} name - 工具名称
+     * @param {Object} args - 工具参数
+     * @param {Object} requestContext - 请求级上下文（用于并发隔离）
      */
-    async callTool(name, args) {
+    async callTool(name, args, requestContext = null) {
+        // 创建请求级上下文包装器，优先使用传入的上下文
+        const ctx = this.createRequestContext(requestContext)
+        
         // 先检查是否是自定义工具
         const customTools = this.getCustomTools()
         const customTool = customTools.find(t => t.name === name)
@@ -407,7 +417,7 @@ export class BuiltinMcpServer {
         if (customTool) {
             logger.info(`[BuiltinMCP] Calling custom tool: ${name}`, args)
             try {
-                const result = await this.executeCustomHandler(customTool.handler, args, toolContext)
+                const result = await this.executeCustomHandler(customTool.handler, args, ctx)
                 return this.formatResult(result)
             } catch (error) {
                 logger.error(`[BuiltinMCP] Custom tool error: ${name}`, error)
@@ -427,7 +437,7 @@ export class BuiltinMcpServer {
         logger.info(`[BuiltinMCP] Calling tool: ${name}`, args)
 
         try {
-            const result = await tool.handler(args, toolContext)
+            const result = await tool.handler(args, ctx)
             
             // 格式化为 MCP 标准响应
             return this.formatResult(result)
@@ -438,6 +448,33 @@ export class BuiltinMcpServer {
                 isError: true
             }
         }
+    }
+
+    /**
+     * 创建请求级上下文包装器
+     * @param {Object} requestContext - 传入的请求上下文 {event, bot}
+     * @returns {Object} 上下文包装器
+     */
+    createRequestContext(requestContext) {
+        // 如果有传入的请求上下文，使用它（用于并发隔离）
+        if (requestContext && requestContext.event) {
+            return {
+                getBot: (botId) => {
+                    if (requestContext.bot) return requestContext.bot
+                    if (requestContext.event?.bot) return requestContext.event.bot
+                    const framework = getBotFramework()
+                    if (framework === 'trss' && botId && Bot.bots?.get) {
+                        return Bot.bots.get(botId) || Bot
+                    }
+                    return Bot
+                },
+                getEvent: () => requestContext.event,
+                registerCallback: (id, cb) => toolContext.registerCallback(id, cb),
+                executeCallback: (id, data) => toolContext.executeCallback(id, data)
+            }
+        }
+        // 回退到全局上下文（兼容旧代码）
+        return toolContext
     }
 
     /**
