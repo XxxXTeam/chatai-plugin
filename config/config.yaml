@@ -17,7 +17,7 @@ admin:
   sensitiveCommandMasterOnly: true
 llm:
   defaultModel: gemini-3-pro-preview
-  defaultChatPresetId: ef51d9f6-e69c-447b-accf-fb7808782ed2
+  defaultChatPresetId: 2fbee134-9cdb-480b-93bb-4a3148da77c1
   embeddingModel: gemini-3-pro-preview
   dimensions: 1536
   models:
@@ -107,15 +107,30 @@ context:
   maxMessages: 20
   maxTokens: 8096
   cleaningStrategy: auto
+  isolation:
+    groupUserIsolation: false
+    privateIsolation: true
+  autoContext:
+    enabled: true
+    maxHistoryMessages: 20
+    includeToolCalls: false
 memory:
   enabled: true
-  storage: true
+  storage: database
   autoExtract: true
   pollInterval: 5
   maxMemories: 50
+  groupContext:
+    enabled: true
+    collectInterval: 10
+    maxMessagesPerCollect: 50
+    analyzeThreshold: 20
+    extractUserInfo: true
+    extractTopics: true
+    extractRelations: true
   minScore: 0.7
 presets:
-  defaultId: ef51d9f6-e69c-447b-accf-fb7808782ed2
+  defaultId: 2fbee134-9cdb-480b-93bb-4a3148da77c1
   allowUserSwitch: true
   perUserPreset: false
   perGroupPreset: false
@@ -136,6 +151,16 @@ features:
     minMessages: 10
 streaming:
   enabled: true
+listener:
+  enabled: false
+  priority: -.inf
+  triggerMode: at
+  triggerPrefix: "#chat"
+  randomReplyRate: 0.1
+  blacklistUsers: []
+  whitelistUsers: []
+  blacklistGroups: []
+  whitelistGroups: []
 customTools:
   - name: execute_command
     description: 执行shell命令（注意安全）

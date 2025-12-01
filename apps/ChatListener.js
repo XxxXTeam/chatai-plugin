@@ -6,6 +6,7 @@ import { chatService } from '../src/services/ChatService.js'
 import { parseUserMessage } from '../src/utils/messageParser.js'
 import { setToolContext } from '../src/core/utils/toolAdapter.js'
 import { mcpManager } from '../src/mcp/McpManager.js'
+import { memoryManager } from '../src/services/MemoryManager.js'
 import config from '../config/config.js'
 
 export class ChatListener extends plugin {
@@ -30,8 +31,23 @@ export class ChatListener extends plugin {
     /**
      * 消息处理入口
      */
-    async onMessage(e) {
+    async onMessage() {
+        const e = this.e
         const listenerConfig = config.get('listener') || {}
+        
+        // 群聊消息采集（无论是否触发AI都收集）
+        if (e.isGroup && e.group_id) {
+            try {
+                memoryManager.collectGroupMessage(String(e.group_id), {
+                    user_id: e.user_id,
+                    sender: e.sender,
+                    msg: e.msg,
+                    raw_message: e.raw_message
+                })
+            } catch (err) {
+                // 静默失败，不影响主流程
+            }
+        }
         
         // 检查是否启用
         if (!listenerConfig.enabled) {
@@ -39,49 +55,49 @@ export class ChatListener extends plugin {
         }
 
         // 检查黑白名单
-        if (!this.checkAccess(e, listenerConfig)) {
+        if (!this.checkAccess(listenerConfig)) {
             return false
         }
 
         // 检查触发条件
-        if (!this.checkTrigger(e, listenerConfig)) {
+        if (!this.checkTrigger(listenerConfig)) {
             return false
         }
 
         // 处理消息
         try {
-            await this.handleChat(e, listenerConfig)
+            await this.handleChat(listenerConfig)
             return true
         } catch (error) {
             logger.error('[ChatListener] 处理消息失败:', error)
             return false
         }
     }
-
     /**
      * 检查访问权限（黑白名单）
      */
-    checkAccess(e, config) {
+    checkAccess(cfg) {
+        const e = this.e
         const userId = e.user_id?.toString()
         const groupId = e.group_id?.toString()
 
         // 检查用户黑名单
-        if (config.blacklistUsers?.includes(userId)) {
+        if (cfg.blacklistUsers?.includes(userId)) {
             return false
         }
 
         // 检查用户白名单（如果设置了白名单，必须在白名单内）
-        if (config.whitelistUsers?.length > 0 && !config.whitelistUsers.includes(userId)) {
+        if (cfg.whitelistUsers?.length > 0 && !cfg.whitelistUsers.includes(userId)) {
             return false
         }
 
         // 检查群组黑名单
-        if (e.isGroup && config.blacklistGroups?.includes(groupId)) {
+        if (e.isGroup && cfg.blacklistGroups?.includes(groupId)) {
             return false
         }
 
         // 检查群组白名单
-        if (e.isGroup && config.whitelistGroups?.length > 0 && !config.whitelistGroups.includes(groupId)) {
+        if (e.isGroup && cfg.whitelistGroups?.length > 0 && !cfg.whitelistGroups.includes(groupId)) {
             return false
         }
 
@@ -91,9 +107,10 @@ export class ChatListener extends plugin {
     /**
      * 检查触发条件
      */
-    checkTrigger(e, config) {
-        const triggerMode = config.triggerMode || 'at'
-        const triggerPrefix = config.triggerPrefix || ''
+    checkTrigger(cfg) {
+        const e = this.e
+        const triggerMode = cfg.triggerMode || 'at'
+        const triggerPrefix = cfg.triggerPrefix || ''
 
         switch (triggerMode) {
             case 'at':
@@ -121,7 +138,8 @@ export class ChatListener extends plugin {
     /**
      * 处理聊天
      */
-    async handleChat(e, listenerConfig) {
+    async handleChat(listenerConfig) {
+        const e = this.e
         const userId = e.user_id?.toString()
         const featuresConfig = config.get('features') || {}
         
@@ -160,7 +178,7 @@ export class ChatListener extends plugin {
         if (result.response && result.response.length > 0) {
             const replyContent = this.formatReply(result.response)
             if (replyContent) {
-                await e.reply(replyContent, true)
+                await this.reply(replyContent, true)
             }
         }
 
@@ -202,5 +220,73 @@ export class ChatListener extends plugin {
         }
 
         return messages.length > 0 ? messages : null
+    }
+
+    /**
+     * 发送合并转发消息
+     * @param {string} title 标题
+     * @param {Array} messages 消息数组
+     * @returns {Promise<boolean>} 是否发送成功
+     */
+    async sendForwardMsg(title, messages) {
+        const e = this.e
+        if (!e) return false
+        
+        try {
+            const bot = e.bot || Bot
+            const botId = bot?.uin || e.self_id || 10000
+            
+            const forwardNodes = messages.map(msg => ({
+                user_id: botId,
+                nickname: title || 'Bot',
+                message: Array.isArray(msg) ? msg : [msg]
+            }))
+            
+            if (e.isGroup && e.group?.makeForwardMsg) {
+                const forwardMsg = await e.group.makeForwardMsg(forwardNodes)
+                if (forwardMsg) {
+                    await e.group.sendMsg(forwardMsg)
+                    return true
+                }
+            } else if (!e.isGroup && e.friend?.makeForwardMsg) {
+                const forwardMsg = await e.friend.makeForwardMsg(forwardNodes)
+                if (forwardMsg) {
+                    await e.friend.sendMsg(forwardMsg)
+                    return true
+                }
+            }
+            
+            return false
+        } catch (err) {
+            logger.debug('[ChatListener] sendForwardMsg failed:', err.message)
+            return false
+        }
+    }
+
+    /**
+     * 获取引用消息
+     * @returns {Promise<Object|null>} 引用的消息对象
+     */
+    async getQuoteMessage() {
+        const e = this.e
+        if (!e?.source) return null
+        
+        try {
+            const bot = e.bot || Bot
+            const messageId = e.source.message_id || e.source.seq
+            
+            if (typeof bot?.getMsg === 'function') {
+                return await bot.getMsg(messageId)
+            }
+            if (e.group && typeof e.group?.getChatHistory === 'function') {
+                const history = await e.group.getChatHistory(e.source.seq, 1)
+                return history?.[0] || null
+            }
+            
+            return null
+        } catch (err) {
+            logger.debug('[ChatListener] getQuoteMessage failed:', err.message)
+            return null
+        }
     }
 }

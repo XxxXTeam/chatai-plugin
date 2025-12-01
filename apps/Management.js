@@ -75,65 +75,65 @@ export class AIManagement extends plugin {
     /**
      * 获取管理面板链接（临时token，5分钟有效）
      */
-    async managementPanel(e) {
+    async managementPanel() {
         try {
             const webServer = getWebServer()
             const url = webServer.generateLoginUrl(false, false)
-            await e.reply(`管理面板链接（5分钟内有效）：\n${url}`, true)
+            await this.reply(`管理面板链接（5分钟内有效）：\n${url}`, true)
         } catch (err) {
-            await e.reply(`获取管理面板失败: ${err.message}`, true)
+            await this.reply(`获取管理面板失败: ${err.message}`, true)
         }
     }
 
     /**
      * 获取管理面板链接（永久token）
      */
-    async permanentPanel(e) {
+    async permanentPanel() {
         try {
             const webServer = getWebServer()
             const url = webServer.generateLoginUrl(false, true)
-            await e.reply(`管理面板链接（永久有效）：\n${url}\n\n⚠️ 请妥善保管此链接，不要泄露给他人！`, true)
+            await this.reply(`管理面板链接（永久有效）：\n${url}\n\n⚠️ 请妥善保管此链接，不要泄露给他人！`, true)
         } catch (err) {
-            await e.reply(`获取管理面板失败: ${err.message}`, true)
+            await this.reply(`获取管理面板失败: ${err.message}`, true)
         }
     }
 
     /**
      * 结束当前对话
      */
-    async endConversation(e) {
+    async endConversation() {
         try {
-            const userId = e.user_id?.toString()
-            const groupId = e.group_id || null
+            const userId = this.e.user_id?.toString()
+            const groupId = this.e.group_id || null
             await chatService.clearHistory(userId, groupId)
-            await e.reply('已结束当前对话，上下文已清除。', true)
+            await this.reply('已结束当前对话，上下文已清除。', true)
         } catch (err) {
-            await e.reply(`结束对话失败: ${err.message}`, true)
+            await this.reply(`结束对话失败: ${err.message}`, true)
         }
     }
 
     /**
      * 结束全部对话
      */
-    async endAllConversations(e) {
+    async endAllConversations() {
         try {
             // TODO: 实现清除所有用户对话的逻辑
-            await e.reply('已结束全部对话。', true)
+            await this.reply('已结束全部对话。', true)
         } catch (err) {
-            await e.reply(`结束全部对话失败: ${err.message}`, true)
+            await this.reply(`结束全部对话失败: ${err.message}`, true)
         }
     }
 
     /**
      * 设置个人人格（独立prompt）
      */
-    async setPersonality(e) {
+    async setPersonality() {
         try {
             const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
-            const prompt = e.msg.replace(new RegExp(`^${cmdPrefix}设置人格\\s+`), '').trim()
+            const prompt = this.e.msg.replace(new RegExp(`^${cmdPrefix}设置人格\\s+`), '').trim()
             
             if (!prompt) {
-                await e.reply('请输入人格设定内容', true)
+                await this.reply('请输入人格设定内容', true)
                 return
             }
 
@@ -143,30 +143,30 @@ export class AIManagement extends plugin {
             const scopeManager = getScopeManager(databaseService)
             await scopeManager.init()
 
-            const userId = e.user_id?.toString()
+            const userId = this.e.user_id?.toString()
             await scopeManager.setUserPrompt(userId, prompt)
 
-            await e.reply(`已设置你的专属人格：\n${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}`, true)
+            await this.reply(`已设置你的专属人格：\n${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}`, true)
         } catch (err) {
-            await e.reply(`设置人格失败: ${err.message}`, true)
+            await this.reply(`设置人格失败: ${err.message}`, true)
         }
     }
 
     /**
      * 设置群组人格
      */
-    async setGroupPersonality(e) {
-        if (!e.isGroup) {
-            await e.reply('此命令仅可在群聊中使用', true)
+    async setGroupPersonality() {
+        if (!this.e.isGroup) {
+            await this.reply('此命令仅可在群聊中使用', true)
             return
         }
 
         try {
             const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
-            const prompt = e.msg.replace(new RegExp(`^${cmdPrefix}设置群人格\\s+`), '').trim()
+            const prompt = this.e.msg.replace(new RegExp(`^${cmdPrefix}设置群人格\\s+`), '').trim()
             
             if (!prompt) {
-                await e.reply('请输入群人格设定内容', true)
+                await this.reply('请输入群人格设定内容', true)
                 return
             }
 
@@ -176,19 +176,19 @@ export class AIManagement extends plugin {
             const scopeManager = getScopeManager(databaseService)
             await scopeManager.init()
 
-            const groupId = e.group_id?.toString()
+            const groupId = this.e.group_id?.toString()
             await scopeManager.setGroupPrompt(groupId, prompt)
 
-            await e.reply(`已设置本群人格：\n${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}`, true)
+            await this.reply(`已设置本群人格：\n${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}`, true)
         } catch (err) {
-            await e.reply(`设置群人格失败: ${err.message}`, true)
+            await this.reply(`设置群人格失败: ${err.message}`, true)
         }
     }
 
     /**
      * 查看当前人格设定
      */
-    async viewPersonality(e) {
+    async viewPersonality() {
         try {
             if (!databaseService.initialized) {
                 await databaseService.init()
@@ -196,8 +196,8 @@ export class AIManagement extends plugin {
             const scopeManager = getScopeManager(databaseService)
             await scopeManager.init()
 
-            const userId = e.user_id?.toString()
-            const groupId = e.group_id?.toString()
+            const userId = this.e.user_id?.toString()
+            const groupId = this.e.group_id?.toString()
 
             const effective = await scopeManager.getEffectiveSettings(groupId, userId)
             
@@ -210,16 +210,16 @@ export class AIManagement extends plugin {
                 msg += '未设置自定义人格，使用默认预设。'
             }
 
-            await e.reply(msg, true)
+            await this.reply(msg, true)
         } catch (err) {
-            await e.reply(`查看人格失败: ${err.message}`, true)
+            await this.reply(`查看人格失败: ${err.message}`, true)
         }
     }
 
     /**
      * 清除个人人格
      */
-    async clearPersonality(e) {
+    async clearPersonality() {
         try {
             if (!databaseService.initialized) {
                 await databaseService.init()
@@ -227,21 +227,21 @@ export class AIManagement extends plugin {
             const scopeManager = getScopeManager(databaseService)
             await scopeManager.init()
 
-            const userId = e.user_id?.toString()
+            const userId = this.e.user_id?.toString()
             await scopeManager.deleteUserSettings(userId)
 
-            await e.reply('已清除你的专属人格设定', true)
+            await this.reply('已清除你的专属人格设定', true)
         } catch (err) {
-            await e.reply(`清除人格失败: ${err.message}`, true)
+            await this.reply(`清除人格失败: ${err.message}`, true)
         }
     }
 
     /**
      * 清除群组人格
      */
-    async clearGroupPersonality(e) {
-        if (!e.isGroup) {
-            await e.reply('此命令仅可在群聊中使用', true)
+    async clearGroupPersonality() {
+        if (!this.e.isGroup) {
+            await this.reply('此命令仅可在群聊中使用', true)
             return
         }
 
@@ -252,19 +252,19 @@ export class AIManagement extends plugin {
             const scopeManager = getScopeManager(databaseService)
             await scopeManager.init()
 
-            const groupId = e.group_id?.toString()
+            const groupId = this.e.group_id?.toString()
             await scopeManager.deleteGroupSettings(groupId)
 
-            await e.reply('已清除本群人格设定', true)
+            await this.reply('已清除本群人格设定', true)
         } catch (err) {
-            await e.reply(`清除群人格失败: ${err.message}`, true)
+            await this.reply(`清除群人格失败: ${err.message}`, true)
         }
     }
 
     /**
      * 查看状态
      */
-    async status(e) {
+    async status() {
         try {
             const webServer = getWebServer()
             const addresses = webServer.getAddresses()
@@ -277,16 +277,16 @@ export class AIManagement extends plugin {
             }
             msg += `\n使用 ${config.get('basic.commandPrefix') || '#ai'}帮助 查看可用命令`
 
-            await e.reply(msg, true)
+            await this.reply(msg, true)
         } catch (err) {
-            await e.reply(`获取状态失败: ${err.message}`, true)
+            await this.reply(`获取状态失败: ${err.message}`, true)
         }
     }
 
     /**
      * 帮助信息
      */
-    async help(e) {
+    async help() {
         const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
         
         const msg = `AI插件命令帮助：
@@ -304,6 +304,100 @@ ${cmdPrefix}帮助 - 显示此帮助信息
 
 人格优先级：群内用户设定 > 群组设定 > 用户全局设定 > 默认预设`
 
-        await e.reply(msg, true)
+        await this.reply(msg, true)
+    }
+
+    /**
+     * 发送私聊消息给主人
+     * @param {string|Array} msg 消息内容
+     * @returns {Promise<boolean>} 是否发送成功
+     */
+    async sendToMaster(msg) {
+        try {
+            const bot = this.e?.bot || Bot
+            const masters = bot?.config?.master || []
+            
+            for (const masterId of masters) {
+                await this.sendPrivateMsg(masterId, msg)
+            }
+            return true
+        } catch (err) {
+            logger.debug('[Management] sendToMaster failed:', err.message)
+            return false
+        }
+    }
+
+    /**
+     * 发送私聊消息
+     * @param {string|number} userId 用户ID
+     * @param {string|Array} msg 消息内容
+     * @returns {Promise<boolean>} 是否发送成功
+     */
+    async sendPrivateMsg(userId, msg) {
+        try {
+            const bot = this.e?.bot || Bot
+            
+            if (typeof bot?.sendPrivateMsg === 'function') {
+                await bot.sendPrivateMsg(userId, msg)
+                return true
+            }
+            if (typeof bot?.pickFriend === 'function') {
+                const friend = bot.pickFriend(userId)
+                if (friend?.sendMsg) {
+                    await friend.sendMsg(msg)
+                    return true
+                }
+            }
+            if (typeof Bot?.sendFriendMsg === 'function') {
+                await Bot.sendFriendMsg(bot?.uin, userId, msg)
+                return true
+            }
+            
+            return false
+        } catch (err) {
+            logger.debug('[Management] sendPrivateMsg failed:', err.message)
+            return false
+        }
+    }
+
+    /**
+     * 发送合并转发消息
+     * @param {string} title 标题
+     * @param {Array} messages 消息数组
+     * @returns {Promise<boolean>} 是否发送成功
+     */
+    async sendForwardMsg(title, messages) {
+        const e = this.e
+        if (!e) return false
+        
+        try {
+            const bot = e.bot || Bot
+            const botId = bot?.uin || e.self_id || 10000
+            
+            const forwardNodes = messages.map(msg => ({
+                user_id: botId,
+                nickname: title || 'Bot',
+                message: Array.isArray(msg) ? msg : [msg]
+            }))
+            
+            if (e.isGroup && e.group?.makeForwardMsg) {
+                const forwardMsg = await e.group.makeForwardMsg(forwardNodes)
+                if (forwardMsg) {
+                    await e.group.sendMsg(forwardMsg)
+                    return true
+                }
+            } else if (!e.isGroup && e.friend?.makeForwardMsg) {
+                const forwardMsg = await e.friend.makeForwardMsg(forwardNodes)
+                if (forwardMsg) {
+                    await e.friend.sendMsg(forwardMsg)
+                    return true
+                }
+            }
+            
+            return false
+        } catch (err) {
+            logger.debug('[Management] sendForwardMsg failed:', err.message)
+            return false
+        }
     }
 }

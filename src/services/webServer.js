@@ -1,6 +1,7 @@
 import express from 'express'
 import { rateLimit } from 'express-rate-limit'
 import multer from 'multer'
+import cookieParser from 'cookie-parser'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -61,7 +62,7 @@ let authKey = crypto.randomUUID()
 // Frontend Authentication Handler for temporary token-based auth
 class FrontendAuthHandler {
     constructor() {
-        this.tokens = new Map() // 支持多个 token
+        this.tokens = new Map() // token -> expiry
     }
 
     /**
@@ -107,7 +108,7 @@ class FrontendAuthHandler {
         // 检查永久Token
         const permanentToken = config.get('web.permanentAuthToken')
         if (permanentToken && token === permanentToken) {
-            return true // 不删除，可重复使用
+            return true // 永久token可重复使用
         }
 
         // 检查临时Token
@@ -224,6 +225,7 @@ export class WebServer {
     setupMiddleware() {
         this.app.use(express.json({ limit: '50mb' }))
         this.app.use(express.urlencoded({ extended: true, limit: '50mb' }))
+        this.app.use(cookieParser())
         this.app.use(express.static(path.join(__dirname, '../../resources/web')))
 
 
@@ -300,20 +302,47 @@ export class WebServer {
         this.app.get('/login/token', async (req, res) => {
             const { token } = req.query
 
+            // 1. 首先检查请求中是否已有有效JWT（用户可能已登录）
+            const authHeader = req.headers.authorization
+            const cookieToken = req.cookies?.auth_token
+            const existingToken = authHeader?.startsWith('Bearer ') 
+                ? authHeader.substring(7) 
+                : cookieToken
+
+            if (existingToken) {
+                try {
+                    jwt.verify(existingToken, authKey)
+                    // JWT有效，直接重定向到主页
+                    logger.info('[Auth] User already authenticated, redirecting to home...')
+                    return res.redirect('/')
+                } catch {
+                    // JWT无效，继续正常登录流程
+                }
+            }
+
             if (!token) {
                 return res.status(400).send('Token is required')
             }
 
             try {
+                // 2. 验证临时token
                 const success = authHandler.validateToken(token)
+                
                 if (success) {
-                    // Generate JWT for session
+                    // 生成新JWT
                     const jwtToken = jwt.sign({
                         authenticated: true,
                         loginTime: Date.now()
                     }, authKey, { expiresIn: '30d' })
-
+                    
                     logger.info('[Auth] Login successful via URL token')
+                    
+                    // 设置cookie用于后续检测已登录状态
+                    res.cookie('auth_token', jwtToken, {
+                        maxAge: 30 * 24 * 60 * 60 * 1000, // 30天
+                        httpOnly: false, // 允许前端JS访问
+                        sameSite: 'lax'
+                    })
                     
                     // 重定向到前端，带上 token
                     res.redirect(`/?auth_token=${jwtToken}`)
@@ -445,8 +474,8 @@ export class WebServer {
                 thinking: config.get('thinking') || {
                     enableReasoning: false,
                     defaultLevel: 'low',
-                    adaptThinking: false,
-                    sendThinkingAsMessage: false
+                    showThinkingContent: true,
+                    useForwardMsg: true
                 },
                 streaming: {
                     enabled: config.get('streaming.enabled') !== false,
@@ -461,7 +490,41 @@ export class WebServer {
                 },
                 context: {
                     maxMessages: config.get('context.maxMessages') || 20,
-                    cleaningStrategy: config.get('context.cleaningStrategy') || 'truncate'
+                    cleaningStrategy: config.get('context.cleaningStrategy') || 'truncate',
+                    isolation: config.get('context.isolation') || {
+                        groupUserIsolation: false,
+                        privateIsolation: true
+                    },
+                    autoContext: config.get('context.autoContext') || {
+                        enabled: true,
+                        maxHistoryMessages: 20,
+                        includeToolCalls: false
+                    }
+                },
+                memory: config.get('memory') || {
+                    enabled: false,
+                    autoExtract: true,
+                    pollInterval: 5,
+                    maxMemories: 50,
+                    groupContext: {
+                        enabled: true,
+                        collectInterval: 10,
+                        maxMessagesPerCollect: 50,
+                        analyzeThreshold: 20,
+                        extractUserInfo: true,
+                        extractTopics: true,
+                        extractRelations: true
+                    }
+                },
+                tools: config.get('tools') || {
+                    showCallLogs: true,
+                    useForwardMsg: true
+                },
+                builtinTools: config.get('builtinTools') || {
+                    enabled: true,
+                    allowedTools: [],
+                    disabledTools: [],
+                    allowDangerous: false
                 }
             }
             res.json(ChaiteResponse.ok(advancedConfig))
@@ -469,7 +532,7 @@ export class WebServer {
 
         // PUT /api/config/advanced - Update advanced configuration (protected)
         this.app.put('/api/config/advanced', this.authMiddleware.bind(this), (req, res) => {
-            const { thinking, streaming, llm, context } = req.body
+            const { thinking, streaming, llm, context, memory, tools, builtinTools } = req.body
 
             if (thinking) {
                 if (thinking.enableReasoning !== undefined) {
@@ -478,11 +541,11 @@ export class WebServer {
                 if (thinking.defaultLevel) {
                     config.set('thinking.defaultLevel', thinking.defaultLevel)
                 }
-                if (thinking.adaptThinking !== undefined) {
-                    config.set('thinking.adaptThinking', thinking.adaptThinking)
+                if (thinking.showThinkingContent !== undefined) {
+                    config.set('thinking.showThinkingContent', thinking.showThinkingContent)
                 }
-                if (thinking.sendThinkingAsMessage !== undefined) {
-                    config.set('thinking.sendThinkingAsMessage', thinking.sendThinkingAsMessage)
+                if (thinking.useForwardMsg !== undefined) {
+                    config.set('thinking.useForwardMsg', thinking.useForwardMsg)
                 }
             }
 
@@ -520,9 +583,92 @@ export class WebServer {
                 if (context.cleaningStrategy) {
                     config.set('context.cleaningStrategy', context.cleaningStrategy)
                 }
+                // 上下文隔离配置
+                if (context.isolation) {
+                    config.set('context.isolation', {
+                        ...config.get('context.isolation'),
+                        ...context.isolation
+                    })
+                }
+                // 自动上下文配置
+                if (context.autoContext) {
+                    config.set('context.autoContext', {
+                        ...config.get('context.autoContext'),
+                        ...context.autoContext
+                    })
+                }
+            }
+
+            // 记忆配置
+            if (memory) {
+                if (memory.enabled !== undefined) {
+                    config.set('memory.enabled', memory.enabled)
+                }
+                if (memory.autoExtract !== undefined) {
+                    config.set('memory.autoExtract', memory.autoExtract)
+                }
+                if (memory.pollInterval) {
+                    config.set('memory.pollInterval', memory.pollInterval)
+                }
+                if (memory.maxMemories) {
+                    config.set('memory.maxMemories', memory.maxMemories)
+                }
+                // 群聊上下文采集配置
+                if (memory.groupContext) {
+                    config.set('memory.groupContext', {
+                        ...config.get('memory.groupContext'),
+                        ...memory.groupContext
+                    })
+                }
+            }
+
+            // 工具配置
+            if (tools) {
+                config.set('tools', { ...config.get('tools'), ...tools })
+            }
+
+            // 内置工具配置
+            if (builtinTools) {
+                config.set('builtinTools', { ...config.get('builtinTools'), ...builtinTools })
             }
 
             res.json(ChaiteResponse.ok({ success: true }))
+        })
+
+        // PATCH /api/config/:section - Update specific config section (protected)
+        this.app.patch('/api/config/:section', this.authMiddleware.bind(this), (req, res) => {
+            const { section } = req.params
+            const data = req.body
+            
+            // 验证 section 是否合法
+            const allowedSections = [
+                'basic', 'admin', 'llm', 'bym', 'tools', 'builtinTools', 
+                'mcp', 'redis', 'images', 'web', 'context', 'memory', 
+                'presets', 'loadBalancing', 'thinking', 'features', 'streaming', 'listener'
+            ]
+            
+            if (!allowedSections.includes(section)) {
+                return res.status(400).json(ChaiteResponse.fail(null, `Invalid config section: ${section}`))
+            }
+            
+            try {
+                const current = config.get(section) || {}
+                config.set(section, { ...current, ...data })
+                res.json(ChaiteResponse.ok({ success: true, section }))
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
+        })
+
+        // GET /api/config/:section - Get specific config section (protected)
+        this.app.get('/api/config/:section', this.authMiddleware.bind(this), (req, res) => {
+            const { section } = req.params
+            const data = config.get(section)
+            if (data !== undefined) {
+                res.json(ChaiteResponse.ok(data))
+            } else {
+                res.status(404).json(ChaiteResponse.fail(null, `Config section not found: ${section}`))
+            }
         })
 
         // ==================== Preset Routes ====================

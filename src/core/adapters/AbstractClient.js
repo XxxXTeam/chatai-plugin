@@ -21,8 +21,9 @@ import { asyncLocalStorage, extractClassName, getKey } from '../utils/index.js'
 
 /** 默认工具调用限制 */
 const DEFAULT_TOOL_CALL_LIMIT = {
-    maxConsecutiveCalls: 10,
-    maxConsecutiveIdenticalCalls: 2
+    maxConsecutiveCalls: 8,           // 最大连续调用次数
+    maxConsecutiveIdenticalCalls: 2,  // 最大连续相同调用次数
+    maxTotalToolCalls: 15             // 单次对话最大工具调用总数
 }
 
 /**
@@ -187,16 +188,20 @@ export class AbstractClient {
                 options.parentMessageId = tcMsgId
                 await this.historyManager.saveHistory(toolCallResultMessage, options.conversationId)
 
-                // 追踪工具调用次数
+                // 追踪工具调用轮次（用于决定是否禁用工具）
                 if (!options._toolCallCount) options._toolCallCount = 0
                 options._toolCallCount++
                 
-                // 只在连续调用超过3次时才禁用工具
-                if (options._toolCallCount >= 3) {
-                    this.logger.warn(`[Tool] 已执行${options._toolCallCount}次工具调用，禁用工具强制生成回复`)
+                // 检测模型类型，Gemini 模型更容易陷入循环
+                const isGeminiModel = (options.model || '').toLowerCase().includes('gemini')
+                const maxBeforeDisable = isGeminiModel ? 2 : 3
+                
+                // 连续调用超过阈值时禁用工具
+                if (options._toolCallCount >= maxBeforeDisable) {
+                    this.logger.warn(`[Tool] 已执行${options._toolCallCount}次工具调用轮次，禁用工具强制生成回复`)
                     options.toolChoice = { type: 'none' }
                 } else {
-                    this.logger.info(`[Tool] 已执行${options._toolCallCount}次工具调用，继续允许调用`)
+                    this.logger.info(`[Tool] 已执行${options._toolCallCount}次工具调用轮次，继续允许调用`)
                     options.toolChoice = { type: 'auto' }
                 }
                 
@@ -360,8 +365,9 @@ export class AbstractClient {
         options._toolCallInitialized = true
         options._consecutiveToolCallCount = 0
         options._consecutiveIdenticalToolCallCount = 0
+        options._totalToolCallCount = 0
         options._lastToolCallSignature = undefined
-        options._toolCallHistory = new Map()
+        options._toolCallSignatureHistory = new Map()
         options._toolCallLogs = []
     }
 
@@ -377,25 +383,48 @@ export class AbstractClient {
 
         // 递增连续调用计数
         options._consecutiveToolCallCount = (options._consecutiveToolCallCount || 0) + 1
+        
+        // 递增总调用计数
+        options._totalToolCallCount = (options._totalToolCallCount || 0) + toolCalls.length
 
         // 检查最大连续调用次数
         if (limitConfig.maxConsecutiveCalls && options._consecutiveToolCallCount > limitConfig.maxConsecutiveCalls) {
-            return `工具调用次数超过限制(${limitConfig.maxConsecutiveCalls})，已自动停止`
+            return `工具调用轮次超过限制(${limitConfig.maxConsecutiveCalls})，已自动停止`
+        }
+        
+        // 检查总调用次数
+        if (limitConfig.maxTotalToolCalls && options._totalToolCallCount > limitConfig.maxTotalToolCalls) {
+            return `工具调用总次数超过限制(${limitConfig.maxTotalToolCalls})，已自动停止`
         }
 
-        // 构建调用签名用于检测重复
+        // 构建调用签名用于检测重复（只比较函数名和参数，忽略 thought_signature）
         const signature = this.buildToolCallSignature(toolCalls)
+        
+        // 检查是否与上次调用完全相同
         if (options._lastToolCallSignature === signature) {
             options._consecutiveIdenticalToolCallCount = (options._consecutiveIdenticalToolCallCount || 0) + 1
+            this.logger.warn(`[Tool] 检测到重复调用 #${options._consecutiveIdenticalToolCallCount}: ${signature.substring(0, 100)}`)
         } else {
             options._lastToolCallSignature = signature
             options._consecutiveIdenticalToolCallCount = 1
         }
 
-        // 检查最大连续相同调用次数
+        // 检查最大连续相同调用次数（降低阈值，Gemini 经常重复）
         if (limitConfig.maxConsecutiveIdenticalCalls && 
             options._consecutiveIdenticalToolCallCount > limitConfig.maxConsecutiveIdenticalCalls) {
-            return `检测到连续${options._consecutiveIdenticalToolCallCount}次相同工具调用，已自动停止`
+            return `检测到连续${options._consecutiveIdenticalToolCallCount}次相同工具调用（可能是模型循环），已自动停止`
+        }
+        
+        // 检查是否出现了之前已经调用过的相同调用（历史重复检测）
+        if (!options._toolCallSignatureHistory) {
+            options._toolCallSignatureHistory = new Map()
+        }
+        const prevCount = options._toolCallSignatureHistory.get(signature) || 0
+        options._toolCallSignatureHistory.set(signature, prevCount + 1)
+        
+        // 如果同一个调用出现超过3次，也认为是循环
+        if (prevCount >= 3) {
+            return `工具调用"${toolCalls[0]?.function?.name}"已重复${prevCount + 1}次，检测到循环调用`
         }
 
         return undefined
@@ -408,9 +437,9 @@ export class AbstractClient {
     resetToolCallTracking(options) {
         options._consecutiveToolCallCount = 0
         options._consecutiveIdenticalToolCallCount = 0
+        options._totalToolCallCount = 0
         options._lastToolCallSignature = undefined
-        // 保留 _toolCallHistory 用于返回日志，但清除缓存
-        // options._toolCallHistory?.clear()
+        options._toolCallSignatureHistory?.clear()
     }
 
     /**

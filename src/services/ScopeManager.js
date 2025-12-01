@@ -614,7 +614,38 @@ export class ScopeManager {
     return {
       systemPrompt: effectivePrompt,
       presetId: effectivePresetId,
-      source
+      source,
+      // 标记是否有独立人设（设置了systemPrompt）
+      hasIndependentPrompt: !!effectivePrompt
+    }
+  }
+
+  /**
+   * 获取独立人设Prompt（如果设置了自定义人设，则直接使用，不拼接默认人设）
+   * @param {string|null} groupId 群组ID
+   * @param {string} userId 用户ID
+   * @param {string} defaultPrompt 默认Prompt（仅在没有设置独立人设时使用）
+   * @returns {Promise<{prompt: string, source: string, isIndependent: boolean}>}
+   */
+  async getIndependentPrompt(groupId, userId, defaultPrompt = '') {
+    await this.init()
+    
+    const effective = await this.getEffectiveSettings(groupId, userId)
+    
+    // 如果设置了独立人设，直接使用，不拼接默认
+    if (effective.hasIndependentPrompt) {
+      return {
+        prompt: effective.systemPrompt,
+        source: effective.source,
+        isIndependent: true
+      }
+    }
+    
+    // 没有设置独立人设，使用默认Prompt
+    return {
+      prompt: defaultPrompt,
+      source: 'default',
+      isIndependent: false
     }
   }
 }

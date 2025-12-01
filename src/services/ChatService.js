@@ -45,8 +45,12 @@ export class ChatService {
             presetId,
             adapterType,
             event, // Yunzai event for tool context
-            mode = 'chat'
+            mode = 'chat',
+            debugMode = false  // 调试模式
         } = options
+
+        // 调试信息收集
+        const debugInfo = debugMode ? { request: {}, response: {} } : null
 
         if (!userId) {
             throw new Error('userId is required')
@@ -158,27 +162,56 @@ export class ChatService {
             promptContext.bot_name = event.bot?.nickname || 'AI助手'
         }
         
-        let systemPrompt = preset?.systemPrompt || presetManager.buildSystemPrompt(effectivePresetId, promptContext)
-
-        // 1.1 Scope-based Prompts (User/Group Settings)
-        // 确保 scopeManager 已初始化
-        const sm = await ensureScopeManager()
+        // 获取默认预设的Prompt
+        const defaultPrompt = preset?.systemPrompt || presetManager.buildSystemPrompt(effectivePresetId, promptContext)
         
-        // 使用 buildMergedPrompt 构建合并的 Prompt
+        // 1.1 Scope-based Prompts (独立人设逻辑)
+        // 如果用户/群组设置了独立人设，则直接使用，不拼接默认人设
+        const sm = await ensureScopeManager()
+        let systemPrompt = defaultPrompt
+        
         try {
-            const groupId = event?.group_id?.toString() || null
-            systemPrompt = await sm.buildMergedPrompt(systemPrompt, groupId, userId)
+            const scopeGroupId = event?.group_id?.toString() || null
+            const independentResult = await sm.getIndependentPrompt(scopeGroupId, userId, defaultPrompt)
+            
+            // 使用独立人设或默认人设
+            systemPrompt = independentResult.prompt
+            
+            if (independentResult.isIndependent) {
+                logger.debug(`[ChatService] 使用独立人设 (来源: ${independentResult.source})`)
+            }
         } catch (e) { 
-            logger.warn(`[ChatService] 构建作用域Prompt失败:`, e.message) 
+            logger.warn(`[ChatService] 获取独立人设失败:`, e.message) 
         }
 
         // 1.2 Memory Context
         if (config.get('memory.enabled')) {
             try {
                 await memoryManager.init()
+                // 获取用户个人记忆
                 const memoryContext = await memoryManager.getMemoryContext(userId, message || '')
                 if (memoryContext) {
                     systemPrompt += memoryContext
+                }
+                
+                // 获取群聊记忆上下文
+                if (groupId && config.get('memory.groupContext.enabled')) {
+                    const groupMemory = await memoryManager.getGroupMemoryContext(String(groupId), userId)
+                    if (groupMemory) {
+                        const parts = []
+                        if (groupMemory.userInfo?.length > 0) {
+                            parts.push(`群成员信息：${groupMemory.userInfo.join('；')}`)
+                        }
+                        if (groupMemory.topics?.length > 0) {
+                            parts.push(`最近话题：${groupMemory.topics.join('；')}`)
+                        }
+                        if (groupMemory.relations?.length > 0) {
+                            parts.push(`群友关系：${groupMemory.relations.join('；')}`)
+                        }
+                        if (parts.length > 0) {
+                            systemPrompt += `\n【群聊记忆】\n${parts.join('\n')}\n`
+                        }
+                    }
                 }
             } catch (err) {
                 logger.warn('[ChatService] 获取记忆上下文失败:', err.message)
@@ -232,12 +265,39 @@ export class ChatService {
                 systemOverride: systemPrompt,
             }
 
+            // 收集调试信息
+            if (debugInfo) {
+                debugInfo.request = {
+                    model: llmModel,
+                    conversationId,
+                    messagesCount: messages.length,
+                    historyCount: validHistory.length,
+                    toolsCount: hasTools ? client.tools.length : 0,
+                    systemPromptLength: systemPrompt.length,
+                    options: {
+                        maxToken: requestOptions.maxToken,
+                        temperature: requestOptions.temperature,
+                        topP: requestOptions.topP
+                    }
+                }
+            }
+
             // --- 2. 统一使用 Client 发送消息，工具调用由 AbstractClient 内部处理 ---
             const response = await client.sendMessage(userMessage, requestOptions)
             
             finalResponse = response.contents
             finalUsage = response.usage
             allToolLogs = response.toolCallLogs || []
+            
+            // 收集响应调试信息
+            if (debugInfo) {
+                debugInfo.response = {
+                    contentsCount: finalResponse?.length || 0,
+                    toolCallLogsCount: allToolLogs.length,
+                    hasText: finalResponse?.some(c => c.type === 'text'),
+                    hasReasoning: finalResponse?.some(c => c.type === 'reasoning'),
+                }
+            }
             
         } finally {
             if (channel) {
@@ -282,7 +342,8 @@ export class ChatService {
             response: finalResponse || [],
             usage: finalUsage || {},
             model: llmModel,
-            toolCallLogs: allToolLogs
+            toolCallLogs: allToolLogs,
+            debugInfo  // 调试信息（仅在 debugMode 时有值）
         }
     }
 

@@ -24,16 +24,27 @@ registerFromChaiteConverter('openai', (source) => {
 
             // Only add tool_calls if present
             if (hasToolCalls) {
-                msg.tool_calls = source.toolCalls.map(t => ({
-                    id: t.id,
-                    type: t.type || 'function',
-                    function: {
-                        arguments: typeof t.function.arguments === 'string' 
-                            ? t.function.arguments 
-                            : JSON.stringify(t.function.arguments),
-                        name: t.function.name,
-                    },
-                }))
+                msg.tool_calls = source.toolCalls.map(t => {
+                    const toolCall = {
+                        id: t.id,
+                        type: t.type || 'function',
+                        function: {
+                            arguments: typeof t.function.arguments === 'string' 
+                                ? t.function.arguments 
+                                : JSON.stringify(t.function.arguments),
+                            name: t.function.name,
+                        },
+                    }
+                    // 保留 Gemini thought_signature（OpenAI 兼容模式）
+                    if (t.thought_signature || t.extra_content?.google?.thought_signature) {
+                        toolCall.extra_content = {
+                            google: {
+                                thought_signature: t.thought_signature || t.extra_content.google.thought_signature
+                            }
+                        }
+                    }
+                    return toolCall
+                })
             }
 
             return msg
@@ -160,7 +171,7 @@ registerIntoChaiteConverter('openai', (msg) => {
                     } else if (!args) {
                         args = {}
                     }
-                    return {
+                    const toolCall = {
                         id: t.id,
                         type: 'function',
                         function: {
@@ -168,6 +179,13 @@ registerIntoChaiteConverter('openai', (msg) => {
                             arguments: args,
                         },
                     }
+                    // 保留 Gemini thought_signature（OpenAI 兼容模式）
+                    // 这对于 Gemini 3 Pro 模型是必须的
+                    if (t.extra_content?.google?.thought_signature) {
+                        toolCall.thought_signature = t.extra_content.google.thought_signature
+                        toolCall.extra_content = t.extra_content
+                    }
+                    return toolCall
                 })
             }
 

@@ -1,4 +1,5 @@
 import config from '../config/config.js'
+import { cleanCQCode } from '../src/utils/messageParser.js'
 
 /**
  * 伪人模式 (BYM - Be Yourself Mode)
@@ -23,9 +24,9 @@ export class bym extends plugin {
 
     /**
      * 伪人模式触发logic
-     * @param {*} e
      */
-    async bym(e) {
+    async bym() {
+        const e = this.e
         // 检查是否启用
         const enabled = config.get('bym.enable')
         if (!enabled) {
@@ -53,8 +54,8 @@ export class bym extends plugin {
             // BYM usually doesn't need tools, but we can enable them if needed
             const client = await LlmService.createClient({ enableTools: false })
 
-            // Get message text
-            const messageText = e.msg || ''
+            // Get message text and clean CQ codes
+            const messageText = cleanCQCode(e.msg || '')
             if (!messageText.trim()) {
                 return false
             }
@@ -111,12 +112,53 @@ export class bym extends plugin {
 
                 // 是否撤回
                 const recall = config.get('bym.recall')
-                await e.reply(replyText, false, { recallMsg: recall ? 10 : 0 })
+                await this.reply(replyText, false, { recallMsg: recall ? 10 : 0 })
             }
 
             return true
         } catch (error) {
             logger.error('[BYM] Error:', error)
+            return false
+        }
+    }
+
+    /**
+     * 发送合并转发消息
+     * @param {string} title 标题
+     * @param {Array} messages 消息数组
+     * @returns {Promise<boolean>} 是否发送成功
+     */
+    async sendForwardMsg(title, messages) {
+        const e = this.e
+        if (!e) return false
+        
+        try {
+            const bot = e.bot || Bot
+            const botId = bot?.uin || e.self_id || 10000
+            
+            const forwardNodes = messages.map(msg => ({
+                user_id: botId,
+                nickname: title || 'Bot',
+                message: Array.isArray(msg) ? msg : [msg]
+            }))
+            
+            if (e.isGroup && e.group?.makeForwardMsg) {
+                const forwardMsg = await e.group.makeForwardMsg(forwardNodes)
+                if (forwardMsg) {
+                    await e.group.sendMsg(forwardMsg)
+                    return true
+                }
+            } else if (!e.isGroup && e.friend?.makeForwardMsg) {
+                const forwardMsg = await e.friend.makeForwardMsg(forwardNodes)
+                if (forwardMsg) {
+                    await e.friend.sendMsg(forwardMsg)
+                    return true
+                }
+            }
+            
+            return false
+        } catch (err) {
+            logger.debug('[BYM] sendForwardMsg failed:', err.message)
             return false
         }
     }

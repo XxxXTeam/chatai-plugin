@@ -1,9 +1,16 @@
 import plugin from '../../../lib/plugins/plugin.js'
 import { createRequire } from 'module'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 import config from '../config/config.js'
 
 const require = createRequire(import.meta.url)
 const { exec, execSync } = require('child_process')
+
+// 获取插件目录路径（相对于Yunzai根目录）
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const pluginPath = path.resolve(__dirname, '..')
 
 let uping = false
 
@@ -30,18 +37,18 @@ export class update extends plugin {
     /**
      * 更新插件
      */
-    async update(e) {
-        if (!e.isMaster) return false
+    async update() {
+        if (!this.e.isMaster) return false
 
         if (uping) {
-            await e.reply('已有命令更新中..请勿重复操作')
+            await this.reply('已有命令更新中..请勿重复操作')
             return false
         }
 
         // 检查git
         if (!(await this.checkGit())) return false
 
-        const isForce = e.msg.includes('强制')
+        const isForce = this.e.msg.includes('强制')
         await this.runUpdate(isForce)
 
         return true
@@ -52,21 +59,21 @@ export class update extends plugin {
      */
     async runUpdate(isForce) {
         try {
-            let command = 'git -C ./plugins/new-plugin/ pull --no-rebase'
+            let command = `git -C "${pluginPath}" pull --no-rebase`
             if (isForce) {
-                command = `git -C ./plugins/new-plugin/ checkout . && ${command}`
-                await this.e.reply('正在执行强制更新操作，请稍等')
+                command = `git -C "${pluginPath}" checkout . && ${command}`
+                await this.reply('正在执行强制更新操作，请稍等')
             } else {
-                await this.e.reply('正在执行更新操作，请稍等')
+                await this.reply('正在执行更新操作，请稍等')
             }
 
-            this.oldCommitId = await this.getcommitId('new-plugin')
+            this.oldCommitId = await this.getcommitId()
             uping = true
 
             let ret = await this.execSync(command)
 
             if (ret.error) {
-                logger.mark(`${this.e.logFnc} 更新失败：new-plugin`)
+                logger.mark(`${this.e?.logFnc || 'update'} 更新失败：new-plugin`)
                 this.gitErr(ret.error, ret.stdout)
                 return false
             }
@@ -75,21 +82,21 @@ export class update extends plugin {
             let packageManager = await this.checkPnpm()
             await this.reply(`正在使用 ${packageManager} 更新依赖...`)
 
-            let npmRet = await this.execSync(`cd ./plugins/new-plugin/ && ${packageManager} install`)
+            let npmRet = await this.execSync(`cd "${pluginPath}" && ${packageManager} install`)
 
             if (npmRet.error) {
-                logger.mark(`${this.e.logFnc} 依赖更新失败`)
+                logger.mark(`${this.e?.logFnc || 'update'} 依赖更新失败`)
                 await this.reply(`依赖更新失败：\n${npmRet.error.toString()}`)
                 return false
             }
 
-            let time = await this.getTime('new-plugin')
+            let time = await this.getTime()
 
             if (/(Already up[ -]to[ -]date|已经是最新的)/.test(ret.stdout)) {
                 await this.reply(`new-plugin已经是最新版本\n最后更新时间：${time}`)
             } else {
                 await this.reply(`new-plugin更新成功\n最后更新时间：${time}`)
-                let log = await this.getLog('new-plugin')
+                let log = await this.getLog()
                 if (log) {
                     await this.reply(log)
                 }
@@ -111,8 +118,8 @@ export class update extends plugin {
     /**
      * 获取更新日志
      */
-    async getLog(plugin = '') {
-        let cm = `cd ./plugins/${plugin}/ && git log -20 --oneline --pretty=format:"%h||[%cd]  %s" --date=format:"%m-%d %H:%M"`
+    async getLog() {
+        let cm = `git -C "${pluginPath}" log -20 --oneline --pretty=format:"%h||[%cd]  %s" --date=format:"%m-%d %H:%M"`
 
         let logAll
         try {
@@ -148,8 +155,8 @@ export class update extends plugin {
     /**
      * 获取commit ID
      */
-    async getcommitId(plugin = '') {
-        let cm = `git -C ./plugins/${plugin}/ rev-parse --short HEAD`
+    async getcommitId() {
+        let cm = `git -C "${pluginPath}" rev-parse --short HEAD`
         let commitId = await execSync(cm, { encoding: 'utf-8' })
         return commitId.trim()
     }
@@ -157,8 +164,8 @@ export class update extends plugin {
     /**
      * 获取最后提交时间
      */
-    async getTime(plugin = '') {
-        let cm = `cd ./plugins/${plugin}/ && git log -1 --oneline --pretty=format:"%cd" --date=format:"%m-%d %H:%M"`
+    async getTime() {
+        let cm = `git -C "${pluginPath}" log -1 --oneline --pretty=format:"%cd" --date=format:"%m-%d %H:%M"`
 
         try {
             let time = await execSync(cm, { encoding: 'utf-8' })
@@ -170,41 +177,97 @@ export class update extends plugin {
     }
 
     /**
-     * 制作转发消息
+     * 制作并发送转发消息
+     * @param {string} title 标题
+     * @param {string} msg 消息内容
+     * @param {string} end 结尾消息
+     * @returns {Promise<Object|string>} 转发消息或原始消息
      */
     async makeForwardMsg(title, msg, end) {
-        const _bot = this.e.bot ?? Bot
-        let nickname = _bot.nickname
+        const e = this.e
+        const bot = e?.bot || Bot
+        const botId = bot?.uin || e?.self_id || 10000
+        let nickname = bot?.nickname || 'Bot'
 
-        if (this.e.isGroup) {
-            let info = await _bot?.pickMember?.(this.e.group_id, _bot.uin) ||
-                await _bot?.getGroupMemberInfo?.(this.e.group_id, _bot.uin)
-            nickname = info.card || info.nickname
+        // 尝试获取群内昵称
+        if (e?.isGroup && bot?.uin) {
+            try {
+                const info = await bot?.pickMember?.(e.group_id, bot.uin) ||
+                    await bot?.getGroupMemberInfo?.(e.group_id, bot.uin)
+                if (info) nickname = info.card || info.nickname || nickname
+            } catch { }
         }
 
-        let userInfo = {
-            user_id: _bot.uin,
-            nickname
-        }
-
-        let forwardMsg = [
-            { ...userInfo, message: title },
-            { ...userInfo, message: msg }
+        // 构建消息节点
+        const forwardNodes = [
+            { user_id: botId, nickname, message: title },
+            { user_id: botId, nickname, message: msg }
         ]
-
         if (end) {
-            forwardMsg.push({ ...userInfo, message: end })
+            forwardNodes.push({ user_id: botId, nickname, message: end })
         }
 
-        if (this.e.group?.makeForwardMsg) {
-            forwardMsg = await this.e.group.makeForwardMsg(forwardMsg)
-        } else if (this.e?.friend?.makeForwardMsg) {
-            forwardMsg = await this.e.friend.makeForwardMsg(forwardMsg)
-        } else {
-            return msg
+        // 优先使用 e.group/e.friend 的方法
+        if (e?.group?.makeForwardMsg) {
+            return await e.group.makeForwardMsg(forwardNodes)
+        } else if (e?.friend?.makeForwardMsg) {
+            return await e.friend.makeForwardMsg(forwardNodes)
+        } else if (typeof Bot?.makeForwardMsg === 'function') {
+            return Bot.makeForwardMsg(forwardNodes)
         }
 
-        return forwardMsg
+        // 最终回退：直接返回消息内容
+        return msg
+    }
+
+    /**
+     * 发送合并转发消息
+     * @param {string} title 标题
+     * @param {Array} messages 消息数组
+     * @returns {Promise<boolean>} 是否发送成功
+     */
+    async sendForwardMsg(title, messages) {
+        const e = this.e
+        if (!e) return false
+        
+        try {
+            const bot = e.bot || Bot
+            const botId = bot?.uin || e.self_id || 10000
+            
+            const forwardNodes = messages.map(msg => ({
+                user_id: botId,
+                nickname: title || 'Bot',
+                message: Array.isArray(msg) ? msg : [msg]
+            }))
+            
+            if (e.isGroup && e.group?.makeForwardMsg) {
+                const forwardMsg = await e.group.makeForwardMsg(forwardNodes)
+                if (forwardMsg) {
+                    await e.group.sendMsg(forwardMsg)
+                    return true
+                }
+            } else if (!e.isGroup && e.friend?.makeForwardMsg) {
+                const forwardMsg = await e.friend.makeForwardMsg(forwardNodes)
+                if (forwardMsg) {
+                    await e.friend.sendMsg(forwardMsg)
+                    return true
+                }
+            }
+            
+            // 回退
+            if (e.isGroup && bot?.pickGroup) {
+                const group = bot.pickGroup(e.group_id)
+                if (group?.sendForwardMsg) {
+                    await group.sendForwardMsg(forwardNodes)
+                    return true
+                }
+            }
+            
+            return false
+        } catch (err) {
+            logger.debug('[Update] sendForwardMsg failed:', err.message)
+            return false
+        }
     }
 
     /**

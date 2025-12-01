@@ -9,6 +9,7 @@
     "@google/generative-ai": "^0.21.0",
     "axios": "^1.13.2",
     "better-sqlite3": "^12.4.1",
+    "cookie-parser": "^1.4.7",
     "eventsource": "^4.1.0",
     "express": "^4.21.2",
     "express-rate-limit": "^8.2.1",

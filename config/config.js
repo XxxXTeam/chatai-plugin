@@ -160,6 +160,17 @@ class Config {
                 maxMessages: 20,
                 maxTokens: 4000,
                 cleaningStrategy: 'auto', // 'auto', 'manual'
+                // 隔离模式配置
+                isolation: {
+                    groupUserIsolation: false,  // 群聊用户隔离（false=群共享上下文, true=每用户独立）
+                    privateIsolation: true,     // 私聊隔离（每用户独立上下文）
+                },
+                // 自动上下文配置
+                autoContext: {
+                    enabled: true,              // 启用自动上下文
+                    maxHistoryMessages: 20,     // 携带的历史消息数量
+                    includeToolCalls: false,    // 是否包含工具调用记录
+                },
             },
             memory: {
                 enabled: false,
@@ -167,6 +178,16 @@ class Config {
                 autoExtract: true,   // 自动从对话提取记忆
                 pollInterval: 5,     // 轮询间隔（分钟）
                 maxMemories: 50,     // 每用户最大记忆数
+                // 群聊上下文采集
+                groupContext: {
+                    enabled: true,           // 启用群聊上下文采集
+                    collectInterval: 10,     // 采集间隔（分钟）
+                    maxMessagesPerCollect: 50, // 每次采集最大消息数
+                    analyzeThreshold: 20,    // 触发分析的最小消息数
+                    extractUserInfo: true,   // 提取用户信息作为记忆
+                    extractTopics: true,     // 提取讨论话题
+                    extractRelations: true,  // 提取用户关系
+                },
             },
             presets: {
                 // 默认预设 ID
@@ -200,6 +221,19 @@ class Config {
             },
             streaming: {
                 enabled: true,
+            },
+            // 监听器配置
+            listener: {
+                enabled: false,             // 是否启用监听器
+                priority: -Infinity,        // 优先级
+                triggerMode: 'at',          // 触发模式: 'at', 'prefix', 'both', 'random'
+                triggerPrefix: '#chat',     // 前缀触发关键词
+                randomReplyRate: 0.1,       // 随机回复概率
+                // 黑白名单
+                blacklistUsers: [],         // 用户黑名单
+                whitelistUsers: [],         // 用户白名单（空=不限制）
+                blacklistGroups: [],        // 群黑名单
+                whitelistGroups: [],        // 群白名单（空=不限制）
             },
         }
     }

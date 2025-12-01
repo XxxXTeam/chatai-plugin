@@ -48,17 +48,54 @@ export class ContextManager {
      * @param {string} [groupId] - Optional group ID for group chats
      * @returns {string} Conversation ID
      * 
-     * Isolation strategy:
-     * - Group chat: isolated by group (all users in same group share context)
-     * - Private chat: isolated by user (each user has their own context)
+     * Isolation strategy (configurable):
+     * - Group chat: 
+     *   - groupUserIsolation=false: 群共享上下文（默认）
+     *   - groupUserIsolation=true: 每用户独立上下文
+     * - Private chat:
+     *   - privateIsolation=true: 每用户独立上下文（默认）
+     *   - privateIsolation=false: 所有私聊共享上下文
      */
     getConversationId(userId, groupId = null) {
+        const isolation = config.get('context.isolation') || {}
+        const groupUserIsolation = isolation.groupUserIsolation ?? false
+        const privateIsolation = isolation.privateIsolation ?? true
+
         if (groupId) {
-            // 群聊：按群隔离，同一群的所有用户共享上下文
+            if (groupUserIsolation) {
+                // 群聊用户隔离：每个用户独立上下文
+                return `group:${groupId}:user:${userId}`
+            }
+            // 群聊共享：同一群的所有用户共享上下文
             return `group:${groupId}`
         }
-        // 私聊：按用户隔离
-        return `user:${userId}`
+        
+        if (privateIsolation) {
+            // 私聊隔离：每用户独立
+            return `user:${userId}`
+        }
+        // 私聊共享（罕见场景）
+        return `private:shared`
+    }
+
+    /**
+     * 获取隔离模式描述
+     * @returns {Object} 隔离模式信息
+     */
+    getIsolationMode() {
+        const isolation = config.get('context.isolation') || {}
+        return {
+            groupUserIsolation: isolation.groupUserIsolation ?? false,
+            privateIsolation: isolation.privateIsolation ?? true,
+            description: {
+                group: (isolation.groupUserIsolation ?? false) 
+                    ? '群聊用户独立上下文' 
+                    : '群聊共享上下文',
+                private: (isolation.privateIsolation ?? true)
+                    ? '私聊用户独立上下文'
+                    : '私聊共享上下文'
+            }
+        }
     }
 
     /**

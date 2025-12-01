@@ -1,4 +1,5 @@
 import config from '../config/config.js'
+import { cleanCQCode } from '../src/utils/messageParser.js'
 
 /**
  * 转义正则特殊字符
@@ -57,9 +58,9 @@ export class Chat extends plugin {
 
   /**
    * 统一消息入口，动态判断触发方式
-   * @param {*} e Yunzai event
    */
-  async handleMessage(e) {
+  async handleMessage() {
+    const e = this.e
     // 实时读取配置
     const toggleMode = config.get('basic.toggleMode') || 'at'
     const togglePrefix = config.get('basic.togglePrefix') || '#chat'
@@ -69,13 +70,13 @@ export class Chat extends plugin {
 
     // 检查 @ 触发
     if ((toggleMode === 'at' || toggleMode === 'both') && e.atBot) {
-      msg = e.msg?.trim() || ''
+      msg = cleanCQCode(e.msg?.trim() || '')
       shouldTrigger = true
     }
 
     // 检查前缀触发
     if (!shouldTrigger && (toggleMode === 'prefix' || toggleMode === 'both')) {
-      const rawMsg = e.msg || ''
+      const rawMsg = cleanCQCode(e.msg || '')
       if (rawMsg.startsWith(togglePrefix)) {
         msg = rawMsg.slice(togglePrefix.length).trim()
         shouldTrigger = true
@@ -86,17 +87,36 @@ export class Chat extends plugin {
       return false
     }
 
-    return this.processChat(e, msg)
+    // 检测 debug 模式：消息末尾包含 "debug"
+    let debugMode = false
+    if (msg && /\s+debug\s*$/i.test(msg)) {
+      debugMode = true
+      msg = msg.replace(/\s+debug\s*$/i, '').trim()
+      logger.info('[AI-Chat] Debug模式已启用')
+    }
+
+    return this.processChat(msg, { debugMode })
   }
 
   /**
    * 统一的消息处理逻辑
-   * @param {*} e Yunzai event
    * @param {string} msg 处理后的消息内容
+   * @param {Object} options 选项
+   * @param {boolean} options.debugMode 是否启用调试模式
    */
-  async processChat(e, msg) {
+  async processChat(msg, options = {}) {
+    const e = this.e
+    const { debugMode = false } = options
+    const debugLogs = []  // 收集调试信息
+    
+    const addDebugLog = (title, content) => {
+      if (debugMode) {
+        debugLogs.push({ title, content: typeof content === 'string' ? content : JSON.stringify(content, null, 2) })
+      }
+    }
+
     if (!msg && (!e.img || e.img.length === 0)) {
-      await e.reply('请输入要说的内容或发送图片', true)
+      await this.reply('请输入要说的内容或发送图片', true)
       return true
     }
 
@@ -111,7 +131,7 @@ export class Chat extends plugin {
       await channelManager.init()
       const channels = channelManager.getAll().filter(ch => ch.enabled)
       if (channels.length === 0) {
-        await e.reply('请先在管理面板中配置至少一个启用的渠道', true)
+        await this.reply('请先在管理面板中配置至少一个启用的渠道', true)
         return true
       }
 
@@ -121,6 +141,20 @@ export class Chat extends plugin {
 
       // Build unique user ID (combine user + group if in group)
       const fullUserId = groupId ? `${groupId}_${userId}` : String(userId)
+      
+      // 获取隔离模式信息
+      const { contextManager } = await import('../src/services/ContextManager.js')
+      const conversationId = contextManager.getConversationId(userId, groupId)
+      
+      addDebugLog('📋 基础信息', {
+        userId,
+        groupId,
+        fullUserId,
+        conversationId,
+        isolationMode: contextManager.getIsolationMode(),
+        message: msg?.substring(0, 100) + (msg?.length > 100 ? '...' : ''),
+        imageCount: e.img?.length || 0
+      })
 
       // 检查用户是否被封禁（检查 userId 和 fullUserId）
       const { databaseService } = await import('../src/services/DatabaseService.js')
@@ -184,11 +218,25 @@ export class Chat extends plugin {
         isRoleplay: false
       })
 
+      // 获取最佳渠道
+      const channel = channelManager.getBestChannel(model)
+      
+      addDebugLog('🔧 模型与渠道', {
+        selectedModel: model,
+        presetId,
+        presetName: preset?.name,
+        channelId: channel?.id,
+        channelName: channel?.name,
+        adapterType: channel?.adapterType,
+        baseUrl: channel?.baseUrl?.substring(0, 50)
+      })
+
       // Send message using ChatService
       if (config.get('basic.showThinkingMessage') !== false) {
-        await e.reply('思考中...', true)
+        await this.reply('思考中...', true)
       }
 
+      // 传递 debug 模式给 ChatService
       const result = await chatService.sendMessage({
         userId: fullUserId,
         message: msg,
@@ -197,8 +245,16 @@ export class Chat extends plugin {
         mode: 'chat',  // 指定模式
         preset: preset,
         presetId: presetId,
-        event: e  // Pass event for tool context
+        event: e,  // Pass event for tool context
+        debugMode  // 传递调试模式
       })
+      
+      // 收集调试信息
+      if (debugMode && result.debugInfo) {
+        addDebugLog('📤 请求信息', result.debugInfo.request || '无')
+        addDebugLog('📥 响应信息', result.debugInfo.response || '无')
+        addDebugLog('📊 Token用量', result.usage || '无')
+      }
 
       // Extract text and reasoning response
       let replyText = ''
@@ -237,10 +293,9 @@ export class Chat extends plugin {
       const toolCallLogs = result.toolCallLogs || []
       const hasToolLogs = toolCallLogs.length > 0 && showToolLogs
       const hasThinking = reasoningText && showThinking
-      const canForward = e.group_id && e.bot?.pickGroup
 
       // 1. 先发送工具调用日志（合并转发）
-      if (hasToolLogs && toolsUseForward && canForward) {
+      if (hasToolLogs && toolsUseForward) {
         try {
           const toolLogText = toolCallLogs.map(log => 
             `🔧 ${log.name}\n` +
@@ -249,38 +304,51 @@ export class Chat extends plugin {
             `耗时: ${log.duration}ms ${log.isError ? '❌' : '✅'}`
           ).join('\n\n')
           
-          const forwardMsg = [{
-            user_id: e.bot.uin || e.self_id,
-            nickname: '工具调用日志',
-            time: Math.floor(Date.now() / 1000),
-            message: [toolLogText]
-          }]
-          await e.bot.pickGroup(e.group_id).sendForwardMsg(forwardMsg)
+          await this.sendForwardMsg('工具调用日志', [toolLogText])
         } catch (err) {
           logger.warn('[AI-Chat] 工具日志转发失败:', err.message)
         }
       }
 
       // 2. 发送思考内容（合并转发）
-      if (hasThinking && thinkingUseForward && canForward) {
+      if (hasThinking && thinkingUseForward) {
         try {
-          const forwardMsg = [{
-            user_id: e.bot.uin || e.self_id,
-            nickname: '思考过程',
-            time: Math.floor(Date.now() / 1000),
-            message: [reasoningText]
-          }]
-          await e.bot.pickGroup(e.group_id).sendForwardMsg(forwardMsg)
+          await this.sendForwardMsg('思考过程', [reasoningText])
         } catch (err) {
           logger.warn('[AI-Chat] 思考内容转发失败:', err.message)
         }
       }
 
       // 3. 直接发送AI回复（普通消息）
-      const replyResult = await e.reply(finalReply, quoteReply)
+      const replyResult = await this.reply(finalReply, quoteReply)
       
       // 自动撤回处理
-      this.handleAutoRecall(e, replyResult, false)
+      this.handleAutoRecall(replyResult, false)
+      
+      // 4. Debug模式：发送调试信息（合并转发）
+      if (debugMode && debugLogs.length > 0) {
+        try {
+          // 添加工具调用日志
+          if (toolCallLogs.length > 0) {
+            addDebugLog('🔧 工具调用', toolCallLogs)
+          }
+          // 添加思考内容
+          if (reasoningText) {
+            addDebugLog('💭 思考过程', reasoningText)
+          }
+          // 添加最终回复
+          addDebugLog('💬 最终回复', replyText.substring(0, 500) + (replyText.length > 500 ? '...' : ''))
+          
+          // 构建调试消息
+          const debugMessages = debugLogs.map(log => 
+            `【${log.title}】\n${log.content}`
+          )
+          
+          await this.sendForwardMsg('🔍 Debug调试信息', debugMessages)
+        } catch (err) {
+          logger.warn('[AI-Chat] 调试信息发送失败:', err.message)
+        }
+      }
 
     } catch (error) {
       // 详细错误记录到控制台
@@ -288,10 +356,10 @@ export class Chat extends plugin {
       
       // 给用户显示简化的错误信息
       const userFriendlyError = this.formatErrorForUser(error)
-      const errorResult = await e.reply(userFriendlyError, true)
+      const errorResult = await this.reply(userFriendlyError, true)
       
       // 错误消息也支持自动撤回
-      this.handleAutoRecall(e, errorResult, true)
+      this.handleAutoRecall(errorResult, true)
     }
 
     return true
@@ -299,11 +367,10 @@ export class Chat extends plugin {
 
   /**
    * 处理自动撤回
-   * @param {*} e 事件对象
    * @param {*} replyResult 回复结果
    * @param {boolean} isError 是否是错误消息
    */
-  handleAutoRecall(e, replyResult, isError = false) {
+  handleAutoRecall(replyResult, isError = false) {
     const autoRecall = config.get('basic.autoRecall') || {}
     if (!autoRecall.enabled) return
     if (isError && !autoRecall.recallError) return
@@ -316,9 +383,11 @@ export class Chat extends plugin {
       return
     }
     
+    const e = this.e
     setTimeout(async () => {
       try {
-        const bot = e.bot || global.Bot
+        // 优先使用 this.e.bot，回退到 Bot
+        const bot = e?.bot || Bot
         if (typeof bot?.deleteMsg === 'function') {
           await bot.deleteMsg(messageId)
           logger.debug(`[AI-Chat] 已撤回消息: ${messageId}`)
@@ -382,29 +451,27 @@ export class Chat extends plugin {
 
   /**
    * Clear chat history (alias for endConversation)
-   * @param {*} e Yunzai event
    */
-  async clearHistory(e) {
-    return this.endConversation(e)
+  async clearHistory() {
+    return this.endConversation()
   }
 
   /**
    * 结束当前对话/开始新对话
-   * @param {*} e Yunzai event
    */
-  async endConversation(e) {
+  async endConversation() {
     try {
       const { chatService } = await import('../src/services/ChatService.js')
 
-      const userId = e.user_id || e.sender?.user_id || 'unknown'
-      const groupId = e.group_id || null
+      const userId = this.e.user_id || this.e.sender?.user_id || 'unknown'
+      const groupId = this.e.group_id || null
 
       // 使用正确的隔离方式清除历史
       await chatService.clearHistory(userId, groupId)
-      await e.reply('✅ 已结束当前对话，下次对话将开始新会话', true)
+      await this.reply('✅ 已结束当前对话，下次对话将开始新会话', true)
     } catch (error) {
       logger.error('[AI-Chat] End conversation error:', error)
-      await e.reply('操作失败: ' + error.message, true)
+      await this.reply('操作失败: ' + error.message, true)
     }
 
     return true
@@ -412,22 +479,21 @@ export class Chat extends plugin {
 
   /**
    * 清除用户记忆
-   * @param {*} e Yunzai event
    */
-  async clearMemory(e) {
+  async clearMemory() {
     try {
       const { memoryManager } = await import('../src/services/MemoryManager.js')
 
-      const userId = e.user_id || e.sender?.user_id || 'unknown'
-      const groupId = e.group_id || (e.isGroup ? e.group_id : null)
+      const userId = this.e.user_id || this.e.sender?.user_id || 'unknown'
+      const groupId = this.e.group_id || (this.e.isGroup ? this.e.group_id : null)
       const fullUserId = groupId ? `${groupId}_${userId}` : String(userId)
 
       await memoryManager.init()
       await memoryManager.clearMemory(fullUserId)
-      await e.reply('✅ 已清除你的所有记忆数据', true)
+      await this.reply('✅ 已清除你的所有记忆数据', true)
     } catch (error) {
       logger.error('[AI-Chat] Clear memory error:', error)
-      await e.reply('清除记忆失败: ' + error.message, true)
+      await this.reply('清除记忆失败: ' + error.message, true)
     }
 
     return true
@@ -435,15 +501,14 @@ export class Chat extends plugin {
 
   /**
    * 查看对话状态
-   * @param {*} e Yunzai event
    */
-  async conversationStatus(e) {
+  async conversationStatus() {
     try {
       const { databaseService } = await import('../src/services/DatabaseService.js')
       const { memoryManager } = await import('../src/services/MemoryManager.js')
 
-      const userId = e.user_id || e.sender?.user_id || 'unknown'
-      const groupId = e.group_id || (e.isGroup ? e.group_id : null)
+      const userId = this.e.user_id || this.e.sender?.user_id || 'unknown'
+      const groupId = this.e.group_id || (this.e.isGroup ? this.e.group_id : null)
       const fullUserId = groupId ? `${groupId}_${userId}` : userId
 
       databaseService.init()
@@ -479,19 +544,149 @@ export class Chat extends plugin {
         `  #清除记忆 - 清除记忆数据`
       ].join('\n')
 
-      await e.reply(status, true)
+      await this.reply(status, true)
     } catch (error) {
       logger.error('[AI-Chat] Status error:', error)
-      await e.reply('获取状态失败: ' + error.message, true)
+      await this.reply('获取状态失败: ' + error.message, true)
     }
 
     return true
   }
 
   /**
+   * 发送合并转发消息
+   * @param {string} title 转发消息标题/昵称
+   * @param {Array} messages 消息数组
+   * @returns {Promise<boolean>} 是否发送成功
+   */
+  async sendForwardMsg(title, messages) {
+    const e = this.e
+    if (!e) return false
+    
+    try {
+      // 获取bot信息
+      const bot = e.bot || Bot
+      const botId = bot?.uin || e.self_id || 10000
+      const nickname = title || 'Bot'
+      
+      // 构建转发消息节点
+      const forwardNodes = messages.map(msg => ({
+        user_id: botId,
+        nickname: nickname,
+        message: Array.isArray(msg) ? msg : [msg]
+      }))
+      
+      // 优先使用 e.group/e.friend 的方法
+      if (e.isGroup && e.group?.makeForwardMsg) {
+        const forwardMsg = await e.group.makeForwardMsg(forwardNodes)
+        if (forwardMsg) {
+          await e.group.sendMsg(forwardMsg)
+          return true
+        }
+      } else if (!e.isGroup && e.friend?.makeForwardMsg) {
+        const forwardMsg = await e.friend.makeForwardMsg(forwardNodes)
+        if (forwardMsg) {
+          await e.friend.sendMsg(forwardMsg)
+          return true
+        }
+      }
+      
+      // 回退：使用 Bot.makeForwardMsg
+      if (typeof Bot?.makeForwardMsg === 'function') {
+        const forwardMsg = Bot.makeForwardMsg(forwardNodes)
+        if (e.group?.sendMsg) {
+          await e.group.sendMsg(forwardMsg)
+          return true
+        } else if (e.friend?.sendMsg) {
+          await e.friend.sendMsg(forwardMsg)
+          return true
+        }
+      }
+      
+      // 最终回退：直接使用 pickGroup/pickFriend
+      if (e.isGroup && bot?.pickGroup) {
+        const group = bot.pickGroup(e.group_id)
+        if (group?.sendForwardMsg) {
+          await group.sendForwardMsg(forwardNodes)
+          return true
+        }
+      }
+      
+      return false
+    } catch (err) {
+      logger.debug('[Chat] sendForwardMsg failed:', err.message)
+      return false
+    }
+  }
+
+  /**
+   * 获取消息（支持引用消息获取）
+   * @param {string} messageId 消息ID
+   * @returns {Promise<Object|null>} 消息对象
+   */
+  async getMessage(messageId) {
+    const e = this.e
+    if (!e || !messageId) return null
+    
+    try {
+      const bot = e.bot || Bot
+      
+      // 尝试多种方式获取消息
+      if (typeof bot?.getMsg === 'function') {
+        return await bot.getMsg(messageId)
+      }
+      if (typeof bot?.getMessage === 'function') {
+        return await bot.getMessage(messageId)
+      }
+      if (e.group && typeof e.group?.getChatHistory === 'function') {
+        const history = await e.group.getChatHistory(messageId, 1)
+        return history?.[0] || null
+      }
+      
+      return null
+    } catch (err) {
+      logger.debug('[Chat] getMessage failed:', err.message)
+      return null
+    }
+  }
+
+  /**
+   * 发送私聊消息
+   * @param {string|number} userId 用户ID
+   * @param {string|Array} msg 消息内容
+   * @returns {Promise<boolean>} 是否发送成功
+   */
+  async sendPrivateMsg(userId, msg) {
+    try {
+      const bot = this.e?.bot || Bot
+      
+      if (typeof bot?.sendPrivateMsg === 'function') {
+        await bot.sendPrivateMsg(userId, msg)
+        return true
+      }
+      if (typeof bot?.pickFriend === 'function') {
+        const friend = bot.pickFriend(userId)
+        if (friend?.sendMsg) {
+          await friend.sendMsg(msg)
+          return true
+        }
+      }
+      if (typeof Bot?.sendFriendMsg === 'function') {
+        await Bot.sendFriendMsg(bot?.uin, userId, msg)
+        return true
+      }
+      
+      return false
+    } catch (err) {
+      logger.debug('[Chat] sendPrivateMsg failed:', err.message)
+      return false
+    }
+  }
+
+  /**
    * 检查功能是否可用（伪人模式限制）
    */
-  checkFeatureAvailable(featureName, e) {
+  checkFeatureAvailable(featureName) {
     const exclusiveFeatures = config.get('bym.exclusiveFeatures') || []
     const bymEnabled = config.get('bym.enable')
     
@@ -503,29 +698,29 @@ export class Chat extends plugin {
 
   /**
    * 群聊总结
-   * @param {*} e Yunzai event
    */
-  async groupSummary(e) {
+  async groupSummary() {
+    const e = this.e
     if (!e.group_id) {
-      await e.reply('此功能仅支持群聊', true)
+      await this.reply('此功能仅支持群聊', true)
       return true
     }
 
     // 检查功能是否启用
     if (!config.get('features.groupSummary.enabled')) {
-      await e.reply('群聊总结功能未启用', true)
+      await this.reply('群聊总结功能未启用', true)
       return true
     }
 
     // 检查伪人模式限制
-    const check = this.checkFeatureAvailable('groupSummary', e)
+    const check = this.checkFeatureAvailable('groupSummary')
     if (!check.available) {
-      await e.reply(check.reason, true)
+      await this.reply(check.reason, true)
       return true
     }
 
     try {
-      await e.reply('正在分析群聊消息...', true)
+      await this.reply('正在分析群聊消息...', true)
       
       const { chatService } = await import('../src/services/ChatService.js')
       const { databaseService } = await import('../src/services/DatabaseService.js')
@@ -539,7 +734,7 @@ export class Chat extends plugin {
       const messages = databaseService.getMessages(groupKey, maxMessages)
       
       if (messages.length < 5) {
-        await e.reply('群聊消息太少，无法生成总结', true)
+        await this.reply('群聊消息太少，无法生成总结', true)
         return true
       }
 
@@ -570,28 +765,17 @@ export class Chat extends plugin {
       }
 
       if (summaryText) {
-        // 使用合并转发发送
-        if (e.bot?.pickGroup) {
-          try {
-            const forwardMsg = [{
-              user_id: e.bot.uin || e.self_id,
-              nickname: '群聊总结',
-              time: Math.floor(Date.now() / 1000),
-              message: [`📊 群聊总结 (最近${messages.length}条消息)\n\n${summaryText}`]
-            }]
-            await e.bot.pickGroup(e.group_id).sendForwardMsg(forwardMsg)
-          } catch {
-            await e.reply(`📊 群聊总结\n\n${summaryText}`, true)
-          }
-        } else {
-          await e.reply(`📊 群聊总结\n\n${summaryText}`, true)
+        // 尝试使用合并转发发送
+        const sent = await this.sendForwardMsg('群聊总结', [`📊 群聊总结 (最近${messages.length}条消息)\n\n${summaryText}`])
+        if (!sent) {
+          await this.reply(`📊 群聊总结\n\n${summaryText}`, true)
         }
       } else {
-        await e.reply('总结生成失败', true)
+        await this.reply('总结生成失败', true)
       }
     } catch (error) {
       logger.error('[AI-Chat] Group summary error:', error)
-      await e.reply('群聊总结失败: ' + error.message, true)
+      await this.reply('群聊总结失败: ' + error.message, true)
     }
 
     return true
@@ -599,44 +783,43 @@ export class Chat extends plugin {
 
   /**
    * 个人画像分析（分析自己）
-   * @param {*} e Yunzai event
    */
-  async userPortrait(e) {
-    return this._generatePortrait(e, e.user_id, e.sender?.nickname || '用户')
+  async userPortrait() {
+    return this._generatePortrait(this.e.user_id, this.e.sender?.nickname || '用户')
   }
 
   /**
    * 个人画像分析（@指定用户）
-   * @param {*} e Yunzai event
    */
-  async userPortraitAt(e) {
-    const atUser = e.message?.find(m => m.type === 'at')
+  async userPortraitAt() {
+    const atUser = this.e.message?.find(m => m.type === 'at')
     if (!atUser) {
-      await e.reply('请@要分析的用户', true)
+      await this.reply('请@要分析的用户', true)
       return true
     }
-    return this._generatePortrait(e, atUser.qq, atUser.text?.replace('@', '') || '用户')
+    return this._generatePortrait(atUser.qq, atUser.text?.replace('@', '') || '用户')
   }
 
   /**
    * 生成用户画像
    */
-  async _generatePortrait(e, targetUserId, nickname) {
+  async _generatePortrait(targetUserId, nickname) {
+    const e = this.e
     // 检查功能是否启用
     if (!config.get('features.userPortrait.enabled')) {
-      await e.reply('个人画像功能未启用', true)
+      await this.reply('个人画像功能未启用', true)
       return true
     }
 
     // 检查伪人模式限制
-    const check = this.checkFeatureAvailable('userPortrait', e)
+    const check = this.checkFeatureAvailable('userPortrait')
     if (!check.available) {
-      await e.reply(check.reason, true)
+      await this.reply(check.reason, true)
       return true
     }
 
     try {
-      await e.reply('正在分析用户画像...', true)
+      await this.reply('正在分析用户画像...', true)
       
       const { chatService } = await import('../src/services/ChatService.js')
       const { databaseService } = await import('../src/services/DatabaseService.js')
@@ -654,7 +837,7 @@ export class Chat extends plugin {
       const userMessages = messages.filter(m => m.role === 'user')
       
       if (userMessages.length < minMessages) {
-        await e.reply(`消息数量不足（需要至少${minMessages}条），无法生成画像`, true)
+        await this.reply(`消息数量不足（需要至少${minMessages}条），无法生成画像`, true)
         return true
       }
 
@@ -693,28 +876,17 @@ ${userMessages.slice(-50).map(m => {
       }
 
       if (portraitText) {
-        // 使用合并转发发送
-        if (e.group_id && e.bot?.pickGroup) {
-          try {
-            const forwardMsg = [{
-              user_id: e.bot.uin || e.self_id,
-              nickname: '用户画像分析',
-              time: Math.floor(Date.now() / 1000),
-              message: [`👤 ${nickname} 的用户画像\n\n${portraitText}`]
-            }]
-            await e.bot.pickGroup(e.group_id).sendForwardMsg(forwardMsg)
-          } catch {
-            await e.reply(`👤 ${nickname} 的用户画像\n\n${portraitText}`, true)
-          }
-        } else {
-          await e.reply(`👤 ${nickname} 的用户画像\n\n${portraitText}`, true)
+        // 尝试使用合并转发发送
+        const sent = await this.sendForwardMsg('用户画像分析', [`👤 ${nickname} 的用户画像\n\n${portraitText}`])
+        if (!sent) {
+          await this.reply(`👤 ${nickname} 的用户画像\n\n${portraitText}`, true)
         }
       } else {
-        await e.reply('画像生成失败', true)
+        await this.reply('画像生成失败', true)
       }
     } catch (error) {
       logger.error('[AI-Chat] User portrait error:', error)
-      await e.reply('用户画像分析失败: ' + error.message, true)
+      await this.reply('用户画像分析失败: ' + error.message, true)
     }
 
     return true

@@ -122,12 +122,12 @@ export async function parseUserMessage(e, options = {}) {
         text = text.replace(prefixRegex, '')
     }
 
-    // 添加文本内容
-    const trimmedText = text.trim()
-    if (trimmedText) {
+    // 清理CQ码并添加文本内容
+    const cleanedText = cleanCQCode(text)
+    if (cleanedText) {
         contents.push({
             type: 'text',
-            text: trimmedText
+            text: cleanedText
         })
     }
 
@@ -146,12 +146,16 @@ async function parseReplyMessage(e, options) {
     let text = ''
 
     try {
-        let replyMessage = null
+        let replyData = null
+        let replySenderId = null
+        let replySenderName = null
 
         // 获取引用消息
         if (e.getReply && typeof e.getReply === 'function') {
             const reply = await e.getReply()
-            replyMessage = reply?.message
+            replyData = reply
+            replySenderId = reply?.user_id || reply?.sender?.user_id
+            replySenderName = reply?.sender?.card || reply?.sender?.nickname || reply?.nickname
         } else {
             // 兼容旧版本
             const seq = e.isGroup 
@@ -161,24 +165,35 @@ async function parseReplyMessage(e, options) {
             if (seq) {
                 if (e.isGroup && e.group?.getChatHistory) {
                     const history = await e.group.getChatHistory(seq, 1)
-                    replyMessage = history?.pop()?.message
+                    replyData = history?.pop()
                 } else if (!e.isGroup && e.friend?.getChatHistory) {
                     const history = await e.friend.getChatHistory(seq, 1)
-                    replyMessage = history?.pop()?.message
+                    replyData = history?.pop()
+                }
+                if (replyData) {
+                    replySenderId = replyData.user_id || replyData.sender?.user_id
+                    replySenderName = replyData.sender?.card || replyData.sender?.nickname || replyData.nickname
                 }
             }
         }
 
+        const replyMessage = replyData?.message
         if (!replyMessage) {
             return { text: '', contents: [] }
         }
 
+        // 判断引用的是否是机器人的消息
+        const botId = e.bot?.uin || e.self_id
+        const isQuotingBot = replySenderId && botId && String(replySenderId) === String(botId)
+        const senderLabel = isQuotingBot ? 'AI助手' : (replySenderName || '用户')
+
         // 解析引用消息内容
+        let replyTextContent = ''
         for (const val of replyMessage) {
             switch (val.type) {
                 case 'text':
                     if (handleReplyText) {
-                        text = `[引用消息]\n${val.text}\n\n[当前消息]\n`
+                        replyTextContent += val.text || ''
                     }
                     break
                 
@@ -210,15 +225,26 @@ async function parseReplyMessage(e, options) {
                                 fileUrl = await e.friend.getFileUrl(val.fid)
                             }
                         } catch {}
-                        text = `[引用文件]\n文件名: ${val.name || val.fid}\n下载地址: ${fileUrl || '无法获取'}\n\n[当前消息]\n`
+                        replyTextContent += `[文件: ${val.name || val.fid}]`
                     }
                     break
                 
                 case 'forward':
                     if (handleForward) {
-                        text = '[引用了一条转发消息]\n\n[当前消息]\n'
+                        replyTextContent += '[转发消息]'
                     }
                     break
+            }
+        }
+
+        // 构建引用上下文，明确标注发送者身份
+        if (replyTextContent) {
+            // 清理引用内容中的CQ码
+            replyTextContent = cleanCQCode(replyTextContent)
+            if (isQuotingBot) {
+                text = `[用户引用了你(AI助手)之前的回复]\n"${replyTextContent}"\n\n[用户针对上述引用的提问]\n`
+            } else {
+                text = `[用户引用了${senderLabel}的消息]\n"${replyTextContent}"\n\n[用户的提问]\n`
             }
         }
     } catch (err) {
@@ -302,6 +328,106 @@ function escapeRegex(str) {
 }
 
 /**
+ * 清理CQ码 - 将CQ码转换为可读文本或移除
+ * 参考: https://docs.go-cqhttp.org/cqcode
+ * @param {string} text - 包含CQ码的文本
+ * @returns {string} 清理后的文本
+ */
+function cleanCQCode(text) {
+    if (!text) return ''
+    
+    return text
+        // === 先处理HTML实体编码 ===
+        .replace(/&#91;/g, '[')
+        .replace(/&#93;/g, ']')
+        .replace(/&#44;/g, ',')
+        .replace(/&amp;/g, '&')
+        
+        // === 需要移除的CQ码（不显示任何内容）===
+        // 回复消息 - 移除（已在引用解析中处理）
+        .replace(/\[CQ:reply,[^\]]+\]/g, '')
+        // 匿名消息标记 - 移除
+        .replace(/\[CQ:anonymous[^\]]*\]/g, '')
+        
+        // === @消息 ===
+        // [CQ:at,qq=123] 或 [CQ:at,qq=123,name=xxx] 或 [CQ:at,qq=all]
+        .replace(/\[CQ:at,qq=all\]/g, '@全体成员')
+        .replace(/\[CQ:at,qq=(\d+)(?:,name=([^\],]+))?[^\]]*\]/g, (_, qq, name) => ` @${name || qq} `)
+        
+        // === 多媒体消息 ===
+        // 图片 [CQ:image,file=xxx,type=flash] - 闪照
+        .replace(/\[CQ:image,[^\]]*type=flash[^\]]*\]/g, '[闪照]')
+        // 图片 [CQ:image,file=xxx,type=show] - 秀图
+        .replace(/\[CQ:image,[^\]]*type=show[^\]]*\]/g, '[秀图]')
+        // 普通图片
+        .replace(/\[CQ:image,[^\]]+\]/g, '[图片]')
+        // 语音
+        .replace(/\[CQ:record,[^\]]+\]/g, '[语音]')
+        // 视频
+        .replace(/\[CQ:video,[^\]]+\]/g, '[视频]')
+        // 文件
+        .replace(/\[CQ:file,[^\]]+\]/g, '[文件]')
+        
+        // === 表情类 ===
+        // QQ表情
+        .replace(/\[CQ:face,id=(\d+)[^\]]*\]/g, '[表情]')
+        // 戳一戳
+        .replace(/\[CQ:poke,qq=(\d+)[^\]]*\]/g, '[戳一戳]')
+        // 礼物
+        .replace(/\[CQ:gift,[^\]]+\]/g, '[礼物]')
+        // 窗口抖动
+        .replace(/\[CQ:shake\]/g, '[窗口抖动]')
+        
+        // === 互动类 ===
+        // 猜拳
+        .replace(/\[CQ:rps\]/g, '[猜拳]')
+        // 骰子
+        .replace(/\[CQ:dice\]/g, '[骰子]')
+        
+        // === 分享类 ===
+        // 链接分享 - 提取标题
+        .replace(/\[CQ:share,[^\]]*title=([^\],]+)[^\]]*\]/g, '[分享:$1]')
+        .replace(/\[CQ:share,[^\]]+\]/g, '[链接分享]')
+        // 音乐分享
+        .replace(/\[CQ:music,[^\]]*type=(\w+)[^\]]*\]/g, '[音乐:$1]')
+        // 位置分享
+        .replace(/\[CQ:location,[^\]]+\]/g, '[位置]')
+        // 推荐联系人/群
+        .replace(/\[CQ:contact,type=qq[^\]]*\]/g, '[推荐好友]')
+        .replace(/\[CQ:contact,type=group[^\]]*\]/g, '[推荐群]')
+        
+        // === 卡片消息 ===
+        // JSON卡片
+        .replace(/\[CQ:json,[^\]]+\]/g, '[卡片消息]')
+        // XML卡片
+        .replace(/\[CQ:xml,[^\]]+\]/g, '[XML消息]')
+        // 装逼大图
+        .replace(/\[CQ:cardimage,[^\]]+\]/g, '[大图]')
+        
+        // === 转发消息 ===
+        // 转发消息
+        .replace(/\[CQ:forward,[^\]]+\]/g, '[转发消息]')
+        // 合并转发节点
+        .replace(/\[CQ:node,[^\]]+\]/g, '')
+        
+        // === 特殊消息 ===
+        // 红包
+        .replace(/\[CQ:redbag,[^\]]*title=([^\],]+)[^\]]*\]/g, '[红包:$1]')
+        .replace(/\[CQ:redbag,[^\]]+\]/g, '[红包]')
+        // TTS语音
+        .replace(/\[CQ:tts,text=([^\]]+)\]/g, '[语音:$1]')
+        
+        // === 兜底处理 ===
+        // 其他未知CQ码 - 移除
+        .replace(/\[CQ:[^\]]+\]/g, '')
+        
+        // === 清理格式 ===
+        // 清理多余空格
+        .replace(/\s+/g, ' ')
+        .trim()
+}
+
+/**
  * 从用户消息中提取纯文本
  */
 export function extractTextFromMessage(message) {
@@ -335,3 +461,8 @@ export function getImages(message) {
             source: c.source
         }))
 }
+
+/**
+ * 导出CQ码清理函数供外部使用
+ */
+export { cleanCQCode }

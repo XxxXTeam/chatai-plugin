@@ -3,6 +3,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { getBotFramework } from '../../utils/bot.js'
 import config from '../../config/config.js'
+import { cleanCQCode } from '../utils/messageParser.js'
 import puppeteer from 'puppeteer-extra'
 import StealthPlugin from 'puppeteer-extra-plugin-stealth'
 import TurndownService from 'turndown'
@@ -1590,7 +1591,7 @@ export class BuiltinMcpServer {
                             nickname: msg.sender?.nickname,
                             card: msg.sender?.card || '',
                             time: msg.time,
-                            raw_message: msg.raw_message,
+                            raw_message: cleanCQCode(msg.raw_message || ''),
                             has_image: msg.message?.some(m => m.type === 'image'),
                             has_video: msg.message?.some(m => m.type === 'video')
                         }))
@@ -1779,7 +1780,7 @@ export class BuiltinMcpServer {
                         message_id: e.message_id,
                         seq: e.seq,
                         rand: e.rand,
-                        raw_message: e.raw_message,
+                        raw_message: cleanCQCode(e.raw_message || ''),
                         self_id: e.self_id,
                         time: e.time,
                         
@@ -1851,7 +1852,7 @@ export class BuiltinMcpServer {
                             user_id: e.source.user_id,
                             nickname: e.source.nickname,
                             message: e.source.message,
-                            raw_message: e.source.raw_message,
+                            raw_message: cleanCQCode(e.source.raw_message || ''),
                             time: e.source.time,
                             seq: e.source.seq
                         }
@@ -1903,7 +1904,7 @@ export class BuiltinMcpServer {
                         nickname: source.nickname,
                         time: source.time,
                         seq: source.seq,
-                        raw_message: source.raw_message || fullMessage?.raw_message,
+                        raw_message: cleanCQCode(source.raw_message || fullMessage?.raw_message || ''),
                         message: source.message || fullMessage?.message,
                         // 解析引用消息中的内容
                         content: {
@@ -2023,7 +2024,7 @@ export class BuiltinMcpServer {
                             card: msg.sender?.card,
                             time: msg.time,
                             seq: msg.seq,
-                            raw_message: msg.raw_message,
+                            raw_message: cleanCQCode(msg.raw_message || ''),
                             message: msg.message
                         }
                     } catch (err) {
@@ -2056,7 +2057,7 @@ export class BuiltinMcpServer {
                                 nickname: m.nickname,
                                 time: m.time,
                                 message: m.message,
-                                raw_message: m.raw_message
+                                raw_message: cleanCQCode(m.raw_message || '')
                             }))
                         }
                     } catch (err) {

@@ -48,6 +48,233 @@ export class MemoryManager {
         }, intervalMs)
         
         logger.info(`[MemoryManager] 启动周期轮询，间隔 ${intervalMinutes} 分钟`)
+        
+        // 启动群聊上下文采集
+        this.startGroupContextCollection()
+    }
+    
+    /**
+     * 启动群聊上下文采集
+     */
+    startGroupContextCollection() {
+        const groupConfig = config.get('memory.groupContext') || {}
+        if (!groupConfig.enabled) return
+        
+        const intervalMinutes = groupConfig.collectInterval || 10
+        const intervalMs = intervalMinutes * 60 * 1000
+        
+        // 清除旧的定时器
+        if (this.groupContextInterval) {
+            clearInterval(this.groupContextInterval)
+        }
+        
+        // 启动新的定时器
+        this.groupContextInterval = setInterval(() => {
+            this.collectAndAnalyzeGroupContext().catch(e => 
+                logger.warn('[MemoryManager] 群聊上下文分析失败:', e.message)
+            )
+        }, intervalMs)
+        
+        logger.info(`[MemoryManager] 启动群聊上下文采集，间隔 ${intervalMinutes} 分钟`)
+    }
+    
+    /**
+     * 采集并分析群聊上下文
+     */
+    async collectAndAnalyzeGroupContext() {
+        const groupConfig = config.get('memory.groupContext') || {}
+        if (!groupConfig.enabled) return
+        
+        try {
+            // 获取所有活跃群聊
+            const groupMessages = this.groupMessageBuffer || new Map()
+            
+            for (const [groupId, messages] of groupMessages) {
+                const threshold = groupConfig.analyzeThreshold || 20
+                if (messages.length < threshold) continue
+                
+                // 分析群聊上下文
+                await this.analyzeGroupContext(groupId, messages)
+                
+                // 清空已分析的消息
+                groupMessages.delete(groupId)
+            }
+        } catch (error) {
+            logger.warn('[MemoryManager] 群聊上下文分析失败:', error.message)
+        }
+    }
+    
+    /**
+     * 收集群聊消息（由监听器调用）
+     * @param {string} groupId - 群ID
+     * @param {Object} message - 消息对象
+     */
+    collectGroupMessage(groupId, message) {
+        const groupConfig = config.get('memory.groupContext') || {}
+        if (!groupConfig.enabled) return
+        
+        if (!this.groupMessageBuffer) {
+            this.groupMessageBuffer = new Map()
+        }
+        
+        if (!this.groupMessageBuffer.has(groupId)) {
+            this.groupMessageBuffer.set(groupId, [])
+        }
+        
+        const messages = this.groupMessageBuffer.get(groupId)
+        const maxMessages = groupConfig.maxMessagesPerCollect || 50
+        
+        // 添加消息
+        messages.push({
+            userId: message.user_id,
+            nickname: message.sender?.nickname || message.sender?.card || '未知',
+            content: message.msg || message.raw_message || '',
+            timestamp: Date.now()
+        })
+        
+        // 限制消息数量
+        while (messages.length > maxMessages) {
+            messages.shift()
+        }
+    }
+    
+    /**
+     * 分析群聊上下文，提取记忆
+     * @param {string} groupId - 群ID
+     * @param {Array} messages - 消息列表
+     */
+    async analyzeGroupContext(groupId, messages) {
+        const groupConfig = config.get('memory.groupContext') || {}
+        
+        try {
+            // 构建对话文本
+            const dialogText = messages
+                .map(m => `[${m.nickname}]: ${m.content.substring(0, 100)}`)
+                .join('\n')
+            
+            if (dialogText.length < 100) return
+            
+            // 构建分析提示
+            const analysisTypes = []
+            if (groupConfig.extractUserInfo) analysisTypes.push('用户信息（如：爱好、职业、特点）')
+            if (groupConfig.extractTopics) analysisTypes.push('讨论话题和群氛围')
+            if (groupConfig.extractRelations) analysisTypes.push('用户之间的关系')
+            
+            const prompt = `分析以下群聊记录，提取有价值的信息用于记忆。
+分析维度：${analysisTypes.join('、')}
+
+【群聊记录】
+${dialogText}
+
+请按以下格式输出（每行一条，不超过50字）：
+【用户:用户昵称】具体信息
+【话题】讨论的主题
+【关系】用户A与用户B的关系
+
+只输出有意义的信息，没有则不输出：`
+
+            const client = await LlmService.getChatClient()
+            const result = await client.sendMessage(
+                { role: 'user', content: [{ type: 'text', text: prompt }] },
+                { 
+                    model: config.get('llm.defaultModel'), 
+                    maxToken: 500, 
+                    disableHistorySave: true,
+                    temperature: 0.3
+                }
+            )
+            
+            const responseText = result.contents?.[0]?.text?.trim() || ''
+            if (!responseText || responseText.length < 10) return
+            
+            // 解析并保存记忆
+            const lines = responseText.split('\n').filter(line => line.trim())
+            
+            for (const line of lines) {
+                // 提取用户记忆
+                const userMatch = line.match(/【用户[:：](.+?)】(.+)/)
+                if (userMatch) {
+                    const nickname = userMatch[1].trim()
+                    const info = userMatch[2].trim()
+                    if (info.length > 5 && info.length < 100) {
+                        await this.saveMemory(`group:${groupId}:user:${nickname}`, info, {
+                            source: 'group_context',
+                            groupId,
+                            type: 'user_info'
+                        })
+                        logger.info(`[MemoryManager] 群聊提取用户记忆 [${groupId}:${nickname}]: ${info}`)
+                    }
+                }
+                
+                // 提取话题记忆
+                const topicMatch = line.match(/【话题】(.+)/)
+                if (topicMatch) {
+                    const topic = topicMatch[1].trim()
+                    if (topic.length > 3 && topic.length < 100) {
+                        await this.saveMemory(`group:${groupId}:topics`, topic, {
+                            source: 'group_context',
+                            groupId,
+                            type: 'topic'
+                        })
+                        logger.info(`[MemoryManager] 群聊提取话题 [${groupId}]: ${topic}`)
+                    }
+                }
+                
+                // 提取关系记忆
+                const relationMatch = line.match(/【关系】(.+)/)
+                if (relationMatch) {
+                    const relation = relationMatch[1].trim()
+                    if (relation.length > 5 && relation.length < 100) {
+                        await this.saveMemory(`group:${groupId}:relations`, relation, {
+                            source: 'group_context',
+                            groupId,
+                            type: 'relation'
+                        })
+                        logger.info(`[MemoryManager] 群聊提取关系 [${groupId}]: ${relation}`)
+                    }
+                }
+            }
+            
+            logger.info(`[MemoryManager] 群 ${groupId} 上下文分析完成，处理 ${messages.length} 条消息`)
+        } catch (error) {
+            logger.debug(`[MemoryManager] 分析群 ${groupId} 上下文失败:`, error.message)
+        }
+    }
+    
+    /**
+     * 获取群聊相关记忆
+     * @param {string} groupId - 群ID
+     * @param {string} [userId] - 可选的用户ID
+     * @returns {Object} 群聊记忆上下文
+     */
+    async getGroupMemoryContext(groupId, userId = null) {
+        await this.init()
+        
+        const result = {
+            userInfo: [],
+            topics: [],
+            relations: []
+        }
+        
+        try {
+            // 获取用户信息记忆
+            if (userId) {
+                const userMemories = databaseService.getMemories(`group:${groupId}:user:${userId}`, 5)
+                result.userInfo = userMemories.map(m => m.content)
+            }
+            
+            // 获取话题记忆
+            const topicMemories = databaseService.getMemories(`group:${groupId}:topics`, 5)
+            result.topics = topicMemories.map(m => m.content)
+            
+            // 获取关系记忆
+            const relationMemories = databaseService.getMemories(`group:${groupId}:relations`, 5)
+            result.relations = relationMemories.map(m => m.content)
+        } catch (error) {
+            logger.debug(`[MemoryManager] 获取群 ${groupId} 记忆失败:`, error.message)
+        }
+        
+        return result
     }
     
     /**
@@ -58,6 +285,11 @@ export class MemoryManager {
             clearInterval(this.pollInterval)
             this.pollInterval = null
             logger.info('[MemoryManager] 停止周期轮询')
+        }
+        if (this.groupContextInterval) {
+            clearInterval(this.groupContextInterval)
+            this.groupContextInterval = null
+            logger.info('[MemoryManager] 停止群聊上下文采集')
         }
     }
     
