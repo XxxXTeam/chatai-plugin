@@ -397,10 +397,10 @@ export class Chat extends plugin {
       const { chatService } = await import('../src/services/ChatService.js')
 
       const userId = e.user_id || e.sender?.user_id || 'unknown'
-      const groupId = e.group_id || (e.isGroup ? e.group_id : null)
-      const fullUserId = groupId ? `${groupId}_${userId}` : userId
+      const groupId = e.group_id || null
 
-      await chatService.clearHistory(fullUserId)
+      // 使用正确的隔离方式清除历史
+      await chatService.clearHistory(userId, groupId)
       await e.reply('✅ 已结束当前对话，下次对话将开始新会话', true)
     } catch (error) {
       logger.error('[AI-Chat] End conversation error:', error)

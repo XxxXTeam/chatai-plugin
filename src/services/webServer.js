@@ -12,6 +12,18 @@ import { presetManager } from './PresetManager.js'
 import { channelManager } from './ChannelManager.js'
 import { imageService } from './ImageService.js'
 import { databaseService } from './DatabaseService.js'
+import { getScopeManager } from './ScopeManager.js'
+
+// 获取 scopeManager 实例
+let scopeManager = null
+const ensureScopeManager = async () => {
+    if (!scopeManager) {
+        const db = getDatabase()
+        scopeManager = getScopeManager(db)
+        await scopeManager.init()
+    }
+    return scopeManager
+}
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -52,7 +64,23 @@ class FrontendAuthHandler {
         this.tokens = new Map() // 支持多个 token
     }
 
-    generateToken(timeout = 5 * 60) {
+    /**
+     * 生成登录Token
+     * @param {number} timeout - 超时时间（秒）
+     * @param {boolean} permanent - 是否永久有效
+     * @returns {string} - 生成的token
+     */
+    generateToken(timeout = 5 * 60, permanent = false) {
+        // 永久Token存储到配置文件
+        if (permanent) {
+            let permanentToken = config.get('web.permanentAuthToken')
+            if (!permanentToken) {
+                permanentToken = crypto.randomUUID()
+                config.set('web.permanentAuthToken', permanentToken)
+            }
+            return permanentToken
+        }
+        
         const timestamp = Math.floor(Date.now() / 1000)
         const randomString = Math.random().toString(36).substring(2, 15)
         const token = `${timestamp}-${randomString}`
@@ -68,9 +96,21 @@ class FrontendAuthHandler {
         return token
     }
 
+    /**
+     * 验证Token
+     * @param {string} token
+     * @returns {boolean}
+     */
     validateToken(token) {
         if (!token) return false
 
+        // 检查永久Token
+        const permanentToken = config.get('web.permanentAuthToken')
+        if (permanentToken && token === permanentToken) {
+            return true // 不删除，可重复使用
+        }
+
+        // 检查临时Token
         const expiry = this.tokens.get(token)
         if (expiry && Date.now() < expiry) {
             // 验证成功后删除（一次性使用）
@@ -79,6 +119,20 @@ class FrontendAuthHandler {
         }
 
         return false
+    }
+
+    /**
+     * 撤销永久Token
+     */
+    revokePermanentToken() {
+        config.set('web.permanentAuthToken', null)
+    }
+
+    /**
+     * 获取永久Token状态
+     */
+    hasPermanentToken() {
+        return !!config.get('web.permanentAuthToken')
     }
 }
 
@@ -1659,6 +1713,295 @@ export class WebServer {
             }
         })
 
+        // ==================== Scope API (作用域管理) ====================
+        // GET /api/scope/users - 列出所有用户作用域配置
+        this.app.get('/api/scope/users', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const users = await sm.listUserSettings()
+                res.json(ChaiteResponse.ok(users))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/scope/user/:userId - 获取用户作用域配置
+        this.app.get('/api/scope/user/:userId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const settings = await sm.getUserSettings(req.params.userId)
+                res.json(ChaiteResponse.ok(settings))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // PUT /api/scope/user/:userId - 设置用户作用域配置
+        this.app.put('/api/scope/user/:userId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                await sm.setUserSettings(req.params.userId, req.body)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/scope/user/:userId - 删除用户作用域配置
+        this.app.delete('/api/scope/user/:userId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                await sm.deleteUserSettings(req.params.userId)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/scope/groups - 列出所有群组作用域配置
+        this.app.get('/api/scope/groups', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const groups = await sm.listGroupSettings()
+                res.json(ChaiteResponse.ok(groups))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/scope/group/:groupId - 获取群组作用域配置
+        this.app.get('/api/scope/group/:groupId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const settings = await sm.getGroupSettings(req.params.groupId)
+                res.json(ChaiteResponse.ok(settings))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // PUT /api/scope/group/:groupId - 设置群组作用域配置
+        this.app.put('/api/scope/group/:groupId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                await sm.setGroupSettings(req.params.groupId, req.body)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/scope/group/:groupId - 删除群组作用域配置
+        this.app.delete('/api/scope/group/:groupId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                await sm.deleteGroupSettings(req.params.groupId)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/scope/group-users - 列出所有群用户组合作用域配置
+        this.app.get('/api/scope/group-users', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const groupUsers = await sm.listAllGroupUserSettings()
+                res.json(ChaiteResponse.ok(groupUsers))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/scope/group/:groupId/users - 列出群组内所有用户配置
+        this.app.get('/api/scope/group/:groupId/users', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const users = await sm.listGroupUserSettings(req.params.groupId)
+                res.json(ChaiteResponse.ok(users))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/scope/group/:groupId/user/:userId - 获取群用户组合配置
+        this.app.get('/api/scope/group/:groupId/user/:userId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const settings = await sm.getGroupUserSettings(req.params.groupId, req.params.userId)
+                res.json(ChaiteResponse.ok(settings))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // PUT /api/scope/group/:groupId/user/:userId - 设置群用户组合配置
+        this.app.put('/api/scope/group/:groupId/user/:userId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                await sm.setGroupUserSettings(req.params.groupId, req.params.userId, req.body)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/scope/group/:groupId/user/:userId - 删除群用户组合配置
+        this.app.delete('/api/scope/group/:groupId/user/:userId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                await sm.deleteGroupUserSettings(req.params.groupId, req.params.userId)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/scope/effective/:userId - 获取有效配置（按优先级）
+        this.app.get('/api/scope/effective/:userId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const groupId = req.query.groupId || null
+                const effective = await sm.getEffectiveSettings(groupId, req.params.userId)
+                res.json(ChaiteResponse.ok(effective))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // ==================== Auth Token Management API ====================
+        // POST /api/auth/token/permanent - 生成永久Token
+        this.app.post('/api/auth/token/permanent', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const token = authHandler.generateToken(0, true)
+                res.json(ChaiteResponse.ok({ token, permanent: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/auth/token/permanent - 撤销永久Token
+        this.app.delete('/api/auth/token/permanent', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                authHandler.revokePermanentToken()
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/auth/token/status - 获取Token状态
+        this.app.get('/api/auth/token/status', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                res.json(ChaiteResponse.ok({
+                    hasPermanentToken: authHandler.hasPermanentToken(),
+                    tempTokenCount: authHandler.tokens.size
+                }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // ==================== Features Configuration API ====================
+        // GET /api/features - 获取所有功能配置
+        this.app.get('/api/features', this.authMiddleware.bind(this), (req, res) => {
+            const features = {
+                voiceReply: config.get('features.voiceReply') || {
+                    enabled: false,
+                    triggerOnTool: true,
+                    triggerAlways: false,
+                    ttsProvider: 'miao',
+                    maxTextLength: 500
+                },
+                groupContext: config.get('features.groupContext') || {
+                    enabled: true,
+                    maxMessages: 20
+                },
+                autoMemory: config.get('features.autoMemory') || {
+                    enabled: true,
+                    extractOnChat: true
+                },
+                replyQuote: config.get('features.replyQuote') || {
+                    enabled: true,
+                    handleText: true,
+                    handleImage: true,
+                    handleFile: true,
+                    handleForward: true
+                },
+                atTrigger: config.get('features.atTrigger') || {
+                    enabled: true,
+                    requireAt: true,
+                    prefix: ''
+                }
+            }
+            res.json(ChaiteResponse.ok(features))
+        })
+
+        // PUT /api/features - 更新功能配置
+        this.app.put('/api/features', this.authMiddleware.bind(this), (req, res) => {
+            try {
+                const { voiceReply, groupContext, autoMemory, replyQuote, atTrigger } = req.body
+                
+                if (voiceReply !== undefined) config.set('features.voiceReply', voiceReply)
+                if (groupContext !== undefined) config.set('features.groupContext', groupContext)
+                if (autoMemory !== undefined) config.set('features.autoMemory', autoMemory)
+                if (replyQuote !== undefined) config.set('features.replyQuote', replyQuote)
+                if (atTrigger !== undefined) config.set('features.atTrigger', atTrigger)
+                
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/features/voiceReply - 获取语音回复配置
+        this.app.get('/api/features/voiceReply', this.authMiddleware.bind(this), (req, res) => {
+            const voiceConfig = config.get('features.voiceReply') || {
+                enabled: false,
+                triggerOnTool: true,
+                triggerAlways: false,
+                ttsProvider: 'miao',
+                maxTextLength: 500
+            }
+            res.json(ChaiteResponse.ok(voiceConfig))
+        })
+
+        // PUT /api/features/voiceReply - 更新语音回复配置
+        this.app.put('/api/features/voiceReply', this.authMiddleware.bind(this), (req, res) => {
+            try {
+                config.set('features.voiceReply', req.body)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // ==================== Chat Listener Configuration API ====================
+        // GET /api/listener/config - 获取群聊监听配置
+        this.app.get('/api/listener/config', this.authMiddleware.bind(this), (req, res) => {
+            const listenerConfig = config.get('listener') || {
+                enabled: true,
+                priority: -Infinity,
+                triggerMode: 'at', // 'at' | 'prefix' | 'always'
+                triggerPrefix: '',
+                whitelistGroups: [],
+                blacklistGroups: [],
+                whitelistUsers: [],
+                blacklistUsers: []
+            }
+            res.json(ChaiteResponse.ok(listenerConfig))
+        })
+
+        // PUT /api/listener/config - 更新群聊监听配置
+        this.app.put('/api/listener/config', this.authMiddleware.bind(this), (req, res) => {
+            try {
+                config.set('listener', req.body)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
         // ==================== Catch-all Route ====================
         // Serve index.html for all other routes
         this.app.get('*', (req, res) => {
@@ -1669,10 +2012,11 @@ export class WebServer {
     /**
      * Generate temporary login token (delegates to authHandler)
      * @param {number} expiresIn - Expiration time in seconds
+     * @param {boolean} permanent - 是否永久有效
      * @returns {string} - Generated token
      */
-    generateToken(expiresIn = 300) {
-        return authHandler.generateToken(expiresIn)
+    generateToken(expiresIn = 300, permanent = false) {
+        return authHandler.generateToken(expiresIn, permanent)
     }
 
     /**
@@ -1694,10 +2038,11 @@ export class WebServer {
     /**
      * Generate login URL with token
      * @param {boolean} usePublic - 是否使用公网地址
+     * @param {boolean} permanent - 是否永久有效
      * @returns {string}
      */
-    generateLoginUrl(usePublic = false) {
-        const token = authHandler.generateToken(5 * 60, false)
+    generateLoginUrl(usePublic = false, permanent = false) {
+        const token = authHandler.generateToken(permanent ? 0 : 5 * 60, permanent)
         const baseUrl = usePublic && this.addresses.public 
             ? this.addresses.public 
             : (this.addresses.local[0] || `http://127.0.0.1:${this.port}`)

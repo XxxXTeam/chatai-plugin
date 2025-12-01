@@ -102,6 +102,7 @@ images:
     - webp
 web:
   port: 3000
+  permanentAuthToken: 4ca63cd1-4514-4399-ac86-2ebb2ddfd71b
 context:
   maxMessages: 20
   maxTokens: 8096

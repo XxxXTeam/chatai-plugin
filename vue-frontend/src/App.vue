@@ -2,7 +2,7 @@
 import { h, ref, computed, onMounted } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { NConfigProvider, NGlobalStyle, NLayout, NLayoutSider, NLayoutHeader, NLayoutContent, NMenu, NMessageProvider, NDialogProvider, NButton, NSpace, darkTheme } from 'naive-ui'
-import { DashboardOutlined, MessageOutlined, BuildOutlined, SettingsOutlined, AppsOutlined, PersonOutlined, LogOutOutlined, DarkModeOutlined, LightModeOutlined, ExtensionOutlined, TuneOutlined, PsychologyOutlined, HistoryOutlined, BugReportOutlined, PeopleOutlined } from '@vicons/material'
+import { DashboardOutlined, MessageOutlined, BuildOutlined, SettingsOutlined, AppsOutlined, PersonOutlined, LogOutOutlined, DarkModeOutlined, LightModeOutlined, ExtensionOutlined, TuneOutlined, PsychologyOutlined, HistoryOutlined, BugReportOutlined, PeopleOutlined, GroupOutlined, VolumeUpOutlined, HearingOutlined } from '@vicons/material'
 import { NIcon } from 'naive-ui'
 
 const route = useRoute()
@@ -58,6 +58,21 @@ const menuOptions = computed(() => [
     label: () => h(RouterLink, { to: '/users' }, { default: () => '用户管理' }),
     key: 'users',
     icon: renderIcon(PeopleOutlined)
+  },
+  {
+    label: () => h(RouterLink, { to: '/scope' }, { default: () => '独立人格' }),
+    key: 'scope',
+    icon: renderIcon(GroupOutlined)
+  },
+  {
+    label: () => h(RouterLink, { to: '/features' }, { default: () => '功能配置' }),
+    key: 'features',
+    icon: renderIcon(VolumeUpOutlined)
+  },
+  {
+    label: () => h(RouterLink, { to: '/listener' }, { default: () => '监听配置' }),
+    key: 'listener',
+    icon: renderIcon(HearingOutlined)
   },
   {
     label: () => h(RouterLink, { to: '/settings' }, { default: () => '系统设置' }),

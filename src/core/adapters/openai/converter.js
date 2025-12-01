@@ -17,7 +17,9 @@ registerFromChaiteConverter('openai', (source) => {
             // Build the message object
             const msg = {
                 role: 'assistant',
-                content: text || '',  // Always use empty string, never null (some APIs reject null)
+                // 重要：有 tool_calls 时，content 应为 null 而不是空字符串
+                // 某些 API（如 Gemini）在 content 为空字符串时可能无法正确处理
+                content: text || (hasToolCalls ? null : ''),
             }
 
             // Only add tool_calls if present
@@ -77,11 +79,18 @@ registerFromChaiteConverter('openai', (source) => {
             }
         }
         case 'tool': {
-            return source.content.map(tcr => ({
-                role: 'tool',
-                tool_call_id: tcr.tool_call_id,
-                content: tcr.content,
-            }))
+            const toolMsgs = source.content.map(tcr => {
+                console.log('[OpenAI Converter] tool消息转换:', {
+                    原始tool_call_id: tcr.tool_call_id,
+                    content长度: tcr.content?.length
+                })
+                return {
+                    role: 'tool',
+                    tool_call_id: tcr.tool_call_id,
+                    content: tcr.content,
+                }
+            })
+            return toolMsgs
         }
         case 'system': {
             // Handle system messages
@@ -135,17 +144,37 @@ registerIntoChaiteConverter('openai', (msg) => {
                 text: t.type === 'text' ? t.text : t.refusal || '',
             })))
 
+            // 安全解析 tool_calls
+            let toolCalls = undefined
+            if (msg.tool_calls && msg.tool_calls.length > 0) {
+                toolCalls = msg.tool_calls.map(t => {
+                    let args = t.function?.arguments
+                    // 安全解析 arguments
+                    if (typeof args === 'string') {
+                        try {
+                            args = JSON.parse(args)
+                        } catch (e) {
+                            console.warn('[OpenAI Converter] 解析 arguments 失败:', args, e.message)
+                            args = {}
+                        }
+                    } else if (!args) {
+                        args = {}
+                    }
+                    return {
+                        id: t.id,
+                        type: 'function',
+                        function: {
+                            name: t.function?.name,
+                            arguments: args,
+                        },
+                    }
+                })
+            }
+
             return {
                 role: 'assistant',
                 content: contents,
-                toolCalls: msg.tool_calls?.map(t => ({
-                    id: t.id,
-                    type: 'function',
-                    function: {
-                        name: t.function.name,
-                        arguments: JSON.parse(t.function.arguments),
-                    },
-                })),
+                toolCalls,
             }
         }
         case 'user': {

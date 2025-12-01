@@ -43,20 +43,21 @@ export class ContextManager {
     }
 
     /**
-     * Get conversation ID for a user
-     * @param {string} userId
-     * @param {string} [groupId] Optional group ID for group chats
+     * Get conversation ID for proper chat isolation
+     * @param {string} userId - User ID
+     * @param {string} [groupId] - Optional group ID for group chats
      * @returns {string} Conversation ID
+     * 
+     * Isolation strategy:
+     * - Group chat: isolated by group (all users in same group share context)
+     * - Private chat: isolated by user (each user has their own context)
      */
     getConversationId(userId, groupId = null) {
-        // If it's a group chat, we might want a shared context or per-user context in group
-        // For now, let's assume per-user isolation even in groups, or group-wide context
-        // The requirement is "user isolation", so we prioritize userId.
-
-        // Format: "user:<userId>" or "group:<groupId>:user:<userId>"
         if (groupId) {
-            return `group:${groupId}:user:${userId}`
+            // 群聊：按群隔离，同一群的所有用户共享上下文
+            return `group:${groupId}`
         }
+        // 私聊：按用户隔离
         return `user:${userId}`
     }
 

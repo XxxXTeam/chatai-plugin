@@ -129,7 +129,15 @@ export class OpenAIClient extends AbstractClient {
             max_completion_tokens: requestPayload.max_completion_tokens,
             reasoning_effort: requestPayload.reasoning_effort,
             messages_count: requestPayload.messages?.length,
+            tools_count: requestPayload.tools?.length || 0,
+            tool_choice: requestPayload.tool_choice,
         }))
+
+        // 打印工具列表（仅名称）
+        if (requestPayload.tools?.length > 0) {
+            const toolNames = requestPayload.tools.map(t => t.function?.name).filter(Boolean)
+            logger.info('[OpenAI适配器] 可用工具:', toolNames.join(', '))
+        }
 
         // Log actual messages for debugging
         logger.info('[OpenAI适配器] 实际Messages内容:', JSON.stringify(requestPayload.messages, null, 2))
@@ -139,6 +147,15 @@ export class OpenAIClient extends AbstractClient {
             chatCompletion = await client.chat.completions.create(requestPayload)
             // Debug logging
             logger.info('[OpenAI适配器] API响应:', JSON.stringify(chatCompletion).substring(0, 300))
+            
+            // 完整打印 tool_calls 用于调试
+            const firstChoice = chatCompletion.choices?.[0]
+            if (firstChoice?.message?.tool_calls) {
+                logger.info('[OpenAI适配器] 完整tool_calls:', JSON.stringify(firstChoice.message.tool_calls, null, 2))
+            }
+            if (firstChoice?.finish_reason) {
+                logger.info('[OpenAI适配器] finish_reason:', firstChoice.finish_reason)
+            }
         } catch (error) {
             // Log detailed error information from the API
             logger.error('[OpenAI适配器] API错误详情:', {

@@ -65,6 +65,21 @@ const router = createRouter({
             path: '/users',
             name: 'users',
             component: () => import('../views/Users.vue')
+        },
+        {
+            path: '/scope',
+            name: 'scope',
+            component: () => import('../views/ScopeManager.vue')
+        },
+        {
+            path: '/features',
+            name: 'features',
+            component: () => import('../views/FeaturesConfig.vue')
+        },
+        {
+            path: '/listener',
+            name: 'listener',
+            component: () => import('../views/ListenerConfig.vue')
         }
     ]
 })

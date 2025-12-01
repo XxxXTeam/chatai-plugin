@@ -1094,6 +1094,116 @@ export class BuiltinMcpServer {
                 }
             },
 
+            {
+                name: 'random_at_members',
+                description: '随机@群成员并发送消息。可以指定数量、排除特定角色（如管理员、群主）。仅在群聊中有效。',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        count: { type: 'number', description: '要随机选择的成员数量，默认1' },
+                        message: { type: 'string', description: '附带的消息内容' },
+                        exclude_admin: { type: 'boolean', description: '是否排除管理员，默认false' },
+                        exclude_owner: { type: 'boolean', description: '是否排除群主，默认false' },
+                        exclude_bot: { type: 'boolean', description: '是否排除机器人自己，默认true' },
+                        exclude_users: { 
+                            type: 'array', 
+                            items: { type: 'string' },
+                            description: '要排除的用户QQ号列表' 
+                        }
+                    }
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const e = ctx.getEvent()
+                        const bot = ctx.getBot()
+                        if (!e || !e.group_id) {
+                            return { success: false, error: '此功能仅在群聊中有效' }
+                        }
+
+                        const count = args.count || 1
+                        const excludeAdmin = args.exclude_admin || false
+                        const excludeOwner = args.exclude_owner || false
+                        const excludeBot = args.exclude_bot !== false  // 默认排除机器人
+                        const excludeUsers = args.exclude_users || []
+                        const botId = bot.uin || bot.self_id
+
+                        // 获取群成员列表
+                        let memberList = []
+                        try {
+                            if (bot.getGroupMemberList) {
+                                memberList = await bot.getGroupMemberList(e.group_id) || []
+                            } else {
+                                const group = bot.pickGroup?.(e.group_id)
+                                if (group?.getMemberMap) {
+                                    const memberMap = await group.getMemberMap()
+                                    for (const [uid, member] of memberMap) {
+                                        memberList.push({ user_id: uid, ...member })
+                                    }
+                                } else if (group?.getMemberList) {
+                                    memberList = await group.getMemberList() || []
+                                }
+                            }
+                        } catch (err) {
+                            return { success: false, error: `获取群成员列表失败: ${err.message}` }
+                        }
+
+                        // 过滤成员
+                        let candidates = memberList.filter(m => {
+                            const uid = String(m.user_id || m.uid)
+                            const role = m.role || 'member'
+                            
+                            // 排除机器人自己
+                            if (excludeBot && uid === String(botId)) return false
+                            // 排除管理员
+                            if (excludeAdmin && role === 'admin') return false
+                            // 排除群主
+                            if (excludeOwner && role === 'owner') return false
+                            // 排除指定用户
+                            if (excludeUsers.includes(uid)) return false
+                            
+                            return true
+                        })
+
+                        if (candidates.length === 0) {
+                            return { success: false, error: '没有符合条件的群成员可供选择' }
+                        }
+
+                        // 随机选择
+                        const selected = []
+                        const actualCount = Math.min(count, candidates.length)
+                        for (let i = 0; i < actualCount; i++) {
+                            const randomIndex = Math.floor(Math.random() * candidates.length)
+                            selected.push(candidates[randomIndex])
+                            candidates.splice(randomIndex, 1)  // 避免重复选择
+                        }
+
+                        // 构建消息
+                        const msgParts = []
+                        for (const member of selected) {
+                            msgParts.push(segment.at(member.user_id || member.uid))
+                            msgParts.push(' ')
+                        }
+                        if (args.message) {
+                            msgParts.push(args.message)
+                        }
+
+                        const result = await e.reply(msgParts)
+                        return { 
+                            success: true, 
+                            message_id: result?.message_id,
+                            selected_count: selected.length,
+                            selected_members: selected.map(m => ({
+                                user_id: String(m.user_id || m.uid),
+                                nickname: m.nickname || m.nick || '',
+                                card: m.card || ''
+                            }))
+                        }
+                    } catch (err) {
+                        return { success: false, error: `随机@成员失败: ${err.message}` }
+                    }
+                }
+            },
+
             // ==================== 图片处理工具 ====================
             {
                 name: 'parse_image',
