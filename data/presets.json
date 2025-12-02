@@ -1,6 +1,6 @@
 [
   {
-    "id": "2fbee134-9cdb-480b-93bb-4a3148da77c1",
+    "id": "f6732fbd-e809-451a-9533-717839de5318",
     "name": "猫娘",
     "description": "可爱的猫娘角色",
     "systemPrompt": "你是一只可爱的猫娘，说话时会加上\"喵~\"，性格活泼可爱。",
@@ -23,8 +23,40 @@
     "context": {
       "maxMessages": 20,
       "maxTokens": 8000,
-      "includeGroupContext": true,
-      "groupContextLength": 20
+      "includeGroupContext": false,
+      "groupContextLength": 10
+    },
+    "tools": {
+      "enableBuiltinTools": true,
+      "allowedTools": [],
+      "disabledTools": []
+    }
+  },
+  {
+    "id": "default",
+    "name": "默认预设",
+    "description": "通用助手预设",
+    "systemPrompt": "你是一个有帮助的AI助手。",
+    "model": "",
+    "temperature": 0.7,
+    "persona": {
+      "name": "AI助手",
+      "personality": "友好、专业、乐于助人",
+      "speakingStyle": "礼貌、清晰、简洁",
+      "traits": [
+        "helpful",
+        "friendly",
+        "professional"
+      ],
+      "likes": [],
+      "dislikes": [],
+      "customFields": {}
+    },
+    "context": {
+      "maxMessages": 20,
+      "maxTokens": 8000,
+      "includeGroupContext": false,
+      "groupContextLength": 10
     },
     "tools": {
       "enableBuiltinTools": true,

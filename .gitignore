@@ -8,10 +8,6 @@ resources/simple
 memory.db
 *.db
 data/presets.json
-
-# Frontend build (auto-built by CI)
 vue-frontend/dist/
 vue-frontend/node_modules/
-
-# Keep resources/web (built frontend)
 !resources/web/

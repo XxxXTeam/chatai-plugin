@@ -5,7 +5,7 @@ import {
   NModal, NForm, NFormItem, NSpin, useMessage, NPopconfirm, 
   NSwitch, NDynamicTags, NAlert, NTabs, NTabPane, NInputNumber,
   NGrid, NGridItem, NStatistic, NDivider, NCollapse, NCollapseItem,
-  NText, NScrollbar
+  NText, NScrollbar, NEmpty, NDescriptions, NDescriptionsItem
 } from 'naive-ui'
 import axios from 'axios'
 import CodeBlock from '../components/CodeBlock.vue'
@@ -497,11 +497,11 @@ async function saveBuiltinConfig() {
   try {
     const res = await axios.put('/api/tools/builtin/config', builtinConfig.value)
     if (res.data.code === 0) {
-      message.success('配置已保存')
+      message.success('✓ 配置已保存', { duration: 2000 })
       await fetchTools()
     }
   } catch (err) {
-    message.error('保存失败')
+    message.error('保存失败: ' + err.message)
   }
 }
 
@@ -578,12 +578,14 @@ async function testTool() {
     })
     if (res.data.code === 0) {
       testResult.value = JSON.stringify(res.data.data, null, 2)
-      message.success('测试成功')
+      message.success('✓ 执行成功', { duration: 2000 })
     } else {
       testResult.value = `Error: ${res.data.message}`
+      message.error('执行失败')
     }
   } catch (err) {
     testResult.value = `Error: ${err.message}`
+    message.error('执行失败: ' + err.message)
   } finally {
     testLoading.value = false
   }
@@ -840,35 +842,268 @@ const customToolColumns = [
   }
 ]
 
+// ==================== JS 工具文件管理 ====================
+const jsTools = ref([])
+const showJsToolModal = ref(false)
+const isEditJsTool = ref(false)
+const jsToolForm = ref({
+  name: '',
+  source: ''
+})
+const jsToolLoading = ref(false)
+
+async function fetchJsTools() {
+  try {
+    const res = await axios.get('/api/tools/js')
+    if (res.data.code === 0) {
+      jsTools.value = res.data.data || []
+    }
+  } catch (err) {
+    console.error('Failed to fetch JS tools', err)
+  }
+}
+
+async function reloadJsTools() {
+  jsToolLoading.value = true
+  try {
+    const res = await axios.post('/api/tools/js/reload')
+    if (res.data.code === 0) {
+      message.success('✓ ' + (res.data.data?.message || '热重载成功'), { duration: 2000 })
+      await fetchJsTools()
+      await fetchTools()
+    }
+  } catch (err) {
+    message.error('重载失败: ' + err.message)
+  } finally {
+    jsToolLoading.value = false
+  }
+}
+
+function addJsTool() {
+  isEditJsTool.value = false
+  jsToolForm.value = { name: '', source: '' }
+  showJsToolModal.value = true
+}
+
+async function editJsTool(tool) {
+  isEditJsTool.value = true
+  jsToolLoading.value = true
+  try {
+    const res = await axios.get(`/api/tools/js/${tool.name}`)
+    if (res.data.code === 0) {
+      jsToolForm.value = {
+        name: res.data.data.name,
+        source: res.data.data.source
+      }
+      showJsToolModal.value = true
+    }
+  } catch (err) {
+    message.error('加载源码失败: ' + err.message)
+  } finally {
+    jsToolLoading.value = false
+  }
+}
+
+async function saveJsTool() {
+  if (!jsToolForm.value.name) {
+    message.error('请输入工具名称')
+    return
+  }
+  
+  jsToolLoading.value = true
+  try {
+    if (isEditJsTool.value) {
+      const res = await axios.put(`/api/tools/js/${jsToolForm.value.name}`, {
+        source: jsToolForm.value.source
+      })
+      if (res.data.code === 0) {
+        message.success('✓ 保存成功，已热重载', { duration: 2000 })
+        showJsToolModal.value = false
+        await fetchJsTools()
+        await fetchTools()
+      } else {
+        message.error(res.data.message)
+      }
+    } else {
+      const res = await axios.post('/api/tools/js', {
+        name: jsToolForm.value.name,
+        source: jsToolForm.value.source || undefined
+      })
+      if (res.data.code === 0) {
+        message.success('✓ 工具已创建', { duration: 2000 })
+        showJsToolModal.value = false
+        await fetchJsTools()
+        await fetchTools()
+      } else {
+        message.error(res.data.message)
+      }
+    }
+  } catch (err) {
+    message.error('保存失败: ' + err.message)
+  } finally {
+    jsToolLoading.value = false
+  }
+}
+
+async function deleteJsTool(name) {
+  try {
+    const res = await axios.delete(`/api/tools/js/${name}`)
+    if (res.data.code === 0) {
+      message.success('删除成功')
+      await fetchJsTools()
+      await fetchTools()
+    }
+  } catch (err) {
+    message.error('删除失败: ' + err.message)
+  }
+}
+
+const jsToolColumns = [
+  { title: '工具名', key: 'name', width: 150 },
+  { title: '描述', key: 'description', ellipsis: { tooltip: true } },
+  { title: '文件', key: 'filename', width: 140 },
+  { 
+    title: '修改时间', 
+    key: 'modifiedAt',
+    width: 160,
+    render: (row) => new Date(row.modifiedAt).toLocaleString('zh-CN')
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 200,
+    render: (row) => {
+      return h(NSpace, { size: 'small' }, {
+        default: () => [
+          h(NButton, { size: 'small', onClick: () => editJsTool(row) }, { default: () => '编辑' }),
+          h(NButton, { size: 'small', type: 'primary', onClick: () => openTestModal({ name: row.name, inputSchema: {} }) }, { default: () => '测试' }),
+          h(NPopconfirm, {
+            onPositiveClick: () => deleteJsTool(row.name)
+          }, {
+            trigger: () => h(NButton, { size: 'small', type: 'error' }, { default: () => '删除' }),
+            default: () => '确定删除工具文件吗？'
+          })
+        ]
+      })
+    }
+  }
+]
+
+// ==================== 调用日志 ====================
+const toolLogs = ref([])
+const logLoading = ref(false)
+const logFilter = ref({ tool: null })
+const logToolOptions = computed(() => {
+  const tools = new Set(toolLogs.value.map(l => l.toolName))
+  return Array.from(tools).map(t => ({ label: t, value: t }))
+})
+
+const logColumns = [
+  {
+    title: '时间',
+    key: 'timestamp',
+    width: 160,
+    render: (row) => new Date(row.timestamp).toLocaleString('zh-CN')
+  },
+  {
+    title: '工具',
+    key: 'toolName',
+    width: 150,
+    render: (row) => h(NTag, { type: 'info', size: 'small' }, () => row.toolName)
+  },
+  {
+    title: '状态',
+    key: 'success',
+    width: 70,
+    render: (row) => h(NTag, { 
+      type: row.success ? 'success' : 'error',
+      size: 'small'
+    }, () => row.success ? '成功' : '失败')
+  },
+  {
+    title: '耗时',
+    key: 'duration',
+    width: 70,
+    render: (row) => row.duration ? `${row.duration}ms` : '-'
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 60,
+    render: (row) => h(NButton, {
+      size: 'small',
+      onClick: () => viewLogDetail(row)
+    }, () => '详情')
+  }
+]
+
+const showLogDetailModal = ref(false)
+const selectedLog = ref(null)
+
+async function fetchToolLogs() {
+  logLoading.value = true
+  try {
+    const params = {}
+    if (logFilter.value.tool) params.tool = logFilter.value.tool
+    const res = await axios.get('/api/tools/logs', { params })
+    if (res.data.code === 0) {
+      toolLogs.value = res.data.data || []
+    }
+  } catch (err) {
+    message.error('获取日志失败')
+  } finally {
+    logLoading.value = false
+  }
+}
+
+async function clearToolLogs() {
+  try {
+    const res = await axios.delete('/api/tools/logs')
+    if (res.data.code === 0) {
+      message.success('日志已清空')
+      toolLogs.value = []
+    }
+  } catch (err) {
+    message.error('清空失败')
+  }
+}
+
+function viewLogDetail(log) {
+  selectedLog.value = log
+  showLogDetailModal.value = true
+}
+
 onMounted(() => {
   fetchTools()
   fetchServers()
   fetchBuiltinConfig()
   fetchCustomTools()
+  fetchJsTools()
+  fetchToolLogs()
 })
 </script>
 
 <template>
   <n-space vertical :size="16">
     <!-- 统计卡片 -->
-    <n-grid :cols="4" :x-gap="16">
-      <n-grid-item>
-        <n-card size="small">
+    <n-grid :cols="4" :x-gap="12" :y-gap="12" responsive="screen" item-responsive>
+      <n-grid-item span="0:2 400:1">
+        <n-card size="small" hoverable>
           <n-statistic label="内置工具" :value="builtinToolsCount" />
         </n-card>
       </n-grid-item>
-      <n-grid-item>
-        <n-card size="small">
+      <n-grid-item span="0:2 400:1">
+        <n-card size="small" hoverable>
           <n-statistic label="MCP工具" :value="mcpToolsCount" />
         </n-card>
       </n-grid-item>
-      <n-grid-item>
-        <n-card size="small">
+      <n-grid-item span="0:2 400:1">
+        <n-card size="small" hoverable>
           <n-statistic label="MCP服务器" :value="mcpServers.length" />
         </n-card>
       </n-grid-item>
-      <n-grid-item>
-        <n-card size="small">
+      <n-grid-item span="0:2 400:1">
+        <n-card size="small" hoverable>
           <n-statistic label="已连接" :value="connectedServers" />
         </n-card>
       </n-grid-item>
@@ -971,6 +1206,58 @@ onMounted(() => {
                 </n-grid>
               </n-collapse-item>
             </n-collapse>
+          </n-space>
+        </n-tab-pane>
+
+        <!-- JS 工具文件 -->
+        <n-tab-pane name="jstools" tab="JS工具文件">
+          <n-space vertical :size="16">
+            <n-alert type="info">
+              JS 工具文件存放在 <code>data/tools/</code> 目录下，支持热重载。工具会自动注入 Bot、logger、redis、segment、common 等全局变量。
+            </n-alert>
+
+            <n-space justify="space-between">
+              <n-text>共 {{ jsTools.length }} 个 JS 工具文件</n-text>
+              <n-space>
+                <n-button @click="reloadJsTools" :loading="jsToolLoading">热重载</n-button>
+                <n-button type="primary" @click="addJsTool">创建工具</n-button>
+              </n-space>
+            </n-space>
+
+            <n-data-table :columns="jsToolColumns" :data="jsTools" size="small" />
+          </n-space>
+        </n-tab-pane>
+
+        <!-- 调用日志 -->
+        <n-tab-pane name="logs" tab="调用日志">
+          <n-space vertical :size="12">
+            <n-space justify="space-between">
+              <n-space>
+                <n-select
+                  v-model:value="logFilter.tool"
+                  :options="logToolOptions"
+                  placeholder="筛选工具"
+                  clearable
+                  style="width: 180px"
+                  @update:value="fetchToolLogs"
+                />
+              </n-space>
+              <n-space>
+                <n-button @click="fetchToolLogs" :loading="logLoading">刷新</n-button>
+                <n-button type="error" @click="clearToolLogs" v-if="toolLogs.length > 0">清空</n-button>
+              </n-space>
+            </n-space>
+            
+            <n-empty v-if="toolLogs.length === 0" description="暂无日志记录" />
+            <n-data-table
+              v-else
+              :columns="logColumns"
+              :data="toolLogs"
+              :loading="logLoading"
+              :pagination="{ pageSize: 30 }"
+              size="small"
+              max-height="50vh"
+            />
           </n-space>
         </n-tab-pane>
       </n-tabs>
@@ -1176,6 +1463,98 @@ return { text: '结果', data: {} }"
           <n-button type="primary" @click="saveCustomTool">保存工具</n-button>
         </n-space>
       </template>
+    </n-modal>
+
+    <!-- JS 工具文件编辑 Modal -->
+    <n-modal v-model:show="showJsToolModal" preset="card" :title="isEditJsTool ? '编辑 JS 工具' : '创建 JS 工具'" style="width: 900px; max-height: 90vh">
+      <n-scrollbar style="max-height: calc(90vh - 120px)">
+        <n-space vertical :size="16">
+          <n-form label-placement="left" label-width="80">
+            <n-form-item label="工具名称" required>
+              <n-input v-model:value="jsToolForm.name" placeholder="工具名称（不含.js后缀）" :disabled="isEditJsTool" />
+            </n-form-item>
+          </n-form>
+
+          <n-card size="small" title="工具源码">
+            <template #header-extra>
+              <n-text depth="3" style="font-size: 12px">
+                保存后自动热重载
+              </n-text>
+            </template>
+            <CodeEditor 
+              v-model="jsToolForm.source" 
+              language="javascript"
+              :rows="25"
+              :placeholder="`/**
+ * 自定义工具
+ * 全局变量: Bot, logger, redis, segment, common
+ */
+export default {
+    name: 'my_tool',
+    description: '工具描述',
+    inputSchema: {
+        type: 'object',
+        properties: {},
+        required: []
+    },
+    
+    async run(args, ctx) {
+        return { text: '结果' }
+    }
+}`"
+            />
+          </n-card>
+
+          <n-alert type="info" title="自动注入的全局变量">
+            <n-space :size="8" style="flex-wrap: wrap">
+              <n-tag size="small">Bot</n-tag>
+              <n-tag size="small">logger</n-tag>
+              <n-tag size="small">redis</n-tag>
+              <n-tag size="small">segment</n-tag>
+              <n-tag size="small">common</n-tag>
+              <n-tag size="small">config</n-tag>
+              <n-tag size="small">fetch</n-tag>
+            </n-space>
+          </n-alert>
+        </n-space>
+      </n-scrollbar>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showJsToolModal = false">取消</n-button>
+          <n-button type="primary" @click="saveJsTool" :loading="jsToolLoading">
+            {{ isEditJsTool ? '保存并热重载' : '创建工具' }}
+          </n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- 日志详情 Modal -->
+    <n-modal v-model:show="showLogDetailModal" preset="card" title="调用详情" style="width: 700px">
+      <n-descriptions v-if="selectedLog" :column="2" label-placement="left" bordered>
+        <n-descriptions-item label="工具名称">
+          <n-tag type="info">{{ selectedLog.toolName }}</n-tag>
+        </n-descriptions-item>
+        <n-descriptions-item label="状态">
+          <n-tag :type="selectedLog.success ? 'success' : 'error'">
+            {{ selectedLog.success ? '成功' : '失败' }}
+          </n-tag>
+        </n-descriptions-item>
+        <n-descriptions-item label="用户ID">{{ selectedLog.userId || '-' }}</n-descriptions-item>
+        <n-descriptions-item label="耗时">{{ selectedLog.duration ? selectedLog.duration + 'ms' : '-' }}</n-descriptions-item>
+        <n-descriptions-item label="时间" :span="2">{{ new Date(selectedLog.timestamp).toLocaleString('zh-CN') }}</n-descriptions-item>
+      </n-descriptions>
+
+      <n-card title="请求参数" size="small" style="margin-top: 16px" v-if="selectedLog?.arguments">
+        <CodeBlock :code="JSON.stringify(selectedLog.arguments, null, 2)" language="json" />
+      </n-card>
+
+      <n-card title="返回结果" size="small" style="margin-top: 16px" v-if="selectedLog?.result">
+        <CodeBlock :code="JSON.stringify(selectedLog.result, null, 2)" language="json" max-height="200px" />
+      </n-card>
+
+      <n-card title="错误信息" size="small" style="margin-top: 16px" v-if="selectedLog?.error">
+        <CodeBlock :code="selectedLog.error" language="text" />
+      </n-card>
     </n-modal>
   </n-space>
 </template>

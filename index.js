@@ -7,8 +7,26 @@ import { getWebServer } from './src/services/webServer.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-logger.info('**************************************')
-logger.info('加载中...')
+// 颜色日志
+const colors = {
+  reset: '\x1b[0m',
+  bright: '\x1b[1m',
+  dim: '\x1b[2m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  magenta: '\x1b[35m',
+  cyan: '\x1b[36m',
+  white: '\x1b[37m'
+}
+
+const pluginName = 'Chaite-AI'
+const pluginVersion = '1.0.0'
+
+logger.info(`${colors.cyan}╔════════════════════════════════════╗${colors.reset}`)
+logger.info(`${colors.cyan}║${colors.reset}  ${colors.bright}${colors.magenta}${pluginName}${colors.reset} ${colors.dim}v${pluginVersion}${colors.reset}  ${colors.cyan}║${colors.reset}`)
+logger.info(`${colors.cyan}╚════════════════════════════════════╝${colors.reset}`)
 
 // Initialize global object if needed
 if (!global.segment) {
@@ -31,17 +49,21 @@ const webServer = getWebServer()
 webServer.start()
 
 // 异步初始化 MCP（不阻塞插件加载）
+let mcpToolCount = 0
+let mcpCustomToolCount = 0
 ;(async () => {
   try {
     const { mcpManager } = await import('./src/mcp/McpManager.js')
     await mcpManager.init()
-    logger.info('[MCP] 初始化完成')
+    mcpToolCount = mcpManager.builtinServer?.tools?.length || 0
+    mcpCustomToolCount = mcpManager.customToolsServer?.tools?.length || 0
   } catch (err) {
-    logger.error('[MCP] 初始化失败:', err.message)
+    logger.error(`${colors.red}[MCP] 初始化失败:${colors.reset}`, err.message)
   }
 })()
 
 const apps = {}
+const loadStats = { success: 0, failed: 0, plugins: [] }
 
 // Load apps
 const appsDir = path.join(__dirname, 'apps')
@@ -56,13 +78,20 @@ if (fs.existsSync(appsDir)) {
 
     if (result.status === 'fulfilled') {
       apps[name] = result.value[Object.keys(result.value)[0]]
+      loadStats.success++
+      loadStats.plugins.push(name)
     } else {
-      logger.error(`[NewPlugin] Failed to load app ${name}:`, result.reason)
+      loadStats.failed++
+      logger.error(`${colors.red}[Plugin] 加载失败 ${name}:${colors.reset}`, result.reason?.message || result.reason)
     }
   })
 }
 
-logger.info(' 加载成功')
-logger.info('**************************************')
+// 输出加载统计
+logger.info(`${colors.green}[Plugin]${colors.reset} 加载完成: ${colors.bright}${loadStats.success}${colors.reset} 个插件`)
+if (loadStats.failed > 0) {
+  logger.warn(`${colors.yellow}[Plugin]${colors.reset} 加载失败: ${colors.red}${loadStats.failed}${colors.reset} 个`)
+}
+logger.info(`${colors.cyan}════════════════════════════════════${colors.reset}`)
 
 export { apps }

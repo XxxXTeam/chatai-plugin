@@ -10,12 +10,17 @@ import historyManager from '../core/utils/history.js'
  * - 最多 20 条上文构建请求
  * - 群聊用户隔离模式
  * - 多用户消息区分
+ * - 异步锁防止并发冲突
  */
 export class ContextManager {
     constructor() {
-        this.locks = new Map()
+        this.locks = new Map()          // 异步锁状态
+        this.lockQueues = new Map()     // 锁等待队列
         this.initialized = false
-        this.maxContextMessages = 20  // 最多20条上文
+        this.maxContextMessages = 20    // 最多20条上文
+        this.requestCounters = new Map() // 请求计数器（用于检测并发）
+        this.messageQueues = new Map()  // 消息队列（确保消息不丢失）
+        this.processingFlags = new Map() // 处理中标记
     }
 
     /**
@@ -29,24 +34,183 @@ export class ContextManager {
     }
 
     /**
-     * Get context lock for a user
-     * @param {string} userId
-     * @returns {boolean} True if lock acquired
+     * 获取异步锁 - 真正的互斥锁实现
+     * @param {string} key - 锁的key（conversationId）
+     * @param {number} timeout - 超时时间(ms)，默认30秒
+     * @returns {Promise<Function>} 释放锁的函数
      */
-    async acquireLock(userId) {
-        if (this.locks.get(userId)) {
-            return false
+    async acquireLock(key, timeout = 30000) {
+        const startTime = Date.now()
+        
+        // 等待现有锁释放
+        while (this.locks.has(key)) {
+            // 检查超时
+            if (Date.now() - startTime > timeout) {
+                logger.warn(`[ContextManager] 获取锁超时: ${key}`)
+                throw new Error(`获取上下文锁超时，请稍后重试`)
+            }
+            
+            // 等待现有锁释放
+            await new Promise(resolve => {
+                // 创建等待队列
+                if (!this.lockQueues.has(key)) {
+                    this.lockQueues.set(key, [])
+                }
+                this.lockQueues.get(key).push(resolve)
+                
+                // 设置超时自动释放
+                setTimeout(() => {
+                    const queue = this.lockQueues.get(key)
+                    if (queue) {
+                        const idx = queue.indexOf(resolve)
+                        if (idx >= 0) {
+                            queue.splice(idx, 1)
+                            resolve()
+                        }
+                    }
+                }, Math.min(5000, timeout - (Date.now() - startTime)))
+            })
         }
-        this.locks.set(userId, true)
-        return true
+        
+        // 设置锁
+        this.locks.set(key, {
+            acquiredAt: Date.now(),
+            timeout
+        })
+        
+        // 返回释放锁的函数
+        return () => this.releaseLock(key)
     }
 
     /**
-     * Release context lock
-     * @param {string} userId
+     * 释放锁
+     * @param {string} key
      */
-    releaseLock(userId) {
-        this.locks.delete(userId)
+    releaseLock(key) {
+        this.locks.delete(key)
+        
+        // 通知等待队列中的第一个
+        const queue = this.lockQueues.get(key)
+        if (queue && queue.length > 0) {
+            const resolve = queue.shift()
+            if (resolve) resolve()
+        }
+        if (queue && queue.length === 0) {
+            this.lockQueues.delete(key)
+        }
+    }
+
+    /**
+     * 记录请求（用于并发检测）
+     * @param {string} conversationId
+     * @returns {number} 当前并发数
+     */
+    recordRequest(conversationId) {
+        const count = (this.requestCounters.get(conversationId) || 0) + 1
+        this.requestCounters.set(conversationId, count)
+        
+        // 5秒后自动减少计数
+        setTimeout(() => {
+            const current = this.requestCounters.get(conversationId) || 0
+            if (current > 0) {
+                this.requestCounters.set(conversationId, current - 1)
+            }
+        }, 5000)
+        
+        return count
+    }
+
+    /**
+     * 检查是否有并发请求
+     * @param {string} conversationId
+     * @returns {boolean}
+     */
+    hasConcurrentRequests(conversationId) {
+        return (this.requestCounters.get(conversationId) || 0) > 1
+    }
+
+    /**
+     * 添加消息到队列
+     * @param {string} conversationId
+     * @param {Object} message - 消息对象
+     * @returns {number} 队列长度
+     */
+    enqueueMessage(conversationId, message) {
+        if (!this.messageQueues.has(conversationId)) {
+            this.messageQueues.set(conversationId, [])
+        }
+        const queue = this.messageQueues.get(conversationId)
+        queue.push({
+            ...message,
+            enqueuedAt: Date.now()
+        })
+        
+        // 防止队列无限增长，最多保留100条
+        if (queue.length > 100) {
+            queue.shift()
+            logger.warn(`[ContextManager] 消息队列过长，丢弃旧消息: ${conversationId}`)
+        }
+        
+        return queue.length
+    }
+
+    /**
+     * 从队列获取消息
+     * @param {string} conversationId
+     * @returns {Object|null}
+     */
+    dequeueMessage(conversationId) {
+        const queue = this.messageQueues.get(conversationId)
+        if (!queue || queue.length === 0) return null
+        return queue.shift()
+    }
+
+    /**
+     * 获取队列长度
+     * @param {string} conversationId
+     * @returns {number}
+     */
+    getQueueLength(conversationId) {
+        const queue = this.messageQueues.get(conversationId)
+        return queue?.length || 0
+    }
+
+    /**
+     * 清空队列
+     * @param {string} conversationId
+     */
+    clearQueue(conversationId) {
+        this.messageQueues.delete(conversationId)
+    }
+
+    /**
+     * 标记正在处理
+     * @param {string} conversationId
+     * @param {boolean} processing
+     */
+    setProcessing(conversationId, processing) {
+        if (processing) {
+            this.processingFlags.set(conversationId, Date.now())
+        } else {
+            this.processingFlags.delete(conversationId)
+        }
+    }
+
+    /**
+     * 检查是否正在处理
+     * @param {string} conversationId
+     * @returns {boolean}
+     */
+    isProcessing(conversationId) {
+        const startTime = this.processingFlags.get(conversationId)
+        if (!startTime) return false
+        
+        // 超过60秒认为处理已超时，自动重置
+        if (Date.now() - startTime > 60000) {
+            this.processingFlags.delete(conversationId)
+            return false
+        }
+        return true
     }
 
     /**

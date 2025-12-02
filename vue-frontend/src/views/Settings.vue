@@ -1,9 +1,9 @@
 <script setup>
-import { ref, onMounted, reactive } from 'vue'
+import { ref, onMounted, reactive, computed } from 'vue'
 import { 
   NCard, NForm, NFormItem, NInput, NButton, NInputNumber,
   NSpace, NSwitch, useMessage, NAlert, NDivider, NSlider, NModal,
-  NSelect, NTooltip
+  NSelect, NTooltip, NDynamicTags, NTabs, NTabPane, NGrid, NGridItem
 } from 'naive-ui'
 import axios from 'axios'
 import ModelSelector from '../components/ModelSelector.vue'
@@ -71,12 +71,41 @@ const config = reactive({
     userPortrait: {
       enabled: true,
       minMessages: 10
+    },
+    poke: {
+      enabled: false,
+      pokeBack: false,
+      message: '别戳了~'
+    },
+    reaction: {
+      enabled: false
     }
   },
   memory: {
     enabled: false,
     autoExtract: true
+  },
+  listener: {
+    enabled: true,
+    triggerMode: 'at',
+    triggerPrefix: '',
+    whitelistGroups: [],
+    blacklistGroups: [],
+    whitelistUsers: [],
+    blacklistUsers: []
   }
+})
+
+// 触发模式选项
+const triggerModeOptions = [
+  { label: '仅@触发', value: 'at' },
+  { label: '仅前缀触发', value: 'prefix' },
+  { label: '@或前缀', value: 'at_or_prefix' },
+  { label: '始终触发', value: 'always' }
+]
+
+const showPrefixInput = computed(() => {
+  return ['prefix', 'at_or_prefix'].includes(config.listener.triggerMode)
 })
 
 const allModels = ref([])
@@ -126,8 +155,18 @@ async function fetchConfig() {
       if (data.features) {
         if (data.features.groupSummary) Object.assign(config.features.groupSummary, data.features.groupSummary)
         if (data.features.userPortrait) Object.assign(config.features.userPortrait, data.features.userPortrait)
+        if (data.features.poke) Object.assign(config.features.poke, data.features.poke)
+        if (data.features.reaction) Object.assign(config.features.reaction, data.features.reaction)
       }
       if (data.memory) Object.assign(config.memory, data.memory)
+      if (data.listener) {
+        Object.assign(config.listener, data.listener)
+        // 确保数组存在
+        config.listener.whitelistGroups = data.listener.whitelistGroups || []
+        config.listener.blacklistGroups = data.listener.blacklistGroups || []
+        config.listener.whitelistUsers = data.listener.whitelistUsers || []
+        config.listener.blacklistUsers = data.listener.blacklistUsers || []
+      }
 
       // Fetch channels to get all models for selector
       const channelsRes = await axios.get('/api/channels/list')
@@ -163,13 +202,13 @@ async function saveConfig() {
       tools: { ...config.tools },
       thinking: { ...config.thinking },
       features: { ...config.features },
-      memory: { ...config.memory }
+      memory: { ...config.memory },
+      listener: { ...config.listener }
     }
 
     const res = await axios.post('/api/config', payload)
     if (res.data.code === 0) {
-      message.success('配置已保存')
-      fetchConfig()
+      message.success('✓ 配置已保存', { duration: 2000 })
     } else {
       message.error('保存失败: ' + res.data.message)
     }
@@ -200,13 +239,6 @@ function handleModelSelect(models) {
   }
   showModelSelector.value = false
 }
-
-// 触发模式选项
-const triggerModeOptions = [
-  { label: '仅@触发', value: 'at' },
-  { label: '仅前缀触发', value: 'prefix' },
-  { label: '@和前缀都触发', value: 'both' }
-]
 
 onMounted(() => {
   fetchConfig()
@@ -488,6 +520,37 @@ onMounted(() => {
           </n-tooltip>
         </n-form-item>
 
+        <n-divider title-placement="left">戳一戳响应</n-divider>
+        <n-form-item label="启用">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.features.poke.enabled" />
+            </template>
+            开启后，被戳时会使用AI人设回复
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="自动回戳">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.features.poke.pokeBack" :disabled="!config.features.poke.enabled" />
+            </template>
+            回复后自动戳回去
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="备用回复">
+          <n-input v-model:value="config.features.poke.message" placeholder="AI回复失败时的备用回复" :disabled="!config.features.poke.enabled" />
+        </n-form-item>
+
+        <n-divider title-placement="left">表情回应</n-divider>
+        <n-form-item label="启用">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.features.reaction.enabled" />
+            </template>
+            开启后，收到表情回应时会使用AI人设处理（需适配器支持）
+          </n-tooltip>
+        </n-form-item>
+
         <n-divider title-placement="left">长期记忆</n-divider>
         <n-form-item label="启用记忆">
           <n-tooltip trigger="hover">
@@ -508,13 +571,64 @@ onMounted(() => {
       </n-form>
     </n-card>
 
+    <!-- 监听配置 -->
+    <n-card title="监听配置">
+      <n-form label-placement="left" label-width="140">
+        <n-form-item label="启用监听">
+          <n-switch v-model:value="config.listener.enabled" />
+        </n-form-item>
+        <n-form-item label="触发模式">
+          <n-select 
+            v-model:value="config.listener.triggerMode" 
+            :options="triggerModeOptions"
+            style="width: 200px;"
+          />
+        </n-form-item>
+        <n-form-item label="触发前缀" v-if="showPrefixInput">
+          <n-input 
+            v-model:value="config.listener.triggerPrefix" 
+            placeholder="如: #ai 或 /chat"
+            style="width: 200px;"
+          />
+        </n-form-item>
+        
+        <n-divider title-placement="left">群组过滤</n-divider>
+        <n-grid :cols="2" :x-gap="24" responsive="screen" :collapsed-cols="1">
+          <n-grid-item>
+            <n-form-item label="群白名单">
+              <n-dynamic-tags v-model:value="config.listener.whitelistGroups" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="群黑名单">
+              <n-dynamic-tags v-model:value="config.listener.blacklistGroups" />
+            </n-form-item>
+          </n-grid-item>
+        </n-grid>
+        
+        <n-divider title-placement="left">用户过滤</n-divider>
+        <n-grid :cols="2" :x-gap="24" responsive="screen" :collapsed-cols="1">
+          <n-grid-item>
+            <n-form-item label="用户白名单">
+              <n-dynamic-tags v-model:value="config.listener.whitelistUsers" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="用户黑名单">
+              <n-dynamic-tags v-model:value="config.listener.blacklistUsers" />
+            </n-form-item>
+          </n-grid-item>
+        </n-grid>
+      </n-form>
+    </n-card>
+
     <n-alert type="info" title="命令提示" style="margin-top: 8px">
       <div>• <strong>#群聊总结</strong> - 总结群聊消息</div>
       <div>• <strong>#个人画像</strong> - 分析自己的用户画像</div>
       <div>• <strong>#分析 @用户</strong> - 分析指定用户的画像</div>
     </n-alert>
 
-    <n-space justify="end" style="margin-top: 16px">
+    <n-space justify="end" style="margin-top: 16px; position: sticky; bottom: 16px; background: var(--n-color); padding: 12px; border-radius: 8px; box-shadow: 0 -2px 8px rgba(0,0,0,0.1);">
       <n-button type="primary" size="large" @click="saveConfig" :loading="saving">
         保存配置
       </n-button>

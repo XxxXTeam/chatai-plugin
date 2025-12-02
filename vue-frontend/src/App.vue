@@ -2,7 +2,7 @@
 import { h, ref, computed, onMounted } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { NConfigProvider, NGlobalStyle, NLayout, NLayoutSider, NLayoutHeader, NLayoutContent, NMenu, NMessageProvider, NDialogProvider, NButton, NSpace, darkTheme } from 'naive-ui'
-import { DashboardOutlined, MessageOutlined, BuildOutlined, SettingsOutlined, AppsOutlined, PersonOutlined, LogOutOutlined, DarkModeOutlined, LightModeOutlined, ExtensionOutlined, TuneOutlined, PsychologyOutlined, HistoryOutlined, BugReportOutlined, PeopleOutlined, GroupOutlined, VolumeUpOutlined, HearingOutlined } from '@vicons/material'
+import { DashboardOutlined, MessageOutlined, BuildOutlined, SettingsOutlined, AppsOutlined, PersonOutlined, LogOutOutlined, DarkModeOutlined, LightModeOutlined, ExtensionOutlined, TuneOutlined, PsychologyOutlined, HistoryOutlined, BugReportOutlined, PeopleOutlined, GroupOutlined, VolumeUpOutlined, HearingOutlined, TouchAppOutlined, CodeOutlined } from '@vicons/material'
 import { NIcon } from 'naive-ui'
 
 const route = useRoute()
@@ -25,24 +25,19 @@ const menuOptions = computed(() => [
     icon: renderIcon(AppsOutlined)
   },
   {
-    label: () => h(RouterLink, { to: '/model-config' }, { default: () => '模型配置' }),
-    key: 'model-config',
-    icon: renderIcon(TuneOutlined)
-  },
-  {
     label: () => h(RouterLink, { to: '/presets' }, { default: () => '预设管理' }),
     key: 'presets',
     icon: renderIcon(PersonOutlined)
   },
   {
+    label: () => h(RouterLink, { to: '/scope' }, { default: () => '独立人格' }),
+    key: 'scope',
+    icon: renderIcon(GroupOutlined)
+  },
+  {
     label: () => h(RouterLink, { to: '/tools' }, { default: () => '工具管理' }),
     key: 'tools',
     icon: renderIcon(ExtensionOutlined)
-  },
-  {
-    label: () => h(RouterLink, { to: '/tool-logs' }, { default: () => '工具日志' }),
-    key: 'tool-logs',
-    icon: renderIcon(BugReportOutlined)
   },
   {
     label: () => h(RouterLink, { to: '/history' }, { default: () => '对话历史' }),
@@ -60,21 +55,6 @@ const menuOptions = computed(() => [
     icon: renderIcon(PeopleOutlined)
   },
   {
-    label: () => h(RouterLink, { to: '/scope' }, { default: () => '独立人格' }),
-    key: 'scope',
-    icon: renderIcon(GroupOutlined)
-  },
-  {
-    label: () => h(RouterLink, { to: '/features' }, { default: () => '功能配置' }),
-    key: 'features',
-    icon: renderIcon(VolumeUpOutlined)
-  },
-  {
-    label: () => h(RouterLink, { to: '/listener' }, { default: () => '监听配置' }),
-    key: 'listener',
-    icon: renderIcon(HearingOutlined)
-  },
-  {
     label: () => h(RouterLink, { to: '/settings' }, { default: () => '系统设置' }),
     key: 'settings',
     icon: renderIcon(SettingsOutlined)
@@ -82,6 +62,14 @@ const menuOptions = computed(() => [
 ])
 
 const activeKey = ref('dashboard')
+const collapsed = ref(window.innerWidth < 768)
+
+// 监听窗口大小变化
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', () => {
+    collapsed.value = window.innerWidth < 768
+  })
+}
 
 onMounted(() => {
     const savedTheme = localStorage.getItem('theme')
@@ -158,18 +146,23 @@ onMounted(() => {
             <n-layout-sider
               bordered
               collapse-mode="width"
+              :collapsed="collapsed"
               :collapsed-width="64"
-              :width="240"
+              :width="200"
               :native-scrollbar="false"
+              show-trigger
+              @collapse="collapsed = true"
+              @expand="collapsed = false"
             >
               <n-menu
                 v-model:value="activeKey"
+                :collapsed="collapsed"
                 :collapsed-width="64"
-                :collapsed-icon-size="22"
+                :collapsed-icon-size="20"
                 :options="menuOptions"
               />
             </n-layout-sider>
-            <n-layout-content content-style="padding: 24px;">
+            <n-layout-content content-style="padding: 16px;" class="main-content">
               <router-view />
             </n-layout-content>
           </n-layout>
@@ -209,5 +202,48 @@ onMounted(() => {
 
 .n-config-provider--dark .n-card p:last-child {
   color: #707070 !important;
+}
+
+/* 响应式适配 */
+@media (max-width: 768px) {
+  .n-layout-header {
+    padding: 0 12px !important;
+  }
+  
+  .main-content {
+    padding: 12px !important;
+  }
+  
+  .n-card {
+    margin-bottom: 12px;
+  }
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #666;
+}
+
+/* 过渡动画 */
+.n-card {
+  transition: box-shadow 0.2s ease;
+}
+
+.n-card:hover {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
 }
 </style>

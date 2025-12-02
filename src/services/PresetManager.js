@@ -35,6 +35,10 @@ const PRESETS_FILE = path.join(DATA_DIR, 'presets.json')
  * @property {string[]} [likes] - 喜好
  * @property {string[]} [dislikes] - 厌恶
  * @property {Object} [customFields] - 自定义字段
+ * @property {string} [documentPath] - 人格文档路径
+ * @property {string} [documentContent] - 人格文档内容
+ * @property {string} [acgCharacter] - ACG角色名称
+ * @property {Object} [acgData] - ACG角色数据
  */
 
 /**
@@ -216,6 +220,29 @@ export class PresetManager {
                 }
             }
 
+            // 人格文档内容
+            if (persona.documentContent) {
+                personaParts.push(`\n【角色详细设定】\n${persona.documentContent}`)
+            } else if (persona.documentPath) {
+                // 从文件加载
+                try {
+                    const docContent = this.loadDocumentContent(persona.documentPath)
+                    if (docContent) {
+                        personaParts.push(`\n【角色详细设定】\n${docContent}`)
+                    }
+                } catch (e) {
+                    console.warn('[PresetManager] 加载人格文档失败:', e.message)
+                }
+            }
+
+            // ACG角色数据
+            if (persona.acgCharacter || persona.acgData) {
+                const acgParts = this.buildAcgPersona(persona.acgCharacter, persona.acgData)
+                if (acgParts) {
+                    personaParts.push(acgParts)
+                }
+            }
+
             if (personaParts.length > 0) {
                 parts.push('\n【角色设定】\n' + personaParts.join('\n'))
             }
@@ -313,6 +340,136 @@ export class PresetManager {
             return true
         }
         return false
+    }
+
+    /**
+     * 加载人格文档内容
+     * @param {string} docPath - 文档路径（相对于persona目录或绝对路径）
+     * @returns {string|null}
+     */
+    loadDocumentContent(docPath) {
+        if (!docPath) return null
+        
+        // 支持的文档目录
+        const personaDir = path.join(DATA_DIR, 'persona')
+        
+        // 确保 persona 目录存在
+        if (!fs.existsSync(personaDir)) {
+            fs.mkdirSync(personaDir, { recursive: true })
+        }
+        
+        // 尝试多种路径
+        const possiblePaths = [
+            docPath,                                    // 绝对路径
+            path.join(personaDir, docPath),             // persona目录
+            path.join(personaDir, `${docPath}.txt`),    // 添加.txt后缀
+            path.join(personaDir, `${docPath}.md`),     // 添加.md后缀
+            path.join(DATA_DIR, docPath)                // data目录
+        ]
+        
+        for (const filePath of possiblePaths) {
+            try {
+                if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+                    const content = fs.readFileSync(filePath, 'utf-8')
+                    console.log(`[PresetManager] 加载人格文档: ${filePath}`)
+                    return content.trim()
+                }
+            } catch (e) {
+                // 继续尝试下一个路径
+            }
+        }
+        
+        console.warn(`[PresetManager] 人格文档不存在: ${docPath}`)
+        return null
+    }
+
+    /**
+     * 构建ACG角色人设
+     * @param {string} characterName - 角色名称
+     * @param {Object} acgData - ACG角色数据
+     * @returns {string|null}
+     */
+    buildAcgPersona(characterName, acgData = {}) {
+        const parts = []
+        
+        if (characterName) {
+            parts.push(`【ACG角色】你正在扮演「${characterName}」这个角色。`)
+        }
+        
+        if (acgData) {
+            // 作品信息
+            if (acgData.series || acgData.anime || acgData.game) {
+                const source = acgData.series || acgData.anime || acgData.game
+                parts.push(`来源作品：${source}`)
+            }
+            
+            // 角色属性
+            if (acgData.gender) parts.push(`性别：${acgData.gender}`)
+            if (acgData.age) parts.push(`年龄：${acgData.age}`)
+            if (acgData.height) parts.push(`身高：${acgData.height}`)
+            if (acgData.birthday) parts.push(`生日：${acgData.birthday}`)
+            
+            // 性格设定
+            if (acgData.personality) {
+                parts.push(`性格特点：${acgData.personality}`)
+            }
+            
+            // 说话方式
+            if (acgData.speech) {
+                parts.push(`说话方式：${acgData.speech}`)
+            }
+            
+            // 口头禅
+            if (acgData.catchphrase) {
+                parts.push(`口头禅：「${acgData.catchphrase}」`)
+            }
+            
+            // 角色关系
+            if (acgData.relationships && Array.isArray(acgData.relationships)) {
+                const relParts = acgData.relationships.map(r => 
+                    `${r.name}（${r.relation}）`
+                ).join('、')
+                parts.push(`人物关系：${relParts}`)
+            }
+            
+            // 背景故事
+            if (acgData.story) {
+                parts.push(`背景故事：${acgData.story}`)
+            }
+            
+            // 角色设定文档
+            if (acgData.characterDocument) {
+                parts.push(`\n【角色详细设定】\n${acgData.characterDocument}`)
+            }
+        }
+        
+        if (parts.length === 0) return null
+        
+        return '\n' + parts.join('\n')
+    }
+
+    /**
+     * 创建ACG角色预设
+     * @param {string} characterName - 角色名称
+     * @param {Object} acgData - ACG角色数据
+     * @returns {Promise<Object>}
+     */
+    async createAcgPreset(characterName, acgData = {}) {
+        const systemPrompt = `你现在是${characterName}，请以该角色的身份、性格、语气进行对话。
+始终保持角色特征，不要跳出角色。
+回复时使用角色特有的语气和说话方式。`
+        
+        return this.create({
+            name: `ACG-${characterName}`,
+            description: `ACG角色扮演: ${characterName}`,
+            systemPrompt,
+            temperature: 0.8,  // 稍高的温度让角色更有活力
+            persona: {
+                name: characterName,
+                acgCharacter: characterName,
+                acgData: acgData
+            }
+        })
     }
 }
 

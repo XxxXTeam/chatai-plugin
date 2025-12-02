@@ -132,14 +132,7 @@ class Config {
             },
             channels: [],
             mcp: {
-                enabled: true,
-                servers: {
-                    filesystem: {
-                        type: 'stdio',
-                        command: 'npx',
-                        args: ['-y', '@modelcontextprotocol/server-filesystem', '/']
-                    }
-                }
+                enabled: true
             },
             redis: {
                 enabled: true,
@@ -225,6 +218,24 @@ class Config {
                 userPortrait: {
                     enabled: true,           // 个人画像分析
                     minMessages: 10,         // 最少需要N条消息才能分析
+                },
+                // 戳一戳响应（默认关闭，需在面板开启）
+                poke: {
+                    enabled: false,          // 启用戳一戳响应
+                    pokeBack: false,         // 是否回戳
+                    message: '别戳了~',       // AI失败时的默认回复
+                },
+                // 表情回应处理（默认关闭，需在面板开启）
+                reaction: {
+                    enabled: false,          // 启用表情回应处理
+                },
+                // 语音回复
+                voiceReply: {
+                    enabled: false,          // 启用语音回复
+                    ttsProvider: 'system',   // TTS提供者
+                    triggerOnTool: false,    // 工具调用后语音回复
+                    triggerAlways: false,    // 总是语音回复
+                    maxTextLength: 500,      // 最大文本长度
                 },
             },
             streaming: {

@@ -1,15 +1,70 @@
 /**
  * 消息解析工具
- * 参考 chatgpt-plugin/utils/message.js 实现
- * 基于 icqq API: https://icqq.pages.dev
+ * 兼容多种协议:
+ * - icqq: Yunzai默认协议
+ * - NapCat(NC): https://napneko.github.io/develop/msg
+ * - OneBot v11: https://github.com/botuniverse/onebot-11
+ * - go-cqhttp: https://docs.go-cqhttp.org/cqcode
  * 
- * 支持:
- * - 引用消息 (e.source / e.getReply)
- * - 合并转发消息 (e.group.getForwardMsg)
- * - 群聊历史 (e.group.getChatHistory)
- * - 完整的消息段类型
- * - 用户身份标签 (sender)
+ * 支持的消息类型:
+ * - text: 文本消息
+ * - image: 图片消息
+ * - face: QQ表情
+ * - at: @消息
+ * - reply: 引用消息
+ * - forward: 转发消息
+ * - json: JSON卡片
+ * - xml: XML消息
+ * - record: 语音消息
+ * - video: 视频消息
+ * - file: 文件消息
+ * - share: 链接分享
+ * - location: 位置分享
+ * - music: 音乐分享
+ * - poke: 戳一戳
+ * - mface: 商城表情
+ * - markdown: Markdown消息
  */
+
+/**
+ * 统一获取消息段数据 - 兼容 NC/icqq/OneBot 格式
+ * NC/OneBot格式: { type: 'image', data: { url: '...', file: '...' } }
+ * icqq格式: { type: 'image', url: '...', file: '...' }
+ * @param {Object} segment - 消息段
+ * @returns {Object} 统一的数据对象
+ */
+function getSegmentData(segment) {
+    if (!segment) return {}
+    // NC/OneBot 格式: 数据在 data 字段中
+    if (segment.data && typeof segment.data === 'object') {
+        return { ...segment.data, _type: segment.type }
+    }
+    // icqq 格式: 数据直接在 segment 上
+    return segment
+}
+
+/**
+ * 获取图片/视频/文件的URL
+ * 优先使用 url，其次 file（如果是http开头）
+ * @param {Object} data - 消息段数据
+ * @returns {string|null} URL
+ */
+function getMediaUrl(data) {
+    if (!data) return null
+    // 优先使用 url 字段
+    if (data.url && typeof data.url === 'string') {
+        return data.url
+    }
+    // 其次检查 file 字段是否是 URL
+    if (data.file && typeof data.file === 'string' && data.file.startsWith('http')) {
+        return data.file
+    }
+    // 检查 path 字段
+    if (data.path && typeof data.path === 'string' && data.path.startsWith('http')) {
+        return data.path
+    }
+    return null
+}
 
 /**
  * 将 Yunzai 事件消息转换为统一的用户消息格式
@@ -83,10 +138,15 @@ export async function parseUserMessage(e, options = {}) {
         text += e.raw_message || ''
     } else {
         for (const val of e.message || []) {
-            switch (val.type) {
-                case 'at':
+            // 统一获取消息段数据，兼容 NC 和 icqq 格式
+            const segData = getSegmentData(val)
+            const segType = val.type || segData._type || ''
+            
+            switch (segType) {
+                case 'at': {
                     if (handleAtMsg) {
-                        const { qq, text: atCard } = val
+                        const qq = segData.qq || val.qq
+                        const atCard = segData.text || val.text
                         // 如果是@机器人且需要排除，跳过
                         if (excludeAtBot && qq === e.bot?.uin) {
                             continue
@@ -94,35 +154,62 @@ export async function parseUserMessage(e, options = {}) {
                         text += ` @${atCard || qq} `
                     }
                     break
+                }
                 
-                case 'text':
-                    text += val.text || ''
+                case 'text': {
+                    const textContent = segData.text || val.text || ''
+                    text += textContent
                     break
+                }
                 
-                case 'image':
-                    try {
-                        const imageData = await fetchImage(val.url)
-                        if (imageData) {
-                            contents.push({
-                                type: 'image',
-                                image: imageData.base64,
-                                mimeType: imageData.mimeType
-                            })
+                case 'image': {
+                    // 获取图片URL - 兼容NC和icqq格式
+                    const imgUrl = getMediaUrl(segData) || val.url
+                    if (imgUrl) {
+                        try {
+                            // 优先直接使用URL（更高效）
+                            if (imgUrl.startsWith('http')) {
+                                contents.push({
+                                    type: 'image_url',
+                                    image_url: { url: imgUrl },
+                                    source: 'message'
+                                })
+                            } else {
+                                // 非http URL，尝试下载转base64
+                                const imageData = await fetchImage(imgUrl)
+                                if (imageData) {
+                                    contents.push({
+                                        type: 'image',
+                                        image: imageData.base64,
+                                        mimeType: imageData.mimeType
+                                    })
+                                }
+                            }
+                        } catch (err) {
+                            logger.warn(`[MessageParser] 获取图片失败: ${imgUrl}`, err.message)
+                            // 失败时也记录URL信息
+                            text += `[图片:${imgUrl.substring(0, 50)}...]`
                         }
-                    } catch (err) {
-                        logger.warn(`[MessageParser] 获取图片失败: ${val.url}`, err.message)
+                    } else {
+                        text += '[图片]'
                     }
                     break
+                }
                 
-                case 'face':
+                case 'face': {
                     // 表情转文字描述
-                    text += `[表情:${val.id}]`
+                    const faceId = segData.id || val.id || ''
+                    text += `[表情:${faceId}]`
                     break
+                }
                 
-                case 'file':
+                case 'file': {
                     // 文件信息
-                    text += `[文件:${val.name || val.fid}]`
+                    const fileName = segData.name || val.name || segData.fid || val.fid || '未知文件'
+                    const fileUrl = getMediaUrl(segData)
+                    text += `[文件:${fileName}${fileUrl ? ' URL:' + fileUrl : ''}]`
                     break
+                }
                 
                 case 'json':
                     // JSON 卡片消息 - 特别处理合并转发类型
@@ -192,35 +279,135 @@ export async function parseUserMessage(e, options = {}) {
                     // 引用标记 - 已在上面处理，跳过
                     break
                 
-                case 'record':
-                    // 语音消息
-                    text += '[语音消息]'
+                case 'record': {
+                    // 语音消息 - 尝试获取URL
+                    const recordUrl = getMediaUrl(segData)
+                    const recordName = segData.name || val.name || ''
+                    text += `[语音${recordName ? ':' + recordName : ''}${recordUrl ? ' URL:' + recordUrl : ''}]`
                     break
+                }
                 
-                case 'video':
-                    // 视频消息
-                    text += `[视频${val.name ? ':' + val.name : ''}]`
+                case 'video': {
+                    // 视频消息 - 获取URL信息
+                    const videoUrl = getMediaUrl(segData)
+                    const videoName = segData.name || val.name || ''
+                    const videoThumb = segData.thumb || val.thumb || ''
+                    if (videoUrl) {
+                        // 将视频URL作为文本描述传递给AI
+                        text += `[视频${videoName ? ':' + videoName : ''} URL:${videoUrl}]`
+                        // 同时添加视频信息到contents
+                        contents.push({
+                            type: 'video_info',
+                            url: videoUrl,
+                            name: videoName,
+                            thumb: videoThumb,
+                            source: 'message'
+                        })
+                    } else {
+                        text += `[视频${videoName ? ':' + videoName : ''}]`
+                    }
                     break
+                }
                 
-                case 'poke':
+                case 'poke': {
                     // 戳一戳
                     text += '[戳一戳]'
                     break
+                }
                 
-                case 'share':
+                case 'share': {
                     // 链接分享
-                    text += `[分享:${val.title || val.url || '链接'}]`
+                    const shareTitle = segData.title || val.title || ''
+                    const shareUrl = segData.url || val.url || ''
+                    text += `[分享:${shareTitle || shareUrl || '链接'}]`
                     break
+                }
                 
-                case 'location':
+                case 'location': {
                     // 位置分享
-                    text += `[位置:${val.name || val.address || '位置'}]`
+                    const locName = segData.name || val.name || ''
+                    const locAddr = segData.address || val.address || ''
+                    text += `[位置:${locName || locAddr || '位置'}]`
                     break
+                }
                 
-                case 'music':
+                case 'music': {
                     // 音乐分享
-                    text += `[音乐:${val.title || '音乐'}]`
+                    const musicTitle = segData.title || val.title || ''
+                    text += `[音乐:${musicTitle || '音乐'}]`
                     break
+                }
+                
+                case 'mface': {
+                    // 商城表情 (NC/OneBot)
+                    const mfaceName = segData.summary || segData.text || val.summary || ''
+                    text += `[商城表情${mfaceName ? ':' + mfaceName : ''}]`
+                    break
+                }
+                
+                case 'dice': {
+                    // 骰子
+                    const diceResult = segData.result || val.result || '?'
+                    text += `[骰子:点数${diceResult}]`
+                    break
+                }
+                
+                case 'rps': {
+                    // 猜拳
+                    const rpsResult = segData.result || val.result || '?'
+                    const rpsMap = { '1': '石头', '2': '剪刀', '3': '布' }
+                    text += `[猜拳:${rpsMap[rpsResult] || rpsResult}]`
+                    break
+                }
+                
+                case 'markdown': {
+                    // Markdown消息 (NC)
+                    const mdContent = segData.content || segData.text || val.content || ''
+                    if (mdContent) {
+                        text += mdContent
+                    } else {
+                        text += '[Markdown消息]'
+                    }
+                    break
+                }
+                
+                case 'contact': {
+                    // 推荐联系人/群
+                    const contactType = segData.type || val.type || 'qq'
+                    const contactId = segData.id || val.id || ''
+                    text += `[推荐${contactType === 'group' ? '群' : '好友'}:${contactId}]`
+                    break
+                }
+                
+                case 'node': {
+                    // 转发节点 (在forward中使用)
+                    // 通常不单独出现，跳过
+                    break
+                }
+                
+                case 'gift': {
+                    // 礼物
+                    text += '[礼物]'
+                    break
+                }
+                
+                case 'weather': {
+                    // 天气
+                    const city = segData.city || val.city || ''
+                    text += `[天气${city ? ':' + city : ''}]`
+                    break
+                }
+                
+                default: {
+                    // 未知类型 - 记录但不报错
+                    if (segType && segType !== 'reply' && segType !== 'source') {
+                        text += `[${segType}]`
+                        if (debugInfo) {
+                            debugInfo.parseSteps.push(`未知消息类型: ${segType}`)
+                        }
+                    }
+                    break
+                }
             }
         }
     }
@@ -424,9 +611,9 @@ async function parseReplyMessage(e, options) {
         // 解析引用消息内容 - 兼容 NC 格式
         let replyTextContent = ''
         for (const val of replyMessage) {
-            // NC 格式: { type: 'xxx', data: {...} }
-            const valData = val.data || val
-            const valType = val.type || ''
+            // 使用统一的数据获取函数
+            const valData = getSegmentData(val)
+            const valType = val.type || valData._type || ''
             
             switch (valType) {
                 case 'text':
@@ -438,22 +625,37 @@ async function parseReplyMessage(e, options) {
                 
                 case 'image':
                     if (handleReplyImage) {
-                        try {
-                            // NC: valData.url/file, icqq: val.url
-                            const imgUrl = valData.url || valData.file || val.url || val.file
-                            if (imgUrl) {
-                                const imageData = await fetchImage(imgUrl)
-                                if (imageData) {
+                        // 使用统一的URL获取函数
+                        const imgUrl = getMediaUrl(valData) || val.url || val.file
+                        if (imgUrl) {
+                            try {
+                                // 优先使用URL直接传递
+                                if (imgUrl.startsWith('http')) {
                                     contents.push({
-                                        type: 'image',
-                                        image: imageData.base64,
-                                        mimeType: imageData.mimeType,
+                                        type: 'image_url',
+                                        image_url: { url: imgUrl },
                                         source: 'reply'
                                     })
+                                    parseLog.push(`[Reply] 图片URL: ${imgUrl.substring(0, 50)}...`)
+                                } else {
+                                    // 非http URL，尝试下载转base64
+                                    const imageData = await fetchImage(imgUrl)
+                                    if (imageData) {
+                                        contents.push({
+                                            type: 'image',
+                                            image: imageData.base64,
+                                            mimeType: imageData.mimeType,
+                                            source: 'reply'
+                                        })
+                                    }
                                 }
+                            } catch (err) {
+                                logger.warn(`[MessageParser] 获取引用图片失败: ${imgUrl}`, err.message)
+                                // 失败时记录为文本
+                                replyTextContent += `[图片:${imgUrl.substring(0, 30)}...]`
                             }
-                        } catch (err) {
-                            logger.warn(`[MessageParser] 获取引用图片失败: ${valData.url || val.url}`, err.message)
+                        } else {
+                            replyTextContent += '[图片]'
                         }
                     }
                     break
@@ -475,9 +677,18 @@ async function parseReplyMessage(e, options) {
                     break
                 
                 case 'video': {
-                    const videoUrl = valData.url || valData.file || val.url || val.file || ''
+                    const videoUrl = getMediaUrl(valData) || val.url || val.file || ''
                     const videoName = valData.name || val.name
                     replyTextContent += `[视频${videoName ? ':' + videoName : ''}${videoUrl ? ' URL:' + videoUrl : ''}]`
+                    // 添加视频信息到contents
+                    if (videoUrl) {
+                        contents.push({
+                            type: 'video_info',
+                            url: videoUrl,
+                            name: videoName || '',
+                            source: 'reply'
+                        })
+                    }
                     break
                 }
                 
@@ -708,9 +919,9 @@ async function parseForwardMessage(e, forwardElement) {
                 }
                 
                 for (const val of messageContent) {
-                    // NC 格式: val.data.text, icqq 格式: val.text
-                    const valData = val.data || val
-                    const valType = val.type || ''
+                    // 使用统一的数据获取函数
+                    const valData = getSegmentData(val)
+                    const valType = val.type || valData._type || ''
                     
                     if (valType === 'text') {
                         const textContent = valData.text || valData || ''
@@ -719,14 +930,28 @@ async function parseForwardMessage(e, forwardElement) {
                             msgInfo.content.push({ type: 'text', text: textContent })
                         }
                     } else if (valType === 'image') {
-                        // 图片 URL 兼容多种格式
-                        const imgUrl = valData.url || valData.file || val.url || val.file || ''
-                        forwardTexts.push(`${nickname}: [图片]`)
+                        // 图片 URL - 使用统一函数获取
+                        const imgUrl = getMediaUrl(valData) || val.url || val.file || ''
+                        forwardTexts.push(`${nickname}: [图片${imgUrl ? '' : '(无URL)'}]`)
                         msgInfo.content.push({ type: 'image', url: imgUrl })
-                        if (imgUrl) {
+                        if (imgUrl && imgUrl.startsWith('http')) {
                             contents.push({
                                 type: 'image_url',
                                 image_url: { url: imgUrl },
+                                source: 'forward'
+                            })
+                        }
+                    } else if (valType === 'video') {
+                        // 视频 URL
+                        const videoUrl = getMediaUrl(valData) || val.url || val.file || ''
+                        const videoName = valData.name || val.name || ''
+                        forwardTexts.push(`${nickname}: [视频${videoName ? ':' + videoName : ''}]`)
+                        msgInfo.content.push({ type: 'video', url: videoUrl, name: videoName })
+                        if (videoUrl) {
+                            contents.push({
+                                type: 'video_info',
+                                url: videoUrl,
+                                name: videoName,
                                 source: 'forward'
                             })
                         }

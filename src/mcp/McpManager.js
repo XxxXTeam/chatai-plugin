@@ -557,7 +557,37 @@ export class McpManager {
      * @returns {Promise} Tool result
      */
     async callTool(name, args, options = {}) {
-        const tool = this.tools.get(name)
+        let tool = this.tools.get(name)
+        
+        // 如果在 tools Map 中找不到，尝试初始化后再查找
+        if (!tool) {
+            await this.init()
+            tool = this.tools.get(name)
+        }
+        
+        // 仍然找不到，检查是否是内置工具（直接调用内置服务器）
+        if (!tool) {
+            const builtinTools = builtinMcpServer.listTools()
+            const builtinTool = builtinTools.find(t => t.name === name)
+            if (builtinTool) {
+                tool = { ...builtinTool, isBuiltin: true, serverName: 'builtin' }
+            }
+        }
+        
+        // 检查是否是 JS 工具
+        if (!tool && builtinMcpServer.jsTools?.has(name)) {
+            tool = { name, isJsTool: true, serverName: 'custom-tools' }
+        }
+        
+        // 检查是否是 YAML 配置的自定义工具
+        if (!tool) {
+            const customTools = builtinMcpServer.getCustomTools()
+            const customTool = customTools.find(t => t.name === name)
+            if (customTool) {
+                tool = { ...customTool, isCustom: true, serverName: 'builtin' }
+            }
+        }
+        
         if (!tool) {
             throw new Error(`Tool not found: ${name}`)
         }
@@ -588,8 +618,11 @@ export class McpManager {
             logger.info(`[MCP] Calling tool: ${name}`, args)
             let result
 
-            // 内置工具使用内置服务器处理，传递请求级上下文
-            if (tool.isBuiltin || tool.serverName === 'builtin') {
+            // 内置工具、JS工具、自定义工具都使用内置服务器处理
+            const useBuiltin = tool.isBuiltin || tool.isJsTool || tool.isCustom || 
+                               tool.serverName === 'builtin' || tool.serverName === 'custom-tools'
+            
+            if (useBuiltin) {
                 result = await builtinMcpServer.callTool(name, args, options.context)
             } else {
                 // 外部 MCP 服务器
@@ -698,6 +731,51 @@ export class McpManager {
 
         logger.info(`[MCP] Refreshed builtin tools: ${tools.length}`)
         return tools
+    }
+
+    /**
+     * 热重载 JS 工具
+     * 用于在前端修改 JS 工具源码后重新加载
+     */
+    async reloadJsTools() {
+        try {
+            // 移除旧的 JS 工具
+            for (const [name, tool] of this.tools) {
+                if (tool.isJsTool) {
+                    this.tools.delete(name)
+                }
+            }
+
+            // 重新加载 JS 工具
+            await builtinMcpServer.loadJsTools()
+
+            // 将新的 JS 工具添加到工具列表
+            for (const [name, tool] of builtinMcpServer.jsTools) {
+                this.tools.set(name, {
+                    name: tool.name || name,
+                    description: tool.description || '自定义 JS 工具',
+                    inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+                    serverName: 'custom-tools',
+                    isJsTool: true
+                })
+            }
+
+            // 更新自定义工具服务器
+            const customServer = this.servers.get('custom-tools')
+            if (customServer) {
+                customServer.tools = Array.from(builtinMcpServer.jsTools.values()).map(t => ({
+                    name: t.name,
+                    description: t.description,
+                    inputSchema: t.inputSchema
+                }))
+            }
+
+            logger.info(`[MCP] 热重载完成: ${builtinMcpServer.jsTools.size} 个 JS 工具`)
+            return builtinMcpServer.jsTools.size
+        } catch (error) {
+            logger.error('[MCP] JS 工具热重载失败:', error)
+            throw error
+        }
     }
 
     /**

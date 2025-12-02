@@ -179,10 +179,14 @@ export class BuiltinMcpServer {
 
     /**
      * 加载 data/tools 目录下的 JS 工具文件
+     * 支持热重载，通过添加时间戳避免模块缓存
      */
     async loadJsTools() {
         const toolsDir = path.join(__dirname, '../../data/tools')
         logger.info(`[BuiltinMCP] Loading JS tools from: ${toolsDir}`)
+        
+        // 清除旧工具
+        this.jsTools.clear()
         
         if (!fs.existsSync(toolsDir)) {
             logger.info(`[BuiltinMCP] Tools directory not found, creating: ${toolsDir}`)
@@ -200,8 +204,9 @@ export class BuiltinMcpServer {
                 const filePath = path.join(toolsDir, file)
                 logger.info(`[BuiltinMCP] Loading tool file: ${filePath}`)
                 
-                // 动态导入 JS 模块
-                const module = await import(`file://${filePath}`)
+                // 使用时间戳避免模块缓存，实现热重载
+                const timestamp = Date.now()
+                const module = await import(`file://${filePath}?t=${timestamp}`)
                 const tool = module.default
                 
                 if (!tool) {
@@ -214,13 +219,16 @@ export class BuiltinMcpServer {
                 logger.info(`[BuiltinMCP] Module loaded: { name: ${toolName}, run: ${hasRun} }`)
                 
                 if (toolName && hasRun) {
+                    // 直接保存原始工具对象（保留原型方法），添加文件信息
+                    tool.__filename = file
+                    tool.__filepath = filePath
                     this.jsTools.set(toolName, tool)
                     logger.info(`[BuiltinMCP] ✓ Loaded JS tool: ${toolName} from ${file}`)
                 } else {
                     logger.warn(`[BuiltinMCP] ✗ Invalid tool format in ${file}, must have name and run()`)
                 }
             } catch (error) {
-                logger.error(`[BuiltinMCP] ✗ Failed to load tool ${file}:`, error)
+                logger.error(`[BuiltinMCP] ✗ Failed to load tool ${file}:`, error.message)
             }
         }
         
@@ -638,6 +646,60 @@ export class BuiltinMcpServer {
      */
     defineTools() {
         return [
+            // ==================== 基础工具 ====================
+            {
+                name: 'get_current_time',
+                description: '获取当前时间和日期信息',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        format: { 
+                            type: 'string', 
+                            description: '时间格式：full(完整)、date(仅日期)、time(仅时间)、timestamp(时间戳)',
+                            enum: ['full', 'date', 'time', 'timestamp']
+                        },
+                        timezone: {
+                            type: 'string',
+                            description: '时区，默认 Asia/Shanghai'
+                        }
+                    }
+                },
+                handler: async (args) => {
+                    const now = new Date()
+                    const tz = args.timezone || 'Asia/Shanghai'
+                    const format = args.format || 'full'
+                    
+                    const options = { timeZone: tz }
+                    const dateStr = now.toLocaleDateString('zh-CN', { ...options, year: 'numeric', month: '2-digit', day: '2-digit' })
+                    const timeStr = now.toLocaleTimeString('zh-CN', { ...options, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+                    const weekday = ['日', '一', '二', '三', '四', '五', '六'][now.getDay()]
+                    
+                    let result
+                    switch (format) {
+                        case 'date':
+                            result = dateStr
+                            break
+                        case 'time':
+                            result = timeStr
+                            break
+                        case 'timestamp':
+                            result = now.getTime().toString()
+                            break
+                        default:
+                            result = `${dateStr} ${timeStr} 星期${weekday}`
+                    }
+                    
+                    return {
+                        text: `当前时间: ${result}`,
+                        datetime: now.toISOString(),
+                        timestamp: now.getTime(),
+                        formatted: result,
+                        timezone: tz,
+                        weekday: `星期${weekday}`
+                    }
+                }
+            },
+
             // ==================== 工具列表工具 ====================
             {
                 name: 'list_available_tools',
@@ -653,6 +715,7 @@ export class BuiltinMcpServer {
                     
                     // 工具分类
                     const categories = {
+                        basic: ['get_current_time', 'list_available_tools'],
                         user: ['get_user_info', 'get_friend_list', 'send_like'],
                         group: ['get_group_info', 'get_group_list', 'get_group_member_list', 'get_group_member_info', 'get_group_files', 'get_file_url'],
                         message: ['send_private_message', 'send_group_message', 'reply_current_message', 'at_user', 'get_chat_history', 'get_current_context', 'get_reply_message', 'get_at_members', 'get_message_by_id', 'get_forward_message', 'make_forward_message', 'recall_message'],

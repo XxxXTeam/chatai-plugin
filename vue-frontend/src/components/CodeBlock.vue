@@ -30,15 +30,61 @@ const renderedContent = computed(() => {
 })
 
 function formatCode(code, lang) {
-  if (lang === 'json') {
-    try {
-      const obj = typeof code === 'string' ? JSON.parse(code) : code
-      return syntaxHighlight(JSON.stringify(obj, null, 2))
-    } catch {
-      return escapeHtml(code)
-    }
+  const normalizedLang = lang?.toLowerCase() || 'text'
+  
+  // 预处理：将转义的换行符转换为实际换行
+  if (typeof code === 'string') {
+    code = code.replace(/\\n/g, '\n').replace(/\\r/g, '\r')
   }
-  return escapeHtml(code)
+  
+  switch (normalizedLang) {
+    case 'json':
+      try {
+        const obj = typeof code === 'string' ? JSON.parse(code) : code
+        // 处理JSON中的换行符
+        const jsonStr = JSON.stringify(obj, (key, value) => {
+          if (typeof value === 'string') {
+            return value.replace(/\\n/g, '\n')
+          }
+          return value
+        }, 2)
+        return highlightJson(jsonStr)
+      } catch {
+        return escapeHtml(code)
+      }
+    
+    case 'javascript':
+    case 'js':
+    case 'ts':
+    case 'typescript':
+      return highlightJavaScript(code)
+    
+    case 'python':
+    case 'py':
+      return highlightPython(code)
+    
+    case 'yaml':
+    case 'yml':
+      return highlightYaml(code)
+    
+    case 'bash':
+    case 'shell':
+    case 'sh':
+      return highlightBash(code)
+    
+    case 'css':
+      return highlightCss(code)
+    
+    case 'html':
+    case 'xml':
+      return highlightHtml(code)
+    
+    case 'sql':
+      return highlightSql(code)
+    
+    default:
+      return escapeHtml(code)
+  }
 }
 
 function escapeHtml(str) {
@@ -49,7 +95,7 @@ function escapeHtml(str) {
 }
 
 // JSON 语法高亮
-function syntaxHighlight(json) {
+function highlightJson(json) {
   return json.replace(
     /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
     (match) => {
@@ -68,6 +114,127 @@ function syntaxHighlight(json) {
       return `<span class="${cls}">${match}</span>`
     }
   )
+}
+
+// JavaScript/TypeScript 语法高亮
+function highlightJavaScript(code) {
+  let result = escapeHtml(code)
+  
+  // 关键字
+  const keywords = ['const', 'let', 'var', 'function', 'async', 'await', 'return', 'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'break', 'continue', 'try', 'catch', 'finally', 'throw', 'new', 'class', 'extends', 'import', 'export', 'from', 'default', 'typeof', 'instanceof', 'in', 'of', 'this', 'super', 'static', 'get', 'set']
+  keywords.forEach(kw => {
+    result = result.replace(new RegExp(`\\b${kw}\\b`, 'g'), `<span class="hl-keyword">${kw}</span>`)
+  })
+  
+  // 字符串
+  result = result.replace(/(['"`])(?:(?!\1)[^\\]|\\.)*\1/g, '<span class="hl-string">$&</span>')
+  
+  // 注释
+  result = result.replace(/\/\/.*$/gm, '<span class="hl-comment">$&</span>')
+  result = result.replace(/\/\*[\s\S]*?\*\//g, '<span class="hl-comment">$&</span>')
+  
+  // 数字
+  result = result.replace(/\b\d+(\.\d+)?\b/g, '<span class="hl-number">$&</span>')
+  
+  return result
+}
+
+// Python 语法高亮
+function highlightPython(code) {
+  let result = escapeHtml(code)
+  
+  const keywords = ['def', 'class', 'import', 'from', 'as', 'return', 'if', 'elif', 'else', 'for', 'while', 'try', 'except', 'finally', 'with', 'yield', 'lambda', 'pass', 'break', 'continue', 'and', 'or', 'not', 'in', 'is', 'True', 'False', 'None', 'async', 'await', 'global', 'nonlocal', 'raise', 'assert']
+  keywords.forEach(kw => {
+    result = result.replace(new RegExp(`\\b${kw}\\b`, 'g'), `<span class="hl-keyword">${kw}</span>`)
+  })
+  
+  result = result.replace(/(['"])(?:(?!\1)[^\\]|\\.)*\1/g, '<span class="hl-string">$&</span>')
+  result = result.replace(/#.*$/gm, '<span class="hl-comment">$&</span>')
+  result = result.replace(/\b\d+(\.\d+)?\b/g, '<span class="hl-number">$&</span>')
+  
+  return result
+}
+
+// YAML 语法高亮
+function highlightYaml(code) {
+  let result = escapeHtml(code)
+  
+  // Key
+  result = result.replace(/^(\s*)([\w-]+):/gm, '$1<span class="hl-key">$2</span>:')
+  // 布尔值
+  result = result.replace(/:\s*(true|false)\b/gi, ': <span class="hl-boolean">$1</span>')
+  // 数字
+  result = result.replace(/:\s*(\d+(\.\d+)?)\b/g, ': <span class="hl-number">$1</span>')
+  // 字符串
+  result = result.replace(/(['"])(?:(?!\1)[^\\]|\\.)*\1/g, '<span class="hl-string">$&</span>')
+  // 注释
+  result = result.replace(/#.*$/gm, '<span class="hl-comment">$&</span>')
+  
+  return result
+}
+
+// Bash 语法高亮
+function highlightBash(code) {
+  let result = escapeHtml(code)
+  
+  const commands = ['echo', 'cd', 'ls', 'cat', 'grep', 'sed', 'awk', 'mkdir', 'rm', 'cp', 'mv', 'chmod', 'chown', 'sudo', 'apt', 'yum', 'npm', 'yarn', 'git', 'docker', 'curl', 'wget', 'tar', 'zip', 'unzip', 'ssh', 'scp', 'rsync', 'systemctl', 'service', 'kill', 'ps', 'top', 'df', 'du', 'find', 'head', 'tail', 'sort', 'uniq', 'wc', 'xargs', 'source', 'export', 'alias']
+  commands.forEach(cmd => {
+    result = result.replace(new RegExp(`^(\\s*)${cmd}\\b`, 'gm'), `$1<span class="hl-keyword">${cmd}</span>`)
+  })
+  
+  result = result.replace(/\$[\w{}]+/g, '<span class="hl-variable">$&</span>')
+  result = result.replace(/(['"])(?:(?!\1)[^\\]|\\.)*\1/g, '<span class="hl-string">$&</span>')
+  result = result.replace(/#.*$/gm, '<span class="hl-comment">$&</span>')
+  
+  return result
+}
+
+// CSS 语法高亮
+function highlightCss(code) {
+  let result = escapeHtml(code)
+  
+  // 选择器
+  result = result.replace(/([.#]?[\w-]+)\s*{/g, '<span class="hl-selector">$1</span> {')
+  // 属性
+  result = result.replace(/([\w-]+)\s*:/g, '<span class="hl-property">$1</span>:')
+  // 值
+  result = result.replace(/:\s*([^;{}]+)/g, ': <span class="hl-value">$1</span>')
+  // 注释
+  result = result.replace(/\/\*[\s\S]*?\*\//g, '<span class="hl-comment">$&</span>')
+  
+  return result
+}
+
+// HTML/XML 语法高亮
+function highlightHtml(code) {
+  let result = escapeHtml(code)
+  
+  // 标签
+  result = result.replace(/&lt;(\/?[\w-]+)/g, '&lt;<span class="hl-tag">$1</span>')
+  // 属性
+  result = result.replace(/([\w-]+)=/g, '<span class="hl-attr">$1</span>=')
+  // 属性值
+  result = result.replace(/="([^"]*)"/g, '="<span class="hl-string">$1</span>"')
+  // 注释
+  result = result.replace(/&lt;!--[\s\S]*?--&gt;/g, '<span class="hl-comment">$&</span>')
+  
+  return result
+}
+
+// SQL 语法高亮
+function highlightSql(code) {
+  let result = escapeHtml(code)
+  
+  const keywords = ['SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'LIKE', 'BETWEEN', 'IS', 'NULL', 'ORDER', 'BY', 'ASC', 'DESC', 'GROUP', 'HAVING', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'ON', 'AS', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE', 'CREATE', 'TABLE', 'INDEX', 'DROP', 'ALTER', 'ADD', 'COLUMN', 'PRIMARY', 'KEY', 'FOREIGN', 'REFERENCES', 'CONSTRAINT', 'UNIQUE', 'DEFAULT', 'CHECK', 'LIMIT', 'OFFSET', 'UNION', 'ALL', 'DISTINCT', 'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END']
+  keywords.forEach(kw => {
+    result = result.replace(new RegExp(`\\b${kw}\\b`, 'gi'), `<span class="hl-keyword">${kw}</span>`)
+  })
+  
+  result = result.replace(/(['"])(?:(?!\1)[^\\]|\\.)*\1/g, '<span class="hl-string">$&</span>')
+  result = result.replace(/--.*$/gm, '<span class="hl-comment">$&</span>')
+  result = result.replace(/\b\d+(\.\d+)?\b/g, '<span class="hl-number">$&</span>')
+  
+  return result
 }
 
 const containerStyle = computed(() => {
@@ -107,7 +274,6 @@ const containerStyle = computed(() => {
   overflow-x: auto;
 }
 
-/* JSON 语法高亮 */
 .code-content :deep(.hl-key) {
   color: #9cdcfe;
 }
@@ -122,6 +288,38 @@ const containerStyle = computed(() => {
 }
 .code-content :deep(.hl-null) {
   color: #569cd6;
+}
+.code-content :deep(.hl-keyword) {
+  color: #c586c0;
+  font-weight: 500;
+}
+.code-content :deep(.hl-comment) {
+  color: #6a9955;
+  font-style: italic;
+}
+.code-content :deep(.hl-variable) {
+  color: #9cdcfe;
+}
+.code-content :deep(.hl-function) {
+  color: #dcdcaa;
+}
+.code-content :deep(.hl-class) {
+  color: #4ec9b0;
+}
+.code-content :deep(.hl-tag) {
+  color: #569cd6;
+}
+.code-content :deep(.hl-attr) {
+  color: #9cdcfe;
+}
+.code-content :deep(.hl-selector) {
+  color: #d7ba7d;
+}
+.code-content :deep(.hl-property) {
+  color: #9cdcfe;
+}
+.code-content :deep(.hl-value) {
+  color: #ce9178;
 }
 
 /* Markdown 样式 */

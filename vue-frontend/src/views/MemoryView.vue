@@ -158,6 +158,26 @@ async function clearAllMemories() {
     }
 }
 
+// 一键清空所有用户记忆
+async function clearAllUsersMemories() {
+    loading.value = true
+    try {
+        const res = await axios.delete('/api/memory/clear-all')
+        if (res.data.code === 0) {
+            const count = res.data.data?.deletedCount ?? res.data.deletedCount ?? 0
+            message.success(`清空成功，共清空 ${count} 个用户的记忆`)
+            memories.value = []
+            await fetchUserList()
+        } else {
+            message.error('清空失败: ' + res.data.message)
+        }
+    } catch (error) {
+        message.error('清空失败: ' + (error.response?.data?.message || error.message))
+    } finally {
+        loading.value = false
+    }
+}
+
 onMounted(() => {
     fetchUserList()
 })
@@ -191,6 +211,15 @@ onMounted(() => {
                         <template #icon><n-icon><RefreshOutlined /></n-icon></template>
                         刷新用户
                     </n-button>
+                    <n-popconfirm @positive-click="clearAllUsersMemories">
+                        <template #trigger>
+                            <n-button size="small" type="error">
+                                <template #icon><n-icon><DeleteOutlined /></n-icon></template>
+                                清空所有记忆
+                            </n-button>
+                        </template>
+                        确定清空所有用户的记忆？此操作不可恢复！
+                    </n-popconfirm>
                 </n-space>
             </template>
 

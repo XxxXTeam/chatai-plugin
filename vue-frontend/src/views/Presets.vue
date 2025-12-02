@@ -192,10 +192,17 @@ async function fetchPresets() {
   try {
     const res = await axios.get('/api/preset/list')
     if (res.data.code === 0) {
-      presets.value = res.data.data
+      // 确保data是数组
+      presets.value = Array.isArray(res.data.data) ? res.data.data : []
+      console.log('[Presets] 加载预设:', presets.value.length, '个')
+    } else {
+      console.warn('[Presets] API返回错误:', res.data.message)
+      presets.value = []
     }
   } catch (err) {
-    message.error('获取预设列表失败')
+    console.error('[Presets] 获取预设列表失败:', err)
+    message.error('获取预设列表失败: ' + (err.response?.data?.message || err.message))
+    presets.value = []
   }
 }
 

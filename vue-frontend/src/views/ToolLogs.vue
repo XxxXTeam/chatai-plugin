@@ -106,7 +106,18 @@ function formatTime(timestamp) {
 
 function formatJson(obj) {
   try {
-    return JSON.stringify(obj, null, 2)
+    // 处理嵌套的换行符
+    const replacer = (key, value) => {
+      if (typeof value === 'string') {
+        // 保留换行符，不转义
+        return value
+      }
+      return value
+    }
+    let str = JSON.stringify(obj, replacer, 2)
+    // 处理已转义的换行符
+    str = str.replace(/\\\\n/g, '\n').replace(/\\n/g, '\n')
+    return str
   } catch {
     return String(obj)
   }

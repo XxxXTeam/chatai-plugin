@@ -116,6 +116,25 @@ async function deleteConversation(id) {
   }
 }
 
+// 一键清空所有对话
+async function clearAllConversations() {
+  loading.value = true
+  try {
+    const res = await axios.delete('/api/conversations/clear-all')
+    if (res.data.code === 0) {
+      const count = res.data.data?.deletedCount ?? res.data.deletedCount ?? 0
+      message.success(`清空成功，共删除 ${count} 条对话`)
+      conversations.value = []
+    } else {
+      message.error('清空失败: ' + res.data.message)
+    }
+  } catch (err) {
+    message.error('清空失败: ' + err.message)
+  } finally {
+    loading.value = false
+  }
+}
+
 function formatTime(timestamp) {
   if (!timestamp) return '-'
   const date = new Date(timestamp)
@@ -197,6 +216,17 @@ onMounted(() => {
             </template>
             刷新
           </n-button>
+          <n-popconfirm @positive-click="clearAllConversations">
+            <template #trigger>
+              <n-button type="error" :disabled="conversations.length === 0">
+                <template #icon>
+                  <n-icon><DeleteOutlined /></n-icon>
+                </template>
+                清空所有
+              </n-button>
+            </template>
+            确定清空所有对话历史？此操作不可恢复！
+          </n-popconfirm>
         </n-space>
       </template>
 

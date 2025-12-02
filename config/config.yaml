@@ -17,7 +17,7 @@ admin:
   sensitiveCommandMasterOnly: true
 llm:
   defaultModel: gemini-3-pro-preview
-  defaultChatPresetId: 2fbee134-9cdb-480b-93bb-4a3148da77c1
+  defaultChatPresetId: f6732fbd-e809-451a-9533-717839de5318
   embeddingModel: gemini-3-pro-preview
   dimensions: 1536
   models:
@@ -105,7 +105,7 @@ images:
     - webp
 web:
   port: 3000
-  permanentAuthToken: 4ca63cd1-4514-4399-ac86-2ebb2ddfd71b
+  permanentAuthToken: 8ceb8747-46d1-408c-bd20-20e5f029bb7f
 context:
   maxMessages: 20
   maxTokens: 8096
@@ -133,7 +133,7 @@ memory:
     extractRelations: true
   minScore: 0.7
 presets:
-  defaultId: 2fbee134-9cdb-480b-93bb-4a3148da77c1
+  defaultId: f6732fbd-e809-451a-9533-717839de5318
   allowUserSwitch: true
   perUserPreset: false
   perGroupPreset: false
@@ -159,6 +159,20 @@ features:
   userPortrait:
     enabled: true
     minMessages: 10
+  poke:
+    enabled: true
+    pokeBack: false
+    message: 别戳了，戳我干嘛~
+    useAI: true
+  reaction:
+    enabled: false
+    useAI: false
+  voiceReply:
+    enabled: false
+    ttsProvider: system
+    triggerOnTool: false
+    triggerAlways: false
+    maxTextLength: 500
 streaming:
   enabled: true
 listener:

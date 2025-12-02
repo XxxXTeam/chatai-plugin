@@ -9,6 +9,7 @@ import crypto from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import config from '../../config/config.js'
 import { mcpManager } from '../mcp/McpManager.js'
+import { builtinMcpServer } from '../mcp/BuiltinMcpServer.js'
 import { presetManager } from './PresetManager.js'
 import { channelManager } from './ChannelManager.js'
 import { imageService } from './ImageService.js'
@@ -674,18 +675,28 @@ export class WebServer {
 
         // ==================== Preset Routes ====================
         // GET /api/preset/list - List all presets (protected)
-        this.app.get('/api/preset/list', this.authMiddleware.bind(this), (req, res) => {
-            res.json(ChaiteResponse.ok(presetManager.getAll()))
+        this.app.get('/api/preset/list', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                await presetManager.init()
+                res.json(ChaiteResponse.ok(presetManager.getAll()))
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
         })
 
         // GET /api/preset/:id - Get single preset (protected)
-        this.app.get('/api/preset/:id', this.authMiddleware.bind(this), (req, res) => {
-            const { id } = req.params
-            const preset = presetManager.get(id)
-            if (preset) {
-                res.json(ChaiteResponse.ok(preset))
-            } else {
-                res.status(404).json(ChaiteResponse.fail(null, 'Preset not found'))
+        this.app.get('/api/preset/:id', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                await presetManager.init()
+                const { id } = req.params
+                const preset = presetManager.get(id)
+                if (preset) {
+                    res.json(ChaiteResponse.ok(preset))
+                } else {
+                    res.status(404).json(ChaiteResponse.fail(null, 'Preset not found'))
+                }
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
             }
         })
 
@@ -1262,6 +1273,200 @@ export class WebServer {
                 await mcpManager.refreshBuiltinTools()
 
                 res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // ==================== JS 工具文件 API ====================
+        const jsToolsDir = path.join(__dirname, '../../data/tools')
+        
+        // GET /api/tools/js - 列出 JS 工具文件
+        this.app.get('/api/tools/js', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                if (!fs.existsSync(jsToolsDir)) {
+                    fs.mkdirSync(jsToolsDir, { recursive: true })
+                }
+                
+                // 从已加载的 jsTools 中获取工具信息（包含实际工具名）
+                await mcpManager.init()
+                const jsTools = []
+                
+                for (const [toolName, tool] of builtinMcpServer.jsTools || new Map()) {
+                    const filename = tool.__filename || `${toolName}.js`
+                    const filePath = tool.__filepath || path.join(jsToolsDir, filename)
+                    let stat = { size: 0, mtime: new Date() }
+                    try {
+                        stat = fs.statSync(filePath)
+                    } catch {}
+                    
+                    jsTools.push({
+                        name: toolName,  // 使用实际工具名
+                        filename,
+                        description: tool.description || tool.function?.description || '',
+                        size: stat.size,
+                        modifiedAt: stat.mtime.getTime()
+                    })
+                }
+                
+                res.json(ChaiteResponse.ok(jsTools))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+        
+        // GET /api/tools/js/:name - 读取 JS 工具源码
+        this.app.get('/api/tools/js/:name', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const filename = req.params.name.endsWith('.js') ? req.params.name : `${req.params.name}.js`
+                const filePath = path.join(jsToolsDir, filename)
+                
+                if (!fs.existsSync(filePath)) {
+                    return res.status(404).json(ChaiteResponse.fail(null, 'Tool file not found'))
+                }
+                
+                const source = fs.readFileSync(filePath, 'utf-8')
+                const stat = fs.statSync(filePath)
+                
+                res.json(ChaiteResponse.ok({
+                    name: req.params.name,
+                    filename,
+                    source,
+                    size: stat.size,
+                    modifiedAt: stat.mtime.getTime()
+                }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+        
+        // PUT /api/tools/js/:name - 更新 JS 工具源码
+        this.app.put('/api/tools/js/:name', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { source } = req.body
+                if (!source) {
+                    return res.status(400).json(ChaiteResponse.fail(null, 'source is required'))
+                }
+                
+                const filename = req.params.name.endsWith('.js') ? req.params.name : `${req.params.name}.js`
+                const filePath = path.join(jsToolsDir, filename)
+                
+                // 写入文件
+                fs.writeFileSync(filePath, source, 'utf-8')
+                
+                // 热重载
+                await mcpManager.reloadJsTools()
+                
+                res.json(ChaiteResponse.ok({ 
+                    success: true, 
+                    message: '工具已保存并热重载'
+                }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+        
+        // POST /api/tools/js - 创建新 JS 工具
+        this.app.post('/api/tools/js', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { name, source } = req.body
+                if (!name) {
+                    return res.status(400).json(ChaiteResponse.fail(null, 'name is required'))
+                }
+                
+                const filename = name.endsWith('.js') ? name : `${name}.js`
+                const filePath = path.join(jsToolsDir, filename)
+                
+                if (fs.existsSync(filePath)) {
+                    return res.status(409).json(ChaiteResponse.fail(null, 'Tool file already exists'))
+                }
+                
+                // 创建默认模板
+                const defaultSource = source || `/**
+ * ${name} - 自定义工具
+ * 工具会自动注入以下全局变量:
+ * - Bot: 机器人实例
+ * - logger: 日志器
+ * - redis: Redis 客户端
+ * - segment: 消息构造器
+ * - common: 常用工具函数
+ */
+export default {
+    name: '${name}',
+    description: '自定义工具描述',
+    inputSchema: {
+        type: 'object',
+        properties: {
+            message: {
+                type: 'string',
+                description: '参数描述'
+            }
+        },
+        required: []
+    },
+    
+    /**
+     * 工具执行函数
+     * @param {Object} args - 用户传入的参数
+     * @param {Object} ctx - 上下文对象
+     * @returns {Object} 返回结果
+     */
+    async run(args, ctx) {
+        // 在这里编写工具逻辑
+        return {
+            text: '工具执行成功',
+            data: args
+        }
+    }
+}
+`
+                
+                fs.writeFileSync(filePath, defaultSource, 'utf-8')
+                
+                // 热重载
+                await mcpManager.reloadJsTools()
+                
+                res.status(201).json(ChaiteResponse.ok({ 
+                    success: true,
+                    filename,
+                    message: '工具已创建'
+                }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+        
+        // DELETE /api/tools/js/:name - 删除 JS 工具
+        this.app.delete('/api/tools/js/:name', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const filename = req.params.name.endsWith('.js') ? req.params.name : `${req.params.name}.js`
+                const filePath = path.join(jsToolsDir, filename)
+                
+                if (!fs.existsSync(filePath)) {
+                    return res.status(404).json(ChaiteResponse.fail(null, 'Tool file not found'))
+                }
+                
+                fs.unlinkSync(filePath)
+                
+                // 热重载
+                await mcpManager.reloadJsTools()
+                
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+        
+        // POST /api/tools/js/reload - 热重载所有 JS 工具
+        this.app.post('/api/tools/js/reload', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                await mcpManager.reloadJsTools()
+                const count = mcpManager.builtinServer?.jsTools?.size || 0
+                res.json(ChaiteResponse.ok({ 
+                    success: true, 
+                    count,
+                    message: `已重载 ${count} 个 JS 工具`
+                }))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
@@ -1943,6 +2148,54 @@ export class WebServer {
             }
         })
 
+        // DELETE /api/conversations/clear-all - 清空所有对话
+        this.app.delete('/api/conversations/clear-all', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const db = getDatabase()
+                const conversations = db.getConversations()
+                let deletedCount = 0
+                
+                for (const conv of conversations) {
+                    try {
+                        db.deleteConversation(conv.id)
+                        deletedCount++
+                    } catch (e) {
+                        logger.warn(`[WebServer] 删除对话失败: ${conv.id}`, e.message)
+                    }
+                }
+                
+                logger.info(`[WebServer] 清空所有对话完成, 删除: ${deletedCount}条`)
+                res.json(ChaiteResponse.ok({ success: true, deletedCount }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/memory/clear-all - 清空所有用户记忆
+        this.app.delete('/api/memory/clear-all', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { memoryManager } = await import('./MemoryManager.js')
+                await memoryManager.init()
+                
+                const users = await memoryManager.listUsers()
+                let deletedCount = 0
+                
+                for (const userId of users) {
+                    try {
+                        await memoryManager.clearMemory(userId)
+                        deletedCount++
+                    } catch (e) {
+                        logger.warn(`[WebServer] 清空用户记忆失败: ${userId}`, e.message)
+                    }
+                }
+                
+                logger.info(`[WebServer] 清空所有记忆完成, 清空用户数: ${deletedCount}`)
+                res.json(ChaiteResponse.ok({ success: true, deletedCount }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
         // ==================== Scope API (作用域管理) ====================
         // GET /api/scope/users - 列出所有用户作用域配置
         this.app.get('/api/scope/users', this.authMiddleware.bind(this), async (req, res) => {
@@ -2227,6 +2480,136 @@ export class WebServer {
             try {
                 config.set('listener', req.body)
                 res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // ==================== Platform & Message API ====================
+        // GET /api/platform/info - 获取平台信息
+        this.app.get('/api/platform/info', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { detectPlatform, getBotInfo } = await import('../utils/platformAdapter.js')
+                const bot = global.Bot || {}
+                const platform = detectPlatform({ bot })
+                const botInfo = getBotInfo({ bot })
+                
+                const features = []
+                if (bot.pickGroup) features.push('pickGroup')
+                if (bot.pickFriend) features.push('pickFriend')
+                if (bot.getMsg) features.push('getMsg')
+                if (bot.getGroupMemberInfo) features.push('getGroupMemberInfo')
+                
+                res.json(ChaiteResponse.ok({
+                    platform,
+                    version: bot.version?.version || bot.version?.app_name || '',
+                    uin: botInfo.uin,
+                    nickname: botInfo.nickname,
+                    features
+                }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/message/query - 查询消息
+        this.app.post('/api/message/query', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { type, value, group_id, user_id } = req.body
+                const { getMessage, detectPlatform } = await import('../utils/platformAdapter.js')
+                const bot = global.Bot || {}
+                const platform = detectPlatform({ bot })
+                
+                const result = {
+                    platform,
+                    seq: type === 'seq' ? value : null,
+                    message_id: type === 'message_id' ? value : null,
+                    raw: null,
+                    pb: null,
+                    parsed: null,
+                    methods_tried: []
+                }
+                
+                let rawMsg = null
+                
+                // 尝试获取消息
+                if (group_id && bot.pickGroup) {
+                    const group = bot.pickGroup(parseInt(group_id))
+                    
+                    if (group.getMsg) {
+                        try {
+                            rawMsg = await group.getMsg(value)
+                            result.methods_tried.push('group.getMsg')
+                            if (rawMsg) {
+                                result.raw = rawMsg
+                                if (rawMsg.raw) {
+                                    result.pb = {
+                                        has_raw: true,
+                                        raw_type: typeof rawMsg.raw,
+                                        raw_length: rawMsg.raw?.length || 0
+                                    }
+                                    if (Buffer.isBuffer(rawMsg.raw)) {
+                                        result.pb.hex_preview = rawMsg.raw.slice(0, 100).toString('hex')
+                                    }
+                                }
+                            }
+                        } catch (err) {
+                            result.methods_tried.push(`group.getMsg failed: ${err.message}`)
+                        }
+                    }
+                    
+                    if (!rawMsg && group.getChatHistory) {
+                        try {
+                            const history = await group.getChatHistory(parseInt(value), 1)
+                            if (history?.length > 0) {
+                                rawMsg = history[0]
+                                result.methods_tried.push('group.getChatHistory')
+                                result.raw = rawMsg
+                            }
+                        } catch (err) {
+                            result.methods_tried.push(`group.getChatHistory failed: ${err.message}`)
+                        }
+                    }
+                }
+                
+                if (!rawMsg && bot.getMsg) {
+                    try {
+                        rawMsg = await bot.getMsg(value)
+                        result.methods_tried.push('bot.getMsg')
+                        result.raw = rawMsg
+                    } catch (err) {
+                        result.methods_tried.push(`bot.getMsg failed: ${err.message}`)
+                    }
+                }
+                
+                if (!rawMsg) {
+                    return res.status(404).json(ChaiteResponse.fail(result, '获取消息失败'))
+                }
+                
+                result.parsed = {
+                    message_id: rawMsg.message_id || rawMsg.id,
+                    seq: rawMsg.seq,
+                    time: rawMsg.time,
+                    sender: rawMsg.sender,
+                    message: rawMsg.message,
+                    raw_message: rawMsg.raw_message,
+                    rand: rawMsg.rand,
+                    font: rawMsg.font,
+                    pktnum: rawMsg.pktnum,
+                    real_id: rawMsg.real_id,
+                    message_type: rawMsg.message_type
+                }
+                
+                res.json(ChaiteResponse.ok(result))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/test/poke - 测试戳一戳
+        this.app.post('/api/test/poke', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                res.json(ChaiteResponse.ok({ success: true, message: '戳一戳测试发送成功' }))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }

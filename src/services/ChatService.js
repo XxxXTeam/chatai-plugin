@@ -80,29 +80,74 @@ export class ChatService {
             messageContent.push({ type: 'text', text: message })
         }
 
-        // Process images
+        // Process images - 优先直接使用URL，避免下载大文件
         for (const imageRef of images) {
             try {
-                let base64Image
-                // If it's an image ID
-                if (imageRef.length === 32 && !/[:/]/.test(imageRef)) {
-                    base64Image = await imageService.getImageBase64(imageRef, 'jpeg')
+                // 如果是 image_url 类型对象（来自 messageParser）
+                if (imageRef && typeof imageRef === 'object') {
+                    if (imageRef.type === 'image_url' && imageRef.image_url?.url) {
+                        // 直接使用URL
+                        messageContent.push({
+                            type: 'image_url',
+                            image_url: { url: imageRef.image_url.url }
+                        })
+                        continue
+                    } else if (imageRef.type === 'url' && imageRef.url) {
+                        // URL引用格式
+                        messageContent.push({
+                            type: 'image_url',
+                            image_url: { url: imageRef.url }
+                        })
+                        continue
+                    } else if (imageRef.type === 'video_info' && imageRef.url) {
+                        // 视频信息 - 作为文本描述添加
+                        // 某些API不支持视频，所以转为文本
+                        const videoDesc = `[视频${imageRef.name ? ':' + imageRef.name : ''} URL:${imageRef.url}]`
+                        // 将视频信息添加到文本内容中
+                        const textIdx = messageContent.findIndex(c => c.type === 'text')
+                        if (textIdx >= 0) {
+                            messageContent[textIdx].text += '\n' + videoDesc
+                        } else {
+                            messageContent.push({ type: 'text', text: videoDesc })
+                        }
+                        continue
+                    }
                 }
-                // If it's a URL
-                else if (imageRef.startsWith('http://') || imageRef.startsWith('https://')) {
-                    base64Image = await imageService.urlToBase64(imageRef)
+                
+                // 字符串格式处理
+                if (typeof imageRef === 'string') {
+                    // 如果是HTTP URL，直接使用
+                    if (imageRef.startsWith('http://') || imageRef.startsWith('https://')) {
+                        messageContent.push({
+                            type: 'image_url',
+                            image_url: { url: imageRef }
+                        })
+                        continue
+                    }
+                    
+                    // 如果是base64 data URL，直接使用
+                    if (imageRef.startsWith('data:')) {
+                        messageContent.push({
+                            type: 'image_url',
+                            image_url: { url: imageRef }
+                        })
+                        continue
+                    }
+                    
+                    // 如果是图片ID，从服务获取
+                    if (imageRef.length === 32 && !/[:/]/.test(imageRef)) {
+                        const base64Image = await imageService.getImageBase64(imageRef, 'jpeg')
+                        if (base64Image) {
+                            messageContent.push({
+                                type: 'image_url',
+                                image_url: { url: base64Image }
+                            })
+                        }
+                        continue
+                    }
                 }
-                // If it's already base64
-                else if (imageRef.startsWith('data:')) {
-                    base64Image = imageRef
-                }
-
-                if (base64Image) {
-                    messageContent.push({
-                        type: 'image_url',
-                        image_url: { url: base64Image }
-                    })
-                }
+                
+                logger.warn('[ChatService] 无法处理的图片引用:', typeof imageRef, imageRef)
             } catch (error) {
                 logger.error('[ChatService] Failed to process image:', error)
             }
@@ -354,11 +399,61 @@ export class ChatService {
             }
 
             // --- 2. 统一使用 Client 发送消息，工具调用由 AbstractClient 内部处理 ---
-            const response = await client.sendMessage(userMessage, requestOptions)
+            // 记录并发请求
+            const concurrentCount = contextManager.recordRequest(conversationId)
+            if (concurrentCount > 1) {
+                logger.warn(`[ChatService] 检测到并发请求: ${conversationId}, 当前并发数: ${concurrentCount}`)
+            }
             
-            finalResponse = response.contents
-            finalUsage = response.usage
-            allToolLogs = response.toolCallLogs || []
+            // 获取锁防止并发冲突
+            let releaseLock = null
+            try {
+                releaseLock = await contextManager.acquireLock(conversationId, 60000)
+            } catch (lockErr) {
+                logger.error('[ChatService] 获取锁失败:', lockErr.message)
+                throw new Error('系统繁忙，请稍后重试')
+            }
+            
+            try {
+                // 空输出重试机制
+                const MAX_RETRY = 2
+                let retryCount = 0
+                let response = null
+                
+                while (retryCount <= MAX_RETRY) {
+                    response = await client.sendMessage(userMessage, requestOptions)
+                    
+                    // 检查是否有有效内容
+                    const hasValidContent = response.contents && response.contents.length > 0 && 
+                        response.contents.some(c => {
+                            if (c.type === 'text') return c.text && c.text.trim().length > 0
+                            if (c.type === 'reasoning') return c.text && c.text.trim().length > 0
+                            return true
+                        })
+                    
+                    if (hasValidContent) {
+                        break // 有有效内容，跳出循环
+                    }
+                    
+                    retryCount++
+                    if (retryCount <= MAX_RETRY) {
+                        logger.warn(`[ChatService] API返回空内容，重试第${retryCount}次...`)
+                        // 短暂延迟后重试
+                        await new Promise(r => setTimeout(r, 500 * retryCount))
+                    }
+                }
+                
+                if (retryCount > MAX_RETRY) {
+                    logger.warn('[ChatService] 多次重试后仍无有效内容')
+                }
+                
+                finalResponse = response.contents
+                finalUsage = response.usage
+                allToolLogs = response.toolCallLogs || []
+            } finally {
+                // 确保释放锁
+                if (releaseLock) releaseLock()
+            }
             
             // 收集响应调试信息
             if (debugInfo) {

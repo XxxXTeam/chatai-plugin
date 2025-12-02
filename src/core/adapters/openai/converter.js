@@ -81,12 +81,33 @@ registerFromChaiteConverter('openai', (source) => {
                                 input_audio: { data: t.data, format: t.format },
                             }
                         case 'image':
+                            // 支持base64和URL
                             return {
                                 type: 'image_url',
-                                image_url: { url: t.image.startsWith('http') ? t.image : `data:image/jpeg;base64,${t.image}` },
+                                image_url: { 
+                                    url: t.image.startsWith('http') || t.image.startsWith('data:') 
+                                        ? t.image 
+                                        : `data:image/jpeg;base64,${t.image}` 
+                                },
                             }
+                        case 'image_url':
+                            // 直接传递 image_url 类型（来自 messageParser）
+                            return {
+                                type: 'image_url',
+                                image_url: { url: t.image_url?.url || t.url || '' }
+                            }
+                        case 'video_info':
+                            // 视频信息转为文本描述（大多数API不支持视频）
+                            return {
+                                type: 'text',
+                                text: `[视频${t.name ? ':' + t.name : ''} URL:${t.url || ''}]`
+                            }
+                        default:
+                            // 未知类型跳过
+                            console.warn('[OpenAI Converter] 未知的content类型:', t.type)
+                            return null
                     }
-                }),
+                }).filter(Boolean),  // 过滤掉null
             }
         }
         case 'tool': {

@@ -1,5 +1,6 @@
 import config from '../config/config.js'
 import { cleanCQCode, parseUserMessage } from '../src/utils/messageParser.js'
+import { isDebugEnabled } from './Commands.js'
 
 /**
  * 转义正则特殊字符
@@ -8,9 +9,6 @@ function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/**
- * AI Chat plugin for Yunzai
- */
 export class Chat extends plugin {
   constructor() {
     super({
@@ -23,34 +21,6 @@ export class Chat extends plugin {
           reg: '',  // 匹配所有消息，动态判断
           fnc: 'handleMessage',
           log: false
-        },
-        {
-          reg: '^#(结束对话|结束会话|新对话|新会话)$',
-          fnc: 'endConversation'
-        },
-        {
-          reg: '^#(清除记忆|清理记忆|删除记忆)$',
-          fnc: 'clearMemory'
-        },
-        {
-          reg: '^#(对话状态|会话状态)$',
-          fnc: 'conversationStatus'
-        },
-        {
-          reg: '^#clear$',
-          fnc: 'clearHistory'
-        },
-        {
-          reg: '^#(群聊总结|总结群聊|群消息总结)$',
-          fnc: 'groupSummary'
-        },
-        {
-          reg: '^#(个人画像|用户画像|分析我)$',
-          fnc: 'userPortrait'
-        },
-        {
-          reg: '^#(分析|画像)\\s*\\[CQ:at',
-          fnc: 'userPortraitAt'
         }
       ]
     })
@@ -61,6 +31,14 @@ export class Chat extends plugin {
    */
   async handleMessage() {
     const e = this.e
+    const bot = e.bot || Bot
+    
+    // 防护：忽略自身消息，防止自言自语
+    const selfId = bot?.uin || e.self_id
+    if (e.user_id && String(e.user_id) === String(selfId)) {
+      return false
+    }
+    
     // 实时读取配置
     const toggleMode = config.get('basic.toggleMode') || 'at'
     const togglePrefix = config.get('basic.togglePrefix') || '#chat'
@@ -87,12 +65,17 @@ export class Chat extends plugin {
       return false
     }
 
-    // 检测 debug 模式：消息末尾包含 "debug"
-    let debugMode = false
+    // 检测 debug 模式：
+    // 1. 消息末尾包含 "debug" （单次触发）
+    // 2. 通过 #chatdebug 命令开启的持久化模式
+    let debugMode = isDebugEnabled(e)  // 检查持久化debug模式
+    
     if (msg && /\s+debug\s*$/i.test(msg)) {
       debugMode = true
       msg = msg.replace(/\s+debug\s*$/i, '').trim()
-      logger.info('[AI-Chat] Debug模式已启用')
+      logger.info('[AI-Chat] Debug模式已启用(单次)')
+    } else if (debugMode) {
+      logger.info('[AI-Chat] Debug模式已启用(持久化)')
     }
 
     return this.processChat(msg, { debugMode })
@@ -198,24 +181,53 @@ export class Chat extends plugin {
       const { contextManager } = await import('../src/services/ContextManager.js')
       const conversationId = contextManager.getConversationId(userId, groupId)
       
-      addDebugLog('📋 基础信息', {
+      // 检测框架和适配器
+      const bot = e.bot || Bot
+      const framework = bot?.bots ? 'TRSS' : 'Miao'
+      let adapter = 'unknown'
+      if (bot?.adapter?.name) {
+        adapter = bot.adapter.name
+      } else if (bot?.version?.app_name) {
+        adapter = bot.version.app_name
+      } else if (bot?.pickGroup && bot?.gml) {
+        adapter = 'icqq'
+      }
+      
+      addDebugLog('🖥️ 环境信息', {
+        framework,
+        adapter,
+        botUin: bot?.uin || e.self_id,
+        platform: e.platform || 'QQ'
+      })
+      
+      addDebugLog('📋 消息信息', {
         userId,
         groupId,
         fullUserId,
         conversationId,
         isolationMode: contextManager.getIsolationMode(),
-        message: msg?.substring(0, 100) + (msg?.length > 100 ? '...' : ''),
-        imageCount: e.img?.length || 0,
-        // icqq/TRSS 消息信息
-        sender: e.sender ? {
-          user_id: e.sender.user_id,
-          nickname: e.sender.nickname,
-          card: e.sender.card,
-          role: e.sender.role
-        } : null,
+        message: msg?.substring(0, 200) + (msg?.length > 200 ? '...' : ''),
+        messageLength: msg?.length || 0,
+        imageCount: e.img?.length || 0
+      })
+      
+      addDebugLog('👤 发送者信息', {
+        user_id: e.sender?.user_id,
+        nickname: e.sender?.nickname,
+        card: e.sender?.card,
+        role: e.sender?.role,
+        title: e.sender?.title,
+        level: e.sender?.level
+      })
+      
+      addDebugLog('📨 消息结构', {
         hasSource: !!e.source,
         hasForward: e.message?.some(m => m.type === 'forward'),
-        messageSegments: e.message?.map(m => m.type)
+        messageSegments: e.message?.map(m => m.type),
+        sourceSeq: e.source?.seq,
+        sourceMsgId: e.source?.message_id,
+        atBot: e.atBot,
+        isGroup: e.isGroup
       })
 
       // 检查用户是否被封禁（检查 userId 和 fullUserId）

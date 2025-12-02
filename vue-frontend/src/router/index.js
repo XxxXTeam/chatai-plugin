@@ -80,6 +80,16 @@ const router = createRouter({
             path: '/listener',
             name: 'listener',
             component: () => import('../views/ListenerConfig.vue')
+        },
+        {
+            path: '/events',
+            name: 'events',
+            component: () => import('../views/EventsView.vue')
+        },
+        {
+            path: '/message-debug',
+            name: 'message-debug',
+            component: () => import('../views/MessageDebug.vue')
         }
     ]
 })

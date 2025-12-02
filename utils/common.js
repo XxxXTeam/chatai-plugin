@@ -71,7 +71,8 @@ function padZero (num) {
   return num < 10 ? '0' + num : num.toString()
 }
 
-export const dataDir = path.resolve('./plugins/chatgpt-plugin', ChatGPTConfig.chaite.dataDir)
+// 数据目录 - 使用正确的配置引用
+export const dataDir = path.resolve('./plugins/new-plugin', config.get('chaite.dataDir') || 'data')
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true })
 }
