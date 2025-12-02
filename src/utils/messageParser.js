@@ -290,46 +290,129 @@ function extractSender(e) {
 
 /**
  * 解析引用消息
+ * 支持多平台: icqq, NapCat(NC), TRSS 等
  */
 async function parseReplyMessage(e, options) {
     const { handleReplyText, handleReplyImage, handleReplyFile, handleForward } = options
     const contents = []
     let text = ''
+    const parseLog = [] // 解析日志
 
     try {
         let replyData = null
         let replySenderId = null
         let replySenderName = null
 
-        // 获取引用消息
+        parseLog.push(`[Reply] 开始解析引用消息, hasSource=${!!e.source}, hasGetReply=${typeof e.getReply === 'function'}`)
+
+        // 方式1: 使用 e.getReply() (TRSS/部分平台)
         if (e.getReply && typeof e.getReply === 'function') {
-            const reply = await e.getReply()
-            replyData = reply
-            replySenderId = reply?.user_id || reply?.sender?.user_id
-            replySenderName = reply?.sender?.card || reply?.sender?.nickname || reply?.nickname
-        } else {
-            // 兼容旧版本
+            try {
+                parseLog.push(`[Reply] 尝试 e.getReply()`)
+                const reply = await e.getReply()
+                if (reply) {
+                    replyData = reply
+                    // 兼容 NC 格式: reply.data 或直接 reply
+                    const replyInfo = reply.data || reply
+                    replySenderId = replyInfo.user_id || replyInfo.sender?.user_id || reply.user_id
+                    replySenderName = replyInfo.sender?.card || replyInfo.sender?.nickname || 
+                                      replyInfo.nickname || reply.nickname
+                    parseLog.push(`[Reply] e.getReply() 成功, sender=${replySenderId}`)
+                }
+            } catch (err) {
+                parseLog.push(`[Reply] e.getReply() 失败: ${err.message}`)
+            }
+        }
+        
+        // 方式2: 从 e.source 获取并通过 API 拉取完整消息
+        if (!replyData && e.source) {
+            parseLog.push(`[Reply] 尝试从 e.source 获取, seq=${e.source.seq}, message_id=${e.source.message_id}`)
             const seq = e.isGroup 
-                ? (e.source?.seq || e.reply_id) 
-                : (e.source?.time)
+                ? (e.source.seq || e.source.message_id || e.reply_id) 
+                : (e.source.time || e.source.seq)
             
             if (seq) {
-                if (e.isGroup && e.group?.getChatHistory) {
-                    const history = await e.group.getChatHistory(seq, 1)
-                    replyData = history?.pop()
-                } else if (!e.isGroup && e.friend?.getChatHistory) {
-                    const history = await e.friend.getChatHistory(seq, 1)
-                    replyData = history?.pop()
+                // 群聊
+                if (e.isGroup || e.group_id) {
+                    // 尝试 group.getMsg
+                    if (e.group?.getMsg) {
+                        try {
+                            parseLog.push(`[Reply] 尝试 group.getMsg(${seq})`)
+                            replyData = await e.group.getMsg(seq)
+                            if (replyData) parseLog.push(`[Reply] group.getMsg 成功`)
+                        } catch (err) {
+                            parseLog.push(`[Reply] group.getMsg 失败: ${err.message}`)
+                        }
+                    }
+                    // 回退: group.getChatHistory
+                    if (!replyData && e.group?.getChatHistory) {
+                        try {
+                            parseLog.push(`[Reply] 尝试 group.getChatHistory(${seq})`)
+                            const history = await e.group.getChatHistory(seq, 1)
+                            replyData = history?.pop?.() || history?.[0]
+                            if (replyData) parseLog.push(`[Reply] group.getChatHistory 成功`)
+                        } catch (err) {
+                            parseLog.push(`[Reply] group.getChatHistory 失败: ${err.message}`)
+                        }
+                    }
+                    // 回退: bot.getMsg (NC)
+                    if (!replyData && e.bot?.getMsg) {
+                        try {
+                            parseLog.push(`[Reply] 尝试 bot.getMsg(${seq})`)
+                            replyData = await e.bot.getMsg(seq)
+                            if (replyData) parseLog.push(`[Reply] bot.getMsg 成功`)
+                        } catch (err) {
+                            parseLog.push(`[Reply] bot.getMsg 失败: ${err.message}`)
+                        }
+                    }
+                } 
+                // 私聊
+                else if (e.friend?.getChatHistory) {
+                    try {
+                        parseLog.push(`[Reply] 尝试 friend.getChatHistory(${seq})`)
+                        const history = await e.friend.getChatHistory(seq, 1)
+                        replyData = history?.pop?.() || history?.[0]
+                        if (replyData) parseLog.push(`[Reply] friend.getChatHistory 成功`)
+                    } catch (err) {
+                        parseLog.push(`[Reply] friend.getChatHistory 失败: ${err.message}`)
+                    }
                 }
+                
                 if (replyData) {
-                    replySenderId = replyData.user_id || replyData.sender?.user_id
-                    replySenderName = replyData.sender?.card || replyData.sender?.nickname || replyData.nickname
+                    // 兼容 NC 格式
+                    const replyInfo = replyData.data || replyData
+                    replySenderId = replyInfo.user_id || replyInfo.sender?.user_id || replyData.user_id
+                    replySenderName = replyInfo.sender?.card || replyInfo.sender?.nickname || 
+                                      replyInfo.nickname || replyData.nickname
                 }
             }
         }
+        
+        // 方式3: 直接使用 e.source 中的信息 (部分平台 source 包含完整消息)
+        if (!replyData && e.source?.message) {
+            parseLog.push(`[Reply] 使用 e.source 中的消息数据`)
+            replyData = e.source
+            replySenderId = e.source.user_id
+            replySenderName = e.source.nickname
+        }
 
-        const replyMessage = replyData?.message
-        if (!replyMessage) {
+        // 提取消息内容 - 兼容多种格式
+        const replyInfo = replyData?.data || replyData || {}
+        let replyMessage = replyInfo.message || replyInfo.content || replyData?.message || replyData?.content
+        
+        // 确保是数组
+        if (replyMessage && !Array.isArray(replyMessage)) {
+            if (typeof replyMessage === 'string') {
+                replyMessage = [{ type: 'text', data: { text: replyMessage } }]
+            } else {
+                replyMessage = []
+            }
+        }
+        
+        parseLog.push(`[Reply] 消息内容: ${replyMessage ? `${replyMessage.length} 段` : '无'}`)
+        
+        if (!replyMessage || replyMessage.length === 0) {
+            logger.info('[MessageParser]', parseLog.join('\n'))
             return { text: '', contents: [], quoteInfo: null }
         }
 
@@ -338,30 +421,39 @@ async function parseReplyMessage(e, options) {
         const isQuotingBot = replySenderId && botId && String(replySenderId) === String(botId)
         const senderLabel = isQuotingBot ? 'AI助手' : (replySenderName || '用户')
 
-        // 解析引用消息内容
+        // 解析引用消息内容 - 兼容 NC 格式
         let replyTextContent = ''
         for (const val of replyMessage) {
-            switch (val.type) {
+            // NC 格式: { type: 'xxx', data: {...} }
+            const valData = val.data || val
+            const valType = val.type || ''
+            
+            switch (valType) {
                 case 'text':
                     if (handleReplyText) {
-                        replyTextContent += val.text || ''
+                        // NC: valData.text, icqq: val.text
+                        replyTextContent += valData.text || val.text || ''
                     }
                     break
                 
                 case 'image':
                     if (handleReplyImage) {
                         try {
-                            const imageData = await fetchImage(val.url)
-                            if (imageData) {
-                                contents.push({
-                                    type: 'image',
-                                    image: imageData.base64,
-                                    mimeType: imageData.mimeType,
-                                    source: 'reply'
-                                })
+                            // NC: valData.url/file, icqq: val.url
+                            const imgUrl = valData.url || valData.file || val.url || val.file
+                            if (imgUrl) {
+                                const imageData = await fetchImage(imgUrl)
+                                if (imageData) {
+                                    contents.push({
+                                        type: 'image',
+                                        image: imageData.base64,
+                                        mimeType: imageData.mimeType,
+                                        source: 'reply'
+                                    })
+                                }
                             }
                         } catch (err) {
-                            logger.warn(`[MessageParser] 获取引用图片失败: ${val.url}`, err.message)
+                            logger.warn(`[MessageParser] 获取引用图片失败: ${valData.url || val.url}`, err.message)
                         }
                     }
                     break
@@ -369,24 +461,37 @@ async function parseReplyMessage(e, options) {
                 case 'file':
                     if (handleReplyFile) {
                         let fileUrl = ''
+                        const fid = valData.fid || val.fid
                         try {
-                            if (e.group?.getFileUrl) {
-                                fileUrl = await e.group.getFileUrl(val.fid)
-                            } else if (e.friend?.getFileUrl) {
-                                fileUrl = await e.friend.getFileUrl(val.fid)
+                            if (e.group?.getFileUrl && fid) {
+                                fileUrl = await e.group.getFileUrl(fid)
+                            } else if (e.friend?.getFileUrl && fid) {
+                                fileUrl = await e.friend.getFileUrl(fid)
                             }
                         } catch {}
-                        // 包含文件名和URL（如果有）
-                        const fileName = val.name || val.fid || '未知文件'
+                        const fileName = valData.name || val.name || fid || '未知文件'
                         replyTextContent += `[文件: ${fileName}${fileUrl ? ' URL:' + fileUrl : ''}]`
                     }
                     break
                 
-                case 'video':
-                    // 视频消息
-                    const videoUrl = val.url || val.file || ''
-                    replyTextContent += `[视频${val.name ? ':' + val.name : ''}${videoUrl ? ' URL:' + videoUrl : ''}]`
+                case 'video': {
+                    const videoUrl = valData.url || valData.file || val.url || val.file || ''
+                    const videoName = valData.name || val.name
+                    replyTextContent += `[视频${videoName ? ':' + videoName : ''}${videoUrl ? ' URL:' + videoUrl : ''}]`
                     break
+                }
+                
+                case 'face': {
+                    const faceId = valData.id || val.id || ''
+                    replyTextContent += `[表情:${faceId}]`
+                    break
+                }
+                
+                case 'at': {
+                    const atQQ = valData.qq || val.qq || ''
+                    replyTextContent += `@${atQQ} `
+                    break
+                }
                 
                 case 'forward':
                     if (handleForward) {
@@ -395,7 +500,6 @@ async function parseReplyMessage(e, options) {
                             if (fwdResult.text) {
                                 replyTextContent += fwdResult.text
                             }
-                            // 添加转发消息中的图片
                             if (fwdResult.contents?.length > 0) {
                                 contents.push(...fwdResult.contents)
                             }
@@ -409,18 +513,18 @@ async function parseReplyMessage(e, options) {
                     break
                 
                 case 'json':
-                    // 检查是否是合并转发消息
                     if (handleForward) {
                         try {
-                            const jsonData = JSON.parse(val.data)
+                            // NC: valData.data 可能是字符串或对象
+                            const jsonStr = valData.data || val.data
+                            const jsonData = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr
                             if (jsonData.app === 'com.tencent.multimsg') {
                                 const resid = jsonData.meta?.detail?.resid
-                                if (resid && e.group?.getForwardMsg) {
+                                if (resid) {
                                     const fwdResult = await parseForwardMessage(e, { id: resid, resid })
                                     if (fwdResult.text) {
                                         replyTextContent += fwdResult.text
                                     }
-                                    // 添加转发消息中的图片
                                     if (fwdResult.contents?.length > 0) {
                                         contents.push(...fwdResult.contents)
                                     }
@@ -440,12 +544,23 @@ async function parseReplyMessage(e, options) {
                         }
                     }
                     break
+                    
+                default:
+                    // 其他未知类型
+                    if (valType) {
+                        replyTextContent += `[${valType}]`
+                    }
+                    break
             }
         }
 
+        parseLog.push(`[Reply] 解析完成, 文本长度: ${replyTextContent.length}, 图片数: ${contents.length}`)
+        
+        // 输出解析日志
+        logger.info('[MessageParser]', parseLog.join('\n'))
+
         // 构建引用上下文，明确标注发送者身份
         if (replyTextContent) {
-            // 清理引用内容中的CQ码
             replyTextContent = cleanCQCode(replyTextContent)
             if (isQuotingBot) {
                 text = `[用户引用了你(AI助手)之前的回复]\n"${replyTextContent}"\n\n[用户针对上述引用的提问]\n`
@@ -459,13 +574,13 @@ async function parseReplyMessage(e, options) {
             sender: {
                 user_id: replySenderId,
                 nickname: replySenderName,
-                card: replyData?.sender?.card || '',
-                role: replyData?.sender?.role || 'member'
+                card: replyData?.sender?.card || replyInfo?.sender?.card || '',
+                role: replyData?.sender?.role || replyInfo?.sender?.role || 'member'
             },
             content: replyTextContent,
             isBot: isQuotingBot,
-            time: replyData?.time,
-            seq: replyData?.seq
+            time: replyData?.time || replyInfo?.time,
+            seq: replyData?.seq || replyInfo?.seq
         }
         
         return { text, contents, quoteInfo }
@@ -478,65 +593,177 @@ async function parseReplyMessage(e, options) {
 
 /**
  * 解析转发消息
+ * 支持多平台: icqq, NapCat(NC), TRSS 等
  */
 async function parseForwardMessage(e, forwardElement) {
     const contents = []
     let text = ''
     let forwardInfo = null
+    const parseLog = [] // 解析日志
 
     try {
         // 尝试获取转发消息内容 - 支持多种方式
         let forwardMessages = null
+        let parseMethod = ''
         
-        // 方式1: 直接包含 content
-        if (forwardElement.content) {
+        parseLog.push(`[Forward] 开始解析转发消息, element keys: ${Object.keys(forwardElement || {}).join(', ')}`)
+        if (forwardElement.content && Array.isArray(forwardElement.content)) {
             forwardMessages = forwardElement.content
-        } 
-        // 方式2: 通过 id 获取 (icqq e.group.getForwardMsg)
-        else if (forwardElement.id && e.group?.getForwardMsg) {
-            forwardMessages = await e.group.getForwardMsg(forwardElement.id)
+            parseMethod = 'direct_content'
+            parseLog.push(`[Forward] 使用 direct_content 方式, 消息数: ${forwardMessages.length}`)
         }
-        // 方式3: 通过 resid 获取 (TRSS)
+        else if (forwardElement.data?.content && Array.isArray(forwardElement.data.content)) {
+            forwardMessages = forwardElement.data.content
+            parseMethod = 'data_content'
+            parseLog.push(`[Forward] 使用 data_content 方式, 消息数: ${forwardMessages.length}`)
+        }
+        // 方式3: 通过 id 获取 (icqq e.group.getForwardMsg)
+        else if (forwardElement.id && e.group?.getForwardMsg) {
+            parseLog.push(`[Forward] 尝试通过 id=${forwardElement.id} 获取`)
+            try {
+                forwardMessages = await e.group.getForwardMsg(forwardElement.id)
+                parseMethod = 'group_getForwardMsg_id'
+                parseLog.push(`[Forward] 通过 id 获取成功, 消息数: ${forwardMessages?.length || 0}`)
+            } catch (err) {
+                parseLog.push(`[Forward] 通过 id 获取失败: ${err.message}`)
+            }
+        }
+        // 方式4: 通过 data.id 获取 (NC 格式)
+        else if (forwardElement.data?.id && e.group?.getForwardMsg) {
+            parseLog.push(`[Forward] 尝试通过 data.id=${forwardElement.data.id} 获取`)
+            try {
+                forwardMessages = await e.group.getForwardMsg(forwardElement.data.id)
+                parseMethod = 'group_getForwardMsg_data_id'
+                parseLog.push(`[Forward] 通过 data.id 获取成功, 消息数: ${forwardMessages?.length || 0}`)
+            } catch (err) {
+                parseLog.push(`[Forward] 通过 data.id 获取失败: ${err.message}`)
+            }
+        }
+        // 方式5: 通过 resid 获取 (TRSS)
         else if (forwardElement.resid && e.group?.getForwardMsg) {
-            forwardMessages = await e.group.getForwardMsg(forwardElement.resid)
+            parseLog.push(`[Forward] 尝试通过 resid=${forwardElement.resid} 获取`)
+            try {
+                forwardMessages = await e.group.getForwardMsg(forwardElement.resid)
+                parseMethod = 'group_getForwardMsg_resid'
+                parseLog.push(`[Forward] 通过 resid 获取成功, 消息数: ${forwardMessages?.length || 0}`)
+            } catch (err) {
+                parseLog.push(`[Forward] 通过 resid 获取失败: ${err.message}`)
+            }
+        }
+        // 方式6: 通过 bot.getForwardMsg 获取 (全局方法)
+        if (!forwardMessages && e.bot?.getForwardMsg) {
+            const fwdId = forwardElement.id || forwardElement.data?.id || forwardElement.resid
+            if (fwdId) {
+                parseLog.push(`[Forward] 尝试通过 bot.getForwardMsg id=${fwdId} 获取`)
+                try {
+                    forwardMessages = await e.bot.getForwardMsg(fwdId)
+                    parseMethod = 'bot_getForwardMsg'
+                    parseLog.push(`[Forward] 通过 bot.getForwardMsg 获取成功, 消息数: ${forwardMessages?.length || 0}`)
+                } catch (err) {
+                    parseLog.push(`[Forward] 通过 bot.getForwardMsg 获取失败: ${err.message}`)
+                }
+            }
         }
 
         if (forwardMessages && Array.isArray(forwardMessages)) {
             const forwardTexts = []
             const parsedMessages = []
             
+            parseLog.push(`[Forward] 开始解析 ${forwardMessages.length} 条消息, 方法: ${parseMethod}`)
+            
             // 最多处理15条转发消息
-            for (const msg of forwardMessages.slice(0, 15)) {
+            for (let i = 0; i < Math.min(forwardMessages.length, 15); i++) {
+                const msg = forwardMessages[i]
+                
+                // NC/NapCat 兼容: 消息可能在 msg 或 msg.data 中
+                const msgData = msg.data || msg
+                
+                // 提取用户信息 - 兼容多种格式
+                const userId = msgData.user_id || msgData.uin || msgData.sender?.user_id || msg.user_id || ''
+                const nickname = msgData.nickname || msgData.nick || msgData.sender?.nickname || 
+                                 msgData.sender?.card || msg.nickname || msg.nick || `用户${userId || i}`
+                const time = msgData.time || msg.time || 0
+                
+                // 提取消息内容 - 兼容多种格式
+                // NC 格式: msg.data.content 或 msg.content
+                // icqq 格式: msg.message
+                let messageContent = msgData.content || msgData.message || msg.message || msg.content || []
+                
+                // 确保是数组
+                if (!Array.isArray(messageContent)) {
+                    if (typeof messageContent === 'string') {
+                        messageContent = [{ type: 'text', data: { text: messageContent } }]
+                    } else {
+                        messageContent = []
+                    }
+                }
+                
+                parseLog.push(`[Forward] 消息 ${i}: user=${userId}, nick=${nickname}, content_len=${messageContent.length}`)
+                
                 const msgInfo = {
-                    user_id: msg.user_id,
-                    nickname: msg.nickname || '未知',
-                    time: msg.time,
+                    user_id: userId,
+                    nickname: nickname,
+                    time: time,
                     content: []
                 }
                 
-                if (msg.message) {
-                    for (const val of msg.message) {
-                        if (val.type === 'text') {
-                            forwardTexts.push(`${msg.nickname || '未知'}: ${val.text}`)
-                            msgInfo.content.push({ type: 'text', text: val.text })
-                        } else if (val.type === 'image') {
-                            // 图片直接传递给模型解析
-                            const imgUrl = val.url || val.file || ''
-                            forwardTexts.push(`${msg.nickname || '未知'}: [图片]`)
-                            msgInfo.content.push({ type: 'image', url: imgUrl })
-                            // 添加到 contents 供模型直接解析
-                            if (imgUrl) {
-                                contents.push({
-                                    type: 'image_url',
-                                    image_url: { url: imgUrl },
-                                    source: 'forward'  // 标记来源
-                                })
-                            }
-                        } else if (val.type === 'forward') {
-                            // 嵌套转发
-                            forwardTexts.push(`${msg.nickname || '未知'}: [嵌套转发消息]`)
-                            msgInfo.content.push({ type: 'forward', nested: true })
+                for (const val of messageContent) {
+                    // NC 格式: val.data.text, icqq 格式: val.text
+                    const valData = val.data || val
+                    const valType = val.type || ''
+                    
+                    if (valType === 'text') {
+                        const textContent = valData.text || valData || ''
+                        if (textContent) {
+                            forwardTexts.push(`${nickname}: ${textContent}`)
+                            msgInfo.content.push({ type: 'text', text: textContent })
                         }
+                    } else if (valType === 'image') {
+                        // 图片 URL 兼容多种格式
+                        const imgUrl = valData.url || valData.file || val.url || val.file || ''
+                        forwardTexts.push(`${nickname}: [图片]`)
+                        msgInfo.content.push({ type: 'image', url: imgUrl })
+                        if (imgUrl) {
+                            contents.push({
+                                type: 'image_url',
+                                image_url: { url: imgUrl },
+                                source: 'forward'
+                            })
+                        }
+                    } else if (valType === 'face') {
+                        const faceId = valData.id || val.id || ''
+                        forwardTexts.push(`${nickname}: [表情:${faceId}]`)
+                        msgInfo.content.push({ type: 'face', id: faceId })
+                    } else if (valType === 'at') {
+                        const atQQ = valData.qq || val.qq || ''
+                        forwardTexts.push(`${nickname}: @${atQQ}`)
+                        msgInfo.content.push({ type: 'at', qq: atQQ })
+                    } else if (valType === 'forward') {
+                        forwardTexts.push(`${nickname}: [嵌套转发消息]`)
+                        msgInfo.content.push({ type: 'forward', nested: true })
+                    } else if (valType === 'file') {
+                        const fileName = valData.name || val.name || '文件'
+                        forwardTexts.push(`${nickname}: [文件:${fileName}]`)
+                        msgInfo.content.push({ type: 'file', name: fileName })
+                    } else if (valType === 'video') {
+                        forwardTexts.push(`${nickname}: [视频]`)
+                        msgInfo.content.push({ type: 'video' })
+                    } else if (valType === 'record') {
+                        forwardTexts.push(`${nickname}: [语音]`)
+                        msgInfo.content.push({ type: 'record' })
+                    } else if (valType) {
+                        // 其他类型
+                        forwardTexts.push(`${nickname}: [${valType}]`)
+                        msgInfo.content.push({ type: valType })
+                    }
+                }
+                
+                // 如果没有解析出任何内容，尝试获取 raw_message
+                if (msgInfo.content.length === 0) {
+                    const rawMsg = msgData.raw_message || msg.raw_message || ''
+                    if (rawMsg) {
+                        forwardTexts.push(`${nickname}: ${rawMsg}`)
+                        msgInfo.content.push({ type: 'text', text: rawMsg })
                     }
                 }
                 
@@ -545,20 +772,33 @@ async function parseForwardMessage(e, forwardElement) {
             
             if (forwardTexts.length > 0) {
                 text = `[转发消息内容 共${forwardMessages.length}条]\n${forwardTexts.join('\n')}\n[转发消息结束]\n`
+            } else {
+                text = `[转发消息 共${forwardMessages.length}条，内容解析为空]\n`
+                parseLog.push(`[Forward] 警告: 转发消息内容解析为空`)
             }
             
             // 构建转发信息对象
             forwardInfo = {
                 total: forwardMessages.length,
                 parsed: parsedMessages.length,
+                method: parseMethod,
                 messages: parsedMessages
             }
+            
+            parseLog.push(`[Forward] 解析完成, 共 ${parsedMessages.length} 条, 文本行数: ${forwardTexts.length}`)
         } else {
             text = '[转发消息]'
+            parseLog.push(`[Forward] 未能获取转发消息内容`)
         }
     } catch (err) {
+        parseLog.push(`[Forward] 解析失败: ${err.message}`)
         logger.warn('[MessageParser] 解析转发消息失败:', err.message)
         text = '[转发消息]'
+    }
+    
+    // 输出解析日志
+    if (parseLog.length > 0) {
+        logger.info('[MessageParser]', parseLog.join('\n'))
     }
 
     return { text, contents, forwardInfo }

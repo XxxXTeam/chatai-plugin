@@ -208,10 +208,6 @@ export class BuiltinMcpServer {
                     logger.warn(`[BuiltinMCP] ✗ No default export in ${file}`)
                     continue
                 }
-                
-                // 兼容两种格式：
-                // 1. 类格式: { name, function: { name, description, parameters }, run() }
-                // 2. 简单对象: { name, function/description/parameters, run() }
                 const toolName = tool.name || tool.function?.name
                 const hasRun = typeof tool.run === 'function'
                 
@@ -2026,85 +2022,260 @@ export class BuiltinMcpServer {
 
             {
                 name: 'get_reply_message',
-                description: '获取当前消息引用/回复的原消息详情',
+                description: '获取当前消息引用/回复的原消息详情，支持多平台(icqq/NC/TRSS)',
                 inputSchema: {
                     type: 'object',
                     properties: {}
                 },
                 handler: async (args, ctx) => {
                     const e = ctx.getEvent()
+                    const parseLog = [] // 解析日志
+                    
                     if (!e) {
                         return { success: false, error: '没有可用的会话上下文' }
                     }
 
-                    if (!e.source) {
+                    // NC/NapCat 兼容: 检查多种引用消息来源
+                    // icqq: e.source
+                    // NC: e.reply 或 message 中的 reply 段
+                    let source = e.source
+                    let replyMsgId = null
+                    
+                    parseLog.push(`[GetReply] 开始解析, hasSource=${!!source}, hasReply=${!!e.reply}, reply_id=${e.reply_id || 'none'}`)
+                    
+                    // 尝试从 message 中获取 reply 段 (NC 格式)
+                    if (!source && e.message) {
+                        const replySegment = e.message.find(m => m.type === 'reply')
+                        if (replySegment) {
+                            // NC 格式: { type: 'reply', data: { id: 'xxx' } }
+                            replyMsgId = replySegment.data?.id || replySegment.id
+                            parseLog.push(`[GetReply] 从 message 中找到 reply 段, id=${replyMsgId}`)
+                        }
+                    }
+                    
+                    // 使用 e.reply_id (部分平台)
+                    if (!source && !replyMsgId && e.reply_id) {
+                        replyMsgId = e.reply_id
+                        parseLog.push(`[GetReply] 使用 e.reply_id=${replyMsgId}`)
+                    }
+
+                    if (!source && !replyMsgId) {
+                        logger.info('[GetReply] 当前消息没有引用')
                         return { success: true, has_reply: false, message: '当前消息没有引用其他消息' }
                     }
 
                     const bot = ctx.getBot()
-                    const source = e.source
 
-                    // 尝试获取完整的引用消息
+                    // 尝试获取完整的引用消息 - 多种方式回退
                     let fullMessage = null
-                    try {
-                        if (e.group_id) {
-                            const group = bot.pickGroup(e.group_id)
-                            fullMessage = await group.getMsg(source.seq || source.message_id)
-                        } else {
-                            const friend = bot.pickFriend(e.user_id)
-                            fullMessage = await friend.getMsg(source.seq || source.message_id)
+                    const tryMethods = []
+                    
+                    // 方式1: 使用 e.getReply() (TRSS/部分平台)
+                    if (!fullMessage && typeof e.getReply === 'function') {
+                        try {
+                            parseLog.push(`[GetReply] 尝试 e.getReply()`)
+                            fullMessage = await e.getReply()
+                            if (fullMessage) {
+                                tryMethods.push('e.getReply()')
+                                parseLog.push(`[GetReply] e.getReply() 成功`)
+                            }
+                        } catch (err) {
+                            parseLog.push(`[GetReply] e.getReply() 失败: ${err.message}`)
                         }
-                    } catch (err) {
-                        // 获取完整消息失败，使用 source 中的信息
                     }
-
+                    
+                    // 方式2: 使用 group.getMsg() 通过 source.seq
+                    if (!fullMessage && source?.seq && e.group_id) {
+                        try {
+                            parseLog.push(`[GetReply] 尝试 group.getMsg(seq=${source.seq})`)
+                            const group = bot.pickGroup(e.group_id)
+                            fullMessage = await group.getMsg(source.seq)
+                            if (fullMessage) {
+                                tryMethods.push('group.getMsg(seq)')
+                                parseLog.push(`[GetReply] group.getMsg(seq) 成功`)
+                            }
+                        } catch (err) {
+                            parseLog.push(`[GetReply] group.getMsg(seq) 失败: ${err.message}`)
+                        }
+                    }
+                    
+                    // 方式3: 使用 group.getMsg() 通过 message_id
+                    if (!fullMessage && (source?.message_id || replyMsgId) && e.group_id) {
+                        const msgId = source?.message_id || replyMsgId
+                        try {
+                            parseLog.push(`[GetReply] 尝试 group.getMsg(id=${msgId})`)
+                            const group = bot.pickGroup(e.group_id)
+                            fullMessage = await group.getMsg(msgId)
+                            if (fullMessage) {
+                                tryMethods.push('group.getMsg(id)')
+                                parseLog.push(`[GetReply] group.getMsg(id) 成功`)
+                            }
+                        } catch (err) {
+                            parseLog.push(`[GetReply] group.getMsg(id) 失败: ${err.message}`)
+                        }
+                    }
+                    
+                    // 方式4: 使用 group.getChatHistory 通过 seq
+                    if (!fullMessage && source?.seq && e.group_id && bot.pickGroup) {
+                        try {
+                            parseLog.push(`[GetReply] 尝试 group.getChatHistory(seq=${source.seq})`)
+                            const group = bot.pickGroup(e.group_id)
+                            if (group.getChatHistory) {
+                                const history = await group.getChatHistory(source.seq, 1)
+                                fullMessage = history?.pop?.() || history?.[0]
+                                if (fullMessage) {
+                                    tryMethods.push('group.getChatHistory')
+                                    parseLog.push(`[GetReply] group.getChatHistory 成功`)
+                                }
+                            }
+                        } catch (err) {
+                            parseLog.push(`[GetReply] group.getChatHistory 失败: ${err.message}`)
+                        }
+                    }
+                    
+                    // 方式5: 使用 bot.getMsg() (NC 全局方法)
+                    if (!fullMessage && replyMsgId && bot.getMsg) {
+                        try {
+                            parseLog.push(`[GetReply] 尝试 bot.getMsg(id=${replyMsgId})`)
+                            fullMessage = await bot.getMsg(replyMsgId)
+                            if (fullMessage) {
+                                tryMethods.push('bot.getMsg')
+                                parseLog.push(`[GetReply] bot.getMsg 成功`)
+                            }
+                        } catch (err) {
+                            parseLog.push(`[GetReply] bot.getMsg 失败: ${err.message}`)
+                        }
+                    }
+                    
+                    // 方式6: 私聊消息
+                    if (!fullMessage && !e.group_id && e.user_id) {
+                        const msgId = source?.seq || source?.message_id || source?.time || replyMsgId
+                        if (msgId) {
+                            try {
+                                parseLog.push(`[GetReply] 尝试 friend.getMsg(id=${msgId})`)
+                                const friend = bot.pickFriend(e.user_id)
+                                fullMessage = await friend.getMsg(msgId)
+                                if (fullMessage) {
+                                    tryMethods.push('friend.getMsg')
+                                    parseLog.push(`[GetReply] friend.getMsg 成功`)
+                                }
+                            } catch (err) {
+                                parseLog.push(`[GetReply] friend.getMsg 失败: ${err.message}`)
+                            }
+                        }
+                    }
+                    
+                    // 输出解析日志
+                    logger.info('[GetReply]', parseLog.join('\n'))
+                    
+                    // 合并 source 和 fullMessage 的信息
+                    const finalSource = source || {}
+                    const finalMsg = fullMessage || {}
+                    
+                    // 兼容 NC 格式: message 可能在 data 字段中
+                    const msgData = finalMsg.data || finalMsg
+                    
+                    // 提取用户信息 - 兼容多种格式
+                    const userId = finalSource.user_id || msgData.user_id || msgData.sender?.user_id || finalMsg.user_id
+                    const nickname = finalSource.nickname || msgData.sender?.nickname || msgData.sender?.card || 
+                                     msgData.nickname || finalMsg.nickname || '未知'
+                    
+                    // 提取消息内容 - 兼容多种格式
+                    let msgArray = finalSource.message || msgData.message || finalMsg.message || []
+                    
+                    // NC 格式可能是 content
+                    if (!Array.isArray(msgArray) || msgArray.length === 0) {
+                        msgArray = msgData.content || finalMsg.content || []
+                    }
+                    
+                    // 确保是数组
+                    if (!Array.isArray(msgArray)) {
+                        msgArray = []
+                    }
+                    
+                    // 解析消息内容 - 兼容 NC 格式
+                    const parseMessageContent = (msgArray) => {
+                        const result = {
+                            text: '',
+                            has_image: false,
+                            images: [],
+                            has_file: false,
+                            files: [],
+                            has_video: false,
+                            videos: [],
+                            has_json: false,
+                            json_cards: [],
+                            has_forward: false,
+                            forward_id: null
+                        }
+                        
+                        for (const m of msgArray) {
+                            // NC 格式: { type: 'xxx', data: {...} }
+                            const mData = m.data || m
+                            const mType = m.type || ''
+                            
+                            if (mType === 'text') {
+                                result.text += mData.text || mData || ''
+                            } else if (mType === 'image') {
+                                result.has_image = true
+                                result.images.push(mData.url || mData.file || m.url || m.file || '')
+                            } else if (mType === 'file') {
+                                result.has_file = true
+                                result.files.push({ 
+                                    name: mData.name || m.name, 
+                                    fid: mData.fid || m.fid, 
+                                    size: mData.size || m.size 
+                                })
+                            } else if (mType === 'video') {
+                                result.has_video = true
+                                result.videos.push({ 
+                                    url: mData.url || m.url, 
+                                    file: mData.file || m.file, 
+                                    name: mData.name || m.name 
+                                })
+                            } else if (mType === 'json') {
+                                result.has_json = true
+                                try {
+                                    const jsonStr = mData.data || m.data || '{}'
+                                    const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr
+                                    result.json_cards.push({ app: data.app, desc: data.desc, prompt: data.prompt })
+                                    // 检查是否是转发消息
+                                    if (data.app === 'com.tencent.multimsg') {
+                                        result.has_forward = true
+                                        result.forward_id = data.meta?.detail?.resid
+                                    }
+                                } catch { 
+                                    result.json_cards.push({ raw: String(mData.data || m.data || '').substring(0, 200) }) 
+                                }
+                            } else if (mType === 'forward') {
+                                result.has_forward = true
+                                result.forward_id = mData.id || m.id || mData.resid || m.resid
+                            }
+                        }
+                        
+                        return result
+                    }
+                    
+                    const content = parseMessageContent(msgArray)
+                    
                     return {
                         success: true,
                         has_reply: true,
-                        message_id: source.message_id || source.seq,
-                        user_id: source.user_id,
-                        nickname: source.nickname,
-                        time: source.time,
-                        seq: source.seq,
-                        raw_message: cleanCQCode(source.raw_message || fullMessage?.raw_message || ''),
-                        message: source.message || fullMessage?.message,
-                        // 解析引用消息中的内容
-                        content: (() => {
-                            // 确保 message 是数组
-                            const msgArray = Array.isArray(source.message) ? source.message 
-                                : Array.isArray(fullMessage?.message) ? fullMessage.message 
-                                : []
-                            return {
-                                text: msgArray
-                                    .filter(m => m.type === 'text')
-                                    .map(m => m.text)
-                                    .join(''),
-                                has_image: msgArray.some(m => m.type === 'image'),
-                                images: msgArray
-                                    .filter(m => m.type === 'image')
-                                    .map(m => m.url || m.file),
-                                // 文件信息
-                                has_file: msgArray.some(m => m.type === 'file'),
-                                files: msgArray
-                                    .filter(m => m.type === 'file')
-                                    .map(m => ({ name: m.name, fid: m.fid, size: m.size })),
-                                // 视频信息
-                                has_video: msgArray.some(m => m.type === 'video'),
-                                videos: msgArray
-                                    .filter(m => m.type === 'video')
-                                    .map(m => ({ url: m.url, file: m.file, name: m.name })),
-                                // JSON卡片（可能是转发消息）
-                                has_json: msgArray.some(m => m.type === 'json'),
-                                json_cards: msgArray
-                                    .filter(m => m.type === 'json')
-                                    .map(m => {
-                                        try {
-                                            const data = JSON.parse(m.data)
-                                            return { app: data.app, desc: data.desc, prompt: data.prompt }
-                                        } catch { return { raw: m.data?.substring(0, 200) } }
-                                    })
-                            }
-                        })()
+                        message_id: finalSource.message_id || msgData.message_id || finalMsg.message_id || replyMsgId,
+                        user_id: userId,
+                        nickname: nickname,
+                        time: finalSource.time || msgData.time || finalMsg.time,
+                        seq: finalSource.seq || msgData.seq || finalMsg.seq,
+                        raw_message: cleanCQCode(finalSource.raw_message || msgData.raw_message || finalMsg.raw_message || ''),
+                        message: msgArray,
+                        content: content,
+                        // 调试信息
+                        _debug: {
+                            methods_tried: tryMethods,
+                            has_source: !!source,
+                            has_full_message: !!fullMessage,
+                            reply_msg_id: replyMsgId
+                        }
                     }
                 }
             },
@@ -2222,33 +2393,134 @@ export class BuiltinMcpServer {
 
             {
                 name: 'get_forward_message',
-                description: '获取合并转发消息的内容',
+                description: '获取合并转发消息的内容，支持多平台(icqq/NC/TRSS)',
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        res_id: { type: 'string', description: '转发消息的res_id' }
+                        res_id: { type: 'string', description: '转发消息的res_id或message_id' },
+                        group_id: { type: 'string', description: '群号（可选，用于回退获取）' }
                     },
                     required: ['res_id']
                 },
                 handler: async (args, ctx) => {
                     const bot = ctx.getBot()
+                    const e = ctx.getEvent()
+                    const parseLog = []
                     
-                    try {
-                        const msgs = await bot.getForwardMsg(args.res_id)
+                    let msgs = null
+                    const resId = args.res_id
+                    const groupId = args.group_id || e?.group_id
+                    
+                    parseLog.push(`[GetForward] 开始获取转发消息, res_id=${resId}, group_id=${groupId || 'none'}`)
+                    
+                    // 方式1: bot.getForwardMsg (标准方式)
+                    if (!msgs && bot.getForwardMsg) {
+                        try {
+                            parseLog.push(`[GetForward] 尝试 bot.getForwardMsg`)
+                            msgs = await bot.getForwardMsg(resId)
+                            if (msgs) parseLog.push(`[GetForward] bot.getForwardMsg 成功, 消息数: ${msgs?.length || 0}`)
+                        } catch (err) {
+                            parseLog.push(`[GetForward] bot.getForwardMsg 失败: ${err.message}`)
+                        }
+                    }
+                    
+                    // 方式2: group.getForwardMsg (群组方法)
+                    if (!msgs && groupId && bot.pickGroup) {
+                        try {
+                            parseLog.push(`[GetForward] 尝试 group.getForwardMsg`)
+                            const group = bot.pickGroup(parseInt(groupId))
+                            if (group.getForwardMsg) {
+                                msgs = await group.getForwardMsg(resId)
+                                if (msgs) parseLog.push(`[GetForward] group.getForwardMsg 成功, 消息数: ${msgs?.length || 0}`)
+                            }
+                        } catch (err) {
+                            parseLog.push(`[GetForward] group.getForwardMsg 失败: ${err.message}`)
+                        }
+                    }
+                    
+                    // 方式3: 尝试作为 message_id 获取 (NC 可能返回的格式)
+                    if (!msgs && bot.getMsg) {
+                        try {
+                            parseLog.push(`[GetForward] 尝试 bot.getMsg 作为消息ID`)
+                            const msgResult = await bot.getMsg(resId)
+                            // 检查是否是转发消息并提取内容
+                            if (msgResult?.message) {
+                                const fwdSegment = msgResult.message.find(m => m.type === 'forward')
+                                if (fwdSegment?.data?.content) {
+                                    msgs = fwdSegment.data.content
+                                    parseLog.push(`[GetForward] 从消息中提取转发内容成功, 消息数: ${msgs?.length || 0}`)
+                                }
+                            }
+                        } catch (err) {
+                            parseLog.push(`[GetForward] bot.getMsg 失败: ${err.message}`)
+                        }
+                    }
+                    
+                    // 输出解析日志
+                    logger.info('[GetForward]', parseLog.join('\n'))
+                    
+                    if (!msgs || !Array.isArray(msgs)) {
+                        return { 
+                            success: false, 
+                            error: '获取转发消息失败，所有方法均失败',
+                            _debug: { parseLog }
+                        }
+                    }
+                    
+                    // 解析消息 - 兼容 NC 格式
+                    const parsedMessages = msgs.map((m, idx) => {
+                        // NC 格式: m.data 或直接 m
+                        const msgData = m.data || m
+                        
+                        // 提取用户信息
+                        const userId = msgData.user_id || msgData.uin || msgData.sender?.user_id || m.user_id || ''
+                        const nickname = msgData.nickname || msgData.nick || msgData.sender?.nickname || 
+                                         msgData.sender?.card || m.nickname || m.nick || `用户${idx}`
+                        const time = msgData.time || m.time || 0
+                        
+                        // 提取消息内容
+                        let messageContent = msgData.content || msgData.message || m.message || m.content || []
+                        if (!Array.isArray(messageContent)) {
+                            if (typeof messageContent === 'string') {
+                                messageContent = [{ type: 'text', data: { text: messageContent } }]
+                            } else {
+                                messageContent = []
+                            }
+                        }
+                        
+                        // 解析消息内容为文本
+                        const textParts = []
+                        for (const val of messageContent) {
+                            const valData = val.data || val
+                            const valType = val.type || ''
+                            
+                            if (valType === 'text') {
+                                textParts.push(valData.text || valData || '')
+                            } else if (valType === 'image') {
+                                textParts.push('[图片]')
+                            } else if (valType === 'face') {
+                                textParts.push(`[表情]`)
+                            } else if (valType === 'at') {
+                                textParts.push(`@${valData.qq || val.qq || ''}`)
+                            } else if (valType) {
+                                textParts.push(`[${valType}]`)
+                            }
+                        }
                         
                         return {
-                            success: true,
-                            count: msgs.length,
-                            messages: msgs.map(m => ({
-                                user_id: m.user_id,
-                                nickname: m.nickname,
-                                time: m.time,
-                                message: m.message,
-                                raw_message: cleanCQCode(m.raw_message || '')
-                            }))
+                            user_id: userId,
+                            nickname: nickname,
+                            time: time,
+                            message: messageContent,
+                            raw_message: cleanCQCode(msgData.raw_message || m.raw_message || textParts.join('') || '')
                         }
-                    } catch (err) {
-                        return { success: false, error: '获取转发消息失败: ' + err.message }
+                    })
+                    
+                    return {
+                        success: true,
+                        count: parsedMessages.length,
+                        messages: parsedMessages,
+                        _debug: { parseLog }
                     }
                 }
             },

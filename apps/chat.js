@@ -132,13 +132,19 @@ export class Chat extends plugin {
       })
       
       // 合并解析结果到消息中
-      const parsedText = parsedMessage.content
+      let parsedText = parsedMessage.content
         ?.filter(c => c.type === 'text')
         ?.map(c => c.text)
         ?.join('') || ''
       
+      // 移除 debug 后缀（如果存在），因为 parseUserMessage 使用原始 e.message
+      if (debugMode && parsedText) {
+        parsedText = parsedText.replace(/\s+debug\s*$/i, '').trim()
+      }
+      
       // 如果解析出的文本比原始 msg 更丰富（包含引用/转发内容），使用解析结果
-      if (parsedText.length > (msg?.length || 0)) {
+      // 但仅当有引用或转发时才替换，避免覆盖已清理的 msg
+      if ((parsedMessage.quote || parsedMessage.forward) && parsedText.length > (msg?.length || 0)) {
         enhancedMsg = parsedText
       } else if (parsedText && !msg) {
         enhancedMsg = parsedText

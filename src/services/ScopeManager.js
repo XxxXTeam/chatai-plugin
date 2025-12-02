@@ -564,7 +564,7 @@ export class ScopeManager {
     
     // 从配置读取优先级顺序
     const { default: config } = await import('../../config/config.js')
-    const priorityOrder = config.get('personality.priority') || ['group', 'group_user', 'user', 'default']
+    const priorityOrder = config.get('personality.priority') || ['group_user', 'user', 'group', 'default']
     
     let effectivePrompt = null
     let effectivePresetId = null
@@ -577,6 +577,14 @@ export class ScopeManager {
       settingsCache.group_user = await this.getGroupUserSettings(groupId, userId)
     }
     settingsCache.user = await this.getUserSettings(userId)
+    
+    // 输出调试日志
+    logger.info(`[ScopeManager] 查询人格配置: groupId=${groupId}, userId=${userId}`)
+    logger.info(`[ScopeManager] 优先级顺序: ${priorityOrder.join(' > ')}`)
+    logger.info(`[ScopeManager] 缓存数据: group_user=${settingsCache.group_user ? '有' : '无'}, group=${settingsCache.group ? '有' : '无'}, user=${settingsCache.user ? '有' : '无'}`)
+    if (settingsCache.group_user) {
+      logger.info(`[ScopeManager] group_user配置: prompt=${settingsCache.group_user.systemPrompt?.substring(0, 50) || '无'}...`)
+    }
 
     // 按优先级顺序查找
     for (const level of priorityOrder) {
@@ -599,9 +607,11 @@ export class ScopeManager {
       }
       
       if (settings) {
+        logger.info(`[ScopeManager] 检查 ${level}: hasPrompt=${!!settings.systemPrompt}, hasPresetId=${!!settings.presetId}`)
         if (!effectivePrompt && settings.systemPrompt) {
           effectivePrompt = settings.systemPrompt
           source = level
+          logger.info(`[ScopeManager] 使用 ${level} 的 systemPrompt`)
         }
         if (!effectivePresetId && settings.presetId) {
           effectivePresetId = settings.presetId
@@ -610,7 +620,7 @@ export class ScopeManager {
       }
     }
 
-    logger.debug(`[ScopeManager] 人格优先级: ${priorityOrder.join(' > ')}, 生效来源: ${source}`)
+    logger.info(`[ScopeManager] 最终生效来源: ${source}, hasPrompt=${!!effectivePrompt}`)
 
     return {
       systemPrompt: effectivePrompt,

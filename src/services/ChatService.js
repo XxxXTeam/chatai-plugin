@@ -188,16 +188,24 @@ export class ChatService {
         
         try {
             const scopeGroupId = event?.group_id?.toString() || null
-            const independentResult = await sm.getIndependentPrompt(scopeGroupId, userId, defaultPrompt)
+            // 从 event 获取原始 userId，而不是使用组合的 fullUserId
+            // 因为数据库中存储的是纯 userId，不带群号前缀
+            const scopeUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
+            // 如果 userId 包含下划线（fullUserId 格式），提取纯 userId
+            const pureUserId = scopeUserId.includes('_') ? scopeUserId.split('_').pop() : scopeUserId
+            
+            logger.info(`[ChatService] 查询独立人设: groupId=${scopeGroupId}, userId=${pureUserId} (原始: ${userId})`)
+            
+            const independentResult = await sm.getIndependentPrompt(scopeGroupId, pureUserId, defaultPrompt)
             
             // 使用独立人设或默认人设
             systemPrompt = independentResult.prompt
             
             if (independentResult.isIndependent) {
                 logger.info(`[ChatService] 使用独立人设 (来源: ${independentResult.source}, 优先级: ${independentResult.priorityOrder?.join(' > ') || 'default'})`)
-                logger.debug(`[ChatService] 独立人设内容前100字: ${systemPrompt.substring(0, 100)}...`)
+                logger.info(`[ChatService] 独立人设内容前100字: ${systemPrompt.substring(0, 100)}...`)
             } else {
-                logger.debug(`[ChatService] 使用默认人设`)
+                logger.info(`[ChatService] 未找到独立人设，使用默认人设`)
             }
         } catch (e) { 
             logger.warn(`[ChatService] 获取独立人设失败:`, e.message) 
