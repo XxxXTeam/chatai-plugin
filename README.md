@@ -56,28 +56,20 @@
 1. **克隆插件到 Yunzai 插件目录**
 
 ```bash
-cd Yunzai-Bot/plugins
-git clone https://github.com/XxxXTeam/chatgpt-plugin.git new-plugin
+git clone --depth=1 https://github.com/XxxXTeam/chatgpt-plugin.git ./plugins/chatgpt-plugin
 ```
 
 2. **安装依赖**
 
 ```bash
-cd new-plugin
+cd plugins/chatgpt-plugin
 pnpm install
 # 或
 npm install
 ```
 
-3. **构建前端面板**
 
-```bash
-cd vue-frontend
-npm install
-npm run build
-```
-
-4. **配置插件**
+3. **配置插件**
 
 编辑 `config/config.yaml`，配置 API 密钥和基础设置：
 
@@ -99,7 +91,7 @@ channels:
     enabled: true
 ```
 
-5. **重启 Yunzai**
+4. **重启 Yunzai**
 
 ```bash
 # 返回 Yunzai 根目录
@@ -427,7 +419,8 @@ channels:
 
 ## 💖 鸣谢
 
-- [Yunzai-Bot](https://github.com/Le-niao/Yunzai-Bot)
+- [Yunzai-Bot](https://gitee.com/Le-niao/Yunzai-Bot)
+- [chatgpt-plugin原库](https://github.com/ikechan8370/chatgpt-plugin/)
 - [OpenAI](https://openai.com/)
 - [Google Gemini](https://ai.google.dev/)
 - [Anthropic Claude](https://www.anthropic.com/)
