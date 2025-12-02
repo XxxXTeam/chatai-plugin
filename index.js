@@ -30,6 +30,17 @@ config.startSync(dataDir)
 const webServer = getWebServer()
 webServer.start()
 
+// 异步初始化 MCP（不阻塞插件加载）
+;(async () => {
+  try {
+    const { mcpManager } = await import('./src/mcp/McpManager.js')
+    await mcpManager.init()
+    logger.info('[MCP] 初始化完成')
+  } catch (err) {
+    logger.error('[MCP] 初始化失败:', err.message)
+  }
+})()
+
 const apps = {}
 
 // Load apps

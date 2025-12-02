@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import { getBotFramework } from '../../utils/bot.js'
 import config from '../../config/config.js'
 import { cleanCQCode } from '../utils/messageParser.js'
@@ -9,6 +10,9 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth'
 import TurndownService from 'turndown'
 import common from '../../../../lib/common/common.js'
 import fetch from 'node-fetch'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 puppeteer.use(StealthPlugin())
 
@@ -159,6 +163,7 @@ export class BuiltinMcpServer {
     constructor() {
         this.name = 'builtin'
         this.tools = this.defineTools()
+        this.jsTools = new Map()  // 存储 JS 文件加载的工具
         this.initialized = false
     }
 
@@ -167,8 +172,63 @@ export class BuiltinMcpServer {
      */
     async init() {
         if (this.initialized) return
+        await this.loadJsTools()
         this.initialized = true
-        logger.info('[BuiltinMCP] Server initialized with', this.tools.length, 'tools')
+        logger.info('[BuiltinMCP] Server initialized with', this.tools.length, 'builtin tools,', this.jsTools.size, 'custom JS tools')
+    }
+
+    /**
+     * 加载 data/tools 目录下的 JS 工具文件
+     */
+    async loadJsTools() {
+        const toolsDir = path.join(__dirname, '../../data/tools')
+        logger.info(`[BuiltinMCP] Loading JS tools from: ${toolsDir}`)
+        
+        if (!fs.existsSync(toolsDir)) {
+            logger.info(`[BuiltinMCP] Tools directory not found, creating: ${toolsDir}`)
+            fs.mkdirSync(toolsDir, { recursive: true })
+            return
+        }
+        
+        const allFiles = fs.readdirSync(toolsDir)
+        // 排除 CustomTool.js 基类文件
+        const files = allFiles.filter(f => f.endsWith('.js') && f !== 'CustomTool.js')
+        logger.info(`[BuiltinMCP] Found ${allFiles.length} files, ${files.length} JS tools: ${files.join(', ') || 'none'}`)
+        
+        for (const file of files) {
+            try {
+                const filePath = path.join(toolsDir, file)
+                logger.info(`[BuiltinMCP] Loading tool file: ${filePath}`)
+                
+                // 动态导入 JS 模块
+                const module = await import(`file://${filePath}`)
+                const tool = module.default
+                
+                if (!tool) {
+                    logger.warn(`[BuiltinMCP] ✗ No default export in ${file}`)
+                    continue
+                }
+                
+                // 兼容两种格式：
+                // 1. 类格式: { name, function: { name, description, parameters }, run() }
+                // 2. 简单对象: { name, function/description/parameters, run() }
+                const toolName = tool.name || tool.function?.name
+                const hasRun = typeof tool.run === 'function'
+                
+                logger.info(`[BuiltinMCP] Module loaded: { name: ${toolName}, run: ${hasRun} }`)
+                
+                if (toolName && hasRun) {
+                    this.jsTools.set(toolName, tool)
+                    logger.info(`[BuiltinMCP] ✓ Loaded JS tool: ${toolName} from ${file}`)
+                } else {
+                    logger.warn(`[BuiltinMCP] ✗ Invalid tool format in ${file}, must have name and run()`)
+                }
+            } catch (error) {
+                logger.error(`[BuiltinMCP] ✗ Failed to load tool ${file}:`, error)
+            }
+        }
+        
+        logger.info(`[BuiltinMCP] JS tools loading complete, total: ${this.jsTools.size}`)
     }
 
     /**
@@ -220,7 +280,7 @@ export class BuiltinMcpServer {
             }))
         }
 
-        // 添加自定义工具
+        // 添加自定义工具（YAML 配置）
         const customTools = this.getCustomTools()
         for (const ct of customTools) {
             tools.push({
@@ -228,6 +288,17 @@ export class BuiltinMcpServer {
                 description: ct.description,
                 inputSchema: ct.inputSchema,
                 isCustom: true
+            })
+        }
+        
+        // 添加 JS 文件工具
+        for (const [name, tool] of this.jsTools) {
+            tools.push({
+                name: name,
+                description: tool.function?.description || tool.description || '',
+                inputSchema: tool.function?.parameters || tool.parameters || { type: 'object', properties: {} },
+                isCustom: true,
+                isJsTool: true
             })
         }
 
@@ -410,7 +481,35 @@ export class BuiltinMcpServer {
         // 创建请求级上下文包装器，优先使用传入的上下文
         const ctx = this.createRequestContext(requestContext)
         
-        // 先检查是否是自定义工具
+        // 先检查是否是 JS 文件工具
+        const jsTool = this.jsTools.get(name)
+        if (jsTool) {
+            logger.info(`[BuiltinMCP] Calling JS tool: ${name}`, args)
+            try {
+                // 设置上下文供工具使用
+                const { asyncLocalStorage } = await import('../core/utils/helpers.js')
+                const chaiteContext = {
+                    getEvent: () => ctx.getEvent?.(),
+                    getBot: () => ctx.getBot?.(),
+                    event: ctx.getEvent?.(),
+                    bot: ctx.getBot?.()
+                }
+                
+                // 在 asyncLocalStorage 中运行，以便工具可以获取上下文
+                const result = await asyncLocalStorage.run(chaiteContext, async () => {
+                    return await jsTool.run(args, chaiteContext)
+                })
+                return this.formatResult(result)
+            } catch (error) {
+                logger.error(`[BuiltinMCP] JS tool error: ${name}`, error)
+                return {
+                    content: [{ type: 'text', text: `Error: ${error.message}` }],
+                    isError: true
+                }
+            }
+        }
+        
+        // 检查是否是 YAML 配置的自定义工具
         const customTools = this.getCustomTools()
         const customTool = customTools.find(t => t.name === name)
         

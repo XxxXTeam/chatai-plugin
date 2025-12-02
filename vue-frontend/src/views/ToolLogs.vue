@@ -1,8 +1,9 @@
 <script setup>
 import { ref, onMounted, h } from 'vue'
-import { NCard, NDataTable, NSpace, NButton, NInput, NSelect, NTag, NModal, NEmpty, NIcon, useMessage, NCode, NDescriptions, NDescriptionsItem } from 'naive-ui'
+import { NCard, NDataTable, NSpace, NButton, NInput, NSelect, NTag, NModal, NEmpty, NIcon, useMessage, NDescriptions, NDescriptionsItem } from 'naive-ui'
 import { SearchOutlined, RefreshOutlined, DeleteOutlined } from '@vicons/material'
 import axios from 'axios'
+import CodeBlock from '../components/CodeBlock.vue'
 
 const message = useMessage()
 const loading = ref(false)
@@ -181,16 +182,17 @@ onMounted(() => {
       </n-descriptions>
 
       <n-card title="请求参数" size="small" style="margin-top: 16px" v-if="selectedLog?.arguments">
-        <n-code :code="formatJson(selectedLog.arguments)" language="json" />
+        <CodeBlock :code="formatJson(selectedLog.arguments)" language="json" />
       </n-card>
 
       <n-card title="返回结果" size="small" style="margin-top: 16px" v-if="selectedLog?.result">
-        <n-code :code="formatJson(selectedLog.result)" language="json" style="max-height: 300px; overflow: auto;" />
+        <CodeBlock :code="formatJson(selectedLog.result)" language="json" max-height="300px" />
       </n-card>
 
       <n-card title="错误信息" size="small" style="margin-top: 16px" v-if="selectedLog?.error">
-        <n-code :code="selectedLog.error" language="text" />
+        <CodeBlock :code="selectedLog.error" language="text" />
       </n-card>
     </n-modal>
   </n-space>
 </template>
+

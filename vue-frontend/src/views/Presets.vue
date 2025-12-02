@@ -1,7 +1,8 @@
 <script setup>
 import { ref, onMounted, h, computed } from 'vue'
-import { NSpace, NCard, NButton, NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber, useMessage, NPopconfirm, NSelect, NSwitch, NTabs, NTabPane, NDynamicTags, NCode, NTag } from 'naive-ui'
+import { NSpace, NCard, NButton, NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber, useMessage, NPopconfirm, NSelect, NSwitch, NTabs, NTabPane, NDynamicTags, NTag } from 'naive-ui'
 import axios from 'axios'
+import CodeBlock from '../components/CodeBlock.vue'
 
 const message = useMessage()
 const presets = ref([])
@@ -509,7 +510,7 @@ onMounted(() => {
 
     <!-- 预览系统提示词 Modal -->
     <n-modal v-model:show="showPromptPreview" preset="card" title="系统提示词预览" style="width: 700px">
-      <n-code :code="builtPrompt" language="markdown" word-wrap />
+      <CodeBlock :code="builtPrompt" :markdown="true" />
     </n-modal>
 
     <!-- 模板库 Modal -->

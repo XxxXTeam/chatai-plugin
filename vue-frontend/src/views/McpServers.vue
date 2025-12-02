@@ -1,13 +1,15 @@
 <script setup>
 import { ref, onMounted, h } from 'vue'
-import { NSpace, NCard, NButton, NDataTable, NModal, NForm, NFormItem, NInput, NSelect, NTag, useMessage, NPopconfirm } from 'naive-ui'
+import { NSpace, NCard, NButton, NDataTable, NModal, NForm, NFormItem, NInput, NSelect, NTag, useMessage, NPopconfirm, NTabPane, NTabs } from 'naive-ui'
 import axios from 'axios'
 
 const message = useMessage()
 const servers = ref([])
 const showModal = ref(false)
+const showImportModal = ref(false)
 const loading = ref(false)
 const formRef = ref(null)
+const importJson = ref('')
 
 const formValue = ref({
   name: '',
@@ -15,7 +17,9 @@ const formValue = ref({
   command: '',
   args: '',
   url: '',
-  env: ''
+  headers: '',
+  env: '',
+  package: ''
 })
 
 const rules = {
@@ -80,7 +84,9 @@ function addServer() {
     command: '',
     args: '',
     url: '',
-    env: ''
+    headers: '',
+    env: '',
+    package: ''
   }
   showModal.value = true
 }
@@ -124,18 +130,34 @@ async function handleSubmit() {
         if (config.type === 'stdio') {
           config.command = formValue.value.command
           if (formValue.value.args) {
-            config.args = formValue.value.args.split(' ')
+            config.args = formValue.value.args.split(' ').filter(a => a)
           }
-          if (formValue.value.env) {
+        } else if (config.type === 'npm') {
+          config.package = formValue.value.package
+          if (formValue.value.args) {
+            config.args = formValue.value.args.split(' ').filter(a => a)
+          }
+        } else {
+          // sse 或 http
+          config.url = formValue.value.url
+          if (formValue.value.headers) {
             try {
-              config.env = JSON.parse(formValue.value.env)
+              config.headers = JSON.parse(formValue.value.headers)
             } catch (e) {
-              message.error('环境变量格式错误 (JSON)')
+              message.error('Headers 格式错误 (JSON)')
               return
             }
           }
-        } else {
-          config.url = formValue.value.url
+        }
+        
+        // 通用环境变量
+        if (formValue.value.env) {
+          try {
+            config.env = JSON.parse(formValue.value.env)
+          } catch (e) {
+            message.error('环境变量格式错误 (JSON)')
+            return
+          }
         }
 
         const res = await axios.post('/api/mcp/servers', {
@@ -151,10 +173,38 @@ async function handleSubmit() {
           message.error(res.data.message)
         }
       } catch (err) {
-        message.error('添加失败')
+        message.error('添加失败: ' + (err.response?.data?.message || err.message))
       }
     }
   })
+}
+
+async function handleImport() {
+  if (!importJson.value.trim()) {
+    message.error('请输入 JSON 配置')
+    return
+  }
+  
+  try {
+    const config = JSON.parse(importJson.value)
+    const res = await axios.post('/api/mcp/import', config)
+    
+    if (res.data.code === 0) {
+      const result = res.data.data
+      message.success(`导入完成: 成功 ${result.success}/${result.total}`)
+      showImportModal.value = false
+      importJson.value = ''
+      fetchServers()
+    } else {
+      message.error(res.data.message)
+    }
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      message.error('JSON 格式错误')
+    } else {
+      message.error('导入失败: ' + (err.response?.data?.message || err.message))
+    }
+  }
 }
 
 onMounted(() => {
@@ -166,11 +216,15 @@ onMounted(() => {
   <n-space vertical>
     <n-card title="MCP 服务器管理">
       <template #header-extra>
-        <n-button type="primary" @click="addServer">添加服务器</n-button>
+        <n-space>
+          <n-button @click="showImportModal = true">导入配置</n-button>
+          <n-button type="primary" @click="addServer">添加服务器</n-button>
+        </n-space>
       </template>
       <n-data-table :columns="columns" :data="servers" />
     </n-card>
 
+    <!-- 添加服务器模态框 -->
     <n-modal v-model:show="showModal" preset="card" title="添加 MCP 服务器" style="width: 600px">
       <n-form ref="formRef" :model="formValue" :rules="rules" label-placement="left" label-width="100">
         <n-form-item label="名称" path="name">
@@ -178,34 +232,79 @@ onMounted(() => {
         </n-form-item>
         <n-form-item label="类型" path="type">
           <n-select v-model:value="formValue.type" :options="[
-            { label: 'Stdio (本地进程)', value: 'stdio' },
+            { label: 'Stdio (本地命令)', value: 'stdio' },
+            { label: 'NPM 包 (npx)', value: 'npm' },
             { label: 'SSE (Server-Sent Events)', value: 'sse' },
             { label: 'HTTP', value: 'http' }
           ]" />
         </n-form-item>
         
+        <!-- stdio 类型 -->
         <template v-if="formValue.type === 'stdio'">
           <n-form-item label="命令" path="command">
-            <n-input v-model:value="formValue.command" placeholder="例如: node, python" />
+            <n-input v-model:value="formValue.command" placeholder="例如: node, npx, python" />
           </n-form-item>
-          <n-form-item label="参数" path="args">
-            <n-input v-model:value="formValue.args" placeholder="空格分隔的参数" />
-          </n-form-item>
-          <n-form-item label="环境变量" path="env">
-            <n-input v-model:value="formValue.env" type="textarea" placeholder='JSON格式, 例如: {"KEY": "VALUE"}' />
+          <n-form-item label="参数">
+            <n-input v-model:value="formValue.args" placeholder="空格分隔，例如: -y @modelcontextprotocol/server-filesystem /" />
           </n-form-item>
         </template>
 
-        <template v-else>
-          <n-form-item label="URL" path="url">
-            <n-input v-model:value="formValue.url" placeholder="服务器地址" />
+        <!-- npm 类型 -->
+        <template v-else-if="formValue.type === 'npm'">
+          <n-form-item label="NPM 包">
+            <n-input v-model:value="formValue.package" placeholder="例如: @upstash/context7-mcp" />
+          </n-form-item>
+          <n-form-item label="参数">
+            <n-input v-model:value="formValue.args" placeholder="空格分隔，例如: --api-key YOUR_KEY" />
           </n-form-item>
         </template>
+
+        <!-- sse/http 类型 -->
+        <template v-else>
+          <n-form-item label="URL">
+            <n-input v-model:value="formValue.url" placeholder="例如: https://mcp.context7.com/mcp" />
+          </n-form-item>
+          <n-form-item label="Headers">
+            <n-input v-model:value="formValue.headers" type="textarea" :rows="2"
+              placeholder='JSON格式，例如: {"Authorization": "Bearer xxx"}' />
+          </n-form-item>
+        </template>
+
+        <!-- 通用环境变量 -->
+        <n-form-item label="环境变量">
+          <n-input v-model:value="formValue.env" type="textarea" :rows="2"
+            placeholder='JSON格式，例如: {"API_KEY": "xxx"}' />
+        </n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showModal = false">取消</n-button>
           <n-button type="primary" @click="handleSubmit">保存</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- 导入配置模态框 -->
+    <n-modal v-model:show="showImportModal" preset="card" title="导入 MCP 配置" style="width: 700px">
+      <n-input v-model:value="importJson" type="textarea" :rows="15"
+        placeholder='{
+  "servers": {
+    "context7": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "filesystem": {
+      "type": "npm",
+      "package": "@modelcontextprotocol/server-filesystem",
+      "args": ["/path/to/dir"]
+    }
+  }
+}' />
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showImportModal = false">取消</n-button>
+          <n-button type="primary" @click="handleImport">导入</n-button>
         </n-space>
       </template>
     </n-modal>

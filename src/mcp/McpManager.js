@@ -1,8 +1,15 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import config from '../../config/config.js'
 import { McpClient } from './McpClient.js'
 import { builtinMcpServer, setBuiltinToolContext } from './BuiltinMcpServer.js'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+// MCP 服务器配置文件路径
+const MCP_SERVERS_FILE = path.join(__dirname, '../../data/mcp-servers.json')
 
 export class McpManager {
     constructor() {
@@ -14,6 +21,42 @@ export class McpManager {
         this.toolLogs = []  // 工具调用日志
         this.maxLogs = 1000 // 最大日志数量
         this.initialized = false
+        this.serversConfig = { servers: {} }
+    }
+
+    /**
+     * 加载 MCP 服务器配置
+     */
+    loadServersConfig() {
+        try {
+            if (fs.existsSync(MCP_SERVERS_FILE)) {
+                const content = fs.readFileSync(MCP_SERVERS_FILE, 'utf-8')
+                this.serversConfig = JSON.parse(content)
+                if (!this.serversConfig.servers) {
+                    this.serversConfig.servers = {}
+                }
+            }
+        } catch (error) {
+            logger.error('[MCP] Failed to load servers config:', error.message)
+            this.serversConfig = { servers: {} }
+        }
+        return this.serversConfig
+    }
+
+    /**
+     * 保存 MCP 服务器配置
+     */
+    saveServersConfig() {
+        try {
+            const dir = path.dirname(MCP_SERVERS_FILE)
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true })
+            }
+            fs.writeFileSync(MCP_SERVERS_FILE, JSON.stringify(this.serversConfig, null, 2), 'utf-8')
+            logger.info('[MCP] Servers config saved')
+        } catch (error) {
+            logger.error('[MCP] Failed to save servers config:', error.message)
+        }
     }
 
     /**
@@ -24,6 +67,9 @@ export class McpManager {
 
         // 初始化内置 MCP 服务器
         await this.initBuiltinServer()
+        
+        // 初始化自定义工具服务器 (data/tools)
+        await this.initCustomToolsServer()
 
         const mcpConfig = config.get('mcp')
         if (!mcpConfig?.enabled) {
@@ -38,19 +84,22 @@ export class McpManager {
     }
 
     /**
-     * 初始化内置 MCP 服务器
+     * 初始化内置 MCP 服务器（不包含 JS 工具）
      */
     async initBuiltinServer() {
         try {
             await builtinMcpServer.init()
             
-            // 注册内置工具
-            const tools = builtinMcpServer.listTools()
-            for (const tool of tools) {
+            // 只注册内置工具（排除 JS 工具）
+            const allTools = builtinMcpServer.listTools()
+            const builtinTools = allTools.filter(t => !t.isJsTool)
+            
+            for (const tool of builtinTools) {
                 this.tools.set(tool.name, {
                     ...tool,
                     serverName: 'builtin',
-                    isBuiltin: true
+                    isBuiltin: !tool.isCustom,
+                    isCustom: tool.isCustom || false
                 })
             }
 
@@ -59,16 +108,58 @@ export class McpManager {
                 status: 'connected',
                 config: { type: 'builtin' },
                 client: null,
-                tools,
+                tools: builtinTools,
                 resources: [],
                 prompts: [],
                 connectedAt: Date.now(),
                 isBuiltin: true
             })
 
-            logger.info(`[MCP] Builtin server initialized with ${tools.length} tools`)
+            logger.info(`[MCP] Builtin server initialized with ${builtinTools.length} tools`)
         } catch (error) {
             logger.error('[MCP] Failed to initialize builtin server:', error)
+        }
+    }
+
+    /**
+     * 初始化自定义工具服务器 (data/tools 目录)
+     */
+    async initCustomToolsServer() {
+        try {
+            const allTools = builtinMcpServer.listTools()
+            const jsTools = allTools.filter(t => t.isJsTool)
+            
+            if (jsTools.length === 0) {
+                logger.info('[MCP] No custom JS tools found in data/tools')
+                return
+            }
+            
+            // 注册 JS 工具
+            for (const tool of jsTools) {
+                this.tools.set(tool.name, {
+                    ...tool,
+                    serverName: 'custom-tools',
+                    isBuiltin: false,
+                    isJsTool: true
+                })
+            }
+
+            // 注册自定义工具服务器
+            this.servers.set('custom-tools', {
+                status: 'connected',
+                config: { type: 'custom', path: 'data/tools' },
+                client: null,
+                tools: jsTools,
+                resources: [],
+                prompts: [],
+                connectedAt: Date.now(),
+                isBuiltin: false,
+                isCustomTools: true
+            })
+
+            logger.info(`[MCP] Custom tools server initialized with ${jsTools.length} tools`)
+        } catch (error) {
+            logger.error('[MCP] Failed to initialize custom tools server:', error)
         }
     }
 
@@ -80,23 +171,53 @@ export class McpManager {
     }
 
     /**
-     * Load servers from configuration
+     * Load servers from configuration (JSON file)
      */
     async loadServers() {
-        const mcpConfig = config.get('mcp')
-        const servers = mcpConfig?.servers || {}
+        // 从 JSON 文件加载配置
+        this.loadServersConfig()
+        const servers = this.serversConfig.servers || {}
 
-        for (const [name, serverConfig] of Object.entries(servers)) {
-            try {
-                await this.connectServer(name, serverConfig)
-            } catch (error) {
-                logger.error(`[MCP] Failed to load server ${name}:`, error.message)
-            }
+        const serverNames = Object.keys(servers)
+        if (serverNames.length === 0) {
+            logger.info('[MCP] No external MCP servers configured')
+            return
         }
+
+        logger.info(`[MCP] Loading ${serverNames.length} external server(s): ${serverNames.join(', ')}`)
+
+        // 异步并行加载所有服务器
+        const results = await Promise.allSettled(
+            serverNames.map(async name => {
+                try {
+                    await this.connectServer(name, servers[name])
+                    return { name, success: true }
+                } catch (error) {
+                    logger.error(`[MCP] Failed to load server ${name}:`, error.message)
+                    return { name, success: false, error: error.message }
+                }
+            })
+        )
+
+        const success = results.filter(r => r.status === 'fulfilled' && r.value.success).length
+        logger.info(`[MCP] Loaded ${success}/${serverNames.length} external servers`)
     }
 
     async connectServer(name, serverConfig) {
         try {
+            // 处理特殊服务器类型
+            if (name === 'builtin') {
+                await this.initBuiltinServer()
+                return { success: true, tools: this.servers.get('builtin')?.tools?.length || 0 }
+            }
+            
+            if (name === 'custom-tools' || serverConfig?.type === 'custom') {
+                // 重新加载 data/tools 目录的 JS 工具
+                await builtinMcpServer.loadJsTools()
+                await this.initCustomToolsServer()
+                return { success: true, tools: this.servers.get('custom-tools')?.tools?.length || 0 }
+            }
+            
             // Disconnect existing server if any
             if (this.servers.has(name)) {
                 await this.disconnectServer(name)
@@ -232,17 +353,18 @@ export class McpManager {
     }
 
     /**
-     * Add a new server
+     * Add a new server (or update if exists)
      */
     async addServer(name, serverConfig) {
+        // 如果已存在，先断开
         if (this.servers.has(name)) {
-            throw new Error(`Server already exists: ${name}`)
+            await this.disconnectServer(name)
         }
 
-        // Save to config
-        const mcpConfig = config.get('mcp') || { enabled: true, servers: {} }
-        mcpConfig.servers[name] = serverConfig
-        config.set('mcp', mcpConfig)
+        // 保存到 JSON 文件
+        this.loadServersConfig()
+        this.serversConfig.servers[name] = serverConfig
+        this.saveServersConfig()
 
         // Connect
         await this.connectServer(name, serverConfig)
@@ -262,10 +384,10 @@ export class McpManager {
             throw new Error('Cannot update builtin server')
         }
 
-        // Update config
-        const mcpConfig = config.get('mcp') || { enabled: true, servers: {} }
-        mcpConfig.servers[name] = serverConfig
-        config.set('mcp', mcpConfig)
+        // 更新 JSON 文件
+        this.loadServersConfig()
+        this.serversConfig.servers[name] = serverConfig
+        this.saveServersConfig()
 
         // Reconnect
         await this.reloadServer(name)
@@ -287,10 +409,10 @@ export class McpManager {
 
         await this.disconnectServer(name)
 
-        // Remove from config
-        const mcpConfig = config.get('mcp') || { enabled: true, servers: {} }
-        delete mcpConfig.servers[name]
-        config.set('mcp', mcpConfig)
+        // 从 JSON 文件删除
+        this.loadServersConfig()
+        delete this.serversConfig.servers[name]
+        this.saveServersConfig()
 
         return true
     }

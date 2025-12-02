@@ -2,10 +2,11 @@
 import { ref, onMounted, computed, h } from 'vue'
 import { 
   NSpace, NCard, NDataTable, NButton, NTag, NInput, NSelect, 
-  NModal, NForm, NFormItem, NSpin, useMessage, NPopconfirm, NCode, NCollapse, NCollapseItem,
+  NModal, NForm, NFormItem, NSpin, useMessage, NPopconfirm, NCollapse, NCollapseItem,
   NSwitch, NDynamicTags, NAlert
 } from 'naive-ui'
 import axios from 'axios'
+import CodeBlock from '../components/CodeBlock.vue'
 
 const message = useMessage()
 const tools = ref([])
@@ -332,7 +333,7 @@ onMounted(() => {
         </div>
         <div>
           <strong>输入参数:</strong>
-          <n-code :code="JSON.stringify(selectedTool.inputSchema || selectedTool.parameters || {}, null, 2)" language="json" />
+          <CodeBlock :code="JSON.stringify(selectedTool.inputSchema || selectedTool.parameters || {}, null, 2)" language="json" />
         </div>
       </n-space>
     </n-modal>
@@ -366,7 +367,7 @@ onMounted(() => {
 
         <div v-if="testResult">
           <strong>测试结果:</strong>
-          <n-code :code="testResult" language="json" style="margin-top: 8px" />
+          <CodeBlock :code="testResult" language="json" style="margin-top: 8px" />
         </div>
       </n-space>
     </n-modal>

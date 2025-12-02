@@ -644,7 +644,8 @@ export class WebServer {
             const allowedSections = [
                 'basic', 'admin', 'llm', 'bym', 'tools', 'builtinTools', 
                 'mcp', 'redis', 'images', 'web', 'context', 'memory', 
-                'presets', 'loadBalancing', 'thinking', 'features', 'streaming', 'listener'
+                'presets', 'loadBalancing', 'thinking', 'features', 'streaming', 'listener',
+                'personality'
             ]
             
             if (!allowedSections.includes(section)) {
@@ -1161,9 +1162,23 @@ export class WebServer {
         })
 
         // GET /api/tools/custom - List custom tools (protected)
-        this.app.get('/api/tools/custom', this.authMiddleware.bind(this), (req, res) => {
-            const customTools = config.get('customTools') || []
-            res.json(ChaiteResponse.ok(customTools))
+        this.app.get('/api/tools/custom', this.authMiddleware.bind(this), async (req, res) => {
+            const yamlTools = config.get('customTools') || []
+            
+            // 获取 JS 文件工具
+            await mcpManager.init()
+            const allTools = mcpManager.getTools()
+            const jsTools = allTools
+                .filter(t => t.isJsTool)
+                .map(t => ({
+                    name: t.name,
+                    description: t.description,
+                    parameters: t.inputSchema,
+                    isJsTool: true,
+                    readonly: true  // JS 工具只读，不能在面板编辑
+                }))
+            
+            res.json(ChaiteResponse.ok([...yamlTools, ...jsTools]))
         })
 
         // POST /api/tools/custom - Add custom tool (protected)
@@ -1313,12 +1328,81 @@ export class WebServer {
         })
 
         // POST /api/mcp/servers - Add MCP server (protected)
+        // 支持两种格式：
+        // 1. { name, config } - 单个服务器
+        // 2. { servers: { name1: config1, name2: config2 } } - 批量导入
         this.app.post('/api/mcp/servers', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { name, config: serverConfig } = req.body
                 await mcpManager.init()
-                const server = await mcpManager.addServer(name, serverConfig)
+                
+                // 批量导入格式（兼容 MCP 标准配置格式）
+                if (req.body.servers && typeof req.body.servers === 'object') {
+                    const results = []
+                    for (const [name, serverConfig] of Object.entries(req.body.servers)) {
+                        try {
+                            const server = await mcpManager.addServer(name, serverConfig)
+                            results.push({ name, success: true, tools: server?.tools?.length || 0 })
+                        } catch (err) {
+                            results.push({ name, success: false, error: err.message })
+                        }
+                    }
+                    return res.status(201).json(ChaiteResponse.ok({ imported: results }))
+                }
+                
+                // 单个服务器格式
+                const { name, config: serverConfig, ...directConfig } = req.body
+                // 支持直接传配置对象（不带 config 包装）
+                const finalConfig = serverConfig || (directConfig.type ? directConfig : null)
+                
+                if (!name || !finalConfig) {
+                    return res.status(400).json(ChaiteResponse.fail(null, 'Missing name or config'))
+                }
+                
+                const server = await mcpManager.addServer(name, finalConfig)
                 res.status(201).json(ChaiteResponse.ok(server))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/mcp/import - Import MCP config (支持完整配置粘贴)
+        // 格式: { "mcp": { "servers": { ... } } } 或 { "servers": { ... } }
+        this.app.post('/api/mcp/import', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                await mcpManager.init()
+                
+                // 支持 { mcp: { servers: {} } } 或 { servers: {} } 格式
+                const servers = req.body.mcp?.servers || req.body.servers
+                
+                if (!servers || typeof servers !== 'object') {
+                    return res.status(400).json(ChaiteResponse.fail(null, 
+                        '无效格式，请使用: { "servers": { "name": { "type": "stdio", ... } } }'))
+                }
+                
+                const results = []
+                for (const [name, serverConfig] of Object.entries(servers)) {
+                    try {
+                        const server = await mcpManager.addServer(name, serverConfig)
+                        results.push({ 
+                            name, 
+                            success: true, 
+                            type: serverConfig.type,
+                            tools: server?.tools?.length || 0 
+                        })
+                        logger.info(`[MCP] Imported server: ${name} (${serverConfig.type})`)
+                    } catch (err) {
+                        results.push({ name, success: false, error: err.message })
+                        logger.error(`[MCP] Failed to import server ${name}:`, err.message)
+                    }
+                }
+                
+                const successCount = results.filter(r => r.success).length
+                res.json(ChaiteResponse.ok({ 
+                    total: results.length,
+                    success: successCount,
+                    failed: results.length - successCount,
+                    results 
+                }))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }

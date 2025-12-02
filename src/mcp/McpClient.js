@@ -9,7 +9,7 @@ import { EventSource } from 'eventsource'
 export class McpClient {
     constructor(config) {
         this.config = config
-        this.type = config.type || 'stdio'
+        this.type = (config.type || 'stdio').toLowerCase()  // 统一小写
         this.process = null
         this.eventSource = null
         this.pendingRequests = new Map()
@@ -26,6 +26,9 @@ export class McpClient {
         try {
             if (this.type === 'stdio') {
                 await this.connectStdio()
+            } else if (this.type === 'npm' || this.type === 'npx') {
+                // npm 包形式的 MCP 服务器，如 @upstash/context7-mcp
+                await this.connectNpm()
             } else if (this.type === 'sse') {
                 await this.connectSSE()
             } else if (this.type === 'http') {
@@ -43,6 +46,44 @@ export class McpClient {
             logger.error(`[MCP] Connection failed:`, error)
             throw error
         }
+    }
+
+    /**
+     * 连接 npm 包形式的 MCP 服务器
+     * 配置示例: { type: 'npm', package: '@upstash/context7-mcp', env: { ... } }
+     */
+    async connectNpm() {
+        if (this.process) return
+
+        const { package: pkg, args = [], env } = this.config
+        
+        if (!pkg) {
+            throw new Error('npm/npx type requires "package" field, e.g. "@upstash/context7-mcp"')
+        }
+
+        const npxArgs = ['-y', pkg, ...args]
+        logger.info(`[MCP] Spawning npm server: npx ${npxArgs.join(' ')}`)
+
+        this.process = spawn('npx', npxArgs, {
+            env: { ...process.env, ...env },
+            stdio: ['pipe', 'pipe', 'pipe'],
+            shell: process.platform === 'win32'
+        })
+
+        this.process.stdout.on('data', (data) => this.handleData(data))
+        this.process.stderr.on('data', (data) => {
+            logger.warn(`[MCP] Server stderr: ${data.toString()}`)
+        })
+
+        this.process.on('close', (code) => {
+            logger.info(`[MCP] Server exited with code ${code}`)
+            this.handleDisconnect()
+        })
+
+        this.process.on('error', (error) => {
+            logger.error(`[MCP] Process error:`, error)
+            this.handleDisconnect()
+        })
     }
 
     async connectStdio() {
@@ -75,6 +116,7 @@ export class McpClient {
 
     async connectSSE() {
         const { url } = this.config
+        this.sseUrl = url  // 保存 URL 用于发送请求
 
         this.eventSource = new EventSource(url)
 
@@ -88,8 +130,14 @@ export class McpClient {
         }
 
         this.eventSource.onerror = (error) => {
-            logger.error(`[MCP] SSE error:`, error)
-            this.handleDisconnect()
+            // 只在需要时记录详细错误
+            if (error.type === 'error') {
+                logger.warn(`[MCP] SSE connection error`)
+            }
+            // 检查连接状态，只有在非正常关闭时才尝试重连
+            if (this.eventSource?.readyState === EventSource.CLOSED) {
+                this.handleDisconnect()
+            }
         }
 
         // Wait for connection
@@ -103,14 +151,10 @@ export class McpClient {
     }
 
     async connectHTTP() {
-        const { url } = this.config
+        const { url, headers } = this.config
         this.httpUrl = url
-
-        // Test connection
-        const response = await fetch(url, { method: 'HEAD' })
-        if (!response.ok) {
-            throw new Error(`HTTP connection failed: ${response.statusText}`)
-        }
+        this.httpHeaders = headers || {}
+        // HTTP 类型不需要预先测试连接，直接在 initialize 时发送请求
     }
 
     handleData(data) {
@@ -270,12 +314,31 @@ export class McpClient {
             try {
                 const message = JSON.stringify(request) + '\n'
 
-                if (this.type === 'stdio' && this.process) {
+                // stdio 和 npm/npx 类型都通过 process.stdin 发送
+                if ((this.type === 'stdio' || this.type === 'npm' || this.type === 'npx') && this.process) {
                     this.process.stdin.write(message)
-                } else if (this.type === 'sse' && this.eventSource) {
-                    // For SSE, we need a separate HTTP endpoint for requests
-                    // This is implementation-specific
-                    throw new Error('SSE request not implemented')
+                } else if (this.type === 'sse') {
+                    // SSE 类型通过 HTTP POST 发送请求
+                    this.sendSSERequest(request).then(response => {
+                        if (response.id === id) {
+                            const pending = this.pendingRequests.get(id)
+                            if (pending) {
+                                this.pendingRequests.delete(id)
+                                if (response.error) {
+                                    pending.reject(new Error(response.error.message || 'SSE request failed'))
+                                } else {
+                                    pending.resolve(response.result)
+                                }
+                            }
+                        }
+                    }).catch(err => {
+                        const pending = this.pendingRequests.get(id)
+                        if (pending) {
+                            this.pendingRequests.delete(id)
+                            pending.reject(err)
+                        }
+                    })
+                    return // SSE 请求是异步处理的
                 }
             } catch (err) {
                 this.pendingRequests.delete(id)
@@ -283,6 +346,29 @@ export class McpClient {
                 reject(err)
             }
         })
+    }
+
+    /**
+     * 发送 SSE 类型的请求（通过 HTTP POST）
+     */
+    async sendSSERequest(request) {
+        const { headers = {} } = this.config
+        const response = await fetch(this.sseUrl, {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Accept': 'application/json, text/event-stream',
+                ...headers 
+            },
+            body: JSON.stringify(request)
+        })
+        
+        if (!response.ok) {
+            const text = await response.text().catch(() => '')
+            throw new Error(`SSE request failed: ${response.status} ${response.statusText} ${text}`)
+        }
+        
+        return await response.json()
     }
 
     async httpRequest(method, params, timeout = 30000) {
@@ -294,6 +380,8 @@ export class McpClient {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json, text/event-stream',
+                    ...this.httpHeaders
                 },
                 body: JSON.stringify({
                     jsonrpc: '2.0',
@@ -307,7 +395,8 @@ export class McpClient {
             clearTimeout(timer)
 
             if (!response.ok) {
-                throw new Error(`HTTP request failed: ${response.statusText}`)
+                const text = await response.text().catch(() => '')
+                throw new Error(`HTTP request failed: ${response.status} ${response.statusText} ${text}`)
             }
 
             const result = await response.json()

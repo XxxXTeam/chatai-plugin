@@ -2,12 +2,14 @@
 import { ref, onMounted, computed, h } from 'vue'
 import { 
   NSpace, NCard, NDataTable, NButton, NTag, NInput, NSelect, 
-  NModal, NForm, NFormItem, NSpin, useMessage, NPopconfirm, NCode, 
+  NModal, NForm, NFormItem, NSpin, useMessage, NPopconfirm, 
   NSwitch, NDynamicTags, NAlert, NTabs, NTabPane, NInputNumber,
   NGrid, NGridItem, NStatistic, NDivider, NCollapse, NCollapseItem,
   NText, NScrollbar
 } from 'naive-ui'
 import axios from 'axios'
+import CodeBlock from '../components/CodeBlock.vue'
+import CodeEditor from '../components/CodeEditor.vue'
 
 const message = useMessage()
 
@@ -982,7 +984,7 @@ onMounted(() => {
         <div><strong>来源:</strong> <n-tag type="info" size="small">{{ selectedTool.serverName || 'builtin' }}</n-tag></div>
         <n-divider />
         <div><strong>输入参数:</strong></div>
-        <n-code :code="JSON.stringify(selectedTool.inputSchema || {}, null, 2)" language="json" />
+        <CodeBlock :code="JSON.stringify(selectedTool.inputSchema || {}, null, 2)" language="json" />
       </n-space>
     </n-modal>
 
@@ -999,7 +1001,7 @@ onMounted(() => {
         </n-space>
         <div v-if="testResult">
           <strong>测试结果:</strong>
-          <n-code :code="testResult" language="json" style="margin-top: 8px" />
+          <CodeBlock :code="testResult" language="json" style="margin-top: 8px" />
         </div>
       </n-space>
     </n-modal>
@@ -1084,10 +1086,10 @@ onMounted(() => {
             <template #header-extra>
               <n-text depth="3" style="font-size: 12px">定义工具接收的参数</n-text>
             </template>
-            <n-input 
-              v-model:value="customToolForm.parameters" 
-              type="textarea" 
-              :rows="8" 
+            <CodeEditor 
+              v-model="customToolForm.parameters" 
+              language="json"
+              :rows="8"
               placeholder='{
   "type": "object",
   "properties": {
@@ -1095,7 +1097,6 @@ onMounted(() => {
   },
   "required": ["param1"]
 }'
-              style="font-family: monospace"
             />
           </n-card>
 
@@ -1106,10 +1107,10 @@ onMounted(() => {
                 <n-text depth="3" style="font-size: 12px">可用变量: args, ctx</n-text>
               </n-space>
             </template>
-            <n-input 
-              v-model:value="customToolForm.handler" 
-              type="textarea" 
-              :rows="15" 
+            <CodeEditor 
+              v-model="customToolForm.handler" 
+              language="javascript"
+              :rows="15"
               placeholder="// 编写工具逻辑
 // args: 用户传入的参数
 // ctx: 上下文对象
@@ -1117,7 +1118,6 @@ onMounted(() => {
 //   - ctx.getEvent(): 获取当前事件
 
 return { text: '结果', data: {} }"
-              style="font-family: monospace"
             />
           </n-card>
 

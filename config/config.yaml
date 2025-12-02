@@ -84,7 +84,10 @@ channels:
     strategy: round-robin
 mcp:
   enabled: true
-  servers: []
+  servers:
+    context7:
+      type: sse
+      url: https://mcp.context7.com/mcp
 redis:
   enabled: true
   host: 127.0.0.1
@@ -134,6 +137,13 @@ presets:
   allowUserSwitch: true
   perUserPreset: false
   perGroupPreset: false
+personality:
+  priority:
+    - group
+    - group_user
+    - user
+    - default
+  useIndependent: true
 loadBalancing:
   strategy: round-robin
 thinking:
@@ -193,39 +203,3 @@ customTools:
       }
     custom: true
     createdAt: 1764500123529
-  - name: current_time
-    description: 获取当前时间信息
-    parameters:
-      type: object
-      properties:
-        format:
-          type: string
-          description: 时间格式
-          enum:
-            - full
-            - date
-            - time
-          default: full
-    handler: |-
-      const now = new Date()
-      const format = args.format || 'full'
-
-      let result
-      switch (format) {
-        case 'date':
-          result = now.toLocaleDateString('zh-CN')
-          break
-        case 'time':
-          result = now.toLocaleTimeString('zh-CN')
-          break
-        default:
-          result = now.toLocaleString('zh-CN')
-      }
-
-      return {
-        text: `当前时间: ${result}`,
-        timestamp: now.getTime(),
-        formatted: result
-      }
-    custom: true
-    createdAt: 1764500190207
