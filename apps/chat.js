@@ -1,5 +1,5 @@
 import config from '../config/config.js'
-import { cleanCQCode } from '../src/utils/messageParser.js'
+import { cleanCQCode, parseUserMessage } from '../src/utils/messageParser.js'
 
 /**
  * 转义正则特殊字符
@@ -115,7 +115,53 @@ export class Chat extends plugin {
       }
     }
 
-    if (!msg && (!e.img || e.img.length === 0)) {
+    // 使用增强的消息解析器解析引用消息和转发消息
+    let parsedMessage = null
+    let enhancedMsg = msg
+    
+    try {
+      parsedMessage = await parseUserMessage(e, {
+        handleReplyText: true,
+        handleReplyImage: true,
+        handleReplyFile: true,
+        handleForward: true,
+        handleAtMsg: true,
+        excludeAtBot: true,
+        includeSenderInfo: true,
+        includeDebugInfo: debugMode
+      })
+      
+      // 合并解析结果到消息中
+      const parsedText = parsedMessage.content
+        ?.filter(c => c.type === 'text')
+        ?.map(c => c.text)
+        ?.join('') || ''
+      
+      // 如果解析出的文本比原始 msg 更丰富（包含引用/转发内容），使用解析结果
+      if (parsedText.length > (msg?.length || 0)) {
+        enhancedMsg = parsedText
+      } else if (parsedText && !msg) {
+        enhancedMsg = parsedText
+      }
+      
+      if (debugMode) {
+        addDebugLog('📝 消息解析', {
+          originalMsg: msg,
+          parsedText: parsedText?.substring(0, 200),
+          hasQuote: !!parsedMessage.quote,
+          hasForward: !!parsedMessage.forward,
+          quoteSender: parsedMessage.quote?.sender?.nickname,
+          quoteContent: parsedMessage.quote?.content?.substring(0, 100),
+          debugInfo: parsedMessage.debug
+        })
+      }
+    } catch (parseErr) {
+      logger.warn('[AI-Chat] 消息解析失败:', parseErr.message)
+      // 回退到原始消息
+      enhancedMsg = msg
+    }
+
+    if (!enhancedMsg && (!e.img || e.img.length === 0)) {
       await this.reply('请输入要说的内容或发送图片', true)
       return true
     }
@@ -153,7 +199,17 @@ export class Chat extends plugin {
         conversationId,
         isolationMode: contextManager.getIsolationMode(),
         message: msg?.substring(0, 100) + (msg?.length > 100 ? '...' : ''),
-        imageCount: e.img?.length || 0
+        imageCount: e.img?.length || 0,
+        // icqq/TRSS 消息信息
+        sender: e.sender ? {
+          user_id: e.sender.user_id,
+          nickname: e.sender.nickname,
+          card: e.sender.card,
+          role: e.sender.role
+        } : null,
+        hasSource: !!e.source,
+        hasForward: e.message?.some(m => m.type === 'forward'),
+        messageSegments: e.message?.map(m => m.type)
       })
 
       // 检查用户是否被封禁（检查 userId 和 fullUserId）
@@ -239,7 +295,7 @@ export class Chat extends plugin {
       // 传递 debug 模式给 ChatService
       const result = await chatService.sendMessage({
         userId: fullUserId,
-        message: msg,
+        message: enhancedMsg,  // 使用enhancedMsg而不是msg，包含引用/转发解析结果
         images: imageIds,
         model: model,
         mode: 'chat',  // 指定模式
@@ -260,7 +316,9 @@ export class Chat extends plugin {
           addDebugLog('📜 上下文摘要', {
             systemPromptPreview: result.debugInfo.context.systemPromptPreview,
             historyLength: result.debugInfo.context.totalHistoryLength,
-            recentMessages: result.debugInfo.context.historyMessages
+            recentMessages: result.debugInfo.context.historyMessages,
+            isolationMode: result.debugInfo.context.isolationMode,
+            hasUserLabels: result.debugInfo.context.hasUserLabels
           })
         }
         
@@ -278,6 +336,16 @@ export class Chat extends plugin {
         if (result.debugInfo.timing) {
           addDebugLog('⏱️ 耗时', `${result.debugInfo.timing.duration}ms`)
         }
+      }
+      
+      // 添加消息解析调试信息 (引用/转发)
+      if (debugMode && e.source) {
+        addDebugLog('💬 引用消息', {
+          hasSource: true,
+          sourceSeq: e.source?.seq,
+          sourceUserId: e.source?.user_id,
+          sourceTime: e.source?.time
+        })
       }
 
       // Extract text and reasoning response

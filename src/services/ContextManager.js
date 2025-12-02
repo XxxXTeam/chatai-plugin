@@ -3,12 +3,19 @@ import config from '../../config/config.js'
 import historyManager from '../core/utils/history.js'
 
 /**
- * Context Manager - Manages user contexts and conversation isolation
+ * Context Manager - 管理用户上下文和会话隔离
+ * 
+ * 支持:
+ * - 用户 uin 标签
+ * - 最多 20 条上文构建请求
+ * - 群聊用户隔离模式
+ * - 多用户消息区分
  */
 export class ContextManager {
     constructor() {
         this.locks = new Map()
         this.initialized = false
+        this.maxContextMessages = 20  // 最多20条上文
     }
 
     /**
@@ -43,18 +50,17 @@ export class ContextManager {
     }
 
     /**
-     * Get conversation ID for proper chat isolation
-     * @param {string} userId - User ID
-     * @param {string} [groupId] - Optional group ID for group chats
-     * @returns {string} Conversation ID
+     * 获取会话ID - 用于上下文隔离
+     * @param {string} userId - 用户 uin
+     * @param {string} [groupId] - 群号
+     * @returns {string} 会话ID
      * 
-     * Isolation strategy (configurable):
-     * - Group chat: 
+     * 隔离策略 (configurable):
+     * - 群聊: 
      *   - groupUserIsolation=false: 群共享上下文（默认）
      *   - groupUserIsolation=true: 每用户独立上下文
-     * - Private chat:
+     * - 私聊:
      *   - privateIsolation=true: 每用户独立上下文（默认）
-     *   - privateIsolation=false: 所有私聊共享上下文
      */
     getConversationId(userId, groupId = null) {
         const isolation = config.get('context.isolation') || {}
@@ -76,6 +82,87 @@ export class ContextManager {
         }
         // 私聊共享（罕见场景）
         return `private:shared`
+    }
+
+    /**
+     * 获取上下文历史 - 限制最多20条
+     * @param {string} conversationId
+     * @param {number} [limit] - 限制数量，默认20
+     * @returns {Promise<Array>} 历史消息
+     */
+    async getContextHistory(conversationId, limit = null) {
+        const maxMessages = limit || config.get('context.maxMessages') || this.maxContextMessages
+        const history = await historyManager.getHistory(undefined, conversationId)
+        
+        // 限制最多返回数量
+        if (history.length > maxMessages) {
+            return history.slice(-maxMessages)
+        }
+        return history
+    }
+
+    /**
+     * 构建带用户标签的上下文消息
+     * 用于多用户群聊场景，AI可以区分不同用户的发言
+     * 
+     * @param {Array} history - 历史消息
+     * @param {Object} currentSender - 当前发送者信息
+     * @returns {Array} 带用户标签的消息
+     */
+    buildLabeledContext(history, currentSender = null) {
+        return history.map((msg, index) => {
+            // 只处理用户消息
+            if (msg.role === 'user') {
+                // 有 sender 信息
+                if (msg.sender && msg.sender.user_id) {
+                    const label = msg.sender.card || msg.sender.nickname || `用户`
+                    const labeledContent = this.addUserLabelToContent(msg.content, label, msg.sender.user_id)
+                    return {
+                        ...msg,
+                        content: labeledContent
+                    }
+                } else {
+                    // 没有 sender 信息的历史消息，添加默认标签
+                    const labeledContent = this.addUserLabelToContent(msg.content, '用户', `历史#${index}`)
+                    return {
+                        ...msg,
+                        content: labeledContent
+                    }
+                }
+            }
+            return msg
+        })
+    }
+
+    /**
+     * 给消息内容添加用户标签
+     * @param {Array|string} content - 消息内容
+     * @param {string} label - 用户标签
+     * @param {number|string} userId - 用户ID
+     * @returns {Array} 带标签的内容
+     */
+    addUserLabelToContent(content, label, userId) {
+        if (!content) return content
+        
+        // 如果是字符串，转换为数组格式
+        if (typeof content === 'string') {
+            return [{ type: 'text', text: `[${label}(${userId})]: ${content}` }]
+        }
+        
+        // 如果是数组，给第一个文本内容添加标签
+        if (Array.isArray(content)) {
+            const labeled = [...content]
+            const textIndex = labeled.findIndex(c => c.type === 'text')
+            if (textIndex >= 0) {
+                labeled[textIndex] = {
+                    ...labeled[textIndex],
+                    text: `[${label}(${userId})]: ${labeled[textIndex].text || ''}`
+                }
+            }
+            return labeled
+        }
+        
+        return content
     }
 
     /**

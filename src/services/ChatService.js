@@ -108,14 +108,24 @@ export class ChatService {
             }
         }
 
-        // Create user message
+        // Create user message - 包含发送者信息用于多用户上下文区分
         const userMessage = {
             role: 'user',
-            content: messageContent
+            content: messageContent,
+            // 添加发送者信息 (icqq/TRSS 兼容)
+            sender: event?.sender ? {
+                user_id: event.user_id || event.sender.user_id,
+                nickname: event.sender.nickname || '用户',
+                card: event.sender.card || '',
+                role: event.sender.role || 'member'
+            } : { user_id: userId, nickname: '用户', card: '', role: 'member' },
+            timestamp: Date.now(),
+            source_type: groupId ? 'group' : 'private',
+            ...(groupId && { group_id: groupId })
         }
 
-        // Get context and history
-        const history = await historyManager.getHistory(undefined, conversationId)
+        // Get context and history - 限制最多20条
+        let history = await contextManager.getContextHistory(conversationId, 20)
         
         // Determine model
         const llmModel = model || LlmService.getModel(mode)
@@ -184,7 +194,10 @@ export class ChatService {
             systemPrompt = independentResult.prompt
             
             if (independentResult.isIndependent) {
-                logger.debug(`[ChatService] 使用独立人设 (来源: ${independentResult.source})`)
+                logger.info(`[ChatService] 使用独立人设 (来源: ${independentResult.source}, 优先级: ${independentResult.priorityOrder?.join(' > ') || 'default'})`)
+                logger.debug(`[ChatService] 独立人设内容前100字: ${systemPrompt.substring(0, 100)}...`)
+            } else {
+                logger.debug(`[ChatService] 使用默认人设`)
             }
         } catch (e) { 
             logger.warn(`[ChatService] 获取独立人设失败:`, e.message) 
@@ -226,7 +239,7 @@ export class ChatService {
 
         // Construct Messages
         // Filter invalid assistant messages
-        const validHistory = history.filter(msg => {
+        let validHistory = history.filter(msg => {
             if (msg.role === 'assistant') {
                 if (!msg.content || msg.content.length === 0) return false
                 if (Array.isArray(msg.content) && msg.content.every(c => !c.text?.trim())) return false
@@ -234,6 +247,27 @@ export class ChatService {
             }
             return true
         })
+        
+        // 群聊共享模式下，添加用户标签以区分不同用户
+        const isolation = contextManager.getIsolationMode()
+        if (groupId && !isolation.groupUserIsolation) {
+            // 群聊共享模式 - 添加用户标签到历史消息
+            validHistory = contextManager.buildLabeledContext(validHistory)
+            
+            // 当前用户信息
+            const currentUserLabel = event?.sender?.card || event?.sender?.nickname || `用户${userId}`
+            const currentUserUin = event?.user_id || userId
+            
+            // 给当前消息也添加用户标签
+            userMessage.content = contextManager.addUserLabelToContent(
+                userMessage.content, 
+                currentUserLabel, 
+                currentUserUin
+            )
+            
+            // 在系统提示中说明多用户环境
+            systemPrompt += `\n\n[多用户群聊环境]\n你正在群聊中与多位用户对话。每条用户消息都以 [用户名(QQ号)]: 格式标注发送者。\n当前发送消息的用户: [${currentUserLabel}(${currentUserUin})]\n请根据消息前的用户标签区分不同用户，回复时针对当前用户。`
+        }
         
         let messages = [
             { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
@@ -293,10 +327,19 @@ export class ChatService {
                         contentPreview: Array.isArray(msg.content) 
                             ? msg.content.filter(c => c.type === 'text').map(c => c.text?.substring(0, 100)).join('').substring(0, 150)
                             : (typeof msg.content === 'string' ? msg.content.substring(0, 150) : ''),
-                        hasToolCalls: !!msg.toolCalls?.length
+                        hasToolCalls: !!msg.toolCalls?.length,
+                        // 添加发送者信息
+                        sender: msg.sender ? {
+                            user_id: msg.sender.user_id,
+                            nickname: msg.sender.nickname || msg.sender.card
+                        } : null
                     })),
                     systemPromptPreview: systemPrompt.substring(0, 300) + (systemPrompt.length > 300 ? '...' : ''),
-                    totalHistoryLength: validHistory.length
+                    totalHistoryLength: validHistory.length,
+                    // 隔离模式信息
+                    isolationMode: isolation,
+                    hasUserLabels: groupId && !isolation.groupUserIsolation,
+                    maxContextMessages: 20
                 }
                 // 工具列表
                 debugInfo.availableTools = hasTools ? client.tools.map(t => t.function?.name || t.name).slice(0, 20) : []

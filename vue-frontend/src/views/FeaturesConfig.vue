@@ -35,6 +35,11 @@ const features = ref({
         enabled: true,
         requireAt: true,
         prefix: ''
+    },
+    // 上下文隔离配置
+    contextIsolation: {
+        groupUserIsolation: false,
+        privateIsolation: true
     }
 })
 
@@ -62,9 +67,10 @@ const getHeaders = () => ({
 async function loadFeatures() {
     loading.value = true
     try {
-        const [featuresRes, tokenRes] = await Promise.all([
+        const [featuresRes, tokenRes, contextRes] = await Promise.all([
             axios.get('/api/features', { headers: getHeaders() }),
-            axios.get('/api/auth/token/status', { headers: getHeaders() })
+            axios.get('/api/auth/token/status', { headers: getHeaders() }),
+            axios.get('/api/config/context', { headers: getHeaders() })
         ])
         
         if (featuresRes.data?.data) {
@@ -73,6 +79,14 @@ async function loadFeatures() {
         
         if (tokenRes.data?.data) {
             tokenStatus.value = tokenRes.data.data
+        }
+        
+        // 加载上下文隔离配置
+        if (contextRes.data?.data?.isolation) {
+            features.value.contextIsolation = {
+                groupUserIsolation: contextRes.data.data.isolation.groupUserIsolation ?? false,
+                privateIsolation: contextRes.data.data.isolation.privateIsolation ?? true
+            }
         }
     } catch (err) {
         message.error('加载配置失败: ' + err.message)
@@ -85,7 +99,14 @@ async function loadFeatures() {
 async function saveFeatures() {
     saving.value = true
     try {
+        // 保存功能配置
         await axios.put('/api/features', features.value, { headers: getHeaders() })
+        
+        // 保存上下文隔离配置
+        await axios.patch('/api/config/context', {
+            isolation: features.value.contextIsolation
+        }, { headers: getHeaders() })
+        
         message.success('配置已保存')
     } catch (err) {
         message.error('保存失败: ' + err.message)
@@ -240,21 +261,41 @@ onMounted(() => {
             </n-card>
             
             <!-- 群聊上下文配置 -->
-            <n-card title="群聊上下文">
-                <n-form label-placement="left" label-width="150px">
+            <n-card title="上下文与隔离">
+                <n-alert type="info" style="margin-bottom: 16px;">
+                    上下文隔离决定了不同用户/群聊是否共享对话历史。
+                </n-alert>
+                <n-form label-placement="left" label-width="180px">
+                    <n-divider title-placement="left">上下文配置</n-divider>
                     <n-form-item label="启用群聊上下文">
                         <n-switch v-model:value="features.groupContext.enabled" />
                     </n-form-item>
-                    <template v-if="features.groupContext.enabled">
-                        <n-form-item label="最大消息数">
-                            <n-input-number 
-                                v-model:value="features.groupContext.maxMessages" 
-                                :min="5" 
-                                :max="100"
-                                style="width: 150px;"
-                            />
-                        </n-form-item>
-                    </template>
+                    <n-form-item label="最大消息数" v-if="features.groupContext.enabled">
+                        <n-input-number 
+                            v-model:value="features.groupContext.maxMessages" 
+                            :min="5" 
+                            :max="100"
+                            style="width: 150px;"
+                        />
+                    </n-form-item>
+                    
+                    <n-divider title-placement="left">隔离模式</n-divider>
+                    <n-form-item label="群聊用户隔离">
+                        <n-space align="center">
+                            <n-switch v-model:value="features.contextIsolation.groupUserIsolation" />
+                            <span style="color: #888; font-size: 13px;">
+                                {{ features.contextIsolation.groupUserIsolation ? '每个用户独立上下文' : '同群用户共享上下文（会添加用户标签区分）' }}
+                            </span>
+                        </n-space>
+                    </n-form-item>
+                    <n-form-item label="私聊用户隔离">
+                        <n-space align="center">
+                            <n-switch v-model:value="features.contextIsolation.privateIsolation" />
+                            <span style="color: #888; font-size: 13px;">
+                                {{ features.contextIsolation.privateIsolation ? '每个用户独立上下文' : '所有私聊共享上下文' }}
+                            </span>
+                        </n-space>
+                    </n-form-item>
                 </n-form>
             </n-card>
             

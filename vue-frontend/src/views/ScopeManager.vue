@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
-import { NCard, NTabs, NTabPane, NDataTable, NButton, NSpace, NModal, NForm, NFormItem, NInput, NSelect, NEmpty, NTag, NPopconfirm, useMessage } from 'naive-ui'
+import { NCard, NTabs, NTabPane, NDataTable, NButton, NSpace, NModal, NForm, NFormItem, NInput, NSelect, NEmpty, NTag, NPopconfirm, useMessage, NAlert, NDivider, NSwitch, NTransfer } from 'naive-ui'
 import axios from 'axios'
 
 const message = useMessage()
@@ -10,6 +10,29 @@ const userScopes = ref([])
 const groupScopes = ref([])
 const groupUserScopes = ref([])
 const loading = ref(false)
+
+// 人格优先级配置
+const priorityConfig = ref({
+    priority: ['group', 'group_user', 'user', 'default'],
+    useIndependent: true
+})
+const savingPriority = ref(false)
+
+// 优先级选项
+const priorityOptions = [
+    { value: 'group', label: '群聊人格 (group)', description: '特定群组的人格设定' },
+    { value: 'group_user', label: '群内用户人格 (group_user)', description: '特定群内特定用户的人格' },
+    { value: 'user', label: '用户全局人格 (user)', description: '用户在所有场景的人格' },
+    { value: 'default', label: '默认预设 (default)', description: '系统默认预设' }
+]
+
+// 计算当前优先级显示
+const priorityDisplay = computed(() => {
+    return priorityConfig.value.priority.map(p => {
+        const opt = priorityOptions.find(o => o.value === p)
+        return opt ? opt.label : p
+    }).join(' > ')
+})
 
 // 模态框
 const showUserModal = ref(false)
@@ -49,11 +72,12 @@ const getHeaders = () => ({
 async function loadData() {
     loading.value = true
     try {
-        const [usersRes, groupsRes, groupUsersRes, presetsRes] = await Promise.all([
+        const [usersRes, groupsRes, groupUsersRes, presetsRes, configRes] = await Promise.all([
             axios.get('/api/scope/users', { headers: getHeaders() }),
             axios.get('/api/scope/groups', { headers: getHeaders() }),
             axios.get('/api/scope/group-users', { headers: getHeaders() }),
-            axios.get('/api/preset/list', { headers: getHeaders() })
+            axios.get('/api/preset/list', { headers: getHeaders() }),
+            axios.get('/api/config/personality', { headers: getHeaders() })
         ])
         
         userScopes.value = usersRes.data?.data || []
@@ -64,11 +88,41 @@ async function loadData() {
             label: p.name || p.id,
             value: p.id
         }))
+        
+        // 加载优先级配置
+        if (configRes.data?.data) {
+            priorityConfig.value = {
+                priority: configRes.data.data.priority || ['group', 'group_user', 'user', 'default'],
+                useIndependent: configRes.data.data.useIndependent !== false
+            }
+        }
     } catch (err) {
         message.error('加载数据失败: ' + err.message)
     } finally {
         loading.value = false
     }
+}
+
+// 保存优先级配置
+async function savePriorityConfig() {
+    savingPriority.value = true
+    try {
+        await axios.patch('/api/config/personality', priorityConfig.value, { headers: getHeaders() })
+        message.success('优先级配置已保存')
+    } catch (err) {
+        message.error('保存失败: ' + err.message)
+    } finally {
+        savingPriority.value = false
+    }
+}
+
+// 调整优先级顺序
+function movePriority(index, direction) {
+    const arr = [...priorityConfig.value.priority]
+    const newIndex = index + direction
+    if (newIndex < 0 || newIndex >= arr.length) return
+    ;[arr[index], arr[newIndex]] = [arr[newIndex], arr[index]]
+    priorityConfig.value.priority = arr
 }
 
 // 用户作用域表格列
@@ -300,9 +354,46 @@ onMounted(() => {
 
 <template>
     <div>
-        <n-card title="独立人格管理">
+        <!-- 优先级配置卡片 -->
+        <n-card title="人格优先级配置" style="margin-bottom: 16px;">
             <template #header-extra>
-                <n-tag type="info">优先级: 群内用户 > 群组 > 用户全局 > 默认预设</n-tag>
+                <n-button type="primary" size="small" @click="savePriorityConfig" :loading="savingPriority">
+                    保存配置
+                </n-button>
+            </template>
+            
+            <n-alert type="info" style="margin-bottom: 16px;">
+                当多个作用域都设置了人格时，按以下优先级选择第一个有效的人格。<br/>
+                当前优先级: <strong>{{ priorityDisplay }}</strong>
+            </n-alert>
+            
+            <n-space vertical>
+                <n-form-item label="启用独立人格">
+                    <n-switch v-model:value="priorityConfig.useIndependent" />
+                    <span style="margin-left: 12px; color: #888;">开启后，找到的人格将完全替换默认预设，而不是拼接</span>
+                </n-form-item>
+                
+                <n-divider title-placement="left">优先级顺序（从高到低）</n-divider>
+                
+                <div class="priority-list">
+                    <div v-for="(item, index) in priorityConfig.priority" :key="item" class="priority-item">
+                        <span class="priority-rank">{{ index + 1 }}</span>
+                        <n-tag :type="item === 'default' ? 'default' : 'info'" size="large">
+                            {{ priorityOptions.find(o => o.value === item)?.label || item }}
+                        </n-tag>
+                        <n-space>
+                            <n-button size="small" :disabled="index === 0" @click="movePriority(index, -1)">↑</n-button>
+                            <n-button size="small" :disabled="index === priorityConfig.priority.length - 1" @click="movePriority(index, 1)">↓</n-button>
+                        </n-space>
+                        <span class="priority-desc">{{ priorityOptions.find(o => o.value === item)?.description }}</span>
+                    </div>
+                </div>
+            </n-space>
+        </n-card>
+        
+        <n-card title="人格设定管理">
+            <template #header-extra>
+                <n-tag type="success">共 {{ userScopes.length + groupScopes.length + groupUserScopes.length }} 条人格设定</n-tag>
             </template>
             
             <n-tabs type="line" animated>
@@ -426,3 +517,38 @@ onMounted(() => {
         </n-modal>
     </div>
 </template>
+
+<style scoped>
+.priority-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.priority-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: var(--n-color-embedded);
+    border-radius: 8px;
+}
+
+.priority-rank {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--n-color-target);
+    border-radius: 50%;
+    font-weight: bold;
+    color: var(--n-text-color-1);
+}
+
+.priority-desc {
+    color: var(--n-text-color-3);
+    font-size: 13px;
+    margin-left: auto;
+}
+</style>

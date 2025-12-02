@@ -1165,24 +1165,50 @@ export class BuiltinMcpServer {
                         const excludeUsers = args.exclude_users || []
                         const botId = bot.uin || bot.self_id
 
-                        // 获取群成员列表
+                        // 获取群成员列表 - 优先使用 e.group (icqq 标准方式)
                         let memberList = []
                         try {
-                            if (bot.getGroupMemberList) {
-                                memberList = await bot.getGroupMemberList(e.group_id) || []
-                            } else {
-                                const group = bot.pickGroup?.(e.group_id)
-                                if (group?.getMemberMap) {
-                                    const memberMap = await group.getMemberMap()
+                            // 方式1: 使用 e.group.getMemberMap() (icqq 标准)
+                            if (e.group?.getMemberMap) {
+                                const memberMap = await e.group.getMemberMap()
+                                if (memberMap instanceof Map) {
                                     for (const [uid, member] of memberMap) {
                                         memberList.push({ user_id: uid, ...member })
                                     }
-                                } else if (group?.getMemberList) {
-                                    memberList = await group.getMemberList() || []
+                                } else if (memberMap && typeof memberMap === 'object') {
+                                    for (const [uid, member] of Object.entries(memberMap)) {
+                                        memberList.push({ user_id: Number(uid) || uid, ...member })
+                                    }
                                 }
+                            }
+                            // 方式2: 使用 bot.pickGroup
+                            if (memberList.length === 0) {
+                                const group = bot.pickGroup?.(e.group_id)
+                                if (group?.getMemberMap) {
+                                    const memberMap = await group.getMemberMap()
+                                    if (memberMap instanceof Map) {
+                                        for (const [uid, member] of memberMap) {
+                                            memberList.push({ user_id: uid, ...member })
+                                        }
+                                    } else if (memberMap && typeof memberMap === 'object') {
+                                        for (const [uid, member] of Object.entries(memberMap)) {
+                                            memberList.push({ user_id: Number(uid) || uid, ...member })
+                                        }
+                                    }
+                                }
+                            }
+                            // 方式3: bot.getGroupMemberList
+                            if (memberList.length === 0 && bot.getGroupMemberList) {
+                                const result = await bot.getGroupMemberList(e.group_id)
+                                memberList = Array.isArray(result) ? result : []
                             }
                         } catch (err) {
                             return { success: false, error: `获取群成员列表失败: ${err.message}` }
+                        }
+                        
+                        // 确保 memberList 是数组
+                        if (!Array.isArray(memberList)) {
+                            return { success: false, error: '获取群成员列表格式错误' }
                         }
 
                         // 过滤成员
@@ -1944,17 +1970,42 @@ export class BuiltinMcpServer {
                         raw_message: cleanCQCode(source.raw_message || fullMessage?.raw_message || ''),
                         message: source.message || fullMessage?.message,
                         // 解析引用消息中的内容
-                        content: {
-                            text: (source.message || fullMessage?.message || [])
-                                .filter(m => m.type === 'text')
-                                .map(m => m.text)
-                                .join(''),
-                            has_image: (source.message || fullMessage?.message || [])
-                                .some(m => m.type === 'image'),
-                            images: (source.message || fullMessage?.message || [])
-                                .filter(m => m.type === 'image')
-                                .map(m => m.url || m.file)
-                        }
+                        content: (() => {
+                            // 确保 message 是数组
+                            const msgArray = Array.isArray(source.message) ? source.message 
+                                : Array.isArray(fullMessage?.message) ? fullMessage.message 
+                                : []
+                            return {
+                                text: msgArray
+                                    .filter(m => m.type === 'text')
+                                    .map(m => m.text)
+                                    .join(''),
+                                has_image: msgArray.some(m => m.type === 'image'),
+                                images: msgArray
+                                    .filter(m => m.type === 'image')
+                                    .map(m => m.url || m.file),
+                                // 文件信息
+                                has_file: msgArray.some(m => m.type === 'file'),
+                                files: msgArray
+                                    .filter(m => m.type === 'file')
+                                    .map(m => ({ name: m.name, fid: m.fid, size: m.size })),
+                                // 视频信息
+                                has_video: msgArray.some(m => m.type === 'video'),
+                                videos: msgArray
+                                    .filter(m => m.type === 'video')
+                                    .map(m => ({ url: m.url, file: m.file, name: m.name })),
+                                // JSON卡片（可能是转发消息）
+                                has_json: msgArray.some(m => m.type === 'json'),
+                                json_cards: msgArray
+                                    .filter(m => m.type === 'json')
+                                    .map(m => {
+                                        try {
+                                            const data = JSON.parse(m.data)
+                                            return { app: data.app, desc: data.desc, prompt: data.prompt }
+                                        } catch { return { raw: m.data?.substring(0, 200) } }
+                                    })
+                            }
+                        })()
                     }
                 }
             },

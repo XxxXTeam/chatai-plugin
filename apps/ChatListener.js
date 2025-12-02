@@ -141,9 +141,11 @@ export class ChatListener extends plugin {
     async handleChat(listenerConfig) {
         const e = this.e
         const userId = e.user_id?.toString()
+        const groupId = e.group_id?.toString() || null
         const featuresConfig = config.get('features') || {}
         
-        // 解析用户消息（包括引用消息）
+        // 解析用户消息 - 使用增强的消息解析器
+        // 支持引用消息、转发消息、发送者信息
         const userMessage = await parseUserMessage(e, {
             handleReplyText: featuresConfig.replyQuote?.handleText ?? true,
             handleReplyImage: featuresConfig.replyQuote?.handleImage ?? true,
@@ -152,7 +154,9 @@ export class ChatListener extends plugin {
             handleAtMsg: true,
             excludeAtBot: true,
             triggerMode: listenerConfig.triggerMode || 'at',
-            triggerPrefix: listenerConfig.triggerPrefix || ''
+            triggerPrefix: listenerConfig.triggerPrefix || '',
+            includeSenderInfo: true,      // 包含发送者信息
+            includeDebugInfo: false       // 正常模式不包含调试信息
         })
 
         // 检查消息是否有效
@@ -165,13 +169,15 @@ export class ChatListener extends plugin {
         setToolContext({ event: e, bot: e.bot || Bot })
         mcpManager.setToolContext({ event: e, bot: e.bot || Bot })
 
-        // 调用聊天服务
+        // 调用聊天服务 - 传递完整的用户消息信息
         const result = await chatService.sendMessage({
             userId,
             message: textContent,
             images: userMessage.content?.filter(c => c.type === 'image').map(c => c.image) || [],
             event: e,
-            mode: 'chat'
+            mode: 'chat',
+            // 传递解析后的消息信息
+            parsedMessage: userMessage
         })
 
         // 发送回复

@@ -1,7 +1,14 @@
 /**
  * 消息解析工具
  * 参考 chatgpt-plugin/utils/message.js 实现
- * 支持引用消息、图片、文件、转发消息体等
+ * 基于 icqq API: https://icqq.pages.dev
+ * 
+ * 支持:
+ * - 引用消息 (e.source / e.getReply)
+ * - 合并转发消息 (e.group.getForwardMsg)
+ * - 群聊历史 (e.group.getChatHistory)
+ * - 完整的消息段类型
+ * - 用户身份标签 (sender)
  */
 
 /**
@@ -20,25 +27,55 @@ export async function parseUserMessage(e, options = {}) {
         excludeAtBot = true,
         useRawMessage = false,
         triggerMode = 'at',
-        triggerPrefix = ''
+        triggerPrefix = '',
+        includeDebugInfo = false,      // 是否包含调试信息
+        includeSenderInfo = true       // 是否包含发送者信息
     } = options
 
     const contents = []
     let text = ''
+    let quoteInfo = null
+    let forwardInfo = null
+    
+    // 调试信息收集
+    const debugInfo = includeDebugInfo ? {
+        originalMessage: e.message,
+        rawMessage: e.raw_message,
+        hasSource: !!e.source,
+        hasForward: false,
+        parseSteps: [],
+        errors: []
+    } : null
 
     // 处理引用消息
     if ((e.source || e.reply_id) && (handleReplyImage || handleReplyText || handleReplyFile)) {
-        const replyResult = await parseReplyMessage(e, {
-            handleReplyText,
-            handleReplyImage,
-            handleReplyFile,
-            handleForward
-        })
-        
-        if (replyResult.text) {
-            text = replyResult.text
+        if (debugInfo) debugInfo.parseSteps.push('解析引用消息')
+        try {
+            const replyResult = await parseReplyMessage(e, {
+                handleReplyText,
+                handleReplyImage,
+                handleReplyFile,
+                handleForward
+            })
+            
+            if (replyResult.text) {
+                text = replyResult.text
+            }
+            contents.push(...replyResult.contents)
+            quoteInfo = replyResult.quoteInfo
+            
+            if (debugInfo) {
+                debugInfo.quoteResult = {
+                    hasText: !!replyResult.text,
+                    textLength: replyResult.text?.length || 0,
+                    contentsCount: replyResult.contents.length,
+                    quoteSender: quoteInfo?.sender
+                }
+            }
+        } catch (err) {
+            if (debugInfo) debugInfo.errors.push(`引用消息解析失败: ${err.message}`)
+            logger.warn('[MessageParser] 引用消息解析失败:', err.message)
         }
-        contents.push(...replyResult.contents)
     }
 
     // 处理当前消息
@@ -88,10 +125,40 @@ export async function parseUserMessage(e, options = {}) {
                     break
                 
                 case 'json':
-                    // JSON 卡片消息
+                    // JSON 卡片消息 - 特别处理合并转发类型
                     try {
                         const jsonData = JSON.parse(val.data)
-                        text += `[卡片消息:${jsonData.prompt || jsonData.desc || 'JSON'}]`
+                        
+                        // 检查是否是合并转发消息 (com.tencent.multimsg)
+                        if (jsonData.app === 'com.tencent.multimsg' && handleForward) {
+                            if (debugInfo) debugInfo.parseSteps.push('解析JSON合并转发消息')
+                            try {
+                                const resid = jsonData.meta?.detail?.resid
+                                if (resid && e.group?.getForwardMsg) {
+                                    // 使用 resid 获取转发内容
+                                    const forwardResult = await parseForwardMessage(e, { id: resid, resid })
+                                    if (forwardResult.text) {
+                                        text += forwardResult.text
+                                    }
+                                    contents.push(...forwardResult.contents)
+                                    forwardInfo = forwardResult.forwardInfo
+                                    if (debugInfo) debugInfo.hasForward = true
+                                } else {
+                                    // 无法获取内容，使用预览信息
+                                    const preview = jsonData.meta?.detail?.news?.map(n => n.text).join('\n') || ''
+                                    const summary = jsonData.meta?.detail?.summary || jsonData.prompt || '[聊天记录]'
+                                    text += `[转发消息: ${summary}]\n${preview ? '预览: ' + preview : ''}`
+                                }
+                            } catch (err) {
+                                if (debugInfo) debugInfo.errors.push(`JSON转发解析失败: ${err.message}`)
+                                // 回退到预览信息
+                                const preview = jsonData.meta?.detail?.news?.map(n => n.text).join('\n') || ''
+                                text += `[转发消息]${preview ? '\n预览: ' + preview : ''}`
+                            }
+                        } else {
+                            // 其他 JSON 卡片
+                            text += `[卡片消息:${jsonData.prompt || jsonData.desc || 'JSON'}]`
+                        }
                     } catch {
                         text += '[卡片消息]'
                     }
@@ -105,12 +172,54 @@ export async function parseUserMessage(e, options = {}) {
                 case 'forward':
                     // 转发消息
                     if (handleForward) {
-                        const forwardResult = await parseForwardMessage(e, val)
-                        if (forwardResult.text) {
-                            text += forwardResult.text
+                        if (debugInfo) debugInfo.parseSteps.push('解析转发消息')
+                        try {
+                            const forwardResult = await parseForwardMessage(e, val)
+                            if (forwardResult.text) {
+                                text += forwardResult.text
+                            }
+                            contents.push(...forwardResult.contents)
+                            forwardInfo = forwardResult.forwardInfo
+                            if (debugInfo) debugInfo.hasForward = true
+                        } catch (err) {
+                            if (debugInfo) debugInfo.errors.push(`转发消息解析失败: ${err.message}`)
+                            text += '[转发消息]'
                         }
-                        contents.push(...forwardResult.contents)
                     }
+                    break
+                
+                case 'reply':
+                    // 引用标记 - 已在上面处理，跳过
+                    break
+                
+                case 'record':
+                    // 语音消息
+                    text += '[语音消息]'
+                    break
+                
+                case 'video':
+                    // 视频消息
+                    text += `[视频${val.name ? ':' + val.name : ''}]`
+                    break
+                
+                case 'poke':
+                    // 戳一戳
+                    text += '[戳一戳]'
+                    break
+                
+                case 'share':
+                    // 链接分享
+                    text += `[分享:${val.title || val.url || '链接'}]`
+                    break
+                
+                case 'location':
+                    // 位置分享
+                    text += `[位置:${val.name || val.address || '位置'}]`
+                    break
+                
+                case 'music':
+                    // 音乐分享
+                    text += `[音乐:${val.title || '音乐'}]`
                     break
             }
         }
@@ -131,9 +240,51 @@ export async function parseUserMessage(e, options = {}) {
         })
     }
 
-    return {
+    // 构建返回结果
+    const result = {
         role: 'user',
         content: contents
+    }
+    
+    // 添加发送者信息 (用于多用户上下文区分)
+    if (includeSenderInfo) {
+        result.sender = extractSender(e)
+        result.timestamp = e.time ? e.time * 1000 : Date.now()
+        result.source_type = e.isGroup || e.group_id ? 'group' : 'private'
+        if (e.group_id) result.group_id = e.group_id
+        if (e.message_id) result.message_id = e.message_id
+    }
+    
+    // 添加引用/转发信息
+    if (quoteInfo) result.quote = quoteInfo
+    if (forwardInfo) result.forward = forwardInfo
+    
+    // 添加调试信息
+    if (debugInfo) {
+        debugInfo.parseSteps.push('解析完成')
+        debugInfo.finalTextLength = contents.filter(c => c.type === 'text').map(c => c.text?.length || 0).reduce((a, b) => a + b, 0)
+        debugInfo.finalContentsCount = contents.length
+        result.debug = debugInfo
+    }
+    
+    return result
+}
+
+/**
+ * 提取发送者信息 (icqq/TRSS 兼容)
+ * @param {Object} e - 事件对象
+ * @returns {Object} 发送者信息
+ */
+function extractSender(e) {
+    const sender = e.sender || {}
+    return {
+        user_id: e.user_id || sender.user_id || 0,
+        nickname: sender.nickname || e.nickname || '未知用户',
+        card: sender.card || '',                    // 群名片
+        role: sender.role || 'member',              // owner/admin/member
+        level: sender.level || 0,                   // 群等级
+        title: sender.title || '',                  // 专属头衔
+        user_uid: sender.user_uid || e.user_uid || ''  // QQNT uid
     }
 }
 
@@ -179,7 +330,7 @@ async function parseReplyMessage(e, options) {
 
         const replyMessage = replyData?.message
         if (!replyMessage) {
-            return { text: '', contents: [] }
+            return { text: '', contents: [], quoteInfo: null }
         }
 
         // 判断引用的是否是机器人的消息
@@ -225,13 +376,68 @@ async function parseReplyMessage(e, options) {
                                 fileUrl = await e.friend.getFileUrl(val.fid)
                             }
                         } catch {}
-                        replyTextContent += `[文件: ${val.name || val.fid}]`
+                        // 包含文件名和URL（如果有）
+                        const fileName = val.name || val.fid || '未知文件'
+                        replyTextContent += `[文件: ${fileName}${fileUrl ? ' URL:' + fileUrl : ''}]`
                     }
+                    break
+                
+                case 'video':
+                    // 视频消息
+                    const videoUrl = val.url || val.file || ''
+                    replyTextContent += `[视频${val.name ? ':' + val.name : ''}${videoUrl ? ' URL:' + videoUrl : ''}]`
                     break
                 
                 case 'forward':
                     if (handleForward) {
-                        replyTextContent += '[转发消息]'
+                        try {
+                            const fwdResult = await parseForwardMessage(e, val)
+                            if (fwdResult.text) {
+                                replyTextContent += fwdResult.text
+                            }
+                            // 添加转发消息中的图片
+                            if (fwdResult.contents?.length > 0) {
+                                contents.push(...fwdResult.contents)
+                            }
+                            if (!fwdResult.text) {
+                                replyTextContent += '[转发消息]'
+                            }
+                        } catch {
+                            replyTextContent += '[转发消息]'
+                        }
+                    }
+                    break
+                
+                case 'json':
+                    // 检查是否是合并转发消息
+                    if (handleForward) {
+                        try {
+                            const jsonData = JSON.parse(val.data)
+                            if (jsonData.app === 'com.tencent.multimsg') {
+                                const resid = jsonData.meta?.detail?.resid
+                                if (resid && e.group?.getForwardMsg) {
+                                    const fwdResult = await parseForwardMessage(e, { id: resid, resid })
+                                    if (fwdResult.text) {
+                                        replyTextContent += fwdResult.text
+                                    }
+                                    // 添加转发消息中的图片
+                                    if (fwdResult.contents?.length > 0) {
+                                        contents.push(...fwdResult.contents)
+                                    }
+                                    if (!fwdResult.text) {
+                                        const preview = jsonData.meta?.detail?.news?.map(n => n.text).join('\n') || ''
+                                        replyTextContent += `[聊天记录]${preview ? '\n' + preview : ''}`
+                                    }
+                                } else {
+                                    const preview = jsonData.meta?.detail?.news?.map(n => n.text).join('\n') || ''
+                                    replyTextContent += `[聊天记录]${preview ? '\n' + preview : ''}`
+                                }
+                            } else {
+                                replyTextContent += `[卡片消息:${jsonData.prompt || jsonData.desc || ''}]`
+                            }
+                        } catch {
+                            replyTextContent += '[卡片消息]'
+                        }
                     }
                     break
             }
@@ -247,11 +453,27 @@ async function parseReplyMessage(e, options) {
                 text = `[用户引用了${senderLabel}的消息]\n"${replyTextContent}"\n\n[用户的提问]\n`
             }
         }
+        
+        // 构建引用信息对象
+        const quoteInfo = {
+            sender: {
+                user_id: replySenderId,
+                nickname: replySenderName,
+                card: replyData?.sender?.card || '',
+                role: replyData?.sender?.role || 'member'
+            },
+            content: replyTextContent,
+            isBot: isQuotingBot,
+            time: replyData?.time,
+            seq: replyData?.seq
+        }
+        
+        return { text, contents, quoteInfo }
     } catch (err) {
         logger.warn('[MessageParser] 解析引用消息失败:', err.message)
     }
 
-    return { text, contents }
+    return { text, contents, quoteInfo: null }
 }
 
 /**
@@ -260,31 +482,76 @@ async function parseReplyMessage(e, options) {
 async function parseForwardMessage(e, forwardElement) {
     const contents = []
     let text = ''
+    let forwardInfo = null
 
     try {
-        // 尝试获取转发消息内容
+        // 尝试获取转发消息内容 - 支持多种方式
         let forwardMessages = null
         
+        // 方式1: 直接包含 content
         if (forwardElement.content) {
             forwardMessages = forwardElement.content
-        } else if (forwardElement.id && e.group?.getForwardMsg) {
+        } 
+        // 方式2: 通过 id 获取 (icqq e.group.getForwardMsg)
+        else if (forwardElement.id && e.group?.getForwardMsg) {
             forwardMessages = await e.group.getForwardMsg(forwardElement.id)
+        }
+        // 方式3: 通过 resid 获取 (TRSS)
+        else if (forwardElement.resid && e.group?.getForwardMsg) {
+            forwardMessages = await e.group.getForwardMsg(forwardElement.resid)
         }
 
         if (forwardMessages && Array.isArray(forwardMessages)) {
             const forwardTexts = []
-            for (const msg of forwardMessages.slice(0, 10)) { // 最多处理10条
+            const parsedMessages = []
+            
+            // 最多处理15条转发消息
+            for (const msg of forwardMessages.slice(0, 15)) {
+                const msgInfo = {
+                    user_id: msg.user_id,
+                    nickname: msg.nickname || '未知',
+                    time: msg.time,
+                    content: []
+                }
+                
                 if (msg.message) {
                     for (const val of msg.message) {
                         if (val.type === 'text') {
                             forwardTexts.push(`${msg.nickname || '未知'}: ${val.text}`)
+                            msgInfo.content.push({ type: 'text', text: val.text })
+                        } else if (val.type === 'image') {
+                            // 图片直接传递给模型解析
+                            const imgUrl = val.url || val.file || ''
+                            forwardTexts.push(`${msg.nickname || '未知'}: [图片]`)
+                            msgInfo.content.push({ type: 'image', url: imgUrl })
+                            // 添加到 contents 供模型直接解析
+                            if (imgUrl) {
+                                contents.push({
+                                    type: 'image_url',
+                                    image_url: { url: imgUrl },
+                                    source: 'forward'  // 标记来源
+                                })
+                            }
+                        } else if (val.type === 'forward') {
+                            // 嵌套转发
+                            forwardTexts.push(`${msg.nickname || '未知'}: [嵌套转发消息]`)
+                            msgInfo.content.push({ type: 'forward', nested: true })
                         }
                     }
                 }
+                
+                parsedMessages.push(msgInfo)
             }
             
             if (forwardTexts.length > 0) {
-                text = `[转发消息内容]\n${forwardTexts.join('\n')}\n[转发消息结束]\n`
+                text = `[转发消息内容 共${forwardMessages.length}条]\n${forwardTexts.join('\n')}\n[转发消息结束]\n`
+            }
+            
+            // 构建转发信息对象
+            forwardInfo = {
+                total: forwardMessages.length,
+                parsed: parsedMessages.length,
+                messages: parsedMessages
             }
         } else {
             text = '[转发消息]'
@@ -294,7 +561,7 @@ async function parseForwardMessage(e, forwardElement) {
         text = '[转发消息]'
     }
 
-    return { text, contents }
+    return { text, contents, forwardInfo }
 }
 
 /**

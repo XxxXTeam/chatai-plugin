@@ -198,6 +198,14 @@ class Config {
                 perUserPreset: false,
                 perGroupPreset: false
             },
+            // 人格优先级配置
+            personality: {
+                // 优先级顺序，越靠前优先级越高
+                // 可选值: group_user(群内用户独立人格), group(群聊人格), user(用户全局人格), default(默认预设)
+                priority: ['group', 'group_user', 'user', 'default'],
+                // 是否启用独立人格（设置后完全替换默认，不拼接）
+                useIndependent: true,
+            },
             loadBalancing: {
                 strategy: 'priority', // 'priority', 'round-robin', 'random'
             },

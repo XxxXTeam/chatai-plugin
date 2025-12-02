@@ -8,6 +8,14 @@ import { getScopeManager } from '../src/services/ScopeManager.js'
 import { databaseService } from '../src/services/DatabaseService.js'
 import { chatService } from '../src/services/ChatService.js'
 
+// 缓存 Yunzai 主人配置
+let yunzaiCfg = null
+try {
+    yunzaiCfg = (await import('../../../lib/config/config.js')).default
+} catch (e) {
+    // Yunzai 配置不可用
+}
+
 export class AIManagement extends plugin {
     constructor() {
         const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
@@ -67,9 +75,46 @@ export class AIManagement extends plugin {
                 {
                     reg: `^${cmdPrefix}帮助$`,
                     fnc: 'help'
+                },
+                {
+                    reg: `^${cmdPrefix}调试(开启|关闭)$`,
+                    fnc: 'toggleDebug',
+                    permission: 'master'
+                },
+                {
+                    reg: `^${cmdPrefix}伪人(开启|关闭)$`,
+                    fnc: 'toggleBym',
+                    permission: 'master'
+                },
+                {
+                    reg: `^${cmdPrefix}设置(模型|model)\\s*(.+)$`,
+                    fnc: 'setModel',
+                    permission: 'master'
                 }
             ]
         })
+    }
+
+    /**
+     * 检查是否是主人
+     */
+    isMasterUser(userId) {
+        const masters = this.getMasterList()
+        return masters.includes(String(userId)) || masters.includes(Number(userId))
+    }
+
+    /**
+     * 获取主人 QQ 列表
+     */
+    getMasterList() {
+        const pluginMasters = config.get('admin.masterQQ') || []
+        if (pluginMasters.length > 0) {
+            return pluginMasters
+        }
+        if (yunzaiCfg?.masterQQ?.length > 0) {
+            return yunzaiCfg.masterQQ
+        }
+        return global.Bot?.config?.master || []
     }
 
     /**
@@ -300,11 +345,49 @@ ${cmdPrefix}查看人格 - 查看当前生效的人格设定
 ${cmdPrefix}清除人格 - 清除个人人格设定
 ${cmdPrefix}清除群人格 - 清除群组人格设定（管理员）
 ${cmdPrefix}状态 - 查看插件状态
+${cmdPrefix}调试开启/关闭 - 开关调试模式
+${cmdPrefix}伪人开启/关闭 - 开关伪人模式
+${cmdPrefix}设置模型 <名称> - 设置默认模型
 ${cmdPrefix}帮助 - 显示此帮助信息
 
 人格优先级：群内用户设定 > 群组设定 > 用户全局设定 > 默认预设`
 
         await this.reply(msg, true)
+    }
+
+    /**
+     * 切换调试模式
+     */
+    async toggleDebug() {
+        const action = this.e.msg.includes('开启')
+        config.set('basic.debug', action)
+        await this.reply(`调试模式已${action ? '开启' : '关闭'}`, true)
+        return true
+    }
+
+    /**
+     * 切换伪人模式
+     */
+    async toggleBym() {
+        const action = this.e.msg.includes('开启')
+        config.set('bym.enable', action)
+        await this.reply(`伪人模式已${action ? '开启' : '关闭'}`, true)
+        return true
+    }
+
+    /**
+     * 设置默认模型
+     */
+    async setModel() {
+        const model = this.e.msg.match(/设置(?:模型|model)\s*(.+)$/)?.[1]?.trim()
+        if (!model) {
+            await this.reply('请指定模型名称', true)
+            return false
+        }
+
+        config.set('llm.defaultModel', model)
+        await this.reply(`默认模型已设置为: ${model}`, true)
+        return true
     }
 
     /**

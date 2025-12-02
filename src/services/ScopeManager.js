@@ -562,61 +562,64 @@ export class ScopeManager {
   async getEffectiveSettings(groupId, userId) {
     await this.init()
     
+    // 从配置读取优先级顺序
+    const { default: config } = await import('../../config/config.js')
+    const priorityOrder = config.get('personality.priority') || ['group', 'group_user', 'user', 'default']
+    
     let effectivePrompt = null
     let effectivePresetId = null
     let source = 'default'
 
-    // 优先级1: 群用户组合配置
+    // 预加载所有可能的配置
+    const settingsCache = {}
     if (groupId) {
-      const groupUserSettings = await this.getGroupUserSettings(groupId, userId)
-      if (groupUserSettings) {
-        if (groupUserSettings.systemPrompt) {
-          effectivePrompt = groupUserSettings.systemPrompt
-          source = 'group_user'
+      settingsCache.group = await this.getGroupSettings(groupId)
+      settingsCache.group_user = await this.getGroupUserSettings(groupId, userId)
+    }
+    settingsCache.user = await this.getUserSettings(userId)
+
+    // 按优先级顺序查找
+    for (const level of priorityOrder) {
+      if (effectivePrompt && effectivePresetId) break // 都找到了就停止
+      
+      let settings = null
+      switch (level) {
+        case 'group_user':
+          if (groupId) settings = settingsCache.group_user
+          break
+        case 'group':
+          if (groupId) settings = settingsCache.group
+          break
+        case 'user':
+          settings = settingsCache.user
+          break
+        case 'default':
+          // default 由外部处理，这里跳过
+          continue
+      }
+      
+      if (settings) {
+        if (!effectivePrompt && settings.systemPrompt) {
+          effectivePrompt = settings.systemPrompt
+          source = level
         }
-        if (groupUserSettings.presetId) {
-          effectivePresetId = groupUserSettings.presetId
-          source = 'group_user'
+        if (!effectivePresetId && settings.presetId) {
+          effectivePresetId = settings.presetId
+          if (source === 'default') source = level
         }
       }
     }
 
-    // 优先级2: 群组配置（如果群用户未设置）
-    if (groupId && (!effectivePrompt || !effectivePresetId)) {
-      const groupSettings = await this.getGroupSettings(groupId)
-      if (groupSettings) {
-        if (!effectivePrompt && groupSettings.systemPrompt) {
-          effectivePrompt = groupSettings.systemPrompt
-          if (source === 'default') source = 'group'
-        }
-        if (!effectivePresetId && groupSettings.presetId) {
-          effectivePresetId = groupSettings.presetId
-          if (source === 'default') source = 'group'
-        }
-      }
-    }
-
-    // 优先级3: 用户全局配置
-    if (!effectivePrompt || !effectivePresetId) {
-      const userSettings = await this.getUserSettings(userId)
-      if (userSettings) {
-        if (!effectivePrompt && userSettings.systemPrompt) {
-          effectivePrompt = userSettings.systemPrompt
-          if (source === 'default') source = 'user'
-        }
-        if (!effectivePresetId && userSettings.presetId) {
-          effectivePresetId = userSettings.presetId
-          if (source === 'default') source = 'user'
-        }
-      }
-    }
+    logger.debug(`[ScopeManager] 人格优先级: ${priorityOrder.join(' > ')}, 生效来源: ${source}`)
 
     return {
       systemPrompt: effectivePrompt,
       presetId: effectivePresetId,
       source,
       // 标记是否有独立人设（设置了systemPrompt）
-      hasIndependentPrompt: !!effectivePrompt
+      hasIndependentPrompt: !!effectivePrompt,
+      // 返回优先级信息
+      priorityOrder
     }
   }
 
@@ -625,7 +628,7 @@ export class ScopeManager {
    * @param {string|null} groupId 群组ID
    * @param {string} userId 用户ID
    * @param {string} defaultPrompt 默认Prompt（仅在没有设置独立人设时使用）
-   * @returns {Promise<{prompt: string, source: string, isIndependent: boolean}>}
+   * @returns {Promise<{prompt: string, source: string, isIndependent: boolean, priorityOrder: string[]}>}
    */
   async getIndependentPrompt(groupId, userId, defaultPrompt = '') {
     await this.init()
@@ -637,7 +640,8 @@ export class ScopeManager {
       return {
         prompt: effective.systemPrompt,
         source: effective.source,
-        isIndependent: true
+        isIndependent: true,
+        priorityOrder: effective.priorityOrder
       }
     }
     
@@ -645,7 +649,8 @@ export class ScopeManager {
     return {
       prompt: defaultPrompt,
       source: 'default',
-      isIndependent: false
+      isIndependent: false,
+      priorityOrder: effective.priorityOrder
     }
   }
 }

@@ -1,5 +1,5 @@
 node_modules/
-data/
+data/*
 utils/processors
 utils/tools
 utils/triggers
@@ -7,5 +7,4 @@ memory.md
 resources/simple
 memory.db
 *.db
-
-
+data/presets.json
