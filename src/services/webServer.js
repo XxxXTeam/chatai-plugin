@@ -2543,7 +2543,16 @@ export default {
         this.app.get('/api/trigger/config', this.authMiddleware.bind(this), (req, res) => {
             const defaultConfig = {
                 private: { enabled: true, mode: 'always' },
-                group: { enabled: true, at: true, prefix: true, keyword: false, random: false, randomRate: 0.05 },
+                group: { 
+                    enabled: true, 
+                    at: true,           // @机器人触发
+                    reply: false,       // 引用消息触发
+                    replyBot: false,    // 引用机器人消息触发（防止重复响应）
+                    prefix: true, 
+                    keyword: false, 
+                    random: false, 
+                    randomRate: 0.05 
+                },
                 prefixes: ['#chat'],
                 keywords: [],
                 collectGroupMsg: true,

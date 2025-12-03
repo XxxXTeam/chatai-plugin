@@ -178,20 +178,25 @@ features:
 streaming:
   enabled: true
 trigger:
+  # === 私聊触发配置 ===
   private:
-    enabled: true
-    mode: always
+    enabled: true      # 是否启用私聊
+    mode: always       # always: 总是响应, prefix: 仅前缀响应, off: 关闭
+  # === 群聊触发配置 ===
   group:
-    enabled: true
-    at: true
-    prefix: true
-    keyword: false
-    random: false
-    randomRate: 0.05
-  prefixes:
+    enabled: true      # 是否启用群聊
+    at: true           # @机器人触发
+    reply: false       # 引用任意消息是否触发（需要配合@或前缀）
+    replyBot: false    # 引用机器人消息是否触发（即使没有@，默认false防止重复）
+    prefix: true       # 前缀触发
+    keyword: false     # 关键词触发
+    random: false      # 随机触发（伪人模式）
+    randomRate: 0.05   # 随机触发概率 (0-1)
+  # === 触发关键配置 ===
+  prefixes:            # 触发前缀列表
     - "#chat"
-  keywords: []
-  collectGroupMsg: true
+  keywords: []         # 触发关键词列表
+  collectGroupMsg: true # 是否采集群消息用于上下文
   blacklistUsers: []
   whitelistUsers: []
   blacklistGroups: []

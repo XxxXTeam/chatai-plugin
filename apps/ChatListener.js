@@ -8,7 +8,7 @@ import { setToolContext } from '../src/core/utils/toolAdapter.js'
 import { mcpManager } from '../src/mcp/McpManager.js'
 import { memoryManager } from '../src/services/MemoryManager.js'
 import config from '../config/config.js'
-import { isMessageProcessed, markMessageProcessed, isSelfMessage } from './chat.js'
+import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMessage } from './chat.js'
 
 export class ChatListener extends plugin {
     constructor() {
@@ -40,6 +40,25 @@ export class ChatListener extends plugin {
             return false
         }
         
+        // === 检查监听器总开关 ===
+        const listenerEnabled = config.get('listener.enabled')
+        if (listenerEnabled === false) {
+            // 监听器关闭时，只采集群消息（如果启用），不处理触发
+            if (e.isGroup && e.group_id && config.get('trigger.collectGroupMsg') !== false) {
+                try {
+                    memoryManager.collectGroupMessage(String(e.group_id), {
+                        user_id: e.user_id,
+                        sender: e.sender,
+                        msg: e.msg,
+                        raw_message: e.raw_message
+                    })
+                } catch (err) {
+                    // 静默失败
+                }
+            }
+            return false
+        }
+        
         // 获取配置（优先使用新trigger配置，兼容旧listener配置）
         let triggerCfg = config.get('trigger')
         if (!triggerCfg || !triggerCfg.private) {
@@ -48,7 +67,7 @@ export class ChatListener extends plugin {
             triggerCfg = this.convertLegacyConfig(listenerConfig)
         }
         
-        // 群聊消息采集
+        // 群聊消息采集（仅在群聊时）
         if (e.isGroup && e.group_id && triggerCfg.collectGroupMsg !== false) {
             try {
                 memoryManager.collectGroupMessage(String(e.group_id), {
@@ -72,7 +91,7 @@ export class ChatListener extends plugin {
             return false
         }
 
-        // 检查触发条件
+        // 检查触发条件（私聊和群聊独立判断）
         const triggerResult = this.checkTrigger(triggerCfg)
         if (!triggerResult.triggered) {
             return false
@@ -163,10 +182,33 @@ export class ChatListener extends plugin {
         
         // 1. @触发（优先级最高）
         if (groupCfg.at && e.atBot) {
-            return { triggered: true, msg: rawMsg, reason: '@机器人' }
+            const isReplyToBot = isReplyToBotMessage(e)
+            const hasReply = !!e.source
+            
+            if (isReplyToBot) {
+                // 引用机器人消息：检查 replyBot 配置
+                if (groupCfg.replyBot) {
+                    return { triggered: true, msg: rawMsg, reason: '引用机器人消息' }
+                }
+                // 不触发（防止重复响应）
+            } else if (hasReply) {
+                // 引用其他消息：@ 仍然有效
+                return { triggered: true, msg: rawMsg, reason: '@机器人(含引用)' }
+            } else {
+                // 正常 @ 触发
+                return { triggered: true, msg: rawMsg, reason: '@机器人' }
+            }
         }
         
-        // 2. 前缀触发
+        // 2. 引用机器人消息触发（独立于@，需要 replyBot=true）
+        if (groupCfg.replyBot && e.source && !e.atBot) {
+            const isReplyToBot = isReplyToBotMessage(e)
+            if (isReplyToBot) {
+                return { triggered: true, msg: rawMsg, reason: '引用机器人消息' }
+            }
+        }
+        
+        // 3. 前缀触发
         if (groupCfg.prefix) {
             const result = this.checkPrefix(rawMsg, triggerCfg.prefixes)
             if (result.matched) {
@@ -174,7 +216,7 @@ export class ChatListener extends plugin {
             }
         }
         
-        // 3. 关键词触发
+        // 4. 关键词触发
         if (groupCfg.keyword) {
             const result = this.checkKeyword(rawMsg, triggerCfg.keywords)
             if (result.matched) {
@@ -182,7 +224,7 @@ export class ChatListener extends plugin {
             }
         }
         
-        // 4. 随机触发
+        // 5. 随机触发
         if (groupCfg.random) {
             const rate = groupCfg.randomRate || 0.05
             if (Math.random() < rate) {
@@ -282,10 +324,20 @@ export class ChatListener extends plugin {
         mcpManager.setToolContext({ event: e, bot: e.bot || Bot })
 
         // 调用聊天服务 - 传递完整的用户消息信息
+        // 提取图片：支持 image 和 image_url 两种类型
+        const images = userMessage.content?.filter(c => 
+            c.type === 'image' || c.type === 'image_url'
+        ) || []
+        
+        // 调试日志：确认图片传递（debug级别）
+        if (images.length > 0) {
+            logger.debug(`[ChatListener] 传递图片: ${images.length} 张, 类型: ${images.map(i => i.type).join(', ')}`)
+        }
+        
         const result = await chatService.sendMessage({
             userId,
             message: textContent,
-            images: userMessage.content?.filter(c => c.type === 'image').map(c => c.image) || [],
+            images,
             event: e,
             mode: 'chat',
             // 传递解析后的消息信息

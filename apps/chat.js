@@ -79,6 +79,65 @@ export function isSelfMessage(e) {
   }
 }
 
+/**
+ * 获取所有机器人ID集合
+ * @returns {Set<string>}
+ */
+export function getBotIds() {
+  const selfIds = new Set()
+  try {
+    if (Bot?.uin) selfIds.add(String(Bot.uin))
+    if (Bot?.self_id) selfIds.add(String(Bot.self_id))
+    if (Bot?.bots && typeof Bot.bots[Symbol.iterator] === 'function') {
+      for (const [id] of Bot.bots) {
+        selfIds.add(String(id))
+      }
+    } else if (Bot?.bots && typeof Bot.bots === 'object') {
+      for (const id of Object.keys(Bot.bots)) {
+        selfIds.add(String(id))
+      }
+    }
+  } catch (err) {
+    // ignore
+  }
+  return selfIds
+}
+
+/**
+ * 检查是否是引用机器人消息触发（需要排除）
+ * 当用户引用机器人的消息并且被识别为 atBot 时，应排除这种情况
+ * @param {Object} e - 事件对象
+ * @returns {boolean} true 表示是引用机器人消息触发，应该忽略
+ */
+export function isReplyToBotMessage(e) {
+  try {
+    // 没有引用消息则不是
+    if (!e?.source) return false
+    
+    // 获取机器人ID集合
+    const botIds = getBotIds()
+    
+    // 检查引用消息的发送者是否是机器人
+    const sourceUserId = String(e.source.user_id || e.source.sender?.user_id || '')
+    if (sourceUserId && botIds.has(sourceUserId)) {
+      // 引用的是机器人的消息
+      // 检查当前消息是否只有引用没有真正的 @
+      const hasRealAt = e.message?.some(seg => 
+        seg.type === 'at' && botIds.has(String(seg.qq))
+      )
+      
+      // 如果没有真正的 @ 但 atBot 为 true，说明是框架因为引用而设置的
+      if (e.atBot && !hasRealAt) {
+        return true
+      }
+    }
+    
+    return false
+  } catch (err) {
+    return false
+  }
+}
+
 export class Chat extends plugin {
   constructor() {
     super({
@@ -136,25 +195,77 @@ export class Chat extends plugin {
     let msg = null
     let triggerReason = ''
 
-    // 群聊：检查 @ 触发
-    if (e.isGroup && triggerCfg.group?.at && e.atBot) {
-      msg = rawMsg
-      triggerReason = '@机器人'
-    }
-
-    // 检查前缀触发（私聊和群聊都支持）
-    if (!msg && triggerCfg.group?.prefix) {
-      for (const prefix of prefixes) {
-        if (prefix && rawMsg.startsWith(prefix)) {
-          msg = rawMsg.slice(prefix.length).trim()
-          triggerReason = `前缀[${prefix}]`
-          break
+    // === 私聊处理 ===
+    if (!e.isGroup) {
+      const privateCfg = triggerCfg.private || {}
+      // 私聊未启用则跳过
+      if (!privateCfg.enabled) {
+        return false
+      }
+      
+      const mode = privateCfg.mode || 'prefix'
+      if (mode === 'always') {
+        // 私聊总是响应模式 - 交给 ChatListener 处理
+        return false
+      } else if (mode === 'prefix') {
+        // 私聊前缀模式
+        for (const prefix of prefixes) {
+          if (prefix && rawMsg.startsWith(prefix)) {
+            msg = rawMsg.slice(prefix.length).trim()
+            triggerReason = `私聊前缀[${prefix}]`
+            break
+          }
         }
       }
-    }
+      
+      if (!msg) {
+        return false
+      }
+    } else {
+      // === 群聊处理 ===
+      const groupCfg = triggerCfg.group || {}
+      // 群聊未启用则跳过
+      if (!groupCfg.enabled) {
+        return false
+      }
+      
+      // 群聊：检查 @ 触发
+      if (groupCfg.at && e.atBot) {
+        const isReplyToBot = isReplyToBotMessage(e)
+        const hasReply = !!e.source
+        
+        if (isReplyToBot) {
+          // 引用机器人消息：检查 replyBot 配置
+          if (groupCfg.replyBot) {
+            msg = rawMsg
+            triggerReason = '引用机器人消息'
+          }
+          // 如果 replyBot=false，则不触发（防止重复响应）
+        } else if (hasReply && !groupCfg.reply) {
+          // 引用其他消息但 reply=false：仍然允许 @ 触发
+          msg = rawMsg
+          triggerReason = '@机器人(含引用)'
+        } else {
+          // 正常 @ 触发
+          msg = rawMsg
+          triggerReason = '@机器人'
+        }
+      }
 
-    if (!msg) {
-      return false  // 交给ChatListener处理其他情况
+      // 群聊：检查前缀触发
+      if (!msg && groupCfg.prefix) {
+        for (const prefix of prefixes) {
+          if (prefix && rawMsg.startsWith(prefix)) {
+            msg = rawMsg.slice(prefix.length).trim()
+            triggerReason = `群聊前缀[${prefix}]`
+            break
+          }
+        }
+      }
+
+      if (!msg) {
+        return false  // 交给ChatListener处理其他情况（随机、关键词等）
+      }
     }
     
     logger.debug(`[Chat] 触发: ${triggerReason}`)
@@ -336,40 +447,40 @@ export class Chat extends plugin {
       }
 
       // Process images - 直接使用图片URL
-      let imageUrls = []
+      let imageIds = []
       
-      // 方式1: 从 e.img 获取 (Yunzai 解析的图片URL数组)
-      if (e.img && e.img.length > 0) {
-        for (const imgUrl of e.img) {
-          if (typeof imgUrl === 'string' && imgUrl.startsWith('http')) {
-            imageUrls.push(imgUrl)
+      // 方式1: 从 parsedMessage.content 获取（包括引用消息中的图片）
+      if (parsedMessage?.content) {
+        for (const item of parsedMessage.content) {
+          if (item.type === 'image_url' && item.image_url?.url) {
+            // 直接传递 image_url 对象
+            imageIds.push(item)
+          } else if (item.type === 'image' && item.image) {
+            // base64 或其他格式
+            imageIds.push(item)
           }
         }
       }
       
-      // 方式2: 从 e.message 获取 (icqq 原始消息)
-      if (imageUrls.length === 0 && e.message) {
+      // 方式2: 从 e.img 获取 (Yunzai 解析的图片URL数组)
+      if (imageIds.length === 0 && e.img && e.img.length > 0) {
+        for (const imgUrl of e.img) {
+          if (typeof imgUrl === 'string' && imgUrl.startsWith('http')) {
+            imageIds.push({ type: 'image_url', image_url: { url: imgUrl } })
+          }
+        }
+      }
+      
+      // 方式3: 从 e.message 获取 (icqq 原始消息)
+      if (imageIds.length === 0 && e.message) {
         for (const seg of e.message) {
           if (seg.type === 'image') {
             // icqq 图片消息格式
             const url = seg.url || seg.file
             if (url && url.startsWith('http')) {
-              imageUrls.push(url)
+              imageIds.push({ type: 'image_url', image_url: { url } })
             }
           }
-        }
-      }
-      
-      // 转换为图片内容格式
-      let imageIds = []
-      for (const url of imageUrls) {
-        try {
-          const downloaded = await imageService.downloadImage(url)
-          imageIds.push(downloaded.id)
-        } catch (imgError) {
-          logger.warn('[AI-Chat] 图片下载失败，直接使用URL:', imgError.message)
-          // 下载失败时直接使用URL
-          imageIds.push({ type: 'url', url })
         }
       }
 

@@ -194,11 +194,49 @@ class DatabaseService {
     }
 
     /**
-     * Save a message to the database
+     * Save a message to the database (with deduplication)
      * @param {string} conversationId 
      * @param {Object} message 
      */
     saveMessage(conversationId, message) {
+        // 去重：检查是否已存在相同 ID 的消息
+        if (message.id) {
+            const existing = this.db.prepare(`
+                SELECT id FROM messages 
+                WHERE conversation_id = ? AND content LIKE ?
+                LIMIT 1
+            `).get(conversationId, `%"id":"${message.id}"%`)
+            
+            if (existing) {
+                // 消息已存在，跳过保存
+                return
+            }
+        }
+        
+        // 内容去重：检查最近5条消息是否有相同内容（防止重复触发）
+        const contentHash = this.hashContent(message.content, message.role)
+        const recentDuplicate = this.db.prepare(`
+            SELECT id FROM messages 
+            WHERE conversation_id = ? 
+            ORDER BY timestamp DESC 
+            LIMIT 5
+        `).all(conversationId)
+        
+        for (const recent of recentDuplicate) {
+            const recentMsg = this.db.prepare(`SELECT content, role FROM messages WHERE id = ?`).get(recent.id)
+            if (recentMsg) {
+                try {
+                    const parsed = JSON.parse(recentMsg.content)
+                    if (this.hashContent(parsed.content, recentMsg.role) === contentHash) {
+                        // 最近已有相同内容，跳过保存
+                        return
+                    }
+                } catch (e) {
+                    // 解析失败，继续
+                }
+            }
+        }
+        
         const stmt = this.db.prepare(`
             INSERT INTO messages (conversation_id, role, content, timestamp, metadata)
             VALUES (?, ?, ?, ?, ?)
@@ -216,6 +254,23 @@ class DatabaseService {
         const timestamp = message.timestamp || Date.now()
 
         stmt.run(conversationId, message.role, content, timestamp, metadata)
+    }
+    
+    /**
+     * 生成消息内容的简单哈希用于去重
+     * @param {any} content 
+     * @param {string} role
+     * @returns {string}
+     */
+    hashContent(content, role) {
+        const str = JSON.stringify(content) + role
+        let hash = 0
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i)
+            hash = ((hash << 5) - hash) + char
+            hash = hash & hash
+        }
+        return hash.toString(16)
     }
 
     /**

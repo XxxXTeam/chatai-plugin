@@ -1,6 +1,6 @@
 import config from '../config/config.js'
 import { cleanCQCode } from '../src/utils/messageParser.js'
-import { isMessageProcessed, markMessageProcessed, isSelfMessage } from './chat.js'
+import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMessage } from './chat.js'
 import { getScopeManager } from '../src/services/ScopeManager.js'
 import { databaseService } from '../src/services/DatabaseService.js'
 
@@ -48,8 +48,8 @@ export class bym extends plugin {
             return false
         }
         
-        // 检查是否被@（被@时应由其他插件处理）
-        if (e.atBot) {
+        // 检查是否被@（被@时应由其他插件处理，但排除引用机器人消息的误触发）
+        if (e.atBot && !isReplyToBotMessage(e)) {
             return false
         }
 

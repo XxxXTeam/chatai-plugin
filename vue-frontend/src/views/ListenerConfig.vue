@@ -10,7 +10,16 @@ const saving = ref(false)
 // 触发配置（新结构）
 const triggerConfig = ref({
     private: { enabled: true, mode: 'always' },
-    group: { enabled: true, at: true, prefix: true, keyword: false, random: false, randomRate: 0.05 },
+    group: { 
+        enabled: true, 
+        at: true,           // @机器人触发
+        reply: false,       // 引用消息触发（需配合@或前缀）
+        replyBot: false,    // 引用机器人消息触发（即使无@）
+        prefix: true, 
+        keyword: false, 
+        random: false, 
+        randomRate: 0.05 
+    },
     prefixes: ['#chat'],
     keywords: [],
     collectGroupMsg: true,
@@ -59,7 +68,16 @@ async function loadConfig() {
                 ...triggerConfig.value, 
                 ...data,
                 private: data.private || { enabled: true, mode: 'always' },
-                group: data.group || { enabled: true, at: true, prefix: true, keyword: false, random: false, randomRate: 0.05 },
+                group: { 
+                    enabled: data.group?.enabled ?? true, 
+                    at: data.group?.at ?? true, 
+                    reply: data.group?.reply ?? false,
+                    replyBot: data.group?.replyBot ?? false,
+                    prefix: data.group?.prefix ?? true, 
+                    keyword: data.group?.keyword ?? false, 
+                    random: data.group?.random ?? false, 
+                    randomRate: data.group?.randomRate ?? 0.05 
+                },
                 prefixes: data.prefixes || ['#chat'],
                 keywords: data.keywords || [],
                 collectGroupMsg: data.collectGroupMsg ?? true,
@@ -126,13 +144,28 @@ onMounted(() => {
                     
                     <template v-if="triggerConfig.group.enabled">
                         <n-form-item label="@机器人触发">
-                            <n-switch v-model:value="triggerConfig.group.at" />
+                            <n-space align="center">
+                                <n-switch v-model:value="triggerConfig.group.at" />
+                                <span style="color: #999; font-size: 12px;">被@时响应</span>
+                            </n-space>
+                        </n-form-item>
+                        <n-form-item label="引用机器人触发">
+                            <n-space align="center">
+                                <n-switch v-model:value="triggerConfig.group.replyBot" />
+                                <span style="color: #999; font-size: 12px;">引用机器人消息时触发（关闭可防止重复响应）</span>
+                            </n-space>
                         </n-form-item>
                         <n-form-item label="前缀触发">
-                            <n-switch v-model:value="triggerConfig.group.prefix" />
+                            <n-space align="center">
+                                <n-switch v-model:value="triggerConfig.group.prefix" />
+                                <span style="color: #999; font-size: 12px;">消息以指定前缀开头时响应</span>
+                            </n-space>
                         </n-form-item>
                         <n-form-item label="关键词触发">
-                            <n-switch v-model:value="triggerConfig.group.keyword" />
+                            <n-space align="center">
+                                <n-switch v-model:value="triggerConfig.group.keyword" />
+                                <span style="color: #999; font-size: 12px;">消息包含关键词时响应</span>
+                            </n-space>
                         </n-form-item>
                         <n-form-item label="随机触发">
                             <n-space align="center">
@@ -141,6 +174,7 @@ onMounted(() => {
                                     <n-slider v-model:value="triggerConfig.group.randomRate" :min="0" :max="0.5" :step="0.01" style="width: 120px;" />
                                     <span>{{ (triggerConfig.group.randomRate * 100).toFixed(0) }}%</span>
                                 </template>
+                                <span v-else style="color: #999; font-size: 12px;">按概率随机响应（伪人模式）</span>
                             </n-space>
                         </n-form-item>
                     </template>
@@ -204,9 +238,11 @@ onMounted(() => {
                         群聊: {{ triggerConfig.group.enabled ? '开启' : '关闭' }}
                     </n-tag>
                     <n-tag v-if="triggerConfig.group.at" type="info">@触发</n-tag>
+                    <n-tag v-if="triggerConfig.group.replyBot" type="info">引用触发</n-tag>
                     <n-tag v-if="triggerConfig.group.prefix" type="info">前缀触发</n-tag>
                     <n-tag v-if="triggerConfig.group.keyword" type="info">关键词触发</n-tag>
                     <n-tag v-if="triggerConfig.group.random" type="warning">随机{{ (triggerConfig.group.randomRate * 100).toFixed(0) }}%</n-tag>
+                    <n-tag v-if="!triggerConfig.group.replyBot" type="default">引用机器人不触发</n-tag>
                 </n-space>
             </n-card>
             

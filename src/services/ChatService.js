@@ -104,6 +104,9 @@ export class ChatService {
         }
 
         // Process images - 优先直接使用URL，避免下载大文件
+        if (images.length > 0) {
+            logger.debug(`[ChatService] 接收到图片: ${images.length} 张`)
+        }
         for (const imageRef of images) {
             try {
                 // 如果是 image_url 类型对象（来自 messageParser）
@@ -438,7 +441,7 @@ export class ChatService {
             }
             
             try {
-                // 空输出重试机制
+                // 智能重试机制 - 只在真正的空返回时重试，不对正常的无文本回复重试
                 const MAX_RETRY = 2
                 let retryCount = 0
                 let response = null
@@ -446,28 +449,35 @@ export class ChatService {
                 while (retryCount <= MAX_RETRY) {
                     response = await client.sendMessage(userMessage, requestOptions)
                     
-                    // 检查是否有有效内容
-                    const hasValidContent = response.contents && response.contents.length > 0 && 
-                        response.contents.some(c => {
-                            if (c.type === 'text') return c.text && c.text.trim().length > 0
-                            if (c.type === 'reasoning') return c.text && c.text.trim().length > 0
-                            return true
-                        })
+                    // 判断是否需要重试
+                    // 1. response 完全为空或异常 - 需要重试
+                    // 2. 有工具调用日志但无内容 - 这是正常的，不重试
+                    // 3. 有任何类型的内容（包括空文本）- 不重试
                     
-                    if (hasValidContent) {
-                        break // 有有效内容，跳出循环
+                    const hasToolCallLogs = response.toolCallLogs && response.toolCallLogs.length > 0
+                    const hasContents = response.contents && response.contents.length > 0
+                    const hasAnyContent = hasContents || hasToolCallLogs
+                    
+                    // 只有在完全没有任何响应时才重试
+                    const shouldRetry = !response || (!hasAnyContent && !response.id)
+                    
+                    if (!shouldRetry) {
+                        // 正常返回（即使内容为空也不重试）
+                        if (!hasContents && hasToolCallLogs) {
+                            logger.debug('[ChatService] 工具调用完成，无额外文本回复')
+                        }
+                        break
                     }
                     
                     retryCount++
                     if (retryCount <= MAX_RETRY) {
-                        logger.warn(`[ChatService] API返回空内容，重试第${retryCount}次...`)
-                        // 短暂延迟后重试
+                        logger.warn(`[ChatService] API返回异常空响应，重试第${retryCount}次...`)
                         await new Promise(r => setTimeout(r, 500 * retryCount))
                     }
                 }
                 
                 if (retryCount > MAX_RETRY) {
-                    logger.warn('[ChatService] 多次重试后仍无有效内容')
+                    logger.warn('[ChatService] 多次重试后仍无有效响应')
                 }
                 
                 finalResponse = response.contents

@@ -975,13 +975,21 @@ async function parseReplyMessage(e, options) {
         // 输出解析日志
         logger.info('[MessageParser]', parseLog.join('\n'))
 
-        // 构建引用上下文，明确标注发送者身份
+        // 构建引用上下文（简化格式，避免冗余）
         if (replyTextContent) {
             replyTextContent = cleanCQCode(replyTextContent)
+            // 截断过长的引用内容
+            const maxQuoteLen = 200
+            const truncatedQuote = replyTextContent.length > maxQuoteLen 
+                ? replyTextContent.substring(0, maxQuoteLen) + '...' 
+                : replyTextContent
+            
             if (isQuotingBot) {
-                text = `[用户引用了你(AI助手)之前的回复]\n"${replyTextContent}"\n\n[用户针对上述引用的提问]\n`
+                // 引用机器人消息：简洁格式
+                text = `[引用你之前的回复: "${truncatedQuote}"]\n`
             } else {
-                text = `[用户引用了${senderLabel}的消息]\n"${replyTextContent}"\n\n[用户的提问]\n`
+                // 引用其他用户消息
+                text = `[引用${senderLabel}的消息: "${truncatedQuote}"]\n`
             }
         }
         
