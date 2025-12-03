@@ -69,10 +69,33 @@ export class ChatService {
         // Get group ID from event for proper isolation
         const groupId = event?.group_id || event?.data?.group_id || null
         
+        // 提取纯userId（不带群号前缀）
+        const pureUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
+        const cleanUserId = pureUserId?.includes('_') ? pureUserId.split('_').pop() : pureUserId
+        
+        // 检查用户是否有独立人格设置（如果有，需要强制独立会话）
+        let forceIsolation = false
+        if (groupId) {
+            const sm = await ensureScopeManager()
+            const groupUserSettings = await sm.getGroupUserSettings(String(groupId), cleanUserId)
+            const userSettings = await sm.getUserSettings(cleanUserId)
+            // 如果用户在群内或全局设置了独立人格，强制使用独立会话
+            if (groupUserSettings?.systemPrompt || userSettings?.systemPrompt) {
+                forceIsolation = true
+                logger.info(`[ChatService] 用户 ${cleanUserId} 有独立人格设置，强制使用独立会话`)
+            }
+        }
+        
         // Get conversation ID with proper isolation:
-        // - Group chat: isolated by group (group:xxx)
+        // - Group chat: isolated by group (group:xxx) or by user if forceIsolation
         // - Private chat: isolated by user (user:xxx)
-        const conversationId = contextManager.getConversationId(userId, groupId)
+        let conversationId
+        if (forceIsolation && groupId) {
+            // 强制独立会话：使用群+用户的组合ID
+            conversationId = `group:${groupId}:user:${cleanUserId}`
+        } else {
+            conversationId = contextManager.getConversationId(userId, groupId)
+        }
 
         // Build message content
         const messageContent = []

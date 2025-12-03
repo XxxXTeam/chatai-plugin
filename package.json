@@ -1,8 +1,8 @@
 {
-  "name": "new-plugin",
+  "name": "chatgpt-plugin",
   "version": "1.0.0",
   "type": "module",
-  "description": "New Yunzai Plugin with Embedded Chaite & MCP",
+  "description": "New Yunzai Plugin with Embedded Chatgpt & MCP",
   "main": "index.js",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.37.0",

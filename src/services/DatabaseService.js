@@ -151,6 +151,14 @@ class DatabaseService {
     }
     
     /**
+     * 清空所有用户的记忆
+     */
+    clearAllMemories() {
+        const stmt = this.db.prepare('DELETE FROM memories')
+        return stmt.run().changes
+    }
+    
+    /**
      * 获取记忆统计
      */
     getMemoryStats(userId) {

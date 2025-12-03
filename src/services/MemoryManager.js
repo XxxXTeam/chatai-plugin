@@ -156,22 +156,29 @@ export class MemoryManager {
             
             // 构建分析提示
             const analysisTypes = []
-            if (groupConfig.extractUserInfo) analysisTypes.push('用户信息（如：爱好、职业、特点）')
-            if (groupConfig.extractTopics) analysisTypes.push('讨论话题和群氛围')
-            if (groupConfig.extractRelations) analysisTypes.push('用户之间的关系')
+            if (groupConfig.extractUserInfo) analysisTypes.push('用户特征和偏好')
+            if (groupConfig.extractTopics) analysisTypes.push('讨论话题')
+            if (groupConfig.extractRelations) analysisTypes.push('社交关系')
             
-            const prompt = `分析以下群聊记录，提取有价值的信息用于记忆。
-分析维度：${analysisTypes.join('、')}
+            const prompt = `你是一个记忆提取专家。请仔细分析以下群聊记录，提取有长期价值的信息。
+
+【分析维度】${analysisTypes.join('、')}
 
 【群聊记录】
 ${dialogText}
 
-请按以下格式输出（每行一条，不超过50字）：
-【用户:用户昵称】具体信息
-【话题】讨论的主题
-【关系】用户A与用户B的关系
+【提取要求】
+1. 只提取具体、明确的信息，避免模糊描述
+2. 用户信息包括：性格特点、兴趣爱好、专业技能、生活习惯等
+3. 话题需要是具体主题，如"讨论Python编程"而非"技术讨论"
+4. 关系需要明确说明是什么关系，如"经常互动""观点相似"
 
-只输出有意义的信息，没有则不输出：`
+【输出格式】每行一条，格式如下：
+【用户:昵称】具体信息描述
+【话题】具体话题内容
+【关系】A和B：关系描述
+
+只输出有价值的信息，宁缺毋滥，没有则输出"无"：`
 
             const client = await LlmService.getChatClient()
             const result = await client.sendMessage(
@@ -356,16 +363,22 @@ ${dialogText}
             const existingText = existingMemories.map(m => m.content).join('\n')
             
             // 使用 LLM 分析并提取新记忆
-            const prompt = `分析以下对话，提取关于用户的重要信息（如：个人信息、偏好、习惯、重要事件等）。
-每条记忆一行，不超过50字。只输出新信息，不要重复已有记忆。如果没有新信息，返回"无"。
+            const prompt = `你是一个用户记忆管理专家。请分析对话，提取关于用户的有长期价值的信息。
 
-【已有记忆】
+【已有记忆】（避免重复）
 ${existingText || '暂无'}
 
 【最近对话】
 ${dialogText}
 
-【新记忆】（每行一条，最多3条）：`
+【提取规则】
+1. 提取具体的个人信息：姓名、年龄、职业、所在地等
+2. 提取明确的偏好：喜欢/不喜欢的事物、习惯
+3. 提取重要事件：生日、纪念日、重要计划等
+4. 避免重复已有记忆，只提取新信息
+5. 每条记忆简洁明了，不超过40字
+
+【输出格式】每行一条记忆，最多3条，没有新信息则输出"无"：`
 
             const client = await LlmService.getChatClient()
             const result = await client.sendMessage(
@@ -458,7 +471,7 @@ ${dialogText}
     }
 
     /**
-     * 获取与查询相关的记忆上下文
+     * 获取用户记忆上下文
      * @param {string} userId
      * @param {string} query
      * @returns {string} 格式化的记忆上下文
@@ -468,14 +481,56 @@ ${dialogText}
         
         await this.init()
         
-        // 优先搜索相关记忆，否则获取最近记忆
-        let memories = query 
-            ? databaseService.searchMemories(userId, query, 5)
-            : databaseService.getMemories(userId, 10)
+        // 提取纯userId（去除可能的群号前缀）
+        const pureUserId = userId?.includes('_') ? userId.split('_').pop() : userId
         
-        if (memories.length === 0) return ''
+        // 获取所有相关记忆
+        let allMemories = []
+        
+        // 1. 获取用户个人记忆
+        const userMemories = databaseService.getMemories(pureUserId, 10)
+        allMemories.push(...userMemories)
+        
+        // 2. 如果有查询词，搜索相关记忆
+        if (query && query.trim()) {
+            const searchedMemories = databaseService.searchMemories(pureUserId, query, 5)
+            // 合并去重
+            for (const sm of searchedMemories) {
+                if (!allMemories.find(m => m.id === sm.id)) {
+                    allMemories.push(sm)
+                }
+            }
+        }
+        
+        // 3. 如果userId包含群号前缀，也获取组合ID的记忆
+        if (userId?.includes('_')) {
+            const combinedMemories = databaseService.getMemories(userId, 5)
+            for (const cm of combinedMemories) {
+                if (!allMemories.find(m => m.id === cm.id)) {
+                    allMemories.push(cm)
+                }
+            }
+        }
+        
+        if (allMemories.length === 0) {
+            logger.debug(`[MemoryManager] 用户 ${pureUserId} 无记忆数据`)
+            return ''
+        }
+        
+        // 按重要性和时间排序，取最相关的
+        allMemories.sort((a, b) => {
+            // 先按重要性排序，再按时间排序
+            const importanceA = a.importance || 5
+            const importanceB = b.importance || 5
+            if (importanceB !== importanceA) return importanceB - importanceA
+            return (b.timestamp || 0) - (a.timestamp || 0)
+        })
+        
+        // 最多取15条
+        const selectedMemories = allMemories.slice(0, 15)
 
-        const memoryText = memories.map(m => `- ${m.content}`).join('\n')
+        const memoryText = selectedMemories.map(m => `- ${m.content}`).join('\n')
+        logger.info(`[MemoryManager] 为用户 ${pureUserId} 加载 ${selectedMemories.length} 条记忆`)
         return `\n【用户记忆】\n${memoryText}\n`
     }
 

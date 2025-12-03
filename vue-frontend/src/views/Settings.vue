@@ -14,8 +14,6 @@ const saving = ref(false)
 
 const config = reactive({
   basic: {
-    toggleMode: 'at',
-    togglePrefix: '#chat',
     commandPrefix: '#ai',
     debug: false,
     showThinkingMessage: true,
@@ -53,6 +51,7 @@ const config = reactive({
     recall: false,
     model: '',
     systemPrompt: '',
+    inheritPersonality: true,
     exclusiveFeatures: ['groupSummary', 'userPortrait']
   },
   tools: {
@@ -85,27 +84,41 @@ const config = reactive({
     enabled: false,
     autoExtract: true
   },
-  listener: {
-    enabled: true,
-    triggerMode: 'at',
-    triggerPrefix: '',
-    whitelistGroups: [],
-    blacklistGroups: [],
+  // AI触发配置（新结构）
+  trigger: {
+    private: { enabled: true, mode: 'always' },
+    group: { enabled: true, at: true, prefix: true, keyword: false, random: false, randomRate: 0.05 },
+    prefixes: ['#chat'],
+    keywords: [],
+    collectGroupMsg: true,
+    blacklistUsers: [],
     whitelistUsers: [],
-    blacklistUsers: []
+    blacklistGroups: [],
+    whitelistGroups: []
   }
 })
 
-// 触发模式选项
-const triggerModeOptions = [
-  { label: '仅@触发', value: 'at' },
-  { label: '仅前缀触发', value: 'prefix' },
-  { label: '@或前缀', value: 'at_or_prefix' },
-  { label: '始终触发', value: 'always' }
+// 私聊模式选项
+const privateModeOptions = [
+  { label: '总是响应', value: 'always' },
+  { label: '需要前缀', value: 'prefix' },
+  { label: '关闭', value: 'off' }
 ]
 
-const showPrefixInput = computed(() => {
-  return ['prefix', 'at_or_prefix'].includes(config.listener.triggerMode)
+// 前缀输入处理
+const prefixesText = computed({
+  get: () => (config.trigger.prefixes || []).join(', '),
+  set: (val) => {
+    config.trigger.prefixes = val.split(/[,，]\s*/).filter(Boolean)
+  }
+})
+
+// 关键词输入处理
+const keywordsText = computed({
+  get: () => (config.trigger.keywords || []).join(', '),
+  set: (val) => {
+    config.trigger.keywords = val.split(/[,，]\s*/).filter(Boolean)
+  }
 })
 
 const allModels = ref([])
@@ -159,13 +172,17 @@ async function fetchConfig() {
         if (data.features.reaction) Object.assign(config.features.reaction, data.features.reaction)
       }
       if (data.memory) Object.assign(config.memory, data.memory)
-      if (data.listener) {
-        Object.assign(config.listener, data.listener)
-        // 确保数组存在
-        config.listener.whitelistGroups = data.listener.whitelistGroups || []
-        config.listener.blacklistGroups = data.listener.blacklistGroups || []
-        config.listener.whitelistUsers = data.listener.whitelistUsers || []
-        config.listener.blacklistUsers = data.listener.blacklistUsers || []
+      // 加载trigger配置（新结构）
+      if (data.trigger) {
+        config.trigger.private = data.trigger.private || { enabled: true, mode: 'always' }
+        config.trigger.group = data.trigger.group || { enabled: true, at: true, prefix: true, keyword: false, random: false, randomRate: 0.05 }
+        config.trigger.prefixes = data.trigger.prefixes || ['#chat']
+        config.trigger.keywords = data.trigger.keywords || []
+        config.trigger.collectGroupMsg = data.trigger.collectGroupMsg ?? true
+        config.trigger.blacklistUsers = data.trigger.blacklistUsers || []
+        config.trigger.whitelistUsers = data.trigger.whitelistUsers || []
+        config.trigger.blacklistGroups = data.trigger.blacklistGroups || []
+        config.trigger.whitelistGroups = data.trigger.whitelistGroups || []
       }
 
       // Fetch channels to get all models for selector
@@ -203,7 +220,7 @@ async function saveConfig() {
       thinking: { ...config.thinking },
       features: { ...config.features },
       memory: { ...config.memory },
-      listener: { ...config.listener }
+      trigger: { ...config.trigger }
     }
 
     const res = await axios.post('/api/config', payload)
@@ -251,28 +268,108 @@ onMounted(() => {
       API Key 和渠道配置请前往「渠道管理」页面进行设置
     </n-alert>
 
-    <!-- 触发模式配置 -->
-    <n-card title="触发模式">
+    <!-- AI触发配置（重构版） -->
+    <n-card title="AI触发配置">
+      <n-alert type="info" style="margin-bottom: 16px;">
+        配置机器人何时响应消息。私聊和群聊可独立配置触发方式。
+      </n-alert>
+      
       <n-form label-placement="left" label-width="140">
-        <n-form-item label="触发方式">
+        <!-- 私聊配置 -->
+        <n-divider title-placement="left">私聊触发</n-divider>
+        
+        <n-form-item label="响应私聊">
+          <n-switch v-model:value="config.trigger.private.enabled" />
+        </n-form-item>
+        <n-form-item label="私聊模式" v-if="config.trigger.private.enabled">
           <n-select 
-            v-model:value="config.basic.toggleMode" 
-            :options="triggerModeOptions"
-            placeholder="选择触发方式"
+            v-model:value="config.trigger.private.mode" 
+            :options="privateModeOptions"
+            style="width: 180px;"
           />
         </n-form-item>
+        
+        <!-- 群聊配置 -->
+        <n-divider title-placement="left">群聊触发</n-divider>
+        
+        <n-form-item label="响应群聊">
+          <n-switch v-model:value="config.trigger.group.enabled" />
+        </n-form-item>
+        
+        <template v-if="config.trigger.group.enabled">
+          <n-form-item label="@机器人触发">
+            <n-switch v-model:value="config.trigger.group.at" />
+          </n-form-item>
+          <n-form-item label="前缀触发">
+            <n-switch v-model:value="config.trigger.group.prefix" />
+          </n-form-item>
+          <n-form-item label="关键词触发">
+            <n-switch v-model:value="config.trigger.group.keyword" />
+          </n-form-item>
+          <n-form-item label="随机触发">
+            <n-space align="center">
+              <n-switch v-model:value="config.trigger.group.random" />
+              <template v-if="config.trigger.group.random">
+                <n-slider v-model:value="config.trigger.group.randomRate" :min="0" :max="0.5" :step="0.01" style="width: 120px;" />
+                <span>{{ (config.trigger.group.randomRate * 100).toFixed(0) }}%</span>
+              </template>
+            </n-space>
+          </n-form-item>
+        </template>
+        
+        <!-- 触发词配置 -->
+        <n-divider title-placement="left">触发词</n-divider>
+        
         <n-form-item label="触发前缀">
+          <n-input v-model:value="prefixesText" placeholder="多个用逗号分隔，如: #chat, 小助手" />
+        </n-form-item>
+        <n-form-item label="触发关键词" v-if="config.trigger.group.keyword">
+          <n-input v-model:value="keywordsText" placeholder="消息包含这些词时触发" />
+        </n-form-item>
+        
+        <!-- 其他 -->
+        <n-divider title-placement="left">其他</n-divider>
+        
+        <n-form-item label="采集群消息">
           <n-tooltip trigger="hover">
             <template #trigger>
-              <n-input 
-                v-model:value="config.basic.togglePrefix" 
-                placeholder="#chat"
-                :disabled="config.basic.toggleMode === 'at'"
-              />
+              <n-switch v-model:value="config.trigger.collectGroupMsg" />
             </template>
-            当触发方式包含前缀时，用户发送此前缀开头的消息会触发AI对话
+            用于记忆和上下文分析
           </n-tooltip>
         </n-form-item>
+        
+        <!-- 访问控制 -->
+        <n-divider title-placement="left">访问控制</n-divider>
+        
+        <n-grid :cols="2" :x-gap="24" responsive="screen" :collapsed-cols="1">
+          <n-grid-item>
+            <n-form-item label="群白名单">
+              <n-dynamic-tags v-model:value="config.trigger.whitelistGroups" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="群黑名单">
+              <n-dynamic-tags v-model:value="config.trigger.blacklistGroups" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="用户白名单">
+              <n-dynamic-tags v-model:value="config.trigger.whitelistUsers" />
+            </n-form-item>
+          </n-grid-item>
+          <n-grid-item>
+            <n-form-item label="用户黑名单">
+              <n-dynamic-tags v-model:value="config.trigger.blacklistUsers" />
+            </n-form-item>
+          </n-grid-item>
+        </n-grid>
+      </n-form>
+    </n-card>
+    
+    <!-- 基础配置 -->
+    <n-card title="基础配置">
+      <n-form label-placement="left" label-width="140">
         <n-form-item label="命令前缀">
           <n-tooltip trigger="hover">
             <template #trigger>
@@ -281,23 +378,12 @@ onMounted(() => {
             管理命令的前缀，如 #ai帮助、#ai状态 等
           </n-tooltip>
         </n-form-item>
-        <n-form-item label="调试模式">
-          <n-switch v-model:value="config.basic.debug" />
-        </n-form-item>
         <n-form-item label="思考提示">
           <n-tooltip trigger="hover">
             <template #trigger>
               <n-switch v-model:value="config.basic.showThinkingMessage" />
             </template>
             开启后，AI处理时会先发送"思考中..."提示
-          </n-tooltip>
-        </n-form-item>
-        <n-form-item label="调试仅控制台">
-          <n-tooltip trigger="hover">
-            <template #trigger>
-              <n-switch v-model:value="config.basic.debugToConsoleOnly" />
-            </template>
-            开启后，调试信息仅输出到控制台，不发送到聊天
           </n-tooltip>
         </n-form-item>
         <n-form-item label="引用回复">
@@ -308,27 +394,23 @@ onMounted(() => {
             开启后，AI回复会引用触发消息
           </n-tooltip>
         </n-form-item>
+        <n-form-item label="调试模式">
+          <n-switch v-model:value="config.basic.debug" />
+        </n-form-item>
+        <n-form-item label="调试仅控制台" v-if="config.basic.debug">
+          <n-switch v-model:value="config.basic.debugToConsoleOnly" />
+        </n-form-item>
         
         <n-divider title-placement="left">自动撤回</n-divider>
         
         <n-form-item label="启用自动撤回">
-          <n-tooltip trigger="hover">
-            <template #trigger>
-              <n-switch v-model:value="config.basic.autoRecall.enabled" />
-            </template>
-            开启后，AI回复会在指定时间后自动撤回
-          </n-tooltip>
+          <n-switch v-model:value="config.basic.autoRecall.enabled" />
         </n-form-item>
         <n-form-item label="撤回延迟(秒)" v-if="config.basic.autoRecall.enabled">
           <n-input-number v-model:value="config.basic.autoRecall.delay" :min="5" :max="300" />
         </n-form-item>
         <n-form-item label="撤回错误消息" v-if="config.basic.autoRecall.enabled">
-          <n-tooltip trigger="hover">
-            <template #trigger>
-              <n-switch v-model:value="config.basic.autoRecall.recallError" />
-            </template>
-            开启后，错误提示也会自动撤回
-          </n-tooltip>
+          <n-switch v-model:value="config.basic.autoRecall.recallError" />
         </n-form-item>
       </n-form>
     </n-card>
@@ -568,57 +650,6 @@ onMounted(() => {
             自动从对话中提取值得记忆的信息
           </n-tooltip>
         </n-form-item>
-      </n-form>
-    </n-card>
-
-    <!-- 监听配置 -->
-    <n-card title="监听配置">
-      <n-form label-placement="left" label-width="140">
-        <n-form-item label="启用监听">
-          <n-switch v-model:value="config.listener.enabled" />
-        </n-form-item>
-        <n-form-item label="触发模式">
-          <n-select 
-            v-model:value="config.listener.triggerMode" 
-            :options="triggerModeOptions"
-            style="width: 200px;"
-          />
-        </n-form-item>
-        <n-form-item label="触发前缀" v-if="showPrefixInput">
-          <n-input 
-            v-model:value="config.listener.triggerPrefix" 
-            placeholder="如: #ai 或 /chat"
-            style="width: 200px;"
-          />
-        </n-form-item>
-        
-        <n-divider title-placement="left">群组过滤</n-divider>
-        <n-grid :cols="2" :x-gap="24" responsive="screen" :collapsed-cols="1">
-          <n-grid-item>
-            <n-form-item label="群白名单">
-              <n-dynamic-tags v-model:value="config.listener.whitelistGroups" />
-            </n-form-item>
-          </n-grid-item>
-          <n-grid-item>
-            <n-form-item label="群黑名单">
-              <n-dynamic-tags v-model:value="config.listener.blacklistGroups" />
-            </n-form-item>
-          </n-grid-item>
-        </n-grid>
-        
-        <n-divider title-placement="left">用户过滤</n-divider>
-        <n-grid :cols="2" :x-gap="24" responsive="screen" :collapsed-cols="1">
-          <n-grid-item>
-            <n-form-item label="用户白名单">
-              <n-dynamic-tags v-model:value="config.listener.whitelistUsers" />
-            </n-form-item>
-          </n-grid-item>
-          <n-grid-item>
-            <n-form-item label="用户黑名单">
-              <n-dynamic-tags v-model:value="config.listener.blacklistUsers" />
-            </n-form-item>
-          </n-grid-item>
-        </n-grid>
       </n-form>
     </n-card>
 

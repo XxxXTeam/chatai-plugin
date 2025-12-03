@@ -2,12 +2,14 @@ name: Build Frontend
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, v3]
     paths:
       - 'vue-frontend/**'
       - '.github/workflows/build.yml'
+      - '*'
+ 
   pull_request:
-    branches: [main, master]
+    branches: [main, v3]
     paths:
       - 'vue-frontend/**'
   workflow_dispatch:

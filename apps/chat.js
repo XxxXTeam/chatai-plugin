@@ -9,6 +9,76 @@ function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/**
+ * 全局触发标记 - 防止同一消息被多个插件重复处理
+ * 使用WeakMap避免内存泄漏，key为事件对象
+ */
+const processedMessages = new WeakMap()
+
+/**
+ * 标记消息已被处理
+ * @param {Object} e - 事件对象
+ */
+export function markMessageProcessed(e) {
+  processedMessages.set(e, true)
+}
+
+/**
+ * 检查消息是否已被处理
+ * @param {Object} e - 事件对象
+ * @returns {boolean}
+ */
+export function isMessageProcessed(e) {
+  return processedMessages.has(e)
+}
+
+/**
+ * 检查是否是机器人自身的消息（防止自我触发）
+ * @param {Object} e - 事件对象
+ * @returns {boolean} true表示是自身消息，应该忽略
+ */
+export function isSelfMessage(e) {
+  try {
+    const bot = e?.bot || Bot
+    // 获取所有可能的机器人ID
+    const selfIds = new Set()
+    
+    // 主要ID
+    if (bot?.uin) selfIds.add(String(bot.uin))
+    if (e?.self_id) selfIds.add(String(e.self_id))
+    if (bot?.self_id) selfIds.add(String(bot.self_id))
+    
+    // TRSS多账号 - 安全检查
+    if (Bot?.uin) selfIds.add(String(Bot.uin))
+    if (Bot?.bots && typeof Bot.bots[Symbol.iterator] === 'function') {
+      for (const [id] of Bot.bots) {
+        selfIds.add(String(id))
+      }
+    } else if (Bot?.bots && typeof Bot.bots === 'object') {
+      // 如果是普通对象，遍历键
+      for (const id of Object.keys(Bot.bots)) {
+        selfIds.add(String(id))
+      }
+    }
+    
+    // 检查发送者ID
+    const senderId = String(e?.user_id || e?.sender?.user_id || '')
+    if (senderId && selfIds.has(senderId)) {
+      return true
+    }
+    
+    // 检查消息来源标记
+    if (e?.post_type === 'message_sent' || e?.message_type === 'self') {
+      return true
+    }
+    
+    return false
+  } catch (err) {
+    // 出错时不阻止消息处理
+    return false
+  }
+}
+
 export class Chat extends plugin {
   constructor() {
     super({
@@ -27,43 +97,70 @@ export class Chat extends plugin {
   }
 
   /**
-   * 统一消息入口，动态判断触发方式
+   * 统一消息入口（Chat.js作为高优先级入口，ChatListener作为兜底）
+   * 此处主要处理@和前缀触发，其他由ChatListener处理
    */
   async handleMessage() {
     const e = this.e
-    const bot = e.bot || Bot
     
-    // 防护：忽略自身消息，防止自言自语
-    const selfId = bot?.uin || e.self_id
-    if (e.user_id && String(e.user_id) === String(selfId)) {
+    // 防护：忽略自身消息
+    if (isSelfMessage(e)) {
       return false
     }
     
-    // 实时读取配置
-    const toggleMode = config.get('basic.toggleMode') || 'at'
-    const togglePrefix = config.get('basic.togglePrefix') || '#chat'
+    // 已被处理则跳过
+    if (isMessageProcessed(e)) {
+      return false
+    }
     
+    // 获取配置（优先新trigger配置）
+    let triggerCfg = config.get('trigger')
+    let prefixes = triggerCfg?.prefixes || []
+    
+    // 兼容旧配置
+    if (!triggerCfg?.private) {
+      const listenerConfig = config.get('listener') || {}
+      prefixes = listenerConfig.triggerPrefix || ['#chat']
+      if (typeof prefixes === 'string') prefixes = [prefixes]
+      
+      // 旧配置的群聊触发判断
+      const triggerMode = listenerConfig.triggerMode || 'at'
+      const groupCfg = {
+        at: ['at', 'both'].includes(triggerMode),
+        prefix: ['prefix', 'both'].includes(triggerMode)
+      }
+      triggerCfg = { group: groupCfg, prefixes }
+    }
+    
+    const rawMsg = cleanCQCode(e.msg || '')
     let msg = null
-    let shouldTrigger = false
+    let triggerReason = ''
 
-    // 检查 @ 触发
-    if ((toggleMode === 'at' || toggleMode === 'both') && e.atBot) {
-      msg = cleanCQCode(e.msg?.trim() || '')
-      shouldTrigger = true
+    // 群聊：检查 @ 触发
+    if (e.isGroup && triggerCfg.group?.at && e.atBot) {
+      msg = rawMsg
+      triggerReason = '@机器人'
     }
 
-    // 检查前缀触发
-    if (!shouldTrigger && (toggleMode === 'prefix' || toggleMode === 'both')) {
-      const rawMsg = cleanCQCode(e.msg || '')
-      if (rawMsg.startsWith(togglePrefix)) {
-        msg = rawMsg.slice(togglePrefix.length).trim()
-        shouldTrigger = true
+    // 检查前缀触发（私聊和群聊都支持）
+    if (!msg && triggerCfg.group?.prefix) {
+      for (const prefix of prefixes) {
+        if (prefix && rawMsg.startsWith(prefix)) {
+          msg = rawMsg.slice(prefix.length).trim()
+          triggerReason = `前缀[${prefix}]`
+          break
+        }
       }
     }
 
-    if (!shouldTrigger) {
-      return false
+    if (!msg) {
+      return false  // 交给ChatListener处理其他情况
     }
+    
+    logger.debug(`[Chat] 触发: ${triggerReason}`)
+    
+    // 标记消息已处理
+    markMessageProcessed(e)
 
     // 检测 debug 模式：
     // 1. 消息末尾包含 "debug" （单次触发）

@@ -8,6 +8,7 @@ import { setToolContext } from '../src/core/utils/toolAdapter.js'
 import { mcpManager } from '../src/mcp/McpManager.js'
 import { memoryManager } from '../src/services/MemoryManager.js'
 import config from '../config/config.js'
+import { isMessageProcessed, markMessageProcessed, isSelfMessage } from './chat.js'
 
 export class ChatListener extends plugin {
     constructor() {
@@ -33,10 +34,22 @@ export class ChatListener extends plugin {
      */
     async onMessage() {
         const e = this.e
-        const listenerConfig = config.get('listener') || {}
         
-        // 群聊消息采集（无论是否触发AI都收集）
-        if (e.isGroup && e.group_id) {
+        // 防护：忽略自身消息
+        if (isSelfMessage(e)) {
+            return false
+        }
+        
+        // 获取配置（优先使用新trigger配置，兼容旧listener配置）
+        let triggerCfg = config.get('trigger')
+        if (!triggerCfg || !triggerCfg.private) {
+            // 使用旧配置并转换
+            const listenerConfig = config.get('listener') || {}
+            triggerCfg = this.convertLegacyConfig(listenerConfig)
+        }
+        
+        // 群聊消息采集
+        if (e.isGroup && e.group_id && triggerCfg.collectGroupMsg !== false) {
             try {
                 memoryManager.collectGroupMessage(String(e.group_id), {
                     user_id: e.user_id,
@@ -45,28 +58,34 @@ export class ChatListener extends plugin {
                     raw_message: e.raw_message
                 })
             } catch (err) {
-                // 静默失败，不影响主流程
+                // 静默失败
             }
         }
         
-        // 检查是否启用
-        if (!listenerConfig.enabled) {
+        // 检查消息是否已被其他插件处理
+        if (isMessageProcessed(e)) {
             return false
         }
 
         // 检查黑白名单
-        if (!this.checkAccess(listenerConfig)) {
+        if (!this.checkAccess(triggerCfg)) {
             return false
         }
 
         // 检查触发条件
-        if (!this.checkTrigger(listenerConfig)) {
+        const triggerResult = this.checkTrigger(triggerCfg)
+        if (!triggerResult.triggered) {
             return false
         }
+        
+        logger.debug(`[ChatListener] 触发: ${triggerResult.reason}`)
+
+        // 标记消息已处理
+        markMessageProcessed(e)
 
         // 处理消息
         try {
-            await this.handleChat(listenerConfig)
+            await this.handleChat(triggerCfg, triggerResult.msg)
             return true
         } catch (error) {
             logger.error('[ChatListener] 处理消息失败:', error)
@@ -105,47 +124,142 @@ export class ChatListener extends plugin {
     }
 
     /**
-     * 检查触发条件
+     * 检查触发条件（重构版）
+     * @returns {{ triggered: boolean, msg: string, reason: string }}
      */
     checkTrigger(cfg) {
         const e = this.e
-        const triggerMode = cfg.triggerMode || 'at'
-        const triggerPrefix = cfg.triggerPrefix || ''
-
-        switch (triggerMode) {
-            case 'at':
-                // @机器人或私聊触发
-                return e.atBot || !e.isGroup
+        const rawMsg = e.msg || ''
+        
+        // 兼容旧配置：如果是listener配置，转换为新trigger配置
+        const triggerCfg = cfg.private ? cfg : this.convertLegacyConfig(cfg)
+        
+        // === 私聊判断 ===
+        if (!e.isGroup) {
+            const privateCfg = triggerCfg.private || {}
+            if (!privateCfg.enabled) {
+                return { triggered: false, msg: '', reason: '私聊已禁用' }
+            }
             
-            case 'prefix':
-                // 前缀触发
-                if (!triggerPrefix) return false
-                return e.msg?.startsWith(triggerPrefix)
-            
-            case 'always':
-                // 始终触发（群聊也会响应）
-                return true
-            
-            case 'at_or_prefix':
-                // @或前缀都可以
-                return e.atBot || !e.isGroup || (triggerPrefix && e.msg?.startsWith(triggerPrefix))
-            
-            default:
-                return e.atBot || !e.isGroup
+            const mode = privateCfg.mode || 'always'
+            if (mode === 'always') {
+                return { triggered: true, msg: rawMsg, reason: '私聊总是响应' }
+            }
+            if (mode === 'prefix') {
+                const result = this.checkPrefix(rawMsg, triggerCfg.prefixes)
+                if (result.matched) {
+                    return { triggered: true, msg: result.content, reason: `私聊前缀[${result.prefix}]` }
+                }
+                return { triggered: false, msg: '', reason: '私聊需要前缀' }
+            }
+            return { triggered: false, msg: '', reason: '私聊模式关闭' }
+        }
+        
+        // === 群聊判断 ===
+        const groupCfg = triggerCfg.group || {}
+        if (!groupCfg.enabled) {
+            return { triggered: false, msg: '', reason: '群聊已禁用' }
+        }
+        
+        // 1. @触发（优先级最高）
+        if (groupCfg.at && e.atBot) {
+            return { triggered: true, msg: rawMsg, reason: '@机器人' }
+        }
+        
+        // 2. 前缀触发
+        if (groupCfg.prefix) {
+            const result = this.checkPrefix(rawMsg, triggerCfg.prefixes)
+            if (result.matched) {
+                return { triggered: true, msg: result.content, reason: `前缀[${result.prefix}]` }
+            }
+        }
+        
+        // 3. 关键词触发
+        if (groupCfg.keyword) {
+            const result = this.checkKeyword(rawMsg, triggerCfg.keywords)
+            if (result.matched) {
+                return { triggered: true, msg: rawMsg, reason: `关键词[${result.keyword}]` }
+            }
+        }
+        
+        // 4. 随机触发
+        if (groupCfg.random) {
+            const rate = groupCfg.randomRate || 0.05
+            if (Math.random() < rate) {
+                return { triggered: true, msg: rawMsg, reason: `随机(${(rate*100).toFixed(0)}%)` }
+            }
+        }
+        
+        return { triggered: false, msg: '', reason: '未满足触发条件' }
+    }
+    
+    /**
+     * 检查前缀
+     */
+    checkPrefix(msg, prefixes = []) {
+        if (!Array.isArray(prefixes)) prefixes = [prefixes]
+        for (const prefix of prefixes) {
+            if (prefix && msg.startsWith(prefix)) {
+                return { matched: true, prefix, content: msg.slice(prefix.length).trim() }
+            }
+        }
+        return { matched: false }
+    }
+    
+    /**
+     * 检查关键词
+     */
+    checkKeyword(msg, keywords = []) {
+        if (!Array.isArray(keywords)) keywords = [keywords]
+        for (const keyword of keywords) {
+            if (keyword && msg.includes(keyword)) {
+                return { matched: true, keyword }
+            }
+        }
+        return { matched: false }
+    }
+    
+    /**
+     * 兼容旧配置
+     */
+    convertLegacyConfig(oldCfg) {
+        // 如果是旧的listener配置，转换为新格式
+        const triggerMode = oldCfg.triggerMode || 'at'
+        return {
+            private: {
+                enabled: oldCfg.privateChat?.enabled ?? true,
+                mode: oldCfg.privateChat?.alwaysReply ? 'always' : 'prefix'
+            },
+            group: {
+                enabled: oldCfg.groupChat?.enabled ?? true,
+                at: ['at', 'both'].includes(triggerMode),
+                prefix: ['prefix', 'both'].includes(triggerMode),
+                keyword: triggerMode === 'both',
+                random: triggerMode === 'random',
+                randomRate: oldCfg.randomReplyRate || 0.1
+            },
+            prefixes: oldCfg.triggerPrefix || ['#chat'],
+            keywords: oldCfg.triggerKeywords || [],
+            collectGroupMsg: oldCfg.groupChat?.collectMessages ?? true,
+            blacklistUsers: oldCfg.blacklistUsers || [],
+            whitelistUsers: oldCfg.whitelistUsers || [],
+            blacklistGroups: oldCfg.blacklistGroups || [],
+            whitelistGroups: oldCfg.whitelistGroups || []
         }
     }
 
     /**
      * 处理聊天
+     * @param {Object} triggerCfg - 触发配置
+     * @param {string} processedMsg - 已处理的消息（去除前缀后）
      */
-    async handleChat(listenerConfig) {
+    async handleChat(triggerCfg, processedMsg = null) {
         const e = this.e
         const userId = e.user_id?.toString()
         const groupId = e.group_id?.toString() || null
         const featuresConfig = config.get('features') || {}
         
-        // 解析用户消息 - 使用增强的消息解析器
-        // 支持引用消息、转发消息、发送者信息
+        // 解析用户消息
         const userMessage = await parseUserMessage(e, {
             handleReplyText: featuresConfig.replyQuote?.handleText ?? true,
             handleReplyImage: featuresConfig.replyQuote?.handleImage ?? true,
@@ -153,10 +267,8 @@ export class ChatListener extends plugin {
             handleForward: featuresConfig.replyQuote?.handleForward ?? true,
             handleAtMsg: true,
             excludeAtBot: true,
-            triggerMode: listenerConfig.triggerMode || 'at',
-            triggerPrefix: listenerConfig.triggerPrefix || '',
-            includeSenderInfo: true,      // 包含发送者信息
-            includeDebugInfo: false       // 正常模式不包含调试信息
+            includeSenderInfo: true,
+            includeDebugInfo: false
         })
 
         // 检查消息是否有效

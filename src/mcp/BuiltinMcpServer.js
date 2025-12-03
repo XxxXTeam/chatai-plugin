@@ -720,7 +720,7 @@ export class BuiltinMcpServer {
                         group: ['get_group_info', 'get_group_list', 'get_group_member_list', 'get_group_member_info', 'get_group_files', 'get_file_url'],
                         message: ['send_private_message', 'send_group_message', 'reply_current_message', 'at_user', 'get_chat_history', 'get_current_context', 'get_reply_message', 'get_at_members', 'get_message_by_id', 'get_forward_message', 'make_forward_message', 'recall_message'],
                         file: ['parse_file', 'upload_group_file', 'delete_group_file', 'create_group_folder'],
-                        image: ['parse_image', 'send_image', 'parse_video', 'send_video', 'get_avatar', 'image_ocr'],
+                        image: ['parse_image', 'send_image', 'parse_video', 'send_video', 'get_avatar'],
                         admin: ['set_group_card', 'mute_member', 'kick_member', 'set_group_whole_ban', 'set_group_admin', 'set_group_name', 'set_group_special_title', 'send_group_notice', 'set_essence_message', 'remove_essence_message', 'handle_friend_request', 'handle_group_request'],
                         context: ['get_current_context', 'get_reply_message', 'get_at_members'],
                         bot: ['get_bot_status', 'set_online_status', 'send_poke'],
@@ -3059,39 +3059,6 @@ export class BuiltinMcpServer {
                         return { success: false, error: '无效的目标类型，应为 group/private/current' }
                     } catch (err) {
                         return { success: false, error: `发送转发消息失败: ${err.message}` }
-                    }
-                }
-            },
-
-            // ==================== 图片OCR ====================
-            {
-                name: 'image_ocr',
-                description: '识别图片中的文字',
-                inputSchema: {
-                    type: 'object',
-                    properties: {
-                        image_url: { type: 'string', description: '图片URL' }
-                    },
-                    required: ['image_url']
-                },
-                handler: async (args, ctx) => {
-                    try {
-                        const bot = ctx.getBot()
-                        // icqq: bot.imageOcr(image) 或不支持
-                        if (typeof bot.imageOcr === 'function') {
-                            const result = await bot.imageOcr(args.image_url)
-                            const texts = result?.texts || result?.wordslist?.map(w => w.words) || []
-                            return {
-                                success: true,
-                                texts,
-                                text: texts.join('\n'),
-                                language: result?.language
-                            }
-                        } else {
-                            return { success: false, error: '当前协议不支持OCR功能' }
-                        }
-                    } catch (err) {
-                        return { success: false, error: 'OCR识别失败: ' + err.message }
                     }
                 }
             },

@@ -1,6 +1,4 @@
 basic:
-  toggleMode: both
-  togglePrefix: "#111"
   commandPrefix: "#ai"
   debug: true
   showThinkingMessage: false
@@ -10,6 +8,8 @@ basic:
     enabled: false
     delay: 60
     recallError: true
+  toggleMode: both
+  togglePrefix: "#111"
   showTokenUsage: true
 admin:
   masterQQ: []
@@ -37,6 +37,8 @@ bym:
   recall: false
   model: ""
   systemPrompt: 你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。
+  inheritPersonality: true
+  presetMap: {}
   exclusiveFeatures:
     - groupSummary
     - userPortrait
@@ -161,11 +163,11 @@ features:
     minMessages: 10
   poke:
     enabled: true
-    pokeBack: false
+    pokeBack: true
     message: 别戳了，戳我干嘛~
     useAI: true
   reaction:
-    enabled: false
+    enabled: true
     useAI: false
   voiceReply:
     enabled: false
@@ -175,16 +177,42 @@ features:
     maxTextLength: 500
 streaming:
   enabled: true
-listener:
-  enabled: false
-  priority: -.inf
-  triggerMode: at
-  triggerPrefix: "#chat"
-  randomReplyRate: 0.1
+trigger:
+  private:
+    enabled: true
+    mode: always
+  group:
+    enabled: true
+    at: true
+    prefix: true
+    keyword: false
+    random: false
+    randomRate: 0.05
+  prefixes:
+    - "#chat"
+  keywords: []
+  collectGroupMsg: true
   blacklistUsers: []
   whitelistUsers: []
   blacklistGroups: []
   whitelistGroups: []
+listener:
+  enabled: false
+  triggerMode: at
+  triggerPrefix: "#chat"
+  triggerKeywords: []
+  randomReplyRate: 0.1
+  privateChat:
+    enabled: true
+    alwaysReply: true
+  groupChat:
+    enabled: true
+    collectMessages: true
+  blacklistUsers: []
+  whitelistUsers: []
+  blacklistGroups: []
+  whitelistGroups: []
+  priority: -.inf
 customTools:
   - name: execute_command
     description: 执行shell命令（注意安全）

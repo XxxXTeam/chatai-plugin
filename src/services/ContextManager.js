@@ -415,10 +415,7 @@ export class ContextManager {
 
     /**
      * Clean context based on strategy
-     * @param {string} conversationId
-     */
-    /**
-     * Clean context based on strategy
+     * 优化的上下文清理机制，保留最近的重要对话
      * @param {string} conversationId
      */
     async cleanContext(conversationId) {
@@ -427,59 +424,70 @@ export class ContextManager {
 
         const history = await historyManager.getHistory(undefined, conversationId)
 
-        if (history.length > maxMessages) {
-            if (strategy === 'summary') {
-                try {
-                    // Dynamically import to avoid potential circular deps if any
-                    const { LlmService } = await import('./LlmService.js')
+        if (history.length <= maxMessages) {
+            return // 不需要清理
+        }
 
-                    // Messages to summarize (all except last N/2)
-                    const keepCount = Math.floor(maxMessages / 2)
-                    const messagesToSummarize = history.slice(0, history.length - keepCount)
-                    const messagesToKeep = history.slice(history.length - keepCount)
+        logger.info(`[ContextManager] 清理上下文: ${conversationId}, 当前${history.length}条, 最大${maxMessages}条`)
 
-                    if (messagesToSummarize.length < 2) return // Too few to summarize
-
-                    // Create summarization client
-                    const client = await LlmService.createClient({ enableTools: false })
-
-                    const summaryPrompt = `Please summarize the following conversation history into a concise paragraph, retaining key facts and context:\n\n${JSON.stringify(messagesToSummarize)}`
-
-                    const response = await client.sendMessage(
-                        { role: 'user', content: summaryPrompt },
-                        { model: 'gpt-4o-mini', systemOverride: 'You are a helpful assistant that summarizes conversations.' }
-                    )
-
-                    const summaryText = response.contents
-                        .filter(c => c.type === 'text')
-                        .map(c => c.text)
-                        .join('')
-
-                    if (summaryText) {
-                        const newHistory = [
-                            { role: 'system', content: `Previous conversation summary: ${summaryText}` },
-                            ...messagesToKeep
-                        ]
-
-                        // We need a way to replace history. 
-                        // HistoryManager currently only has trimHistory (which truncates from start).
-                        // We need 'replaceHistory' or similar.
-                        // Let's assume we can overwrite it using delete + save loop or add a method.
-                        // Since we are in deep optimization, let's add `setHistory` to HistoryManager or just use delete+save loop for now.
-
-                        await historyManager.deleteConversation(conversationId)
-                        for (const msg of newHistory) {
-                            await historyManager.saveHistory(msg, conversationId)
-                        }
-                        return
+        if (strategy === 'smart') {
+            // 智能清理：保留最近对话和重要消息
+            try {
+                const keepCount = maxMessages
+                
+                // 标记重要消息（包含关键信息的消息）
+                const importantIndicators = ['记住', '我是', '我叫', '我的', '重要', '记得', '别忘']
+                const importantMessages = []
+                const recentMessages = history.slice(-keepCount)
+                
+                // 从早期消息中提取重要内容
+                const earlyMessages = history.slice(0, -keepCount)
+                for (const msg of earlyMessages) {
+                    const content = Array.isArray(msg.content) 
+                        ? msg.content.filter(c => c.type === 'text').map(c => c.text).join('')
+                        : msg.content
+                    
+                    if (importantIndicators.some(ind => content?.includes(ind))) {
+                        importantMessages.push(msg)
+                        if (importantMessages.length >= 3) break // 最多保留3条重要消息
                     }
-                } catch (error) {
-                    logger.error('[ContextManager] Summarization failed, falling back to truncate', error)
                 }
+                
+                // 合并重要消息和最近消息
+                const newHistory = [...importantMessages, ...recentMessages]
+                
+                // 如果仍然超出限制，截断
+                if (newHistory.length > maxMessages) {
+                    await historyManager.trimHistory(conversationId, maxMessages)
+                }
+                
+                logger.info(`[ContextManager] 智能清理完成: 保留${importantMessages.length}条重要消息, ${recentMessages.length}条最近消息`)
+                return
+            } catch (error) {
+                logger.error('[ContextManager] 智能清理失败，回退到截断模式', error)
             }
+        }
 
-            // Fallback or default: Truncate
-            await historyManager.trimHistory(conversationId, maxMessages)
+        // 默认/回退: 简单截断，保留最近的消息
+        await historyManager.trimHistory(conversationId, maxMessages)
+        logger.info(`[ContextManager] 截断清理完成: 保留最近${maxMessages}条`)
+    }
+    
+    /**
+     * 获取上下文统计信息
+     * @param {string} conversationId
+     * @returns {Object}
+     */
+    async getContextStats(conversationId) {
+        const history = await historyManager.getHistory(undefined, conversationId)
+        const maxMessages = config.get('context.maxMessages') || 20
+        
+        return {
+            messageCount: history.length,
+            maxMessages,
+            needsCleaning: history.length > maxMessages,
+            userMessages: history.filter(m => m.role === 'user').length,
+            assistantMessages: history.filter(m => m.role === 'assistant').length
         }
     }
 }

@@ -81,20 +81,20 @@ export class MessageInspector extends plugin {
             name: 'AI-MessageInspector',
             dsc: '消息检查器 - 获取消息raw/pb信息',
             event: 'message',
-            priority: 5,
+            priority: 1,  // 高优先级，确保命令能被触发
             rule: [
                 {
-                    reg: '^#取\\s*(\\d+)?$',
+                    reg: '^#取(\\d*)$',  // 简化正则，匹配#取 或 #取123
                     fnc: 'inspectMessage',
                     permission: 'master'
                 },
                 {
-                    reg: '^#取消息\\s*(\\d+)?$',
+                    reg: '^#取消息(\\d*)$',
                     fnc: 'inspectMessage',
                     permission: 'master'
                 },
                 {
-                    reg: '^#消息详情\\s*(\\d+)?$',
+                    reg: '^#消息详情(\\d*)$',
                     fnc: 'inspectMessage',
                     permission: 'master'
                 }

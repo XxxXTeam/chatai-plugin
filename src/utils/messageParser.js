@@ -45,24 +45,51 @@ function getSegmentData(segment) {
 
 /**
  * 获取图片/视频/文件的URL
- * 优先使用 url，其次 file（如果是http开头）
+ * 兼容 NC/NapCat/icqq/OneBot 多种格式
  * @param {Object} data - 消息段数据
  * @returns {string|null} URL
  */
 function getMediaUrl(data) {
     if (!data) return null
-    // 优先使用 url 字段
-    if (data.url && typeof data.url === 'string') {
-        return data.url
+    
+    // NC/NapCat 可能有多层嵌套: data.data.url
+    const innerData = data.data || data
+    
+    // 按优先级尝试获取URL
+    const urlCandidates = [
+        data.url,
+        innerData.url,
+        data.file,
+        innerData.file,
+        data.path,
+        innerData.path,
+        // NC 特殊字段
+        data.file_url,
+        innerData.file_url,
+        data.download_url,
+        innerData.download_url,
+        // 图片特殊字段
+        data.image,
+        innerData.image,
+    ]
+    
+    for (const candidate of urlCandidates) {
+        if (candidate && typeof candidate === 'string') {
+            // http(s) URL 直接返回
+            if (candidate.startsWith('http://') || candidate.startsWith('https://')) {
+                return candidate
+            }
+            // base64 图片
+            if (candidate.startsWith('base64://')) {
+                return candidate
+            }
+            // file:// 协议
+            if (candidate.startsWith('file://')) {
+                return candidate
+            }
+        }
     }
-    // 其次检查 file 字段是否是 URL
-    if (data.file && typeof data.file === 'string' && data.file.startsWith('http')) {
-        return data.file
-    }
-    // 检查 path 字段
-    if (data.path && typeof data.path === 'string' && data.path.startsWith('http')) {
-        return data.path
-    }
+    
     return null
 }
 
@@ -514,15 +541,41 @@ async function parseReplyMessage(e, options) {
         // 方式2: 从 e.source 获取并通过 API 拉取完整消息
         if (!replyData && e.source) {
             parseLog.push(`[Reply] 尝试从 e.source 获取, seq=${e.source.seq}, message_id=${e.source.message_id}`)
+            
+            // NC/NapCat 使用 message_id, icqq 使用 seq
+            const msgId = e.source.message_id || e.source.id
             const seq = e.isGroup 
-                ? (e.source.seq || e.source.message_id || e.reply_id) 
+                ? (e.source.seq || msgId || e.reply_id) 
                 : (e.source.time || e.source.seq)
             
-            if (seq) {
+            if (seq || msgId) {
                 // 群聊
                 if (e.isGroup || e.group_id) {
-                    // 尝试 group.getMsg
-                    if (e.group?.getMsg) {
+                    // NC/NapCat: 优先使用 bot.getMsg (message_id)
+                    if (!replyData && e.bot?.getMsg && msgId) {
+                        try {
+                            parseLog.push(`[Reply] 尝试 bot.getMsg(message_id=${msgId})`)
+                            replyData = await e.bot.getMsg(msgId)
+                            if (replyData) parseLog.push(`[Reply] bot.getMsg(message_id) 成功`)
+                        } catch (err) {
+                            parseLog.push(`[Reply] bot.getMsg(message_id) 失败: ${err.message}`)
+                        }
+                    }
+                    
+                    // NC/NapCat: 尝试 get_msg API (OneBot标准)
+                    if (!replyData && e.bot?.sendApi && msgId) {
+                        try {
+                            parseLog.push(`[Reply] 尝试 sendApi get_msg(${msgId})`)
+                            replyData = await e.bot.sendApi('get_msg', { message_id: msgId })
+                            if (replyData?.data) replyData = replyData.data
+                            if (replyData) parseLog.push(`[Reply] sendApi get_msg 成功`)
+                        } catch (err) {
+                            parseLog.push(`[Reply] sendApi get_msg 失败: ${err.message}`)
+                        }
+                    }
+                    
+                    // icqq: group.getMsg
+                    if (!replyData && e.group?.getMsg) {
                         try {
                             parseLog.push(`[Reply] 尝试 group.getMsg(${seq})`)
                             replyData = await e.group.getMsg(seq)
@@ -531,8 +584,9 @@ async function parseReplyMessage(e, options) {
                             parseLog.push(`[Reply] group.getMsg 失败: ${err.message}`)
                         }
                     }
+                    
                     // 回退: group.getChatHistory
-                    if (!replyData && e.group?.getChatHistory) {
+                    if (!replyData && e.group?.getChatHistory && seq) {
                         try {
                             parseLog.push(`[Reply] 尝试 group.getChatHistory(${seq})`)
                             const history = await e.group.getChatHistory(seq, 1)
@@ -542,31 +596,46 @@ async function parseReplyMessage(e, options) {
                             parseLog.push(`[Reply] group.getChatHistory 失败: ${err.message}`)
                         }
                     }
-                    // 回退: bot.getMsg (NC)
-                    if (!replyData && e.bot?.getMsg) {
+                    
+                    // 回退: bot.getMsg (使用 seq)
+                    if (!replyData && e.bot?.getMsg && seq) {
                         try {
-                            parseLog.push(`[Reply] 尝试 bot.getMsg(${seq})`)
+                            parseLog.push(`[Reply] 尝试 bot.getMsg(seq=${seq})`)
                             replyData = await e.bot.getMsg(seq)
-                            if (replyData) parseLog.push(`[Reply] bot.getMsg 成功`)
+                            if (replyData) parseLog.push(`[Reply] bot.getMsg(seq) 成功`)
                         } catch (err) {
-                            parseLog.push(`[Reply] bot.getMsg 失败: ${err.message}`)
+                            parseLog.push(`[Reply] bot.getMsg(seq) 失败: ${err.message}`)
                         }
                     }
                 } 
                 // 私聊
-                else if (e.friend?.getChatHistory) {
-                    try {
-                        parseLog.push(`[Reply] 尝试 friend.getChatHistory(${seq})`)
-                        const history = await e.friend.getChatHistory(seq, 1)
-                        replyData = history?.pop?.() || history?.[0]
-                        if (replyData) parseLog.push(`[Reply] friend.getChatHistory 成功`)
-                    } catch (err) {
-                        parseLog.push(`[Reply] friend.getChatHistory 失败: ${err.message}`)
+                else {
+                    // NC: bot.getMsg
+                    if (!replyData && e.bot?.getMsg && msgId) {
+                        try {
+                            parseLog.push(`[Reply] 私聊 bot.getMsg(${msgId})`)
+                            replyData = await e.bot.getMsg(msgId)
+                            if (replyData) parseLog.push(`[Reply] 私聊 bot.getMsg 成功`)
+                        } catch (err) {
+                            parseLog.push(`[Reply] 私聊 bot.getMsg 失败: ${err.message}`)
+                        }
+                    }
+                    
+                    // icqq: friend.getChatHistory
+                    if (!replyData && e.friend?.getChatHistory) {
+                        try {
+                            parseLog.push(`[Reply] 尝试 friend.getChatHistory(${seq})`)
+                            const history = await e.friend.getChatHistory(seq, 1)
+                            replyData = history?.pop?.() || history?.[0]
+                            if (replyData) parseLog.push(`[Reply] friend.getChatHistory 成功`)
+                        } catch (err) {
+                            parseLog.push(`[Reply] friend.getChatHistory 失败: ${err.message}`)
+                        }
                     }
                 }
                 
                 if (replyData) {
-                    // 兼容 NC 格式
+                    // 兼容 NC 格式: 数据可能在 data 字段中
                     const replyInfo = replyData.data || replyData
                     replySenderId = replyInfo.user_id || replyInfo.sender?.user_id || replyData.user_id
                     replySenderName = replyInfo.sender?.card || replyInfo.sender?.nickname || 
@@ -805,20 +874,37 @@ async function parseReplyMessage(e, options) {
 /**
  * 解析转发消息
  * 支持多平台: icqq, NapCat(NC), TRSS 等
+ * 支持多层嵌套转发的递归处理
+ * @param {Object} e - 事件对象
+ * @param {Object} forwardElement - 转发消息元素
+ * @param {number} depth - 递归深度（防止无限递归）
  */
-async function parseForwardMessage(e, forwardElement) {
+async function parseForwardMessage(e, forwardElement, depth = 0) {
     const contents = []
     let text = ''
     let forwardInfo = null
     const parseLog = [] // 解析日志
+    
+    // 防止无限递归，最多3层嵌套
+    const MAX_DEPTH = 3
+    if (depth >= MAX_DEPTH) {
+        return { text: '[嵌套转发消息，层级过深]', contents: [], forwardInfo: null }
+    }
 
     try {
         // 尝试获取转发消息内容 - 支持多种方式
         let forwardMessages = null
         let parseMethod = ''
         
-        parseLog.push(`[Forward] 开始解析转发消息, element keys: ${Object.keys(forwardElement || {}).join(', ')}`)
-        if (forwardElement.content && Array.isArray(forwardElement.content)) {
+        parseLog.push(`[Forward][深度${depth}] 开始解析, element keys: ${Object.keys(forwardElement || {}).join(', ')}`)
+        
+        // NC/NapCat: 可能有 message 数组
+        if (forwardElement.message && Array.isArray(forwardElement.message)) {
+            forwardMessages = forwardElement.message
+            parseMethod = 'message_array'
+            parseLog.push(`[Forward] 使用 message_array 方式, 消息数: ${forwardMessages.length}`)
+        }
+        else if (forwardElement.content && Array.isArray(forwardElement.content)) {
             forwardMessages = forwardElement.content
             parseMethod = 'direct_content'
             parseLog.push(`[Forward] 使用 direct_content 方式, 消息数: ${forwardMessages.length}`)
@@ -827,6 +913,11 @@ async function parseForwardMessage(e, forwardElement) {
             forwardMessages = forwardElement.data.content
             parseMethod = 'data_content'
             parseLog.push(`[Forward] 使用 data_content 方式, 消息数: ${forwardMessages.length}`)
+        }
+        else if (forwardElement.data?.message && Array.isArray(forwardElement.data.message)) {
+            forwardMessages = forwardElement.data.message
+            parseMethod = 'data_message'
+            parseLog.push(`[Forward] 使用 data_message 方式, 消息数: ${forwardMessages.length}`)
         }
         // 方式3: 通过 id 获取 (icqq e.group.getForwardMsg)
         else if (forwardElement.id && e.group?.getForwardMsg) {
@@ -872,6 +963,28 @@ async function parseForwardMessage(e, forwardElement) {
                     parseLog.push(`[Forward] 通过 bot.getForwardMsg 获取成功, 消息数: ${forwardMessages?.length || 0}`)
                 } catch (err) {
                     parseLog.push(`[Forward] 通过 bot.getForwardMsg 获取失败: ${err.message}`)
+                }
+            }
+        }
+        
+        // 方式7: NC/NapCat 使用 sendApi 获取转发消息
+        if (!forwardMessages && e.bot?.sendApi) {
+            const fwdId = forwardElement.id || forwardElement.data?.id || forwardElement.resid || forwardElement.data?.resid
+            if (fwdId) {
+                parseLog.push(`[Forward] 尝试通过 sendApi get_forward_msg id=${fwdId} 获取`)
+                try {
+                    const result = await e.bot.sendApi('get_forward_msg', { id: fwdId })
+                    // NC返回格式: { data: { messages: [...] } } 或 { messages: [...] }
+                    forwardMessages = result?.data?.messages || result?.messages || result?.data || result
+                    if (forwardMessages && !Array.isArray(forwardMessages)) {
+                        forwardMessages = null
+                    }
+                    if (forwardMessages) {
+                        parseMethod = 'sendApi_get_forward_msg'
+                        parseLog.push(`[Forward] 通过 sendApi 获取成功, 消息数: ${forwardMessages.length}`)
+                    }
+                } catch (err) {
+                    parseLog.push(`[Forward] 通过 sendApi 获取失败: ${err.message}`)
                 }
             }
         }
@@ -964,8 +1077,20 @@ async function parseForwardMessage(e, forwardElement) {
                         forwardTexts.push(`${nickname}: @${atQQ}`)
                         msgInfo.content.push({ type: 'at', qq: atQQ })
                     } else if (valType === 'forward') {
-                        forwardTexts.push(`${nickname}: [嵌套转发消息]`)
-                        msgInfo.content.push({ type: 'forward', nested: true })
+                        // 递归处理嵌套转发消息
+                        try {
+                            const nestedResult = await parseForwardMessage(e, val, depth + 1)
+                            if (nestedResult.text) {
+                                forwardTexts.push(`${nickname}: ${nestedResult.text}`)
+                            } else {
+                                forwardTexts.push(`${nickname}: [嵌套转发消息]`)
+                            }
+                            contents.push(...nestedResult.contents)
+                            msgInfo.content.push({ type: 'forward', nested: true, parsed: !!nestedResult.text })
+                        } catch (err) {
+                            forwardTexts.push(`${nickname}: [嵌套转发消息]`)
+                            msgInfo.content.push({ type: 'forward', nested: true })
+                        }
                     } else if (valType === 'file') {
                         const fileName = valData.name || val.name || '文件'
                         forwardTexts.push(`${nickname}: [文件:${fileName}]`)

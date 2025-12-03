@@ -231,17 +231,51 @@ export class WebServer {
 
 
 
-        // MCP Routes Limiting
-        const limiter = rateLimit({
-            windowMs: 15 * 60 * 1000, // 15 minutes
-            max: 100, // Limit each IP to 100 requests per windowMs
+        // 公开API限流（未认证请求）
+        const publicLimiter = rateLimit({
+            windowMs: 15 * 60 * 100000, // 15 minutes
+            max: 50000, // 未认证请求限制更严格
             standardHeaders: true,
             legacyHeaders: false,
-            message: ChaiteResponse.fail(null, 'Too many requests, please try again later.')
+            message: ChaiteResponse.fail(null, 'Too many requests, please try again later.'),
+            skip: (req) => {
+                // 跳过已认证用户的限流
+                const authHeader = req.headers.authorization
+                if (authHeader?.startsWith('Bearer ')) {
+                    try {
+                        jwt.verify(authHeader.substring(7), authKey)
+                        return true // 已认证，跳过限流
+                    } catch {
+                        return false
+                    }
+                }
+                return false
+            }
         })
 
-        // Apply to all API routes
-        this.app.use('/api/', limiter)
+        // 已认证API限流（更宽松）
+        const authLimiter = rateLimit({
+            windowMs: 1 * 60 * 1000, // 1 minute
+            max: 300000, // 已认证用户每分钟300次请求
+            standardHeaders: true,
+            legacyHeaders: false,
+            message: ChaiteResponse.fail(null, 'Too many requests, please slow down.'),
+            skip: (req) => {
+                // 仅对已认证请求生效
+                const authHeader = req.headers.authorization
+                if (!authHeader?.startsWith('Bearer ')) return true
+                try {
+                    jwt.verify(authHeader.substring(7), authKey)
+                    return false // 已认证，应用此限流
+                } catch {
+                    return true
+                }
+            }
+        })
+
+        // Apply rate limiters
+        this.app.use('/api/', publicLimiter)
+        this.app.use('/api/', authLimiter)
 
         // Request logging middleware (audit trail) - DISABLED for less noise
         // this.app.use('/api/', (req, res, next) => {
@@ -458,15 +492,57 @@ export class WebServer {
 
         // POST /api/config - Update configuration (protected)
         this.app.post('/api/config', this.authMiddleware.bind(this), (req, res) => {
-            const { basic, llm, bym, thinking, streaming } = req.body
+            try {
+                const { basic, llm, bym, thinking, streaming, admin, tools, features, memory, trigger } = req.body
 
-            if (basic) config.set('basic', { ...config.get('basic'), ...basic })
-            if (llm) config.set('llm', { ...config.get('llm'), ...llm })
-            if (bym) config.set('bym', { ...config.get('bym'), ...bym })
-            if (thinking) config.set('thinking', { ...config.get('thinking'), ...thinking })
-            if (streaming) config.set('streaming', { ...config.get('streaming'), ...streaming })
+                if (basic) config.set('basic', { ...config.get('basic'), ...basic })
+                if (llm) {
+                    const currentLlm = config.get('llm') || {}
+                    config.set('llm', { 
+                        ...currentLlm, 
+                        ...llm,
+                        models: { ...(currentLlm.models || {}), ...(llm.models || {}) }
+                    })
+                }
+                if (bym) config.set('bym', { ...config.get('bym'), ...bym })
+                if (thinking) config.set('thinking', { ...config.get('thinking'), ...thinking })
+                if (streaming) config.set('streaming', { ...config.get('streaming'), ...streaming })
+                if (admin) config.set('admin', { ...config.get('admin'), ...admin })
+                if (tools) config.set('tools', { ...config.get('tools'), ...tools })
+                
+                // features深度合并
+                if (features) {
+                    const currentFeatures = config.get('features') || {}
+                    const mergedFeatures = { ...currentFeatures }
+                    for (const [key, value] of Object.entries(features)) {
+                        if (typeof value === 'object' && value !== null) {
+                            mergedFeatures[key] = { ...(currentFeatures[key] || {}), ...value }
+                        } else {
+                            mergedFeatures[key] = value
+                        }
+                    }
+                    config.set('features', mergedFeatures)
+                }
+                
+                if (memory) config.set('memory', { ...config.get('memory'), ...memory })
+                
+                // trigger深度合并（新配置结构）
+                if (trigger) {
+                    const currentTrigger = config.get('trigger') || {}
+                    config.set('trigger', {
+                        ...currentTrigger,
+                        ...trigger,
+                        private: { ...(currentTrigger.private || {}), ...(trigger.private || {}) },
+                        group: { ...(currentTrigger.group || {}), ...(trigger.group || {}) }
+                    })
+                }
 
-            res.json(ChaiteResponse.ok({ success: true }))
+                logger.info('[WebServer] 配置已保存')
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                logger.error('[WebServer] 保存配置失败:', error)
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
         })
 
         // GET /api/config/advanced - Get advanced configuration (protected)
@@ -2152,21 +2228,24 @@ export default {
         this.app.delete('/api/conversations/clear-all', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const db = getDatabase()
-                const conversations = db.getConversations()
-                let deletedCount = 0
                 
-                for (const conv of conversations) {
-                    try {
-                        db.deleteConversation(conv.id)
-                        deletedCount++
-                    } catch (e) {
-                        logger.warn(`[WebServer] 删除对话失败: ${conv.id}`, e.message)
-                    }
-                }
+                // 使用批量清除方法
+                const deletedCount = db.clearAllConversations()
                 
-                logger.info(`[WebServer] 清空所有对话完成, 删除: ${deletedCount}条`)
+                // 同时清除上下文缓存
+                const { contextManager } = await import('./ContextManager.js')
+                await contextManager.init()
+                // 清除所有锁和处理标记
+                contextManager.locks.clear()
+                contextManager.lockQueues.clear()
+                contextManager.processingFlags.clear()
+                contextManager.messageQueues.clear()
+                contextManager.requestCounters.clear()
+                
+                logger.info(`[WebServer] 清空所有对话完成, 删除: ${deletedCount}条消息`)
                 res.json(ChaiteResponse.ok({ success: true, deletedCount }))
             } catch (error) {
+                logger.error('[WebServer] 清空对话失败:', error)
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
@@ -2174,24 +2253,24 @@ export default {
         // DELETE /api/memory/clear-all - 清空所有用户记忆
         this.app.delete('/api/memory/clear-all', this.authMiddleware.bind(this), async (req, res) => {
             try {
+                const db = getDatabase()
+                
+                // 使用批量清除方法
+                const deletedCount = db.clearAllMemories()
+                
+                // 停止并重启MemoryManager的轮询
                 const { memoryManager } = await import('./MemoryManager.js')
-                await memoryManager.init()
-                
-                const users = await memoryManager.listUsers()
-                let deletedCount = 0
-                
-                for (const userId of users) {
-                    try {
-                        await memoryManager.clearMemory(userId)
-                        deletedCount++
-                    } catch (e) {
-                        logger.warn(`[WebServer] 清空用户记忆失败: ${userId}`, e.message)
-                    }
+                memoryManager.stopPolling()
+                memoryManager.lastPollTime.clear()
+                if (memoryManager.groupMessageBuffer) {
+                    memoryManager.groupMessageBuffer.clear()
                 }
+                memoryManager.startPolling()
                 
-                logger.info(`[WebServer] 清空所有记忆完成, 清空用户数: ${deletedCount}`)
+                logger.info(`[WebServer] 清空所有记忆完成, 删除: ${deletedCount}条记忆`)
                 res.json(ChaiteResponse.ok({ success: true, deletedCount }))
             } catch (error) {
+                logger.error('[WebServer] 清空记忆失败:', error)
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
@@ -2459,30 +2538,84 @@ export default {
             }
         })
 
-        // ==================== Chat Listener Configuration API ====================
-        // GET /api/listener/config - 获取群聊监听配置
-        this.app.get('/api/listener/config', this.authMiddleware.bind(this), (req, res) => {
-            const listenerConfig = config.get('listener') || {
-                enabled: true,
-                priority: -Infinity,
-                triggerMode: 'at', // 'at' | 'prefix' | 'always'
-                triggerPrefix: '',
-                whitelistGroups: [],
-                blacklistGroups: [],
+        // ==================== AI触发配置 API ====================
+        // GET /api/trigger/config - 获取触发配置
+        this.app.get('/api/trigger/config', this.authMiddleware.bind(this), (req, res) => {
+            const defaultConfig = {
+                private: { enabled: true, mode: 'always' },
+                group: { enabled: true, at: true, prefix: true, keyword: false, random: false, randomRate: 0.05 },
+                prefixes: ['#chat'],
+                keywords: [],
+                collectGroupMsg: true,
+                blacklistUsers: [],
                 whitelistUsers: [],
-                blacklistUsers: []
+                blacklistGroups: [],
+                whitelistGroups: []
             }
-            res.json(ChaiteResponse.ok(listenerConfig))
+            // 优先返回新配置，兼容旧配置
+            let triggerConfig = config.get('trigger')
+            if (!triggerConfig?.private) {
+                // 转换旧配置
+                const oldCfg = config.get('listener') || {}
+                const triggerMode = oldCfg.triggerMode || 'at'
+                triggerConfig = {
+                    private: {
+                        enabled: oldCfg.privateChat?.enabled ?? true,
+                        mode: oldCfg.privateChat?.alwaysReply ? 'always' : 'prefix'
+                    },
+                    group: {
+                        enabled: oldCfg.groupChat?.enabled ?? true,
+                        at: ['at', 'both'].includes(triggerMode),
+                        prefix: ['prefix', 'both'].includes(triggerMode),
+                        keyword: triggerMode === 'both',
+                        random: triggerMode === 'random',
+                        randomRate: oldCfg.randomReplyRate || 0.1
+                    },
+                    prefixes: oldCfg.triggerPrefix || ['#chat'],
+                    keywords: oldCfg.triggerKeywords || [],
+                    collectGroupMsg: oldCfg.groupChat?.collectMessages ?? true,
+                    blacklistUsers: oldCfg.blacklistUsers || [],
+                    whitelistUsers: oldCfg.whitelistUsers || [],
+                    blacklistGroups: oldCfg.blacklistGroups || [],
+                    whitelistGroups: oldCfg.whitelistGroups || []
+                }
+            }
+            res.json(ChaiteResponse.ok({ ...defaultConfig, ...triggerConfig }))
         })
 
-        // PUT /api/listener/config - 更新群聊监听配置
-        this.app.put('/api/listener/config', this.authMiddleware.bind(this), (req, res) => {
+        // PUT /api/trigger/config - 更新触发配置
+        this.app.put('/api/trigger/config', this.authMiddleware.bind(this), (req, res) => {
             try {
-                config.set('listener', req.body)
-                res.json(ChaiteResponse.ok({ success: true }))
+                const currentConfig = config.get('trigger') || {}
+                const body = req.body
+                
+                const newConfig = {
+                    private: { ...(currentConfig.private || {}), ...(body.private || {}) },
+                    group: { ...(currentConfig.group || {}), ...(body.group || {}) },
+                    prefixes: body.prefixes ?? currentConfig.prefixes ?? ['#chat'],
+                    keywords: body.keywords ?? currentConfig.keywords ?? [],
+                    collectGroupMsg: body.collectGroupMsg ?? currentConfig.collectGroupMsg ?? true,
+                    blacklistUsers: body.blacklistUsers ?? currentConfig.blacklistUsers ?? [],
+                    whitelistUsers: body.whitelistUsers ?? currentConfig.whitelistUsers ?? [],
+                    blacklistGroups: body.blacklistGroups ?? currentConfig.blacklistGroups ?? [],
+                    whitelistGroups: body.whitelistGroups ?? currentConfig.whitelistGroups ?? []
+                }
+                
+                config.set('trigger', newConfig)
+                logger.info('[WebServer] 触发配置已更新')
+                res.json(ChaiteResponse.ok({ success: true, config: newConfig }))
             } catch (error) {
+                logger.error('[WebServer] 保存触发配置失败:', error)
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
+        })
+        
+        // 兼容旧API
+        this.app.get('/api/listener/config', this.authMiddleware.bind(this), (req, res) => {
+            res.redirect('/api/trigger/config')
+        })
+        this.app.put('/api/listener/config', this.authMiddleware.bind(this), (req, res) => {
+            res.redirect(307, '/api/trigger/config')
         })
 
         // ==================== Platform & Message API ====================

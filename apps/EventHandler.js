@@ -2,27 +2,54 @@
  * AI 事件处理插件
  * 处理戳一戳、表情回应等事件
  * 使用AI人设进行响应，默认关闭
- * 兼容 icqq / NapCat / OneBot
+ * 兼容 icqq / NapCat / OneBot / go-cqhttp
  */
 import config from '../config/config.js'
-import { getBotFramework } from '../utils/bot.js'
 
 /**
- * 获取用户昵称
+ * 获取用户昵称（多平台兼容）
  */
 async function getUserNickname(e, userId) {
     try {
         const bot = e.bot || Bot
-        if (e.group_id) {
-            const group = bot.pickGroup(e.group_id)
-            const member = group?.pickMember?.(userId)
-            const info = await member?.getInfo?.() || member?.info || member
-            return info?.nickname || info?.card || String(userId)
-        } else {
-            const friend = bot.pickFriend(userId)
-            const info = await friend?.getInfo?.() || friend?.info || friend
-            return info?.nickname || String(userId)
+        
+        // 尝试多种方式获取昵称
+        // 1. 从事件中直接获取
+        if (e.sender?.nickname) return e.sender.nickname
+        if (e.sender?.card) return e.sender.card
+        
+        // 2. 从群成员信息获取
+        if (e.group_id && bot.pickGroup) {
+            try {
+                const group = bot.pickGroup(e.group_id)
+                // icqq 方式
+                if (group?.pickMember) {
+                    const member = group.pickMember(userId)
+                    const info = await member?.getInfo?.() || member?.info || member
+                    if (info?.nickname || info?.card) {
+                        return info.card || info.nickname
+                    }
+                }
+                // NapCat/OneBot 方式
+                if (bot.getGroupMemberInfo) {
+                    const info = await bot.getGroupMemberInfo(e.group_id, userId)
+                    if (info?.nickname || info?.card) {
+                        return info.card || info.nickname
+                    }
+                }
+            } catch {}
         }
+        
+        // 3. 从好友信息获取
+        if (!e.group_id && bot.pickFriend) {
+            try {
+                const friend = bot.pickFriend(userId)
+                const info = await friend?.getInfo?.() || friend?.info || friend
+                if (info?.nickname) return info.nickname
+            } catch {}
+        }
+        
+        return String(userId)
     } catch {
         return String(userId)
     }
@@ -31,13 +58,14 @@ async function getUserNickname(e, userId) {
 /**
  * 戳一戳事件处理 - 群聊
  * 默认关闭，需在面板配置开启
+ * 兼容：icqq(notice.group.poke) / NapCat/OneBot(notice.notify.poke)
  */
 export class PokeHandler extends plugin {
     constructor() {
         super({
             name: 'AI-Poke',
             dsc: 'AI戳一戳响应（使用人设）',
-            event: 'notice.group.poke',
+            event: 'notice',  // 监听所有notice事件，内部判断
             priority: 100,
             rule: [{ fnc: 'handlePoke' }]
         })
@@ -46,12 +74,26 @@ export class PokeHandler extends plugin {
     async handlePoke() {
         const e = this.e
         
+        // 检查是否是戳一戳事件（多平台兼容）
+        const isPoke = (
+            e.notice_type === 'group_poke' ||           // NapCat 群戳
+            e.sub_type === 'poke' ||                    // OneBot poke
+            e.notice_type === 'notify' && e.sub_type === 'poke' ||  // go-cqhttp
+            e.action === 'poke' ||                      // 某些适配器
+            (e.notice_type === 'group' && e.sub_type === 'poke')    // icqq
+        )
+        
+        // 私聊戳一戳由 PrivatePokeHandler 处理
+        if (!isPoke || !e.group_id) {
+            return false
+        }
+        
         // 默认关闭，需配置开启
         if (!config.get('features.poke.enabled')) {
             return false
         }
         
-        const operator = e.operator_id || e.user_id
+        const operator = e.operator_id || e.user_id || e.sender_id
         const target = e.target_id || e.self_id
         const botId = e.bot?.uin || e.self_id
         
@@ -122,13 +164,14 @@ export class PokeHandler extends plugin {
 /**
  * 私聊戳一戳处理
  * 默认关闭，需在面板配置开启
+ * 兼容多平台
  */
 export class PrivatePokeHandler extends plugin {
     constructor() {
         super({
             name: 'AI-PrivatePoke',
             dsc: 'AI私聊戳一戳响应（使用人设）',
-            event: 'notice.friend.poke',
+            event: 'notice',  // 监听所有notice事件
             priority: 100,
             rule: [{ fnc: 'handlePoke' }]
         })
@@ -137,11 +180,23 @@ export class PrivatePokeHandler extends plugin {
     async handlePoke() {
         const e = this.e
         
+        // 检查是否是私聊戳一戳事件
+        const isPrivatePoke = (
+            (e.notice_type === 'friend_poke') ||                    // NapCat
+            (e.notice_type === 'friend' && e.sub_type === 'poke') || // icqq
+            (e.sub_type === 'poke' && !e.group_id) ||               // OneBot 无群号
+            (e.notice_type === 'notify' && e.sub_type === 'poke' && !e.group_id)  // go-cqhttp
+        )
+        
+        if (!isPrivatePoke) {
+            return false
+        }
+        
         if (!config.get('features.poke.enabled')) {
             return false
         }
         
-        const operator = e.operator_id || e.user_id
+        const operator = e.operator_id || e.user_id || e.sender_id
         const nickname = await getUserNickname(e, operator)
         logger.info(`[AI-PrivatePoke] ${nickname}(${operator}) 私聊戳了机器人`)
         
@@ -179,6 +234,7 @@ export class PrivatePokeHandler extends plugin {
  * 表情回应事件处理
  * 默认关闭，需在面板配置开启
  * 支持 NapCat 的 group_msg_emoji_like 事件
+ * 兼容多平台
  */
 export class MessageReactionHandler extends plugin {
     constructor() {
@@ -194,10 +250,15 @@ export class MessageReactionHandler extends plugin {
     async handleReaction() {
         const e = this.e
         
-        // 检查是否是表情回应事件
-        const isReaction = e.notice_type === 'group_msg_emoji_like' || 
-                          e.sub_type === 'emoji_like' ||
-                          (e.emoji_id && e.message_id)
+        // 检查是否是表情回应事件（多平台兼容）
+        const isReaction = (
+            e.notice_type === 'group_msg_emoji_like' ||  // NapCat
+            e.notice_type === 'essence' ||               // 精华消息变动
+            e.sub_type === 'emoji_like' ||               // OneBot
+            e.sub_type === 'reaction' ||                 // 通用
+            (e.emoji_id !== undefined && e.message_id) ||
+            (e.likes && e.message_id)                    // 某些适配器的点赞格式
+        )
         
         if (!isReaction) {
             return false

@@ -62,9 +62,7 @@ class Config {
     getDefaultConfig() {
         return {
             basic: {
-                toggleMode: 'at', // 'at' or 'prefix'
-                togglePrefix: '#chat',
-                commandPrefix: '#ai',
+                commandPrefix: '#ai',      // AI命令前缀
                 debug: false,
                 showThinkingMessage: true, // 是否发送"思考中..."提示
                 debugToConsoleOnly: true,  // 调试信息仅输出到控制台
@@ -111,6 +109,10 @@ class Config {
                 recall: false,
                 model: '',
                 systemPrompt: '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。',
+                // 继承人格配置：启用后会使用用户/群组的独立人格设置
+                inheritPersonality: true,
+                // 关键词预设映射：{ "关键词": "预设ID" }
+                presetMap: {},
                 // 仅伪人模式可用的功能
                 exclusiveFeatures: ['groupSummary', 'userPortrait']
             },
@@ -241,18 +243,32 @@ class Config {
             streaming: {
                 enabled: true,
             },
-            // 监听器配置
-            listener: {
-                enabled: false,             // 是否启用监听器
-                priority: -Infinity,        // 优先级
-                triggerMode: 'at',          // 触发模式: 'at', 'prefix', 'both', 'random'
-                triggerPrefix: '#chat',     // 前缀触发关键词
-                randomReplyRate: 0.1,       // 随机回复概率
-                // 黑白名单
+            // AI触发配置
+            trigger: {
+                // === 私聊触发 ===
+                private: {
+                    enabled: true,          // 是否响应私聊
+                    mode: 'always',         // 私聊触发模式: 'always'(总是), 'prefix'(需前缀), 'off'(关闭)
+                },
+                // === 群聊触发 ===
+                group: {
+                    enabled: true,          // 是否响应群聊
+                    at: true,               // @机器人触发
+                    prefix: true,           // 前缀触发
+                    keyword: false,         // 关键词触发
+                    random: false,          // 随机触发
+                    randomRate: 0.05,       // 随机触发概率
+                },
+                // === 触发词配置 ===
+                prefixes: ['#chat'],        // 前缀列表
+                keywords: [],               // 关键词列表
+                // === 消息采集 ===
+                collectGroupMsg: true,      // 采集群消息用于记忆
+                // === 访问控制 ===
                 blacklistUsers: [],         // 用户黑名单
-                whitelistUsers: [],         // 用户白名单（空=不限制）
+                whitelistUsers: [],         // 用户白名单（空=不限）
                 blacklistGroups: [],        // 群黑名单
-                whitelistGroups: [],        // 群白名单（空=不限制）
+                whitelistGroups: [],        // 群白名单（空=不限）
             },
         }
     }
