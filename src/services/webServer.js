@@ -1819,6 +1819,31 @@ export default {
             }
         })
 
+        // DELETE /api/memory/clear-all - 清空所有用户记忆 (必须在 :userId 之前注册)
+        this.app.delete('/api/memory/clear-all', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const db = getDatabase()
+                
+                // 使用批量清除方法
+                const deletedCount = db.clearAllMemories()
+                
+                // 停止并重启MemoryManager的轮询
+                const { memoryManager } = await import('./MemoryManager.js')
+                memoryManager.stopPolling()
+                memoryManager.lastPollTime.clear()
+                if (memoryManager.groupMessageBuffer) {
+                    memoryManager.groupMessageBuffer.clear()
+                }
+                memoryManager.startPolling()
+                
+                logger.info(`[WebServer] 清空所有记忆完成, 删除: ${deletedCount}条记忆`)
+                res.json(ChaiteResponse.ok({ success: true, deletedCount }))
+            } catch (error) {
+                logger.error('[WebServer] 清空记忆失败:', error)
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
         // DELETE /api/memory/:userId - Clear all memories for a user
         this.app.delete('/api/memory/:userId', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -2246,31 +2271,6 @@ export default {
                 res.json(ChaiteResponse.ok({ success: true, deletedCount }))
             } catch (error) {
                 logger.error('[WebServer] 清空对话失败:', error)
-                res.status(500).json(ChaiteResponse.fail(null, error.message))
-            }
-        })
-
-        // DELETE /api/memory/clear-all - 清空所有用户记忆
-        this.app.delete('/api/memory/clear-all', this.authMiddleware.bind(this), async (req, res) => {
-            try {
-                const db = getDatabase()
-                
-                // 使用批量清除方法
-                const deletedCount = db.clearAllMemories()
-                
-                // 停止并重启MemoryManager的轮询
-                const { memoryManager } = await import('./MemoryManager.js')
-                memoryManager.stopPolling()
-                memoryManager.lastPollTime.clear()
-                if (memoryManager.groupMessageBuffer) {
-                    memoryManager.groupMessageBuffer.clear()
-                }
-                memoryManager.startPolling()
-                
-                logger.info(`[WebServer] 清空所有记忆完成, 删除: ${deletedCount}条记忆`)
-                res.json(ChaiteResponse.ok({ success: true, deletedCount }))
-            } catch (error) {
-                logger.error('[WebServer] 清空记忆失败:', error)
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })

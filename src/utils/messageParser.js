@@ -46,48 +46,80 @@ function getSegmentData(segment) {
 /**
  * 获取图片/视频/文件的URL
  * 兼容 NC/NapCat/icqq/OneBot 多种格式
+ * 
+ * NapCat image 格式:
+ * { type: 'image', data: { file, file_id, url, path, file_size, file_unique, sub_type } }
+ * 
  * @param {Object} data - 消息段数据
+ * @param {boolean} debug - 是否输出调试日志
  * @returns {string|null} URL
  */
-function getMediaUrl(data) {
+function getMediaUrl(data, debug = false) {
     if (!data) return null
     
-    // NC/NapCat 可能有多层嵌套: data.data.url
+    // NC/NapCat 格式: 数据在 data 字段中
     const innerData = data.data || data
     
-    // 按优先级尝试获取URL
+    if (debug) {
+        logger.info('[getMediaUrl] 输入数据:', JSON.stringify({
+            hasData: !!data.data,
+            keys: Object.keys(data),
+            innerKeys: Object.keys(innerData),
+            url: innerData.url,
+            file: innerData.file,
+            path: innerData.path,
+            file_id: innerData.file_id
+        }))
+    }
+    
+    // 按优先级尝试获取URL - 根据 NapCat 文档顺序
     const urlCandidates = [
-        data.url,
+        // 优先使用 url 字段 (NapCat [收] 字段)
         innerData.url,
-        data.file,
-        innerData.file,
-        data.path,
+        data.url,
+        // 其次使用 path (NapCat [收] 本地路径)
         innerData.path,
-        // NC 特殊字段
-        data.file_url,
+        data.path,
+        // file 字段可能是 URL 或文件标识
+        innerData.file,
+        data.file,
+        // NC 扩展字段
         innerData.file_url,
-        data.download_url,
+        data.file_url,
         innerData.download_url,
+        data.download_url,
         // 图片特殊字段
-        data.image,
         innerData.image,
+        data.image,
     ]
     
     for (const candidate of urlCandidates) {
         if (candidate && typeof candidate === 'string') {
             // http(s) URL 直接返回
             if (candidate.startsWith('http://') || candidate.startsWith('https://')) {
+                if (debug) logger.info(`[getMediaUrl] 找到 HTTP URL: ${candidate.substring(0, 80)}...`)
                 return candidate
             }
             // base64 图片
             if (candidate.startsWith('base64://')) {
+                if (debug) logger.info('[getMediaUrl] 找到 base64 数据')
                 return candidate
             }
             // file:// 协议
             if (candidate.startsWith('file://')) {
+                if (debug) logger.info(`[getMediaUrl] 找到 file:// 路径: ${candidate}`)
                 return candidate
             }
+            // 本地绝对路径 (NapCat path 字段可能是本地路径)
+            if (candidate.startsWith('/') || candidate.match(/^[A-Za-z]:\\/)) {
+                if (debug) logger.info(`[getMediaUrl] 找到本地路径: ${candidate}`)
+                return `file://${candidate}`
+            }
         }
+    }
+    
+    if (debug) {
+        logger.warn('[getMediaUrl] 未找到有效 URL，原始数据:', JSON.stringify(data).substring(0, 500))
     }
     
     return null
@@ -190,8 +222,53 @@ export async function parseUserMessage(e, options = {}) {
                 }
                 
                 case 'image': {
-                    // 获取图片URL - 兼容NC和icqq格式
-                    const imgUrl = getMediaUrl(segData) || val.url
+                    // 获取图片URL - 兼容NC/NapCat和icqq格式
+                    // NapCat格式: { type: 'image', data: { url, file, path, file_id, ... } }
+                    
+                    // 调试日志：记录原始消息段
+                    logger.info('[MessageParser][Image] 原始消息段:', JSON.stringify({
+                        type: val.type,
+                        hasData: !!val.data,
+                        segDataKeys: Object.keys(segData),
+                        url: segData.url,
+                        file: segData.file,
+                        path: segData.path,
+                        file_id: segData.file_id,
+                        file_unique: segData.file_unique
+                    }))
+                    
+                    let imgUrl = getMediaUrl(segData, true) || val.url
+                    
+                    // 如果没有直接 URL，尝试通过 file_id 获取 (NapCat)
+                    if (!imgUrl && segData.file_id && e.bot?.sendApi) {
+                        try {
+                            logger.info(`[MessageParser][Image] 尝试通过 file_id 获取: ${segData.file_id}`)
+                            const fileInfo = await e.bot.sendApi('get_image', { file_id: segData.file_id })
+                            imgUrl = fileInfo?.data?.url || fileInfo?.url
+                            if (imgUrl) {
+                                logger.info(`[MessageParser][Image] 通过 get_image 获取成功: ${imgUrl.substring(0, 80)}...`)
+                            }
+                        } catch (err) {
+                            logger.warn(`[MessageParser][Image] get_image API 失败:`, err.message)
+                        }
+                    }
+                    
+                    // 如果还是没有，尝试通过 file 字段获取 (可能是文件名或ID)
+                    if (!imgUrl && segData.file && e.bot?.sendApi) {
+                        try {
+                            logger.info(`[MessageParser][Image] 尝试通过 file 获取: ${segData.file}`)
+                            const fileInfo = await e.bot.sendApi('get_image', { file: segData.file })
+                            imgUrl = fileInfo?.data?.url || fileInfo?.url
+                            if (imgUrl) {
+                                logger.info(`[MessageParser][Image] 通过 get_image(file) 获取成功: ${imgUrl.substring(0, 80)}...`)
+                            }
+                        } catch (err) {
+                            logger.debug(`[MessageParser][Image] get_image(file) 失败:`, err.message)
+                        }
+                    }
+                    
+                    logger.info(`[MessageParser][Image] 最终 URL: ${imgUrl || '无'}`)
+                    
                     if (imgUrl) {
                         try {
                             // 优先直接使用URL（更高效）
@@ -201,8 +278,25 @@ export async function parseUserMessage(e, options = {}) {
                                     image_url: { url: imgUrl },
                                     source: 'message'
                                 })
+                            } else if (imgUrl.startsWith('file://') || imgUrl.startsWith('/')) {
+                                // 本地文件，转 base64
+                                const imageData = await fetchImage(imgUrl)
+                                if (imageData) {
+                                    contents.push({
+                                        type: 'image',
+                                        image: imageData.base64,
+                                        mimeType: imageData.mimeType
+                                    })
+                                }
+                            } else if (imgUrl.startsWith('base64://')) {
+                                // 已经是 base64
+                                contents.push({
+                                    type: 'image',
+                                    image: imgUrl.replace('base64://', ''),
+                                    mimeType: 'image/png'
+                                })
                             } else {
-                                // 非http URL，尝试下载转base64
+                                // 其他格式，尝试下载
                                 const imageData = await fetchImage(imgUrl)
                                 if (imageData) {
                                     contents.push({
@@ -213,12 +307,15 @@ export async function parseUserMessage(e, options = {}) {
                                 }
                             }
                         } catch (err) {
-                            logger.warn(`[MessageParser] 获取图片失败: ${imgUrl}`, err.message)
+                            logger.warn(`[MessageParser][Image] 获取图片失败: ${imgUrl}`, err.message)
                             // 失败时也记录URL信息
                             text += `[图片:${imgUrl.substring(0, 50)}...]`
                         }
                     } else {
-                        text += '[图片]'
+                        // 无法获取 URL，记录原始信息用于调试
+                        const debugInfo = segData.file_id || segData.file || segData.file_unique || '未知'
+                        text += `[图片:${debugInfo}]`
+                        logger.warn('[MessageParser][Image] 无法获取图片URL，原始数据:', JSON.stringify(val).substring(0, 300))
                     }
                     break
                 }
@@ -694,8 +791,32 @@ async function parseReplyMessage(e, options) {
                 
                 case 'image':
                     if (handleReplyImage) {
+                        // 调试日志
+                        parseLog.push(`[Reply][Image] 原始数据: ${JSON.stringify({
+                            type: val.type,
+                            url: valData.url,
+                            file: valData.file,
+                            path: valData.path,
+                            file_id: valData.file_id
+                        })}`)
+                        
                         // 使用统一的URL获取函数
-                        const imgUrl = getMediaUrl(valData) || val.url || val.file
+                        let imgUrl = getMediaUrl(valData, true) || val.url || val.file
+                        
+                        // 如果没有直接 URL，尝试通过 file_id 获取 (NapCat)
+                        if (!imgUrl && valData.file_id && e.bot?.sendApi) {
+                            try {
+                                parseLog.push(`[Reply][Image] 尝试通过 file_id 获取: ${valData.file_id}`)
+                                const fileInfo = await e.bot.sendApi('get_image', { file_id: valData.file_id })
+                                imgUrl = fileInfo?.data?.url || fileInfo?.url
+                                if (imgUrl) parseLog.push(`[Reply][Image] get_image 成功`)
+                            } catch (err) {
+                                parseLog.push(`[Reply][Image] get_image 失败: ${err.message}`)
+                            }
+                        }
+                        
+                        parseLog.push(`[Reply][Image] 最终 URL: ${imgUrl ? imgUrl.substring(0, 50) + '...' : '无'}`)
+                        
                         if (imgUrl) {
                             try {
                                 // 优先使用URL直接传递
@@ -705,9 +826,24 @@ async function parseReplyMessage(e, options) {
                                         image_url: { url: imgUrl },
                                         source: 'reply'
                                     })
-                                    parseLog.push(`[Reply] 图片URL: ${imgUrl.substring(0, 50)}...`)
+                                } else if (imgUrl.startsWith('file://') || imgUrl.startsWith('/')) {
+                                    const imageData = await fetchImage(imgUrl)
+                                    if (imageData) {
+                                        contents.push({
+                                            type: 'image',
+                                            image: imageData.base64,
+                                            mimeType: imageData.mimeType,
+                                            source: 'reply'
+                                        })
+                                    }
+                                } else if (imgUrl.startsWith('base64://')) {
+                                    contents.push({
+                                        type: 'image',
+                                        image: imgUrl.replace('base64://', ''),
+                                        mimeType: 'image/png',
+                                        source: 'reply'
+                                    })
                                 } else {
-                                    // 非http URL，尝试下载转base64
                                     const imageData = await fetchImage(imgUrl)
                                     if (imageData) {
                                         contents.push({
@@ -720,11 +856,11 @@ async function parseReplyMessage(e, options) {
                                 }
                             } catch (err) {
                                 logger.warn(`[MessageParser] 获取引用图片失败: ${imgUrl}`, err.message)
-                                // 失败时记录为文本
                                 replyTextContent += `[图片:${imgUrl.substring(0, 30)}...]`
                             }
                         } else {
-                            replyTextContent += '[图片]'
+                            const debugInfo = valData.file_id || valData.file || '未知'
+                            replyTextContent += `[图片:${debugInfo}]`
                         }
                     }
                     break
@@ -886,7 +1022,7 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
     const parseLog = [] // 解析日志
     
     // 防止无限递归，最多3层嵌套
-    const MAX_DEPTH = 3
+    const MAX_DEPTH = 10
     if (depth >= MAX_DEPTH) {
         return { text: '[嵌套转发消息，层级过深]', contents: [], forwardInfo: null }
     }
