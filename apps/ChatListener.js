@@ -236,13 +236,16 @@ export class ChatListener extends plugin {
     }
     
     /**
-     * 检查前缀
+     * 检查前缀（前缀视为@，如"残花你好"或"残花 你好"都能触发）
      */
     checkPrefix(msg, prefixes = []) {
         if (!Array.isArray(prefixes)) prefixes = [prefixes]
         for (const prefix of prefixes) {
             if (prefix && msg.startsWith(prefix)) {
-                return { matched: true, prefix, content: msg.slice(prefix.length).trim() }
+                // 提取前缀后的内容（只去除开头空格，保留消息格式）
+                const content = msg.slice(prefix.length).trimStart()
+                // 即使内容为空也返回匹配成功（类似@机器人不说话）
+                return { matched: true, prefix, content: content }
             }
         }
         return { matched: false }

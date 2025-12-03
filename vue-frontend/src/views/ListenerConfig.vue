@@ -117,7 +117,8 @@ onMounted(() => {
         <n-space vertical size="large">
             <n-card title="AI触发配置">
                 <n-alert type="info" style="margin-bottom: 16px;">
-                    配置机器人何时响应消息。私聊和群聊可独立配置触发方式。
+                    <p style="margin: 0;">配置机器人何时响应消息。私聊和群聊可独立配置触发方式。</p>
+                    <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">💡 提示：前缀触发视为@，如设置前缀"xx"，则"xx你好"或"xx 你好"都能触发</p>
                 </n-alert>
                 
                 <n-form label-placement="left" label-width="150px">
@@ -128,11 +129,17 @@ onMounted(() => {
                         <n-switch v-model:value="triggerConfig.private.enabled" />
                     </n-form-item>
                     <n-form-item label="私聊模式" v-if="triggerConfig.private.enabled">
-                        <n-select 
-                            v-model:value="triggerConfig.private.mode" 
-                            :options="privateModeOptions"
-                            style="width: 180px;"
-                        />
+                        <n-space align="center">
+                            <n-select 
+                                v-model:value="triggerConfig.private.mode" 
+                                :options="privateModeOptions"
+                                style="width: 180px;"
+                            />
+                            <span style="color: #999; font-size: 12px;">
+                                {{ triggerConfig.private.mode === 'always' ? '私聊消息总是响应' : 
+                                   triggerConfig.private.mode === 'prefix' ? '私聊需要前缀才响应' : '私聊已关闭' }}
+                            </span>
+                        </n-space>
                     </n-form-item>
                     
                     <!-- 群聊配置 -->
@@ -156,9 +163,9 @@ onMounted(() => {
                             </n-space>
                         </n-form-item>
                         <n-form-item label="前缀触发">
-                            <n-space align="center">
+                            <n-space align="center" wrap>
                                 <n-switch v-model:value="triggerConfig.group.prefix" />
-                                <span style="color: #999; font-size: 12px;">消息以指定前缀开头时响应</span>
+                                <span style="color: #999; font-size: 12px;">前缀视为@，如"残花你好"或"残花 你好"都能触发</span>
                             </n-space>
                         </n-form-item>
                         <n-form-item label="关键词触发">
@@ -183,7 +190,10 @@ onMounted(() => {
                     <n-divider title-placement="left">触发词</n-divider>
                     
                     <n-form-item label="触发前缀">
-                        <n-input v-model:value="prefixesText" placeholder="多个用逗号分隔，如: #chat, 小助手" style="width: 300px;" />
+                        <n-space vertical>
+                            <n-input v-model:value="prefixesText" placeholder="多个用逗号分隔，如: #chat, 残花" style="width: 300px;" />
+                            <span style="color: #999; font-size: 12px;">前缀后可直接跟内容或空格，如"残花你好""残花 你好"都可触发</span>
+                        </n-space>
                     </n-form-item>
                     <n-form-item label="触发关键词" v-if="triggerConfig.group.keyword">
                         <n-input v-model:value="keywordsText" placeholder="消息包含这些词时触发" style="width: 300px;" />
@@ -193,7 +203,10 @@ onMounted(() => {
                     <n-divider title-placement="left">其他</n-divider>
                     
                     <n-form-item label="采集群消息">
-                        <n-switch v-model:value="triggerConfig.collectGroupMsg" />
+                        <n-space align="center">
+                            <n-switch v-model:value="triggerConfig.collectGroupMsg" />
+                            <span style="color: #999; font-size: 12px;">采集群消息用于AI上下文理解（不会触发响应）</span>
+                        </n-space>
                     </n-form-item>
                 </n-form>
             </n-card>

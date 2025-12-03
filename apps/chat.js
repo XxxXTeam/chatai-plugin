@@ -252,18 +252,22 @@ export class Chat extends plugin {
         }
       }
 
-      // 群聊：检查前缀触发
+      // 群聊：检查前缀触发（前缀视为@，如"残花你好"或"残花 你好"都能触发）
       if (!msg && groupCfg.prefix) {
         for (const prefix of prefixes) {
           if (prefix && rawMsg.startsWith(prefix)) {
-            msg = rawMsg.slice(prefix.length).trim()
+            // 提取前缀后的内容（去除开头空格）
+            const content = rawMsg.slice(prefix.length).trimStart()
+            // 前缀触发成功，即使后面没有内容也触发（类似@机器人不说话）
+            msg = content || ''  // 允许空内容
             triggerReason = `群聊前缀[${prefix}]`
             break
           }
         }
       }
 
-      if (!msg) {
+      // 前缀触发允许空消息（类似@不说话），其他情况需要有内容
+      if (msg === null || msg === undefined) {
         return false  // 交给ChatListener处理其他情况（随机、关键词等）
       }
     }

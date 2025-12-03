@@ -193,8 +193,9 @@ trigger:
     random: false      # 随机触发（伪人模式）
     randomRate: 0.05   # 随机触发概率 (0-1)
   # === 触发关键配置 ===
-  prefixes:            # 触发前缀列表
+  prefixes:            # 触发前缀（视为@，如设置"残花"则"残花你好"或"残花 你好"都能触发）
     - "#chat"
+    # - "残花"       # 示例：自定义名字前缀
   keywords: []         # 触发关键词列表
   collectGroupMsg: true # 是否采集群消息用于上下文
   blacklistUsers: []
