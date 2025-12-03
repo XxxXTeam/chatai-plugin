@@ -39,6 +39,12 @@ export function isMessageProcessed(e) {
  */
 export function isSelfMessage(e) {
   try {
+    // stdin 适配器是测试用，不应该被判断为自身消息
+    if (e?.adapter?.name === 'stdin' || e?.adapter?.id === 'stdin' || 
+        e?.self_id === 'stdin' || e?.bot?.adapter?.name === 'stdin') {
+      return false
+    }
+    
     const bot = e?.bot || Bot
     // 获取所有可能的机器人ID
     const selfIds = new Set()
@@ -162,13 +168,18 @@ export class Chat extends plugin {
   async handleMessage() {
     const e = this.e
     
+    // 使用全局 logger
+    console.log(`[Chat-DEBUG] handleMessage 开始, msg="${e.msg}", isGroup=${e.isGroup}`)
+    
     // 防护：忽略自身消息
     if (isSelfMessage(e)) {
+      logger.debug('[Chat] 跳过: 自身消息')
       return false
     }
     
     // 已被处理则跳过
     if (isMessageProcessed(e)) {
+      logger.debug('[Chat] 跳过: 已被处理')
       return false
     }
     
@@ -194,6 +205,9 @@ export class Chat extends plugin {
     const rawMsg = cleanCQCode(e.msg || '')
     let msg = null
     let triggerReason = ''
+    
+    // 调试：打印前缀配置和消息
+    logger.debug(`[Chat] 检查触发: isGroup=${e.isGroup}, rawMsg="${rawMsg}", prefixes=${JSON.stringify(prefixes)}`)
 
     // === 私聊处理 ===
     if (!e.isGroup) {
@@ -204,22 +218,29 @@ export class Chat extends plugin {
       }
       
       const mode = privateCfg.mode || 'prefix'
-      if (mode === 'always') {
-        // 私聊总是响应模式 - 交给 ChatListener 处理
-        return false
-      } else if (mode === 'prefix') {
-        // 私聊前缀模式
-        for (const prefix of prefixes) {
-          if (prefix && rawMsg.startsWith(prefix)) {
-            msg = rawMsg.slice(prefix.length).trim()
-            triggerReason = `私聊前缀[${prefix}]`
-            break
-          }
+      
+      // 先检查前缀触发（优先级高于 always 模式）
+      for (const prefix of prefixes) {
+        if (prefix && rawMsg.startsWith(prefix)) {
+          const content = rawMsg.slice(prefix.length).trimStart()
+          msg = content || ''  // 允许空内容
+          triggerReason = `私聊前缀[${prefix}]`
+          break
         }
       }
       
-      if (!msg) {
-        return false
+      // 如果没有前缀触发
+      if (msg === null) {
+        if (mode === 'always') {
+          // 私聊总是响应模式 - 交给 ChatListener 处理
+          return false
+        } else if (mode === 'prefix') {
+          // 私聊前缀模式但没匹配到前缀
+          return false
+        } else {
+          // 其他模式（off）
+          return false
+        }
       }
     } else {
       // === 群聊处理 ===

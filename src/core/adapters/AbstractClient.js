@@ -4,6 +4,75 @@ import DefaultHistoryManager from '../utils/history.js'
 import { asyncLocalStorage, extractClassName, getKey } from '../utils/index.js'
 
 /**
+ * 将图片URL转换为base64
+ * @param {string} url - 图片URL
+ * @returns {Promise<{mimeType: string, data: string}>}
+ */
+async function urlToBase64(url) {
+    try {
+        const response = await fetch(url)
+        if (!response.ok) {
+            throw new Error(`Failed to fetch image: ${response.statusText}`)
+        }
+        const contentType = response.headers.get('content-type') || 'image/jpeg'
+        const buffer = Buffer.from(await response.arrayBuffer())
+        return {
+            mimeType: contentType.split(';')[0],
+            data: buffer.toString('base64')
+        }
+    } catch (error) {
+        logger.error('[ImagePreprocess] 图片URL转base64失败:', url, error.message)
+        throw error
+    }
+}
+
+/**
+ * 预处理消息中的图片URL，转换为base64（用于不支持URL的模型如Gemini）
+ * @param {Array} histories - 消息历史
+ * @returns {Promise<Array>}
+ */
+export async function preprocessImageUrls(histories) {
+    const processed = []
+    for (const msg of histories) {
+        if (msg.role === 'user' && Array.isArray(msg.content)) {
+            const newContent = []
+            for (const item of msg.content) {
+                if (item.type === 'image' && item.image?.startsWith('http')) {
+                    try {
+                        const { mimeType, data } = await urlToBase64(item.image)
+                        newContent.push({
+                            type: 'image',
+                            image: `data:${mimeType};base64,${data}`
+                        })
+                        logger.info('[ImagePreprocess] 已将图片URL转为base64:', item.image.substring(0, 50) + '...')
+                    } catch {
+                        // 转换失败时保留原URL
+                        newContent.push(item)
+                    }
+                } else {
+                    newContent.push(item)
+                }
+            }
+            processed.push({ ...msg, content: newContent })
+        } else {
+            processed.push(msg)
+        }
+    }
+    return processed
+}
+
+/**
+ * 检查模型是否需要图片base64预处理（如Gemini系列）
+ * @param {string} model - 模型名称
+ * @returns {boolean}
+ */
+export function needsImageBase64Preprocess(model) {
+    if (!model) return false
+    const lowerModel = model.toLowerCase()
+    return lowerModel.includes('gemini')
+}
+
+/**
  * 工具调用限制配置
  * @typedef {Object} ToolCallLimitConfig
  * @property {number} [maxConsecutiveCalls] - 最大连续调用次数

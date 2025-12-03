@@ -40,19 +40,13 @@ registerFromChaiteConverter('gemini', (source) => {
                         return { text: t.text }
                     case 'image':
                         // Gemini expects inline data format
+                        // 注：URL图片已在GeminiClient中预处理为base64
                         if (t.image.startsWith('data:')) {
                             const [mimeType, base64Data] = t.image.split(';base64,')
                             return {
                                 inlineData: {
                                     mimeType: mimeType.replace('data:', ''),
                                     data: base64Data,
-                                },
-                            }
-                        } else if (t.image.startsWith('http')) {
-                            // URL-based images
-                            return {
-                                fileData: {
-                                    fileUri: t.image,
                                 },
                             }
                         } else {

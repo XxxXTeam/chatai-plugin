@@ -1,6 +1,6 @@
 import OpenAI from 'openai'
 import crypto from 'node:crypto'
-import { AbstractClient } from '../AbstractClient.js'
+import { AbstractClient, preprocessImageUrls, needsImageBase64Preprocess } from '../AbstractClient.js'
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
 
@@ -43,6 +43,11 @@ export class OpenAIClient extends AbstractClient {
 
         const messages = []
         const model = options.model || 'gpt-4o-mini'
+
+        // Gemini模型需要将图片URL转为base64
+        if (needsImageBase64Preprocess(model)) {
+            histories = await preprocessImageUrls(histories)
+        }
         const isThinkingModel = options.enableReasoning || options.isThinkingModel
 
         if (options.systemOverride) {
@@ -228,6 +233,11 @@ export class OpenAIClient extends AbstractClient {
 
         const messages = []
         const model = options.model || 'gpt-4o-mini'
+
+        // Gemini模型需要将图片URL转为base64
+        if (needsImageBase64Preprocess(model)) {
+            histories = await preprocessImageUrls(histories)
+        }
         const isThinkingModel = options.enableReasoning || options.isThinkingModel
 
         if (options.systemOverride) {

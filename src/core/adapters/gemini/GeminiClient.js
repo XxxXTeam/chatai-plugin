@@ -1,6 +1,6 @@
 import { GoogleGenerativeAI, HarmBlockThreshold, HarmCategory } from '@google/generative-ai'
 import crypto from 'node:crypto'
-import { AbstractClient } from '../AbstractClient.js'
+import { AbstractClient, preprocessImageUrls } from '../AbstractClient.js'
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
 
@@ -39,13 +39,16 @@ export class GeminiClient extends AbstractClient {
         const genAI = new GoogleGenerativeAI(apiKey)
         const model = options.model || 'gemini-1.5-flash'
 
+        // 预处理图片URL为base64（Gemini不支持直接使用URL）
+        const preprocessedHistories = await preprocessImageUrls(histories)
+
         // Separate system prompt from history
         let systemInstruction = options.systemOverride || ''
         const converter = getFromChaiteConverter('gemini')
 
         // Convert history to Gemini format
         const contents = []
-        for (const history of histories) {
+        for (const history of preprocessedHistories) {
             if (history.role === 'system') {
                 // System messages become system instruction
                 systemInstruction = history.content
@@ -144,11 +147,14 @@ export class GeminiClient extends AbstractClient {
         const genAI = new GoogleGenerativeAI(apiKey)
         const model = options.model || 'gemini-1.5-flash'
 
+        // 预处理图片URL为base64（Gemini不支持直接使用URL）
+        const preprocessedHistories = await preprocessImageUrls(histories)
+
         let systemInstruction = options.systemOverride || ''
         const converter = getFromChaiteConverter('gemini')
 
         const contents = []
-        for (const history of histories) {
+        for (const history of preprocessedHistories) {
             if (history.role === 'system') {
                 systemInstruction = history.content
                     .filter(c => c.type === 'text')
