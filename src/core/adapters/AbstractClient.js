@@ -37,6 +37,7 @@ export async function preprocessImageUrls(histories) {
         if (msg.role === 'user' && Array.isArray(msg.content)) {
             const newContent = []
             for (const item of msg.content) {
+                // 处理 image 类型 (image字段是URL)
                 if (item.type === 'image' && item.image?.startsWith('http')) {
                     try {
                         const { mimeType, data } = await urlToBase64(item.image)
@@ -44,12 +45,25 @@ export async function preprocessImageUrls(histories) {
                             type: 'image',
                             image: `data:${mimeType};base64,${data}`
                         })
-                        logger.info('[ImagePreprocess] 已将图片URL转为base64:', item.image.substring(0, 50) + '...')
+                        logger.info('[ImagePreprocess] 已将image URL转为base64:', item.image.substring(0, 50) + '...')
                     } catch {
-                        // 转换失败时保留原URL
                         newContent.push(item)
                     }
-                } else {
+                }
+                // 处理 image_url 类型 (来自messageParser)
+                else if (item.type === 'image_url' && item.image_url?.url?.startsWith('http')) {
+                    try {
+                        const { mimeType, data } = await urlToBase64(item.image_url.url)
+                        newContent.push({
+                            type: 'image',
+                            image: `data:${mimeType};base64,${data}`
+                        })
+                        logger.info('[ImagePreprocess] 已将image_url转为base64:', item.image_url.url.substring(0, 50) + '...')
+                    } catch {
+                        newContent.push(item)
+                    }
+                }
+                else {
                     newContent.push(item)
                 }
             }
