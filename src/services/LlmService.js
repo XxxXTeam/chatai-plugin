@@ -3,7 +3,7 @@ import { OpenAIClient, GeminiClient, ClaudeClient } from '../core/adapters/index
 import { mcpManager } from '../mcp/McpManager.js'
 import { getAllTools, setToolContext } from '../core/utils/toolAdapter.js'
 import { presetManager } from './PresetManager.js'
-import { keyManager } from './KeyManager.js'
+import { channelManager } from './ChannelManager.js'
 
 /**
  * Service for managing LLM clients and configurations
@@ -19,27 +19,43 @@ export class LlmService {
      * @returns {Promise<OpenAIClient>} Configured client
      */
     static async createClient(options = {}) {
-        const adapterType = options.adapterType || config.get('llm.defaultAdapter') || 'openai'
         const enableTools = options.enableTools !== false
 
         // 使用传入的选项，不再读取全局thinking配置
         const enableReasoning = options.enableReasoning || false
         const reasoningEffort = options.reasoningEffort || 'low'
 
-        // Load configuration based on adapter type
-        let apiKey, baseUrl, ClientClass
+        // Load configuration from channelManager
+        await channelManager.init()
+        
+        let apiKey, baseUrl, ClientClass, adapterType
 
-        // Get API Key using KeyManager (or override)
-        apiKey = options.apiKey || keyManager.getNextKey(adapterType)
+        // 优先使用传入的选项
+        if (options.apiKey && options.baseUrl) {
+            apiKey = options.apiKey
+            baseUrl = options.baseUrl
+            adapterType = options.adapterType || 'openai'
+        } else {
+            // 从渠道管理器获取可用渠道
+            const model = options.model || config.get('llm.defaultModel')
+            const channel = channelManager.getBestChannel(model) ||
+                            channelManager.getAll().find(c => c.enabled && c.apiKey)
+            
+            if (!channel) {
+                throw new Error('未找到可用的 API 渠道配置，请先配置渠道')
+            }
+            
+            apiKey = channelManager.getChannelKey(channel)
+            baseUrl = channel.baseUrl
+            adapterType = channel.adapterType || 'openai'
+        }
 
+        // 根据适配器类型选择客户端类
         if (adapterType === 'openai') {
-            baseUrl = options.baseUrl || config.get('openai.baseUrl')
             ClientClass = OpenAIClient
         } else if (adapterType === 'gemini') {
-            baseUrl = options.baseUrl || config.get('gemini.baseUrl')
             ClientClass = GeminiClient
         } else if (adapterType === 'claude') {
-            baseUrl = options.baseUrl || config.get('claude.baseUrl')
             ClientClass = ClaudeClient
         } else {
             throw new Error(`Unsupported adapter type: ${adapterType}`)
