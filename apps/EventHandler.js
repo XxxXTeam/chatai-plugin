@@ -78,7 +78,7 @@ export class PokeHandler extends plugin {
         const isPoke = (
             e.notice_type === 'group_poke' ||           // NapCat 群戳
             e.sub_type === 'poke' ||                    // OneBot poke
-            e.notice_type === 'notify' && e.sub_type === 'poke' ||  // go-cqhttp
+            (e.notice_type === 'notify' && e.sub_type === 'poke') ||  // go-cqhttp
             e.action === 'poke' ||                      // 某些适配器
             (e.notice_type === 'group' && e.sub_type === 'poke')    // icqq
         )
@@ -93,19 +93,36 @@ export class PokeHandler extends plugin {
             return false
         }
         
+        // 获取操作者和目标（多平台兼容）
         const operator = e.operator_id || e.user_id || e.sender_id
-        const target = e.target_id || e.self_id
-        const botId = e.bot?.uin || e.self_id
+        const target = e.target_id || e.poked_uid || e.target
         
-        // 只响应戳机器人
-        if (String(target) !== String(botId)) {
+        // 获取机器人ID（多平台兼容）
+        const bot = e.bot || Bot
+        const botId = bot?.uin || e.self_id || bot?.self_id
+        
+        // 收集所有可能的机器人ID
+        const botIds = new Set()
+        if (botId) botIds.add(String(botId))
+        if (e.self_id) botIds.add(String(e.self_id))
+        if (bot?.self_id) botIds.add(String(bot.self_id))
+        if (Bot?.uin) botIds.add(String(Bot.uin))
+        
+        // 严格检查：只响应戳机器人自己
+        const targetStr = String(target)
+        if (!botIds.has(targetStr)) {
+            logger.debug(`[AI-Poke] 忽略：target=${target} 不是bot (botIds=${[...botIds].join(',')})`)
+            return false
+        }
+        
+        // 防止自己戳自己触发
+        if (operator && botIds.has(String(operator))) {
+            logger.debug('[AI-Poke] 忽略：机器人自己戳自己')
             return false
         }
         
         const nickname = await getUserNickname(e, operator)
         logger.info(`[AI-Poke] ${nickname}(${operator}) 戳了机器人`)
-        
-        // 使用AI人设处理
         try {
             const { chatService } = await import('../src/services/ChatService.js')
             

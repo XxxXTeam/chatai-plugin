@@ -102,7 +102,13 @@ const defaultFormValue = () => ({
   description: '',
   systemPrompt: '',
   model: '',
-  temperature: 0.7,
+  modelParams: {
+    temperature: 0.7,
+    top_p: 0.9,
+    max_tokens: 4096,
+    presence_penalty: 0,
+    frequency_penalty: 0
+  },
   persona: {
     name: '',
     personality: '',
@@ -116,11 +122,14 @@ const defaultFormValue = () => ({
   context: {
     maxMessages: 20,
     maxTokens: 8000,
+    isolateContext: false,
     includeGroupContext: false,
-    groupContextLength: 10
+    groupContextLength: 10,
+    clearOnSwitch: false
   },
   tools: {
     enableBuiltinTools: true,
+    enableMcpTools: true,
     allowedTools: [],
     disabledTools: []
   }
@@ -446,8 +455,39 @@ onMounted(() => {
             <n-form-item label="模型">
               <n-select v-model:value="formValue.model" :options="modelOptions" placeholder="留空使用默认模型" filterable tag clearable />
             </n-form-item>
+          </n-tab-pane>
+          
+          <!-- 模型参数 -->
+          <n-tab-pane name="modelParams" tab="模型参数">
             <n-form-item label="温度">
-              <n-input-number v-model:value="formValue.temperature" :min="0" :max="2" :step="0.1" style="width: 150px" />
+              <n-space align="center">
+                <n-input-number v-model:value="formValue.modelParams.temperature" :min="0" :max="2" :step="0.1" style="width: 120px" />
+                <span style="color: #999; font-size: 12px">控制输出随机性，越高越有创意</span>
+              </n-space>
+            </n-form-item>
+            <n-form-item label="Top P">
+              <n-space align="center">
+                <n-input-number v-model:value="formValue.modelParams.top_p" :min="0" :max="1" :step="0.05" style="width: 120px" />
+                <span style="color: #999; font-size: 12px">核采样参数，建议保持默认</span>
+              </n-space>
+            </n-form-item>
+            <n-form-item label="最大输出">
+              <n-space align="center">
+                <n-input-number v-model:value="formValue.modelParams.max_tokens" :min="100" :max="128000" :step="100" style="width: 120px" />
+                <span style="color: #999; font-size: 12px">单次回复最大 token 数</span>
+              </n-space>
+            </n-form-item>
+            <n-form-item label="存在惩罚">
+              <n-space align="center">
+                <n-input-number v-model:value="formValue.modelParams.presence_penalty" :min="-2" :max="2" :step="0.1" style="width: 120px" />
+                <span style="color: #999; font-size: 12px">增加讨论新话题的可能性</span>
+              </n-space>
+            </n-form-item>
+            <n-form-item label="频率惩罚">
+              <n-space align="center">
+                <n-input-number v-model:value="formValue.modelParams.frequency_penalty" :min="-2" :max="2" :step="0.1" style="width: 120px" />
+                <span style="color: #999; font-size: 12px">减少重复内容</span>
+              </n-space>
             </n-form-item>
           </n-tab-pane>
 
@@ -479,10 +519,28 @@ onMounted(() => {
           <!-- 上下文配置 -->
           <n-tab-pane name="context" tab="上下文配置">
             <n-form-item label="最大消息数">
-              <n-input-number v-model:value="formValue.context.maxMessages" :min="1" :max="100" style="width: 150px" />
+              <n-space align="center">
+                <n-input-number v-model:value="formValue.context.maxMessages" :min="1" :max="100" style="width: 150px" />
+                <span style="color: #999; font-size: 12px">保留的历史消息数量</span>
+              </n-space>
             </n-form-item>
             <n-form-item label="最大Token数">
-              <n-input-number v-model:value="formValue.context.maxTokens" :min="100" :max="128000" :step="100" style="width: 150px" />
+              <n-space align="center">
+                <n-input-number v-model:value="formValue.context.maxTokens" :min="100" :max="128000" :step="100" style="width: 150px" />
+                <span style="color: #999; font-size: 12px">上下文总 token 限制</span>
+              </n-space>
+            </n-form-item>
+            <n-form-item label="独立上下文">
+              <n-space align="center">
+                <n-switch v-model:value="formValue.context.isolateContext" />
+                <span style="color: #999; font-size: 12px">此预设使用独立的对话历史</span>
+              </n-space>
+            </n-form-item>
+            <n-form-item label="切换时清除" v-if="formValue.context.isolateContext">
+              <n-space align="center">
+                <n-switch v-model:value="formValue.context.clearOnSwitch" />
+                <span style="color: #999; font-size: 12px">切换预设时清除原上下文</span>
+              </n-space>
             </n-form-item>
             <n-form-item label="包含群聊上下文">
               <n-switch v-model:value="formValue.context.includeGroupContext" />
@@ -497,11 +555,17 @@ onMounted(() => {
             <n-form-item label="启用内置工具">
               <n-switch v-model:value="formValue.tools.enableBuiltinTools" />
             </n-form-item>
-            <n-form-item label="允许的工具" v-if="formValue.tools.enableBuiltinTools">
+            <n-form-item label="启用MCP工具">
+              <n-space align="center">
+                <n-switch v-model:value="formValue.tools.enableMcpTools" />
+                <span style="color: #999; font-size: 12px">允许使用 MCP 服务器提供的工具</span>
+              </n-space>
+            </n-form-item>
+            <n-form-item label="允许的工具" v-if="formValue.tools.enableBuiltinTools || formValue.tools.enableMcpTools">
               <n-dynamic-tags v-model:value="formValue.tools.allowedTools" />
               <template #feedback>留空表示允许所有工具</template>
             </n-form-item>
-            <n-form-item label="禁用的工具" v-if="formValue.tools.enableBuiltinTools">
+            <n-form-item label="禁用的工具" v-if="formValue.tools.enableBuiltinTools || formValue.tools.enableMcpTools">
               <n-dynamic-tags v-model:value="formValue.tools.disabledTools" />
             </n-form-item>
           </n-tab-pane>

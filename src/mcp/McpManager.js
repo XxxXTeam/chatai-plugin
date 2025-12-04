@@ -662,6 +662,110 @@ export class McpManager {
     }
 
     /**
+     * 并行执行多个工具调用
+     * @param {Array<{name: string, args: Object}>} toolCalls - 工具调用列表
+     * @param {Object} options - 执行选项
+     * @returns {Promise<Array<{name: string, result: any, error?: string, duration: number}>>}
+     */
+    async callToolsParallel(toolCalls, options = {}) {
+        if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
+            return []
+        }
+
+        const startTime = Date.now()
+        logger.info(`[MCP] 并行执行 ${toolCalls.length} 个工具调用`)
+
+        // 按服务器分组，同一服务器的调用可能需要串行
+        const serverGroups = new Map()
+        for (const call of toolCalls) {
+            const tool = this.tools.get(call.name)
+            const serverName = tool?.serverName || 'builtin'
+            if (!serverGroups.has(serverName)) {
+                serverGroups.set(serverName, [])
+            }
+            serverGroups.get(serverName).push(call)
+        }
+
+        // 并行执行所有调用
+        const results = await Promise.allSettled(
+            toolCalls.map(async (call) => {
+                const callStart = Date.now()
+                try {
+                    const result = await this.callTool(call.name, call.args, options)
+                    return {
+                        name: call.name,
+                        result,
+                        duration: Date.now() - callStart,
+                        success: true
+                    }
+                } catch (error) {
+                    return {
+                        name: call.name,
+                        error: error.message,
+                        duration: Date.now() - callStart,
+                        success: false
+                    }
+                }
+            })
+        )
+
+        const totalDuration = Date.now() - startTime
+        const successCount = results.filter(r => r.status === 'fulfilled' && r.value.success).length
+
+        logger.info(`[MCP] 并行执行完成: ${successCount}/${toolCalls.length} 成功, 耗时 ${totalDuration}ms`)
+
+        return results.map(r => r.status === 'fulfilled' ? r.value : {
+            name: 'unknown',
+            error: r.reason?.message || 'Unknown error',
+            duration: 0,
+            success: false
+        })
+    }
+
+    /**
+     * 批量执行工具调用（智能调度：无依赖的并行，有依赖的串行）
+     * @param {Array<{name: string, args: Object, dependsOn?: string[]}>} toolCalls
+     * @param {Object} options
+     * @returns {Promise<Map<string, any>>} 工具名 -> 结果 的映射
+     */
+    async callToolsBatch(toolCalls, options = {}) {
+        const results = new Map()
+        const pending = [...toolCalls]
+        const completed = new Set()
+
+        while (pending.length > 0) {
+            // 找出所有无依赖或依赖已完成的调用
+            const ready = pending.filter(call => {
+                if (!call.dependsOn || call.dependsOn.length === 0) return true
+                return call.dependsOn.every(dep => completed.has(dep))
+            })
+
+            if (ready.length === 0 && pending.length > 0) {
+                // 存在循环依赖，强制执行剩余的
+                logger.warn('[MCP] 检测到可能的循环依赖，强制执行剩余工具')
+                ready.push(pending[0])
+            }
+
+            // 从 pending 中移除 ready 的调用
+            for (const call of ready) {
+                const idx = pending.indexOf(call)
+                if (idx !== -1) pending.splice(idx, 1)
+            }
+
+            // 并行执行 ready 的调用
+            const batchResults = await this.callToolsParallel(ready, options)
+
+            // 收集结果
+            for (const result of batchResults) {
+                results.set(result.name, result)
+                completed.add(result.name)
+            }
+        }
+
+        return results
+    }
+
+    /**
      * 添加工具调用日志
      */
     addToolLog(entry) {

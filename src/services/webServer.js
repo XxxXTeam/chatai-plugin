@@ -529,11 +529,30 @@ export class WebServer {
                 // trigger深度合并（新配置结构）
                 if (trigger) {
                     const currentTrigger = config.get('trigger') || {}
+                    // 过滤无效的 prefixes 和 keywords 值
+                    const cleanPrefixes = (trigger.prefixes || currentTrigger.prefixes || [])
+                        .filter(p => p && typeof p === 'string' && p.trim())
+                    const cleanKeywords = (trigger.keywords || currentTrigger.keywords || [])
+                        .filter(k => k && typeof k === 'string' && k.trim())
+                    
                     config.set('trigger', {
                         ...currentTrigger,
                         ...trigger,
+                        prefixes: cleanPrefixes,
+                        keywords: cleanKeywords,
                         private: { ...(currentTrigger.private || {}), ...(trigger.private || {}) },
                         group: { ...(currentTrigger.group || {}), ...(trigger.group || {}) }
+                    })
+                }
+
+                // personality配置（人格上下文）
+                const { personality } = req.body
+                if (personality) {
+                    const currentPersonality = config.get('personality') || {}
+                    config.set('personality', {
+                        ...currentPersonality,
+                        ...personality,
+                        isolateContext: { ...(currentPersonality.isolateContext || {}), ...(personality.isolateContext || {}) }
                     })
                 }
 

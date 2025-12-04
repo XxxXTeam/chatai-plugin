@@ -1244,6 +1244,231 @@ export class BuiltinMcpServer {
             },
 
             {
+                name: 'send_music',
+                description: '发送音乐卡片分享。支持QQ音乐、网易云音乐、酷狗等平台，也支持自定义音乐。',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        type: { 
+                            type: 'string', 
+                            enum: ['qq', '163', 'kugou', 'kuwo', 'migu', 'custom'],
+                            description: '音乐平台类型：qq(QQ音乐)、163(网易云)、kugou(酷狗)、kuwo(酷我)、migu(咪咕)、custom(自定义)'
+                        },
+                        id: { type: 'string', description: '歌曲ID（非custom类型必填）' },
+                        // custom类型的参数
+                        url: { type: 'string', description: '自定义音乐：跳转链接' },
+                        audio: { type: 'string', description: '自定义音乐：音频URL' },
+                        title: { type: 'string', description: '自定义音乐：标题' },
+                        singer: { type: 'string', description: '自定义音乐：歌手/描述' },
+                        image: { type: 'string', description: '自定义音乐：封面图URL' }
+                    },
+                    required: ['type']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const e = ctx.getEvent()
+                        if (!e) {
+                            return { success: false, error: '没有可用的会话上下文' }
+                        }
+
+                        let musicSeg
+                        if (args.type === 'custom') {
+                            if (!args.url || !args.audio || !args.title) {
+                                return { success: false, error: '自定义音乐需要提供url、audio、title参数' }
+                            }
+                            musicSeg = segment.music('custom', {
+                                url: args.url,
+                                audio: args.audio,
+                                title: args.title,
+                                content: args.singer || '',
+                                image: args.image || ''
+                            })
+                        } else {
+                            if (!args.id) {
+                                return { success: false, error: '平台音乐需要提供歌曲ID' }
+                            }
+                            musicSeg = segment.music(args.type, args.id)
+                        }
+
+                        const result = await e.reply(musicSeg)
+                        return { success: true, message_id: result?.message_id, type: args.type }
+                    } catch (err) {
+                        return { success: false, error: `发送音乐卡片失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'send_voice',
+                description: '发送语音消息。支持URL或本地文件路径。',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        file: { type: 'string', description: '语音文件URL、本地路径或base64' },
+                        magic: { type: 'boolean', description: '是否变声（部分平台支持）' }
+                    },
+                    required: ['file']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const e = ctx.getEvent()
+                        if (!e) {
+                            return { success: false, error: '没有可用的会话上下文' }
+                        }
+
+                        const recordSeg = {
+                            type: 'record',
+                            data: { 
+                                file: args.file,
+                                ...(args.magic ? { magic: true } : {})
+                            }
+                        }
+
+                        const result = await e.reply(recordSeg)
+                        return { success: true, message_id: result?.message_id }
+                    } catch (err) {
+                        return { success: false, error: `发送语音失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'send_file',
+                description: '发送文件消息。支持URL或本地文件路径。仅群聊支持。',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        file: { type: 'string', description: '文件URL或本地路径' },
+                        name: { type: 'string', description: '显示的文件名（可选）' }
+                    },
+                    required: ['file']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const e = ctx.getEvent()
+                        const bot = ctx.getBot()
+                        if (!e) {
+                            return { success: false, error: '没有可用的会话上下文' }
+                        }
+
+                        // 尝试多种方式发送文件
+                        if (e.group_id) {
+                            // 群文件
+                            const group = bot?.pickGroup?.(e.group_id) || e.group
+                            if (group?.sendFile) {
+                                await group.sendFile(args.file, args.name)
+                                return { success: true, file: args.file }
+                            }
+                            // NapCat/OneBot API
+                            if (bot?.sendApi) {
+                                await bot.sendApi('upload_group_file', {
+                                    group_id: e.group_id,
+                                    file: args.file,
+                                    name: args.name || args.file.split('/').pop()
+                                })
+                                return { success: true, file: args.file }
+                            }
+                        } else {
+                            // 私聊文件
+                            const friend = bot?.pickFriend?.(e.user_id) || e.friend
+                            if (friend?.sendFile) {
+                                await friend.sendFile(args.file, args.name)
+                                return { success: true, file: args.file }
+                            }
+                            // NapCat/OneBot API
+                            if (bot?.sendApi) {
+                                await bot.sendApi('upload_private_file', {
+                                    user_id: e.user_id,
+                                    file: args.file,
+                                    name: args.name || args.file.split('/').pop()
+                                })
+                                return { success: true, file: args.file }
+                            }
+                        }
+
+                        return { success: false, error: '当前平台不支持发送文件' }
+                    } catch (err) {
+                        return { success: false, error: `发送文件失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'send_video',
+                description: '发送视频消息。支持URL或本地文件路径。',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        file: { type: 'string', description: '视频文件URL或本地路径' },
+                        thumb: { type: 'string', description: '视频缩略图URL（可选）' }
+                    },
+                    required: ['file']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const e = ctx.getEvent()
+                        if (!e) {
+                            return { success: false, error: '没有可用的会话上下文' }
+                        }
+
+                        const videoSeg = segment.video(args.file, args.thumb)
+                        const result = await e.reply(videoSeg)
+                        return { success: true, message_id: result?.message_id }
+                    } catch (err) {
+                        return { success: false, error: `发送视频失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'send_link_card',
+                description: '发送链接卡片消息',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        title: { type: 'string', description: '卡片标题' },
+                        desc: { type: 'string', description: '卡片描述' },
+                        url: { type: 'string', description: '跳转链接' },
+                        image: { type: 'string', description: '预览图片URL（可选）' }
+                    },
+                    required: ['title', 'url']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const e = ctx.getEvent()
+                        if (!e) {
+                            return { success: false, error: '没有可用的会话上下文' }
+                        }
+
+                        // 构建链接卡片JSON
+                        const cardJson = {
+                            app: 'com.tencent.structmsg',
+                            desc: '',
+                            view: 'news',
+                            ver: '0.0.0.1',
+                            prompt: args.title,
+                            meta: {
+                                news: {
+                                    title: args.title,
+                                    desc: args.desc || '',
+                                    jumpUrl: args.url,
+                                    preview: args.image || '',
+                                    tag: '',
+                                    tagIcon: ''
+                                }
+                            }
+                        }
+
+                        const cardSeg = segment.json(cardJson)
+                        const result = await e.reply(cardSeg)
+                        return { success: true, message_id: result?.message_id }
+                    } catch (err) {
+                        return { success: false, error: `发送链接卡片失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
                 name: 'at_user',
                 description: '发送@用户的消息',
                 inputSchema: {

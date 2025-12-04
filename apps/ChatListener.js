@@ -1,14 +1,10 @@
-/**
- * AI 群聊监听器
- * 优先级设为 -Infinity 确保最后执行（成功监听所有消息）
- */
 import { chatService } from '../src/services/ChatService.js'
-import { parseUserMessage } from '../src/utils/messageParser.js'
+import { parseUserMessage, segment, CardParser, MessageApi, MessageUtils } from '../src/utils/messageParser.js'
 import { setToolContext } from '../src/core/utils/toolAdapter.js'
 import { mcpManager } from '../src/mcp/McpManager.js'
 import { memoryManager } from '../src/services/MemoryManager.js'
 import config from '../config/config.js'
-import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMessage } from './chat.js'
+import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMessage, recordSentMessage } from './chat.js'
 
 export class ChatListener extends plugin {
     constructor() {
@@ -52,7 +48,7 @@ export class ChatListener extends plugin {
                         msg: e.msg,
                         raw_message: e.raw_message
                     })
-                } catch (err) {
+                } catch {
                     // 静默失败
                 }
             }
@@ -76,7 +72,7 @@ export class ChatListener extends plugin {
                     msg: e.msg,
                     raw_message: e.raw_message
                 })
-            } catch (err) {
+            } catch {
                 // 静默失败
             }
         }
@@ -97,7 +93,6 @@ export class ChatListener extends plugin {
             return false
         }
         
-        logger.debug(`[ChatListener] 触发: ${triggerResult.reason}`)
 
         // 标记消息已处理
         markMessageProcessed(e)
@@ -106,8 +101,7 @@ export class ChatListener extends plugin {
         try {
             await this.handleChat(triggerCfg, triggerResult.msg)
             return true
-        } catch (error) {
-            logger.error('[ChatListener] 处理消息失败:', error)
+        } catch {
             return false
         }
     }
@@ -239,9 +233,12 @@ export class ChatListener extends plugin {
      * 检查前缀（前缀视为@，如"残花你好"或"残花 你好"都能触发）
      */
     checkPrefix(msg, prefixes = []) {
+        // 过滤无效的 prefix 值
         if (!Array.isArray(prefixes)) prefixes = [prefixes]
+        prefixes = prefixes.filter(p => p && typeof p === 'string' && p.trim()).map(p => p.trim())
+        
         for (const prefix of prefixes) {
-            if (prefix && msg.startsWith(prefix)) {
+            if (msg.startsWith(prefix)) {
                 // 提取前缀后的内容（只去除开头空格，保留消息格式）
                 const content = msg.slice(prefix.length).trimStart()
                 // 即使内容为空也返回匹配成功（类似@机器人不说话）
@@ -332,10 +329,6 @@ export class ChatListener extends plugin {
             c.type === 'image' || c.type === 'image_url'
         ) || []
         
-        // 调试日志：确认图片传递（debug级别）
-        if (images.length > 0) {
-            logger.debug(`[ChatListener] 传递图片: ${images.length} 张, 类型: ${images.map(i => i.type).join(', ')}`)
-        }
         
         const result = await chatService.sendMessage({
             userId,
@@ -351,6 +344,15 @@ export class ChatListener extends plugin {
         if (result.response && result.response.length > 0) {
             const replyContent = this.formatReply(result.response)
             if (replyContent) {
+                // 记录发送的消息（用于防止自身消息循环）
+                const textContent = result.response
+                    .filter(c => c.type === 'text')
+                    .map(c => c.text)
+                    .join('\n')
+                if (textContent) {
+                    recordSentMessage(textContent)
+                }
+                
                 await this.reply(replyContent, true)
             }
         }
@@ -430,8 +432,7 @@ export class ChatListener extends plugin {
             }
             
             return false
-        } catch (err) {
-            logger.debug('[ChatListener] sendForwardMsg failed:', err.message)
+        } catch {
             return false
         }
     }
@@ -457,8 +458,7 @@ export class ChatListener extends plugin {
             }
             
             return null
-        } catch (err) {
-            logger.debug('[ChatListener] getQuoteMessage failed:', err.message)
+        } catch {
             return null
         }
     }

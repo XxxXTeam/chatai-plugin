@@ -1467,3 +1467,539 @@ export function getImages(message) {
  * 导出CQ码清理函数供外部使用
  */
 export { cleanCQCode }
+
+// ==================== 标准化消息段构建器 ====================
+// 兼容 icqq / OneBot v11 / NapCat
+
+/**
+ * 消息段构建器 - 标准化API
+ * @see https://icqq.pages.dev/
+ * @see https://napneko.github.io/onebot/sement
+ */
+export const segment = {
+    /** 文本消息 */
+    text: (text) => ({ type: 'text', data: { text: String(text) } }),
+    
+    /** 图片消息 - file可以是URL/base64/本地路径 */
+    image: (file, opts = {}) => ({ 
+        type: 'image', 
+        data: { file, ...opts } 
+    }),
+    
+    /** @消息 - qq可以是QQ号或'all' */
+    at: (qq, name) => ({ 
+        type: 'at', 
+        data: { qq: String(qq), ...(name ? { name } : {}) } 
+    }),
+    
+    /** 引用回复 */
+    reply: (id) => ({ type: 'reply', data: { id: String(id) } }),
+    
+    /** QQ表情 */
+    face: (id) => ({ type: 'face', data: { id: Number(id) } }),
+    
+    /** 语音消息 */
+    record: (file) => ({ type: 'record', data: { file } }),
+    
+    /** 视频消息 */
+    video: (file, thumb) => ({ 
+        type: 'video', 
+        data: { file, ...(thumb ? { thumb } : {}) } 
+    }),
+    
+    /** JSON卡片消息 */
+    json: (data) => ({ 
+        type: 'json', 
+        data: { data: typeof data === 'string' ? data : JSON.stringify(data) } 
+    }),
+    
+    /** XML消息 */
+    xml: (data) => ({ type: 'xml', data: { data } }),
+    
+    /** 转发消息 */
+    forward: (id) => ({ type: 'forward', data: { id } }),
+    
+    /** 转发节点 - 用于构建合并转发 */
+    node: (userId, nickname, content) => ({
+        type: 'node',
+        data: {
+            user_id: String(userId),
+            nickname,
+            content: Array.isArray(content) ? content : [segment.text(content)]
+        }
+    }),
+    
+    /** 文件消息 */
+    file: (file, name) => ({ 
+        type: 'file', 
+        data: { file, ...(name ? { name } : {}) } 
+    }),
+    
+    /** 链接分享 */
+    share: (url, title, content, image) => ({
+        type: 'share',
+        data: { url, title, ...(content ? { content } : {}), ...(image ? { image } : {}) }
+    }),
+    
+    /** 音乐分享 - type: qq/163/kugou/kuwo/migu/custom */
+    music: (type, idOrData) => {
+        if (type === 'custom' && typeof idOrData === 'object') {
+            return { type: 'music', data: { type: 'custom', ...idOrData } }
+        }
+        return { type: 'music', data: { type, id: String(idOrData) } }
+    },
+    
+    /** 位置分享 */
+    location: (lat, lon, title, content) => ({
+        type: 'location',
+        data: { lat, lon, ...(title ? { title } : {}), ...(content ? { content } : {}) }
+    }),
+    
+    /** 戳一戳 */
+    poke: (type, id) => ({ type: 'poke', data: { type, id } }),
+    
+    /** 商城表情 */
+    mface: (emojiPackageId, emojiId, key, summary) => ({
+        type: 'mface',
+        data: {
+            emoji_package_id: emojiPackageId,
+            emoji_id: emojiId,
+            ...(key ? { key } : {}),
+            ...(summary ? { summary } : {})
+        }
+    }),
+    
+    /** 骰子 */
+    dice: () => ({ type: 'dice', data: {} }),
+    
+    /** 猜拳 */
+    rps: () => ({ type: 'rps', data: {} }),
+    
+    /** Markdown消息 (NapCat) */
+    markdown: (content) => ({ type: 'markdown', data: { content } }),
+    
+    /** 推荐联系人/群 */
+    contact: (type, id) => ({ type: 'contact', data: { type, id: String(id) } })
+}
+
+// ==================== 卡片消息解析器 ====================
+
+/**
+ * JSON卡片类型
+ */
+export const CardType = {
+    LINK: 'com.tencent.structmsg',        // 链接卡片
+    FORWARD: 'com.tencent.multimsg',      // 合并转发
+    MINIAPP: 'com.tencent.miniapp',       // 小程序
+    MUSIC: 'com.tencent.music',           // 音乐分享
+}
+
+/**
+ * 卡片消息解析器
+ */
+export const CardParser = {
+    /**
+     * 解析JSON卡片消息
+     * @param {string|Object} json 
+     * @returns {{type: string, data: Object, raw: Object}|null}
+     */
+    parse(json) {
+        try {
+            const data = typeof json === 'string' ? JSON.parse(json) : json
+            if (!data?.app) return null
+
+            const result = { type: 'unknown', data: {}, raw: data }
+
+            switch (data.app) {
+                case CardType.LINK:
+                    result.type = 'link'
+                    result.data = {
+                        title: data.meta?.news?.title || data.prompt || '',
+                        desc: data.meta?.news?.desc || data.desc || '',
+                        url: data.meta?.news?.jumpUrl || '',
+                        image: data.meta?.news?.preview || '',
+                        source: data.meta?.news?.tag || ''
+                    }
+                    break
+
+                case CardType.FORWARD:
+                    result.type = 'forward'
+                    result.data = {
+                        resid: data.meta?.detail?.resid || '',
+                        summary: data.meta?.detail?.summary || '',
+                        source: data.meta?.detail?.source || '',
+                        preview: (data.meta?.detail?.news || []).map(n => n.text)
+                    }
+                    break
+
+                case CardType.MUSIC:
+                    result.type = 'music'
+                    result.data = {
+                        title: data.meta?.music?.title || '',
+                        singer: data.meta?.music?.desc || '',
+                        url: data.meta?.music?.jumpUrl || '',
+                        audio: data.meta?.music?.musicUrl || '',
+                        image: data.meta?.music?.preview || ''
+                    }
+                    break
+
+                case CardType.MINIAPP:
+                    result.type = 'miniapp'
+                    result.data = {
+                        appid: data.meta?.detail_1?.appid || '',
+                        title: data.meta?.detail_1?.title || data.prompt || '',
+                        desc: data.meta?.detail_1?.desc || '',
+                        url: data.meta?.detail_1?.qqdocurl || '',
+                        image: data.meta?.detail_1?.preview || ''
+                    }
+                    break
+
+                default:
+                    result.type = 'custom'
+                    result.data = { app: data.app, prompt: data.prompt || '', meta: data.meta || {} }
+            }
+            return result
+        } catch {
+            return null
+        }
+    },
+
+    /** 判断是否是转发消息卡片 */
+    isForward: (json) => CardParser.parse(json)?.type === 'forward',
+    
+    /** 判断是否是链接卡片 */
+    isLink: (json) => CardParser.parse(json)?.type === 'link',
+    
+    /** 提取卡片中的URL */
+    extractUrl: (json) => CardParser.parse(json)?.data?.url || null,
+    
+    /** 提取卡片中的图片 */
+    extractImage: (json) => CardParser.parse(json)?.data?.image || null
+}
+
+/**
+ * 卡片消息构建器
+ */
+export const CardBuilder = {
+    /**
+     * 创建链接卡片
+     */
+    link(title, desc, url, image) {
+        return segment.json({
+            app: CardType.LINK,
+            desc: '',
+            view: 'news',
+            ver: '0.0.0.1',
+            prompt: title,
+            meta: {
+                news: { title, desc, jumpUrl: url, preview: image || '', tag: '', tagIcon: '' }
+            }
+        })
+    },
+
+    /**
+     * 创建音乐分享卡片
+     */
+    music(type, idOrData) {
+        return segment.music(type, idOrData)
+    },
+
+    /**
+     * 创建自定义JSON卡片
+     */
+    json(data) {
+        return segment.json(data)
+    }
+}
+
+// ==================== 标准化消息API ====================
+
+/**
+ * 标准化消息API - 兼容多平台
+ * 提供统一的消息发送和获取接口
+ */
+export const MessageApi = {
+    /**
+     * 获取消息（支持多平台）
+     * @param {Object} e - 事件对象
+     * @param {string|number} messageId - 消息ID
+     * @returns {Promise<Object|null>}
+     */
+    async getMsg(e, messageId) {
+        if (!e || !messageId) return null
+        const bot = e.bot || Bot
+        
+        try {
+            // NapCat/OneBot: bot.getMsg 或 sendApi
+            if (typeof bot?.getMsg === 'function') {
+                return await bot.getMsg(messageId)
+            }
+            if (typeof bot?.sendApi === 'function') {
+                const result = await bot.sendApi('get_msg', { message_id: messageId })
+                return result?.data || result
+            }
+            // icqq: group/friend 方法
+            if (e.isGroup && e.group?.getMsg) {
+                return await e.group.getMsg(messageId)
+            }
+            if (e.isGroup && e.group?.getChatHistory) {
+                const history = await e.group.getChatHistory(messageId, 1)
+                return history?.[0] || null
+            }
+            if (!e.isGroup && e.friend?.getChatHistory) {
+                const history = await e.friend.getChatHistory(messageId, 1)
+                return history?.[0] || null
+            }
+        } catch (err) {
+            logger.debug('[MessageApi] getMsg failed:', err.message)
+        }
+        return null
+    },
+
+    /**
+     * 获取转发消息内容
+     * @param {Object} e - 事件对象  
+     * @param {string} resid - 转发消息ID
+     * @returns {Promise<Array|null>}
+     */
+    async getForwardMsg(e, resid) {
+        if (!e || !resid) return null
+        const bot = e.bot || Bot
+        
+        try {
+            // NapCat/OneBot: sendApi
+            if (typeof bot?.sendApi === 'function') {
+                const result = await bot.sendApi('get_forward_msg', { id: resid })
+                return result?.data?.messages || result?.messages || null
+            }
+            // icqq: group.getForwardMsg
+            if (e.group?.getForwardMsg) {
+                return await e.group.getForwardMsg(resid)
+            }
+            // bot.getForwardMsg
+            if (typeof bot?.getForwardMsg === 'function') {
+                return await bot.getForwardMsg(resid)
+            }
+        } catch (err) {
+            logger.debug('[MessageApi] getForwardMsg failed:', err.message)
+        }
+        return null
+    },
+
+    /**
+     * 发送私聊消息
+     * @param {Object} e - 事件对象
+     * @param {string|number} userId - 用户ID
+     * @param {Array|string} message - 消息内容
+     * @returns {Promise<Object|null>}
+     */
+    async sendPrivateMsg(e, userId, message) {
+        const bot = e?.bot || Bot
+        
+        try {
+            if (typeof bot?.sendPrivateMsg === 'function') {
+                return await bot.sendPrivateMsg(userId, message)
+            }
+            if (typeof bot?.sendApi === 'function') {
+                return await bot.sendApi('send_private_msg', { user_id: userId, message })
+            }
+            if (typeof bot?.pickFriend === 'function') {
+                const friend = bot.pickFriend(userId)
+                if (friend?.sendMsg) {
+                    return await friend.sendMsg(message)
+                }
+            }
+        } catch (err) {
+            logger.debug('[MessageApi] sendPrivateMsg failed:', err.message)
+        }
+        return null
+    },
+
+    /**
+     * 发送群消息
+     * @param {Object} e - 事件对象
+     * @param {string|number} groupId - 群号
+     * @param {Array|string} message - 消息内容
+     * @returns {Promise<Object|null>}
+     */
+    async sendGroupMsg(e, groupId, message) {
+        const bot = e?.bot || Bot
+        
+        try {
+            if (typeof bot?.sendGroupMsg === 'function') {
+                return await bot.sendGroupMsg(groupId, message)
+            }
+            if (typeof bot?.sendApi === 'function') {
+                return await bot.sendApi('send_group_msg', { group_id: groupId, message })
+            }
+            if (typeof bot?.pickGroup === 'function') {
+                const group = bot.pickGroup(groupId)
+                if (group?.sendMsg) {
+                    return await group.sendMsg(message)
+                }
+            }
+        } catch (err) {
+            logger.debug('[MessageApi] sendGroupMsg failed:', err.message)
+        }
+        return null
+    },
+
+    /**
+     * 撤回消息
+     * @param {Object} e - 事件对象
+     * @param {string|number} messageId - 消息ID
+     * @returns {Promise<boolean>}
+     */
+    async deleteMsg(e, messageId) {
+        const bot = e?.bot || Bot
+        
+        try {
+            if (typeof bot?.deleteMsg === 'function') {
+                await bot.deleteMsg(messageId)
+                return true
+            }
+            if (typeof bot?.recallMsg === 'function') {
+                await bot.recallMsg(messageId)
+                return true
+            }
+            if (typeof bot?.sendApi === 'function') {
+                await bot.sendApi('delete_msg', { message_id: messageId })
+                return true
+            }
+        } catch (err) {
+            logger.debug('[MessageApi] deleteMsg failed:', err.message)
+        }
+        return false
+    },
+
+    /**
+     * 获取群成员信息
+     * @param {Object} e - 事件对象
+     * @param {string|number} groupId - 群号
+     * @param {string|number} userId - 用户ID
+     * @returns {Promise<Object|null>}
+     */
+    async getGroupMemberInfo(e, groupId, userId) {
+        const bot = e?.bot || Bot
+        
+        try {
+            if (typeof bot?.getGroupMemberInfo === 'function') {
+                return await bot.getGroupMemberInfo(groupId, userId)
+            }
+            if (typeof bot?.sendApi === 'function') {
+                const result = await bot.sendApi('get_group_member_info', { 
+                    group_id: groupId, 
+                    user_id: userId 
+                })
+                return result?.data || result
+            }
+            if (typeof bot?.pickGroup === 'function') {
+                const group = bot.pickGroup(groupId)
+                if (group?.pickMember) {
+                    const member = group.pickMember(userId)
+                    return member?.info || null
+                }
+            }
+        } catch (err) {
+            logger.debug('[MessageApi] getGroupMemberInfo failed:', err.message)
+        }
+        return null
+    },
+
+    /**
+     * 获取图片信息（通过file_id获取URL）
+     * @param {Object} e - 事件对象
+     * @param {string} fileId - 文件ID
+     * @returns {Promise<{url: string}|null>}
+     */
+    async getImage(e, fileId) {
+        const bot = e?.bot || Bot
+        
+        try {
+            if (typeof bot?.sendApi === 'function') {
+                const result = await bot.sendApi('get_image', { file_id: fileId })
+                return result?.data || result
+            }
+        } catch (err) {
+            logger.debug('[MessageApi] getImage failed:', err.message)
+        }
+        return null
+    }
+}
+
+// ==================== 消息工具函数 ====================
+
+/**
+ * 消息数组工具
+ */
+export const MessageUtils = {
+    /**
+     * 提取所有文本内容
+     * @param {Array} segments - 消息段数组
+     * @returns {string}
+     */
+    extractText(segments) {
+        if (!Array.isArray(segments)) return ''
+        return segments
+            .filter(s => s.type === 'text')
+            .map(s => s.data?.text || s.text || '')
+            .join('')
+    },
+
+    /**
+     * 提取所有图片
+     * @param {Array} segments - 消息段数组
+     * @returns {Array<{file: string, url?: string}>}
+     */
+    extractImages(segments) {
+        if (!Array.isArray(segments)) return []
+        return segments
+            .filter(s => s.type === 'image')
+            .map(s => ({
+                file: s.data?.file || s.file,
+                url: s.data?.url || s.url
+            }))
+    },
+
+    /**
+     * 判断消息是否包含指定类型
+     * @param {Array} segments
+     * @param {string} type
+     * @returns {boolean}
+     */
+    hasType(segments, type) {
+        if (!Array.isArray(segments)) return false
+        return segments.some(s => s.type === type)
+    },
+
+    /**
+     * 获取指定类型的消息段
+     * @param {Array} segments
+     * @param {string} type
+     * @returns {Array}
+     */
+    getByType(segments, type) {
+        if (!Array.isArray(segments)) return []
+        return segments.filter(s => s.type === type)
+    },
+
+    /**
+     * 将消息段数组转换为CQ码字符串
+     * @param {Array} segments
+     * @returns {string}
+     */
+    toCQCode(segments) {
+        if (!Array.isArray(segments)) return ''
+        return segments.map(seg => {
+            if (seg.type === 'text') {
+                return seg.data?.text || seg.text || ''
+            }
+            const data = seg.data || seg
+            const params = Object.entries(data)
+                .filter(([k, v]) => k !== 'type' && v !== undefined && v !== null)
+                .map(([k, v]) => `${k}=${String(v).replace(/[&\[\],]/g, c => `&#${c.charCodeAt(0)};`)}`)
+                .join(',')
+            return `[CQ:${seg.type}${params ? ',' + params : ''}]`
+        }).join('')
+    }
+}

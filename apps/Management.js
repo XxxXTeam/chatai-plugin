@@ -122,9 +122,7 @@ export class AIManagement extends plugin {
      */
     async managementPanel() {
         try {
-            const webServer = getWebServer()
-            const url = webServer.generateLoginUrl(false, false)
-            await this.reply(`管理面板链接（5分钟内有效）：\n${url}`, true)
+            await this.sendPanelInfo(false)
         } catch (err) {
             await this.reply(`获取管理面板失败: ${err.message}`, true)
         }
@@ -135,11 +133,126 @@ export class AIManagement extends plugin {
      */
     async permanentPanel() {
         try {
-            const webServer = getWebServer()
-            const url = webServer.generateLoginUrl(false, true)
-            await this.reply(`管理面板链接（永久有效）：\n${url}\n\n⚠️ 请妥善保管此链接，不要泄露给他人！`, true)
+            await this.sendPanelInfo(true)
         } catch (err) {
             await this.reply(`获取管理面板失败: ${err.message}`, true)
+        }
+    }
+    
+    /**
+     * 发送面板登录信息（私聊+合并转发）
+     * @param {boolean} permanent - 是否永久有效
+     */
+    async sendPanelInfo(permanent = false) {
+        const webServer = getWebServer()
+        const addresses = webServer.getAddresses()
+        const localUrl = webServer.generateLoginUrl(false, permanent)
+        const publicUrl = addresses.public ? webServer.generateLoginUrl(true, permanent) : null
+        
+        const validityText = permanent ? '永久有效' : '5分钟内有效'
+        const warningText = permanent ? '\n\n⚠️ 请妥善保管此链接，不要泄露给他人！' : ''
+        
+        // 构建消息内容
+        const messages = []
+        
+        // 标题
+        messages.push({
+            message: `🔐 AI插件管理面板（${validityText}）`,
+            nickname: 'AI管理面板',
+            user_id: this.e.self_id
+        })
+        
+        // 本地地址
+        messages.push({
+            message: `📍 本地地址：\n${localUrl}`,
+            nickname: 'AI管理面板',
+            user_id: this.e.self_id
+        })
+        
+        // 公网地址
+        if (publicUrl) {
+            messages.push({
+                message: `🌐 公网地址：\n${publicUrl}`,
+                nickname: 'AI管理面板',
+                user_id: this.e.self_id
+            })
+        }
+        
+        // 使用说明
+        messages.push({
+            message: `📌 使用说明：\n1. 点击链接在浏览器中打开\n2. 如本地访问失败，请尝试公网地址\n3. 链接包含登录凭证，请勿分享${warningText}`,
+            nickname: 'AI管理面板',
+            user_id: this.e.self_id
+        })
+        
+        // 私聊发送
+        const userId = this.e.user_id
+        try {
+            // 尝试发送合并转发
+            const bot = this.e.bot || Bot
+            if (bot?.pickUser) {
+                const friend = bot.pickUser(userId)
+                if (friend?.sendMsg) {
+                    // 构建合并转发消息
+                    const forwardMsg = await this.makeForwardMsg(messages)
+                    if (forwardMsg) {
+                        await friend.sendMsg(forwardMsg)
+                        // 如果在群聊中，提示已私聊发送
+                        if (this.e.group_id) {
+                            await this.reply('✅ 管理面板链接已私聊发送，请查收', true)
+                        }
+                        return
+                    }
+                }
+            }
+            
+            // 备用：直接私聊发送文本
+            const textMsg = [
+                `🔐 AI插件管理面板（${validityText}）`,
+                '',
+                `📍 本地地址：`,
+                localUrl,
+                publicUrl ? `\n🌐 公网地址：\n${publicUrl}` : '',
+                '',
+                `📌 链接包含登录凭证，请勿分享${warningText}`
+            ].filter(Boolean).join('\n')
+            
+            if (this.e.friend?.sendMsg) {
+                await this.e.friend.sendMsg(textMsg)
+            } else if (bot?.sendPrivateMsg) {
+                await bot.sendPrivateMsg(userId, textMsg)
+            } else {
+                // 最后备用：直接回复
+                await this.reply(textMsg, true)
+                return
+            }
+            
+            if (this.e.group_id) {
+                await this.reply('✅ 管理面板链接已私聊发送，请查收', true)
+            }
+        } catch (err) {
+            logger.error('[Management] 私聊发送失败:', err)
+            // 私聊失败时在群里回复（仅本地地址）
+            await this.reply(`管理面板（${validityText}）：\n${localUrl}${warningText}`, true)
+        }
+    }
+    
+    /**
+     * 构建合并转发消息
+     */
+    async makeForwardMsg(messages) {
+        try {
+            const bot = this.e.bot || Bot
+            if (bot?.makeForwardMsg) {
+                return await bot.makeForwardMsg(messages)
+            }
+            // 尝试使用 segment 构建
+            if (typeof segment !== 'undefined' && segment.forward) {
+                return segment.forward(messages)
+            }
+            return null
+        } catch {
+            return null
         }
     }
 

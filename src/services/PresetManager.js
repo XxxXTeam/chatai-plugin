@@ -17,10 +17,22 @@ const PRESETS_FILE = path.join(DATA_DIR, 'presets.json')
  * @property {string} description - 描述
  * @property {string} systemPrompt - 系统提示词
  * @property {string} [model] - 指定模型
- * @property {number} [temperature] - 温度
+ * @property {ModelParams} [modelParams] - 模型参数配置
  * @property {PersonaConfig} [persona] - 人设配置
  * @property {ContextConfig} [context] - 上下文配置
  * @property {ToolsConfig} [tools] - 工具配置
+ */
+
+/**
+ * 模型参数配置
+ * @typedef {Object} ModelParams
+ * @property {number} [temperature] - 温度 (0-2)，控制输出随机性
+ * @property {number} [top_p] - 核采样参数 (0-1)
+ * @property {number} [top_k] - Top-K采样
+ * @property {number} [max_tokens] - 最大输出token数
+ * @property {number} [presence_penalty] - 存在惩罚 (-2 to 2)
+ * @property {number} [frequency_penalty] - 频率惩罚 (-2 to 2)
+ * @property {string[]} [stop] - 停止词列表
  */
 
 /**
@@ -46,14 +58,17 @@ const PRESETS_FILE = path.join(DATA_DIR, 'presets.json')
  * @typedef {Object} ContextConfig
  * @property {number} [maxMessages] - 最大消息数
  * @property {number} [maxTokens] - 最大token数
+ * @property {boolean} [isolateContext] - 是否使用独立上下文（不与其他预设共享）
  * @property {boolean} [includeGroupContext] - 是否包含群聊上下文
  * @property {number} [groupContextLength] - 群聊上下文长度
+ * @property {boolean} [clearOnSwitch] - 切换预设时是否清除上下文
  */
 
 /**
  * 工具配置
  * @typedef {Object} ToolsConfig
  * @property {boolean} [enableBuiltinTools] - 启用内置工具
+ * @property {boolean} [enableMcpTools] - 启用MCP工具
  * @property {string[]} [allowedTools] - 允许的工具列表
  * @property {string[]} [disabledTools] - 禁用的工具列表
  */
@@ -105,7 +120,13 @@ export class PresetManager {
             description: '通用助手预设',
             systemPrompt: '你是一个有帮助的AI助手。',
             model: '',
-            temperature: 0.7,
+            modelParams: {
+                temperature: 0.7,
+                top_p: 0.9,
+                max_tokens: 4096,
+                presence_penalty: 0,
+                frequency_penalty: 0
+            },
             persona: {
                 name: 'AI助手',
                 personality: '友好、专业、乐于助人',
@@ -118,11 +139,14 @@ export class PresetManager {
             context: {
                 maxMessages: 20,
                 maxTokens: 8000,
+                isolateContext: false,      // 是否使用独立上下文
                 includeGroupContext: false,
-                groupContextLength: 10
+                groupContextLength: 10,
+                clearOnSwitch: false        // 切换预设时是否清除上下文
             },
             tools: {
                 enableBuiltinTools: true,
+                enableMcpTools: true,
                 allowedTools: [],
                 disabledTools: []
             }

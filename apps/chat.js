@@ -10,30 +10,130 @@ function escapeRegExp(str) {
 }
 
 /**
- * 全局触发标记 - 防止同一消息被多个插件重复处理
- * 使用WeakMap避免内存泄漏，key为事件对象
+ * 消息去重与防护机制
+ * 1. processedMessages: WeakMap存储已处理的事件对象
+ * 2. recentMessageHashes: 存储最近消息的hash，用于检测重复消息
+ * 3. sentMessageFingerprints: 存储机器人发送消息的指纹，用于防止自身循环
  */
 const processedMessages = new WeakMap()
+const recentMessageHashes = new Map() // hash -> timestamp
+const sentMessageFingerprints = new Map() // fingerprint -> timestamp (机器人发送的消息)
+const MESSAGE_DEDUP_EXPIRE = 5000 // 消息去重过期时间(ms)
+const SENT_MSG_EXPIRE = 30000 // 发送消息指纹过期时间(ms)
+
+/**
+ * 生成消息hash用于去重
+ */
+function getMessageHash(e) {
+    const userId = e.user_id || ''
+    const groupId = e.group_id || ''
+    const msg = e.msg || e.raw_message || ''
+    const msgId = e.message_id || ''
+    return `${userId}_${groupId}_${msgId}_${msg.substring(0, 50)}`
+}
+
+/**
+ * 生成消息内容指纹（用于检测是否是自己发送的消息被回显）
+ */
+function getContentFingerprint(content) {
+    if (!content) return ''
+    const text = typeof content === 'string' ? content : 
+        (Array.isArray(content) ? content.filter(c => c.type === 'text').map(c => c.text || c.data?.text || '').join('') : '')
+    // 只取前100字符作为指纹
+    return text.substring(0, 100).trim()
+}
+
+/**
+ * 记录机器人发送的消息指纹
+ * @param {string} content - 发送的消息内容
+ */
+export function recordSentMessage(content) {
+    const fingerprint = getContentFingerprint(content)
+    if (fingerprint) {
+        sentMessageFingerprints.set(fingerprint, Date.now())
+        // 定期清理
+        if (sentMessageFingerprints.size > 200) {
+            cleanExpiredSentFingerprints()
+        }
+    }
+}
+
+/**
+ * 检查消息是否可能是机器人发送后被回显的
+ */
+function isSentMessageEcho(e) {
+    const msg = e.msg || e.raw_message || ''
+    const fingerprint = getContentFingerprint(msg)
+    if (!fingerprint) return false
+    
+    const sentTime = sentMessageFingerprints.get(fingerprint)
+    if (sentTime && Date.now() - sentTime < SENT_MSG_EXPIRE) {
+        return true
+    }
+    return false
+}
+
+/**
+ * 清理过期的发送消息指纹
+ */
+function cleanExpiredSentFingerprints() {
+    const now = Date.now()
+    for (const [fp, time] of sentMessageFingerprints) {
+        if (now - time > SENT_MSG_EXPIRE) {
+            sentMessageFingerprints.delete(fp)
+        }
+    }
+}
+
+/**
+ * 清理过期的消息hash
+ */
+function cleanExpiredHashes() {
+    const now = Date.now()
+    for (const [hash, time] of recentMessageHashes) {
+        if (now - time > MESSAGE_DEDUP_EXPIRE) {
+            recentMessageHashes.delete(hash)
+        }
+    }
+}
 
 /**
  * 标记消息已被处理
  * @param {Object} e - 事件对象
  */
 export function markMessageProcessed(e) {
-  processedMessages.set(e, true)
+    processedMessages.set(e, true)
+    // 同时记录消息hash
+    const hash = getMessageHash(e)
+    recentMessageHashes.set(hash, Date.now())
+    // 定期清理
+    if (recentMessageHashes.size > 100) {
+        cleanExpiredHashes()
+    }
 }
 
 /**
- * 检查消息是否已被处理
+ * 检查消息是否已被处理（包括重复消息检测）
  * @param {Object} e - 事件对象
  * @returns {boolean}
  */
 export function isMessageProcessed(e) {
-  return processedMessages.has(e)
+    // 检查事件对象是否已处理
+    if (processedMessages.has(e)) return true
+    // 检查消息hash是否重复
+    const hash = getMessageHash(e)
+    if (recentMessageHashes.has(hash)) {
+        const lastTime = recentMessageHashes.get(hash)
+        if (Date.now() - lastTime < MESSAGE_DEDUP_EXPIRE) {
+            return true
+        }
+    }
+    return false
 }
 
 /**
  * 检查是否是机器人自身的消息（防止自我触发）
+ * 增强版：多重检测机制防止循环
  * @param {Object} e - 事件对象
  * @returns {boolean} true表示是自身消息，应该忽略
  */
@@ -70,17 +170,46 @@ export function isSelfMessage(e) {
     // 检查发送者ID
     const senderId = String(e?.user_id || e?.sender?.user_id || '')
     if (senderId && selfIds.has(senderId)) {
+      logger.debug('[SelfGuard] 检测到自身ID消息:', senderId)
       return true
     }
     
-    // 检查消息来源标记
+    // 检查消息来源标记（OneBot/NapCat标准）
     if (e?.post_type === 'message_sent' || e?.message_type === 'self') {
+      logger.debug('[SelfGuard] 检测到message_sent类型')
+      return true
+    }
+    
+    // 检查 sub_type（部分协议使用）
+    if (e?.sub_type === 'self' || e?.sub_type === 'send') {
+      logger.debug('[SelfGuard] 检测到self/send sub_type')
+      return true
+    }
+    
+    // 检查是否是回显消息（机器人发送后被协议端回传）
+    if (isSentMessageEcho(e)) {
+      logger.debug('[SelfGuard] 检测到发送消息回显')
+      return true
+    }
+    
+    // 检查 sender.user_id 与 self_id 是否相同（NapCat兼容）
+    if (e?.sender?.user_id && e?.self_id) {
+      if (String(e.sender.user_id) === String(e.self_id)) {
+        logger.debug('[SelfGuard] sender.user_id === self_id')
+        return true
+      }
+    }
+    
+    // 检查是否有 from_self 标记（部分协议）
+    if (e?.from_self === true || e?.message?.from_self === true) {
+      logger.debug('[SelfGuard] 检测到from_self标记')
       return true
     }
     
     return false
   } catch (err) {
     // 出错时不阻止消息处理
+    logger.debug('[SelfGuard] 检测出错:', err.message)
     return false
   }
 }
@@ -168,9 +297,6 @@ export class Chat extends plugin {
   async handleMessage() {
     const e = this.e
     
-    // 使用全局 logger
-    console.log(`[Chat-DEBUG] handleMessage 开始, msg="${e.msg}", isGroup=${e.isGroup}`)
-    
     // 防护：忽略自身消息
     if (isSelfMessage(e)) {
       logger.debug('[Chat] 跳过: 自身消息')
@@ -196,18 +322,36 @@ export class Chat extends plugin {
       // 旧配置的群聊触发判断
       const triggerMode = listenerConfig.triggerMode || 'at'
       const groupCfg = {
+        enabled: listenerConfig.groupChat?.enabled ?? true,
         at: ['at', 'both'].includes(triggerMode),
         prefix: ['prefix', 'both'].includes(triggerMode)
       }
-      triggerCfg = { group: groupCfg, prefixes }
+      // 私聊配置：默认启用，默认前缀触发（与群聊一致）
+      const privateCfg = {
+        enabled: listenerConfig.privateChat?.enabled ?? true,
+        mode: listenerConfig.privateChat?.alwaysReply ? 'always' : 'prefix'  // 默认prefix模式
+      }
+      triggerCfg = { private: privateCfg, group: groupCfg, prefixes }
     }
+    
+    // 过滤无效的 prefix 值（null, undefined, 空字符串）
+    prefixes = (Array.isArray(prefixes) ? prefixes : [prefixes])
+      .filter(p => p && typeof p === 'string' && p.trim())
+      .map(p => p.trim())
+    
+    // 获取系统命令前缀，避免系统命令被当作 AI 对话触发
+    const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
+    const cmdPrefixEscaped = escapeRegExp(cmdPrefix)
     
     const rawMsg = cleanCQCode(e.msg || '')
     let msg = null
     let triggerReason = ''
     
-    // 调试：打印前缀配置和消息
-    logger.debug(`[Chat] 检查触发: isGroup=${e.isGroup}, rawMsg="${rawMsg}", prefixes=${JSON.stringify(prefixes)}`)
+    // 检查是否是系统命令（以 #ai 开头的管理命令），避免被当作 AI 对话
+    if (rawMsg && new RegExp(`^${cmdPrefixEscaped}[\\u4e00-\\u9fa5a-zA-Z]`).test(rawMsg)) {
+      logger.debug(`[Chat] 跳过: 系统命令 ${rawMsg.substring(0, 20)}...`)
+      return false
+    }
 
     // === 私聊处理 ===
     if (!e.isGroup) {
@@ -293,7 +437,6 @@ export class Chat extends plugin {
       }
     }
     
-    logger.debug(`[Chat] 触发: ${triggerReason}`)
     
     // 标记消息已处理
     markMessageProcessed(e)
@@ -377,8 +520,7 @@ export class Chat extends plugin {
           debugInfo: parsedMessage.debug
         })
       }
-    } catch (parseErr) {
-      logger.warn('[AI-Chat] 消息解析失败:', parseErr.message)
+    } catch {
       // 回退到原始消息
       enhancedMsg = msg
     }
@@ -646,10 +788,9 @@ export class Chat extends plugin {
             `结果: ${log.result}\n` +
             `耗时: ${log.duration}ms ${log.isError ? '❌' : '✅'}`
           ).join('\n\n')
-          
           await this.sendForwardMsg('工具调用日志', [toolLogText])
-        } catch (err) {
-          logger.warn('[AI-Chat] 工具日志转发失败:', err.message)
+        } catch {
+          // 转发失败时忽略
         }
       }
 
@@ -657,12 +798,15 @@ export class Chat extends plugin {
       if (hasThinking && thinkingUseForward) {
         try {
           await this.sendForwardMsg('思考过程', [reasoningText])
-        } catch (err) {
-          logger.warn('[AI-Chat] 思考内容转发失败:', err.message)
+        } catch {
+          // 转发失败时忽略
         }
       }
 
       // 3. 直接发送AI回复（普通消息）
+      // 记录发送的消息（用于防止自身消息循环）
+      recordSentMessage(finalReply)
+      
       const replyResult = await this.reply(finalReply, quoteReply)
       
       // 自动撤回处理
@@ -695,14 +839,9 @@ export class Chat extends plugin {
       }
 
     } catch (error) {
-      // 详细错误记录到控制台
-      logger.error('[AI-Chat] Error:', error)
-      
       // 给用户显示简化的错误信息
       const userFriendlyError = this.formatErrorForUser(error)
       const errorResult = await this.reply(userFriendlyError, true)
-      
-      // 错误消息也支持自动撤回
       this.handleAutoRecall(errorResult, true)
     }
 
@@ -734,13 +873,11 @@ export class Chat extends plugin {
         const bot = e?.bot || Bot
         if (typeof bot?.deleteMsg === 'function') {
           await bot.deleteMsg(messageId)
-          logger.debug(`[AI-Chat] 已撤回消息: ${messageId}`)
         } else if (typeof bot?.recallMsg === 'function') {
           await bot.recallMsg(messageId)
-          logger.debug(`[AI-Chat] 已撤回消息: ${messageId}`)
         }
-      } catch (err) {
-        logger.debug(`[AI-Chat] 撤回消息失败: ${err.message}`)
+      } catch {
+        // 撤回失败时忽略
       }
     }, delay)
   }
@@ -806,18 +943,13 @@ export class Chat extends plugin {
   async endConversation() {
     try {
       const { chatService } = await import('../src/services/ChatService.js')
-
       const userId = this.e.user_id || this.e.sender?.user_id || 'unknown'
       const groupId = this.e.group_id || null
-
-      // 使用正确的隔离方式清除历史
       await chatService.clearHistory(userId, groupId)
       await this.reply('✅ 已结束当前对话，下次对话将开始新会话', true)
     } catch (error) {
-      logger.error('[AI-Chat] End conversation error:', error)
       await this.reply('操作失败: ' + error.message, true)
     }
-
     return true
   }
 
@@ -827,19 +959,15 @@ export class Chat extends plugin {
   async clearMemory() {
     try {
       const { memoryManager } = await import('../src/services/MemoryManager.js')
-
       const userId = this.e.user_id || this.e.sender?.user_id || 'unknown'
       const groupId = this.e.group_id || (this.e.isGroup ? this.e.group_id : null)
       const fullUserId = groupId ? `${groupId}_${userId}` : String(userId)
-
       await memoryManager.init()
       await memoryManager.clearMemory(fullUserId)
       await this.reply('✅ 已清除你的所有记忆数据', true)
     } catch (error) {
-      logger.error('[AI-Chat] Clear memory error:', error)
       await this.reply('清除记忆失败: ' + error.message, true)
     }
-
     return true
   }
 
@@ -890,7 +1018,6 @@ export class Chat extends plugin {
 
       await this.reply(status, true)
     } catch (error) {
-      logger.error('[AI-Chat] Status error:', error)
       await this.reply('获取状态失败: ' + error.message, true)
     }
 

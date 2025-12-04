@@ -109,15 +109,12 @@ export class bym extends plugin {
                     
                     const groupId = e.group_id ? String(e.group_id) : null
                     const userId = String(e.user_id || e.sender?.user_id)
-                    
-                    // 获取独立人格（优先级：群用户 > 群 > 用户全局）
                     const defaultBymPrompt = config.get('bym.systemPrompt') || 
                         '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。'
                     
                     const independentResult = await scopeManager.getIndependentPrompt(groupId, userId, defaultBymPrompt)
                     
                     if (independentResult.isIndependent) {
-                        // 使用独立人格，并添加伪人模式的行为指导
                         systemPrompt = independentResult.prompt
                         systemPrompt += '\n\n【伪人模式行为指导】\n请用简短、自然、口语化的方式回复，就像真人聊天一样。回复要简洁（通常1-2句话），可以使用语气词和网络用语。'
                         logger.info(`[BYM] 使用独立人格 (来源: ${independentResult.source})`)
@@ -130,12 +127,9 @@ export class bym extends plugin {
                         '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。'
                 }
             } else {
-                // 不继承，使用BYM固定配置
                 systemPrompt = config.get('bym.systemPrompt') ||
                     '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。'
             }
-
-            // 2. 检查关键词预设映射（可覆盖上面的设置）
             const presetMap = config.get('bym.presetMap') || {}
             for (const [keyword, presetId] of Object.entries(presetMap)) {
                 if (messageText.includes(keyword)) {
@@ -152,8 +146,6 @@ export class bym extends plugin {
                 role: 'user',
                 content: [{ type: 'text', text: messageText }],
             }
-
-            // 3. 添加上下文信息
             if (e.sender) {
                 systemPrompt += `\n当前对话者: ${e.sender.card || e.sender.nickname || '未知用户'}`
             }

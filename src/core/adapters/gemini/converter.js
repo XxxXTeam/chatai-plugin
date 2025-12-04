@@ -41,7 +41,7 @@ registerFromChaiteConverter('gemini', (source) => {
                     case 'image':
                         // Gemini expects inline data format
                         // 注：URL图片已在GeminiClient中预处理为base64
-                        if (t.image.startsWith('data:')) {
+                        if (t.image?.startsWith('data:')) {
                             const [mimeType, base64Data] = t.image.split(';base64,')
                             return {
                                 inlineData: {
@@ -49,7 +49,7 @@ registerFromChaiteConverter('gemini', (source) => {
                                     data: base64Data,
                                 },
                             }
-                        } else {
+                        } else if (t.image) {
                             // Base64 without data URL prefix
                             return {
                                 inlineData: {
@@ -58,17 +58,66 @@ registerFromChaiteConverter('gemini', (source) => {
                                 },
                             }
                         }
-                    case 'audio':
-                        return {
-                            inlineData: {
-                                mimeType: `audio/${t.format || 'mp3'}`,
-                                data: t.data,
-                            },
+                        return { text: '[图片]' }
+                    case 'video':
+                        // Gemini 支持视频的 inlineData 格式
+                        if (t.video?.startsWith('data:')) {
+                            const [mimeType, base64Data] = t.video.split(';base64,')
+                            return {
+                                inlineData: {
+                                    mimeType: mimeType.replace('data:', ''),
+                                    data: base64Data,
+                                },
+                            }
+                        } else if (t.video) {
+                            return {
+                                inlineData: {
+                                    mimeType: t.mimeType || 'video/mp4',
+                                    data: t.video,
+                                },
+                            }
                         }
+                        return { text: '[视频]' }
+                    case 'video_info':
+                        // 视频信息类型，如果已转为base64
+                        if (t.video?.startsWith('data:')) {
+                            const [mimeType, base64Data] = t.video.split(';base64,')
+                            return {
+                                inlineData: {
+                                    mimeType: mimeType.replace('data:', ''),
+                                    data: base64Data,
+                                },
+                            }
+                        }
+                        // 否则只返回文本描述
+                        return { text: `[视频: ${t.url || t.name || ''}]` }
+                    case 'audio':
+                    case 'record':
+                        // 音频处理
+                        if (t.data?.startsWith?.('data:')) {
+                            const [mimeType, base64Data] = t.data.split(';base64,')
+                            return {
+                                inlineData: {
+                                    mimeType: mimeType.replace('data:', ''),
+                                    data: base64Data,
+                                },
+                            }
+                        } else if (t.data) {
+                            return {
+                                inlineData: {
+                                    mimeType: `audio/${t.format || 'mp3'}`,
+                                    data: t.data,
+                                },
+                            }
+                        }
+                        return { text: '[语音]' }
+                    case 'file':
+                        // 文件类型转为文本描述
+                        return { text: `[文件: ${t.name || t.file || ''}]` }
                     default:
                         return { text: '' }
                 }
-            })
+            }).filter(p => p.text !== '' || p.inlineData)
 
             return {
                 role: 'user',

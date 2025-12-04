@@ -4,66 +4,161 @@ import DefaultHistoryManager from '../utils/history.js'
 import { asyncLocalStorage, extractClassName, getKey } from '../utils/index.js'
 
 /**
- * 将图片URL转换为base64
- * @param {string} url - 图片URL
+ * 将URL资源转换为base64
+ * @param {string} url - 资源URL
+ * @param {string} [defaultMimeType] - 默认MIME类型
  * @returns {Promise<{mimeType: string, data: string}>}
  */
-async function urlToBase64(url) {
+async function urlToBase64(url, defaultMimeType = 'application/octet-stream') {
     try {
+        // 处理本地文件路径
+        if (url.startsWith('file://') || url.startsWith('/')) {
+            const fs = await import('node:fs')
+            const path = await import('node:path')
+            const filePath = url.replace('file://', '')
+            const buffer = fs.readFileSync(filePath)
+            const ext = path.extname(filePath).toLowerCase().slice(1)
+            const mimeType = getMimeType(ext) || defaultMimeType
+            return { mimeType, data: buffer.toString('base64') }
+        }
+        
+        // 处理已经是 base64 的情况
+        if (url.startsWith('base64://')) {
+            return { mimeType: defaultMimeType, data: url.replace('base64://', '') }
+        }
+        if (url.startsWith('data:')) {
+            const [header, data] = url.split(',')
+            const mimeType = header.match(/data:([^;]+)/)?.[1] || defaultMimeType
+            return { mimeType, data }
+        }
+        
+        // HTTP/HTTPS URL
         const response = await fetch(url)
         if (!response.ok) {
-            throw new Error(`Failed to fetch image: ${response.statusText}`)
+            throw new Error(`Failed to fetch: ${response.statusText}`)
         }
-        const contentType = response.headers.get('content-type') || 'image/jpeg'
+        const contentType = response.headers.get('content-type') || defaultMimeType
         const buffer = Buffer.from(await response.arrayBuffer())
         return {
             mimeType: contentType.split(';')[0],
             data: buffer.toString('base64')
         }
     } catch (error) {
-        logger.error('[ImagePreprocess] 图片URL转base64失败:', url, error.message)
         throw error
     }
 }
 
 /**
- * 预处理消息中的图片URL，转换为base64（用于不支持URL的模型如Gemini）
+ * 根据文件扩展名获取MIME类型
+ */
+function getMimeType(ext) {
+    const mimeTypes = {
+        // 图片
+        'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
+        'gif': 'image/gif', 'webp': 'image/webp', 'bmp': 'image/bmp',
+        'svg': 'image/svg+xml', 'ico': 'image/x-icon',
+        // 视频
+        'mp4': 'video/mp4', 'webm': 'video/webm', 'avi': 'video/x-msvideo',
+        'mov': 'video/quicktime', 'mkv': 'video/x-matroska', 'flv': 'video/x-flv',
+        'm4v': 'video/x-m4v', '3gp': 'video/3gpp',
+        // 音频
+        'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg',
+        'm4a': 'audio/mp4', 'flac': 'audio/flac', 'aac': 'audio/aac',
+        // 文档
+        'pdf': 'application/pdf', 'txt': 'text/plain',
+    }
+    return mimeTypes[ext?.toLowerCase()]
+}
+
+/**
+ * 预处理消息中的媒体URL，转换为base64（用于Gemini等需要base64的模型）
+ * 支持：图片、视频、音频
  * @param {Array} histories - 消息历史
+ * @param {Object} options - 选项
+ * @param {boolean} [options.processVideo=true] - 是否处理视频
+ * @param {boolean} [options.processAudio=true] - 是否处理音频
+ * @param {number} [options.maxVideoSize=20*1024*1024] - 最大视频大小(bytes)
  * @returns {Promise<Array>}
  */
-export async function preprocessImageUrls(histories) {
+export async function preprocessMediaToBase64(histories, options = {}) {
+    const { processVideo = true, processAudio = true, maxVideoSize = 20 * 1024 * 1024 } = options
     const processed = []
+    
     for (const msg of histories) {
         if (msg.role === 'user' && Array.isArray(msg.content)) {
             const newContent = []
             for (const item of msg.content) {
-                // 处理 image 类型 (image字段是URL)
-                if (item.type === 'image' && item.image?.startsWith('http')) {
-                    try {
-                        const { mimeType, data } = await urlToBase64(item.image)
+                try {
+                    // 处理 image 类型
+                    if (item.type === 'image' && item.image && !item.image.startsWith('data:')) {
+                        const { mimeType, data } = await urlToBase64(item.image, 'image/jpeg')
                         newContent.push({
                             type: 'image',
                             image: `data:${mimeType};base64,${data}`
                         })
-                        logger.info('[ImagePreprocess] 已将image URL转为base64:', item.image.substring(0, 50) + '...')
-                    } catch {
-                        newContent.push(item)
+                        logger.debug('[MediaPreprocess] 图片转base64:', item.image?.substring(0, 50))
                     }
-                }
-                // 处理 image_url 类型 (来自messageParser)
-                else if (item.type === 'image_url' && item.image_url?.url?.startsWith('http')) {
-                    try {
-                        const { mimeType, data } = await urlToBase64(item.image_url.url)
+                    // 处理 image_url 类型
+                    else if (item.type === 'image_url' && item.image_url?.url && !item.image_url.url.startsWith('data:')) {
+                        const { mimeType, data } = await urlToBase64(item.image_url.url, 'image/jpeg')
                         newContent.push({
                             type: 'image',
                             image: `data:${mimeType};base64,${data}`
                         })
-                        logger.info('[ImagePreprocess] 已将image_url转为base64:', item.image_url.url.substring(0, 50) + '...')
-                    } catch {
+                        logger.debug('[MediaPreprocess] image_url转base64:', item.image_url.url?.substring(0, 50))
+                    }
+                    // 处理视频类型
+                    else if (processVideo && (item.type === 'video' || item.type === 'video_info')) {
+                        const videoUrl = item.url || item.video || item.file
+                        if (videoUrl && !videoUrl.startsWith('data:')) {
+                            try {
+                                const { mimeType, data } = await urlToBase64(videoUrl, 'video/mp4')
+                                // 检查大小限制
+                                const sizeBytes = (data.length * 3) / 4
+                                if (sizeBytes <= maxVideoSize) {
+                                    newContent.push({
+                                        type: 'video',
+                                        video: `data:${mimeType};base64,${data}`,
+                                        mimeType
+                                    })
+                                    logger.debug('[MediaPreprocess] 视频转base64:', videoUrl?.substring(0, 50))
+                                } else {
+                                    logger.warn(`[MediaPreprocess] 视频过大(${(sizeBytes/1024/1024).toFixed(1)}MB)，跳过:`, videoUrl?.substring(0, 50))
+                                    newContent.push(item) // 保留原始
+                                }
+                            } catch (err) {
+                                logger.warn('[MediaPreprocess] 视频转换失败:', err.message)
+                                newContent.push(item)
+                            }
+                        } else {
+                            newContent.push(item)
+                        }
+                    }
+                    // 处理音频类型
+                    else if (processAudio && (item.type === 'audio' || item.type === 'record')) {
+                        const audioUrl = item.url || item.data || item.file
+                        if (audioUrl && typeof audioUrl === 'string' && !audioUrl.startsWith('data:')) {
+                            try {
+                                const { mimeType, data } = await urlToBase64(audioUrl, 'audio/mpeg')
+                                newContent.push({
+                                    type: 'audio',
+                                    data,
+                                    format: mimeType.split('/')[1] || 'mp3'
+                                })
+                                logger.debug('[MediaPreprocess] 音频转base64:', audioUrl?.substring(0, 50))
+                            } catch (err) {
+                                logger.warn('[MediaPreprocess] 音频转换失败:', err.message)
+                                newContent.push(item)
+                            }
+                        } else {
+                            newContent.push(item)
+                        }
+                    }
+                    else {
                         newContent.push(item)
                     }
-                }
-                else {
+                } catch (err) {
+                    logger.warn('[MediaPreprocess] 处理失败:', err.message)
                     newContent.push(item)
                 }
             }
@@ -76,14 +171,29 @@ export async function preprocessImageUrls(histories) {
 }
 
 /**
- * 检查模型是否需要图片base64预处理（如Gemini系列）
+ * 兼容旧函数名
+ */
+export async function preprocessImageUrls(histories) {
+    return preprocessMediaToBase64(histories, { processVideo: true, processAudio: true })
+}
+
+/**
+ * 检查模型是否需要base64预处理（如Gemini系列）
  * @param {string} model - 模型名称
  * @returns {boolean}
  */
-export function needsImageBase64Preprocess(model) {
+export function needsBase64Preprocess(model) {
     if (!model) return false
     const lowerModel = model.toLowerCase()
+    // Gemini 系列模型都需要 base64
     return lowerModel.includes('gemini')
+}
+
+/**
+ * 兼容旧函数名
+ */
+export function needsImageBase64Preprocess(model) {
+    return needsBase64Preprocess(model)
 }
 
 /**
@@ -215,16 +325,12 @@ export class AbstractClient {
 
             // Handle tool calls with improved logic
             if (modelResponse.toolCalls && modelResponse.toolCalls.length > 0) {
-                // 调试日志：打印解析后的 toolCalls
-                this.logger.info('[Tool] 解析后的toolCalls:', JSON.stringify(modelResponse.toolCalls, null, 2))
-                
                 // 初始化工具调用追踪状态
                 this.initToolCallTracking(options)
                 
                 // 检查工具调用限制
                 const limitReason = this.updateToolCallTracking(options, modelResponse.toolCalls)
                 if (limitReason) {
-                    this.logger.warn(`[Tool] ${limitReason}`)
                     this.resetToolCallTracking(options)
                     
                     // 如果已有文本内容，返回它；否则返回限制提示
@@ -237,16 +343,22 @@ export class AbstractClient {
                         toolCallLogs: options._toolCallLogs || [],
                     }
                 }
-
+                const intermediateTextContent = modelResponse.content?.filter(c => c.type === 'text') || []
+                const intermediateText = intermediateTextContent.map(c => c.text).join('').trim()
+                
                 // 触发工具调用中间消息回调（如果设置）
+                // 这会在工具调用之前先发送模型的文本回复
                 if (this.onMessageWithToolCall || options.onMessageWithToolCall) {
                     const callback = options.onMessageWithToolCall || this.onMessageWithToolCall
-                    for (const content of (modelResponse.content || [])) {
-                        try {
-                            await callback(content, modelResponse.toolCalls)
-                        } catch (err) {
-                            this.logger.warn(`[Tool] 中间消息回调错误: ${err.message}`)
-                        }
+                    try {
+                        await callback({
+                            intermediateText,           // 中间文本回复
+                            contents: modelResponse.content,  // 完整内容
+                            toolCalls: modelResponse.toolCalls,  // 工具调用信息
+                            isIntermediate: true       // 标记为中间消息
+                        })
+                    } catch (err) {
+                        this.logger.warn('[Tool] 中间消息回调错误:', err.message)
                     }
                 }
 
@@ -281,10 +393,8 @@ export class AbstractClient {
                 
                 // 连续调用超过阈值时禁用工具
                 if (options._toolCallCount >= maxBeforeDisable) {
-                    this.logger.warn(`[Tool] 已执行${options._toolCallCount}次工具调用轮次，禁用工具强制生成回复`)
                     options.toolChoice = { type: 'none' }
                 } else {
-                    this.logger.info(`[Tool] 已执行${options._toolCallCount}次工具调用轮次，继续允许调用`)
                     options.toolChoice = { type: 'auto' }
                 }
                 
@@ -538,7 +648,7 @@ export class AbstractClient {
     }
 
     /**
-     * 执行工具调用（无签名/缓存，每次都执行）
+     * 执行工具调用（支持并行执行无依赖的工具）
      * @param {Array} toolCalls - 工具调用列表
      * @param {SendMessageOption} options
      * @returns {Promise<{toolCallResults: Array, toolCallLogs: Array}>}
@@ -547,76 +657,128 @@ export class AbstractClient {
         const toolCallResults = []
         const toolCallLogs = []
 
-        for (const toolCall of toolCalls) {
-            const fcName = toolCall.function.name
-            let fcArgs = toolCall.function.arguments
+        // 检测是否可以并行执行（多个工具调用且启用并行）
+        const enableParallel = options.enableParallelToolCalls !== false && toolCalls.length > 1
+        
+        if (enableParallel) {
+            // 并行执行所有工具调用
+            const startTime = Date.now()
+            this.logger.info(`[Tool] 并行执行 ${toolCalls.length} 个工具调用`)
             
-            // 解析参数
-            if (typeof fcArgs === 'string') {
-                try {
-                    fcArgs = JSON.parse(fcArgs)
-                } catch (e) {
-                    fcArgs = {}
+            const results = await Promise.allSettled(
+                toolCalls.map(toolCall => this.executeSingleToolCall(toolCall))
+            )
+            
+            const totalDuration = Date.now() - startTime
+            this.logger.info(`[Tool] 并行执行完成, 总耗时 ${totalDuration}ms`)
+            
+            // 收集结果
+            for (let i = 0; i < results.length; i++) {
+                const result = results[i]
+                const toolCall = toolCalls[i]
+                
+                if (result.status === 'fulfilled') {
+                    toolCallResults.push(result.value.toolResult)
+                    toolCallLogs.push(result.value.log)
+                } else {
+                    // Promise rejected
+                    const fcName = toolCall.function?.name || 'unknown'
+                    toolCallResults.push({
+                        tool_call_id: toolCall.id,
+                        content: `执行失败: ${result.reason?.message || 'Unknown error'}`,
+                        type: 'tool',
+                        name: fcName,
+                    })
+                    toolCallLogs.push({
+                        name: fcName,
+                        args: {},
+                        result: `执行失败: ${result.reason?.message || 'Unknown error'}`,
+                        duration: 0,
+                        isError: true
+                    })
                 }
             }
+        } else {
+            // 串行执行
+            for (const toolCall of toolCalls) {
+                const { toolResult, log } = await this.executeSingleToolCall(toolCall)
+                toolCallResults.push(toolResult)
+                toolCallLogs.push(log)
+            }
+        }
 
-            const tool = this.tools.find(t => t.function?.name === fcName || t.name === fcName)
+        return { toolCallResults, toolCallLogs }
+    }
 
-            if (tool) {
-                this.logger.info(`[Tool] 执行: ${fcName}`, JSON.stringify(fcArgs))
-                this.logger.info(`[Tool] tool_call_id: ${toolCall.id}`)
-                const startTime = Date.now()
-                let toolResult
-                let isError = false
+    /**
+     * 执行单个工具调用
+     * @param {Object} toolCall - 工具调用对象
+     * @returns {Promise<{toolResult: Object, log: Object}>}
+     */
+    async executeSingleToolCall(toolCall) {
+        const fcName = toolCall.function?.name || toolCall.name
+        let fcArgs = toolCall.function?.arguments || toolCall.arguments
+        
+        // 解析参数
+        if (typeof fcArgs === 'string') {
+            try {
+                fcArgs = JSON.parse(fcArgs)
+            } catch (e) {
+                fcArgs = {}
+            }
+        }
 
-                try {
-                    toolResult = await tool.run(fcArgs, this.context)
-                    if (typeof toolResult !== 'string') {
-                        toolResult = JSON.stringify(toolResult)
-                    }
-                    this.logger.info(`[Tool] ${fcName} 返回结果: ${toolResult.substring(0, 200)}${toolResult.length > 200 ? '...' : ''}`)
-                } catch (err) {
-                    toolResult = `执行失败: ${err.message}`
-                    isError = true
-                    this.logger.error(`[Tool] ${fcName} 执行错误:`, err.message)
+        const tool = this.tools.find(t => t.function?.name === fcName || t.name === fcName)
+
+        if (tool) {
+            const startTime = Date.now()
+            let toolResult
+            let isError = false
+
+            try {
+                toolResult = await tool.run(fcArgs, this.context)
+                if (typeof toolResult !== 'string') {
+                    toolResult = JSON.stringify(toolResult)
                 }
+            } catch (err) {
+                toolResult = `执行失败: ${err.message}`
+                isError = true
+            }
 
-                const duration = Date.now() - startTime
-                this.logger.info(`[Tool] ${fcName} 完成，耗时 ${duration}ms`)
+            const duration = Date.now() - startTime
 
-                toolCallLogs.push({
+            return {
+                toolResult: {
+                    tool_call_id: toolCall.id,
+                    content: toolResult,
+                    type: 'tool',
+                    name: fcName,
+                },
+                log: {
                     name: fcName,
                     args: fcArgs,
                     result: toolResult.length > 500 ? toolResult.substring(0, 500) + '...' : toolResult,
                     duration,
                     isError
-                })
-                
-                toolCallResults.push({
-                    tool_call_id: toolCall.id,
-                    content: toolResult,
-                    type: 'tool',
-                    name: fcName,
-                })
-            } else {
-                this.logger.warn(`[Tool] 未找到工具: ${fcName}`)
-                toolCallResults.push({
+                }
+            }
+        } else {
+            return {
+                toolResult: {
                     tool_call_id: toolCall.id,
                     content: `工具 "${fcName}" 不存在或未启用`,
                     type: 'tool',
                     name: fcName,
-                })
-                toolCallLogs.push({
+                },
+                log: {
                     name: fcName,
                     args: fcArgs,
                     result: '工具不存在',
                     duration: 0,
                     isError: true
-                })
+                }
             }
         }
-
-        return { toolCallResults, toolCallLogs }
     }
 
     /**

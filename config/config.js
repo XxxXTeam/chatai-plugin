@@ -118,8 +118,10 @@ class Config {
             },
             // 工具调用配置
             tools: {
-                showCallLogs: true,    // 显示工具调用日志
-                useForwardMsg: true,   // 工具日志使用合并转发
+                showCallLogs: true,        // 显示工具调用日志
+                useForwardMsg: true,       // 工具日志使用合并转发
+                parallelExecution: true,   // 启用并行工具执行
+                sendIntermediateReply: true, // 工具调用前发送模型的中间回复
             },
             builtinTools: {
                 enabled: true,
@@ -200,6 +202,11 @@ class Config {
                 priority: ['group', 'group_user', 'user', 'default'],
                 // 是否启用独立人格（设置后完全替换默认，不拼接）
                 useIndependent: true,
+                // 独立人格上下文设置
+                isolateContext: {
+                    enabled: false,           // 启用独立上下文（不与其他预设共享对话历史）
+                    clearOnSwitch: false,     // 切换人格时是否清除上下文
+                },
             },
             loadBalancing: {
                 strategy: 'priority', // 'priority', 'round-robin', 'random'
@@ -248,7 +255,7 @@ class Config {
                 // === 私聊触发 ===
                 private: {
                     enabled: true,          // 是否响应私聊
-                    mode: 'always',         // 私聊触发模式: 'always'(总是), 'prefix'(需前缀), 'off'(关闭)
+                    mode: 'prefix',         // 私聊触发模式: 'always'(总是), 'prefix'(需前缀), 'off'(关闭)
                 },
                 // === 群聊触发 ===
                 group: {

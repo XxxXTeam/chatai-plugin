@@ -56,7 +56,15 @@ const config = reactive({
   },
   tools: {
     showCallLogs: true,
-    useForwardMsg: true
+    useForwardMsg: true,
+    parallelExecution: true,
+    sendIntermediateReply: true
+  },
+  personality: {
+    isolateContext: {
+      enabled: false,
+      clearOnSwitch: false
+    }
   },
   thinking: {
     showThinkingContent: true,
@@ -165,6 +173,9 @@ async function fetchConfig() {
       if (data.bym) Object.assign(config.bym, data.bym)
       if (data.tools) Object.assign(config.tools, data.tools)
       if (data.thinking) Object.assign(config.thinking, data.thinking)
+      if (data.personality?.isolateContext) {
+        config.personality.isolateContext = { ...config.personality.isolateContext, ...data.personality.isolateContext }
+      }
       if (data.features) {
         if (data.features.groupSummary) Object.assign(config.features.groupSummary, data.features.groupSummary)
         if (data.features.userPortrait) Object.assign(config.features.userPortrait, data.features.userPortrait)
@@ -176,8 +187,14 @@ async function fetchConfig() {
       if (data.trigger) {
         config.trigger.private = data.trigger.private || { enabled: true, mode: 'always' }
         config.trigger.group = data.trigger.group || { enabled: true, at: true, prefix: true, keyword: false, random: false, randomRate: 0.05 }
-        config.trigger.prefixes = data.trigger.prefixes || ['#chat']
-        config.trigger.keywords = data.trigger.keywords || []
+        // 过滤无效的 prefix 值（null, undefined, 空字符串）
+        const rawPrefixes = data.trigger.prefixes || ['#chat']
+        config.trigger.prefixes = (Array.isArray(rawPrefixes) ? rawPrefixes : [rawPrefixes])
+          .filter(p => p && typeof p === 'string' && p.trim())
+        // 过滤无效的 keyword 值
+        const rawKeywords = data.trigger.keywords || []
+        config.trigger.keywords = (Array.isArray(rawKeywords) ? rawKeywords : [rawKeywords])
+          .filter(k => k && typeof k === 'string' && k.trim())
         config.trigger.collectGroupMsg = data.trigger.collectGroupMsg ?? true
         config.trigger.blacklistUsers = data.trigger.blacklistUsers || []
         config.trigger.whitelistUsers = data.trigger.whitelistUsers || []
@@ -211,6 +228,11 @@ async function fetchConfig() {
 async function saveConfig() {
   saving.value = true
   try {
+    // 清理 trigger 中的无效值
+    const cleanedTrigger = { ...config.trigger }
+    cleanedTrigger.prefixes = (config.trigger.prefixes || []).filter(p => p && typeof p === 'string' && p.trim())
+    cleanedTrigger.keywords = (config.trigger.keywords || []).filter(k => k && typeof k === 'string' && k.trim())
+    
     const payload = {
       basic: { ...config.basic },
       admin: { ...config.admin },
@@ -220,7 +242,8 @@ async function saveConfig() {
       thinking: { ...config.thinking },
       features: { ...config.features },
       memory: { ...config.memory },
-      trigger: { ...config.trigger }
+      trigger: cleanedTrigger,
+      personality: { ...config.personality }
     }
 
     const res = await axios.post('/api/config', payload)
@@ -546,6 +569,47 @@ onMounted(() => {
               <n-switch v-model:value="config.tools.useForwardMsg" />
             </template>
             开启后，工具调用日志使用合并转发发送
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="并行执行">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.tools.parallelExecution" />
+            </template>
+            开启后，多个无依赖的工具调用会并行执行，提升响应速度
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="发送中间回复">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.tools.sendIntermediateReply" />
+            </template>
+            开启后，工具调用前会先发送模型的文本回复（如"好的，我来帮你..."）
+          </n-tooltip>
+        </n-form-item>
+      </n-form>
+    </n-card>
+    
+    <!-- 人格上下文配置 -->
+    <n-card title="人格上下文">
+      <n-alert type="info" style="margin-bottom: 16px;">
+        配置独立人格的上下文隔离行为。启用后，不同人格将拥有独立的对话历史。
+      </n-alert>
+      <n-form label-placement="left" label-width="140">
+        <n-form-item label="独立上下文">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.personality.isolateContext.enabled" />
+            </template>
+            启用后，不同人格的对话历史相互独立，不共享上下文
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="切换时清除">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.personality.isolateContext.clearOnSwitch" :disabled="!config.personality.isolateContext.enabled" />
+            </template>
+            切换人格时是否清除原人格的上下文历史
           </n-tooltip>
         </n-form-item>
       </n-form>

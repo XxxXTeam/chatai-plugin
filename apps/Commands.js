@@ -49,7 +49,7 @@ export class AICommands extends plugin {
             name: 'AI-Commands',
             dsc: 'AI插件命令处理',
             event: 'message',
-            priority: 10,  // 高优先级，确保命令不被抢占
+            priority: -100,  // 最高优先级，确保命令不被其他插件抢占（数值越小优先级越高）
             rule: [
                 {
                     reg: '^#(结束对话|结束会话|新对话|新会话)$',

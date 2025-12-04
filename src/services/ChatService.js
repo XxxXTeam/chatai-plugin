@@ -367,10 +367,20 @@ export class ChatService {
         
         try {
             // 设置工具调用中间消息回调（用于发送工具调用过程中的消息）
+            // 当模型返回文本+工具调用时，先发送文本再执行工具
             if (event && event.reply) {
-                client.setOnMessageWithToolCall(async (content, toolCalls) => {
-                    if (content && content.type === 'text' && content.text) {
-                        await event.reply(content.text, true)
+                client.setOnMessageWithToolCall(async (data) => {
+                    // 新格式：data = { intermediateText, contents, toolCalls, isIntermediate }
+                    if (data?.intermediateText && data.isIntermediate) {
+                        const text = data.intermediateText.trim()
+                        if (text) {
+                            logger.info('[ChatService] 发送工具调用前的中间回复:', text.substring(0, 50))
+                            await event.reply(text, true)
+                        }
+                    }
+                    // 兼容旧格式：data = content对象
+                    else if (data?.type === 'text' && data.text) {
+                        await event.reply(data.text, true)
                     }
                 })
             }
