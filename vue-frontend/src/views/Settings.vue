@@ -86,6 +86,12 @@ const config = reactive({
     },
     reaction: {
       enabled: false
+    },
+    imageGen: {
+      enabled: true,
+      apiUrl: 'https://business.928100.xyz/v1/chat/completions',
+      apiKey: 'X-Free',
+      model: 'gemini-3-pro-image'
     }
   },
   memory: {
@@ -97,6 +103,7 @@ const config = reactive({
     private: { enabled: true, mode: 'always' },
     group: { enabled: true, at: true, prefix: true, keyword: false, random: false, randomRate: 0.05 },
     prefixes: ['#chat'],
+    prefixPersonas: [],  // 前缀人格配置
     keywords: [],
     collectGroupMsg: true,
     blacklistUsers: [],
@@ -348,6 +355,26 @@ onMounted(() => {
         </n-form-item>
         <n-form-item label="触发关键词" v-if="config.trigger.group.keyword">
           <n-input v-model:value="keywordsText" placeholder="消息包含这些词时触发" />
+        </n-form-item>
+        
+        <!-- 前缀人格 -->
+        <n-divider title-placement="left">前缀人格</n-divider>
+        <n-alert type="info" style="margin-bottom: 12px;">
+          设置特定前缀触发独立人格，该前缀仅使用此人格，不影响其他对话
+        </n-alert>
+        
+        <n-form-item label="前缀人格列表">
+          <n-dynamic-input
+            v-model:value="config.trigger.prefixPersonas"
+            :on-create="() => ({ prefix: '', preset: '' })"
+          >
+            <template #default="{ value }">
+              <n-space>
+                <n-input v-model:value="value.prefix" placeholder="触发前缀，如: 猫娘" style="width: 120px;" />
+                <n-input v-model:value="value.preset" placeholder="人格提示词" style="width: 300px;" type="textarea" :autosize="{ minRows: 1, maxRows: 3 }" />
+              </n-space>
+            </template>
+          </n-dynamic-input>
         </n-form-item>
         
         <!-- 其他 -->
@@ -697,6 +724,25 @@ onMounted(() => {
           </n-tooltip>
         </n-form-item>
 
+        <n-divider title-placement="left">AI 图片生成</n-divider>
+        <n-form-item label="启用">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.features.imageGen.enabled" />
+            </template>
+            开启后可使用 #文生图、#图生图、#手办化 等命令
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="API地址">
+          <n-input v-model:value="config.features.imageGen.apiUrl" placeholder="图片生成API地址" :disabled="!config.features.imageGen.enabled" />
+        </n-form-item>
+        <n-form-item label="API密钥">
+          <n-input v-model:value="config.features.imageGen.apiKey" type="password" show-password-on="click" placeholder="API密钥" :disabled="!config.features.imageGen.enabled" />
+        </n-form-item>
+        <n-form-item label="模型名称">
+          <n-input v-model:value="config.features.imageGen.model" placeholder="gemini-3-pro-image" :disabled="!config.features.imageGen.enabled" />
+        </n-form-item>
+
         <n-divider title-placement="left">长期记忆</n-divider>
         <n-form-item label="启用记忆">
           <n-tooltip trigger="hover">
@@ -721,6 +767,9 @@ onMounted(() => {
       <div>• <strong>#群聊总结</strong> - 总结群聊消息</div>
       <div>• <strong>#个人画像</strong> - 分析自己的用户画像</div>
       <div>• <strong>#分析 @用户</strong> - 分析指定用户的画像</div>
+      <div>• <strong>#文生图 描述</strong> - 文字生成图片</div>
+      <div>• <strong>#图生图 描述</strong> - 图片转换处理 (需引用/发送图片)</div>
+      <div>• <strong>#手办化 / #Q版 / #动漫化</strong> - 预设效果 (需图片)</div>
     </n-alert>
 
     <n-space justify="end" style="margin-top: 16px; position: sticky; bottom: 16px; background: var(--n-color); padding: 12px; border-radius: 8px; box-shadow: 0 -2px 8px rgba(0,0,0,0.1);">

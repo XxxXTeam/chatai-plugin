@@ -26,7 +26,7 @@ export function convertMcpTools(mcpTools, requestContext = null) {
          */
         async run(args, context) {
             try {
-                logger.info(`[MCP Tool] Running ${mcpTool.name}`, args)
+                logger.debug(`[Tool] ${mcpTool.name}`)
 
                 // 使用闭包捕获的请求级上下文，实现并发隔离
                 const result = await mcpManager.callTool(mcpTool.name, args, {

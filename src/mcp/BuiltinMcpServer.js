@@ -174,7 +174,7 @@ export class BuiltinMcpServer {
         if (this.initialized) return
         await this.loadJsTools()
         this.initialized = true
-        logger.info('[BuiltinMCP] Server initialized with', this.tools.length, 'builtin tools,', this.jsTools.size, 'custom JS tools')
+        logger.debug('[BuiltinMCP] 初始化完成:', this.tools.length, '内置工具,', this.jsTools.size, 'JS工具')
     }
 
     /**
@@ -183,13 +183,13 @@ export class BuiltinMcpServer {
      */
     async loadJsTools() {
         const toolsDir = path.join(__dirname, '../../data/tools')
-        logger.info(`[BuiltinMCP] Loading JS tools from: ${toolsDir}`)
+        logger.debug(`[BuiltinMCP] 加载JS工具: ${toolsDir}`)
         
         // 清除旧工具
         this.jsTools.clear()
         
         if (!fs.existsSync(toolsDir)) {
-            logger.info(`[BuiltinMCP] Tools directory not found, creating: ${toolsDir}`)
+            logger.debug(`[BuiltinMCP] 创建工具目录: ${toolsDir}`)
             fs.mkdirSync(toolsDir, { recursive: true })
             return
         }
@@ -197,12 +197,12 @@ export class BuiltinMcpServer {
         const allFiles = fs.readdirSync(toolsDir)
         // 排除 CustomTool.js 基类文件
         const files = allFiles.filter(f => f.endsWith('.js') && f !== 'CustomTool.js')
-        logger.info(`[BuiltinMCP] Found ${allFiles.length} files, ${files.length} JS tools: ${files.join(', ') || 'none'}`)
+        logger.debug(`[BuiltinMCP] 发现 ${files.length} 个JS工具`)
         
         for (const file of files) {
             try {
                 const filePath = path.join(toolsDir, file)
-                logger.info(`[BuiltinMCP] Loading tool file: ${filePath}`)
+                logger.debug(`[BuiltinMCP] 加载: ${file}`)
                 
                 // 使用时间戳避免模块缓存，实现热重载
                 const timestamp = Date.now()
@@ -216,14 +216,14 @@ export class BuiltinMcpServer {
                 const toolName = tool.name || tool.function?.name
                 const hasRun = typeof tool.run === 'function'
                 
-                logger.info(`[BuiltinMCP] Module loaded: { name: ${toolName}, run: ${hasRun} }`)
+                logger.debug(`[BuiltinMCP] 模块: ${toolName}, run=${hasRun}`)
                 
                 if (toolName && hasRun) {
                     // 直接保存原始工具对象（保留原型方法），添加文件信息
                     tool.__filename = file
                     tool.__filepath = filePath
                     this.jsTools.set(toolName, tool)
-                    logger.info(`[BuiltinMCP] ✓ Loaded JS tool: ${toolName} from ${file}`)
+                    logger.debug(`[BuiltinMCP] ✓ ${toolName}`)
                 } else {
                     logger.warn(`[BuiltinMCP] ✗ Invalid tool format in ${file}, must have name and run()`)
                 }
@@ -232,7 +232,7 @@ export class BuiltinMcpServer {
             }
         }
         
-        logger.info(`[BuiltinMCP] JS tools loading complete, total: ${this.jsTools.size}`)
+        logger.debug(`[BuiltinMCP] JS工具加载完成: ${this.jsTools.size}`)
     }
 
     /**
@@ -488,7 +488,7 @@ export class BuiltinMcpServer {
         // 先检查是否是 JS 文件工具
         const jsTool = this.jsTools.get(name)
         if (jsTool) {
-            logger.info(`[BuiltinMCP] Calling JS tool: ${name}`, args)
+            logger.debug(`[BuiltinMCP] 调用JS工具: ${name}`)
             try {
                 // 设置上下文供工具使用
                 const { asyncLocalStorage } = await import('../core/utils/helpers.js')
@@ -518,7 +518,7 @@ export class BuiltinMcpServer {
         const customTool = customTools.find(t => t.name === name)
         
         if (customTool) {
-            logger.info(`[BuiltinMCP] Calling custom tool: ${name}`, args)
+            logger.debug(`[BuiltinMCP] 调用自定义工具: ${name}`)
             try {
                 const result = await this.executeCustomHandler(customTool.handler, args, ctx)
                 return this.formatResult(result)
@@ -537,7 +537,7 @@ export class BuiltinMcpServer {
             throw new Error(`Tool not found: ${name}`)
         }
 
-        logger.info(`[BuiltinMCP] Calling tool: ${name}`, args)
+        logger.debug(`[BuiltinMCP] 调用内置工具: ${name}`)
 
         try {
             const result = await tool.handler(args, ctx)
@@ -2192,6 +2192,573 @@ export class BuiltinMcpServer {
                 }
             },
 
+            // ==================== 互动工具 ====================
+            {
+                name: 'poke_user',
+                description: '戳一戳用户（双击头像效果）。可在群聊或私聊中使用。',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        user_id: { type: 'string', description: '要戳的用户QQ号，不填则戳当前对话用户' },
+                        group_id: { type: 'string', description: '群号（群聊戳一戳需要）' }
+                    }
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const bot = ctx.getBot()
+                        const e = ctx.getEvent()
+                        
+                        const userId = args.user_id ? parseInt(args.user_id) : e?.user_id
+                        const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
+                        
+                        if (!userId) {
+                            return { success: false, error: '无法确定要戳的用户' }
+                        }
+                        
+                        if (groupId) {
+                            // 群聊戳一戳
+                            const group = bot.pickGroup(groupId)
+                            if (typeof group?.pokeMember === 'function') {
+                                await group.pokeMember(userId)
+                            } else if (group?.pickMember) {
+                                const member = group.pickMember(userId)
+                                if (typeof member?.poke === 'function') {
+                                    await member.poke()
+                                } else {
+                                    return { success: false, error: '当前协议不支持群聊戳一戳' }
+                                }
+                            } else {
+                                return { success: false, error: '当前协议不支持群聊戳一戳' }
+                            }
+                            return { success: true, user_id: userId, group_id: groupId, message: `已戳了用户 ${userId}` }
+                        } else {
+                            // 私聊戳一戳
+                            const friend = bot.pickFriend(userId)
+                            if (typeof friend?.poke === 'function') {
+                                await friend.poke()
+                                return { success: true, user_id: userId, message: `已私聊戳了用户 ${userId}` }
+                            } else {
+                                return { success: false, error: '当前协议不支持私聊戳一戳' }
+                            }
+                        }
+                    } catch (err) {
+                        return { success: false, error: `戳一戳失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'send_like',
+                description: '给用户点赞（发送名片赞）',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        user_id: { type: 'string', description: '要点赞的用户QQ号，不填则给当前对话用户点赞' },
+                        times: { type: 'number', description: '点赞次数（1-20），默认为10次' }
+                    }
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const bot = ctx.getBot()
+                        const e = ctx.getEvent()
+                        
+                        const userId = args.user_id ? parseInt(args.user_id) : e?.user_id
+                        const times = Math.min(Math.max(args.times || 10, 1), 20) // 限制1-20次
+                        
+                        if (!userId) {
+                            return { success: false, error: '无法确定要点赞的用户' }
+                        }
+                        
+                        // icqq: bot.sendLike(user_id, times)
+                        // NapCat/OneBot: bot.send_like({ user_id, times })
+                        if (typeof bot?.sendLike === 'function') {
+                            await bot.sendLike(userId, times)
+                        } else if (typeof bot?.send_like === 'function') {
+                            await bot.send_like({ user_id: userId, times })
+                        } else if (typeof bot?.pickFriend === 'function') {
+                            const friend = bot.pickFriend(userId)
+                            if (typeof friend?.thumbUp === 'function') {
+                                await friend.thumbUp(times)
+                            } else if (typeof friend?.sendLike === 'function') {
+                                await friend.sendLike(times)
+                            } else {
+                                return { success: false, error: '当前协议不支持点赞' }
+                            }
+                        } else {
+                            return { success: false, error: '当前协议不支持点赞' }
+                        }
+                        
+                        return { success: true, user_id: userId, times, message: `已给用户 ${userId} 点赞 ${times} 次` }
+                    } catch (err) {
+                        return { success: false, error: `点赞失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'set_message_reaction',
+                description: '给消息添加表情回应（贴表情）',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        message_id: { type: 'string', description: '消息ID，不填则回应当前消息' },
+                        emoji_id: { type: 'string', description: '表情ID，常用：76=赞、181=抱抱、307=恭喜、305=加油、312=鼓掌、124=酷、325=笑哭、310=666' },
+                        is_add: { type: 'boolean', description: '是否添加表情（true添加，false取消），默认true' }
+                    },
+                    required: ['emoji_id']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const bot = ctx.getBot()
+                        const e = ctx.getEvent()
+                        
+                        const messageId = args.message_id || e?.message_id
+                        const emojiId = parseInt(args.emoji_id)
+                        const isAdd = args.is_add !== false
+                        
+                        if (!messageId) {
+                            return { success: false, error: '无法确定要回应的消息' }
+                        }
+                        
+                        // NapCat/go-cqhttp: bot.set_msg_emoji_like
+                        if (typeof bot?.set_msg_emoji_like === 'function') {
+                            await bot.set_msg_emoji_like({
+                                message_id: messageId,
+                                emoji_id: String(emojiId)
+                            })
+                            return { success: true, message_id: messageId, emoji_id: emojiId, action: isAdd ? 'add' : 'remove' }
+                        }
+                        
+                        // icqq: group.setReaction
+                        if (e?.group_id && bot?.pickGroup) {
+                            const group = bot.pickGroup(e.group_id)
+                            if (typeof group?.setReaction === 'function') {
+                                await group.setReaction(e.seq || messageId, emojiId, isAdd ? 1 : 0)
+                                return { success: true, message_id: messageId, emoji_id: emojiId, action: isAdd ? 'add' : 'remove' }
+                            }
+                        }
+                        
+                        return { success: false, error: '当前协议不支持表情回应' }
+                    } catch (err) {
+                        return { success: false, error: `表情回应失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'get_user_avatar',
+                description: '获取用户头像URL',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        user_id: { type: 'string', description: '用户QQ号，不填则获取当前对话用户头像' },
+                        size: { type: 'number', description: '头像尺寸：40/100/140/640，默认640' }
+                    }
+                },
+                handler: async (args, ctx) => {
+                    const e = ctx.getEvent()
+                    const userId = args.user_id || e?.user_id
+                    const size = args.size || 640
+                    
+                    if (!userId) {
+                        return { success: false, error: '无法确定用户' }
+                    }
+                    
+                    const avatarUrl = `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=${size}`
+                    return { 
+                        success: true, 
+                        user_id: userId, 
+                        avatar_url: avatarUrl,
+                        message: `用户 ${userId} 的头像地址: ${avatarUrl}`
+                    }
+                }
+            },
+
+            {
+                name: 'get_group_avatar',
+                description: '获取群头像URL',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        group_id: { type: 'string', description: '群号，不填则获取当前群头像' },
+                        size: { type: 'number', description: '头像尺寸：40/100/140/640，默认640' }
+                    }
+                },
+                handler: async (args, ctx) => {
+                    const e = ctx.getEvent()
+                    const groupId = args.group_id || e?.group_id
+                    const size = args.size || 640
+                    
+                    if (!groupId) {
+                        return { success: false, error: '无法确定群号' }
+                    }
+                    
+                    const avatarUrl = `https://p.qlogo.cn/gh/${groupId}/${groupId}/${size}`
+                    return { 
+                        success: true, 
+                        group_id: groupId, 
+                        avatar_url: avatarUrl,
+                        message: `群 ${groupId} 的头像地址: ${avatarUrl}`
+                    }
+                }
+            },
+
+            {
+                name: 'send_music',
+                description: '发送音乐卡片分享',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        type: { type: 'string', description: '音乐平台：qq/163/kugou/migu/kuwo，默认qq' },
+                        id: { type: 'string', description: '音乐ID（从平台URL获取）' },
+                        title: { type: 'string', description: '歌曲标题（自定义音乐时使用）' },
+                        singer: { type: 'string', description: '歌手名（自定义音乐时使用）' },
+                        url: { type: 'string', description: '跳转链接（自定义音乐时使用）' },
+                        audio: { type: 'string', description: '音频链接（自定义音乐时使用）' },
+                        image: { type: 'string', description: '封面图片（自定义音乐时使用）' }
+                    }
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const e = ctx.getEvent()
+                        if (!e) {
+                            return { success: false, error: '无法获取会话上下文' }
+                        }
+                        
+                        let musicMsg
+                        
+                        if (args.id) {
+                            // 平台音乐
+                            const platform = args.type || 'qq'
+                            musicMsg = { type: 'music', data: { type: platform, id: args.id } }
+                        } else if (args.url && args.audio) {
+                            // 自定义音乐
+                            musicMsg = {
+                                type: 'music',
+                                data: {
+                                    type: 'custom',
+                                    url: args.url,
+                                    audio: args.audio,
+                                    title: args.title || '未知歌曲',
+                                    singer: args.singer || '未知歌手',
+                                    image: args.image || ''
+                                }
+                            }
+                        } else {
+                            return { success: false, error: '请提供音乐ID或自定义音乐信息（url和audio必填）' }
+                        }
+                        
+                        await e.reply(musicMsg)
+                        return { success: true, message: '音乐卡片已发送' }
+                    } catch (err) {
+                        return { success: false, error: `发送音乐失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'send_poke_message',
+                description: '发送戳一戳消息（在聊天中发送戳一戳动作）',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        user_id: { type: 'string', description: '要戳的用户QQ号' }
+                    },
+                    required: ['user_id']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const e = ctx.getEvent()
+                        if (!e) {
+                            return { success: false, error: '无法获取会话上下文' }
+                        }
+                        
+                        const userId = parseInt(args.user_id)
+                        
+                        // 发送戳一戳消息段
+                        const pokeMsg = { type: 'poke', data: { qq: userId } }
+                        await e.reply(pokeMsg)
+                        
+                        return { success: true, user_id: userId, message: `已发送戳一戳给 ${userId}` }
+                    } catch (err) {
+                        return { success: false, error: `发送戳一戳消息失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'send_face',
+                description: '发送QQ表情',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        face_id: { type: 'number', description: '表情ID，常用：0=惊讶、1=撇嘴、2=色、4=酷、5=流泪、6=害羞、7=闭嘴、8=睡、14=微笑、21=可爱、66=爱心、277=汪汪' },
+                        text: { type: 'string', description: '附加的文字消息（可选）' }
+                    },
+                    required: ['face_id']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const e = ctx.getEvent()
+                        if (!e) {
+                            return { success: false, error: '无法获取会话上下文' }
+                        }
+                        
+                        const msgs = []
+                        if (args.text) {
+                            msgs.push({ type: 'text', text: args.text })
+                        }
+                        msgs.push({ type: 'face', id: args.face_id })
+                        
+                        await e.reply(msgs)
+                        return { success: true, face_id: args.face_id, message: '表情已发送' }
+                    } catch (err) {
+                        return { success: false, error: `发送表情失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'get_weather',
+                description: '获取天气信息（需要联网）',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        city: { type: 'string', description: '城市名称，如"北京"、"上海"' }
+                    },
+                    required: ['city']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        // 使用 wttr.in 免费天气API
+                        const city = encodeURIComponent(args.city)
+                        const response = await fetch(`https://wttr.in/${city}?format=j1&lang=zh`)
+                        if (!response.ok) {
+                            return { success: false, error: `获取天气失败: ${response.status}` }
+                        }
+                        const data = await response.json()
+                        const current = data.current_condition?.[0]
+                        const location = data.nearest_area?.[0]
+                        
+                        if (!current) {
+                            return { success: false, error: '无法解析天气数据' }
+                        }
+                        
+                        return {
+                            success: true,
+                            city: location?.areaName?.[0]?.value || args.city,
+                            temperature: `${current.temp_C}°C`,
+                            feels_like: `${current.FeelsLikeC}°C`,
+                            humidity: `${current.humidity}%`,
+                            weather: current.lang_zh?.[0]?.value || current.weatherDesc?.[0]?.value,
+                            wind: `${current.winddir16Point} ${current.windspeedKmph}km/h`,
+                            visibility: `${current.visibility}km`,
+                            uv_index: current.uvIndex
+                        }
+                    } catch (err) {
+                        return { success: false, error: `获取天气失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'search_music',
+                description: '搜索音乐并返回结果',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        keyword: { type: 'string', description: '搜索关键词' },
+                        platform: { type: 'string', description: '平台：qq/163/kugou，默认qq' }
+                    },
+                    required: ['keyword']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const keyword = encodeURIComponent(args.keyword)
+                        const platform = args.platform || 'qq'
+                        
+                        // 使用公共API搜索音乐
+                        let apiUrl
+                        if (platform === '163' || platform === 'netease') {
+                            apiUrl = `https://music.163.com/api/search/get/web?s=${keyword}&type=1&limit=5`
+                        } else {
+                            // QQ音乐搜索
+                            apiUrl = `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=${keyword}&format=json&n=5`
+                        }
+                        
+                        const response = await fetch(apiUrl, {
+                            headers: { 'User-Agent': 'Mozilla/5.0' }
+                        })
+                        
+                        if (!response.ok) {
+                            return { success: false, error: '搜索失败' }
+                        }
+                        
+                        const data = await response.json()
+                        let songs = []
+                        
+                        if (platform === '163' || platform === 'netease') {
+                            songs = (data.result?.songs || []).slice(0, 5).map(s => ({
+                                id: s.id,
+                                name: s.name,
+                                artist: s.artists?.map(a => a.name).join('/') || '未知',
+                                platform: '163'
+                            }))
+                        } else {
+                            songs = (data.data?.song?.list || []).slice(0, 5).map(s => ({
+                                id: s.songmid,
+                                name: s.songname,
+                                artist: s.singer?.map(a => a.name).join('/') || '未知',
+                                platform: 'qq'
+                            }))
+                        }
+                        
+                        return {
+                            success: true,
+                            keyword: args.keyword,
+                            platform,
+                            count: songs.length,
+                            songs,
+                            tip: '使用 send_music 工具发送音乐，传入对应的 id 和 platform'
+                        }
+                    } catch (err) {
+                        return { success: false, error: `搜索音乐失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'get_hitokoto',
+                description: '获取一言（随机句子/名言）',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        type: { type: 'string', description: '类型：a=动画、b=漫画、c=游戏、d=文学、e=原创、f=网络、g=其他、h=影视、i=诗词、j=网易云、k=哲学、l=抖机灵' }
+                    }
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        let url = 'https://v1.hitokoto.cn/?encode=json'
+                        if (args.type) {
+                            url += `&c=${args.type}`
+                        }
+                        
+                        const response = await fetch(url)
+                        if (!response.ok) {
+                            return { success: false, error: '获取失败' }
+                        }
+                        
+                        const data = await response.json()
+                        return {
+                            success: true,
+                            hitokoto: data.hitokoto,
+                            from: data.from || '未知',
+                            from_who: data.from_who || '',
+                            type: data.type
+                        }
+                    } catch (err) {
+                        return { success: false, error: `获取一言失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'dice_roll',
+                description: '掷骰子',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        dice: { type: 'string', description: '骰子表达式，如 "1d6"、"2d20"、"3d6+5"' },
+                        times: { type: 'number', description: '投掷次数，默认1' }
+                    },
+                    required: ['dice']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const diceExpr = args.dice.toLowerCase()
+                        const times = Math.min(args.times || 1, 10)
+                        
+                        // 解析骰子表达式
+                        const match = diceExpr.match(/^(\d*)d(\d+)([+-]\d+)?$/)
+                        if (!match) {
+                            return { success: false, error: '无效的骰子表达式，格式如: 1d6, 2d20+5' }
+                        }
+                        
+                        const count = parseInt(match[1]) || 1
+                        const sides = parseInt(match[2])
+                        const modifier = parseInt(match[3]) || 0
+                        
+                        if (count > 100 || sides > 1000) {
+                            return { success: false, error: '骰子数量或面数过大' }
+                        }
+                        
+                        const results = []
+                        for (let t = 0; t < times; t++) {
+                            const rolls = []
+                            for (let i = 0; i < count; i++) {
+                                rolls.push(Math.floor(Math.random() * sides) + 1)
+                            }
+                            const sum = rolls.reduce((a, b) => a + b, 0) + modifier
+                            results.push({
+                                rolls,
+                                modifier,
+                                total: sum
+                            })
+                        }
+                        
+                        return {
+                            success: true,
+                            expression: args.dice,
+                            times,
+                            results,
+                            summary: times === 1 
+                                ? `${args.dice} = ${results[0].total}`
+                                : results.map((r, i) => `#${i+1}: ${r.total}`).join(', ')
+                        }
+                    } catch (err) {
+                        return { success: false, error: `掷骰子失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'random_choice',
+                description: '从多个选项中随机选择',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        options: { 
+                            type: 'array', 
+                            items: { type: 'string' },
+                            description: '选项列表' 
+                        },
+                        count: { type: 'number', description: '选择数量，默认1' }
+                    },
+                    required: ['options']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const options = args.options
+                        if (!options || options.length === 0) {
+                            return { success: false, error: '请提供选项列表' }
+                        }
+                        
+                        const count = Math.min(args.count || 1, options.length)
+                        const shuffled = [...options].sort(() => Math.random() - 0.5)
+                        const selected = shuffled.slice(0, count)
+                        
+                        return {
+                            success: true,
+                            total_options: options.length,
+                            selected_count: count,
+                            result: count === 1 ? selected[0] : selected
+                        }
+                    } catch (err) {
+                        return { success: false, error: `随机选择失败: ${err.message}` }
+                    }
+                }
+            },
+
             // ==================== 当前上下文工具 ====================
             {
                 name: 'get_current_context',
@@ -2348,7 +2915,7 @@ export class BuiltinMcpServer {
                     }
 
                     if (!source && !replyMsgId) {
-                        logger.info('[GetReply] 当前消息没有引用')
+                        logger.debug('[GetReply] 当前消息没有引用')
                         return { success: true, has_reply: false, message: '当前消息没有引用其他消息' }
                     }
 
@@ -2454,7 +3021,7 @@ export class BuiltinMcpServer {
                     }
                     
                     // 输出解析日志
-                    logger.info('[GetReply]', parseLog.join('\n'))
+                    logger.debug('[GetReply]', parseLog.join(' | '))
                     
                     // 合并 source 和 fullMessage 的信息
                     const finalSource = source || {}
@@ -2745,7 +3312,7 @@ export class BuiltinMcpServer {
                     }
                     
                     // 输出解析日志
-                    logger.info('[GetForward]', parseLog.join('\n'))
+                    logger.debug('[GetForward]', parseLog.join(' | '))
                     
                     if (!msgs || !Array.isArray(msgs)) {
                         return { 

@@ -13,6 +13,8 @@ const __dirname = path.dirname(__filename)
 const pluginPath = path.resolve(__dirname, '..')
 
 let uping = false
+let upingTimeout = null // 超时自动解锁
+const UPING_TIMEOUT = 120000 // 2分钟超时
 
 /**
  * 插件更新
@@ -41,8 +43,15 @@ export class update extends plugin {
         if (!this.e.isMaster) return false
 
         if (uping) {
-            await this.reply('已有命令更新中..请勿重复操作')
-            return false
+            // 检查是否超时锁定
+            if (upingTimeout && Date.now() > upingTimeout) {
+                logger.warn('[Update] 检测到锁定超时，强制解锁')
+                uping = false
+                upingTimeout = null
+            } else {
+                await this.reply('已有命令更新中..请勿重复操作')
+                return false
+            }
         }
 
         // 检查git
@@ -70,6 +79,7 @@ export class update extends plugin {
             
             this.oldCommitId = await this.getcommitId()
             uping = true
+            upingTimeout = Date.now() + UPING_TIMEOUT
 
             let command = `git -C "${pluginPath}" pull --no-rebase`
             if (isForce) {
@@ -136,6 +146,7 @@ export class update extends plugin {
             return false
         } finally {
             uping = false
+            upingTimeout = null
         }
     }
 

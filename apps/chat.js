@@ -8,13 +8,6 @@ import { isDebugEnabled } from './Commands.js'
 function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
-
-/**
- * 消息去重与防护机制
- * 1. processedMessages: WeakMap存储已处理的事件对象
- * 2. recentMessageHashes: 存储最近消息的hash，用于检测重复消息
- * 3. sentMessageFingerprints: 存储机器人发送消息的指纹，用于防止自身循环
- */
 const processedMessages = new WeakMap()
 const recentMessageHashes = new Map() // hash -> timestamp
 const sentMessageFingerprints = new Map() // fingerprint -> timestamp (机器人发送的消息)
@@ -131,12 +124,6 @@ export function isMessageProcessed(e) {
     return false
 }
 
-/**
- * 检查是否是机器人自身的消息（防止自我触发）
- * 增强版：多重检测机制防止循环
- * @param {Object} e - 事件对象
- * @returns {boolean} true表示是自身消息，应该忽略
- */
 export function isSelfMessage(e) {
   try {
     // stdin 适配器是测试用，不应该被判断为自身消息

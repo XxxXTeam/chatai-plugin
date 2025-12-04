@@ -99,7 +99,10 @@ export class ChatListener extends plugin {
 
         // 处理消息
         try {
-            await this.handleChat(triggerCfg, triggerResult.msg)
+            await this.handleChat(triggerCfg, triggerResult.msg, {
+                persona: triggerResult.persona,
+                isPersonaPrefix: triggerResult.isPersonaPrefix
+            })
             return true
         } catch {
             return false
@@ -202,11 +205,17 @@ export class ChatListener extends plugin {
             }
         }
         
-        // 3. 前缀触发
+        // 3. 前缀触发（包括前缀人格）
         if (groupCfg.prefix) {
-            const result = this.checkPrefix(rawMsg, triggerCfg.prefixes)
+            const result = this.checkPrefix(rawMsg, triggerCfg.prefixes, triggerCfg.prefixPersonas)
             if (result.matched) {
-                return { triggered: true, msg: result.content, reason: `前缀[${result.prefix}]` }
+                return { 
+                    triggered: true, 
+                    msg: result.content, 
+                    reason: result.isPersonaPrefix ? `前缀人格[${result.prefix}]` : `前缀[${result.prefix}]`,
+                    persona: result.persona,
+                    isPersonaPrefix: result.isPersonaPrefix
+                }
             }
         }
         
@@ -231,18 +240,37 @@ export class ChatListener extends plugin {
     
     /**
      * 检查前缀（前缀视为@，如"残花你好"或"残花 你好"都能触发）
+     * @param {string} msg - 消息内容
+     * @param {string[]} prefixes - 普通前缀列表
+     * @param {Array} prefixPersonas - 前缀人格配置
      */
-    checkPrefix(msg, prefixes = []) {
-        // 过滤无效的 prefix 值
+    checkPrefix(msg, prefixes = [], prefixPersonas = []) {
+        // 1. 检查前缀人格（优先级更高）
+        if (Array.isArray(prefixPersonas) && prefixPersonas.length > 0) {
+            for (const persona of prefixPersonas) {
+                if (!persona?.prefix) continue
+                const prefix = persona.prefix.trim()
+                if (msg.startsWith(prefix)) {
+                    const content = msg.slice(prefix.length).trimStart()
+                    return { 
+                        matched: true, 
+                        prefix, 
+                        content,
+                        persona: persona.preset || persona.systemPrompt,
+                        isPersonaPrefix: true
+                    }
+                }
+            }
+        }
+        
+        // 2. 检查普通前缀
         if (!Array.isArray(prefixes)) prefixes = [prefixes]
         prefixes = prefixes.filter(p => p && typeof p === 'string' && p.trim()).map(p => p.trim())
         
         for (const prefix of prefixes) {
             if (msg.startsWith(prefix)) {
-                // 提取前缀后的内容（只去除开头空格，保留消息格式）
                 const content = msg.slice(prefix.length).trimStart()
-                // 即使内容为空也返回匹配成功（类似@机器人不说话）
-                return { matched: true, prefix, content: content }
+                return { matched: true, prefix, content, isPersonaPrefix: false }
             }
         }
         return { matched: false }
@@ -294,12 +322,16 @@ export class ChatListener extends plugin {
      * 处理聊天
      * @param {Object} triggerCfg - 触发配置
      * @param {string} processedMsg - 已处理的消息（去除前缀后）
+     * @param {Object} personaOptions - 前缀人格选项
      */
-    async handleChat(triggerCfg, processedMsg = null) {
+    async handleChat(triggerCfg, processedMsg = null, personaOptions = {}) {
         const e = this.e
         const userId = e.user_id?.toString()
         const groupId = e.group_id?.toString() || null
         const featuresConfig = config.get('features') || {}
+        
+        // 前缀人格配置
+        const { persona, isPersonaPrefix } = personaOptions
         
         // 解析用户消息
         const userMessage = await parseUserMessage(e, {
@@ -330,15 +362,23 @@ export class ChatListener extends plugin {
         ) || []
         
         
-        const result = await chatService.sendMessage({
+        // 构建请求选项
+        const chatOptions = {
             userId,
             message: textContent,
             images,
             event: e,
             mode: 'chat',
-            // 传递解析后的消息信息
             parsedMessage: userMessage
-        })
+        }
+        
+        // 如果使用前缀人格，传递人格配置
+        if (isPersonaPrefix && persona) {
+            chatOptions.prefixPersona = persona
+            logger.info(`[ChatListener] 使用前缀人格: ${persona.substring(0, 50)}...`)
+        }
+        
+        const result = await chatService.sendMessage(chatOptions)
 
         // 发送回复
         if (result.response && result.response.length > 0) {

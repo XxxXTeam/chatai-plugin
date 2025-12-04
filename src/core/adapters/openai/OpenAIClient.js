@@ -138,28 +138,32 @@ export class OpenAIClient extends AbstractClient {
             tool_choice: requestPayload.tool_choice,
         }))
 
-        // 打印工具列表（仅名称）
+        // 打印工具列表（仅名称）- 仅debug级别
         if (requestPayload.tools?.length > 0) {
             const toolNames = requestPayload.tools.map(t => t.function?.name).filter(Boolean)
-            logger.info('[OpenAI适配器] 可用工具:', toolNames.join(', '))
+            logger.debug('[OpenAI适配器] 可用工具:', toolNames.join(', '))
         }
 
-        // Log actual messages for debugging
-        logger.info('[OpenAI适配器] 实际Messages内容:', JSON.stringify(requestPayload.messages, null, 2))
+        // Log actual messages for debugging - 使用简化格式避免base64刷屏
+        if (logger.level === 'debug') {
+            const sanitizedMessages = this.sanitizeMessagesForLog(requestPayload.messages)
+            logger.debug('[OpenAI适配器] 实际Messages内容:', JSON.stringify(sanitizedMessages, null, 2))
+        }
 
         let chatCompletion
         try {
             chatCompletion = await client.chat.completions.create(requestPayload)
-            // Debug logging
-            logger.info('[OpenAI适配器] API响应:', JSON.stringify(chatCompletion).substring(0, 300))
             
-            // 完整打印 tool_calls 用于调试
+            // 简化响应日志
             const firstChoice = chatCompletion.choices?.[0]
-            if (firstChoice?.message?.tool_calls) {
-                logger.info('[OpenAI适配器] 完整tool_calls:', JSON.stringify(firstChoice.message.tool_calls, null, 2))
-            }
-            if (firstChoice?.finish_reason) {
-                logger.info('[OpenAI适配器] finish_reason:', firstChoice.finish_reason)
+            const toolCallCount = firstChoice?.message?.tool_calls?.length || 0
+            const hasContent = !!firstChoice?.message?.content
+            logger.info(`[OpenAI适配器] 响应: finish=${firstChoice?.finish_reason}, tools=${toolCallCount}, hasContent=${hasContent}`)
+            
+            // debug级别打印完整tool_calls
+            if (toolCallCount > 0) {
+                const toolNames = firstChoice.message.tool_calls.map(t => t.function?.name).join(', ')
+                logger.debug(`[OpenAI适配器] tool_calls: ${toolNames}`)
             }
         } catch (error) {
             // Log detailed error information from the API
@@ -315,37 +319,20 @@ export class OpenAIClient extends AbstractClient {
             }
         })
 
-        // Debug logging - log the request payload
-        logger.info('[OpenAI适配器] Streaming请求参数:', JSON.stringify({
+        // 简化日志
+        logger.info('[OpenAI适配器] Streaming请求:', JSON.stringify({
             model: requestPayload.model,
-            stream: requestPayload.stream,
-            temperature: requestPayload.temperature,
-            max_tokens: requestPayload.max_tokens,
-            max_completion_tokens: requestPayload.max_completion_tokens,
-            reasoning_effort: requestPayload.reasoning_effort,
             messages_count: requestPayload.messages?.length,
+            tools_count: requestPayload.tools?.length || 0,
         }))
-
-        // Log actual messages for debugging
-        logger.info('[OpenAI适配器] 实际Messages内容:', JSON.stringify(requestPayload.messages, null, 2))
 
         let stream
         try {
             stream = await client.chat.completions.create(requestPayload)
         } catch (error) {
-            // Log detailed error information from the API
-            logger.error('[OpenAI适配器] Streaming API错误详情:', {
-                status: error.status,
-                code: error.code,
-                type: error.type,
-                message: error.message,
-                error: error.error,
-                headers: error.headers
-            })
-            // Re-throw to be handled by caller
+            logger.error('[OpenAI适配器] Streaming API错误:', error.message)
             throw error
         }
-
 
         async function* generator() {
             let allReasoning = ''  // 累积所有reasoning_content
@@ -465,6 +452,40 @@ export class OpenAIClient extends AbstractClient {
         }
 
         return generator()
+    }
+
+    /**
+     * 简化消息内容用于日志，避免base64刷屏
+     * @param {Array} messages - 消息数组
+     * @returns {Array} 简化后的消息
+     */
+    sanitizeMessagesForLog(messages) {
+        if (!messages) return []
+        return messages.map(msg => {
+            const sanitized = { ...msg }
+            // 处理 content 数组（多模态消息）
+            if (Array.isArray(msg.content)) {
+                sanitized.content = msg.content.map(item => {
+                    if (item.type === 'image_url' && item.image_url?.url) {
+                        const url = item.image_url.url
+                        if (url.startsWith('data:')) {
+                            // base64 图片，只显示前50字符
+                            return { type: 'image_url', image_url: { url: url.substring(0, 50) + '...[base64 truncated]' } }
+                        }
+                        return item
+                    }
+                    if (item.type === 'text' && item.text?.length > 500) {
+                        return { type: 'text', text: item.text.substring(0, 500) + '...[truncated]' }
+                    }
+                    return item
+                })
+            }
+            // 处理 content 字符串
+            else if (typeof msg.content === 'string' && msg.content.length > 1000) {
+                sanitized.content = msg.content.substring(0, 1000) + '...[truncated]'
+            }
+            return sanitized
+        })
     }
 
     /**

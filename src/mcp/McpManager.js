@@ -615,7 +615,9 @@ export class McpManager {
         }
 
         try {
-            logger.info(`[MCP] Calling tool: ${name}`, args)
+            // 简化日志：只显示工具名和关键参数
+            const argsPreview = this.truncateArgs(args)
+            logger.debug(`[MCP] Calling: ${name} ${argsPreview}`)
             let result
 
             // 内置工具、JS工具、自定义工具都使用内置服务器处理
@@ -673,7 +675,8 @@ export class McpManager {
         }
 
         const startTime = Date.now()
-        logger.info(`[MCP] 并行执行 ${toolCalls.length} 个工具调用`)
+        const toolNames = toolCalls.map(t => t.name).join(', ')
+        logger.debug(`[MCP] 并行执行: ${toolNames}`)
 
         // 按服务器分组，同一服务器的调用可能需要串行
         const serverGroups = new Map()
@@ -712,7 +715,7 @@ export class McpManager {
         const totalDuration = Date.now() - startTime
         const successCount = results.filter(r => r.status === 'fulfilled' && r.value.success).length
 
-        logger.info(`[MCP] 并行执行完成: ${successCount}/${toolCalls.length} 成功, 耗时 ${totalDuration}ms`)
+        logger.debug(`[MCP] 并行完成: ${successCount}/${toolCalls.length}, ${totalDuration}ms`)
 
         return results.map(r => r.status === 'fulfilled' ? r.value : {
             name: 'unknown',
@@ -883,11 +886,33 @@ export class McpManager {
     }
 
     /**
+     * 截断参数用于日志显示
+     * @param {Object} args - 工具参数
+     * @param {number} maxLen - 最大长度
+     * @returns {string} 截断后的参数预览
+     */
+    truncateArgs(args, maxLen = 100) {
+        if (!args || Object.keys(args).length === 0) return ''
+        try {
+            let str = JSON.stringify(args)
+            // 移除 base64 内容
+            str = str.replace(/data:[^;]+;base64,[^"]+/g, '[base64]')
+            // 截断长字符串
+            if (str.length > maxLen) {
+                str = str.substring(0, maxLen) + '...'
+            }
+            return str
+        } catch {
+            return '[args]'
+        }
+    }
+
+    /**
      * Clear tool result cache
      */
     clearCache() {
         this.toolResultCache.clear()
-        logger.info('[MCP] Tool result cache cleared')
+        logger.debug('[MCP] Tool result cache cleared')
     }
 
     /**

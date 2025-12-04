@@ -93,31 +93,49 @@ export class PokeHandler extends plugin {
             return false
         }
         
-        // 获取操作者和目标（多平台兼容）
-        const operator = e.operator_id || e.user_id || e.sender_id
-        const target = e.target_id || e.poked_uid || e.target
-        
         // 获取机器人ID（多平台兼容）
         const bot = e.bot || Bot
-        const botId = bot?.uin || e.self_id || bot?.self_id
         
         // 收集所有可能的机器人ID
         const botIds = new Set()
-        if (botId) botIds.add(String(botId))
+        if (bot?.uin) botIds.add(String(bot.uin))
         if (e.self_id) botIds.add(String(e.self_id))
         if (bot?.self_id) botIds.add(String(bot.self_id))
         if (Bot?.uin) botIds.add(String(Bot.uin))
+        // NapCat/Lagrange 可能使用这些字段
+        if (bot?.config?.qq) botIds.add(String(bot.config.qq))
+        if (bot?.qq) botIds.add(String(bot.qq))
+        
+        // 获取操作者和目标（多平台兼容）
+        // NapCat: operator_id=戳人者, target_id=被戳者
+        // icqq: user_id=戳人者, target=被戳者
+        // OneBot: user_id=戳人者, target_id=被戳者
+        const operator = e.operator_id || e.user_id || e.sender_id
+        const target = e.target_id || e.poked_uid || e.target
+        
+        // 如果没有 target，可能是不支持的事件格式
+        if (!target && !operator) {
+            logger.debug('[AI-Poke] 忽略：无法获取操作者和目标')
+            return false
+        }
         
         // 严格检查：只响应戳机器人自己
         const targetStr = String(target)
-        if (!botIds.has(targetStr)) {
+        if (target && !botIds.has(targetStr)) {
+            // 别人戳别人，忽略
             logger.debug(`[AI-Poke] 忽略：target=${target} 不是bot (botIds=${[...botIds].join(',')})`)
             return false
         }
         
-        // 防止自己戳自己触发
+        // 防止机器人自己触发
         if (operator && botIds.has(String(operator))) {
-            logger.debug('[AI-Poke] 忽略：机器人自己戳自己')
+            logger.debug('[AI-Poke] 忽略：机器人自己戳人')
+            return false
+        }
+        
+        // 双重验证：确保 operator 和 target 不相同（排除自己戳自己）
+        if (operator && target && String(operator) === String(target)) {
+            logger.debug('[AI-Poke] 忽略：自己戳自己')
             return false
         }
         
@@ -213,7 +231,38 @@ export class PrivatePokeHandler extends plugin {
             return false
         }
         
+        // 获取机器人ID（多平台兼容）
+        const bot = e.bot || Bot
+        const botIds = new Set()
+        if (bot?.uin) botIds.add(String(bot.uin))
+        if (e.self_id) botIds.add(String(e.self_id))
+        if (bot?.self_id) botIds.add(String(bot.self_id))
+        if (Bot?.uin) botIds.add(String(Bot.uin))
+        if (bot?.config?.qq) botIds.add(String(bot.config.qq))
+        if (bot?.qq) botIds.add(String(bot.qq))
+        
+        // 获取操作者和目标
         const operator = e.operator_id || e.user_id || e.sender_id
+        const target = e.target_id || e.poked_uid || e.target
+        
+        // 私聊戳一戳也要检查目标是否是机器人
+        if (target && !botIds.has(String(target))) {
+            logger.debug(`[AI-PrivatePoke] 忽略：target=${target} 不是bot`)
+            return false
+        }
+        
+        // 防止机器人自己触发
+        if (operator && botIds.has(String(operator))) {
+            logger.debug('[AI-PrivatePoke] 忽略：机器人自己触发')
+            return false
+        }
+        
+        // 排除自己戳自己
+        if (operator && target && String(operator) === String(target)) {
+            logger.debug('[AI-PrivatePoke] 忽略：自己戳自己')
+            return false
+        }
+        
         const nickname = await getUserNickname(e, operator)
         logger.info(`[AI-PrivatePoke] ${nickname}(${operator}) 私聊戳了机器人`)
         
@@ -286,26 +335,92 @@ export class MessageReactionHandler extends plugin {
             return false
         }
         
+        // 获取机器人ID（多平台兼容）
+        const bot = e.bot || Bot
+        const botIds = new Set()
+        if (bot?.uin) botIds.add(String(bot.uin))
+        if (e.self_id) botIds.add(String(e.self_id))
+        if (bot?.self_id) botIds.add(String(bot.self_id))
+        if (Bot?.uin) botIds.add(String(Bot.uin))
+        
+        // 检查被回应的消息是否是机器人发的
+        // NapCat: e.message_sender_id 表示原消息发送者
+        // 其他适配器可能需要通过 message_id 获取
+        let msgSenderId = e.message_sender_id || e.target_id
+        
+        // 如果没有直接的发送者ID，尝试通过message_id获取原消息
+        if (!msgSenderId && e.message_id) {
+            try {
+                if (typeof bot?.getMsg === 'function') {
+                    const originalMsg = await bot.getMsg(e.message_id)
+                    msgSenderId = originalMsg?.sender?.user_id || originalMsg?.user_id
+                }
+            } catch (err) {
+                logger.debug(`[AI-Reaction] 获取原消息失败: ${err.message}`)
+            }
+        }
+        
+        // 如果仍然无法确定原消息发送者，跳过检查（兼容旧版本）
+        if (msgSenderId && !botIds.has(String(msgSenderId))) {
+            // 不是对机器人消息的回应，忽略
+            logger.debug(`[AI-Reaction] 忽略：回应的消息发送者(${msgSenderId})不是机器人`)
+            return false
+        }
+        
+        // 如果无法确定原消息发送者，默认不响应（安全策略）
+        if (!msgSenderId) {
+            logger.debug('[AI-Reaction] 忽略：无法确定原消息发送者')
+            return false
+        }
+        
+        // 防止机器人自己触发
+        if (e.user_id && botIds.has(String(e.user_id))) {
+            logger.debug('[AI-Reaction] 忽略：机器人自己的表情回应')
+            return false
+        }
+        
         const nickname = await getUserNickname(e, e.user_id)
+        
+        // 获取表情ID（多平台兼容）
+        // NapCat: e.likes 是数组 [{emoji_id, count}]
+        // 其他: e.emoji_id 直接是ID
+        let emojiId = e.emoji_id
+        if (!emojiId && e.likes && Array.isArray(e.likes) && e.likes.length > 0) {
+            emojiId = e.likes[0].emoji_id || e.likes[0].id
+        }
+        if (!emojiId && e.face_id) {
+            emojiId = e.face_id
+        }
         
         // 表情名称映射
         const emojiMap = {
             '76': '赞👍',
-            '124': '爱心❤️',
+            '124': '爱心❤️', 
             '66': '笑脸😊',
             '277': '火焰🔥',
             '179': '疑问❓',
-            '42': '鼓掌👏'
+            '42': '鼓掌👏',
+            '32': '厉害👍',
+            '1': '撇嘴',
+            '2': '色',
+            '4': '得意',
+            '5': '流泪',
+            '8': '睡',
+            '9': '大哭',
+            '10': '尴尬',
+            '12': '调皮',
+            '14': '微笑',
+            '21': '可爱'
         }
         
-        const emojiDesc = emojiMap[String(e.emoji_id)] || `表情(${e.emoji_id})`
+        const emojiDesc = emojiId ? (emojiMap[String(emojiId)] || `表情[${emojiId}]`) : '未知表情'
         
-        logger.info(`[AI-Reaction] ${nickname}(${e.user_id}) 对消息做出了 ${emojiDesc} 回应`)
+        logger.info(`[AI-Reaction] ${nickname}(${e.user_id}) 对机器人消息做出了 ${emojiDesc} 回应`)
         
         try {
             const { chatService } = await import('../src/services/ChatService.js')
             
-            const eventDesc = `[事件通知] ${nickname} 对你之前的消息做出了"${emojiDesc}"的表情回应。如果你觉得有必要回应可以简短回复，否则可以忽略。`
+            const eventDesc = `[事件通知] ${nickname} 对你之前的消息做出了"${emojiDesc}"的表情回应。这是对你消息的正面反馈，你可以简短回应表示感谢或互动，也可以选择不回复。`
             
             const result = await chatService.sendMessage({
                 userId: String(e.user_id),

@@ -50,7 +50,10 @@ tools:
 builtinTools:
   enabled: true
   allowedTools: []
-  disabledTools: []
+  disabledTools:
+    - kick_member
+    - mute_member
+    - recall_message
   dangerousTools:
     - kick_member
     - mute_member
@@ -180,12 +183,17 @@ features:
     triggerOnTool: false
     triggerAlways: false
     maxTextLength: 500
+  imageGen:
+    enabled: true
+    apiUrl: https://business.928100.xyz/v1/chat/completions
+    apiKey: X-Free
+    model: gemini-3-pro-image
 streaming:
   enabled: true
 trigger:
   private:
     enabled: true
-    mode: prefix
+    mode: always
   group:
     enabled: true
     at: true
@@ -203,8 +211,9 @@ trigger:
   whitelistUsers: []
   blacklistGroups: []
   whitelistGroups: []
+  prefixPersonas: []
 listener:
-  enabled: false
+  enabled: true
   triggerMode: at
   triggerPrefix: "#chat"
   triggerKeywords: []
@@ -219,7 +228,7 @@ listener:
   whitelistUsers: []
   blacklistGroups: []
   whitelistGroups: []
-  priority: -.inf
+  priority: 99999
 customTools:
   - name: execute_command
     description: 执行shell命令（注意安全）
@@ -231,24 +240,37 @@ customTools:
           description: 要执行的命令
       required:
         - command
-    handler: |-
+    handler: >-
       const { command } = args
 
+
       // 安全检查 - 禁止危险命令
+
       const dangerous = ['rm -rf', 'mkfs', 'dd if=', ':(){', 'chmod -R 777']
+
       if (dangerous.some(d => command.includes(d))) {
         return { error: '检测到危险命令，已拒绝执行' }
       }
 
+
       try {
         const { stdout, stderr } = await runtime.utils.exec(command)
+        // 返回详细的执行结果，让模型明确知道命令已成功执行
+        const result = {
+          success: true,
+          command: command,
+          stdout: stdout || '(无输出)',
+          stderr: stderr || '(无错误)'
+        }
+        // 返回结构化结果，模型可以清楚看到命令已执行成功
         return {
-          text: stdout || '命令执行完成',
-          stdout,
-          stderr
+          text: `命令执行成功\n命令: ${command}\n输出: ${stdout || '(命令已执行，无标准输出)'}\n${stderr ? '错误输出: ' + stderr : ''}`.trim()
         }
       } catch (error) {
-        return { error: `执行失败: ${error.message}` }
+        return { 
+          text: `命令执行失败\n命令: ${command}\n错误: ${error.message}`,
+          error: error.message 
+        }
       }
     custom: true
     createdAt: 1764500123529

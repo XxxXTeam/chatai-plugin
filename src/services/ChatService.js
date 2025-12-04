@@ -46,7 +46,8 @@ export class ChatService {
             adapterType,
             event, // Yunzai event for tool context
             mode = 'chat',
-            debugMode = false  // 调试模式
+            debugMode = false,  // 调试模式
+            prefixPersona = null  // 前缀人格（独立于普通人设）
         } = options
 
         // 调试信息收集
@@ -280,6 +281,12 @@ export class ChatService {
             }
         } catch (e) { 
             logger.warn(`[ChatService] 获取独立人设失败:`, e.message) 
+        }
+        
+        // 1.1.5 前缀人格覆盖（最高优先级，仅限本次对话）
+        if (prefixPersona) {
+            systemPrompt = prefixPersona
+            logger.info(`[ChatService] 使用前缀人格覆盖，内容前50字: ${prefixPersona.substring(0, 50)}...`)
         }
 
         // 1.2 Memory Context
