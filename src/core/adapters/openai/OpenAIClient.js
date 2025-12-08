@@ -175,6 +175,27 @@ export class OpenAIClient extends AbstractClient {
                 error: error.error,
                 headers: error.headers
             })
+            
+            // 检查是否启用错误时自动结清功能
+            try {
+                const config = (await import('../../../../config/config.js')).default
+                const autoCleanConfig = config.get('features.autoCleanOnError')
+                const autoCleanEnabled = autoCleanConfig?.enabled === true
+                
+                // 如果启用了自动结清，尝试回复用户
+                if (autoCleanEnabled && options.event && options.event.reply) {
+                    try {
+                        const errorMsg = error.message || '未知错误'
+                        await options.event.reply(`⚠️ API错误: ${errorMsg}\n已自动结清历史，请重新开始对话。`, true)
+                        logger.info('[OpenAI适配器] 已向用户回复错误信息')
+                    } catch (replyErr) {
+                        logger.error('[OpenAI适配器] 回复用户失败:', replyErr.message)
+                    }
+                }
+            } catch (configErr) {
+                logger.debug('[OpenAI适配器] 获取配置失败:', configErr.message)
+            }
+            
             // Re-throw to be handled by caller
             throw error
         }
