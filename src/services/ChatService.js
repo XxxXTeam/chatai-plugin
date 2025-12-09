@@ -35,6 +35,68 @@ export class ChatService {
      * Send a chat message with optional images
      */
     async sendMessage(options) {
+        try {
+            return await this._sendMessageImpl(options)
+        } catch (error) {
+            // 检查是否启用错误时自动结清功能
+            const autoCleanConfig = config.get('features.autoCleanOnError')
+            const autoCleanEnabled = autoCleanConfig?.enabled === true
+            
+            if (autoCleanEnabled) {
+                // 发生错误时自动执行结清操作（参考xiaozuo插件的autoclear.js）
+                logger.error('[ChatService] sendMessage 出错，执行自动结清:', error.message)
+                
+                try {
+                    // 提取纯userId（去除群号前缀）
+                    const fullUserId = String(options.userId)
+                    const pureUserId = fullUserId.includes('_') ? fullUserId.split('_').pop() : fullUserId
+                    const groupId = options.event?.group_id ? String(options.event.group_id) : null
+                    
+                    // 导入所需服务
+                    const historyManager = (await import("../core/utils/history.js")).default
+                    
+                    // 获取当前格式的 conversationId（使用纯userId）
+                    const currentConversationId = contextManager.getConversationId(pureUserId, groupId)
+                    
+                    // 兼容旧格式：group:群号:user:QQ号（使用纯userId）
+                    const legacyConversationId = groupId ? `group:${groupId}:user:${pureUserId}` : `user:${pureUserId}`
+                    
+                    // 删除当前格式
+                    await historyManager.deleteConversation(currentConversationId)
+                    await contextManager.cleanContext(currentConversationId)
+                    
+                    // 删除旧格式（如果不同）
+                    if (legacyConversationId !== currentConversationId) {
+                        await historyManager.deleteConversation(legacyConversationId)
+                        await contextManager.cleanContext(legacyConversationId)
+                    }
+                    
+                    logger.info(`[ChatService] 自动结清完成: pureUserId=${pureUserId}, groupId=${groupId}`)
+                    
+                    // 向用户回复结清提示
+                    if (options.event && options.event.reply) {
+                        try {
+                            await options.event.reply(`历史对话已自动清理`, true)
+                        } catch (replyErr) {
+                            logger.error('[ChatService] 回复结清提示失败:', replyErr.message)
+                        }
+                    }
+                } catch (clearErr) {
+                    logger.error('[ChatService] 自动结清失败:', clearErr.message)
+                }
+            } else {
+                logger.warn('[ChatService] 错误时自动结清功能已禁用，错误信息:', error.message)
+            }
+            
+            // 重新抛出原始错误，让上层处理
+            throw error
+        }
+    }
+
+    /**
+     * Internal implementation of sendMessage
+     */
+    async _sendMessageImpl(options) {
         const {
             userId,
             message,

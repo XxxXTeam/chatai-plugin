@@ -92,6 +92,10 @@ const config = reactive({
       apiUrl: 'https://business.928100.xyz/v1/chat/completions',
       apiKey: 'X-Free',
       model: 'gemini-3-pro-image'
+    },
+    autoCleanOnError: {
+      enabled: false,
+      notifyUser: true
     }
   },
   memory: {
@@ -188,6 +192,7 @@ async function fetchConfig() {
         if (data.features.userPortrait) Object.assign(config.features.userPortrait, data.features.userPortrait)
         if (data.features.poke) Object.assign(config.features.poke, data.features.poke)
         if (data.features.reaction) Object.assign(config.features.reaction, data.features.reaction)
+        if (data.features.autoCleanOnError) Object.assign(config.features.autoCleanOnError, data.features.autoCleanOnError)
       }
       if (data.memory) Object.assign(config.memory, data.memory)
       // 加载trigger配置（新结构）
@@ -741,6 +746,24 @@ onMounted(() => {
         </n-form-item>
         <n-form-item label="模型名称">
           <n-input v-model:value="config.features.imageGen.model" placeholder="gemini-3-pro-image" :disabled="!config.features.imageGen.enabled" />
+        </n-form-item>
+
+        <n-divider title-placement="left">错误处理</n-divider>
+        <n-form-item label="错误时自动结清">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.features.autoCleanOnError.enabled" />
+            </template>
+            当API返回错误时，自动删除该用户的对话历史，防止错误堆积
+          </n-tooltip>
+        </n-form-item>
+        <n-form-item label="提示用户">
+          <n-tooltip trigger="hover">
+            <template #trigger>
+              <n-switch v-model:value="config.features.autoCleanOnError.notifyUser" :disabled="!config.features.autoCleanOnError.enabled" />
+            </template>
+            结清后是否提示用户已自动结清历史
+          </n-tooltip>
         </n-form-item>
 
         <n-divider title-placement="left">长期记忆</n-divider>

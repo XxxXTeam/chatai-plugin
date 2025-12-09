@@ -378,26 +378,31 @@ export class ChatListener extends plugin {
             logger.info(`[ChatListener] 使用前缀人格: ${persona.substring(0, 50)}...`)
         }
         
-        const result = await chatService.sendMessage(chatOptions)
+        try {
+            const result = await chatService.sendMessage(chatOptions)
 
-        // 发送回复
-        if (result.response && result.response.length > 0) {
-            const replyContent = this.formatReply(result.response)
-            if (replyContent) {
-                // 记录发送的消息（用于防止自身消息循环）
-                const textContent = result.response
-                    .filter(c => c.type === 'text')
-                    .map(c => c.text)
-                    .join('\n')
-                if (textContent) {
-                    recordSentMessage(textContent)
+            // 发送回复
+            if (result.response && result.response.length > 0) {
+                const replyContent = this.formatReply(result.response)
+                if (replyContent) {
+                    // 记录发送的消息（用于防止自身消息循环）
+                    const textContent = result.response
+                        .filter(c => c.type === 'text')
+                        .map(c => c.text)
+                        .join('\n')
+                    if (textContent) {
+                        recordSentMessage(textContent)
+                    }
+                    
+                    await this.reply(replyContent, true)
                 }
-                
-                await this.reply(replyContent, true)
             }
-        }
 
-        return true
+            return true
+        } catch (error) {
+            logger.error('[ChatListener] 对话出错:', error.message)
+            return false
+        }
     }
 
     /**

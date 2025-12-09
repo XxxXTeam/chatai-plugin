@@ -188,6 +188,9 @@ features:
     apiUrl: https://business.928100.xyz/v1/chat/completions
     apiKey: X-Free
     model: gemini-3-pro-image
+  autoCleanOnError:
+    enabled: false
+    notifyUser: true
 streaming:
   enabled: true
 trigger:
