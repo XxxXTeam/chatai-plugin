@@ -490,6 +490,57 @@ export class ContextManager {
             assistantMessages: history.filter(m => m.role === 'assistant').length
         }
     }
+
+    /**
+     * 检查对话轮数并自动结束
+     * @param {string} conversationId
+     * @returns {Promise<{shouldEnd: boolean, currentRounds: number, maxRounds: number}>}
+     */
+    async checkAutoEnd(conversationId) {
+        const autoEndConfig = config.get('context.autoEnd') || {}
+        
+        if (!autoEndConfig.enabled) {
+            return { shouldEnd: false, currentRounds: 0, maxRounds: 0 }
+        }
+        
+        const maxRounds = autoEndConfig.maxRounds || 50
+        const history = await historyManager.getHistory(undefined, conversationId)
+        
+        // 计算对话轮数（每次用户消息+AI回复算一轮）
+        const userMessages = history.filter(m => m.role === 'user').length
+        const currentRounds = userMessages
+        
+        const shouldEnd = currentRounds >= maxRounds
+        
+        if (shouldEnd) {
+            logger.info(`[ContextManager] 对话达到轮数限制: ${conversationId}, ${currentRounds}/${maxRounds}`)
+        }
+        
+        return {
+            shouldEnd,
+            currentRounds,
+            maxRounds,
+            notifyUser: autoEndConfig.notifyUser !== false,
+            notifyMessage: autoEndConfig.notifyMessage || '对话已达到最大轮数限制，已自动开始新会话。'
+        }
+    }
+
+    /**
+     * 执行自动结束对话
+     * @param {string} conversationId
+     * @returns {Promise<boolean>}
+     */
+    async executeAutoEnd(conversationId) {
+        try {
+            await historyManager.deleteConversation(conversationId)
+            await this.cleanContext(conversationId)
+            logger.info(`[ContextManager] 自动结束对话成功: ${conversationId}`)
+            return true
+        } catch (error) {
+            logger.error(`[ContextManager] 自动结束对话失败: ${error.message}`)
+            return false
+        }
+    }
 }
 
 export const contextManager = new ContextManager()

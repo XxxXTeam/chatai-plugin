@@ -26,6 +26,12 @@ llm:
     toolCall: ""
     search: ""
     reasoning: ""
+  fallback:
+    enabled: true
+    models: []
+    maxRetries: 3
+    retryDelay: 500
+    notifyOnFallback: false
   chatModel: gemini-3-pro-preview
   codeModel: gemini-3-pro-preview
   translationModel: gemini-3-pro-preview
@@ -124,6 +130,11 @@ context:
     enabled: true
     maxHistoryMessages: 20
     includeToolCalls: false
+  autoEnd:
+    enabled: false
+    maxRounds: 50
+    notifyUser: true
+    notifyMessage: 对话已达到最大轮数限制，已自动开始新会话。
 memory:
   enabled: true
   storage: database
@@ -146,8 +157,8 @@ presets:
   perGroupPreset: false
 personality:
   priority:
-    - group_user
     - group
+    - group_user
     - user
     - default
   useIndependent: true

@@ -310,20 +310,35 @@ ${dialogText}
             // 获取最近有对话的用户
             const conversations = databaseService.getConversations()
             const processedUsers = new Set()
+            const minPollInterval = (config.get('memory.minPollInterval') || 30) * 60 * 1000 // 默认30分钟
+            const now = Date.now()
             
             for (const conv of conversations) {
                 const userId = conv.userId
                 if (processedUsers.has(userId)) continue
                 processedUsers.add(userId)
                 
-                // 检查是否需要处理（距离上次处理超过间隔）
+                // 检查用户上次处理时间（确保不会过于频繁）
                 const lastPoll = this.lastPollTime.get(userId) || 0
-                const pollInterval = (config.get('memory.pollInterval') || 5) * 60 * 1000
-                if (Date.now() - lastPoll < pollInterval) continue
+                if (now - lastPoll < minPollInterval) continue
+                
+                // 检查对话是否有新消息（距离上次轮询后是否有新对话）
+                const convTime = conv.updatedAt || conv.timestamp || 0
+                if (convTime <= lastPoll) continue
                 
                 // 分析该用户的最近对话
                 await this.analyzeUserConversations(userId)
-                this.lastPollTime.set(userId, Date.now())
+                this.lastPollTime.set(userId, now)
+                
+                // 避免一次处理太多用户，限制单次轮询最多处理10个用户
+                if (processedUsers.size >= 10) {
+                    logger.debug(`[MemoryManager] 单次轮询处理了 ${processedUsers.size} 个用户，等待下次轮询`)
+                    break
+                }
+            }
+            
+            if (processedUsers.size > 0) {
+                logger.debug(`[MemoryManager] 本次轮询处理了 ${processedUsers.size} 个用户`)
             }
         } catch (error) {
             logger.warn('[MemoryManager] 轮询处理失败:', error.message)
@@ -545,6 +560,24 @@ ${dialogText}
 
         try {
             await this.init()
+            
+            // 检查记忆数量上限
+            const maxMemories = config.get('memory.maxMemories') || 100
+            const existingMemories = databaseService.getMemories(userId, maxMemories + 10)
+            
+            // 如果超过上限，删除最旧的记忆
+            if (existingMemories.length >= maxMemories) {
+                // 按时间排序，保留最新的 maxMemories - 1 条
+                const sortedMemories = existingMemories.sort((a, b) => 
+                    (b.timestamp || 0) - (a.timestamp || 0)
+                )
+                const memoriesToDelete = sortedMemories.slice(maxMemories - 1)
+                for (const m of memoriesToDelete) {
+                    databaseService.deleteMemory(m.id)
+                }
+                logger.debug(`[MemoryManager] 清理旧记忆 ${memoriesToDelete.length} 条，用户 ${userId}`)
+            }
+            
             const id = databaseService.saveMemory(userId, content, {
                 source: options.source || 'manual',
                 importance: options.importance || 5,

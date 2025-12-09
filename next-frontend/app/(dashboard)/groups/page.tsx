@@ -1,0 +1,325 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
+import { 
+  Dialog, 
+  DialogContent, 
+  DialogDescription, 
+  DialogHeader, 
+  DialogTitle, 
+  DialogTrigger,
+  DialogFooter
+} from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { scopeApi, presetsApi } from '@/lib/api'
+import { toast } from 'sonner'
+import { Plus, Trash2, Loader2, Users, RefreshCw, Settings } from 'lucide-react'
+
+interface GroupScope {
+  groupId: string
+  groupName?: string
+  presetId?: string
+  enabled: boolean
+  triggerMode?: string
+  settings?: any
+}
+
+interface Preset {
+  id: string
+  name: string
+}
+
+export default function GroupsPage() {
+  const [groups, setGroups] = useState<GroupScope[]>([])
+  const [presets, setPresets] = useState<Preset[]>([])
+  const [loading, setLoading] = useState(true)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [editingGroup, setEditingGroup] = useState<GroupScope | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+
+  const [form, setForm] = useState({
+    groupId: '',
+    groupName: '',
+    presetId: '__default__',
+    enabled: true,
+    triggerMode: 'default',
+  })
+
+  const fetchData = async () => {
+    try {
+      const [groupsRes, presetsRes]: any[] = await Promise.all([
+        scopeApi.getGroups(),
+        presetsApi.list()
+      ])
+      setGroups(groupsRes?.data || [])
+      setPresets(presetsRes?.data || [])
+    } catch (error) {
+      toast.error('加载数据失败')
+      console.error(error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchData()
+  }, [])
+
+  const resetForm = () => {
+    setForm({
+      groupId: '',
+      groupName: '',
+      presetId: '__default__',
+      enabled: true,
+      triggerMode: 'default',
+    })
+    setEditingGroup(null)
+  }
+
+  const handleOpenDialog = (group?: GroupScope) => {
+    if (group) {
+      setEditingGroup(group)
+      setForm({
+        groupId: group.groupId,
+        groupName: group.groupName || '',
+        presetId: group.presetId || '__default__',
+        enabled: group.enabled ?? true,
+        triggerMode: group.triggerMode || 'default',
+      })
+    } else {
+      resetForm()
+    }
+    setDialogOpen(true)
+  }
+
+  const handleSave = async () => {
+    if (!form.groupId) {
+      toast.error('请填写群号')
+      return
+    }
+
+    setSaving(true)
+    try {
+      await scopeApi.updateGroup(form.groupId, {
+        groupName: form.groupName,
+        presetId: form.presetId === '__default__' ? '' : form.presetId,
+        enabled: form.enabled,
+        triggerMode: form.triggerMode,
+      })
+      toast.success('群配置已保存')
+      setDialogOpen(false)
+      resetForm()
+      fetchData()
+    } catch (error) {
+      toast.error('保存失败')
+      console.error(error)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const filteredGroups = groups.filter(group => 
+    group.groupId.includes(searchQuery) || 
+    group.groupName?.includes(searchQuery)
+  )
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-8 w-32" />
+          <Skeleton className="h-10 w-24" />
+        </div>
+        <div className="space-y-3">
+          {[...Array(5)].map((_, i) => (
+            <Card key={i}>
+              <CardContent className="p-4">
+                <Skeleton className="h-16 w-full" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold">群组管理</h2>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={fetchData}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            刷新
+          </Button>
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogTrigger asChild>
+              <Button onClick={() => handleOpenDialog()}>
+                <Plus className="mr-2 h-4 w-4" />
+                添加群
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{editingGroup ? '编辑群配置' : '添加群'}</DialogTitle>
+                <DialogDescription>配置群聊个性化设置</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="groupId">群号</Label>
+                  <Input
+                    id="groupId"
+                    value={form.groupId}
+                    onChange={(e) => setForm({ ...form, groupId: e.target.value })}
+                    placeholder="123456789"
+                    disabled={!!editingGroup}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="groupName">群名称</Label>
+                  <Input
+                    id="groupName"
+                    value={form.groupName}
+                    onChange={(e) => setForm({ ...form, groupName: e.target.value })}
+                    placeholder="可选"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="presetId">使用预设</Label>
+                  <Select
+                    value={form.presetId}
+                    onValueChange={(value) => setForm({ ...form, presetId: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="使用默认预设" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__default__">使用默认预设</SelectItem>
+                      {presets.map((preset) => (
+                        <SelectItem key={preset.id} value={preset.id}>
+                          {preset.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="triggerMode">触发模式</Label>
+                  <Select
+                    value={form.triggerMode}
+                    onValueChange={(value) => setForm({ ...form, triggerMode: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">默认</SelectItem>
+                      <SelectItem value="at">仅@触发</SelectItem>
+                      <SelectItem value="prefix">仅前缀触发</SelectItem>
+                      <SelectItem value="all">全部消息</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label>启用AI响应</Label>
+                  <Switch
+                    checked={form.enabled}
+                    onCheckedChange={(checked) => setForm({ ...form, enabled: checked })}
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setDialogOpen(false)}>
+                  取消
+                </Button>
+                <Button onClick={handleSave} disabled={saving}>
+                  {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  保存
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </div>
+
+      {/* 搜索框 */}
+      <div className="flex gap-4">
+        <Input
+          placeholder="搜索群号或群名称..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="max-w-sm"
+        />
+      </div>
+
+      {filteredGroups.length === 0 ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12">
+            <Users className="h-12 w-12 text-muted-foreground mb-4" />
+            <p className="text-muted-foreground">
+              {searchQuery ? '未找到匹配的群' : '暂无群配置'}
+            </p>
+            {!searchQuery && (
+              <Button className="mt-4" onClick={() => handleOpenDialog()}>
+                <Plus className="mr-2 h-4 w-4" />
+                添加第一个群
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        <ScrollArea className="h-[calc(100vh-280px)]">
+          <div className="space-y-3">
+            {filteredGroups.map((group) => (
+              <Card key={group.groupId}>
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-medium">{group.groupId}</span>
+                        {group.groupName && (
+                          <span className="text-muted-foreground">({group.groupName})</span>
+                        )}
+                        <Badge variant={group.enabled ? 'default' : 'secondary'}>
+                          {group.enabled ? '已启用' : '已禁用'}
+                        </Badge>
+                      </div>
+                      <div className="flex gap-4 text-sm text-muted-foreground">
+                        <span>预设: {presets.find(p => p.id === group.presetId)?.name || '默认'}</span>
+                        <span>模式: {group.triggerMode || '默认'}</span>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleOpenDialog(group)}
+                      >
+                        <Settings className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </ScrollArea>
+      )}
+    </div>
+  )
+}

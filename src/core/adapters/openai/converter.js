@@ -171,10 +171,14 @@ registerIntoChaiteConverter('openai', (msg) => {
             }
             
             // 处理普通 content
-            contents.push(...content.map(t => ({
-                type: 'text',
-                text: t.type === 'text' ? t.text : t.refusal || '',
-            })))
+            contents.push(...content.map(t => {
+                let text = t.type === 'text' ? t.text : t.refusal || ''
+                // 去除首行换行符（某些模型会在回复开头添加换行）
+                if (typeof text === 'string') {
+                    text = text.replace(/^[\r\n]+/, '')
+                }
+                return { type: 'text', text }
+            }))
 
             // 安全解析 tool_calls
             let toolCalls = undefined

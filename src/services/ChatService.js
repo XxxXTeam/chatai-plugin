@@ -399,7 +399,6 @@ export class ChatService {
         // 群聊共享模式下，添加用户标签以区分不同用户
         const isolation = contextManager.getIsolationMode()
         if (groupId && !isolation.groupUserIsolation) {
-            // 群聊共享模式 - 添加用户标签到历史消息
             validHistory = contextManager.buildLabeledContext(validHistory)
             
             // 当前用户信息
@@ -520,48 +519,117 @@ export class ChatService {
             }
             
             try {
-                // 智能重试机制 - 只在真正的空返回时重试，不对正常的无文本回复重试
-                const MAX_RETRY = 2
-                let retryCount = 0
+                // 获取备选模型配置
+                const fallbackConfig = config.get('llm.fallback') || {}
+                const fallbackEnabled = fallbackConfig.enabled !== false
+                const fallbackModels = fallbackConfig.models || []
+                const maxRetries = fallbackConfig.maxRetries || 3
+                const retryDelay = fallbackConfig.retryDelay || 500
+                const notifyOnFallback = fallbackConfig.notifyOnFallback
+                const modelsToTry = [llmModel, ...fallbackModels.filter(m => m && m !== llmModel)]
                 let response = null
-                
-                while (retryCount <= MAX_RETRY) {
-                    response = await client.sendMessage(userMessage, requestOptions)
+                let lastError = null
+                let usedModel = llmModel
+                let fallbackUsed = false
+                for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
+                    const currentModel = modelsToTry[modelIndex]
+                    const isMainModel = modelIndex === 0
+                    let retryCount = 0
                     
-                    // 判断是否需要重试
-                    // 1. response 完全为空或异常 - 需要重试
-                    // 2. 有工具调用日志但无内容 - 这是正常的，不重试
-                    // 3. 有任何类型的内容（包括空文本）- 不重试
-                    
-                    const hasToolCallLogs = response.toolCallLogs && response.toolCallLogs.length > 0
-                    const hasContents = response.contents && response.contents.length > 0
-                    const hasAnyContent = hasContents || hasToolCallLogs
-                    
-                    // 只有在完全没有任何响应时才重试
-                    const shouldRetry = !response || (!hasAnyContent && !response.id)
-                    
-                    if (!shouldRetry) {
-                        // 正常返回（即使内容为空也不重试）
-                        if (!hasContents && hasToolCallLogs) {
-                            logger.debug('[ChatService] 工具调用完成，无额外文本回复')
+                    // 每个模型最多重试 maxRetries 次
+                    while (retryCount <= (isMainModel ? maxRetries : 1)) {
+                        try {
+                            // 更新请求模型
+                            const currentRequestOptions = { ...requestOptions, model: currentModel }
+                            
+                            // 如果是备选模型，需要创建新的 client
+                            let currentClient = client
+                            if (!isMainModel) {
+                                // 尝试获取支持该模型的渠道
+                                const fallbackChannel = channelManager.getBestChannel(currentModel)
+                                if (fallbackChannel) {
+                                    const fallbackClientOptions = {
+                                        ...clientOptions,
+                                        adapterType: fallbackChannel.adapterType,
+                                        baseUrl: fallbackChannel.baseUrl,
+                                        apiKey: channelManager.getChannelKey(fallbackChannel)
+                                    }
+                                    currentClient = await LlmService.createClient(fallbackClientOptions)
+                                }
+                            }
+                            
+                            response = await currentClient.sendMessage(userMessage, currentRequestOptions)
+                            
+                            // 判断是否有效响应
+                            const hasToolCallLogs = response.toolCallLogs && response.toolCallLogs.length > 0
+                            const hasContents = response.contents && response.contents.length > 0
+                            const hasAnyContent = hasContents || hasToolCallLogs
+                            
+                            if (response && (hasAnyContent || response.id)) {
+                                // 成功响应
+                                usedModel = currentModel
+                                if (!isMainModel) {
+                                    fallbackUsed = true
+                                    logger.info(`[ChatService] 使用备选模型成功: ${currentModel}`)
+                                    
+                                    // 通知用户（如果配置启用）
+                                    if (notifyOnFallback && event && event.reply) {
+                                        try {
+                                            await event.reply(`[已切换至备选模型: ${currentModel}]`, false)
+                                        } catch (e) { }
+                                    }
+                                }
+                                break
+                            }
+                            
+                            // 空响应，重试
+                            retryCount++
+                            if (retryCount <= (isMainModel ? maxRetries : 1)) {
+                                logger.warn(`[ChatService] 模型${currentModel}返回空响应，重试第${retryCount}次...`)
+                                await new Promise(r => setTimeout(r, retryDelay * retryCount))
+                            }
+                        } catch (modelError) {
+                            lastError = modelError
+                            logger.error(`[ChatService] 模型${currentModel}请求失败: ${modelError.message}`)
+                            
+                            retryCount++
+                            if (retryCount <= (isMainModel ? maxRetries : 1)) {
+                                await new Promise(r => setTimeout(r, retryDelay * retryCount))
+                            }
                         }
+                    }
+                    
+                    // 如果成功获取响应，退出模型循环
+                    if (response && (response.contents?.length > 0 || response.toolCallLogs?.length > 0)) {
                         break
                     }
                     
-                    retryCount++
-                    if (retryCount <= MAX_RETRY) {
-                        logger.warn(`[ChatService] API返回异常空响应，重试第${retryCount}次...`)
-                        await new Promise(r => setTimeout(r, 500 * retryCount))
+                    // 如果没有更多备选模型或未启用 fallback，退出
+                    if (!fallbackEnabled || modelIndex >= modelsToTry.length - 1) {
+                        break
                     }
+                    
+                    logger.info(`[ChatService] 尝试备选模型: ${modelsToTry[modelIndex + 1]}`)
                 }
                 
-                if (retryCount > MAX_RETRY) {
-                    logger.warn('[ChatService] 多次重试后仍无有效响应')
+                // 如果所有模型都失败，抛出最后一个错误
+                if (!response && lastError) {
+                    throw lastError
                 }
                 
-                finalResponse = response.contents
-                finalUsage = response.usage
-                allToolLogs = response.toolCallLogs || []
+                if (!response) {
+                    logger.warn('[ChatService] 所有模型尝试后仍无有效响应')
+                }
+                
+                finalResponse = response?.contents || []
+                finalUsage = response?.usage || {}
+                allToolLogs = response?.toolCallLogs || []
+                
+                // 记录实际使用的模型
+                if (debugInfo) {
+                    debugInfo.usedModel = usedModel
+                    debugInfo.fallbackUsed = fallbackUsed
+                }
             } finally {
                 // 确保释放锁
                 if (releaseLock) releaseLock()
@@ -631,13 +699,36 @@ export class ChatService {
             }
         }
 
+        // 检查定量自动结束对话
+        let autoEndInfo = null
+        try {
+            const autoEndCheck = await contextManager.checkAutoEnd(conversationId)
+            if (autoEndCheck.shouldEnd) {
+                // 执行自动结束
+                await contextManager.executeAutoEnd(conversationId)
+                autoEndInfo = autoEndCheck
+                
+                // 通知用户（如果配置启用且有 event）
+                if (autoEndCheck.notifyUser && event && event.reply) {
+                    try {
+                        await event.reply(autoEndCheck.notifyMessage, true)
+                    } catch (e) {
+                        logger.warn('[ChatService] 自动结束通知发送失败:', e.message)
+                    }
+                }
+            }
+        } catch (e) {
+            logger.warn('[ChatService] 检查自动结束失败:', e.message)
+        }
+
         return {
             conversationId,
             response: finalResponse || [],
             usage: finalUsage || {},
             model: llmModel,
             toolCallLogs: allToolLogs,
-            debugInfo  // 调试信息（仅在 debugMode 时有值）
+            debugInfo,  // 调试信息（仅在 debugMode 时有值）
+            autoEndInfo // 自动结束信息（如果触发）
         }
     }
 

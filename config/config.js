@@ -96,6 +96,14 @@ class Config {
                     // 思考模型 - 用于深度推理
                     reasoning: ''
                 },
+                // 备选模型配置 - 主模型失败时自动轮询
+                fallback: {
+                    enabled: true,              // 启用备选模型轮询
+                    models: [],                 // 备选模型列表，按优先级排序
+                    maxRetries: 3,              // 最大重试次数
+                    retryDelay: 500,            // 重试间隔(ms)
+                    notifyOnFallback: false,    // 切换模型时是否通知用户
+                },
                 // 旧配置兼容
                 chatModel: '',
                 codeModel: '',
@@ -167,6 +175,13 @@ class Config {
                     enabled: true,              // 启用自动上下文
                     maxHistoryMessages: 20,     // 携带的历史消息数量
                     includeToolCalls: false,    // 是否包含工具调用记录
+                },
+                // 定量自动结束对话
+                autoEnd: {
+                    enabled: false,             // 是否启用自动结束
+                    maxRounds: 50,              // 最大对话轮数（用户+AI各算1轮）
+                    notifyUser: true,           // 结束时是否通知用户
+                    notifyMessage: '对话已达到最大轮数限制，已自动开始新会话。',
                 },
             },
             memory: {

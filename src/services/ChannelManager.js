@@ -102,16 +102,17 @@ export class ChannelManager {
         if (!channel) return null
 
         // Update allowed fields
-        const allowedFields = ['name', 'baseUrl', 'apiKey', 'apiKeys', 'strategy', 'models', 'priority', 'enabled', 'advanced']
+        const allowedFields = ['name', 'adapterType', 'baseUrl', 'apiKey', 'apiKeys', 'strategy', 'models', 'priority', 'enabled', 'advanced']
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
                 channel[field] = updates[field]
             }
         }
 
-        // Clear model cache if credentials changed
-        if (updates.apiKey || updates.baseUrl || updates.apiKeys) {
+        // Clear model cache if credentials or adapter type changed
+        if (updates.apiKey || updates.baseUrl || updates.apiKeys || updates.adapterType) {
             channel.modelsCached = false
+            channel.status = undefined  // Reset status when config changes
             await redisClient.del(`models:${id}`)
         }
 
@@ -295,50 +296,153 @@ export class ChannelManager {
     /**
      * Test channel connection
      * @param {string} id
+     * @param {Object} options - 测试选项
+     * @param {string} options.model - 指定测试模型
+     * @param {boolean} options.skipModelCheck - 跳过模型列表检查
      * @returns {Promise<Object>}
      */
-    async testConnection(id) {
+    async testConnection(id, options = {}) {
         const channel = this.channels.get(id)
         if (!channel) {
             throw new Error('Channel not found')
         }
 
+        const { model, skipModelCheck = false } = options
+        
         try {
             if (channel.adapterType === 'openai') {
                 const { OpenAIClient } = await import('../core/adapters/index.js')
+                const apiKey = this.getChannelKey(channel)
+                
+                // 选择测试模型：优先使用指定模型，其次使用渠道配置的第一个模型，最后使用默认模型
+                const testModel = model || channel.models?.[0] || 'gpt-3.5-turbo'
+                
                 const client = new OpenAIClient({
-                    apiKey: this.getChannelKey(channel),
+                    apiKey: apiKey,
                     baseUrl: channel.baseUrl,
                     features: ['chat'],
                     tools: []
                 })
 
+                try {
+                    const response = await client.sendMessage(
+                        { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
+                        { model: testModel, maxToken: 20 }
+                    )
+
+                    const replyText = response.contents
+                        ?.filter(c => c.type === 'text')
+                        ?.map(c => c.text)
+                        ?.join('') || ''
+
+                    channel.status = 'active'
+                    channel.lastHealthCheck = Date.now()
+                    channel.errorCount = 0 // 重置错误计数
+                    this.channels.set(id, channel)
+
+                    return {
+                        success: true,
+                        message: replyText ? `连接成功！AI回复：${replyText}` : '连接成功！',
+                        testResponse: replyText,
+                        model: testModel
+                    }
+                } catch (chatError) {
+                    // 某些中转站可能chat接口报401但实际可用（需要特定模型）
+                    // 尝试获取模型列表来验证API Key是否有效
+                    if (chatError.message?.includes('401') || chatError.message?.includes('Unauthorized')) {
+                        logger.warn(`[ChannelManager] 测试聊天失败(401)，尝试获取模型列表验证: ${channel.name}`)
+                        
+                        try {
+                            // 尝试获取模型列表
+                            const models = await this.fetchModels(id)
+                            if (models && models.length > 0) {
+                                channel.status = 'active'
+                                channel.lastHealthCheck = Date.now()
+                                channel.errorCount = 0
+                                this.channels.set(id, channel)
+                                
+                                return {
+                                    success: true,
+                                    message: `连接验证成功（通过模型列表）！可用模型数: ${models.length}`,
+                                    models: models.slice(0, 5),
+                                    note: '聊天测试返回401，但API Key有效。请确认使用正确的模型名称。'
+                                }
+                            }
+                        } catch (modelError) {
+                            // 模型列表也失败，可能是真正的认证问题
+                            logger.warn(`[ChannelManager] 获取模型列表也失败: ${modelError.message}`)
+                        }
+                    }
+                    throw chatError
+                }
+            } else if (channel.adapterType === 'gemini') {
+                // Gemini 测试
+                const { GeminiClient } = await import('../core/adapters/index.js')
+                const client = new GeminiClient({
+                    apiKey: this.getChannelKey(channel),
+                    baseUrl: channel.baseUrl,
+                    features: ['chat'],
+                    tools: []
+                })
+                
+                const testModel = model || channel.models?.[0] || 'gemini-pro'
                 const response = await client.sendMessage(
                     { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
-                    { model: channel.models[0] || 'gpt-3.5-turbo', maxToken: 20 }
+                    { model: testModel, maxToken: 20 }
                 )
-
+                
                 const replyText = response.contents
-                    .filter(c => c.type === 'text')
-                    .map(c => c.text)
-                    .join('')
-
+                    ?.filter(c => c.type === 'text')
+                    ?.map(c => c.text)
+                    ?.join('') || ''
+                
                 channel.status = 'active'
                 channel.lastHealthCheck = Date.now()
                 this.channels.set(id, channel)
-
+                
                 return {
                     success: true,
-                    message: '连接成功！AI回复：' + replyText,
+                    message: replyText ? `连接成功！AI回复：${replyText}` : '连接成功！',
+                    testResponse: replyText
+                }
+            } else if (channel.adapterType === 'claude') {
+                // Claude 测试
+                const { ClaudeClient } = await import('../core/adapters/index.js')
+                const client = new ClaudeClient({
+                    apiKey: this.getChannelKey(channel),
+                    baseUrl: channel.baseUrl,
+                    features: ['chat'],
+                    tools: []
+                })
+                
+                const testModel = model || channel.models?.[0] || 'claude-3-haiku-20240307'
+                const response = await client.sendMessage(
+                    { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
+                    { model: testModel, maxToken: 20 }
+                )
+                
+                const replyText = response.contents
+                    ?.filter(c => c.type === 'text')
+                    ?.map(c => c.text)
+                    ?.join('') || ''
+                
+                channel.status = 'active'
+                channel.lastHealthCheck = Date.now()
+                this.channels.set(id, channel)
+                
+                return {
+                    success: true,
+                    message: replyText ? `连接成功！AI回复：${replyText}` : '连接成功！',
                     testResponse: replyText
                 }
             }
 
-            // For other adapters, just return success for now
-            return { success: true, message: '该适配器暂不支持测试' }
+            // 未知适配器类型
+            return { success: true, message: '该适配器类型暂不支持完整测试' }
         } catch (error) {
             channel.status = 'error'
             channel.lastHealthCheck = Date.now()
+            channel.errorCount = (channel.errorCount || 0) + 1
             this.channels.set(id, channel)
             throw error
         }

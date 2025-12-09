@@ -10,19 +10,26 @@ function escapeRegExp(str) {
 }
 const processedMessages = new WeakMap()
 const recentMessageHashes = new Map() // hash -> timestamp
+const processedMessageIds = new Map() // message_id -> timestamp (基于消息ID的去重)
 const sentMessageFingerprints = new Map() // fingerprint -> timestamp (机器人发送的消息)
-const MESSAGE_DEDUP_EXPIRE = 5000 // 消息去重过期时间(ms)
+const processingMessages = new Set() // 正在处理中的消息ID（防止并发）
+const MESSAGE_DEDUP_EXPIRE = 10000 // 消息去重过期时间(ms) 增加到10秒
 const SENT_MSG_EXPIRE = 30000 // 发送消息指纹过期时间(ms)
+const MSG_ID_EXPIRE = 60000 // 消息ID过期时间(ms) 1分钟
 
 /**
- * 生成消息hash用于去重
+ * 生成消息hash用于去重 - 增强版
+ * 使用多个字段组合，确保唯一性
  */
 function getMessageHash(e) {
     const userId = e.user_id || ''
     const groupId = e.group_id || ''
     const msg = e.msg || e.raw_message || ''
     const msgId = e.message_id || ''
-    return `${userId}_${groupId}_${msgId}_${msg.substring(0, 50)}`
+    const time = e.time || ''
+    const seq = e.seq || e.source?.seq || ''
+    // 组合多个字段增强唯一性
+    return `${userId}_${groupId}_${msgId}_${time}_${seq}_${msg.substring(0, 80)}`
 }
 
 /**
@@ -96,31 +103,102 @@ function cleanExpiredHashes() {
  */
 export function markMessageProcessed(e) {
     processedMessages.set(e, true)
+    const now = Date.now()
+    
     // 同时记录消息hash
     const hash = getMessageHash(e)
-    recentMessageHashes.set(hash, Date.now())
+    recentMessageHashes.set(hash, now)
+    
+    // 记录 message_id（更可靠的去重方式）
+    const msgId = e.message_id
+    if (msgId) {
+        processedMessageIds.set(String(msgId), now)
+        // 从处理中列表移除
+        processingMessages.delete(String(msgId))
+    }
+    
     // 定期清理
     if (recentMessageHashes.size > 100) {
         cleanExpiredHashes()
     }
+    if (processedMessageIds.size > 500) {
+        cleanExpiredMessageIds()
+    }
 }
 
 /**
- * 检查消息是否已被处理（包括重复消息检测）
+ * 清理过期的消息ID记录
+ */
+function cleanExpiredMessageIds() {
+    const now = Date.now()
+    for (const [id, time] of processedMessageIds) {
+        if (now - time > MSG_ID_EXPIRE) {
+            processedMessageIds.delete(id)
+        }
+    }
+}
+
+/**
+ * 标记消息开始处理（防止并发重复处理）
+ * @param {Object} e - 事件对象
+ * @returns {boolean} 如果返回 false 表示已有相同消息在处理中
+ */
+export function startProcessingMessage(e) {
+    const msgId = e.message_id
+    if (!msgId) return true // 没有 message_id 则无法防并发
+    
+    const msgIdStr = String(msgId)
+    if (processingMessages.has(msgIdStr)) {
+        logger.debug(`[Chat] 消息正在处理中，跳过: ${msgIdStr}`)
+        return false
+    }
+    
+    processingMessages.add(msgIdStr)
+    // 60秒后自动清理（防止处理异常导致永久阻塞）
+    setTimeout(() => processingMessages.delete(msgIdStr), 60000)
+    return true
+}
+
+/**
+ * 检查消息是否已被处理（包括重复消息检测）- 增强版
  * @param {Object} e - 事件对象
  * @returns {boolean}
  */
 export function isMessageProcessed(e) {
-    // 检查事件对象是否已处理
-    if (processedMessages.has(e)) return true
-    // 检查消息hash是否重复
+    // 1. 检查事件对象是否已处理（WeakMap）
+    if (processedMessages.has(e)) {
+        logger.debug('[Chat] 消息已处理(WeakMap)')
+        return true
+    }
+    
+    // 2. 检查 message_id 是否已处理（最可靠）
+    const msgId = e.message_id
+    if (msgId) {
+        const msgIdStr = String(msgId)
+        if (processedMessageIds.has(msgIdStr)) {
+            const lastTime = processedMessageIds.get(msgIdStr)
+            if (Date.now() - lastTime < MSG_ID_EXPIRE) {
+                logger.debug(`[Chat] 消息已处理(message_id): ${msgIdStr}`)
+                return true
+            }
+        }
+        // 检查是否正在处理中
+        if (processingMessages.has(msgIdStr)) {
+            logger.debug(`[Chat] 消息正在处理中: ${msgIdStr}`)
+            return true
+        }
+    }
+    
+    // 3. 检查消息hash是否重复（兜底）
     const hash = getMessageHash(e)
     if (recentMessageHashes.has(hash)) {
         const lastTime = recentMessageHashes.get(hash)
         if (Date.now() - lastTime < MESSAGE_DEDUP_EXPIRE) {
+            logger.debug('[Chat] 消息已处理(hash)')
             return true
         }
     }
+    
     return false
 }
 
@@ -293,6 +371,12 @@ export class Chat extends plugin {
     // 已被处理则跳过
     if (isMessageProcessed(e)) {
       logger.debug('[Chat] 跳过: 已被处理')
+      return false
+    }
+    
+    // 防止并发重复处理（同一消息被多次触发）
+    if (!startProcessingMessage(e)) {
+      logger.debug('[Chat] 跳过: 消息正在处理中')
       return false
     }
     
@@ -841,9 +925,20 @@ export class Chat extends plugin {
    * @param {boolean} isError 是否是错误消息
    */
   handleAutoRecall(replyResult, isError = false) {
-    const autoRecall = config.get('basic.autoRecall') || {}
-    if (!autoRecall.enabled) return
-    if (isError && !autoRecall.recallError) return
+    // 获取配置，严格检查 enabled 必须为 true
+    const autoRecall = config.get('basic.autoRecall')
+    
+    // 严格检查：只有 enabled === true 时才执行撤回
+    if (!autoRecall || autoRecall.enabled !== true) {
+      logger.debug('[AI-Chat] 自动撤回未启用，跳过')
+      return
+    }
+    
+    // 错误消息撤回检查
+    if (isError && autoRecall.recallError !== true) {
+      logger.debug('[AI-Chat] 错误消息撤回未启用，跳过')
+      return
+    }
     
     const delay = (autoRecall.delay || 60) * 1000
     const messageId = replyResult?.message_id || replyResult?.data?.message_id
@@ -853,18 +948,31 @@ export class Chat extends plugin {
       return
     }
     
+    logger.debug(`[AI-Chat] 将在 ${delay/1000} 秒后撤回消息: ${messageId}`)
+    
     const e = this.e
     setTimeout(async () => {
       try {
+        // 再次检查配置（可能在延迟期间被修改）
+        const currentConfig = config.get('basic.autoRecall')
+        if (!currentConfig || currentConfig.enabled !== true) {
+          logger.debug('[AI-Chat] 撤回时配置已变更，取消撤回')
+          return
+        }
+        
         // 优先使用 this.e.bot，回退到 Bot
         const bot = e?.bot || Bot
         if (typeof bot?.deleteMsg === 'function') {
           await bot.deleteMsg(messageId)
+          logger.debug(`[AI-Chat] 成功撤回消息: ${messageId}`)
         } else if (typeof bot?.recallMsg === 'function') {
           await bot.recallMsg(messageId)
+          logger.debug(`[AI-Chat] 成功撤回消息: ${messageId}`)
+        } else {
+          logger.debug('[AI-Chat] 无可用的撤回方法')
         }
-      } catch {
-        // 撤回失败时忽略
+      } catch (err) {
+        logger.debug(`[AI-Chat] 撤回消息失败: ${err.message}`)
       }
     }, delay)
   }

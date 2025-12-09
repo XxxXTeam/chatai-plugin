@@ -136,6 +136,17 @@ class FrontendAuthHandler {
     hasPermanentToken() {
         return !!config.get('web.permanentAuthToken')
     }
+    
+    /**
+     * 验证永久Token
+     * @param {string} token 
+     * @returns {boolean}
+     */
+    validatePermanentToken(token) {
+        if (!token) return false
+        const permanentToken = config.get('web.permanentAuthToken')
+        return permanentToken && token === permanentToken
+    }
 }
 
 const authHandler = new FrontendAuthHandler()
@@ -390,11 +401,60 @@ export class WebServer {
             }
         })
 
-        // POST /api/auth/login - Temporary token authentication
+        // POST /api/auth/login - Token authentication (临时token或永久token)
         this.app.post('/api/auth/login', async (req, res) => {
-            const { token } = req.body
+            const { token, password } = req.body
 
             try {
+                let success = false
+                let loginType = ''
+                
+                // 优先使用 token 参数，兼容 password 参数作为 token
+                const authToken = token || password
+                
+                if (authToken) {
+                    // 1. 先判断是否为临时 token
+                    if (authHandler.validateToken(authToken)) {
+                        success = true
+                        loginType = 'temp_token'
+                    }
+                    // 2. 再判断是否为永久 token
+                    else if (authHandler.validatePermanentToken(authToken)) {
+                        success = true
+                        loginType = 'permanent_token'
+                    }
+                }
+                
+                if (success) {
+                    // Generate JWT for session
+                    const jwtToken = jwt.sign({
+                        authenticated: true,
+                        loginTime: Date.now()
+                    }, authKey, { expiresIn: '30d' })
+
+                    logger.info(`[Auth] Login successful via ${loginType}`)
+                    res.json(ChaiteResponse.ok({
+                        token: jwtToken,
+                        expiresIn: 30 * 24 * 60 * 60
+                    }))
+                } else {
+                    res.status(401).json(ChaiteResponse.fail(null, 'Token 无效或已过期'))
+                }
+            } catch (error) {
+                logger.error('[Auth] Login error:', error)
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+        
+        // GET /api/auth/verify-token - URL token verification
+        this.app.get('/api/auth/verify-token', async (req, res) => {
+            const { token } = req.query
+
+            try {
+                if (!token) {
+                    return res.status(400).json(ChaiteResponse.fail(null, 'Token is required'))
+                }
+                
                 const success = authHandler.validateToken(token)
                 if (success) {
                     // Generate JWT for session
@@ -403,7 +463,7 @@ export class WebServer {
                         loginTime: Date.now()
                     }, authKey, { expiresIn: '30d' })
 
-                    logger.info('[Auth] Login successful with temporary token')
+                    logger.info('[Auth] Login successful via URL token')
                     res.json(ChaiteResponse.ok({
                         token: jwtToken,
                         expiresIn: 30 * 24 * 60 * 60
@@ -412,7 +472,7 @@ export class WebServer {
                     res.status(401).json(ChaiteResponse.fail(null, 'Invalid or expired token'))
                 }
             } catch (error) {
-                logger.error('[Auth] Login error:', error)
+                logger.error('[Auth] Token verification error:', error)
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
@@ -2246,29 +2306,7 @@ export default {
             }
         })
 
-        // GET /api/conversations/:id/messages - Get messages for a conversation
-        this.app.get('/api/conversations/:id/messages', this.authMiddleware.bind(this), async (req, res) => {
-            try {
-                const db = getDatabase()
-                const messages = db.getMessages(req.params.id, 100)
-                res.json(ChaiteResponse.ok(messages))
-            } catch (error) {
-                res.status(500).json(ChaiteResponse.fail(null, error.message))
-            }
-        })
-
-        // DELETE /api/conversations/:id - Delete a conversation
-        this.app.delete('/api/conversations/:id', this.authMiddleware.bind(this), async (req, res) => {
-            try {
-                const db = getDatabase()
-                db.deleteConversation(req.params.id)
-                res.json(ChaiteResponse.ok({ success: true }))
-            } catch (error) {
-                res.status(500).json(ChaiteResponse.fail(null, error.message))
-            }
-        })
-
-        // DELETE /api/conversations/clear-all - 清空所有对话
+        // DELETE /api/conversations/clear-all - 清空所有对话 (必须在 :id 路由之前定义!)
         this.app.delete('/api/conversations/clear-all', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const db = getDatabase()
@@ -2290,6 +2328,28 @@ export default {
                 res.json(ChaiteResponse.ok({ success: true, deletedCount }))
             } catch (error) {
                 logger.error('[WebServer] 清空对话失败:', error)
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/conversations/:id/messages - Get messages for a conversation
+        this.app.get('/api/conversations/:id/messages', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const db = getDatabase()
+                const messages = db.getMessages(req.params.id, 100)
+                res.json(ChaiteResponse.ok(messages))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/conversations/:id - Delete a conversation
+        this.app.delete('/api/conversations/:id', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const db = getDatabase()
+                db.deleteConversation(req.params.id)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
@@ -2477,6 +2537,24 @@ export default {
                 res.json(ChaiteResponse.ok({
                     hasPermanentToken: authHandler.hasPermanentToken(),
                     tempTokenCount: authHandler.tokens.size
+                }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/auth/token/generate - 生成临时登录Token并输出到控制台（与管理面板命令相同）
+        this.app.get('/api/auth/token/generate', async (req, res) => {
+            try {
+                const token = authHandler.generateToken(5 * 60) // 5分钟有效，与管理面板命令一致
+                logger.info('========================================')
+                logger.info('[Chaite] 管理面板登录 Token (5分钟有效):')
+                logger.info(token)
+                logger.info('========================================')
+                res.json(ChaiteResponse.ok({ 
+                    success: true, 
+                    message: 'Token 已输出到 Yunzai 控制台',
+                    expiresIn: '5分钟'
                 }))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -2777,9 +2855,36 @@ export default {
         })
 
         // ==================== Catch-all Route ====================
-        // Serve index.html for all other routes
+        // 支持 Next.js 静态导出的多 HTML 文件结构
         this.app.get('*', (req, res) => {
-            res.sendFile(path.join(__dirname, '../../resources/web/index.html'))
+            const webDir = path.join(__dirname, '../../resources/web')
+            let reqPath = req.path
+            
+            // 移除尾部斜杠（除了根路径）
+            if (reqPath !== '/' && reqPath.endsWith('/')) {
+                reqPath = reqPath.slice(0, -1)
+            }
+            
+            // 尝试查找对应的 HTML 文件
+            const candidates = [
+                path.join(webDir, reqPath, 'index.html'),  // /channels/ -> /channels/index.html
+                path.join(webDir, reqPath + '.html'),       // /channels -> /channels.html
+                path.join(webDir, reqPath),                 // 直接匹配
+            ]
+            
+            for (const candidate of candidates) {
+                if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+                    return res.sendFile(candidate)
+                }
+            }
+            
+            // 回退到 index.html (SPA fallback)
+            const indexPath = path.join(webDir, 'index.html')
+            if (fs.existsSync(indexPath)) {
+                return res.sendFile(indexPath)
+            }
+            
+            res.status(404).send('Not Found')
         })
     }
 
@@ -2834,7 +2939,7 @@ export default {
             logger.warn('═══════════════════════════════════════════════════════════════')
             logger.warn('[WebServer] ⚠️  前端文件未构建！')
             logger.warn('[WebServer] 请执行以下命令构建前端:')
-            logger.warn('[WebServer]   cd plugins/new-plugin/vue-frontend && npm install && npm run build')
+            logger.warn('[WebServer]   cd plugins/new-plugin/next-frontend && pnpm install && pnpm run export')
             logger.warn('═══════════════════════════════════════════════════════════════')
             return false
         }

@@ -204,13 +204,30 @@ export async function parseUserMessage(e, options = {}) {
             switch (segType) {
                 case 'at': {
                     if (handleAtMsg) {
-                        const qq = segData.qq || val.qq
-                        const atCard = segData.text || val.text
+                        const qq = segData.qq || val.qq || segData.data?.qq
+                        const atCard = segData.text || val.text || segData.data?.text || segData.name || ''
+                        const uid = segData.uid || val.uid || segData.data?.uid || ''
+                        
                         // 如果是@机器人且需要排除，跳过
-                        if (excludeAtBot && qq === e.bot?.uin) {
+                        if (excludeAtBot && (qq === e.bot?.uin || String(qq) === String(e.self_id))) {
                             continue
                         }
-                        text += ` @${atCard || qq} `
+                        
+                        // 增强的 @ 信息：同时添加文本表示和结构化信息
+                        // 文本格式：@昵称(QQ号) - 让AI能够识别被@的人的QQ号
+                        const displayName = atCard || `用户${qq}`
+                        text += ` @${displayName}(${qq}) `
+                        
+                        // 结构化信息：添加到 contents 中供工具使用
+                        contents.push({
+                            type: 'at_info',
+                            at: {
+                                qq: String(qq),
+                                uid: uid ? String(uid) : '',
+                                name: atCard || '',
+                                display: displayName
+                            }
+                        })
                     }
                     break
                 }
@@ -570,11 +587,18 @@ export async function parseUserMessage(e, options = {}) {
     if (quoteInfo) result.quote = quoteInfo
     if (forwardInfo) result.forward = forwardInfo
     
+    // 提取 @ 用户列表（方便工具直接使用）
+    const atInfos = contents.filter(c => c.type === 'at_info')
+    if (atInfos.length > 0) {
+        result.atList = atInfos.map(c => c.at)
+    }
+    
     // 添加调试信息
     if (debugInfo) {
         debugInfo.parseSteps.push('解析完成')
         debugInfo.finalTextLength = contents.filter(c => c.type === 'text').map(c => c.text?.length || 0).reduce((a, b) => a + b, 0)
         debugInfo.finalContentsCount = contents.length
+        debugInfo.atCount = atInfos.length
         result.debug = debugInfo
     }
     
@@ -993,18 +1017,32 @@ async function parseReplyMessage(e, options) {
             }
         }
         
-        // 构建引用信息对象
+        // 构建完整的引用信息对象 - 兼容 NC/icqq
         const quoteInfo = {
+            // 发送者信息
             sender: {
                 user_id: replySenderId,
                 nickname: replySenderName,
                 card: replyData?.sender?.card || replyInfo?.sender?.card || '',
-                role: replyData?.sender?.role || replyInfo?.sender?.role || 'member'
+                role: replyData?.sender?.role || replyInfo?.sender?.role || 'member',
+                uid: replyData?.sender?.uid || replyInfo?.sender?.uid || ''
             },
+            // 消息内容
             content: replyTextContent,
             isBot: isQuotingBot,
-            time: replyData?.time || replyInfo?.time,
-            seq: replyData?.seq || replyInfo?.seq
+            // 消息标识 - 完整字段
+            message_id: replyData?.message_id || replyInfo?.message_id || e.source?.message_id || '',
+            seq: replyData?.seq || replyInfo?.seq || e.source?.seq || 0,
+            rand: replyData?.rand || replyInfo?.rand || e.source?.rand || 0,
+            time: replyData?.time || replyInfo?.time || e.source?.time || 0,
+            // 原始消息数据 - 供工具使用
+            raw_message: replyData?.raw_message || replyInfo?.raw_message || '',
+            // 原始消息段数组
+            message: replyMessage,
+            // 群信息（如果是群消息）
+            group_id: replyData?.group_id || replyInfo?.group_id || e.group_id || '',
+            // 完整原始数据（调试用）
+            _raw: replyData
         }
         
         return { text, contents, quoteInfo }
@@ -1720,35 +1758,77 @@ export const CardBuilder = {
  */
 export const MessageApi = {
     /**
-     * 获取消息（支持多平台）
+     * 获取消息（支持多平台）- 返回完整统一格式
      * @param {Object} e - 事件对象
-     * @param {string|number} messageId - 消息ID
-     * @returns {Promise<Object|null>}
+     * @param {string|number} messageId - 消息ID（可以是 message_id 或 seq）
+     * @param {Object} options - 选项
+     * @param {boolean} options.useSeq - 是否使用 seq 方式获取（icqq）
+     * @returns {Promise<Object|null>} 返回统一格式的消息对象
      */
-    async getMsg(e, messageId) {
+    async getMsg(e, messageId, options = {}) {
         if (!e || !messageId) return null
         const bot = e.bot || Bot
+        const { useSeq = false } = options
+        
+        let rawMsg = null
+        let source = 'unknown'
         
         try {
-            // NapCat/OneBot: bot.getMsg 或 sendApi
-            if (typeof bot?.getMsg === 'function') {
-                return await bot.getMsg(messageId)
+            // NapCat/OneBot: bot.getMsg 或 sendApi（使用 message_id）
+            if (!useSeq && typeof bot?.getMsg === 'function') {
+                rawMsg = await bot.getMsg(messageId)
+                source = 'bot.getMsg'
             }
-            if (typeof bot?.sendApi === 'function') {
+            else if (!useSeq && typeof bot?.sendApi === 'function') {
                 const result = await bot.sendApi('get_msg', { message_id: messageId })
-                return result?.data || result
+                rawMsg = result?.data || result
+                source = 'sendApi.get_msg'
             }
-            // icqq: group/friend 方法
-            if (e.isGroup && e.group?.getMsg) {
-                return await e.group.getMsg(messageId)
+            // icqq: group.getMsg（使用 seq）
+            else if (e.isGroup && e.group?.getMsg) {
+                rawMsg = await e.group.getMsg(messageId)
+                source = 'group.getMsg'
             }
-            if (e.isGroup && e.group?.getChatHistory) {
+            // icqq: group.getChatHistory
+            else if (e.isGroup && e.group?.getChatHistory) {
                 const history = await e.group.getChatHistory(messageId, 1)
-                return history?.[0] || null
+                rawMsg = history?.[0] || null
+                source = 'group.getChatHistory'
             }
-            if (!e.isGroup && e.friend?.getChatHistory) {
+            // icqq: friend.getChatHistory
+            else if (!e.isGroup && e.friend?.getChatHistory) {
                 const history = await e.friend.getChatHistory(messageId, 1)
-                return history?.[0] || null
+                rawMsg = history?.[0] || null
+                source = 'friend.getChatHistory'
+            }
+            
+            if (!rawMsg) return null
+            
+            // 统一格式化返回
+            const data = rawMsg.data || rawMsg
+            return {
+                // 消息标识
+                message_id: data.message_id || rawMsg.message_id || messageId,
+                seq: data.seq || rawMsg.seq || data.message_seq || 0,
+                rand: data.rand || rawMsg.rand || 0,
+                time: data.time || rawMsg.time || 0,
+                // 发送者
+                user_id: data.user_id || data.sender?.user_id || rawMsg.user_id || 0,
+                sender: {
+                    user_id: data.sender?.user_id || data.user_id || rawMsg.user_id || 0,
+                    nickname: data.sender?.nickname || data.nickname || rawMsg.nickname || '',
+                    card: data.sender?.card || data.card || rawMsg.card || '',
+                    role: data.sender?.role || 'member',
+                    uid: data.sender?.uid || data.uid || ''
+                },
+                // 群信息
+                group_id: data.group_id || rawMsg.group_id || e.group_id || '',
+                // 消息内容
+                message: data.message || rawMsg.message || [],
+                raw_message: data.raw_message || rawMsg.raw_message || '',
+                // 原始数据
+                _raw: rawMsg,
+                _source: source
             }
         } catch (err) {
             logger.debug('[MessageApi] getMsg failed:', err.message)
