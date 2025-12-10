@@ -25,9 +25,12 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Separator } from '@/components/ui/separator'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { Progress } from '@/components/ui/progress'
 import { channelsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, Trash2, TestTube, Loader2, Plug, RefreshCw, Download, Eye, EyeOff, List, CheckCircle, XCircle, ChevronDown, ChevronUp, Settings2 } from 'lucide-react'
+import { Plus, Trash2, TestTube, Loader2, Plug, RefreshCw, Download, Eye, EyeOff, List, CheckCircle, XCircle, ChevronDown, ChevronUp, Settings2, Upload, FileDown, X, Zap, Globe, Key, Layers, MoreHorizontal, Copy, Power, PowerOff } from 'lucide-react'
 import { Slider } from '@/components/ui/slider'
 import {
   Collapsible,
@@ -248,6 +251,64 @@ export default function ChannelsPage() {
     setModelSelectorOpen(false)
   }
 
+  // 导出渠道
+  const exportChannels = () => {
+    const exportData = channels.map(ch => ({
+      name: ch.name,
+      adapterType: ch.adapterType,
+      baseUrl: ch.baseUrl,
+      models: ch.models,
+      priority: ch.priority,
+      enabled: ch.enabled,
+      // 不导出 apiKey
+    }))
+    const data = JSON.stringify(exportData, null, 2)
+    const blob = new Blob([data], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `channels_${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success('导出成功（不含 API Key）')
+  }
+
+  // 导入渠道
+  const importChannels = () => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json'
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0]
+      if (!file) return
+      try {
+        const text = await file.text()
+        const data = JSON.parse(text)
+        if (!Array.isArray(data)) {
+          toast.error('无效的渠道文件格式')
+          return
+        }
+        let imported = 0
+        for (const channel of data) {
+          try {
+            if (!channel.apiKey) {
+              channel.apiKey = 'PLEASE_FILL_YOUR_API_KEY'
+            }
+            await channelsApi.create(channel)
+            imported++
+          } catch (err) {
+            console.error('导入渠道失败:', channel.name, err)
+          }
+        }
+        toast.success(`成功导入 ${imported} 个渠道，请编辑填写 API Key`)
+        fetchChannels()
+      } catch (err) {
+        toast.error('导入失败: ' + (err as Error).message)
+      }
+    }
+    input.click()
+  }
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -276,13 +337,21 @@ export default function ChannelsPage() {
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold">渠道管理</h2>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={fetchChannels}>
+          <Button variant="outline" size="sm" onClick={importChannels}>
+            <Upload className="mr-2 h-4 w-4" />
+            导入
+          </Button>
+          <Button variant="outline" size="sm" onClick={exportChannels} disabled={channels.length === 0}>
+            <FileDown className="mr-2 h-4 w-4" />
+            导出
+          </Button>
+          <Button variant="outline" size="sm" onClick={fetchChannels}>
             <RefreshCw className="mr-2 h-4 w-4" />
             刷新
           </Button>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-              <Button onClick={() => handleOpenDialog()}>
+              <Button size="sm" onClick={() => handleOpenDialog()}>
                 <Plus className="mr-2 h-4 w-4" />
                 添加渠道
               </Button>
@@ -351,29 +420,68 @@ export default function ChannelsPage() {
                   </div>
                   <div className="grid gap-2">
                     <div className="flex items-center justify-between">
-                      <Label htmlFor="models">模型列表</Label>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={handleFetchModels}
-                        disabled={fetchingModels}
-                      >
-                        {fetchingModels ? (
-                          <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-                        ) : (
-                          <Download className="mr-2 h-3 w-3" />
+                      <Label>模型列表</Label>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={handleFetchModels}
+                          disabled={fetchingModels}
+                        >
+                          {fetchingModels ? (
+                            <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                          ) : (
+                            <Download className="mr-2 h-3 w-3" />
+                          )}
+                          获取模型
+                        </Button>
+                        {availableModels.length > 0 && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              const currentModels = form.models.split(',').map(m => m.trim()).filter(Boolean)
+                              setSelectedModels(currentModels)
+                              setModelSelectorOpen(true)
+                            }}
+                          >
+                            <Settings2 className="mr-2 h-3 w-3" />
+                            选择模型
+                          </Button>
                         )}
-                        获取模型
-                      </Button>
+                      </div>
                     </div>
-                    <Input
-                      id="models"
-                      value={form.models}
-                      onChange={(e) => setForm({ ...form, models: e.target.value })}
-                      placeholder="gpt-4o, gpt-4o-mini"
-                    />
-                    <p className="text-xs text-muted-foreground">多个模型用逗号分隔，或点击"获取模型"自动获取</p>
+                    {/* 已选模型 Badge 显示 */}
+                    {form.models && (
+                      <div className="flex flex-wrap gap-1.5 p-2 border rounded-lg bg-muted/30 max-h-[120px] overflow-y-auto">
+                        {form.models.split(',').map(m => m.trim()).filter(Boolean).map((model) => (
+                          <Badge 
+                            key={model} 
+                            variant="secondary" 
+                            className="gap-1 pr-1 text-xs font-normal"
+                          >
+                            <span className="max-w-[150px] truncate">{model}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newModels = form.models.split(',').map(m => m.trim()).filter(m => m && m !== model)
+                                setForm({ ...form, models: newModels.join(', ') })
+                              }}
+                              className="ml-1 rounded-full hover:bg-muted-foreground/20 p-0.5"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    {!form.models && (
+                      <p className="text-xs text-muted-foreground p-2 border rounded-lg bg-muted/30">
+                        点击"获取模型"自动获取可用模型，或"选择模型"从列表中选择
+                      </p>
+                    )}
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="priority">优先级</Label>
@@ -541,110 +649,100 @@ export default function ChannelsPage() {
         </Card>
       ) : (
         <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
-          {channels.map((channel) => {
-            const adapterColors: Record<string, string> = {
-              openai: 'bg-green-500',
-              gemini: 'bg-blue-500', 
-              claude: 'bg-orange-500',
-            }
-            const adapterType = channel.adapterType || 'openai'
-            
-            return (
-              <Card key={channel.id} className="relative overflow-hidden hover:shadow-lg transition-shadow">
-                {/* 顶部彩色条 */}
-                <div className={`absolute top-0 left-0 right-0 h-1 ${adapterColors[adapterType] || 'bg-gray-500'}`} />
-                
-                <CardHeader className="pt-4 pb-3">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-lg font-semibold">{channel.name}</CardTitle>
-                    <div className="flex items-center gap-1.5">
-                      {channel.enabled ? (
-                        <Badge className="bg-green-100 text-green-700 hover:bg-green-100">启用</Badge>
-                      ) : (
-                        <Badge variant="secondary">禁用</Badge>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    <Badge variant="outline" className="font-mono text-xs">
-                      {adapterType.toUpperCase()}
+          {channels.map((channel) => (
+            <Card key={channel.id}>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base">{channel.name}</CardTitle>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-xs">
+                      {(channel.adapterType || 'openai').toUpperCase()}
                     </Badge>
+                    {channel.enabled ? (
+                      <Badge className="bg-green-100 text-green-700 hover:bg-green-100 text-xs">启用</Badge>
+                    ) : (
+                      <Badge variant="secondary" className="text-xs">禁用</Badge>
+                    )}
+                  </div>
+                </div>
+                <CardDescription className="font-mono text-xs truncate">
+                  {channel.baseUrl}
+                </CardDescription>
+              </CardHeader>
+              
+              <CardContent className="space-y-3">
+                {/* 状态和优先级 */}
+                <div className="flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-2">
                     {channel.status === 'active' ? (
-                      <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 text-xs">
-                        <CheckCircle className="h-3 w-3 mr-1" />
-                        正常
+                      <Badge variant="outline" className="text-green-600 border-green-200 text-xs">
+                        <CheckCircle className="h-3 w-3 mr-1" />正常
                       </Badge>
                     ) : channel.status === 'error' ? (
                       <Badge variant="destructive" className="text-xs">
-                        <XCircle className="h-3 w-3 mr-1" />
-                        异常
+                        <XCircle className="h-3 w-3 mr-1" />异常
                       </Badge>
                     ) : (
-                      <Badge variant="secondary" className="text-xs">
-                        未测试
-                      </Badge>
+                      <Badge variant="secondary" className="text-xs">未测试</Badge>
                     )}
                   </div>
-                </CardHeader>
+                  <span className="text-xs text-muted-foreground">优先级: {channel.priority || 0}</span>
+                </div>
+
+                {/* 模型列表 */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">模型 ({channel.models?.length || 0})</span>
+                  </div>
+                  {channel.models && channel.models.length > 0 ? (
+                    <div className="flex flex-wrap gap-1 max-h-[80px] overflow-y-auto">
+                      {channel.models.map((model) => (
+                        <Badge key={model} variant="secondary" className="text-xs font-normal">
+                          {model.length > 20 ? model.slice(0, 20) + '...' : model}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground italic">未配置模型</p>
+                  )}
+                </div>
                 
-                <CardContent className="space-y-4">
-                  {/* URL 显示 */}
-                  <div className="p-2 bg-muted/50 rounded-md">
-                    <p className="text-xs text-muted-foreground mb-1">Base URL</p>
-                    <p className="text-sm font-mono truncate" title={channel.baseUrl}>
-                      {channel.baseUrl}
-                    </p>
-                  </div>
-                  
-                  {/* 统计信息 */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="text-center p-2 bg-muted/30 rounded-md">
-                      <p className="text-2xl font-bold text-primary">{channel.models?.length || 0}</p>
-                      <p className="text-xs text-muted-foreground">模型数</p>
-                    </div>
-                    <div className="text-center p-2 bg-muted/30 rounded-md">
-                      <p className="text-2xl font-bold">{channel.priority || 0}</p>
-                      <p className="text-xs text-muted-foreground">优先级</p>
-                    </div>
-                  </div>
-                  
-                  {/* 操作按钮 */}
-                  <div className="flex gap-2 pt-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-1"
-                      onClick={() => handleTest(channel)}
-                      disabled={testing === channel.id}
-                    >
-                      {testing === channel.id ? (
-                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <TestTube className="mr-1.5 h-3.5 w-3.5" />
-                      )}
-                      测试
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-1"
-                      onClick={() => handleOpenDialog(channel)}
-                    >
-                      编辑
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                      onClick={() => handleDelete(channel.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            )
-          })}
+                {/* 操作按钮 */}
+                <div className="flex gap-2 pt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => handleTest(channel)}
+                    disabled={testing === channel.id}
+                  >
+                    {testing === channel.id ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <TestTube className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    测试
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => handleOpenDialog(channel)}
+                  >
+                    编辑
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                    onClick={() => handleDelete(channel.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
         </div>
       )}
 

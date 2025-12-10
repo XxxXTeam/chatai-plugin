@@ -1294,10 +1294,23 @@ export class Chat extends plugin {
       databaseService.init()
       
       const maxMessages = config.get('features.groupSummary.maxMessages') || 100
-      const groupKey = `group_${e.group_id}`
       
-      // 获取群聊历史消息
-      const messages = databaseService.getMessages(groupKey, maxMessages)
+      // 使用正确的 conversationId 格式 (与 ContextManager.getConversationId 一致)
+      const { contextManager } = await import('../src/services/ContextManager.js')
+      await contextManager.init()
+      const groupKey = contextManager.getConversationId(e.user_id, e.group_id)
+      
+      // 获取群聊历史消息 (从 historyManager 获取，因为消息存储在那里)
+      const historyManager = (await import('../src/core/utils/history.js')).default
+      const historyMessages = await historyManager.getHistory(undefined, groupKey, maxMessages)
+      
+      // 转换格式
+      const messages = historyMessages.map(m => ({
+        role: m.role,
+        content: Array.isArray(m.content) 
+          ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') 
+          : m.content
+      }))
       
       if (messages.length < 5) {
         await this.reply('群聊消息太少，无法生成总结', true)
@@ -1306,11 +1319,7 @@ export class Chat extends plugin {
 
       // 构造总结请求
       const summaryPrompt = `请总结以下群聊对话的主要内容，提取关键话题和讨论要点：\n\n${
-        messages.map(m => `${m.role}: ${
-          Array.isArray(m.content) 
-            ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') 
-            : m.content
-        }`).join('\n')
+        messages.map(m => `${m.role}: ${m.content}`).join('\n')
       }\n\n请用简洁的方式总结：
 1. 主要讨论话题
 2. 关键观点

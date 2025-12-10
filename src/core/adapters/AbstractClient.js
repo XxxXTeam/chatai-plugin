@@ -183,7 +183,7 @@ export async function preprocessImageUrls(histories) {
  * @returns {boolean}
  */
 export function needsBase64Preprocess(model) {
-    if (!model) return false
+    if (!model || typeof model !== 'string') return false
     const lowerModel = model.toLowerCase()
     // Gemini 系列模型都需要 base64
     return lowerModel.includes('gemini')
@@ -394,7 +394,8 @@ export class AbstractClient {
                 options._toolCallCount++
                 
                 // 检测模型类型，Gemini 模型更容易陷入循环
-                const isGeminiModel = (options.model || '').toLowerCase().includes('gemini')
+                const modelStr = typeof options.model === 'string' ? options.model : ''
+                const isGeminiModel = modelStr.toLowerCase().includes('gemini')
                 const maxBeforeDisable = isGeminiModel ? 2 : 3
                 
                 // 连续调用超过阈值时禁用工具

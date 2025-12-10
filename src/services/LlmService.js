@@ -192,17 +192,35 @@ export class LlmService {
     /**
      * Get model for specific mode
      * @param {string} mode - 'chat', 'roleplay', 'toolCall', 'search', 'reasoning', 'code', 'translation', etc.
+     * @returns {string} 模型名称
      */
     static getModel(mode = 'chat') {
         // 先检查新的 models 配置
         const newModelConfig = config.get(`llm.models.${mode}`)
         if (newModelConfig) {
-            return newModelConfig
+            // 如果是数组，取第一个有效模型；如果是字符串，直接返回
+            if (Array.isArray(newModelConfig)) {
+                const firstModel = newModelConfig.find(m => m && typeof m === 'string')
+                if (firstModel) return firstModel
+            } else if (typeof newModelConfig === 'string' && newModelConfig) {
+                return newModelConfig
+            }
         }
         
         // 兼容旧配置
         const modeModel = config.get(`llm.${mode}Model`)
-        return modeModel || config.get('llm.defaultModel')
+        if (modeModel) {
+            if (Array.isArray(modeModel)) {
+                const first = modeModel.find(m => m && typeof m === 'string')
+                if (first) return first
+            } else if (typeof modeModel === 'string') {
+                return modeModel
+            }
+        }
+        
+        // 返回默认模型
+        const defaultModel = config.get('llm.defaultModel')
+        return typeof defaultModel === 'string' ? defaultModel : ''
     }
 
     /**

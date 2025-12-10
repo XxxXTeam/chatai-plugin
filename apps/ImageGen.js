@@ -1,7 +1,7 @@
 /**
- * AI 图片生成插件
- * 支持文生图、图生图和预设提示词模式
- * 使用 Gemini 图片生成模型
+ * AI 图片/视频生成插件
+ * 支持文生图、图生图、文生视频、图生视频和预设提示词模式
+ * 使用 Gemini 图片/视频生成模型
  * 兼容 icqq / NapCat / OneBot
  */
 import config from '../config/config.js'
@@ -52,17 +52,19 @@ export class ImageGen extends plugin {
     constructor() {
         super({
             name: 'AI-ImageGen',
-            dsc: 'AI图片生成 - 文生图/图生图',
+            dsc: 'AI图片/视频生成 - 文生图/图生图/文生视频/图生视频',
             event: 'message',
             priority: 50,
             rule: [
                 { reg: /^#?文生图\s*(.+)$/s, fnc: 'text2img' },
                 { reg: /^#?图生图\s*(.*)$/s, fnc: 'img2img' },
+                { reg: /^#?文生视频\s*(.+)$/s, fnc: 'text2video' },
+                { reg: /^#?图生视频\s*(.*)$/s, fnc: 'img2video' },
                 { reg: presetReg, fnc: 'presetHandler' },
             ]
         })
         
-        this.timeout = 360000 // 6分钟超时
+        this.timeout = 600000 // 10分钟超时（视频生成需要更长时间）
         this.maxImages = 3
     }
 
@@ -124,6 +126,69 @@ export class ImageGen extends plugin {
             await this.sendResult(e, result)
         } catch (err) {
             logger.error('[ImageGen] 图生图失败:', err)
+            await e.reply(`处理失败: ${err.message}`, true)
+        }
+        
+        return true
+    }
+
+    /**
+     * 文生视频处理
+     */
+    async text2video() {
+        const e = this.e
+        
+        if (!config.get('features.imageGen.enabled')) {
+            return false
+        }
+        
+        const prompt = e.msg.replace(/^#?文生视频\s*/s, '').trim()
+        if (!prompt) {
+            await e.reply('请输入视频描述，例如：#文生视频 一只猫咪在草地上奔跑', true)
+            return true
+        }
+        
+        await e.reply('正在生成视频，这可能需要几分钟，请耐心等待...', true, { recallMsg: 120 })
+        
+        try {
+            const result = await this.generateVideo({ prompt })
+            await this.sendVideoResult(e, result)
+        } catch (err) {
+            logger.error('[ImageGen] 文生视频失败:', err)
+            await e.reply(`生成失败: ${err.message}`, true)
+        }
+        
+        return true
+    }
+
+    /**
+     * 图生视频处理
+     */
+    async img2video() {
+        const e = this.e
+        
+        if (!config.get('features.imageGen.enabled')) {
+            return false
+        }
+        
+        const urls = await this.getAllImages(e)
+        if (!urls.length) {
+            await e.reply('请发送或引用至少1张图片作为视频首帧', true)
+            return true
+        }
+        
+        const prompt = e.msg.replace(/^#?图生视频\s*/s, '').trim() || '请根据这张图片生成一段流畅的视频动画'
+        
+        await e.reply('正在根据图片生成视频，这可能需要几分钟，请耐心等待...', true, { recallMsg: 120 })
+        
+        try {
+            const result = await this.generateVideo({ 
+                prompt, 
+                imageUrls: urls.slice(0, 1) // 视频生成通常只支持1张首帧图片
+            })
+            await this.sendVideoResult(e, result)
+        } catch (err) {
+            logger.error('[ImageGen] 图生视频失败:', err)
             await e.reply(`处理失败: ${err.message}`, true)
         }
         
@@ -239,6 +304,167 @@ export class ImageGen extends plugin {
                 return { success: false, error: '请求超时，请重试', duration: this.formatDuration(duration) }
             }
             throw err
+        }
+    }
+
+    /**
+     * 调用视频生成 API
+     */
+    async generateVideo({ prompt, imageUrls = [] }) {
+        const apiConfig = config.get('features.imageGen') || {}
+        const apiUrl = apiConfig.videoApiUrl || apiConfig.apiUrl || 'https://business.928100.xyz/v1/chat/completions'
+        const apiKey = apiConfig.apiKey || 'X-Free'
+        const model = apiConfig.videoModel || 'veo-2.0-generate-001'
+        
+        // 构建消息内容
+        const content = []
+        if (prompt) {
+            content.push({ type: 'text', text: prompt })
+        }
+        if (imageUrls.length) {
+            content.push(...imageUrls.map(url => ({
+                type: 'image_url',
+                image_url: { url }
+            })))
+        }
+        
+        const requestData = {
+            model,
+            messages: [{ role: 'user', content }],
+            stream: false,
+            temperature: 0.7,
+        }
+        
+        const startTime = Date.now()
+        
+        try {
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`,
+                },
+                body: JSON.stringify(requestData),
+                signal: AbortSignal.timeout(this.timeout),
+            })
+            
+            if (!response.ok) {
+                throw new Error(`API 错误: ${response.status}`)
+            }
+            
+            const data = await response.json()
+            const duration = Date.now() - startTime
+            
+            // 解析返回的视频
+            const resultVideos = this.extractVideos(data)
+            
+            if (resultVideos.length) {
+                return {
+                    success: true,
+                    videos: resultVideos,
+                    duration: this.formatDuration(duration)
+                }
+            }
+            
+            // 如果没有视频，尝试提取图片作为备选
+            const resultImages = this.extractImages(data)
+            if (resultImages.length) {
+                return {
+                    success: true,
+                    images: resultImages,
+                    isImage: true,
+                    duration: this.formatDuration(duration)
+                }
+            }
+            
+            return {
+                success: false,
+                error: '未能生成视频，请重试或换个描述',
+                duration: this.formatDuration(duration)
+            }
+        } catch (err) {
+            const duration = Date.now() - startTime
+            if (err.name === 'TimeoutError') {
+                return { success: false, error: '请求超时，视频生成需要较长时间，请重试', duration: this.formatDuration(duration) }
+            }
+            throw err
+        }
+    }
+
+    /**
+     * 从响应中提取视频
+     */
+    extractVideos(data) {
+        const videos = []
+        const msg = data?.choices?.[0]?.message
+        
+        // 处理数组格式的 content
+        if (Array.isArray(msg?.content)) {
+            for (const item of msg.content) {
+                // 视频URL格式
+                if (item?.type === 'video_url' && item?.video_url?.url) {
+                    videos.push(item.video_url.url)
+                }
+                // 文件格式
+                if (item?.type === 'file' && item?.file?.url) {
+                    const url = item.file.url
+                    if (url.includes('.mp4') || url.includes('video')) {
+                        videos.push(url)
+                    }
+                }
+            }
+        }
+        
+        // 处理字符串格式的 content（Markdown 视频链接）
+        if (!videos.length && typeof msg?.content === 'string') {
+            // 匹配视频URL
+            const videoUrlRegex = /(https?:\/\/[^\s]+\.mp4[^\s]*)/gi
+            let match
+            while ((match = videoUrlRegex.exec(msg.content)) !== null) {
+                videos.push(match[1])
+            }
+            
+            // 匹配 Markdown 链接格式的视频
+            const mdLinkRegex = /\[.*?视频.*?\]\((.*?)\)/gi
+            while ((match = mdLinkRegex.exec(msg.content)) !== null) {
+                if (!videos.includes(match[1])) {
+                    videos.push(match[1])
+                }
+            }
+        }
+        
+        return videos
+    }
+
+    /**
+     * 发送视频结果
+     */
+    async sendVideoResult(e, result) {
+        if (result.success) {
+            if (result.isImage) {
+                // 如果返回的是图片而非视频
+                const msgs = [
+                    ...result.images.map(url => segment.image(url)),
+                    `⚠️ 模型返回了图片而非视频 (${result.duration})`
+                ]
+                await e.reply(msgs, true)
+            } else {
+                // 发送视频
+                const msgs = []
+                for (const url of result.videos) {
+                    try {
+                        // 尝试发送视频
+                        msgs.push(segment.video(url))
+                    } catch {
+                        // 如果视频发送失败，发送链接
+                        msgs.push(`🎬 视频链接: ${url}`)
+                    }
+                }
+                msgs.push(`✅ 视频生成完成 (${result.duration})`)
+                await e.reply(msgs, true)
+            }
+        } else {
+            await e.reply(`❌ ${result.error}`, true)
         }
     }
 

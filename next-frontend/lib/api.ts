@@ -78,6 +78,7 @@ export const presetsApi = {
   create: (data: any) => api.post('/api/preset/', data),
   update: (id: string, data: any) => api.put(`/api/preset/${id}`, data),
   delete: (id: string) => api.delete(`/api/preset/${id}`),
+  setDefault: (id: string) => api.post(`/api/preset/${id}/default`),
   getPrompt: (id: string) => api.get(`/api/preset/${id}/prompt`),
   getConfig: () => api.get('/api/presets/config'),
   updateConfig: (data: any) => api.put('/api/presets/config', data),

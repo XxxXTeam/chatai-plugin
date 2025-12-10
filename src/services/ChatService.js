@@ -261,8 +261,14 @@ export class ChatService {
         // Get context and history - 限制最多20条
         let history = await contextManager.getContextHistory(conversationId, 20)
         
-        // Determine model
-        const llmModel = model || LlmService.getModel(mode)
+        // Determine model - 确保获取到有效模型
+        let llmModel = model || LlmService.getModel(mode)
+        
+        // 如果模型为空或不是字符串，使用默认模型
+        if (!llmModel || typeof llmModel !== 'string') {
+            llmModel = config.get('llm.defaultModel') || 'gpt-4o'
+            logger.warn(`[ChatService] 模型配置为空或无效，使用默认模型: ${llmModel}`)
+        }
 
         // Set tool context if event is provided
         if (event) {

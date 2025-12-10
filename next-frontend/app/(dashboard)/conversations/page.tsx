@@ -26,7 +26,8 @@ import {
 } from '@/components/ui/alert-dialog'
 import { conversationsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Trash2, MessageSquare, Eye, RefreshCw, Loader2, User, Bot } from 'lucide-react'
+import { Trash2, MessageSquare, Eye, RefreshCw, Loader2, User, Bot, FileDown, Search } from 'lucide-react'
+import { Input } from '@/components/ui/input'
 
 interface Message {
   id: string
@@ -51,6 +52,7 @@ export default function ConversationsPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [searchTerm, setSearchTerm] = useState('')
 
   const fetchConversations = async () => {
     try {
@@ -122,6 +124,34 @@ export default function ConversationsPage() {
     return new Date(timestamp).toLocaleString('zh-CN')
   }
 
+  const filteredConversations = conversations.filter(c => 
+    c.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    c.userId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    c.groupId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    c.lastMessage?.toLowerCase().includes(searchTerm.toLowerCase())
+  )
+
+  const exportConversation = () => {
+    if (!selectedConversation || !messages.length) return
+    const exportData = {
+      conversation: selectedConversation,
+      messages: messages.map(m => ({
+        role: m.role,
+        content: getMessageText(m.content),
+        timestamp: m.timestamp ? formatTime(m.timestamp) : undefined
+      }))
+    }
+    const data = JSON.stringify(exportData, null, 2)
+    const blob = new Blob([data], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `conversation_${selectedConversation.id}_${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success('导出成功')
+  }
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -176,7 +206,18 @@ export default function ConversationsPage() {
         </div>
       </div>
 
-      {conversations.length === 0 ? (
+      {/* Search */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Input
+          placeholder="搜索对话ID、用户、群组或消息内容..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="pl-10"
+        />
+      </div>
+
+      {filteredConversations.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <MessageSquare className="h-12 w-12 text-muted-foreground mb-4" />
@@ -185,7 +226,7 @@ export default function ConversationsPage() {
         </Card>
       ) : (
         <div className="space-y-3">
-          {conversations.map((conversation) => (
+          {filteredConversations.map((conversation) => (
             <Card key={conversation.id} className="hover:bg-accent/50 transition-colors">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
@@ -231,10 +272,16 @@ export default function ConversationsPage() {
       <Dialog open={!!selectedConversation} onOpenChange={() => setSelectedConversation(null)}>
         <DialogContent className="max-w-2xl max-h-[80vh]">
           <DialogHeader>
-            <DialogTitle>对话详情</DialogTitle>
-            <DialogDescription>
-              {selectedConversation?.id}
-            </DialogDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <DialogTitle>对话详情</DialogTitle>
+                <DialogDescription>{selectedConversation?.id}</DialogDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={exportConversation} disabled={loadingMessages || messages.length === 0}>
+                <FileDown className="mr-2 h-4 w-4" />
+                导出
+              </Button>
+            </div>
           </DialogHeader>
           {loadingMessages ? (
             <div className="flex justify-center py-8">

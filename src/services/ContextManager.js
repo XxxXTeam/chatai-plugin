@@ -41,16 +41,31 @@ export class ContextManager {
      */
     async acquireLock(key, timeout = 30000) {
         const startTime = Date.now()
+        const maxLockDuration = 120000 // 锁最长持有时间 2 分钟
+        
+        // 检查现有锁是否已过期，如果过期则强制释放
+        const existingLock = this.locks.get(key)
+        if (existingLock) {
+            const lockAge = Date.now() - existingLock.acquiredAt
+            if (lockAge > maxLockDuration) {
+            //    logger.warn(`[ContextManager] 检测到过期锁，强制释放: ${key} (已持有 ${Math.round(lockAge/1000)}s)`)
+                this.releaseLock(key)
+            }
+        }
         
         // 等待现有锁释放
+        let waitCount = 0
         while (this.locks.has(key)) {
             // 检查超时
             if (Date.now() - startTime > timeout) {
-                logger.warn(`[ContextManager] 获取锁超时: ${key}`)
-                throw new Error(`获取上下文锁超时，请稍后重试`)
+                // 如果等待超时，强制获取锁（避免死锁）
+            //    logger.warn(`[ContextManager] 获取锁超时，强制获取: ${key}`)
+                this.releaseLock(key)
+                break
             }
             
-            // 等待现有锁释放
+            waitCount++
+            // 等待现有锁释放（最多等待2秒一轮）
             await new Promise(resolve => {
                 // 创建等待队列
                 if (!this.lockQueues.has(key)) {
@@ -68,7 +83,7 @@ export class ContextManager {
                             resolve()
                         }
                     }
-                }, Math.min(5000, timeout - (Date.now() - startTime)))
+                }, Math.min(2000, timeout - (Date.now() - startTime)))
             })
         }
         
@@ -78,8 +93,19 @@ export class ContextManager {
             timeout
         })
         
+        // 设置自动释放定时器（防止锁泄漏）
+        const autoReleaseTimer = setTimeout(() => {
+            if (this.locks.has(key)) {
+                logger.warn(`[ContextManager] 锁自动释放: ${key} (超过最大持有时间)`)
+                this.releaseLock(key)
+            }
+        }, maxLockDuration)
+        
         // 返回释放锁的函数
-        return () => this.releaseLock(key)
+        return () => {
+            clearTimeout(autoReleaseTimer)
+            this.releaseLock(key)
+        }
     }
 
     /**

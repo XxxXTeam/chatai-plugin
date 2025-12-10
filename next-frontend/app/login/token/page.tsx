@@ -37,7 +37,7 @@ function TokenLoginContent() {
           // 延迟跳转
           setTimeout(() => {
             router.push('/')
-          }, 1000)
+          }, 10)
         } else {
           throw new Error(res?.message || '验证失败')
         }

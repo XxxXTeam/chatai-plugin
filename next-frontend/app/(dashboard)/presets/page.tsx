@@ -21,7 +21,7 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { presetsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, Trash2, Loader2, Palette, Copy, Star } from 'lucide-react'
+import { Plus, Trash2, Loader2, Palette, Copy, Star, Upload, FileDown, RefreshCw } from 'lucide-react'
 
 interface Preset {
   id: string
@@ -151,6 +151,61 @@ export default function PresetsPage() {
     setDialogOpen(true)
   }
 
+  const handleSetDefault = async (id: string) => {
+    try {
+      await presetsApi.setDefault(id)
+      toast.success('已设为默认预设')
+      fetchPresets()
+    } catch (error) {
+      toast.error('设置失败')
+      console.error(error)
+    }
+  }
+
+  const exportPresets = () => {
+    const data = JSON.stringify(presets.map(({ id, ...rest }) => rest), null, 2)
+    const blob = new Blob([data], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `presets_${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success('导出成功')
+  }
+
+  const importPresets = () => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json'
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0]
+      if (!file) return
+      try {
+        const text = await file.text()
+        const data = JSON.parse(text)
+        if (!Array.isArray(data)) {
+          toast.error('无效的预设文件格式')
+          return
+        }
+        let imported = 0
+        for (const preset of data) {
+          try {
+            await presetsApi.create({ ...preset, isDefault: false })
+            imported++
+          } catch (err) {
+            console.error('导入预设失败:', preset.name, err)
+          }
+        }
+        toast.success(`成功导入 ${imported} 个预设`)
+        fetchPresets()
+      } catch (err) {
+        toast.error('导入失败: ' + (err as Error).message)
+      }
+    }
+    input.click()
+  }
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -178,13 +233,26 @@ export default function PresetsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold">预设管理</h2>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button onClick={() => handleOpenDialog()}>
-              <Plus className="mr-2 h-4 w-4" />
-              添加预设
-            </Button>
-          </DialogTrigger>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={importPresets}>
+            <Upload className="mr-2 h-4 w-4" />
+            导入
+          </Button>
+          <Button variant="outline" size="sm" onClick={exportPresets} disabled={presets.length === 0}>
+            <FileDown className="mr-2 h-4 w-4" />
+            导出
+          </Button>
+          <Button variant="outline" size="sm" onClick={fetchPresets}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            刷新
+          </Button>
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm" onClick={() => handleOpenDialog()}>
+                <Plus className="mr-2 h-4 w-4" />
+                添加预设
+              </Button>
+            </DialogTrigger>
           <DialogContent className="max-w-2xl max-h-[90vh]">
             <DialogHeader>
               <DialogTitle>{editingPreset ? '编辑预设' : '添加预设'}</DialogTitle>
@@ -278,6 +346,7 @@ export default function PresetsPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       {presets.length === 0 ? (
@@ -329,10 +398,21 @@ export default function PresetsPage() {
                   >
                     编辑
                   </Button>
+                  {!preset.isDefault && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleSetDefault(preset.id)}
+                      title="设为默认"
+                    >
+                      <Star className="h-4 w-4" />
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => handleDuplicate(preset)}
+                    title="复制"
                   >
                     <Copy className="h-4 w-4" />
                   </Button>
@@ -340,7 +420,8 @@ export default function PresetsPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => handleDelete(preset.id)}
-                    disabled={preset.id === 'default'}
+                    disabled={preset.isDefault}
+                    title="删除"
                   >
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </Button>
