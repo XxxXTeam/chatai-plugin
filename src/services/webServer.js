@@ -359,7 +359,7 @@ export class WebServer {
                 try {
                     jwt.verify(existingToken, authKey)
                     // JWT有效，直接重定向到主页
-                    logger.info('[Auth] User already authenticated, redirecting to home...')
+                    logger.debug('[Auth] User already authenticated, redirecting to home...')
                     return res.redirect('/')
                 } catch {
                     // JWT无效，继续正常登录流程
@@ -381,7 +381,7 @@ export class WebServer {
                         loginTime: Date.now()
                     }, authKey, { expiresIn: '30d' })
                     
-                    logger.info('[Auth] Login successful via URL token')
+                    logger.debug('[Auth] Login successful via URL token')
                     
                     // 设置cookie用于后续检测已登录状态
                     res.cookie('auth_token', jwtToken, {
@@ -432,7 +432,7 @@ export class WebServer {
                         loginTime: Date.now()
                     }, authKey, { expiresIn: '30d' })
 
-                    logger.info(`[Auth] Login successful via ${loginType}`)
+                    logger.debug(`[Auth] Login successful via ${loginType}`)
                     res.json(ChaiteResponse.ok({
                         token: jwtToken,
                         expiresIn: 30 * 24 * 60 * 60
@@ -463,7 +463,7 @@ export class WebServer {
                         loginTime: Date.now()
                     }, authKey, { expiresIn: '30d' })
 
-                    logger.info('[Auth] Login successful via URL token')
+                    logger.debug('[Auth] Login successful via URL token')
                     res.json(ChaiteResponse.ok({
                         token: jwtToken,
                         expiresIn: 30 * 24 * 60 * 60
@@ -616,7 +616,7 @@ export class WebServer {
                     })
                 }
 
-                logger.info('[WebServer] 配置已保存')
+                logger.debug('[WebServer] 配置已保存')
                 res.json(ChaiteResponse.ok({ success: true }))
             } catch (error) {
                 logger.error('[WebServer] 保存配置失败:', error)
@@ -893,15 +893,30 @@ export class WebServer {
             }
         })
 
-        // DELETE /api/preset/:id - Delete preset
-        this.app.delete('/api/preset/:id', async (req, res) => {
+        // POST /api/preset/:id/default - Set preset as default (protected)
+        this.app.post('/api/preset/:id/default', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const success = await presetManager.delete(req.params.id)
-                if (success) {
-                    res.json(ChaiteResponse.ok(null))
-                } else {
-                    res.status(404).json(ChaiteResponse.fail(null, 'Preset not found or cannot delete'))
+                await presetManager.init()
+                const preset = presetManager.get(req.params.id)
+                if (!preset) {
+                    return res.status(404).json(ChaiteResponse.fail(null, 'Preset not found'))
                 }
+                
+                // 更新所有预设的 isDefault 状态
+                const allPresets = presetManager.getAll()
+                for (const p of allPresets) {
+                    if (p.id === req.params.id) {
+                        await presetManager.update(p.id, { isDefault: true })
+                    } else if (p.isDefault) {
+                        await presetManager.update(p.id, { isDefault: false })
+                    }
+                }
+                
+                // 同时更新配置
+                config.set('presets.defaultId', req.params.id)
+                config.set('llm.defaultChatPresetId', req.params.id)
+                
+                res.json(ChaiteResponse.ok({ success: true }))
             } catch (err) {
                 res.status(500).json(ChaiteResponse.fail(null, err.message))
             }
@@ -2505,6 +2520,28 @@ export default {
                 const groupId = req.query.groupId || null
                 const effective = await sm.getEffectiveSettings(groupId, req.params.userId)
                 res.json(ChaiteResponse.ok(effective))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/config/personality - 获取人设配置
+        this.app.get('/api/config/personality', this.authMiddleware.bind(this), (req, res) => {
+            try {
+                const personality = config.get('personality') || {}
+                res.json(ChaiteResponse.ok(personality))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // PATCH /api/config/personality - 更新人设配置
+        this.app.patch('/api/config/personality', this.authMiddleware.bind(this), (req, res) => {
+            try {
+                const currentPersonality = config.get('personality') || {}
+                const updated = { ...currentPersonality, ...req.body }
+                config.set('personality', updated)
+                res.json(ChaiteResponse.ok(updated))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }

@@ -355,6 +355,9 @@ export class ImageGen extends plugin {
             const data = await response.json()
             const duration = Date.now() - startTime
             
+            // 调试日志：查看API返回内容
+            logger.info('[ImageGen] 视频API响应:', JSON.stringify(data, null, 2))
+            
             // 解析返回的视频
             const resultVideos = this.extractVideos(data)
             

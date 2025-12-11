@@ -349,7 +349,19 @@ export class PresetManager {
             throw new Error(`Preset not found: ${id}`)
         }
         const preset = this.presets.get(id)
-        const updated = { ...preset, ...data, id } // Ensure ID doesn't change
+        
+        // 深度合并嵌套对象
+        const updated = {
+            ...preset,
+            ...data,
+            id, // Ensure ID doesn't change
+            // 深度合并嵌套字段
+            modelParams: { ...(preset.modelParams || {}), ...(data.modelParams || {}) },
+            persona: { ...(preset.persona || {}), ...(data.persona || {}) },
+            context: { ...(preset.context || {}), ...(data.context || {}) },
+            tools: { ...(preset.tools || {}), ...(data.tools || {}) },
+        }
+        
         this.presets.set(id, updated)
         await this.savePresets()
         return updated

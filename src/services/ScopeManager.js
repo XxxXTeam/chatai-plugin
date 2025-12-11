@@ -61,7 +61,7 @@ export class ScopeManager {
       `)
 
       this.initialized = true
-      logger.info('[ScopeManager] 初始化完成')
+      logger.debug('[ScopeManager] 初始化完成')
     } catch (error) {
       logger.error('[ScopeManager] 初始化失败:', error)
       throw error
@@ -125,7 +125,7 @@ export class ScopeManager {
         now
       )
       
-      logger.info(`[ScopeManager] 用户配置已更新: ${userId}`)
+      logger.debug(`[ScopeManager] 用户配置已更新: ${userId}`)
       return true
     } catch (error) {
       logger.error(`[ScopeManager] 设置用户配置失败 (${userId}):`, error)
@@ -190,7 +190,7 @@ export class ScopeManager {
         now
       )
       
-      logger.info(`[ScopeManager] 群组配置已更新: ${groupId}`)
+      logger.debug(`[ScopeManager] 群组配置已更新: ${groupId}`)
       return true
     } catch (error) {
       logger.error(`[ScopeManager] 设置群组配置失败 (${groupId}):`, error)
@@ -257,7 +257,7 @@ export class ScopeManager {
     try {
       const stmt = this.db.db.prepare('DELETE FROM user_scopes WHERE userId = ?')
       stmt.run(userId)
-      logger.info(`[ScopeManager] 用户配置已删除: ${userId}`)
+      logger.debug(`[ScopeManager] 用户配置已删除: ${userId}`)
       return true
     } catch (error) {
       logger.error(`[ScopeManager] 删除用户配置失败 (${userId}):`, error)
@@ -276,7 +276,7 @@ export class ScopeManager {
     try {
       const stmt = this.db.db.prepare('DELETE FROM group_scopes WHERE groupId = ?')
       stmt.run(groupId)
-      logger.info(`[ScopeManager] 群组配置已删除: ${groupId}`)
+      logger.debug(`[ScopeManager] 群组配置已删除: ${groupId}`)
       return true
     } catch (error) {
       logger.error(`[ScopeManager] 删除群组配置失败 (${groupId}):`, error)
@@ -440,7 +440,7 @@ export class ScopeManager {
         now
       )
       
-      logger.info(`[ScopeManager] 群用户配置已更新: ${groupId}:${userId}`)
+      logger.debug(`[ScopeManager] 群用户配置已更新: ${groupId}:${userId}`)
       return true
     } catch (error) {
       logger.error(`[ScopeManager] 设置群用户配置失败 (${groupId}:${userId}):`, error)
@@ -488,7 +488,7 @@ export class ScopeManager {
         'DELETE FROM group_user_scopes WHERE groupId = ? AND userId = ?'
       )
       stmt.run(groupId, userId)
-      logger.info(`[ScopeManager] 群用户配置已删除: ${groupId}:${userId}`)
+      logger.debug(`[ScopeManager] 群用户配置已删除: ${groupId}:${userId}`)
       return true
     } catch (error) {
       logger.error(`[ScopeManager] 删除群用户配置失败 (${groupId}:${userId}):`, error)
@@ -578,13 +578,8 @@ export class ScopeManager {
     }
     settingsCache.user = await this.getUserSettings(userId)
     
-    // 输出调试日志
-    logger.info(`[ScopeManager] 查询人格配置: groupId=${groupId}, userId=${userId}`)
-    logger.info(`[ScopeManager] 优先级顺序: ${priorityOrder.join(' > ')}`)
-    logger.info(`[ScopeManager] 缓存数据: group_user=${settingsCache.group_user ? '有' : '无'}, group=${settingsCache.group ? '有' : '无'}, user=${settingsCache.user ? '有' : '无'}`)
-    if (settingsCache.group_user) {
-      logger.info(`[ScopeManager] group_user配置: prompt=${settingsCache.group_user.systemPrompt?.substring(0, 50) || '无'}...`)
-    }
+    // 输出调试日志（仅debug级别）
+    logger.debug(`[ScopeManager] 查询人格配置: groupId=${groupId}, userId=${userId}, 优先级: ${priorityOrder.join(' > ')}`)
 
     // 按优先级顺序查找
     for (const level of priorityOrder) {
@@ -607,11 +602,10 @@ export class ScopeManager {
       }
       
       if (settings) {
-        logger.info(`[ScopeManager] 检查 ${level}: hasPrompt=${!!settings.systemPrompt}, hasPresetId=${!!settings.presetId}`)
         if (!effectivePrompt && settings.systemPrompt) {
           effectivePrompt = settings.systemPrompt
           source = level
-          logger.info(`[ScopeManager] 使用 ${level} 的 systemPrompt`)
+          logger.debug(`[ScopeManager] 使用 ${level} 的 systemPrompt`)
         }
         if (!effectivePresetId && settings.presetId) {
           effectivePresetId = settings.presetId
@@ -620,7 +614,7 @@ export class ScopeManager {
       }
     }
 
-    logger.info(`[ScopeManager] 最终生效来源: ${source}, hasPrompt=${!!effectivePrompt}`)
+    logger.debug(`[ScopeManager] 最终生效来源: ${source}, hasPrompt=${!!effectivePrompt}`)
 
     return {
       systemPrompt: effectivePrompt,

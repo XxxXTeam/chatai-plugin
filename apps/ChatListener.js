@@ -153,7 +153,8 @@ export class ChatListener extends plugin {
         // === 私聊判断 ===
         if (!e.isGroup) {
             const privateCfg = triggerCfg.private || {}
-            if (!privateCfg.enabled) {
+            // 私聊默认启用（enabled 不存在或为 true 时启用）
+            if (privateCfg.enabled === false) {
                 return { triggered: false, msg: '', reason: '私聊已禁用' }
             }
             
@@ -162,13 +163,24 @@ export class ChatListener extends plugin {
                 return { triggered: true, msg: rawMsg, reason: '私聊总是响应' }
             }
             if (mode === 'prefix') {
-                const result = this.checkPrefix(rawMsg, triggerCfg.prefixes)
+                const result = this.checkPrefix(rawMsg, triggerCfg.prefixes, triggerCfg.prefixPersonas)
                 if (result.matched) {
-                    return { triggered: true, msg: result.content, reason: `私聊前缀[${result.prefix}]` }
+                    return { 
+                        triggered: true, 
+                        msg: result.content, 
+                        reason: result.isPersonaPrefix ? `私聊前缀人格[${result.prefix}]` : `私聊前缀[${result.prefix}]`,
+                        persona: result.persona,
+                        isPersonaPrefix: result.isPersonaPrefix
+                    }
                 }
                 return { triggered: false, msg: '', reason: '私聊需要前缀' }
             }
-            return { triggered: false, msg: '', reason: '私聊模式关闭' }
+            // mode === 'off' 时不触发
+            if (mode === 'off') {
+                return { triggered: false, msg: '', reason: '私聊模式关闭' }
+            }
+            // 未知模式默认响应
+            return { triggered: true, msg: rawMsg, reason: '私聊默认响应' }
         }
         
         // === 群聊判断 ===
@@ -375,7 +387,6 @@ export class ChatListener extends plugin {
         // 如果使用前缀人格，传递人格配置
         if (isPersonaPrefix && persona) {
             chatOptions.prefixPersona = persona
-            logger.info(`[ChatListener] 使用前缀人格: ${persona.substring(0, 50)}...`)
         }
         
         try {

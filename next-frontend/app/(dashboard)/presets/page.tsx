@@ -21,7 +21,18 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { presetsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, Trash2, Loader2, Palette, Copy, Star, Upload, FileDown, RefreshCw } from 'lucide-react'
+import { Plus, Trash2, Loader2, Palette, Copy, Star, Upload, FileDown, RefreshCw, User, MessageSquare, Sparkles, Heart, ThumbsDown, Tags, BookOpen } from 'lucide-react'
+
+interface PersonaConfig {
+  name?: string
+  personality?: string
+  speakingStyle?: string
+  background?: string
+  traits?: string[]
+  likes?: string[]
+  dislikes?: string[]
+  customFields?: Record<string, string>
+}
 
 interface Preset {
   id: string
@@ -30,8 +41,14 @@ interface Preset {
   systemPrompt: string
   isDefault: boolean
   enableReasoning: boolean
-  temperature: number
-  maxTokens: number
+  modelParams?: {
+    temperature?: number
+    max_tokens?: number
+  }
+  persona?: PersonaConfig
+  // 兼容旧字段
+  temperature?: number
+  maxTokens?: number
 }
 
 export default function PresetsPage() {
@@ -49,6 +66,14 @@ export default function PresetsPage() {
     enableReasoning: false,
     temperature: 0.7,
     maxTokens: 4096,
+    // 人设字段
+    personaName: '',
+    personality: '',
+    speakingStyle: '',
+    background: '',
+    traits: '',
+    likes: '',
+    dislikes: '',
   })
 
   const fetchPresets = async () => {
@@ -76,6 +101,13 @@ export default function PresetsPage() {
       enableReasoning: false,
       temperature: 0.7,
       maxTokens: 4096,
+      personaName: '',
+      personality: '',
+      speakingStyle: '',
+      background: '',
+      traits: '',
+      likes: '',
+      dislikes: '',
     })
     setEditingPreset(null)
   }
@@ -83,19 +115,56 @@ export default function PresetsPage() {
   const handleOpenDialog = (preset?: Preset) => {
     if (preset) {
       setEditingPreset(preset)
+      const persona = preset.persona || {}
       setForm({
         name: preset.name,
         description: preset.description || '',
         systemPrompt: preset.systemPrompt || '',
         isDefault: preset.isDefault || false,
         enableReasoning: preset.enableReasoning || false,
-        temperature: preset.temperature || 0.7,
-        maxTokens: preset.maxTokens || 4096,
+        temperature: preset.modelParams?.temperature ?? preset.temperature ?? 0.7,
+        maxTokens: preset.modelParams?.max_tokens ?? preset.maxTokens ?? 4096,
+        personaName: persona.name || '',
+        personality: persona.personality || '',
+        speakingStyle: persona.speakingStyle || '',
+        background: persona.background || '',
+        traits: (persona.traits || []).join(', '),
+        likes: (persona.likes || []).join(', '),
+        dislikes: (persona.dislikes || []).join(', '),
       })
     } else {
       resetForm()
     }
     setDialogOpen(true)
+  }
+
+  // 将 form 转换为后端数据结构
+  const buildPresetData = () => {
+    const parseList = (str: string) => str.split(/[,，]/).map(s => s.trim()).filter(Boolean)
+    
+    return {
+      name: form.name,
+      description: form.description,
+      systemPrompt: form.systemPrompt,
+      isDefault: form.isDefault,
+      enableReasoning: form.enableReasoning,
+      modelParams: {
+        temperature: form.temperature,
+        max_tokens: form.maxTokens,
+      },
+      persona: {
+        name: form.personaName || undefined,
+        personality: form.personality || undefined,
+        speakingStyle: form.speakingStyle || undefined,
+        background: form.background || undefined,
+        traits: parseList(form.traits),
+        likes: parseList(form.likes),
+        dislikes: parseList(form.dislikes),
+      },
+      // 兼容旧字段
+      temperature: form.temperature,
+      maxTokens: form.maxTokens,
+    }
   }
 
   const handleSave = async () => {
@@ -106,11 +175,12 @@ export default function PresetsPage() {
 
     setSaving(true)
     try {
+      const presetData = buildPresetData()
       if (editingPreset) {
-        await presetsApi.update(editingPreset.id, form)
+        await presetsApi.update(editingPreset.id, presetData)
         toast.success('预设已更新')
       } else {
-        await presetsApi.create(form)
+        await presetsApi.create(presetData)
         toast.success('预设已创建')
       }
 
@@ -138,14 +208,22 @@ export default function PresetsPage() {
   }
 
   const handleDuplicate = (preset: Preset) => {
+    const persona = preset.persona || {}
     setForm({
       name: `${preset.name} (副本)`,
       description: preset.description || '',
       systemPrompt: preset.systemPrompt || '',
       isDefault: false,
       enableReasoning: preset.enableReasoning || false,
-      temperature: preset.temperature || 0.7,
-      maxTokens: preset.maxTokens || 4096,
+      temperature: preset.modelParams?.temperature ?? preset.temperature ?? 0.7,
+      maxTokens: preset.modelParams?.max_tokens ?? preset.maxTokens ?? 4096,
+      personaName: persona.name || '',
+      personality: persona.personality || '',
+      speakingStyle: persona.speakingStyle || '',
+      background: persona.background || '',
+      traits: (persona.traits || []).join(', '),
+      likes: (persona.likes || []).join(', '),
+      dislikes: (persona.dislikes || []).join(', '),
     })
     setEditingPreset(null)
     setDialogOpen(true)
@@ -313,25 +391,146 @@ export default function PresetsPage() {
                     />
                   </div>
                 </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label>启用深度思考</Label>
-                    <p className="text-sm text-muted-foreground">使用思考模型进行推理</p>
+                {/* 人设配置区 */}
+                <div className="mt-6">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="p-1.5 rounded-md bg-gradient-to-br from-purple-500/20 to-pink-500/20">
+                      <Sparkles className="h-4 w-4 text-purple-500" />
+                    </div>
+                    <Label className="text-base font-semibold">角色人设</Label>
+                    <Badge variant="outline" className="text-xs font-normal">可选</Badge>
                   </div>
-                  <Switch
-                    checked={form.enableReasoning}
-                    onCheckedChange={(checked) => setForm({ ...form, enableReasoning: checked })}
-                  />
+                  <p className="text-sm text-muted-foreground mb-4 ml-8">配置AI的角色人设，会自动整合到系统提示词中</p>
+                  
+                  <div className="space-y-4 rounded-lg border bg-muted/30 p-4">
+                    {/* 基础信息 */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="personaName" className="flex items-center gap-2 text-sm">
+                          <User className="h-3.5 w-3.5 text-muted-foreground" />
+                          角色名称
+                        </Label>
+                        <Input
+                          id="personaName"
+                          value={form.personaName}
+                          onChange={(e) => setForm({ ...form, personaName: e.target.value })}
+                          placeholder="如：小助手"
+                          className="bg-background"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="speakingStyle" className="flex items-center gap-2 text-sm">
+                          <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+                          说话风格
+                        </Label>
+                        <Input
+                          id="speakingStyle"
+                          value={form.speakingStyle}
+                          onChange={(e) => setForm({ ...form, speakingStyle: e.target.value })}
+                          placeholder="如：活泼可爱、温柔礼貌"
+                          className="bg-background"
+                        />
+                      </div>
+                    </div>
+                    
+                    {/* 性格特点 */}
+                    <div className="space-y-2">
+                      <Label htmlFor="personality" className="flex items-center gap-2 text-sm">
+                        <Palette className="h-3.5 w-3.5 text-muted-foreground" />
+                        性格特点
+                      </Label>
+                      <Input
+                        id="personality"
+                        value={form.personality}
+                        onChange={(e) => setForm({ ...form, personality: e.target.value })}
+                        placeholder="如：友善、乐于助人、幽默风趣"
+                        className="bg-background"
+                      />
+                    </div>
+                    
+                    {/* 背景故事 */}
+                    <div className="space-y-2">
+                      <Label htmlFor="background" className="flex items-center gap-2 text-sm">
+                        <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
+                        背景故事
+                      </Label>
+                      <Textarea
+                        id="background"
+                        value={form.background}
+                        onChange={(e) => setForm({ ...form, background: e.target.value })}
+                        placeholder="角色的背景故事..."
+                        rows={3}
+                        className="bg-background resize-none"
+                      />
+                    </div>
+                    
+                    {/* 标签区 */}
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="space-y-2">
+                        <Label htmlFor="traits" className="flex items-center gap-2 text-sm">
+                          <Tags className="h-3.5 w-3.5 text-blue-500" />
+                          性格标签
+                        </Label>
+                        <Input
+                          id="traits"
+                          value={form.traits}
+                          onChange={(e) => setForm({ ...form, traits: e.target.value })}
+                          placeholder="逗号分隔"
+                          className="bg-background text-sm"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="likes" className="flex items-center gap-2 text-sm">
+                          <Heart className="h-3.5 w-3.5 text-pink-500" />
+                          喜好
+                        </Label>
+                        <Input
+                          id="likes"
+                          value={form.likes}
+                          onChange={(e) => setForm({ ...form, likes: e.target.value })}
+                          placeholder="逗号分隔"
+                          className="bg-background text-sm"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="dislikes" className="flex items-center gap-2 text-sm">
+                          <ThumbsDown className="h-3.5 w-3.5 text-orange-500" />
+                          讨厌
+                        </Label>
+                        <Input
+                          id="dislikes"
+                          value={form.dislikes}
+                          onChange={(e) => setForm({ ...form, dislikes: e.target.value })}
+                          placeholder="逗号分隔"
+                          className="bg-background text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label>设为默认预设</Label>
-                    <p className="text-sm text-muted-foreground">新对话将使用此预设</p>
+
+                {/* 其他设置 */}
+                <div className="border-t pt-4 mt-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label>启用深度思考</Label>
+                      <p className="text-sm text-muted-foreground">使用思考模型进行推理</p>
+                    </div>
+                    <Switch
+                      checked={form.enableReasoning}
+                      onCheckedChange={(checked) => setForm({ ...form, enableReasoning: checked })}
+                    />
                   </div>
-                  <Switch
-                    checked={form.isDefault}
-                    onCheckedChange={(checked) => setForm({ ...form, isDefault: checked })}
-                  />
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label>设为默认预设</Label>
+                      <p className="text-sm text-muted-foreground">新对话将使用此预设</p>
+                    </div>
+                    <Switch
+                      checked={form.isDefault}
+                      onCheckedChange={(checked) => setForm({ ...form, isDefault: checked })}
+                    />
+                  </div>
                 </div>
               </div>
             </ScrollArea>
@@ -382,12 +581,24 @@ export default function PresetsPage() {
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="text-sm text-muted-foreground line-clamp-3 bg-muted/50 p-2 rounded">
-                  {preset.systemPrompt?.substring(0, 150) || '无系统提示词'}...
+                  {preset.systemPrompt?.substring(0, 150) || '无系统提示词'}{preset.systemPrompt?.length > 150 ? '...' : ''}
                 </div>
+                {preset.persona?.name && (
+                  <div className="flex flex-wrap gap-1">
+                    <Badge variant="outline" className="text-xs">
+                      {preset.persona.name}
+                    </Badge>
+                    {preset.persona.personality && (
+                      <Badge variant="outline" className="text-xs">
+                        {preset.persona.personality.substring(0, 20)}
+                      </Badge>
+                    )}
+                  </div>
+                )}
                 <div className="flex gap-2 text-xs text-muted-foreground">
-                  <span>温度: {preset.temperature}</span>
+                  <span>温度: {preset.modelParams?.temperature ?? preset.temperature ?? 0.7}</span>
                   <span>•</span>
-                  <span>Token: {preset.maxTokens}</span>
+                  <span>Token: {preset.modelParams?.max_tokens ?? preset.maxTokens ?? 4096}</span>
                 </div>
                 <div className="flex gap-2">
                   <Button

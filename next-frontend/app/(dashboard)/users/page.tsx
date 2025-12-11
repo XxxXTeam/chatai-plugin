@@ -27,15 +27,19 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { api } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, Trash2, Loader2, Users, RefreshCw, Settings } from 'lucide-react'
+import { Textarea } from '@/components/ui/textarea'
+import { Plus, Trash2, Loader2, Users, RefreshCw, Settings, FileText } from 'lucide-react'
 
 interface UserScope {
   userId: string
   nickname?: string
   presetId?: string
+  systemPrompt?: string
   enabled: boolean
   lastActive?: number
   settings?: Record<string, unknown>
+  createdAt?: number
+  updatedAt?: number
 }
 
 interface Preset {
@@ -56,6 +60,7 @@ export default function UsersPage() {
     userId: '',
     nickname: '',
     presetId: '__default__',
+    systemPrompt: '',
     enabled: true,
   })
 
@@ -84,6 +89,7 @@ export default function UsersPage() {
       userId: '',
       nickname: '',
       presetId: '__default__',
+      systemPrompt: '',
       enabled: true,
     })
     setEditingUser(null)
@@ -96,6 +102,7 @@ export default function UsersPage() {
         userId: user.userId,
         nickname: user.nickname || '',
         presetId: user.presetId || '__default__',
+        systemPrompt: user.systemPrompt || '',
         enabled: user.enabled ?? true,
       })
     } else {
@@ -115,6 +122,7 @@ export default function UsersPage() {
       await api.put(`/api/scope/user/${form.userId}`, {
         nickname: form.nickname,
         presetId: form.presetId === '__default__' ? '' : form.presetId,
+        systemPrompt: form.systemPrompt || null,
         enabled: form.enabled,
       })
       toast.success('用户配置已保存')
@@ -187,11 +195,12 @@ export default function UsersPage() {
                 添加用户
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-w-2xl max-h-[90vh]">
               <DialogHeader>
                 <DialogTitle>{editingUser ? '编辑用户' : '添加用户'}</DialogTitle>
-                <DialogDescription>配置用户个性化设置</DialogDescription>
+                <DialogDescription>配置用户个性化设置和独立人设</DialogDescription>
               </DialogHeader>
+              <ScrollArea className="max-h-[60vh] pr-4">
               <div className="space-y-4">
                 <div className="grid gap-2">
                   <Label htmlFor="userId">用户ID (QQ号)</Label>
@@ -231,6 +240,25 @@ export default function UsersPage() {
                     </SelectContent>
                   </Select>
                 </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="systemPrompt">
+                    独立人设 <span className="text-xs text-muted-foreground">(设置后将完全替代默认预设)</span>
+                  </Label>
+                  <Textarea
+                    id="systemPrompt"
+                    value={form.systemPrompt}
+                    onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
+                    placeholder="不填写则使用预设配置...​
+
+示例：
+你是一个可爱的猫娘，说话时会加上“喵”。"
+                    rows={6}
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    设置后，此用户的所有对话都将使用这个人设，而不是预设。清空则恢复使用预设。
+                  </p>
+                </div>
                 <div className="flex items-center justify-between">
                   <Label>启用AI响应</Label>
                   <Switch
@@ -239,6 +267,7 @@ export default function UsersPage() {
                   />
                 </div>
               </div>
+              </ScrollArea>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setDialogOpen(false)}>
                   取消
@@ -296,7 +325,14 @@ export default function UsersPage() {
                         </Badge>
                       </div>
                       <div className="flex gap-4 text-sm text-muted-foreground">
-                        <span>预设: {presets.find(p => p.id === user.presetId)?.name || '默认'}</span>
+                        {user.systemPrompt ? (
+                          <span className="flex items-center gap-1">
+                            <FileText className="h-3 w-3" />
+                            独立人设
+                          </span>
+                        ) : (
+                          <span>预设: {presets.find(p => p.id === user.presetId)?.name || '默认'}</span>
+                        )}
                         <span>最后活跃: {formatTime(user.lastActive)}</span>
                       </div>
                     </div>

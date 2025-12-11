@@ -23,7 +23,7 @@ export class MemoryManager {
         
         // 启动周期性轮询
         this.startPolling()
-        logger.info('[MemoryManager] Initialized with database')
+        logger.debug('[MemoryManager] Initialized')
     }
     
     /**
@@ -47,7 +47,7 @@ export class MemoryManager {
             )
         }, intervalMs)
         
-        logger.info(`[MemoryManager] 启动周期轮询，间隔 ${intervalMinutes} 分钟`)
+        logger.debug(`[MemoryManager] 启动周期轮询: ${intervalMinutes}分钟`)
         
         // 启动群聊上下文采集
         this.startGroupContextCollection()
@@ -75,7 +75,7 @@ export class MemoryManager {
             )
         }, intervalMs)
         
-        logger.info(`[MemoryManager] 启动群聊上下文采集，间隔 ${intervalMinutes} 分钟`)
+        logger.debug(`[MemoryManager] 启动群聊上下文采集: ${intervalMinutes}分钟`)
     }
     
     /**
@@ -209,7 +209,7 @@ ${dialogText}
                             groupId,
                             type: 'user_info'
                         })
-                        logger.info(`[MemoryManager] 群聊提取用户记忆 [${groupId}:${nickname}]: ${info}`)
+                        logger.debug(`[MemoryManager] 群聊用户记忆 [${groupId}:${nickname}]`)
                     }
                 }
                 
@@ -223,7 +223,7 @@ ${dialogText}
                             groupId,
                             type: 'topic'
                         })
-                        logger.info(`[MemoryManager] 群聊提取话题 [${groupId}]: ${topic}`)
+                        logger.debug(`[MemoryManager] 群聊话题 [${groupId}]`)
                     }
                 }
                 
@@ -237,12 +237,12 @@ ${dialogText}
                             groupId,
                             type: 'relation'
                         })
-                        logger.info(`[MemoryManager] 群聊提取关系 [${groupId}]: ${relation}`)
+                        logger.debug(`[MemoryManager] 群聊关系 [${groupId}]`)
                     }
                 }
             }
             
-            logger.info(`[MemoryManager] 群 ${groupId} 上下文分析完成，处理 ${messages.length} 条消息`)
+            logger.debug(`[MemoryManager] 群 ${groupId} 分析完成: ${messages.length}条`)
         } catch (error) {
             logger.debug(`[MemoryManager] 分析群 ${groupId} 上下文失败:`, error.message)
         }
@@ -283,6 +283,36 @@ ${dialogText}
         
         return result
     }
+
+    /**
+     * 获取群聊上下文（简化接口）
+     * @param {string} groupId - 群ID
+     * @returns {Object} 群聊记忆
+     */
+    async getGroupContext(groupId) {
+        await this.init()
+        
+        const result = {
+            topics: [],
+            relations: [],
+            userInfos: []
+        }
+        
+        try {
+            // 获取话题记忆
+            result.topics = databaseService.getMemories(`group:${groupId}:topics`, 20)
+            
+            // 获取关系记忆
+            result.relations = databaseService.getMemories(`group:${groupId}:relations`, 20)
+            
+            // 获取群内用户记忆（按前缀查询）
+            result.userInfos = databaseService.getMemoriesByPrefix(`group:${groupId}:user:`, 30)
+        } catch (error) {
+            logger.debug(`[MemoryManager] 获取群 ${groupId} 上下文失败:`, error.message)
+        }
+        
+        return result
+    }
     
     /**
      * 停止轮询
@@ -291,12 +321,12 @@ ${dialogText}
         if (this.pollInterval) {
             clearInterval(this.pollInterval)
             this.pollInterval = null
-            logger.info('[MemoryManager] 停止周期轮询')
+            logger.debug('[MemoryManager] 停止周期轮询')
         }
         if (this.groupContextInterval) {
             clearInterval(this.groupContextInterval)
             this.groupContextInterval = null
-            logger.info('[MemoryManager] 停止群聊上下文采集')
+            logger.debug('[MemoryManager] 停止群聊上下文采集')
         }
     }
     
@@ -426,7 +456,7 @@ ${dialogText}
                         source: 'poll_summary',
                         importance: 6
                     })
-                    logger.info(`[MemoryManager] 轮询提取记忆 [${userId}]: ${memory}`)
+                    logger.debug(`[MemoryManager] 轮询提取记忆 [${userId}]`)
                 }
             }
         } catch (error) {
@@ -476,7 +506,7 @@ ${dialogText}
                     source: 'auto_extract',
                     originalMessage: userMessage.substring(0, 100)
                 })
-                logger.info(`[MemoryManager] 自动提取记忆: ${memoryContent}`)
+                logger.debug(`[MemoryManager] 自动提取记忆`)
                 return memoryContent
             }
         } catch (error) {
@@ -546,6 +576,7 @@ ${dialogText}
 
         const memoryText = selectedMemories.map(m => `- ${m.content}`).join('\n')
         logger.info(`[MemoryManager] 为用户 ${pureUserId} 加载 ${selectedMemories.length} 条记忆`)
+        logger.debug(`[MemoryManager] 记忆内容:\n${memoryText}`)
         return `\n【用户记忆】\n${memoryText}\n`
     }
 
@@ -644,7 +675,7 @@ ${dialogText}
         try {
             await this.init()
             const count = databaseService.clearMemories(userId)
-            logger.info(`[MemoryManager] 清除 ${userId} 的 ${count} 条记忆`)
+            logger.debug(`[MemoryManager] 清除 ${userId} 的 ${count} 条记忆`)
             return true
         } catch (e) {
             logger.error(`[MemoryManager] Failed to clear memory for user ${userId}`, e)

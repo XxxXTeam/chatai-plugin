@@ -1079,27 +1079,37 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
         let parseMethod = ''
         
         parseLog.push(`[Forward][深度${depth}] 开始解析, element keys: ${Object.keys(forwardElement || {}).join(', ')}`)
+        if (forwardElement.data) {
+            parseLog.push(`[Forward] data keys: ${Object.keys(forwardElement.data || {}).join(', ')}`)
+            // NapCat 文档: content 应该在 [收] 时直接包含
+            if (forwardElement.data.content) {
+                parseLog.push(`[Forward] data.content 存在, 长度: ${forwardElement.data.content?.length || 0}`)
+            }
+        }
+        // 输出完整结构用于调试 (限制长度)
+        parseLog.push(`[Forward] 完整结构: ${JSON.stringify(forwardElement).substring(0, 500)}`)
         
-        // NC/NapCat: 可能有 message 数组
-        if (forwardElement.message && Array.isArray(forwardElement.message)) {
-            forwardMessages = forwardElement.message
-            parseMethod = 'message_array'
-            parseLog.push(`[Forward] 使用 message_array 方式, 消息数: ${forwardMessages.length}`)
+        // NC/NapCat 文档: forward 消息段 { type: "forward", data: { id: "", content: [] } }
+        // content 在 [收] 时直接包含，优先检查
+        if (forwardElement.data?.content && Array.isArray(forwardElement.data.content)) {
+            forwardMessages = forwardElement.data.content
+            parseMethod = 'data_content'
+            parseLog.push(`[Forward] 使用 data.content 方式 (NapCat标准), 消息数: ${forwardMessages.length}`)
         }
         else if (forwardElement.content && Array.isArray(forwardElement.content)) {
             forwardMessages = forwardElement.content
             parseMethod = 'direct_content'
             parseLog.push(`[Forward] 使用 direct_content 方式, 消息数: ${forwardMessages.length}`)
         }
-        else if (forwardElement.data?.content && Array.isArray(forwardElement.data.content)) {
-            forwardMessages = forwardElement.data.content
-            parseMethod = 'data_content'
-            parseLog.push(`[Forward] 使用 data_content 方式, 消息数: ${forwardMessages.length}`)
+        else if (forwardElement.message && Array.isArray(forwardElement.message)) {
+            forwardMessages = forwardElement.message
+            parseMethod = 'message_array'
+            parseLog.push(`[Forward] 使用 message_array 方式, 消息数: ${forwardMessages.length}`)
         }
         else if (forwardElement.data?.message && Array.isArray(forwardElement.data.message)) {
             forwardMessages = forwardElement.data.message
             parseMethod = 'data_message'
-            parseLog.push(`[Forward] 使用 data_message 方式, 消息数: ${forwardMessages.length}`)
+            parseLog.push(`[Forward] 使用 data.message 方式, 消息数: ${forwardMessages.length}`)
         }
         // 方式3: 通过 id 获取 (icqq e.group.getForwardMsg)
         else if (forwardElement.id && e.group?.getForwardMsg) {
@@ -1149,24 +1159,40 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
             }
         }
         
-        // 方式7: NC/NapCat 使用 sendApi 获取转发消息
+        // 方式7: OneBot v11 标准 - sendApi get_forward_msg (参数: id)
         if (!forwardMessages && e.bot?.sendApi) {
             const fwdId = forwardElement.id || forwardElement.data?.id || forwardElement.resid || forwardElement.data?.resid
             if (fwdId) {
-                parseLog.push(`[Forward] 尝试通过 sendApi get_forward_msg id=${fwdId} 获取`)
+                parseLog.push(`[Forward] 尝试 sendApi get_forward_msg id=${fwdId}`)
                 try {
                     const result = await e.bot.sendApi('get_forward_msg', { id: fwdId })
-                    // NC返回格式: { data: { messages: [...] } } 或 { messages: [...] }
-                    forwardMessages = result?.data?.messages || result?.messages || result?.data || result
-                    if (forwardMessages && !Array.isArray(forwardMessages)) {
-                        forwardMessages = null
-                    }
-                    if (forwardMessages) {
+                    // OneBot v11 返回格式: { message: [...] }
+                    // NapCat 可能返回: { data: { messages: [...] } } 或 { messages: [...] }
+                    const messages = result?.message || result?.data?.messages || result?.messages || result?.data?.message
+                    if (messages && Array.isArray(messages)) {
+                        forwardMessages = messages
                         parseMethod = 'sendApi_get_forward_msg'
                         parseLog.push(`[Forward] 通过 sendApi 获取成功, 消息数: ${forwardMessages.length}`)
+                    } else if (result) {
+                        parseLog.push(`[Forward] sendApi 返回格式异常: ${JSON.stringify(result).substring(0, 200)}`)
                     }
                 } catch (err) {
-                    parseLog.push(`[Forward] 通过 sendApi 获取失败: ${err.message}`)
+                    parseLog.push(`[Forward] sendApi 获取失败: ${err.message}`)
+                }
+            }
+        }
+        
+        // 方式8: 尝试从引用消息中获取转发内容
+        if (!forwardMessages && e.source?.message) {
+            const sourceMsg = e.source.message
+            if (Array.isArray(sourceMsg)) {
+                const fwdSeg = sourceMsg.find(s => s.type === 'forward')
+                if (fwdSeg?.data?.content || fwdSeg?.data?.message || fwdSeg?.message) {
+                    forwardMessages = fwdSeg.data?.content || fwdSeg.data?.message || fwdSeg.message
+                    if (Array.isArray(forwardMessages)) {
+                        parseMethod = 'source_message'
+                        parseLog.push(`[Forward] 从 source.message 获取成功, 消息数: ${forwardMessages.length}`)
+                    }
                 }
             }
         }
@@ -1180,8 +1206,6 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
             // 最多处理15条转发消息
             for (let i = 0; i < Math.min(forwardMessages.length, 15); i++) {
                 const msg = forwardMessages[i]
-                
-                // NC/NapCat 兼容: 消息可能在 msg 或 msg.data 中
                 const msgData = msg.data || msg
                 
                 // 提取用户信息 - 兼容多种格式

@@ -145,7 +145,6 @@ export class ChatService {
             // 如果用户在群内或全局设置了独立人格，强制使用独立会话
             if (groupUserSettings?.systemPrompt || userSettings?.systemPrompt) {
                 forceIsolation = true
-                logger.info(`[ChatService] 用户 ${cleanUserId} 有独立人格设置，强制使用独立会话`)
             }
         }
         
@@ -334,18 +333,13 @@ export class ChatService {
             // 如果 userId 包含下划线（fullUserId 格式），提取纯 userId
             const pureUserId = scopeUserId.includes('_') ? scopeUserId.split('_').pop() : scopeUserId
             
-            logger.info(`[ChatService] 查询独立人设: groupId=${scopeGroupId}, userId=${pureUserId} (原始: ${userId})`)
-            
             const independentResult = await sm.getIndependentPrompt(scopeGroupId, pureUserId, defaultPrompt)
             
             // 使用独立人设或默认人设
             systemPrompt = independentResult.prompt
             
             if (independentResult.isIndependent) {
-                logger.info(`[ChatService] 使用独立人设 (来源: ${independentResult.source}, 优先级: ${independentResult.priorityOrder?.join(' > ') || 'default'})`)
-                logger.info(`[ChatService] 独立人设内容前100字: ${systemPrompt.substring(0, 100)}...`)
-            } else {
-                logger.info(`[ChatService] 未找到独立人设，使用默认人设`)
+                logger.debug(`[ChatService] 使用独立人设 (来源: ${independentResult.source})`)
             }
         } catch (e) { 
             logger.warn(`[ChatService] 获取独立人设失败:`, e.message) 
@@ -354,7 +348,7 @@ export class ChatService {
         // 1.1.5 前缀人格覆盖（最高优先级，仅限本次对话）
         if (prefixPersona) {
             systemPrompt = prefixPersona
-            logger.info(`[ChatService] 使用前缀人格覆盖，内容前50字: ${prefixPersona.substring(0, 50)}...`)
+            logger.debug(`[ChatService] 使用前缀人格覆盖`)
         }
 
         // 1.2 Memory Context
@@ -365,6 +359,9 @@ export class ChatService {
                 const memoryContext = await memoryManager.getMemoryContext(userId, message || '')
                 if (memoryContext) {
                     systemPrompt += memoryContext
+                    logger.debug(`[ChatService] 已添加记忆上下文到系统提示 (${memoryContext.length} 字符)`)
+                } else {
+                    logger.debug(`[ChatService] 无用户记忆`)
                 }
                 
                 // 获取群聊记忆上下文
@@ -383,6 +380,7 @@ export class ChatService {
                         }
                         if (parts.length > 0) {
                             systemPrompt += `\n【群聊记忆】\n${parts.join('\n')}\n`
+                            logger.debug(`[ChatService] 已添加群聊记忆上下文`)
                         }
                     }
                 }
@@ -433,7 +431,7 @@ export class ChatService {
         // Actually, robust tool handling is easier with non-stream loop, or carefully managed stream loop.
         // Strategy: If tools enabled, try stream. If stream returns tool_calls, break and enter multi-turn loop.
 
-        logger.info(`[ChatService] Request: model=${llmModel}, stream=${useStreaming}, tools=${hasTools ? client.tools.length : 0}`)
+        logger.debug(`[ChatService] Request: model=${llmModel}, stream=${useStreaming}, tools=${hasTools ? client.tools.length : 0}`)
 
         let finalResponse = null
         let finalUsage = null
@@ -448,7 +446,6 @@ export class ChatService {
                     if (data?.intermediateText && data.isIntermediate) {
                         const text = data.intermediateText.trim()
                         if (text) {
-                            logger.info('[ChatService] 发送工具调用前的中间回复:', text.substring(0, 50))
                             await event.reply(text, true)
                         }
                     }
@@ -512,15 +509,15 @@ export class ChatService {
             // 记录并发请求
             const concurrentCount = contextManager.recordRequest(conversationId)
             if (concurrentCount > 1) {
-                logger.warn(`[ChatService] 检测到并发请求: ${conversationId}, 当前并发数: ${concurrentCount}`)
+                logger.debug(`[ChatService] 并发请求: ${conversationId}, 数量: ${concurrentCount}`)
             }
             
             // 获取锁防止并发冲突
             let releaseLock = null
             try {
-                releaseLock = await contextManager.acquireLock(conversationId, 60000)
+                releaseLock = await contextManager.acquireLock(conversationId, 90000)
             } catch (lockErr) {
-                logger.error('[ChatService] 获取锁失败:', lockErr.message)
+                logger.warn('[ChatService] 获取锁超时，请稍后重试')
                 throw new Error('系统繁忙，请稍后重试')
             }
             
@@ -576,7 +573,7 @@ export class ChatService {
                                 usedModel = currentModel
                                 if (!isMainModel) {
                                     fallbackUsed = true
-                                    logger.info(`[ChatService] 使用备选模型成功: ${currentModel}`)
+                                    logger.debug(`[ChatService] 使用备选模型成功: ${currentModel}`)
                                     
                                     // 通知用户（如果配置启用）
                                     if (notifyOnFallback && event && event.reply) {
@@ -615,7 +612,7 @@ export class ChatService {
                         break
                     }
                     
-                    logger.info(`[ChatService] 尝试备选模型: ${modelsToTry[modelIndex + 1]}`)
+                    logger.debug(`[ChatService] 尝试备选模型: ${modelsToTry[modelIndex + 1]}`)
                 }
                 
                 // 如果所有模型都失败，抛出最后一个错误

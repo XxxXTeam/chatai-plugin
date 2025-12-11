@@ -159,6 +159,27 @@ class DatabaseService {
     }
     
     /**
+     * 按前缀获取记忆
+     */
+    getMemoriesByPrefix(prefix, limit = 50) {
+        const stmt = this.db.prepare(`
+            SELECT * FROM memories 
+            WHERE user_id LIKE ? 
+            ORDER BY timestamp DESC 
+            LIMIT ?
+        `)
+        return stmt.all(`${prefix}%`, limit).map(row => ({
+            id: row.id,
+            userId: row.user_id,
+            content: row.content,
+            source: row.source,
+            importance: row.importance,
+            timestamp: row.timestamp,
+            metadata: row.metadata ? JSON.parse(row.metadata) : null
+        }))
+    }
+    
+    /**
      * 获取记忆统计
      */
     getMemoryStats(userId) {

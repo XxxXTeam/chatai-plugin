@@ -78,6 +78,14 @@ export class AICommands extends plugin {
                 {
                     reg: '^#(个人画像|用户画像|分析我)$',
                     fnc: 'userPortrait'
+                },
+                {
+                    reg: '^#(我的记忆|查看记忆|记忆列表)$',
+                    fnc: 'viewMemory'
+                },
+                {
+                    reg: '^#(群记忆|群聊记忆)$',
+                    fnc: 'viewGroupMemory'
                 }
                 // #取 命令已独立到 MessageInspector.js
             ]
@@ -348,6 +356,123 @@ ${userMessages.slice(-50).map(m => {
         } catch (error) {
             logger.error('[AI-Commands] User portrait error:', error)
             await this.reply('个人画像失败: ' + error.message, true)
+        }
+        return true
+    }
+
+    /**
+     * 查看我的记忆
+     */
+    async viewMemory() {
+        const e = this.e
+        try {
+            await memoryManager.init()
+            
+            const userId = e.user_id || e.sender?.user_id || 'unknown'
+            const groupId = e.group_id || null
+            
+            // 获取用户记忆
+            const userMemories = await memoryManager.getMemories(String(userId)) || []
+            
+            // 如果在群里，也获取群内用户记忆
+            let groupUserMemories = []
+            if (groupId) {
+                groupUserMemories = await memoryManager.getMemories(`${groupId}_${userId}`) || []
+            }
+            
+            const allMemories = [...userMemories, ...groupUserMemories]
+            
+            if (allMemories.length === 0) {
+                await this.reply('📭 暂无记忆记录\n\n💡 与AI聊天时，重要信息会被自动记住', true)
+                return true
+            }
+            
+            // 按时间排序，最新在前
+            allMemories.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+            
+            // 最多显示15条
+            const displayMemories = allMemories.slice(0, 15)
+            
+            const memoryList = displayMemories.map((m, i) => {
+                const time = m.timestamp ? new Date(m.timestamp).toLocaleDateString('zh-CN') : '未知'
+                const importance = m.importance ? `[${m.importance}]` : ''
+                return `${i + 1}. ${m.content.substring(0, 60)}${m.content.length > 60 ? '...' : ''}\n   📅 ${time} ${importance}`
+            }).join('\n\n')
+            
+            const reply = [
+                `🧠 我的记忆 (共${allMemories.length}条)`,
+                `━━━━━━━━━━━━`,
+                memoryList,
+                `━━━━━━━━━━━━`,
+                allMemories.length > 15 ? `📝 仅显示最近15条` : '',
+                `💡 #清除记忆 可清空所有记忆`
+            ].filter(Boolean).join('\n')
+            
+            await this.reply(reply, true)
+        } catch (error) {
+            logger.error('[AI-Commands] View memory error:', error)
+            await this.reply('获取记忆失败: ' + error.message, true)
+        }
+        return true
+    }
+
+    /**
+     * 查看群记忆
+     */
+    async viewGroupMemory() {
+        const e = this.e
+        if (!e.group_id) {
+            await this.reply('此功能仅支持群聊', true)
+            return true
+        }
+
+        try {
+            await memoryManager.init()
+            
+            const groupId = e.group_id
+            
+            // 获取群聊相关记忆
+            const groupContext = await memoryManager.getGroupContext(String(groupId))
+            
+            const topics = groupContext?.topics || []
+            const relations = groupContext?.relations || []
+            const userInfos = groupContext?.userInfos || []
+            
+            if (topics.length === 0 && relations.length === 0 && userInfos.length === 0) {
+                await this.reply('📭 暂无群聊记忆\n\n💡 群聊活跃后会自动分析并记录', true)
+                return true
+            }
+            
+            const parts = [`🏠 群聊记忆 [${groupId}]`, `━━━━━━━━━━━━`]
+            
+            if (topics.length > 0) {
+                parts.push(`\n📌 话题记忆 (${topics.length}条)`)
+                topics.slice(0, 5).forEach((t, i) => {
+                    parts.push(`  ${i + 1}. ${t.content?.substring(0, 50) || t}`)
+                })
+            }
+            
+            if (userInfos.length > 0) {
+                parts.push(`\n👤 成员记忆 (${userInfos.length}条)`)
+                userInfos.slice(0, 5).forEach((u, i) => {
+                    parts.push(`  ${i + 1}. ${u.content?.substring(0, 50) || u}`)
+                })
+            }
+            
+            if (relations.length > 0) {
+                parts.push(`\n🔗 关系记忆 (${relations.length}条)`)
+                relations.slice(0, 3).forEach((r, i) => {
+                    parts.push(`  ${i + 1}. ${r.content?.substring(0, 50) || r}`)
+                })
+            }
+            
+            parts.push(`\n━━━━━━━━━━━━`)
+            parts.push(`💡 群聊记忆通过分析群消息自动生成`)
+            
+            await this.reply(parts.join('\n'), true)
+        } catch (error) {
+            logger.error('[AI-Commands] View group memory error:', error)
+            await this.reply('获取群记忆失败: ' + error.message, true)
         }
         return true
     }

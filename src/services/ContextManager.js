@@ -14,8 +14,7 @@ import historyManager from '../core/utils/history.js'
  */
 export class ContextManager {
     constructor() {
-        this.locks = new Map()          // 异步锁状态
-        this.lockQueues = new Map()     // 锁等待队列
+        this.locks = new Map()          // 异步锁: key -> { promise, resolve, acquiredAt }
         this.initialized = false
         this.maxContextMessages = 20    // 最多20条上文
         this.requestCounters = new Map() // 请求计数器（用于检测并发）
@@ -30,100 +29,84 @@ export class ContextManager {
         if (this.initialized) return
         await redisClient.init()
         this.initialized = true
-        logger.info('[ContextManager] Initialized')
+        logger.debug('[ContextManager] Initialized')
     }
 
     /**
-     * 获取异步锁 - 真正的互斥锁实现
+     * 获取异步锁 - 简洁的 Promise-based 互斥锁
      * @param {string} key - 锁的key（conversationId）
-     * @param {number} timeout - 超时时间(ms)，默认30秒
+     * @param {number} timeout - 超时时间(ms)，默认60秒
      * @returns {Promise<Function>} 释放锁的函数
      */
-    async acquireLock(key, timeout = 30000) {
+    async acquireLock(key, timeout = 60000) {
+        const maxLockDuration = 90000 // 锁最长持有时间 90秒
         const startTime = Date.now()
-        const maxLockDuration = 120000 // 锁最长持有时间 2 分钟
-        
-        // 检查现有锁是否已过期，如果过期则强制释放
-        const existingLock = this.locks.get(key)
-        if (existingLock) {
-            const lockAge = Date.now() - existingLock.acquiredAt
-            if (lockAge > maxLockDuration) {
-            //    logger.warn(`[ContextManager] 检测到过期锁，强制释放: ${key} (已持有 ${Math.round(lockAge/1000)}s)`)
-                this.releaseLock(key)
-            }
-        }
         
         // 等待现有锁释放
-        let waitCount = 0
         while (this.locks.has(key)) {
-            // 检查超时
-            if (Date.now() - startTime > timeout) {
-                // 如果等待超时，强制获取锁（避免死锁）
-            //    logger.warn(`[ContextManager] 获取锁超时，强制获取: ${key}`)
-                this.releaseLock(key)
+            const existingLock = this.locks.get(key)
+            
+            // 检查现有锁是否过期
+            if (existingLock && (Date.now() - existingLock.acquiredAt > maxLockDuration)) {
+                // 强制释放过期锁
+                this._forceRelease(key)
                 break
             }
             
-            waitCount++
-            // 等待现有锁释放（最多等待2秒一轮）
-            await new Promise(resolve => {
-                // 创建等待队列
-                if (!this.lockQueues.has(key)) {
-                    this.lockQueues.set(key, [])
-                }
-                this.lockQueues.get(key).push(resolve)
-                
-                // 设置超时自动释放
-                setTimeout(() => {
-                    const queue = this.lockQueues.get(key)
-                    if (queue) {
-                        const idx = queue.indexOf(resolve)
-                        if (idx >= 0) {
-                            queue.splice(idx, 1)
-                            resolve()
-                        }
-                    }
-                }, Math.min(2000, timeout - (Date.now() - startTime)))
-            })
+            // 检查等待超时
+            if (Date.now() - startTime > timeout) {
+                throw new Error(`获取锁超时: ${key}`)
+            }
+            
+            // 等待锁释放
+            if (existingLock?.promise) {
+                await Promise.race([
+                    existingLock.promise,
+                    new Promise(r => setTimeout(r, 1000)) // 每秒检查一次
+                ])
+            } else {
+                await new Promise(r => setTimeout(r, 100))
+            }
         }
         
-        // 设置锁
+        // 创建新锁
+        let lockResolve
+        const lockPromise = new Promise(resolve => { lockResolve = resolve })
+        
         this.locks.set(key, {
             acquiredAt: Date.now(),
-            timeout
+            promise: lockPromise,
+            resolve: lockResolve
         })
         
-        // 设置自动释放定时器（防止锁泄漏）
-        const autoReleaseTimer = setTimeout(() => {
-            if (this.locks.has(key)) {
-                logger.warn(`[ContextManager] 锁自动释放: ${key} (超过最大持有时间)`)
-                this.releaseLock(key)
-            }
-        }, maxLockDuration)
-        
-        // 返回释放锁的函数
+        // 返回释放函数
+        let released = false
         return () => {
-            clearTimeout(autoReleaseTimer)
-            this.releaseLock(key)
+            if (!released) {
+                released = true
+                this._forceRelease(key)
+            }
         }
     }
 
     /**
-     * 释放锁
+     * 内部方法：强制释放锁
+     * @private
+     */
+    _forceRelease(key) {
+        const lock = this.locks.get(key)
+        if (lock?.resolve) {
+            lock.resolve()
+        }
+        this.locks.delete(key)
+    }
+
+    /**
+     * 释放锁（外部调用）
      * @param {string} key
      */
     releaseLock(key) {
-        this.locks.delete(key)
-        
-        // 通知等待队列中的第一个
-        const queue = this.lockQueues.get(key)
-        if (queue && queue.length > 0) {
-            const resolve = queue.shift()
-            if (resolve) resolve()
-        }
-        if (queue && queue.length === 0) {
-            this.lockQueues.delete(key)
-        }
+        this._forceRelease(key)
     }
 
     /**
@@ -454,7 +437,7 @@ export class ContextManager {
             return // 不需要清理
         }
 
-        logger.info(`[ContextManager] 清理上下文: ${conversationId}, 当前${history.length}条, 最大${maxMessages}条`)
+        logger.debug(`[ContextManager] 清理上下文: ${conversationId}, ${history.length} -> ${maxMessages}`)
 
         if (strategy === 'smart') {
             // 智能清理：保留最近对话和重要消息
@@ -487,7 +470,7 @@ export class ContextManager {
                     await historyManager.trimHistory(conversationId, maxMessages)
                 }
                 
-                logger.info(`[ContextManager] 智能清理完成: 保留${importantMessages.length}条重要消息, ${recentMessages.length}条最近消息`)
+                logger.debug(`[ContextManager] 智能清理: 保留${importantMessages.length}条重要+${recentMessages.length}条最近`)
                 return
             } catch (error) {
                 logger.error('[ContextManager] 智能清理失败，回退到截断模式', error)
@@ -496,7 +479,6 @@ export class ContextManager {
 
         // 默认/回退: 简单截断，保留最近的消息
         await historyManager.trimHistory(conversationId, maxMessages)
-        logger.info(`[ContextManager] 截断清理完成: 保留最近${maxMessages}条`)
     }
     
     /**
@@ -539,7 +521,7 @@ export class ContextManager {
         const shouldEnd = currentRounds >= maxRounds
         
         if (shouldEnd) {
-            logger.info(`[ContextManager] 对话达到轮数限制: ${conversationId}, ${currentRounds}/${maxRounds}`)
+            logger.debug(`[ContextManager] 对话达到轮数限制: ${conversationId}, ${currentRounds}/${maxRounds}`)
         }
         
         return {
@@ -560,7 +542,7 @@ export class ContextManager {
         try {
             await historyManager.deleteConversation(conversationId)
             await this.cleanContext(conversationId)
-            logger.info(`[ContextManager] 自动结束对话成功: ${conversationId}`)
+            logger.debug(`[ContextManager] 自动结束对话: ${conversationId}`)
             return true
         } catch (error) {
             logger.error(`[ContextManager] 自动结束对话失败: ${error.message}`)

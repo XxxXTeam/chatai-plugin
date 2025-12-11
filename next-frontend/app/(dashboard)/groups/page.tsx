@@ -25,17 +25,21 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Textarea } from '@/components/ui/textarea'
 import { scopeApi, presetsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, Trash2, Loader2, Users, RefreshCw, Settings } from 'lucide-react'
+import { Plus, Trash2, Loader2, Users, RefreshCw, Settings, FileText } from 'lucide-react'
 
 interface GroupScope {
   groupId: string
   groupName?: string
   presetId?: string
+  systemPrompt?: string
   enabled: boolean
   triggerMode?: string
   settings?: any
+  createdAt?: number
+  updatedAt?: number
 }
 
 interface Preset {
@@ -56,6 +60,7 @@ export default function GroupsPage() {
     groupId: '',
     groupName: '',
     presetId: '__default__',
+    systemPrompt: '',
     enabled: true,
     triggerMode: 'default',
   })
@@ -85,6 +90,7 @@ export default function GroupsPage() {
       groupId: '',
       groupName: '',
       presetId: '__default__',
+      systemPrompt: '',
       enabled: true,
       triggerMode: 'default',
     })
@@ -98,6 +104,7 @@ export default function GroupsPage() {
         groupId: group.groupId,
         groupName: group.groupName || '',
         presetId: group.presetId || '__default__',
+        systemPrompt: group.systemPrompt || '',
         enabled: group.enabled ?? true,
         triggerMode: group.triggerMode || 'default',
       })
@@ -118,6 +125,7 @@ export default function GroupsPage() {
       await scopeApi.updateGroup(form.groupId, {
         groupName: form.groupName,
         presetId: form.presetId === '__default__' ? '' : form.presetId,
+        systemPrompt: form.systemPrompt || null,
         enabled: form.enabled,
         triggerMode: form.triggerMode,
       })
@@ -174,11 +182,12 @@ export default function GroupsPage() {
                 添加群
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-w-2xl max-h-[90vh]">
               <DialogHeader>
                 <DialogTitle>{editingGroup ? '编辑群配置' : '添加群'}</DialogTitle>
-                <DialogDescription>配置群聊个性化设置</DialogDescription>
+                <DialogDescription>配置群聊个性化设置和独立人设</DialogDescription>
               </DialogHeader>
+              <ScrollArea className="max-h-[60vh] pr-4">
               <div className="space-y-4">
                 <div className="grid gap-2">
                   <Label htmlFor="groupId">群号</Label>
@@ -235,6 +244,25 @@ export default function GroupsPage() {
                     </SelectContent>
                   </Select>
                 </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="systemPrompt">
+                    独立人设 <span className="text-xs text-muted-foreground">(设置后将完全替代默认预设)</span>
+                  </Label>
+                  <Textarea
+                    id="systemPrompt"
+                    value={form.systemPrompt}
+                    onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
+                    placeholder="不填写则使用预设配置...​
+
+示例：
+你是本群的AI助手，会称呼群友为“大佬”。"
+                    rows={6}
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    设置后，此群的所有对话都将使用这个人设。清空则恢复使用预设。
+                  </p>
+                </div>
                 <div className="flex items-center justify-between">
                   <Label>启用AI响应</Label>
                   <Switch
@@ -243,6 +271,7 @@ export default function GroupsPage() {
                   />
                 </div>
               </div>
+              </ScrollArea>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setDialogOpen(false)}>
                   取消
@@ -300,7 +329,14 @@ export default function GroupsPage() {
                         </Badge>
                       </div>
                       <div className="flex gap-4 text-sm text-muted-foreground">
-                        <span>预设: {presets.find(p => p.id === group.presetId)?.name || '默认'}</span>
+                        {group.systemPrompt ? (
+                          <span className="flex items-center gap-1">
+                            <FileText className="h-3 w-3" />
+                            独立人设
+                          </span>
+                        ) : (
+                          <span>预设: {presets.find(p => p.id === group.presetId)?.name || '默认'}</span>
+                        )}
                         <span>模式: {group.triggerMode || '默认'}</span>
                       </div>
                     </div>
