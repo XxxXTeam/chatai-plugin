@@ -505,22 +505,14 @@ export class ChatService {
             }
 
             // --- 2. 统一使用 Client 发送消息，工具调用由 AbstractClient 内部处理 ---
-            // 记录并发请求
+            // 记录并发请求（仅用于日志，不阻塞）
             const concurrentCount = contextManager.recordRequest(conversationId)
             if (concurrentCount > 1) {
                 logger.debug(`[ChatService] 并发请求: ${conversationId}, 数量: ${concurrentCount}`)
             }
             
-            // 获取锁防止并发冲突
-            let releaseLock = null
-            try {
-                releaseLock = await contextManager.acquireLock(conversationId, 90000)
-            } catch (lockErr) {
-                logger.warn('[ChatService] 获取锁超时，请稍后重试')
-                throw new Error('系统繁忙，请稍后重试')
-            }
-            
-            try {
+            // 不使用锁机制，直接处理请求（避免锁超时问题）
+            {
                 // 获取备选模型配置
                 const fallbackConfig = config.get('llm.fallback') || {}
                 const fallbackEnabled = fallbackConfig.enabled !== false
@@ -632,9 +624,6 @@ export class ChatService {
                     debugInfo.usedModel = usedModel
                     debugInfo.fallbackUsed = fallbackUsed
                 }
-            } finally {
-                // 确保释放锁
-                if (releaseLock) releaseLock()
             }
             
             // 收集响应调试信息

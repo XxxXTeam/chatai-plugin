@@ -110,8 +110,8 @@ export class MemoryManager {
      * @param {Object} message - 消息对象
      */
     collectGroupMessage(groupId, message) {
-        const groupConfig = config.get('memory.groupContext') || {}
-        if (!groupConfig.enabled) return
+        // 群消息采集独立于 memory.groupContext 配置
+        // 只要触发器配置 collectGroupMsg=true 就会采集
         
         if (!this.groupMessageBuffer) {
             this.groupMessageBuffer = new Map()
@@ -122,19 +122,37 @@ export class MemoryManager {
         }
         
         const messages = this.groupMessageBuffer.get(groupId)
-        const maxMessages = groupConfig.maxMessagesPerCollect || 50
+        const maxMessages = 100  // 内存保留100条
         
-        // 添加消息
-        messages.push({
+        const msgData = {
             userId: message.user_id,
             nickname: message.sender?.nickname || message.sender?.card || '未知',
             content: message.msg || message.raw_message || '',
             timestamp: Date.now()
-        })
+        }
         
-        // 限制消息数量
+        // 添加到内存缓冲区
+        messages.push(msgData)
+        
+        // 限制内存消息数量
         while (messages.length > maxMessages) {
             messages.shift()
+        }
+        
+        // 同时持久化到数据库（用于群聊总结的保底数据）
+        try {
+            databaseService.init()
+            const conversationId = `group_summary_${groupId}`
+            databaseService.saveMessage(conversationId, {
+                role: 'user',
+                content: `[${msgData.nickname}]: ${msgData.content}`,
+                timestamp: msgData.timestamp,
+                metadata: { userId: msgData.userId, nickname: msgData.nickname }
+            })
+            // 保留最近100条
+            databaseService.trimMessages(conversationId, 100)
+        } catch (e) {
+            // 静默失败，不影响主流程
         }
     }
     
@@ -710,6 +728,18 @@ ${dialogText}
      */
     async addMemory(userId, content, metadata = {}) {
         return this.saveMemory(userId, content, metadata)
+    }
+
+    /**
+     * 获取群消息缓冲区中的消息（用于群聊总结）
+     * @param {string} groupId - 群ID
+     * @returns {Array} 消息列表
+     */
+    getGroupMessageBuffer(groupId) {
+        if (!this.groupMessageBuffer) {
+            return []
+        }
+        return this.groupMessageBuffer.get(groupId) || []
     }
 }
 

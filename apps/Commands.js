@@ -238,25 +238,73 @@ export class AICommands extends plugin {
         try {
             await this.reply('正在分析群聊消息...', true)
             
-            databaseService.init()
-            
             const maxMessages = config.get('features.groupSummary.maxMessages') || 100
-            const groupKey = `group_${e.group_id}`
+            const groupId = String(e.group_id)
             
-            const messages = databaseService.getMessages(groupKey, maxMessages)
+            // 1. 优先使用内存缓冲区（实时数据）
+            await memoryManager.init()
+            let messages = memoryManager.getGroupMessageBuffer(groupId)
+            let dataSource = '内存缓冲'
+            
+            // 2. 如果内存不足，从数据库读取持久化的群消息
+            if (messages.length < 5) {
+                try {
+                    databaseService.init()
+                    const conversationId = `group_summary_${groupId}`
+                    const dbMessages = databaseService.getMessages(conversationId, maxMessages)
+                    if (dbMessages && dbMessages.length > 0) {
+                        messages = dbMessages.map(m => ({
+                            nickname: m.metadata?.nickname || '用户',
+                            content: typeof m.content === 'string' ? m.content : 
+                                (Array.isArray(m.content) ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') : String(m.content)),
+                            timestamp: m.timestamp
+                        })).filter(m => m.content && m.content.trim())
+                        dataSource = '数据库'
+                    }
+                } catch (dbErr) {
+                    logger.debug('[AI-Commands] 从数据库读取群消息失败:', dbErr.message)
+                }
+            }
+            
+            // 3. 最后尝试 bot API 获取群聊历史
+            if (messages.length < 5) {
+                try {
+                    const bot = e.bot || Bot
+                    const group = e.group || bot?.pickGroup?.(e.group_id)
+                    if (group && typeof group.getChatHistory === 'function') {
+                        const history = await group.getChatHistory(0, maxMessages)
+                        if (history && history.length > 0) {
+                            messages = history.map(msg => ({
+                                userId: msg.user_id || msg.sender?.user_id,
+                                nickname: msg.sender?.nickname || msg.sender?.card || '用户',
+                                content: msg.raw_message || msg.message?.filter?.(m => m.type === 'text')?.map?.(m => m.text)?.join('') || '',
+                                timestamp: msg.time ? msg.time * 1000 : Date.now()
+                            })).filter(m => m.content && m.content.trim())
+                            dataSource = 'Bot API'
+                        }
+                    }
+                } catch (historyErr) {
+                    logger.debug('[AI-Commands] 获取群聊历史失败:', historyErr.message)
+                }
+            }
             
             if (messages.length < 5) {
-                await this.reply('群聊消息太少，无法生成总结', true)
+                await this.reply('群聊消息太少，无法生成总结\n\n💡 提示：需要在群里有足够的聊天记录\n请确保：\n1. 群聊消息采集已启用 (trigger.collectGroupMsg)\n2. 群里已有一定量的聊天记录', true)
                 return true
             }
 
-            const summaryPrompt = `请总结以下群聊对话的主要内容，提取关键话题和讨论要点：\n\n${
-                messages.map(m => `${m.role}: ${
-                    Array.isArray(m.content) 
-                        ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') 
-                        : m.content
-                }`).join('\n')
-            }\n\n请用简洁的方式总结：
+            // 构建总结提示
+            const dialogText = messages.slice(-maxMessages).map(m => {
+                // 处理已格式化的消息（来自数据库）和原始消息
+                if (typeof m.content === 'string' && m.content.startsWith('[')) {
+                    return m.content  // 已格式化
+                }
+                const content = typeof m.content === 'string' ? m.content : 
+                    (Array.isArray(m.content) ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') : m.content)
+                return `[${m.nickname || '用户'}]: ${content}`
+            }).join('\n')
+            
+            const summaryPrompt = `请总结以下群聊对话的主要内容，提取关键话题和讨论要点：\n\n${dialogText}\n\n请用简洁的方式总结：
 1. 主要讨论话题
 2. 关键观点
 3. 参与度分析`
@@ -276,7 +324,7 @@ export class AICommands extends plugin {
             }
 
             if (summaryText) {
-                await this.reply(`📊 群聊总结\n\n${summaryText}`, true)
+                await this.reply(`📊 群聊总结 (${messages.length}条消息 · ${dataSource})\n\n${summaryText}`, true)
             } else {
                 await this.reply('总结生成失败', true)
             }

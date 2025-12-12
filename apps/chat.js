@@ -374,11 +374,8 @@ export class Chat extends plugin {
       return false
     }
     
-    // 防止并发重复处理（同一消息被多次触发）
-    if (!startProcessingMessage(e)) {
-      logger.debug('[Chat] 跳过: 消息正在处理中')
-      return false
-    }
+    // 注意：startProcessingMessage 移到触发条件判断之后调用
+    // 避免在返回 false（交给 ChatListener 处理）时，消息被标记为处理中
     
     // 获取配置（优先新trigger配置）
     let triggerCfg = config.get('trigger')
@@ -508,6 +505,11 @@ export class Chat extends plugin {
       }
     }
     
+    // 确定要处理消息后，检查并发处理
+    if (!startProcessingMessage(e)) {
+      logger.debug('[Chat] 跳过: 消息正在处理中')
+      return false
+    }
     
     // 标记消息已处理
     markMessageProcessed(e)

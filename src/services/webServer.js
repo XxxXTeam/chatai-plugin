@@ -868,6 +868,19 @@ export class WebServer {
         // PUT /api/preset/:id - Update preset (protected)
         this.app.put('/api/preset/:id', this.authMiddleware.bind(this), async (req, res) => {
             try {
+                // 如果设置 isDefault=true，需要先取消其他预设的 isDefault 状态
+                if (req.body.isDefault === true) {
+                    const allPresets = presetManager.getAll()
+                    for (const p of allPresets) {
+                        if (p.id !== req.params.id && p.isDefault) {
+                            await presetManager.update(p.id, { isDefault: false })
+                        }
+                    }
+                    // 同时更新配置
+                    config.set('presets.defaultId', req.params.id)
+                    config.set('llm.defaultChatPresetId', req.params.id)
+                }
+                
                 const preset = await presetManager.update(req.params.id, req.body)
                 if (preset) {
                     res.json(ChaiteResponse.ok(preset))
