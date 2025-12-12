@@ -129,13 +129,13 @@ export default function ChannelsPage() {
     if (channel) {
       setEditingChannel(channel)
       setForm({
-        name: channel.name,
-        adapterType: channel.adapterType,
-        baseUrl: channel.baseUrl,
-        apiKey: channel.apiKey,
+        name: channel.name || '',
+        adapterType: channel.adapterType || 'openai',
+        baseUrl: channel.baseUrl || '',
+        apiKey: channel.apiKey || '',
         models: channel.models?.join(', ') || '',
-        enabled: channel.enabled,
-        priority: channel.priority,
+        enabled: channel.enabled !== false,
+        priority: channel.priority || 0,
         advanced: (channel as any).advanced || { ...defaultAdvanced }
       })
     } else {
@@ -145,8 +145,8 @@ export default function ChannelsPage() {
   }
 
   const handleSave = async () => {
-    if (!form.name || !form.baseUrl || !form.apiKey) {
-      toast.error('请填写必要信息')
+    if (!form.name || !form.apiKey) {
+      toast.error('请填写渠道名称和 API Key')
       return
     }
 
@@ -192,6 +192,7 @@ export default function ChannelsPage() {
     setTesting(channel.id)
     try {
       const res = await channelsApi.test({
+        id: channel.id,
         adapterType: channel.adapterType,
         baseUrl: channel.baseUrl,
         apiKey: channel.apiKey,
@@ -212,16 +213,26 @@ export default function ChannelsPage() {
   }
 
   // 获取模型列表并打开选择器
+  // 获取默认 baseUrl
+  const getDefaultBaseUrl = (adapterType: string) => {
+    const defaults: Record<string, string> = {
+      openai: 'https://api.openai.com/v1',
+      claude: 'https://api.anthropic.com/v1',
+      gemini: 'https://generativelanguage.googleapis.com'
+    }
+    return defaults[adapterType] || ''
+  }
+
   const handleFetchModels = async () => {
-    if (!form.baseUrl || !form.apiKey) {
-      toast.error('请先填写 Base URL 和 API Key')
+    if (!form.apiKey) {
+      toast.error('请先填写 API Key')
       return
     }
     setFetchingModels(true)
     try {
       const res = await channelsApi.fetchModels({
         adapterType: form.adapterType,
-        baseUrl: form.baseUrl,
+        baseUrl: form.baseUrl || getDefaultBaseUrl(form.adapterType),
         apiKey: form.apiKey,
       }) as any
       const models = res?.data?.models || res?.models || []
@@ -394,8 +405,15 @@ export default function ChannelsPage() {
                       id="baseUrl"
                       value={form.baseUrl}
                       onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
-                      placeholder="https://api.openai.com/v1"
+                      placeholder={
+                        form.adapterType === 'openai' ? 'https://api.openai.com' :
+                        form.adapterType === 'claude' ? 'https://api.anthropic.com' :
+                        'https://generativelanguage.googleapis.com'
+                      }
                     />
+                    <p className="text-xs text-muted-foreground">
+                      留空使用官方地址，自定义时无需 /v1 后缀
+                    </p>
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="apiKey">API Key</Label>

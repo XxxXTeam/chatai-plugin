@@ -263,10 +263,9 @@ export class ChatService {
         // Determine model - 确保获取到有效模型
         let llmModel = model || LlmService.getModel(mode)
         
-        // 如果模型为空或不是字符串，使用默认模型
+        // 如果模型为空或不是字符串，直接抛出错误
         if (!llmModel || typeof llmModel !== 'string') {
-            llmModel = config.get('llm.defaultModel') || 'gpt-4o'
-            logger.warn(`[ChatService] 模型配置为空或无效，使用默认模型: ${llmModel}`)
+            throw new Error('未配置模型，请先在管理面板「设置 → 模型配置」中配置默认模型')
         }
 
         // Set tool context if event is provided

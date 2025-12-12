@@ -16,25 +16,25 @@ admin:
   loginNotifyPrivate: true
   sensitiveCommandMasterOnly: true
 llm:
-  defaultModel: gemini-3-pro-preview
+  defaultModel: ""
   defaultChatPresetId: f6732fbd-e809-451a-9533-717839de5318
   embeddingModel: gemini-3-pro-preview
   dimensions: 1536
   models:
-    chat: gemini-3-pro-preview
-    roleplay: ""
-    toolCall: ""
-    search: ""
-    reasoning: ""
+    chat: []
+    roleplay: []
+    toolCall: []
+    search: []
+    reasoning: []
   fallback:
     enabled: true
     models: []
     maxRetries: 3
     retryDelay: 500
     notifyOnFallback: false
-  chatModel: gemini-3-pro-preview
-  codeModel: gemini-3-pro-preview
-  translationModel: gemini-3-pro-preview
+  chatModel: ""
+  codeModel: ""
+  translationModel: ""
 bym:
   enable: false
   probability: 0.02
@@ -72,8 +72,7 @@ channels:
     baseUrl: http://103.109.22.74:3000/v1
     apiKey: sk-lgrpDhWB7Mm5L521zGdwDO6JescMn9m7xtmQLkAgL0iMXf4h
     models:
-      - qwen/qwen3-next-80b-a3b-instruct
-      - gemini-3-pro-preview
+      - qwen/qwen3-235b-a22b
     priority: 1
     enabled: true
     advanced:
@@ -95,6 +94,37 @@ channels:
       - key: sk-lgrpDhWB7Mm5L521zGdwDO6JescMn9m7xtmQLkAgL0iMXf4h
         enabled: true
     strategy: round-robin
+    status: active
+    lastHealthCheck: 1765475448111
+    testedAt: 1765475448111
+  - id: openai-12c1cc32
+    name: "111111"
+    adapterType: openai
+    baseUrl: https://api.openai.com/v1
+    apiKey: 166824c7-9a88-47ad-8964-d4ee0b5319cf
+    models: []
+    priority: 100
+    enabled: true
+    advanced:
+      streaming:
+        enabled: false
+        chunkSize: 1024
+      thinking:
+        enableReasoning: false
+        defaultLevel: medium
+        adaptThinking: true
+        sendThinkingAsMessage: false
+      llm:
+        temperature: 0.7
+        maxTokens: 4000
+        topP: 1
+        frequencyPenalty: 0
+        presencePenalty: 0
+    apiKeys: []
+    strategy: round-robin
+    status: idle
+    lastHealthCheck: null
+    testedAt: null
 mcp:
   enabled: true
   servers:
@@ -172,6 +202,7 @@ thinking:
   enableReasoning: true
   showThinkingContent: true
   useForwardMsg: true
+  enabled: false
 features:
   groupSummary:
     enabled: true
@@ -207,7 +238,7 @@ streaming:
 trigger:
   private:
     enabled: true
-    mode: always
+    mode: prefix
   group:
     enabled: true
     at: true
@@ -219,6 +250,7 @@ trigger:
     replyBot: false
   prefixes:
     - "#chat"
+    - "1"
   keywords: []
   collectGroupMsg: true
   blacklistUsers: []

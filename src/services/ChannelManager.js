@@ -3,6 +3,47 @@ import crypto from 'node:crypto'
 import { redisClient } from '../core/cache/RedisClient.js'
 
 /**
+ * 默认 API 地址
+ */
+const DEFAULT_BASE_URLS = {
+    openai: 'https://api.openai.com/v1',
+    claude: 'https://api.anthropic.com/v1',
+    gemini: 'https://generativelanguage.googleapis.com'
+}
+
+/**
+ * 规范化 API Base URL
+ * @param {string} baseUrl 
+ * @param {string} adapterType 
+ * @returns {string}
+ */
+function normalizeBaseUrl(baseUrl, adapterType) {
+    // 如果为空，使用默认地址
+    if (!baseUrl || !baseUrl.trim()) {
+        return DEFAULT_BASE_URLS[adapterType] || ''
+    }
+    
+    // 移除末尾斜杠
+    let url = baseUrl.trim().replace(/\/+$/, '')
+    
+    // OpenAI 兼容 API 自动添加 /v1
+    if (adapterType === 'openai') {
+        if (!url.endsWith('/v1') && !url.includes('/chat/') && !url.includes('/models')) {
+            url = url + '/v1'
+        }
+    }
+    
+    // Claude API 自动添加 /v1
+    if (adapterType === 'claude') {
+        if (!url.endsWith('/v1') && !url.includes('/messages')) {
+            url = url + '/v1'
+        }
+    }
+    
+    return url
+}
+
+/**
  * Channel Manager - Manages multiple API channels
  */
 export class ChannelManager {
@@ -32,10 +73,16 @@ export class ChannelManager {
         const channels = config.get('channels') || []
 
         for (const channelConfig of channels) {
+            // 规范化 baseUrl（兼容旧配置）
+            const normalizedUrl = normalizeBaseUrl(channelConfig.baseUrl, channelConfig.adapterType)
+            
             this.channels.set(channelConfig.id, {
                 ...channelConfig,
-                status: 'idle',
-                lastHealthCheck: null,
+                baseUrl: normalizedUrl,
+                // 保留已保存的状态，否则使用默认值
+                status: channelConfig.status || 'idle',
+                lastHealthCheck: channelConfig.lastHealthCheck || null,
+                testedAt: channelConfig.testedAt || null,
                 modelsCached: false,
                 keyIndex: 0
             })
@@ -66,12 +113,15 @@ export class ChannelManager {
      */
     async create(channelData) {
         const id = channelData.id || `${channelData.adapterType}-${crypto.randomBytes(4).toString('hex')}`
+        
+        // 规范化 baseUrl
+        const normalizedUrl = normalizeBaseUrl(channelData.baseUrl, channelData.adapterType)
 
         const channel = {
             id,
             name: channelData.name,
             adapterType: channelData.adapterType,
-            baseUrl: channelData.baseUrl,
+            baseUrl: normalizedUrl,
             apiKey: channelData.apiKey,
             models: channelData.models || [],
             priority: channelData.priority || 100,
@@ -105,7 +155,13 @@ export class ChannelManager {
         const allowedFields = ['name', 'adapterType', 'baseUrl', 'apiKey', 'apiKeys', 'strategy', 'models', 'priority', 'enabled', 'advanced']
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
-                channel[field] = updates[field]
+                // 规范化 baseUrl
+                if (field === 'baseUrl') {
+                    const adapterType = updates.adapterType || channel.adapterType
+                    channel[field] = normalizeBaseUrl(updates[field], adapterType)
+                } else {
+                    channel[field] = updates[field]
+                }
             }
         }
 
@@ -337,8 +393,10 @@ export class ChannelManager {
 
                     channel.status = 'active'
                     channel.lastHealthCheck = Date.now()
+                    channel.testedAt = Date.now()
                     channel.errorCount = 0 // 重置错误计数
                     this.channels.set(id, channel)
+                    await this.saveToConfig() // 持久化状态
 
                     return {
                         success: true,
@@ -358,8 +416,10 @@ export class ChannelManager {
                             if (models && models.length > 0) {
                                 channel.status = 'active'
                                 channel.lastHealthCheck = Date.now()
+                                channel.testedAt = Date.now()
                                 channel.errorCount = 0
                                 this.channels.set(id, channel)
+                                await this.saveToConfig() // 持久化状态
                                 
                                 return {
                                     success: true,
@@ -398,7 +458,9 @@ export class ChannelManager {
                 
                 channel.status = 'active'
                 channel.lastHealthCheck = Date.now()
+                channel.testedAt = Date.now()
                 this.channels.set(id, channel)
+                await this.saveToConfig() // 持久化状态
                 
                 return {
                     success: true,
@@ -428,7 +490,9 @@ export class ChannelManager {
                 
                 channel.status = 'active'
                 channel.lastHealthCheck = Date.now()
+                channel.testedAt = Date.now()
                 this.channels.set(id, channel)
+                await this.saveToConfig() // 持久化状态
                 
                 return {
                     success: true,
@@ -444,6 +508,7 @@ export class ChannelManager {
             channel.lastHealthCheck = Date.now()
             channel.errorCount = (channel.errorCount || 0) + 1
             this.channels.set(id, channel)
+            await this.saveToConfig() // 持久化错误状态
             throw error
         }
     }
@@ -583,7 +648,11 @@ export class ChannelManager {
                 enabled: ch.enabled,
                 advanced: ch.advanced,
                 apiKeys: ch.apiKeys,
-                strategy: ch.strategy
+                strategy: ch.strategy,
+                // 保存状态信息
+                status: ch.status,
+                lastHealthCheck: ch.lastHealthCheck,
+                testedAt: ch.testedAt
             }))
 
         config.set('channels', channelsArray)

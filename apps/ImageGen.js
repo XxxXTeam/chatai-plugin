@@ -336,62 +336,91 @@ export class ImageGen extends plugin {
         }
         
         const startTime = Date.now()
+        const maxRetries = 2
+        let lastError = null
         
-        try {
-            const response = await fetch(apiUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${apiKey}`,
-                },
-                body: JSON.stringify(requestData),
-                signal: AbortSignal.timeout(this.timeout),
-            })
-            
-            if (!response.ok) {
-                throw new Error(`API 错误: ${response.status}`)
-            }
-            
-            const data = await response.json()
-            const duration = Date.now() - startTime
-            
-            // 调试日志：查看API返回内容
-            logger.info('[ImageGen] 视频API响应:', JSON.stringify(data, null, 2))
-            
-            // 解析返回的视频
-            const resultVideos = this.extractVideos(data)
-            
-            if (resultVideos.length) {
+        for (let retry = 0; retry <= maxRetries; retry++) {
+            try {
+                if (retry > 0) {
+                    logger.info(`[ImageGen] 视频生成重试 ${retry}/${maxRetries}`)
+                }
+                
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`,
+                    },
+                    body: JSON.stringify(requestData),
+                    signal: AbortSignal.timeout(this.timeout),
+                })
+                
+                if (!response.ok) {
+                    const errorText = await response.text().catch(() => '')
+                    throw new Error(`API 错误: ${response.status} ${errorText.substring(0, 100)}`)
+                }
+                
+                const data = await response.json()
+                const duration = Date.now() - startTime
+                
+                // 调试日志：查看API返回内容
+                logger.debug('[ImageGen] 视频API响应:', JSON.stringify(data, null, 2))
+                
+                // 解析返回的视频
+                const resultVideos = this.extractVideos(data)
+                
+                if (resultVideos.length) {
+                    return {
+                        success: true,
+                        videos: resultVideos,
+                        duration: this.formatDuration(duration)
+                    }
+                }
+                
+                // 如果没有视频，尝试提取图片作为备选
+                const resultImages = this.extractImages(data)
+                if (resultImages.length) {
+                    return {
+                        success: true,
+                        images: resultImages,
+                        isImage: true,
+                        duration: this.formatDuration(duration)
+                    }
+                }
+                
                 return {
-                    success: true,
-                    videos: resultVideos,
+                    success: false,
+                    error: '未能生成视频，请重试或换个描述',
                     duration: this.formatDuration(duration)
                 }
-            }
-            
-            // 如果没有视频，尝试提取图片作为备选
-            const resultImages = this.extractImages(data)
-            if (resultImages.length) {
-                return {
-                    success: true,
-                    images: resultImages,
-                    isImage: true,
-                    duration: this.formatDuration(duration)
+            } catch (err) {
+                lastError = err
+                const isNetworkError = err.cause?.code === 'UND_ERR_SOCKET' || 
+                                       err.message.includes('fetch failed') ||
+                                       err.message.includes('socket')
+                
+                // 网络错误时重试
+                if (isNetworkError && retry < maxRetries) {
+                    logger.warn(`[ImageGen] 网络错误，${retry + 1}秒后重试: ${err.message}`)
+                    await new Promise(r => setTimeout(r, (retry + 1) * 1000))
+                    continue
                 }
+                
+                // 超时错误
+                if (err.name === 'TimeoutError') {
+                    return { 
+                        success: false, 
+                        error: '请求超时，视频生成需要较长时间，请重试', 
+                        duration: this.formatDuration(Date.now() - startTime) 
+                    }
+                }
+                
+                throw err
             }
-            
-            return {
-                success: false,
-                error: '未能生成视频，请重试或换个描述',
-                duration: this.formatDuration(duration)
-            }
-        } catch (err) {
-            const duration = Date.now() - startTime
-            if (err.name === 'TimeoutError') {
-                return { success: false, error: '请求超时，视频生成需要较长时间，请重试', duration: this.formatDuration(duration) }
-            }
-            throw err
         }
+        
+        // 所有重试都失败
+        throw lastError || new Error('视频生成失败')
     }
 
     /**

@@ -36,7 +36,9 @@ export class GeminiClient extends AbstractClient {
      * @returns {Promise<HistoryMessage & { usage: ModelUsage }>}
      */
     async _sendMessage(histories, apiKey, options) {
-        const genAI = new GoogleGenerativeAI(apiKey)
+        // 支持自定义 baseUrl（用于代理服务）
+        const requestOptions = this.baseUrl ? { baseUrl: this.baseUrl } : undefined
+        const genAI = new GoogleGenerativeAI(apiKey, requestOptions)
         const model = options.model || 'gemini-1.5-flash'
 
         // 预处理图片URL为base64（Gemini不支持直接使用URL）
@@ -144,7 +146,9 @@ export class GeminiClient extends AbstractClient {
      */
     async streamMessage(histories, options) {
         const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
-        const genAI = new GoogleGenerativeAI(apiKey)
+        // 支持自定义 baseUrl
+        const requestOptions = this.baseUrl ? { baseUrl: this.baseUrl } : undefined
+        const genAI = new GoogleGenerativeAI(apiKey, requestOptions)
         const model = options.model || 'gemini-1.5-flash'
 
         // 预处理图片URL为base64（Gemini不支持直接使用URL）
@@ -227,7 +231,9 @@ export class GeminiClient extends AbstractClient {
      */
     async getEmbedding(text, options) {
         const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
-        const genAI = new GoogleGenerativeAI(apiKey)
+        // 支持自定义 baseUrl
+        const requestOptions = this.baseUrl ? { baseUrl: this.baseUrl } : undefined
+        const genAI = new GoogleGenerativeAI(apiKey, requestOptions)
         const model = options.model || 'text-embedding-004'
 
         const embeddingModel = genAI.getGenerativeModel({ model })

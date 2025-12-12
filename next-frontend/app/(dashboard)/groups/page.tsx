@@ -100,13 +100,15 @@ export default function GroupsPage() {
   const handleOpenDialog = (group?: GroupScope) => {
     if (group) {
       setEditingGroup(group)
+      // 兼容 settings 嵌套结构
+      const settings = group.settings || {}
       setForm({
         groupId: group.groupId,
-        groupName: group.groupName || '',
-        presetId: group.presetId || '__default__',
-        systemPrompt: group.systemPrompt || '',
-        enabled: group.enabled ?? true,
-        triggerMode: group.triggerMode || 'default',
+        groupName: group.groupName || settings.groupName || '',
+        presetId: group.presetId || settings.presetId || '__default__',
+        systemPrompt: group.systemPrompt || settings.systemPrompt || '',
+        enabled: group.enabled ?? settings.enabled ?? true,
+        triggerMode: group.triggerMode || settings.triggerMode || 'default',
       })
     } else {
       resetForm()
@@ -324,8 +326,8 @@ export default function GroupsPage() {
                         {group.groupName && (
                           <span className="text-muted-foreground">({group.groupName})</span>
                         )}
-                        <Badge variant={group.enabled ? 'default' : 'secondary'}>
-                          {group.enabled ? '已启用' : '已禁用'}
+                        <Badge variant={(group.enabled ?? group.settings?.enabled) ? 'default' : 'secondary'}>
+                          {(group.enabled ?? group.settings?.enabled) ? '已启用' : '已禁用'}
                         </Badge>
                       </div>
                       <div className="flex gap-4 text-sm text-muted-foreground">

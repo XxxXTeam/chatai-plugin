@@ -1047,7 +1047,8 @@ export class WebServer {
 
         // Test channel connection
         this.app.post('/api/channels/test', this.authMiddleware.bind(this), async (req, res) => {
-            let { adapterType, baseUrl, apiKey, models, advanced } = req.body
+            let { id, adapterType, baseUrl, apiKey, models, advanced } = req.body
+            const startTime = Date.now()
 
             // Auto-append /v1 if missing for OpenAI-compatible APIs
             if (adapterType === 'openai' && baseUrl && !baseUrl.endsWith('/v1')) {
@@ -1129,18 +1130,39 @@ export class WebServer {
                                 '连接失败: API响应格式不正确'))
                         }
 
+                        // 提取文本内容（优先 text，其次 reasoning）
                         replyText = response.contents
                             .filter(c => c && c.type === 'text')
                             .map(c => c.text)
                             .join('')
-
-                        logger.info(`[测试渠道] 测试成功，AI回复: ${replyText}`)
+                        
+                        // 如果没有 text 内容，检查是否有 reasoning 内容（说明连接成功）
+                        const hasReasoning = response.contents.some(c => c && c.type === 'reasoning')
+                        
+                        logger.info(`[测试渠道] 测试成功，AI回复: ${replyText || (hasReasoning ? '(思考内容)' : '(无)')}`)
                     }
 
+                    const elapsed = Date.now() - startTime
+                    const successMsg = replyText 
+                        ? `连接成功！耗时 ${elapsed}ms，AI回复：${replyText.substring(0, 50)}${replyText.length > 50 ? '...' : ''}`
+                        : `连接成功！耗时 ${elapsed}ms`
+                    
+                    // 如果有渠道 ID，更新渠道状态
+                    if (id) {
+                        const channel = channelManager.get(id)
+                        if (channel) {
+                            channel.status = 'active'
+                            channel.lastHealthCheck = Date.now()
+                            channel.testedAt = Date.now()
+                            await channelManager.saveToConfig()
+                        }
+                    }
+                    
                     res.json(ChaiteResponse.ok({
                         success: true,
-                        message: '连接成功！AI回复：' + replyText,
-                        testResponse: replyText
+                        message: successMsg,
+                        testResponse: replyText,
+                        elapsed
                     }))
                 } else {
                     res.json(ChaiteResponse.ok({ success: true, message: '该适配器暂不支持测试' }))
@@ -1154,6 +1176,16 @@ export class WebServer {
                     type: error.type,
                     error: error.error
                 })
+
+                // 如果有渠道 ID，更新渠道状态为错误
+                if (id) {
+                    const channel = channelManager.get(id)
+                    if (channel) {
+                        channel.status = 'error'
+                        channel.lastHealthCheck = Date.now()
+                        await channelManager.saveToConfig()
+                    }
+                }
 
                 // Extract meaningful error message
                 let errorMessage = error.message

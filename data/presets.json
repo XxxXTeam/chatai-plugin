@@ -30,7 +30,11 @@
       "enableBuiltinTools": true,
       "allowedTools": [],
       "disabledTools": []
-    }
+    },
+    "isDefault": true,
+    "enableReasoning": false,
+    "maxTokens": 4096,
+    "modelParams": {}
   },
   {
     "id": "default",
@@ -62,6 +66,8 @@
       "enableBuiltinTools": true,
       "allowedTools": [],
       "disabledTools": []
-    }
+    },
+    "isDefault": false,
+    "modelParams": {}
   }
 ]

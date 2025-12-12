@@ -141,16 +141,24 @@ export class LlmService {
     }
 
     /**
-     * Create a simple chat client (无工具，用于内部任务如记忆提取)
+     * Create a simple chat client (无工具，用于内部任务如记忆提取、伪人模式等)
+     * @param {Object} options - 可选配置
+     * @param {string} [options.model] - 指定模型，用于选择对应的渠道
+     * @param {boolean} [options.enableTools] - 是否启用工具（默认false）
+     * @returns {Promise<OpenAIClient|GeminiClient|ClaudeClient>}
      */
-    static async getChatClient() {
+    static async getChatClient(options = {}) {
         const { channelManager } = await import('./ChannelManager.js')
         await channelManager.init()
         
-        const defaultModel = config.get('llm.defaultModel')
+        // 优先使用传入的 model 参数，否则使用默认模型
+        const targetModel = options.model || config.get('llm.defaultModel')
         const channels = channelManager.getAll()
-        let channel = channels.find(c => c.enabled && c.models?.includes(defaultModel))
         
+        // 优先查找支持指定模型的渠道
+        let channel = channels.find(c => c.enabled && c.models?.includes(targetModel))
+        
+        // 回退：查找任何可用的启用渠道
         if (!channel) {
             channel = channels.find(c => c.enabled && c.apiKey)
         }
@@ -163,8 +171,10 @@ export class LlmService {
         const ClientClass = adapterType === 'gemini' ? GeminiClient :
                            adapterType === 'claude' ? ClaudeClient : OpenAIClient
         
+        logger.debug(`[LlmService] getChatClient 选择渠道: ${channel.name}, 模型: ${targetModel}, 适配器: ${adapterType}`)
+        
         return new ClientClass({
-            apiKey: channel.apiKey,
+            apiKey: channelManager.getChannelKey(channel),
             baseUrl: channel.baseUrl,
             features: ['chat'],
             tools: [] // 无工具

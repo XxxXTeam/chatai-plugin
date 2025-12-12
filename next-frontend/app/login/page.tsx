@@ -95,7 +95,7 @@ export default function LoginPage() {
               获取登录 Token
             </Button>
             <p className="text-xs text-muted-foreground text-center mt-2">
-              点击后在 Yunzai 控制台查看 Token
+              点击后在控制台查看 Token
             </p>
           </div>
         </CardContent>

@@ -176,9 +176,10 @@ const defaultConfig: Config = {
   }
 }
 
-type ModelCategory = 'chat' | 'roleplay' | 'toolCall' | 'search' | 'reasoning' | 'fallback'
+type ModelCategory = 'chat' | 'roleplay' | 'toolCall' | 'search' | 'reasoning' | 'fallback' | 'default'
 
 const MODEL_CATEGORY_LABELS: Record<ModelCategory, string> = {
+  default: '默认模型',
   chat: '对话模型',
   roleplay: '伪人模型',
   toolCall: '工具调用模型',
@@ -304,7 +305,10 @@ export default function SettingsPage() {
     setEditingModelCategory(category)
     // 获取当前模型配置
     let currentModels: string[] = []
-    if (category === 'fallback') {
+    if (category === 'default') {
+      // 默认模型是单个值，转为数组
+      currentModels = config.llm?.defaultModel ? [config.llm.defaultModel] : []
+    } else if (category === 'fallback') {
       currentModels = config.llm?.fallback?.models || []
     } else {
       currentModels = config.llm?.models?.[category] || []
@@ -316,7 +320,10 @@ export default function SettingsPage() {
   // 确认模型选择
   const confirmModelSelection = () => {
     if (!config) return
-    if (editingModelCategory === 'fallback') {
+    if (editingModelCategory === 'default') {
+      // 默认模型只取第一个
+      updateConfig('llm.defaultModel', tempSelectedModels[0] || '')
+    } else if (editingModelCategory === 'fallback') {
       updateConfig('llm.fallback.models', tempSelectedModels)
     } else {
       updateConfig(`llm.models.${editingModelCategory}`, tempSelectedModels)
@@ -327,6 +334,9 @@ export default function SettingsPage() {
   // 获取模型数量显示
   const getModelCount = (category: ModelCategory): number => {
     if (!config) return 0
+    if (category === 'default') {
+      return config.llm?.defaultModel ? 1 : 0
+    }
     if (category === 'fallback') {
       return config.llm?.fallback?.models?.length || 0
     }
@@ -676,15 +686,22 @@ export default function SettingsPage() {
                 </Button>
               </div>
               <Separator />
-              <div className="grid gap-2">
-                <Label htmlFor="defaultModel">默认模型</Label>
-                <Input
-                  id="defaultModel"
-                  value={config.llm?.defaultModel || ''}
-                  onChange={(e) => updateConfig('llm.defaultModel', e.target.value)}
-                  placeholder="gpt-4o"
-                />
-                <p className="text-xs text-muted-foreground">未配置分类模型时使用的默认模型</p>
+              <div className="flex items-center justify-between p-3 border rounded-lg">
+                <div className="flex-1">
+                  <Label>默认模型</Label>
+                  <div className="flex items-center gap-2 mt-1">
+                    {config.llm?.defaultModel ? (
+                      <Badge variant="secondary">{config.llm.defaultModel}</Badge>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">未配置</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">未配置分类模型时使用的默认模型</p>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => openModelDialog('default')} disabled={availableModels.length === 0}>
+                  <Settings2 className="mr-2 h-4 w-4" />
+                  配置
+                </Button>
               </div>
             </CardContent>
           </Card>
