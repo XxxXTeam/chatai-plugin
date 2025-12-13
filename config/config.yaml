@@ -16,7 +16,7 @@ admin:
   loginNotifyPrivate: true
   sensitiveCommandMasterOnly: true
 llm:
-  defaultModel: ""
+  defaultModel: qwen/qwen3-next-80b-a3b-thinking
   defaultChatPresetId: f6732fbd-e809-451a-9533-717839de5318
   embeddingModel: gemini-3-pro-preview
   dimensions: 1536
@@ -37,10 +37,10 @@ llm:
   translationModel: ""
 bym:
   enable: false
-  probability: 0.02
+  probability: 0.5
   temperature: 0.9
   maxTokens: 100
-  recall: false
+  recall: true
   model: ""
   systemPrompt: 你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。
   inheritPersonality: true
@@ -72,7 +72,7 @@ channels:
     baseUrl: http://103.109.22.74:3000/v1
     apiKey: sk-lgrpDhWB7Mm5L521zGdwDO6JescMn9m7xtmQLkAgL0iMXf4h
     models:
-      - qwen/qwen3-235b-a22b
+      - qwen/qwen3-next-80b-a3b-thinking
     priority: 1
     enabled: true
     advanced:
@@ -94,9 +94,8 @@ channels:
       - key: sk-lgrpDhWB7Mm5L521zGdwDO6JescMn9m7xtmQLkAgL0iMXf4h
         enabled: true
     strategy: round-robin
-    status: active
-    lastHealthCheck: 1765475448111
-    testedAt: 1765475448111
+    lastHealthCheck: 1765619852101
+    testedAt: 1765619852101
   - id: openai-12c1cc32
     name: "111111"
     adapterType: openai
@@ -228,11 +227,63 @@ features:
   imageGen:
     enabled: true
     apiUrl: https://business.928100.xyz/v1/chat/completions
-    apiKey: X-Free
-    model: gemini-3-pro-image
+    apiKey: sk-3d2f9b84e7f510b1a08f7b3d6c9a6a7f17fbbad5624ea29f22d9c742bf39c863
+    model: gemini-3-pro-preview-image
+    apis:
+      - "0": h
+        "1": t
+        "2": t
+        "3": p
+        "4": s
+        "5": ":"
+        "6": /
+        "7": /
+        "8": b
+        "9": u
+        "10": s
+        "11": i
+        "12": n
+        "13": e
+        "14": s
+        "15": s
+        "16": "2"
+        "17": a
+        "18": p
+        "19": i
+        "20": .
+        "21": o
+        "22": p
+        "23": e
+        "24": n
+        "25": e
+        "26": l
+        "27": .
+        "28": t
+        "29": o
+        "30": p
+        apiKey: sk-3d2f9b84e7f510b1a08f7b3d6c9a6a7f17fbbad5624ea29f22d9c742bf39c863
+        baseUrl: http://45.142.115.211:19000
+        models:
+          - gemini-2.5-flash
+          - gemini-2.5-flash-image
+          - gemini-2.5-flash-search
+          - gemini-2.5-flash-video
+          - gemini-2.5-pro
+          - gemini-2.5-pro-image
+          - gemini-2.5-pro-search
+          - gemini-2.5-pro-video
+          - gemini-3-pro
+          - gemini-3-pro-image
+          - gemini-3-pro-preview
+          - gemini-3-pro-preview-image
+          - gemini-3-pro-preview-search
+          - gemini-3-pro-preview-video
+          - gemini-3-pro-search
+          - gemini-3-pro-video
+    videoModel: gemini-3-pro-preview-video
   autoCleanOnError:
-    enabled: false
-    notifyUser: true
+    enabled: true
+    notifyUser: false
 streaming:
   enabled: true
 trigger:
@@ -250,7 +301,6 @@ trigger:
     replyBot: false
   prefixes:
     - "#chat"
-    - "1"
   keywords: []
   collectGroupMsg: true
   blacklistUsers: []

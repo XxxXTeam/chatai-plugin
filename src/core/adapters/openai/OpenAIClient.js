@@ -111,11 +111,14 @@ export class OpenAIClient extends AbstractClient {
         const shouldDisableTools = toolChoice === 'none'
         const tools = shouldDisableTools ? [] : this.tools.map(toolConvert)
 
+        // 根据 options.stream 决定是否使用流式
+        const useStream = options.stream === true
+        
         const requestPayload = {
             temperature: options.temperature,
             messages,
             model,
-            stream: false, // Explicitly set stream to false for non-streaming requests
+            stream: useStream,
             tools: tools.length > 0 ? tools : undefined,
             tool_choice: tools.length > 0 ? toolChoice : undefined,
         }
@@ -136,8 +139,6 @@ export class OpenAIClient extends AbstractClient {
                 delete requestPayload[key]
             }
         })
-
-        // Debug logging - log the request payload
         logger.info('[OpenAI适配器] 请求参数:', JSON.stringify({
             model: requestPayload.model,
             stream: requestPayload.stream,
@@ -149,14 +150,10 @@ export class OpenAIClient extends AbstractClient {
             tools_count: requestPayload.tools?.length || 0,
             tool_choice: requestPayload.tool_choice,
         }))
-
-        // 打印工具列表（仅名称）- 仅debug级别
         if (requestPayload.tools?.length > 0) {
             const toolNames = requestPayload.tools.map(t => t.function?.name).filter(Boolean)
             logger.debug('[OpenAI适配器] 可用工具:', toolNames.join(', '))
         }
-
-        // Log actual messages for debugging - 使用简化格式避免base64刷屏
         if (logger.level === 'debug') {
             const sanitizedMessages = this.sanitizeMessagesForLog(requestPayload.messages)
             logger.debug('[OpenAI适配器] 实际Messages内容:', JSON.stringify(sanitizedMessages, null, 2))
@@ -164,18 +161,87 @@ export class OpenAIClient extends AbstractClient {
 
         let chatCompletion
         try {
-            chatCompletion = await client.chat.completions.create(requestPayload)
+            const response = await client.chat.completions.create(requestPayload)
             
-            // 简化响应日志
-            const firstChoice = chatCompletion.choices?.[0]
-            const toolCallCount = firstChoice?.message?.tool_calls?.length || 0
-            const hasContent = !!firstChoice?.message?.content
-            logger.info(`[OpenAI适配器] 响应: finish=${firstChoice?.finish_reason}, tools=${toolCallCount}, hasContent=${hasContent}`)
-            
-            // debug级别打印完整tool_calls
-            if (toolCallCount > 0) {
-                const toolNames = firstChoice.message.tool_calls.map(t => t.function?.name).join(', ')
-                logger.debug(`[OpenAI适配器] tool_calls: ${toolNames}`)
+            // 如果是流式响应，需要收集所有 chunk
+            if (useStream) {
+                logger.info(`[OpenAI适配器] 开始流式响应处理...`)
+                let allContent = ''
+                let allReasoningContent = ''
+                const toolCallsMap = new Map()
+                let finishReason = null
+                let usage = null
+                let chunkCount = 0
+                
+                for await (const chunk of response) {
+                    chunkCount++
+                    const delta = chunk.choices[0]?.delta || {}
+                    const content = delta.content || ''
+                    const reasoningContent = delta.reasoning_content || ''
+                    
+                    allContent += content
+                    allReasoningContent += reasoningContent
+                    
+                    // 处理工具调用
+                    if (delta.tool_calls) {
+                        logger.debug(`[OpenAI适配器] Stream chunk ${chunkCount}: 检测到tool_calls`)
+                        for (const tc of delta.tool_calls) {
+                            const idx = tc.index
+                            if (!toolCallsMap.has(idx)) {
+                                toolCallsMap.set(idx, {
+                                    id: tc.id || '',
+                                    type: tc.type || 'function',
+                                    function: { name: tc.function?.name || '', arguments: '' }
+                                })
+                            }
+                            const existing = toolCallsMap.get(idx)
+                            if (tc.id) existing.id = tc.id
+                            if (tc.function?.name) existing.function.name = tc.function.name
+                            if (tc.function?.arguments) existing.function.arguments += tc.function.arguments
+                        }
+                    }
+                    
+                    finishReason = chunk.choices[0]?.finish_reason || finishReason
+                    if (chunk.usage) usage = chunk.usage
+                    
+                    // 每50个chunk输出一次进度
+                    if (chunkCount % 50 === 0) {
+                        logger.debug(`[OpenAI适配器] Stream进度: ${chunkCount} chunks, ${allContent.length}字符`)
+                    }
+                }
+                
+                logger.info(`[OpenAI适配器] Stream完成: ${chunkCount} chunks`)
+                
+                // 构建完整的响应对象
+                const toolCalls = Array.from(toolCallsMap.values()).filter(tc => tc.id && tc.function.name)
+                chatCompletion = {
+                    choices: [{
+                        message: {
+                            role: 'assistant',
+                            content: allContent || null,
+                            reasoning_content: allReasoningContent || null,
+                            tool_calls: toolCalls.length > 0 ? toolCalls : undefined
+                        },
+                        finish_reason: finishReason
+                    }],
+                    usage: usage || {}
+                }
+                
+                logger.info(`[OpenAI适配器] Stream响应: finish=${finishReason}, tools=${toolCalls.length}, content=${allContent.length}字符`)
+            } else {
+                chatCompletion = response
+                
+                // 简化响应日志
+                const firstChoice = chatCompletion.choices?.[0]
+                const toolCallCount = firstChoice?.message?.tool_calls?.length || 0
+                const hasContent = !!firstChoice?.message?.content
+                logger.info(`[OpenAI适配器] 响应: finish=${firstChoice?.finish_reason}, tools=${toolCallCount}, hasContent=${hasContent}`)
+                
+                // debug级别打印完整tool_calls
+                if (toolCallCount > 0) {
+                    const toolNames = firstChoice.message.tool_calls.map(t => t.function?.name).join(', ')
+                    logger.debug(`[OpenAI适配器] tool_calls: ${toolNames}`)
+                }
             }
         } catch (error) {
             // Log detailed error information from the API

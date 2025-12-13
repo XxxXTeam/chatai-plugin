@@ -415,8 +415,27 @@ export class ChatService {
                 currentUserUin
             )
             
-            // 在系统提示中说明多用户环境
-            systemPrompt += `\n\n[多用户群聊环境]\n你正在群聊中与多位用户对话。每条用户消息都以 [用户名(QQ号)]: 格式标注发送者。\n当前发送消息的用户: [${currentUserLabel}(${currentUserUin})]\n请根据消息前的用户标签区分不同用户，回复时针对当前用户。`
+            // 获取群信息
+            const groupName = event?.group_name || event?.group?.name || ''
+            
+            // 在系统提示中说明多用户环境，并包含群基本信息
+            systemPrompt += `\n\n[当前对话环境]
+群号: ${groupId}${groupName ? `\n群名: ${groupName}` : ''}
+当前发送消息的用户: ${currentUserLabel}(QQ:${currentUserUin})
+你正在群聊中与多位用户对话。每条用户消息都以 [用户名(QQ号)]: 格式标注发送者。
+消息中的 [提及用户 QQ:xxx ...] 表示被@的用户，包含其QQ号、群名片、昵称等信息。
+请根据消息前的用户标签区分不同用户，回复时针对当前用户。`
+        }
+        
+        // 非群聊隔离模式下也添加群信息（如果是群聊）
+        if (groupId && isolation.groupUserIsolation) {
+            const groupName = event?.group_name || event?.group?.name || ''
+            const currentUserLabel = event?.sender?.card || event?.sender?.nickname || `用户${userId}`
+            const currentUserUin = event?.user_id || userId
+            systemPrompt += `\n\n[当前对话环境]
+群号: ${groupId}${groupName ? `\n群名: ${groupName}` : ''}
+当前用户: ${currentUserLabel}(QQ:${currentUserUin})
+消息中的 [提及用户 QQ:xxx ...] 表示被@的用户，包含其QQ号、群名片、昵称等信息。`
         }
         
         let messages = [
@@ -426,10 +445,8 @@ export class ChatService {
         ]
 
         const hasTools = client.tools && client.tools.length > 0
-        const useStreaming = (stream || channelStreaming.enabled === true) && !hasTools // Force non-stream if tools are present for easier loop? No, we can handle stream->tool->loop.
-        // Actually, robust tool handling is easier with non-stream loop, or carefully managed stream loop.
-        // Strategy: If tools enabled, try stream. If stream returns tool_calls, break and enter multi-turn loop.
-
+        const useStreaming = (stream || channelStreaming.enabled === true) && !hasTools    
+        
         logger.debug(`[ChatService] Request: model=${llmModel}, stream=${useStreaming}, tools=${hasTools ? client.tools.length : 0}`)
 
         let finalResponse = null
@@ -462,6 +479,7 @@ export class ChatService {
                 topP: channelLlm.topP,
                 conversationId,
                 systemOverride: systemPrompt,
+                stream: useStreaming,  // 传递流式选项
             }
 
             // 收集调试信息

@@ -208,15 +208,80 @@ export async function parseUserMessage(e, options = {}) {
                         const atCard = segData.text || val.text || segData.data?.text || segData.name || ''
                         const uid = segData.uid || val.uid || segData.data?.uid || ''
                         
+                        logger.info(`[MessageParser][AT] 解析@消息: qq=${qq}, atCard=${atCard}, excludeAtBot=${excludeAtBot}, self_id=${e.self_id}`)
+                        
                         // 如果是@机器人且需要排除，跳过
                         if (excludeAtBot && (qq === e.bot?.uin || String(qq) === String(e.self_id))) {
+                            logger.info(`[MessageParser][AT] 跳过@机器人自己: qq=${qq}`)
                             continue
                         }
                         
-                        // 增强的 @ 信息：同时添加文本表示和结构化信息
-                        // 文本格式：@昵称(QQ号) - 让AI能够识别被@的人的QQ号
-                        const displayName = atCard || `用户${qq}`
-                        text += ` @${displayName}(${qq}) `
+                        // 增强的 @ 信息：自动获取群成员详细信息
+                        let memberInfo = null
+                        let groupCard = ''
+                        let nickname = atCard || ''
+                        let role = ''
+                        let title = ''
+                        
+                        // 如果是群聊，尝试获取群成员详细信息
+                        if (e.group_id && qq && qq !== 'all') {
+                            logger.info(`[MessageParser][AT] 开始获取群成员信息: group_id=${e.group_id}, qq=${qq}`)
+                            try {
+                                const bot = e.bot || global.Bot
+                                if (bot) {
+                                    const group = bot.pickGroup?.(e.group_id)
+                                    if (group) {
+                                        // 尝试获取成员信息
+                                        const member = group.pickMember?.(parseInt(qq))
+                                        logger.info(`[MessageParser][AT] pickMember 结果: hasInfo=${!!member?.info}`)
+                                        if (member?.info) {
+                                            memberInfo = member.info
+                                            groupCard = memberInfo.card || ''
+                                            nickname = memberInfo.nickname || nickname
+                                            role = memberInfo.role || ''
+                                            title = memberInfo.title || ''
+                                            logger.info(`[MessageParser][AT] 从 pickMember 获取: card=${groupCard}, nickname=${nickname}, role=${role}`)
+                                        }
+                                        
+                                        // 如果 pickMember 没有信息，尝试从 getMemberMap 获取
+                                        if (!memberInfo && group.getMemberMap) {
+                                            try {
+                                                logger.info(`[MessageParser][AT] 尝试 getMemberMap`)
+                                                const memberMap = await group.getMemberMap()
+                                                const memberData = memberMap?.get?.(parseInt(qq))
+                                                if (memberData) {
+                                                    groupCard = memberData.card || ''
+                                                    nickname = memberData.nickname || nickname
+                                                    role = memberData.role || ''
+                                                    title = memberData.title || ''
+                                                    logger.info(`[MessageParser][AT] 从 getMemberMap 获取: card=${groupCard}, nickname=${nickname}, role=${role}`)
+                                                }
+                                            } catch (err) {
+                                                logger.debug(`[MessageParser][AT] getMemberMap 失败: ${err.message}`)
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (err) {
+                                // 获取群成员信息失败，使用默认值
+                                logger.warn(`[MessageParser][AT] 获取群成员信息失败: ${err.message}`)
+                            }
+                        }
+                        
+                        // 构建清晰的显示名称（优先使用群名片）
+                        const displayName = groupCard || nickname || atCard || `用户${qq}`
+                        
+                        // 增强的文本格式：提供完整的用户身份信息，避免模型虚构
+                        // 格式：[提及用户 QQ:xxx 群名片:xxx 昵称:xxx]
+                        let atText = `[提及用户 QQ:${qq}`
+                        if (groupCard) atText += ` 群名片:"${groupCard}"`
+                        if (nickname && nickname !== groupCard) atText += ` 昵称:"${nickname}"`
+                        if (role && role !== 'member') atText += ` 角色:${role === 'owner' ? '群主' : role === 'admin' ? '管理员' : role}`
+                        if (title) atText += ` 头衔:"${title}"`
+                        atText += ']'
+                        
+                        logger.info(`[MessageParser][AT] 最终文本: ${atText}`)
+                        text += ` ${atText} `
                         
                         // 结构化信息：添加到 contents 中供工具使用
                         contents.push({
@@ -225,7 +290,12 @@ export async function parseUserMessage(e, options = {}) {
                                 qq: String(qq),
                                 uid: uid ? String(uid) : '',
                                 name: atCard || '',
-                                display: displayName
+                                display: displayName,
+                                // 增强字段：群成员详细信息
+                                card: groupCard,
+                                nickname: nickname,
+                                role: role,
+                                title: title
                             }
                         })
                     }
