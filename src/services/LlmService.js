@@ -182,14 +182,7 @@ export class LlmService {
     }
 
     /**
-     * Get default model configuration
-     */
-    static getDefaultModel() {
-        return config.get('llm.defaultModel')
-    }
-
-    /**
-     * 模型类型枚举
+     * Model type enum
      */
     static ModelType = {
         CHAT: 'chat',           // 对话模型 - 普通聊天
@@ -202,18 +195,20 @@ export class LlmService {
     /**
      * Get model for specific mode
      * @param {string} mode - 'chat', 'roleplay', 'toolCall', 'search', 'reasoning', 'code', 'translation', etc.
-     * @returns {string} 模型名称
+     * @returns {string} 模型名称（如果该mode未配置则返回空字符串，不会自动回退到默认模型）
      */
     static getModel(mode = 'chat') {
         // 先检查新的 models 配置
         const newModelConfig = config.get(`llm.models.${mode}`)
         if (newModelConfig) {
-            // 如果是数组，取第一个有效模型；如果是字符串，直接返回
+            // 如果是数组，取第一个有效模型
             if (Array.isArray(newModelConfig)) {
-                const firstModel = newModelConfig.find(m => m && typeof m === 'string')
-                if (firstModel) return firstModel
-            } else if (typeof newModelConfig === 'string' && newModelConfig) {
-                return newModelConfig
+                const firstModel = newModelConfig.find(m => m && typeof m === 'string' && m.trim())
+                if (firstModel) return firstModel.trim()
+            } 
+            // 如果是字符串且非空，直接返回
+            else if (typeof newModelConfig === 'string' && newModelConfig.trim()) {
+                return newModelConfig.trim()
             }
         }
         
@@ -221,16 +216,27 @@ export class LlmService {
         const modeModel = config.get(`llm.${mode}Model`)
         if (modeModel) {
             if (Array.isArray(modeModel)) {
-                const first = modeModel.find(m => m && typeof m === 'string')
-                if (first) return first
-            } else if (typeof modeModel === 'string') {
-                return modeModel
+                const first = modeModel.find(m => m && typeof m === 'string' && m.trim())
+                if (first) return first.trim()
+            } else if (typeof modeModel === 'string' && modeModel.trim()) {
+                return modeModel.trim()
             }
         }
         
-        // 返回默认模型
+        // 该mode未配置，返回空字符串（让调用方决定如何处理）
+        return ''
+    }
+    
+    /**
+     * 获取默认模型
+     * @returns {string} 默认模型名称
+     */
+    static getDefaultModel() {
         const defaultModel = config.get('llm.defaultModel')
-        return typeof defaultModel === 'string' ? defaultModel : ''
+        if (typeof defaultModel === 'string' && defaultModel.trim()) {
+            return defaultModel.trim()
+        }
+        return ''
     }
 
     /**
@@ -277,27 +283,39 @@ export class LlmService {
      * @param {boolean} options.needsSearch - 是否需要搜索
      */
     static selectModel(options = {}) {
+        // 伪人模式优先 - 使用伪人模型
         if (options.isRoleplay) {
             const model = this.getRoleplayModel()
             if (model) return model
+            // 伪人模式如果没配置专用模型，回退到对话模型或默认模型
+            return this.getChatModel() || this.getDefaultModel()
         }
         
+        // 深度推理需求
         if (options.needsReasoning) {
             const model = this.getReasoningModel()
             if (model) return model
         }
         
-        if (options.needsTools) {
-            const model = this.getToolCallModel()
-            if (model) return model
-        }
-        
+        // 搜索需求
         if (options.needsSearch) {
             const model = this.getSearchModel()
             if (model) return model
         }
         
-        return this.getChatModel() || this.getDefaultModel()
+        // 工具调用需求 - 优先使用工具调用模型（因为对话模型可能不支持工具）
+        if (options.needsTools) {
+            const toolModel = this.getToolCallModel()
+            if (toolModel) return toolModel
+            // 如果没有专门的工具调用模型，使用对话模型
+        }
+        
+        // 使用对话模型
+        const chatModel = this.getChatModel()
+        if (chatModel) return chatModel
+        
+        // 最后使用默认模型
+        return this.getDefaultModel()
     }
 
     /**

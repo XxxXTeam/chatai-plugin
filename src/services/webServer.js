@@ -570,13 +570,28 @@ export class WebServer {
                 if (admin) config.set('admin', { ...config.get('admin'), ...admin })
                 if (tools) config.set('tools', { ...config.get('tools'), ...tools })
                 
-                // features深度合并
+                // features深度合并（注意数组需要直接覆盖而非展开）
                 if (features) {
                     const currentFeatures = config.get('features') || {}
                     const mergedFeatures = { ...currentFeatures }
                     for (const [key, value] of Object.entries(features)) {
-                        if (typeof value === 'object' && value !== null) {
-                            mergedFeatures[key] = { ...(currentFeatures[key] || {}), ...value }
+                        if (Array.isArray(value)) {
+                            // 数组直接覆盖
+                            mergedFeatures[key] = value
+                        } else if (typeof value === 'object' && value !== null) {
+                            // 对象需要深度合并，但内部数组要直接覆盖
+                            const currentObj = currentFeatures[key] || {}
+                            const mergedObj = { ...currentObj }
+                            for (const [subKey, subValue] of Object.entries(value)) {
+                                if (Array.isArray(subValue)) {
+                                    mergedObj[subKey] = subValue  // 数组直接覆盖
+                                } else if (typeof subValue === 'object' && subValue !== null) {
+                                    mergedObj[subKey] = { ...(currentObj[subKey] || {}), ...subValue }
+                                } else {
+                                    mergedObj[subKey] = subValue
+                                }
+                            }
+                            mergedFeatures[key] = mergedObj
                         } else {
                             mergedFeatures[key] = value
                         }

@@ -294,7 +294,8 @@ export class AICommands extends plugin {
             }
 
             // 构建总结提示
-            const dialogText = messages.slice(-maxMessages).map(m => {
+            const recentMessages = messages.slice(-maxMessages)
+            const dialogText = recentMessages.map(m => {
                 // 处理已格式化的消息（来自数据库）和原始消息
                 if (typeof m.content === 'string' && m.content.startsWith('[')) {
                     return m.content  // 已格式化
@@ -304,10 +305,37 @@ export class AICommands extends plugin {
                 return `[${m.nickname || '用户'}]: ${content}`
             }).join('\n')
             
-            const summaryPrompt = `请总结以下群聊对话的主要内容，提取关键话题和讨论要点：\n\n${dialogText}\n\n请用简洁的方式总结：
-1. 主要讨论话题
-2. 关键观点
-3. 参与度分析`
+            // 统计参与者
+            const participants = new Set(recentMessages.map(m => m.nickname || m.userId || '用户'))
+            
+            const summaryPrompt = `请分析以下群聊记录并生成结构化总结：
+
+【群聊记录】
+${dialogText}
+
+【输出要求】
+请严格按以下格式输出，使用 emoji 美化：
+
+📌 **核心话题** (2-3个最主要的讨论话题)
+• 话题1：简要描述
+• 话题2：简要描述
+
+💬 **关键讨论**
+列出最重要的观点交流（3-5条）
+
+👥 **活跃成员**
+最活跃的发言者及其主要贡献
+
+📊 **氛围评估**
+一句话总结群聊氛围和互动质量
+
+⏰ **时间范围**
+总结的消息时间跨度
+
+注意：
+- 保持简洁，每项不超过2-3行
+- 使用要点形式，避免长段落
+- 如有争议或有趣的互动，优先提取`
 
             const result = await chatService.sendMessage({
                 userId: `summary_${e.group_id}`,

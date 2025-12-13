@@ -52,6 +52,14 @@ export class bym extends plugin {
         if (e.atBot && !isReplyToBotMessage(e)) {
             return false
         }
+        
+        // 跳过含有图片的消息（伪人模式不处理图片消息）
+        const hasImage = (e.img && e.img.length > 0) || 
+                         (e.message && e.message.some(m => m.type === 'image'))
+        if (hasImage) {
+            logger.debug('[BYM] 跳过: 消息包含图片')
+            return false
+        }
 
         // 随机触发概率 - 确保配置值有效
         let probability = config.get('bym.probability')
@@ -76,8 +84,11 @@ export class bym extends plugin {
             // 使用 LlmService 获取聊天客户端（自动处理渠道和模型选择）
             const { LlmService } = await import('../src/services/LlmService.js')
             
-            // 获取伪人模型或默认模型
-            const bymModel = config.get('bym.model') || config.get('llm.defaultModel') || LlmService.selectModel({ isRoleplay: true })
+            // 获取伪人模型或默认模型（注意：空字符串要视为未配置）
+            const configBymModel = config.get('bym.model')
+            const bymModel = (configBymModel && typeof configBymModel === 'string' && configBymModel.trim()) 
+                ? configBymModel 
+                : LlmService.selectModel({ isRoleplay: true })
             
             // 使用getChatClient获取客户端，它会自动处理渠道选择
             const client = await LlmService.getChatClient({ 

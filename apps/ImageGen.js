@@ -61,11 +61,135 @@ export class ImageGen extends plugin {
                 { reg: /^#?文生视频\s*(.+)$/s, fnc: 'text2video' },
                 { reg: /^#?图生视频\s*(.*)$/s, fnc: 'img2video' },
                 { reg: presetReg, fnc: 'presetHandler' },
+                { reg: /^#?(谷歌状态|画图状态|api状态)$/i, fnc: 'apiStatus' },
             ]
         })
         
         this.timeout = 600000 // 10分钟超时（视频生成需要更长时间）
         this.maxImages = 3
+    }
+
+    /**
+     * 获取API状态信息
+     */
+    async apiStatus() {
+        const e = this.e
+        
+        if (!config.get('features.imageGen.enabled')) {
+            await e.reply('图片生成功能未启用', true)
+            return true
+        }
+        
+        const apiConfig = config.get('features.imageGen') || {}
+        const apis = this.getApiList()
+        
+        if (apis.length === 0) {
+            await e.reply('未配置任何API', true)
+            return true
+        }
+        
+        await e.reply('正在获取API状态...', true)
+        
+        const results = []
+        
+        for (let i = 0; i < apis.length; i++) {
+            const api = apis[i]
+            try {
+                // 请求根路径获取状态
+                const statusUrl = api.baseUrl.replace(/\/v1\/chat\/completions\/?$/, '').replace(/\/v1\/?$/, '').replace(/\/$/, '')
+                
+                const response = await fetch(statusUrl, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: AbortSignal.timeout(10000)
+                })
+                
+                if (response.ok) {
+                    const data = await response.json()
+                    results.push({
+                        index: i + 1,
+                        baseUrl: api.baseUrl,
+                        success: true,
+                        data
+                    })
+                } else {
+                    results.push({
+                        index: i + 1,
+                        baseUrl: api.baseUrl,
+                        success: false,
+                        error: `HTTP ${response.status}`
+                    })
+                }
+            } catch (err) {
+                results.push({
+                    index: i + 1,
+                    baseUrl: api.baseUrl,
+                    success: false,
+                    error: err.message
+                })
+            }
+        }
+        
+        // 格式化输出
+        const output = results.map(r => {
+            if (!r.success) {
+                return `【API ${r.index}】❌ 连接失败\n地址: ${r.baseUrl}\n错误: ${r.error}`
+            }
+            
+            const d = r.data
+            const lines = [
+                `【API ${r.index}】✅ ${d.service || 'Unknown'} v${d.version || '?'}`,
+                `状态: ${d.status || 'unknown'}`,
+                `运行时间: ${d.uptime || '-'}`,
+            ]
+            
+            // 显示已配置的模型数量
+            const apiObj = apis[r.index - 1]
+            if (apiObj?.models?.length > 0) {
+                lines.push(`已配置模型: ${apiObj.models.length} 个`)
+            }
+            
+            if (d.pool) {
+                lines.push(`资源池: ${d.pool.ready}/${d.pool.total} 可用`)
+            }
+            if (d.images_generated !== undefined) {
+                lines.push(`已生成图片: ${d.images_generated}`)
+            }
+            if (d.videos_generated !== undefined) {
+                lines.push(`已生成视频: ${d.videos_generated}`)
+            }
+            if (d.success_rate) {
+                lines.push(`成功率: ${d.success_rate}`)
+            }
+            if (d.current_rpm !== undefined) {
+                lines.push(`当前RPM: ${d.current_rpm} (平均: ${d.average_rpm || '-'})`)
+            }
+            if (d.total_requests !== undefined) {
+                lines.push(`总请求: ${d.total_requests} (成功: ${d.success_requests || 0})`)
+            }
+            if (d.clients?.count !== undefined) {
+                lines.push(`客户端: ${d.clients.count} 个, ${d.clients.total_threads || 0} 线程`)
+            }
+            if (d.input_tokens !== undefined || d.output_tokens !== undefined) {
+                const input = d.input_tokens ? (d.input_tokens / 1000000).toFixed(1) + 'M' : '-'
+                const output = d.output_tokens ? (d.output_tokens / 1000000).toFixed(1) + 'M' : '-'
+                lines.push(`Token: 输入${input} / 输出${output}`)
+            }
+            if (d.mode) {
+                lines.push(`模式: ${d.mode}${d.flow_enabled ? ' (流式)' : ''}`)
+            }
+            // 显示备注信息
+            if (d.note && Array.isArray(d.note) && d.note.length > 0) {
+                lines.push(`━━━━━━━━━━`)
+                lines.push(`📝 备注:`)
+                d.note.forEach(n => lines.push(`  • ${n}`))
+            }
+            
+            return lines.join('\n')
+        }).join('\n\n')
+        
+        await e.reply(`📊 画图API状态\n${'━'.repeat(15)}\n${output}`, true)
+        return true
     }
 
     /**
@@ -235,192 +359,319 @@ export class ImageGen extends plugin {
     }
 
     /**
-     * 调用图片生成 API
+     * 标准化baseUrl为完整API地址
+     * @param {string} baseUrl - 基础URL
+     * @returns {string} 完整的chat/completions地址
+     */
+    normalizeApiUrl(baseUrl) {
+        if (!baseUrl) return ''
+        let url = baseUrl.trim().replace(/\/$/, '')
+        
+        // 如果已经是完整的chat/completions路径
+        if (url.endsWith('/chat/completions')) {
+            return url
+        }
+        // 如果只有/v1
+        if (url.endsWith('/v1')) {
+            return url + '/chat/completions'
+        }
+        // 如果是根路径
+        return url + '/v1/chat/completions'
+    }
+
+    /**
+     * 获取所有API列表（图片+视频通用）
+     * @returns {Array<{baseUrl: string, apiKey: string, model: string, videoModel: string}>}
+     */
+    getApiList() {
+        const apiConfig = config.get('features.imageGen') || {}
+        const globalModel = apiConfig.model || 'gemini-3-pro-image'
+        const globalVideoModel = apiConfig.videoModel || 'veo-2.0-generate-001'
+        
+        // 新格式：apis 数组 [{baseUrl, apiKey, models: []}]
+        if (Array.isArray(apiConfig.apis) && apiConfig.apis.length > 0) {
+            return apiConfig.apis
+                .filter(api => api && api.baseUrl)  // 过滤无效配置
+                .map(api => ({
+                    baseUrl: this.normalizeApiUrl(api.baseUrl),
+                    apiKey: api.apiKey || 'X-Free',
+                    model: globalModel,
+                    videoModel: globalVideoModel,
+                    models: api.models || []  // 保存模型列表用于状态显示
+                }))
+        }
+        
+        // 兼容旧格式：单个apiUrl
+        if (apiConfig.apiUrl) {
+            return [{
+                baseUrl: this.normalizeApiUrl(apiConfig.apiUrl),
+                apiKey: apiConfig.apiKey || 'X-Free',
+                model: globalModel,
+                videoModel: globalVideoModel,
+                models: []
+            }]
+        }
+        
+        // 默认API
+        return [{
+            baseUrl: 'https://business.928100.xyz/v1/chat/completions',
+            apiKey: 'X-Free',
+            model: globalModel,
+            videoModel: globalVideoModel,
+            models: []
+        }]
+    }
+
+    /**
+     * 获取图片生成API配置
+     * @param {number} apiIndex - API索引
+     */
+    getImageApiConfig(apiIndex = 0) {
+        const apis = this.getApiList()
+        if (apiIndex >= apis.length) return null
+        
+        const api = apis[apiIndex]
+        return {
+            apiUrl: api.baseUrl,
+            apiKey: api.apiKey,
+            model: api.model
+        }
+    }
+    
+    /**
+     * 获取可用API数量
+     */
+    getApiCount() {
+        return this.getApiList().length
+    }
+
+    /**
+     * 调用图片生成 API（支持多API轮询和自动重试）
      */
     async generateImage({ prompt, imageUrls = [] }) {
-        const apiConfig = config.get('features.imageGen') || {}
-        const apiUrl = apiConfig.apiUrl || 'https://business.928100.xyz/v1/chat/completions'
-        const apiKey = apiConfig.apiKey || 'X-Free'
-        const model = apiConfig.model || 'gemini-3-pro-image'
-        
-        // 构建消息内容
-        const content = []
-        if (prompt) {
-            content.push({ type: 'text', text: prompt })
-        }
-        if (imageUrls.length) {
-            content.push(...imageUrls.map(url => ({
-                type: 'image_url',
-                image_url: { url }
-            })))
-        }
-        
-        const requestData = {
-            model,
-            messages: [{ role: 'user', content }],
-            stream: false,
-            temperature: 0.7,
-        }
-        
         const startTime = Date.now()
+        const maxApiRetries = this.getApiCount()  // 最多尝试的API数量
+        const maxEmptyRetries = 2  // 每个API空响应时的重试次数
         
-        try {
-            const response = await fetch(apiUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${apiKey}`,
-                },
-                body: JSON.stringify(requestData),
-                signal: AbortSignal.timeout(this.timeout),
-            })
+        let lastError = null
+        
+        // 遍历所有可用API
+        for (let apiIndex = 0; apiIndex < maxApiRetries; apiIndex++) {
+            const apiConf = this.getImageApiConfig(apiIndex)
+            if (!apiConf) break
             
-            if (!response.ok) {
-                throw new Error(`API 错误: ${response.status}`)
-            }
-            
-            const data = await response.json()
-            const duration = Date.now() - startTime
-            
-            // 解析返回的图片
-            const resultImages = this.extractImages(data)
-            
-            if (resultImages.length) {
-                return {
-                    success: true,
-                    images: resultImages,
-                    duration: this.formatDuration(duration)
+            // 每个API尝试多次（应对空响应）
+            for (let retry = 0; retry <= maxEmptyRetries; retry++) {
+                try {
+                    if (apiIndex > 0 || retry > 0) {
+                        logger.info(`[ImageGen] 图片生成重试 (API=${apiIndex}, retry=${retry})`)
+                    }
+                    
+                    // 构建消息内容
+                    const content = []
+                    if (prompt) {
+                        content.push({ type: 'text', text: prompt })
+                    }
+                    if (imageUrls.length) {
+                        content.push(...imageUrls.map(url => ({
+                            type: 'image_url',
+                            image_url: { url }
+                        })))
+                    }
+                    
+                    const requestData = {
+                        model: apiConf.model,
+                        messages: [{ role: 'user', content }],
+                        stream: false,
+                        temperature: 0.7,
+                    }
+                    
+                    const response = await fetch(apiConf.apiUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${apiConf.apiKey}`,
+                        },
+                        body: JSON.stringify(requestData),
+                        signal: AbortSignal.timeout(this.timeout),
+                    })
+                    
+                    if (!response.ok) {
+                        throw new Error(`API 错误: ${response.status}`)
+                    }
+                    
+                    const data = await response.json()
+                    const resultImages = this.extractImages(data)
+                    
+                    if (resultImages.length) {
+                        const duration = Date.now() - startTime
+                        return {
+                            success: true,
+                            images: resultImages,
+                            duration: this.formatDuration(duration),
+                            apiUsed: apiIndex > 0 ? `备用API${apiIndex}` : '主API'
+                        }
+                    }
+                    
+                    // 空响应，继续重试
+                    logger.warn(`[ImageGen] API返回空图片，准备重试...`)
+                    await new Promise(r => setTimeout(r, 1000))
+                    
+                } catch (err) {
+                    lastError = err
+                    if (err.name === 'TimeoutError') {
+                        logger.warn(`[ImageGen] 请求超时，切换下一个API`)
+                        break // 超时直接切换API
+                    }
+                    logger.warn(`[ImageGen] API请求失败: ${err.message}`)
+                    await new Promise(r => setTimeout(r, 500))
                 }
             }
-            
-            return {
-                success: false,
-                error: '未能生成图片，请重试',
-                duration: this.formatDuration(duration)
-            }
-        } catch (err) {
-            const duration = Date.now() - startTime
-            if (err.name === 'TimeoutError') {
-                return { success: false, error: '请求超时，请重试', duration: this.formatDuration(duration) }
-            }
-            throw err
+        }
+        
+        const duration = Date.now() - startTime
+        return {
+            success: false,
+            error: lastError?.message || '所有API均未能生成图片，请稍后重试',
+            duration: this.formatDuration(duration)
         }
     }
 
     /**
-     * 调用视频生成 API
+     * 获取视频生成API配置
+     * @param {number} apiIndex - API索引
+     */
+    getVideoApiConfig(apiIndex = 0) {
+        const apis = this.getApiList()
+        if (apiIndex >= apis.length) return null
+        
+        const api = apis[apiIndex]
+        return {
+            apiUrl: api.baseUrl,
+            apiKey: api.apiKey,
+            model: api.videoModel
+        }
+    }
+
+    /**
+     * 调用视频生成 API（支持多API轮询和空响应自动重试）
      */
     async generateVideo({ prompt, imageUrls = [] }) {
-        const apiConfig = config.get('features.imageGen') || {}
-        const apiUrl = apiConfig.videoApiUrl || apiConfig.apiUrl || 'https://business.928100.xyz/v1/chat/completions'
-        const apiKey = apiConfig.apiKey || 'X-Free'
-        const model = apiConfig.videoModel || 'veo-2.0-generate-001'
-        
-        // 构建消息内容
-        const content = []
-        if (prompt) {
-            content.push({ type: 'text', text: prompt })
-        }
-        if (imageUrls.length) {
-            content.push(...imageUrls.map(url => ({
-                type: 'image_url',
-                image_url: { url }
-            })))
-        }
-        
-        const requestData = {
-            model,
-            messages: [{ role: 'user', content }],
-            stream: false,
-            temperature: 0.7,
-        }
-        
         const startTime = Date.now()
-        const maxRetries = 2
+        const maxApiCount = this.getApiCount()
+        const maxEmptyRetries = 3  // 空响应时的重试次数（视频生成需要更多重试）
+        
         let lastError = null
         
-        for (let retry = 0; retry <= maxRetries; retry++) {
-            try {
-                if (retry > 0) {
-                    logger.info(`[ImageGen] 视频生成重试 ${retry}/${maxRetries}`)
-                }
-                
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`,
-                    },
-                    body: JSON.stringify(requestData),
-                    signal: AbortSignal.timeout(this.timeout),
-                })
-                
-                if (!response.ok) {
-                    const errorText = await response.text().catch(() => '')
-                    throw new Error(`API 错误: ${response.status} ${errorText.substring(0, 100)}`)
-                }
-                
-                const data = await response.json()
-                const duration = Date.now() - startTime
-                
-                // 调试日志：查看API返回内容
-                logger.debug('[ImageGen] 视频API响应:', JSON.stringify(data, null, 2))
-                
-                // 解析返回的视频
-                const resultVideos = this.extractVideos(data)
-                
-                if (resultVideos.length) {
-                    return {
-                        success: true,
-                        videos: resultVideos,
-                        duration: this.formatDuration(duration)
+        // 遍历所有可用API
+        for (let apiIndex = 0; apiIndex < maxApiCount; apiIndex++) {
+            const apiConf = this.getVideoApiConfig(apiIndex)
+            if (!apiConf) break
+            
+            // 每个API尝试多次（应对空响应）
+            for (let retry = 0; retry <= maxEmptyRetries; retry++) {
+                try {
+                    if (apiIndex > 0 || retry > 0) {
+                        logger.info(`[ImageGen] 视频生成重试 (API=${apiIndex}, retry=${retry})`)
                     }
-                }
-                
-                // 如果没有视频，尝试提取图片作为备选
-                const resultImages = this.extractImages(data)
-                if (resultImages.length) {
-                    return {
-                        success: true,
-                        images: resultImages,
-                        isImage: true,
-                        duration: this.formatDuration(duration)
+                    
+                    // 构建消息内容
+                    const content = []
+                    if (prompt) {
+                        content.push({ type: 'text', text: prompt })
                     }
-                }
-                
-                return {
-                    success: false,
-                    error: '未能生成视频，请重试或换个描述',
-                    duration: this.formatDuration(duration)
-                }
-            } catch (err) {
-                lastError = err
-                const isNetworkError = err.cause?.code === 'UND_ERR_SOCKET' || 
-                                       err.message.includes('fetch failed') ||
-                                       err.message.includes('socket')
-                
-                // 网络错误时重试
-                if (isNetworkError && retry < maxRetries) {
-                    logger.warn(`[ImageGen] 网络错误，${retry + 1}秒后重试: ${err.message}`)
-                    await new Promise(r => setTimeout(r, (retry + 1) * 1000))
-                    continue
-                }
-                
-                // 超时错误
-                if (err.name === 'TimeoutError') {
-                    return { 
-                        success: false, 
-                        error: '请求超时，视频生成需要较长时间，请重试', 
-                        duration: this.formatDuration(Date.now() - startTime) 
+                    if (imageUrls.length) {
+                        content.push(...imageUrls.map(url => ({
+                            type: 'image_url',
+                            image_url: { url }
+                        })))
                     }
+                    
+                    const requestData = {
+                        model: apiConf.model,
+                        messages: [{ role: 'user', content }],
+                        stream: false,
+                        temperature: 0.7,
+                    }
+                    
+                    const response = await fetch(apiConf.apiUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${apiConf.apiKey}`,
+                        },
+                        body: JSON.stringify(requestData),
+                        signal: AbortSignal.timeout(this.timeout),
+                    })
+                    
+                    if (!response.ok) {
+                        const errorText = await response.text().catch(() => '')
+                        throw new Error(`API 错误: ${response.status} ${errorText.substring(0, 100)}`)
+                    }
+                    
+                    const data = await response.json()
+                    
+                    // 调试日志
+                    logger.debug('[ImageGen] 视频API响应:', JSON.stringify(data, null, 2))
+                    
+                    // 解析返回的视频
+                    const resultVideos = this.extractVideos(data)
+                    
+                    if (resultVideos.length) {
+                        const duration = Date.now() - startTime
+                        return {
+                            success: true,
+                            videos: resultVideos,
+                            duration: this.formatDuration(duration),
+                            apiUsed: apiIndex > 0 ? `备用API${apiIndex}` : '主API'
+                        }
+                    }
+                    
+                    // 如果没有视频，尝试提取图片作为备选
+                    const resultImages = this.extractImages(data)
+                    if (resultImages.length) {
+                        const duration = Date.now() - startTime
+                        return {
+                            success: true,
+                            images: resultImages,
+                            isImage: true,
+                            duration: this.formatDuration(duration)
+                        }
+                    }
+                    
+                    // 空响应，等待后重试
+                    logger.warn(`[ImageGen] 视频API返回空结果，等待后重试...`)
+                    await new Promise(r => setTimeout(r, 2000))  // 视频需要更长等待
+                    
+                } catch (err) {
+                    lastError = err
+                    const isNetworkError = err.cause?.code === 'UND_ERR_SOCKET' || 
+                                           err.message.includes('fetch failed') ||
+                                           err.message.includes('socket')
+                    
+                    if (isNetworkError) {
+                        logger.warn(`[ImageGen] 网络错误，准备重试: ${err.message}`)
+                        await new Promise(r => setTimeout(r, 1500))
+                        continue
+                    }
+                    
+                    if (err.name === 'TimeoutError') {
+                        logger.warn(`[ImageGen] 请求超时，切换下一个API`)
+                        break // 超时直接切换API
+                    }
+                    
+                    logger.warn(`[ImageGen] 视频API请求失败: ${err.message}`)
+                    await new Promise(r => setTimeout(r, 1000))
                 }
-                
-                throw err
             }
         }
         
-        // 所有重试都失败
-        throw lastError || new Error('视频生成失败')
+        const duration = Date.now() - startTime
+        return {
+            success: false,
+            error: lastError?.message || '所有API均未能生成视频，请稍后重试',
+            duration: this.formatDuration(duration)
+        }
     }
 
     /**
