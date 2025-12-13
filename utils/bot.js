@@ -1,10 +1,5 @@
 /**
- * 获取机器人框架
- * @returns {'trss'|'miao'}
+ * @deprecated 请使用 src/utils/bot.js
+ * 此文件已迁移，保留用于向后兼容
  */
-export function getBotFramework () {
-  if (Bot.bots) {
-    return 'trss'
-  }
-  return 'miao'
-}
+export * from '../src/utils/bot.js'

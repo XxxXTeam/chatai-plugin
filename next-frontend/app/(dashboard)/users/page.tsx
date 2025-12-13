@@ -317,11 +317,11 @@ export default function UsersPage() {
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-medium">{user.userId}</span>
-                        {user.nickname && (
-                          <span className="text-muted-foreground">({user.nickname})</span>
+                        {((user.settings?.nickname as string) || user.nickname) && (
+                          <span className="text-muted-foreground">({(user.settings?.nickname as string) || user.nickname})</span>
                         )}
-                        <Badge variant={user.enabled ? 'default' : 'secondary'}>
-                          {user.enabled ? '已启用' : '已禁用'}
+                        <Badge variant={((user.settings?.enabled as boolean) ?? user.enabled) ? 'default' : 'secondary'}>
+                          {((user.settings?.enabled as boolean) ?? user.enabled) ? '已启用' : '已禁用'}
                         </Badge>
                       </div>
                       <div className="flex gap-4 text-sm text-muted-foreground">

@@ -187,27 +187,30 @@ export class LlmService {
     static ModelType = {
         CHAT: 'chat',           // 对话模型 - 普通聊天
         ROLEPLAY: 'roleplay',   // 伪人模型 - 模拟真人回复
-        TOOL_CALL: 'toolCall',  // 工具调用模型 - function calling
-        SEARCH: 'search',       // 搜索模型 - 联网搜索
-        REASONING: 'reasoning'  // 思考模型 - 深度推理
+        SEARCH: 'search'        // 搜索模型 - 联网搜索
     }
 
     /**
      * Get model for specific mode
      * @param {string} mode - 'chat', 'roleplay', 'toolCall', 'search', 'reasoning', 'code', 'translation', etc.
-     * @returns {string} 模型名称（如果该mode未配置则返回空字符串，不会自动回退到默认模型）
+     * @param {boolean} [fallbackToDefault=true] - 是否回退到默认模型
+     * @returns {string} 模型名称
      */
-    static getModel(mode = 'chat') {
+    static getModel(mode = 'chat', fallbackToDefault = true) {
         // 先检查新的 models 配置
         const newModelConfig = config.get(`llm.models.${mode}`)
-        if (newModelConfig) {
-            // 如果是数组，取第一个有效模型
+        if (newModelConfig && (!Array.isArray(newModelConfig) || newModelConfig.length > 0)) {
+            // 如果是数组且非空，取第一个有效模型
             if (Array.isArray(newModelConfig)) {
                 const firstModel = newModelConfig.find(m => m && typeof m === 'string' && m.trim())
-                if (firstModel) return firstModel.trim()
+                if (firstModel) {
+                    logger.debug(`[LlmService] getModel(${mode}): 使用 models.${mode} 配置: ${firstModel.trim()}`)
+                    return firstModel.trim()
+                }
             } 
             // 如果是字符串且非空，直接返回
             else if (typeof newModelConfig === 'string' && newModelConfig.trim()) {
+                logger.debug(`[LlmService] getModel(${mode}): 使用 models.${mode} 配置: ${newModelConfig.trim()}`)
                 return newModelConfig.trim()
             }
         }
@@ -215,15 +218,28 @@ export class LlmService {
         // 兼容旧配置
         const modeModel = config.get(`llm.${mode}Model`)
         if (modeModel) {
-            if (Array.isArray(modeModel)) {
+            if (Array.isArray(modeModel) && modeModel.length > 0) {
                 const first = modeModel.find(m => m && typeof m === 'string' && m.trim())
-                if (first) return first.trim()
+                if (first) {
+                    logger.debug(`[LlmService] getModel(${mode}): 使用旧配置 ${mode}Model: ${first.trim()}`)
+                    return first.trim()
+                }
             } else if (typeof modeModel === 'string' && modeModel.trim()) {
+                logger.debug(`[LlmService] getModel(${mode}): 使用旧配置 ${mode}Model: ${modeModel.trim()}`)
                 return modeModel.trim()
             }
         }
         
-        // 该mode未配置，返回空字符串（让调用方决定如何处理）
+        // 该 mode 未配置，回退到默认模型
+        if (fallbackToDefault) {
+            const defaultModel = this.getDefaultModel()
+            if (defaultModel) {
+                logger.debug(`[LlmService] getModel(${mode}): 回退到默认模型: ${defaultModel}`)
+                return defaultModel
+            }
+        }
+        
+        logger.warn(`[LlmService] getModel(${mode}): 未找到任何可用模型`)
         return ''
     }
     
@@ -254,24 +270,10 @@ export class LlmService {
     }
 
     /**
-     * 获取工具调用模型
-     */
-    static getToolCallModel() {
-        return this.getModel(this.ModelType.TOOL_CALL)
-    }
-
-    /**
      * 获取搜索模型
      */
     static getSearchModel() {
         return this.getModel(this.ModelType.SEARCH)
-    }
-
-    /**
-     * 获取思考/推理模型
-     */
-    static getReasoningModel() {
-        return this.getModel(this.ModelType.REASONING)
     }
 
     /**

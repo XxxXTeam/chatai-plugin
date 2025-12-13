@@ -841,7 +841,11 @@ export class Chat extends plugin {
         return true
       }
       const finalReply = replyText
-      const showThinking = config.get('thinking.showThinkingContent') !== false
+      // 思考适配总开关：关闭后完全不处理思考内容
+      const thinkingEnabled = config.get('thinking.enabled') !== false
+      // 显示思考内容：只有总开关开启时才生效
+      const showThinking = thinkingEnabled && config.get('thinking.showThinkingContent') !== false
+      // 思考合并转发：只有总开关开启时才生效
       const thinkingUseForward = config.get('thinking.useForwardMsg') !== false
       const showToolLogs = config.get('tools.showCallLogs') !== false
       const toolsUseForward = config.get('tools.useForwardMsg') !== false
@@ -850,6 +854,7 @@ export class Chat extends plugin {
       // 获取工具调用日志
       const toolCallLogs = result.toolCallLogs || []
       const hasToolLogs = toolCallLogs.length > 0 && showToolLogs
+      // 只有思考适配开启时才显示思考内容
       const hasThinking = reasoningText && showThinking
 
       // 1. 先发送工具调用日志（合并转发）

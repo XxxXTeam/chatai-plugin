@@ -63,9 +63,7 @@ interface Config {
     models: {
       chat: string[]
       roleplay: string[]
-      toolCall: string[]
       search: string[]
-      reasoning: string[]
     }
     fallback: {
       enabled: boolean
@@ -116,11 +114,13 @@ interface Config {
     reaction: { enabled: boolean }
     imageGen: { 
       enabled: boolean
+      apis: Array<{
+        baseUrl: string
+        apiKey: string
+        models: string[]
+      }>
       model: string
       videoModel: string
-      customModels: string  // 自定义模型列表，逗号分隔
-      statusUrl: string     // 状态检测 URL
-      apis: Array<{ baseUrl: string; apiKey: string }>  // 独立API列表
     }
     autoCleanOnError: { enabled: boolean; notifyUser: boolean }
   }
@@ -155,7 +155,7 @@ const defaultConfig: Config = {
   admin: { masterQQ: [], loginNotifyPrivate: true, sensitiveCommandMasterOnly: true },
   llm: { 
     defaultModel: '', 
-    models: { chat: [], roleplay: [], toolCall: [], search: [], reasoning: [] },
+    models: { chat: [], roleplay: [], search: [] },
     fallback: { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false }
   },
   context: { maxMessages: 20, autoEnd: { enabled: false, maxRounds: 50 } },
@@ -170,11 +170,9 @@ const defaultConfig: Config = {
     reaction: { enabled: false },
     imageGen: { 
       enabled: true, 
-      model: '',
-      videoModel: '',
-      customModels: '',
-      statusUrl: '',
-      apis: []
+      apis: [],  // [{baseUrl, apiKey, models: []}]
+      model: 'gemini-3-pro-image',
+      videoModel: 'veo-2.0-generate-001'
     },
     autoCleanOnError: { enabled: false, notifyUser: true }
   },
@@ -190,15 +188,13 @@ const defaultConfig: Config = {
   }
 }
 
-type ModelCategory = 'chat' | 'roleplay' | 'toolCall' | 'search' | 'reasoning' | 'fallback' | 'default'
+type ModelCategory = 'chat' | 'roleplay' | 'search' | 'fallback' | 'default'
 
 const MODEL_CATEGORY_LABELS: Record<ModelCategory, string> = {
   default: '默认模型',
   chat: '对话模型',
   roleplay: '伪人模型',
-  toolCall: '工具调用模型',
   search: '搜索模型',
-  reasoning: '思考模型',
   fallback: '备选模型'
 }
 
@@ -274,7 +270,7 @@ export default function SettingsPage() {
         if (!merged.llm.fallback) merged.llm.fallback = { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false }
         
         // 确保模型配置是数组格式 (后端返回string，前端需要string[])
-        const modelKeys = ['chat', 'roleplay', 'toolCall', 'search', 'reasoning']
+        const modelKeys = ['chat', 'roleplay', 'search']
         modelKeys.forEach(key => {
           const val = merged.llm.models[key]
           if (typeof val === 'string') {
@@ -767,7 +763,7 @@ export default function SettingsPage() {
               <CardDescription>为不同场景配置专用模型</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              {(['chat', 'roleplay', 'toolCall', 'search', 'reasoning'] as ModelCategory[]).map((category) => (
+              {(['chat', 'roleplay', 'search'] as ModelCategory[]).map((category) => (
                 <div key={category} className="flex items-center justify-between p-3 border rounded-lg">
                   <div>
                     <Label>{MODEL_CATEGORY_LABELS[category]}</Label>
@@ -944,18 +940,45 @@ export default function SettingsPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
-                <div><Label>启用思考适配</Label><p className="text-sm text-muted-foreground">开启后会解析和处理模型的思考内容 (如 Claude 的 thinking 标签)</p></div>
+                <div>
+                  <Label>启用思考适配</Label>
+                  <p className="text-sm text-muted-foreground">开启后会解析和处理模型的思考内容 (如 reasoning_content 或 &lt;think&gt; 标签)</p>
+                </div>
                 <Switch checked={config.thinking?.enabled ?? true} onCheckedChange={(v) => updateConfig('thinking.enabled', v)} />
               </div>
               <Separator />
               <div className="flex items-center justify-between">
-                <div><Label>显示思考内容</Label><p className="text-sm text-muted-foreground">显示AI的思考过程</p></div>
-                <Switch checked={config.thinking?.showThinkingContent ?? true} onCheckedChange={(v) => updateConfig('thinking.showThinkingContent', v)} disabled={!config.thinking?.enabled} />
+                <div>
+                  <Label>显示思考内容</Label>
+                  <p className="text-sm text-muted-foreground">
+                    {config.thinking?.enabled ? '显示AI的思考过程' : '需先启用思考适配'}
+                  </p>
+                </div>
+                <Switch 
+                  checked={config.thinking?.showThinkingContent ?? true} 
+                  onCheckedChange={(v) => updateConfig('thinking.showThinkingContent', v)} 
+                />
               </div>
               <div className="flex items-center justify-between">
-                <div><Label>思考合并转发</Label><p className="text-sm text-muted-foreground">思考内容使用合并转发发送</p></div>
-                <Switch checked={config.thinking?.useForwardMsg ?? true} onCheckedChange={(v) => updateConfig('thinking.useForwardMsg', v)} disabled={!config.thinking?.enabled} />
+                <div>
+                  <Label>思考合并转发</Label>
+                  <p className="text-sm text-muted-foreground">
+                    {config.thinking?.enabled ? '思考内容使用合并转发发送' : '需先启用思考适配'}
+                  </p>
+                </div>
+                <Switch 
+                  checked={config.thinking?.useForwardMsg ?? true} 
+                  onCheckedChange={(v) => updateConfig('thinking.useForwardMsg', v)} 
+                />
               </div>
+              {!config.thinking?.enabled && (
+                <Alert>
+                  <Info className="h-4 w-4" />
+                  <AlertDescription>
+                    思考适配已关闭，上方的显示和转发设置将不会生效。如需显示思考内容，请先开启"启用思考适配"。
+                  </AlertDescription>
+                </Alert>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -1034,105 +1057,157 @@ export default function SettingsPage() {
               {config.features?.imageGen?.enabled && (
                 <>
                   <Separator />
-                  <p className="text-sm text-muted-foreground">独立配置画图API，支持多上游</p>
-                  
-                  {/* API 列表 */}
-                  <div className="grid gap-2">
+                  <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <Label>API 列表</Label>
+                      <div>
+                        <Label>API配置</Label>
+                        <p className="text-xs text-muted-foreground">支持多个API，会按顺序轮询和故障转移</p>
+                      </div>
                       <Button
-                        type="button"
                         variant="outline"
                         size="sm"
                         onClick={() => {
                           const apis = config.features?.imageGen?.apis || []
-                          updateConfig('features.imageGen.apis', [...apis, { baseUrl: '', apiKey: '' }])
+                          updateConfig('features.imageGen.apis', [...apis, { baseUrl: '', apiKey: '', models: [] }])
                         }}
                       >
-                        添加 API
+                        <Plus className="h-4 w-4 mr-1" /> 添加API
                       </Button>
                     </div>
-                    {(config.features?.imageGen?.apis || []).length === 0 && (
-                      <p className="text-xs text-muted-foreground p-3 border rounded-lg bg-muted/30">
-                        未配置API，将使用默认API (https://business.928100.xyz)
-                      </p>
-                    )}
-                    {(config.features?.imageGen?.apis || []).map((api: { baseUrl: string; apiKey: string }, idx: number) => (
-                      <div key={idx} className="flex gap-2 items-start p-3 border rounded-lg">
-                        <div className="flex-1 grid gap-2">
+                    
+                    {(config.features?.imageGen?.apis || []).map((api, index) => (
+                      <div key={index} className="p-3 border rounded-lg space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">API {index + 1}</span>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            onClick={() => {
+                              const apis = [...(config.features?.imageGen?.apis || [])]
+                              apis.splice(index, 1)
+                              updateConfig('features.imageGen.apis', apis)
+                            }}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        <div className="grid gap-2">
+                          <Label className="text-xs">API地址</Label>
                           <Input
                             value={api.baseUrl || ''}
                             onChange={(e) => {
                               const apis = [...(config.features?.imageGen?.apis || [])]
-                              apis[idx] = { ...apis[idx], baseUrl: e.target.value }
+                              apis[index] = { ...apis[index], baseUrl: e.target.value }
                               updateConfig('features.imageGen.apis', apis)
                             }}
-                            placeholder="API Base URL"
+                            placeholder="https://business.928100.xyz"
                           />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label className="text-xs">API密钥</Label>
                           <Input
+                            type="password"
                             value={api.apiKey || ''}
                             onChange={(e) => {
                               const apis = [...(config.features?.imageGen?.apis || [])]
-                              apis[idx] = { ...apis[idx], apiKey: e.target.value }
+                              apis[index] = { ...apis[index], apiKey: e.target.value }
                               updateConfig('features.imageGen.apis', apis)
                             }}
-                            placeholder="API Key (留空使用默认)"
+                            placeholder="sk-..."
                           />
                         </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            const apis = (config.features?.imageGen?.apis || []).filter((_: unknown, i: number) => i !== idx)
-                            updateConfig('features.imageGen.apis', apis)
-                          }}
-                        >
-                          删除
-                        </Button>
+                        <div className="grid gap-2">
+                          <div className="flex items-center justify-between">
+                            <Label className="text-xs">可用模型 ({api.models?.length || 0})</Label>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs"
+                              disabled={!api.baseUrl}
+                              onClick={async () => {
+                                if (!api.baseUrl) return
+                                try {
+                                  const res = await channelsApi.fetchModels({
+                                    adapterType: 'openai',
+                                    baseUrl: api.baseUrl,
+                                    apiKey: api.apiKey
+                                  })
+                                  const models = (res as any)?.data?.models || []
+                                  const apis = [...(config.features?.imageGen?.apis || [])]
+                                  apis[index] = { ...apis[index], models }
+                                  updateConfig('features.imageGen.apis', apis)
+                                  toast.success(`获取到 ${models.length} 个模型`)
+                                } catch (err) {
+                                  toast.error('获取模型失败')
+                                }
+                              }}
+                            >
+                              <RefreshCw className="h-3 w-3 mr-1" /> 获取模型
+                            </Button>
+                          </div>
+                          {api.models?.length > 0 && (
+                            <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
+                              {api.models.slice(0, 20).map((m) => (
+                                <Badge key={m} variant="secondary" className="text-xs">{m}</Badge>
+                              ))}
+                              {api.models.length > 20 && (
+                                <Badge variant="outline" className="text-xs">+{api.models.length - 20}</Badge>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     ))}
+                    
+                    {(config.features?.imageGen?.apis || []).length === 0 && (
+                      <div className="text-center py-4 text-sm text-muted-foreground border border-dashed rounded-lg">
+                        暂无API配置，点击上方按钮添加
+                      </div>
+                    )}
                   </div>
                   
+                  <Separator />
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="grid gap-2">
                       <Label>图片模型</Label>
-                      <Input
-                        value={config.features?.imageGen?.model || ''}
-                        onChange={(e) => updateConfig('features.imageGen.model', e.target.value)}
-                        placeholder="gemini-3-pro-preview-image"
-                        list="image-model-options"
-                      />
-                      <datalist id="image-model-options">
-                        <option value="gemini-2.0-flash-exp-image-generation" />
-                        <option value="gemini-2.0-flash-preview-image-generation" />
-                        <option value="gemini-3-pro-preview-image" />
-                      </datalist>
+                      <Select 
+                        value={config.features?.imageGen?.model || ''} 
+                        onValueChange={(v) => updateConfig('features.imageGen.model', v)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="选择或输入模型" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {/* 从所有API的models中汇总 */}
+                          {Array.from(new Set((config.features?.imageGen?.apis || []).flatMap(a => a.models || []))).map(m => (
+                            <SelectItem key={m} value={m}>{m}</SelectItem>
+                          ))}
+                          {(config.features?.imageGen?.apis || []).flatMap(a => a.models || []).length === 0 && (
+                            <SelectItem value="gemini-3-pro-image">gemini-3-pro-image</SelectItem>
+                          )}
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div className="grid gap-2">
                       <Label>视频模型</Label>
-                      <Input
-                        value={config.features?.imageGen?.videoModel || ''}
-                        onChange={(e) => updateConfig('features.imageGen.videoModel', e.target.value)}
-                        placeholder="gemini-3-pro-preview-video"
-                        list="video-model-options"
-                      />
-                      <datalist id="video-model-options">
-                        <option value="veo-2.0-generate-001" />
-                        <option value="gemini-3-pro-preview-video" />
-                      </datalist>
+                      <Select 
+                        value={config.features?.imageGen?.videoModel || ''} 
+                        onValueChange={(v) => updateConfig('features.imageGen.videoModel', v)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="选择或输入模型" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Array.from(new Set((config.features?.imageGen?.apis || []).flatMap(a => a.models || []))).map(m => (
+                            <SelectItem key={m} value={m}>{m}</SelectItem>
+                          ))}
+                          {(config.features?.imageGen?.apis || []).flatMap(a => a.models || []).length === 0 && (
+                            <SelectItem value="veo-2.0-generate-001">veo-2.0-generate-001</SelectItem>
+                          )}
+                        </SelectContent>
+                      </Select>
                     </div>
-                  </div>
-                  
-                  {/* 状态检测URL */}
-                  <div className="grid gap-2">
-                    <Label>状态检测 URL（可选）</Label>
-                    <Input
-                      value={config.features?.imageGen?.statusUrl || ''}
-                      onChange={(e) => updateConfig('features.imageGen.statusUrl', e.target.value)}
-                      placeholder="https://business.928100.xyz"
-                    />
-                    <p className="text-xs text-muted-foreground">用于 #谷歌状态 命令，留空则使用第一个API</p>
                   </div>
                 </>
               )}

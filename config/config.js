@@ -89,12 +89,8 @@ class Config {
                     chat: '',
                     // 伪人模型 - 用于模拟真人回复
                     roleplay: '',
-                    // 工具调用模型 - 用于 function calling
-                    toolCall: '',
                     // 搜索模型 - 用于联网搜索
-                    search: '',
-                    // 思考模型 - 用于深度推理
-                    reasoning: ''
+                    search: ''
                 },
                 // 备选模型配置 - 主模型失败时自动轮询
                 fallback: {
@@ -227,8 +223,9 @@ class Config {
                 strategy: 'priority', // 'priority', 'round-robin', 'random'
             },
             thinking: {
-                defaultLevel: 'low', // 'low', 'medium', 'high'
-                enableReasoning: false,
+                enabled: true,              // 思考适配总开关（关闭后不解析和显示思考内容）
+                defaultLevel: 'low',        // 思考深度: 'low', 'medium', 'high'
+                enableReasoning: false,     // 启用推理模式（发送reasoning参数给API）
                 showThinkingContent: true,  // 显示思考内容
                 useForwardMsg: true,        // 思考内容使用合并转发
             },

@@ -3,8 +3,8 @@
  * #取 - 获取消息完整raw/pb信息
  * 仅主人可用，使用合并转发输出
  */
-import { getBotFramework } from '../utils/bot.js'
-import { formatTimeToBeiJing } from '../utils/common.js'
+import { getBotFramework } from '../src/utils/bot.js'
+import { formatTimeToBeiJing } from '../src/utils/common.js'
 
 // 缓存主人列表
 let masterList = null

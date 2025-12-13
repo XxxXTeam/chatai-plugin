@@ -652,6 +652,7 @@ export class WebServer {
         this.app.get('/api/config/advanced', this.authMiddleware.bind(this), (req, res) => {
             const advancedConfig = {
                 thinking: config.get('thinking') || {
+                    enabled: true,
                     enableReasoning: false,
                     defaultLevel: 'low',
                     showThinkingContent: true,
@@ -715,6 +716,9 @@ export class WebServer {
             const { thinking, streaming, llm, context, memory, tools, builtinTools } = req.body
 
             if (thinking) {
+                if (thinking.enabled !== undefined) {
+                    config.set('thinking.enabled', thinking.enabled)
+                }
                 if (thinking.enableReasoning !== undefined) {
                     config.set('thinking.enableReasoning', thinking.enableReasoning)
                 }
