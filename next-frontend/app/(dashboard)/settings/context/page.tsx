@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,7 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
 import { configApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Save, Loader2, MessageCircle, Users, Timer } from 'lucide-react'
+import { Save, Loader2, MessageCircle, Users, Timer, Check } from 'lucide-react'
 
 interface ContextConfig {
   context: {
@@ -38,12 +38,41 @@ export default function ContextPage() {
   const [config, setConfig] = useState<ContextConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const isInitialLoad = useRef(true)
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
+  // 防抖自动保存
+  const debouncedSave = useCallback(async (configToSave: ContextConfig) => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+    }
+    saveTimeoutRef.current = setTimeout(async () => {
+      setSaveStatus('saving')
+      try {
+        await configApi.update(configToSave)
+        setSaveStatus('saved')
+        setTimeout(() => setSaveStatus('idle'), 2000)
+      } catch (error) {
+        toast.error('自动保存失败')
+        console.error(error)
+        setSaveStatus('idle')
+      }
+    }, 800)
+  }, [])
+
+  // 监听配置变化自动保存
+  useEffect(() => {
+    if (isInitialLoad.current || !config) return
+    debouncedSave(config)
+  }, [config, debouncedSave])
 
   useEffect(() => {
     const fetchConfig = async () => {
       try {
         const res = await configApi.get() as { data: ContextConfig }
         setConfig(res.data)
+        setTimeout(() => { isInitialLoad.current = false }, 100)
       } catch (error) {
         toast.error('加载配置失败')
         console.error(error)
@@ -59,7 +88,9 @@ export default function ContextPage() {
     setSaving(true)
     try {
       await configApi.update(config)
+      setSaveStatus('saved')
       toast.success('配置已保存')
+      setTimeout(() => setSaveStatus('idle'), 2000)
     } catch (error) {
       toast.error('保存失败')
       console.error(error)
@@ -109,10 +140,17 @@ export default function ContextPage() {
           <h2 className="text-2xl font-bold">上下文配置</h2>
           <p className="text-muted-foreground">配置对话上下文管理</p>
         </div>
-        <Button onClick={handleSave} disabled={saving}>
-          {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-          保存配置
-        </Button>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-muted-foreground">
+            {saveStatus === 'saving' && <><Loader2 className="inline h-4 w-4 animate-spin mr-1" />保存中</>}
+            {saveStatus === 'saved' && <><Check className="inline h-4 w-4 text-green-500 mr-1" />已保存</>}
+            {saveStatus === 'idle' && '自动保存'}
+          </span>
+          <Button onClick={handleSave} disabled={saving} size="sm">
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            保存
+          </Button>
+        </div>
       </div>
 
       {/* 基础设置 */}

@@ -52,10 +52,17 @@ export function DynamicTags({
           <Badge key={tag} variant={variant} className="gap-1 pr-1">
             {tag}
             {!disabled && (
-              <X 
-                className="h-3 w-3 cursor-pointer hover:text-destructive" 
-                onClick={() => removeTag(tag)}
-              />
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  removeTag(tag)
+                }}
+                className="ml-1 rounded-full hover:bg-destructive/20 p-0.5"
+              >
+                <X className="h-3 w-3 cursor-pointer hover:text-destructive" />
+              </button>
             )}
           </Badge>
         ))}

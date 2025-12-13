@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -33,7 +33,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { configApi, channelsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Save, Loader2, Info, X, RefreshCw, Settings2, Plus } from 'lucide-react'
+import { Save, Loader2, Info, X, RefreshCw, Settings2, Plus, Check } from 'lucide-react'
 
 interface PrefixPersona {
   prefix: string
@@ -214,6 +214,34 @@ export default function SettingsPage() {
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
   const [editingModelCategory, setEditingModelCategory] = useState<ModelCategory>('chat')
   const [tempSelectedModels, setTempSelectedModels] = useState<string[]>([])
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const isInitialLoad = useRef(true)
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
+  // 防抖自动保存
+  const debouncedSave = useCallback(async (configToSave: Config) => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+    }
+    saveTimeoutRef.current = setTimeout(async () => {
+      setSaveStatus('saving')
+      try {
+        await configApi.update(configToSave)
+        setSaveStatus('saved')
+        setTimeout(() => setSaveStatus('idle'), 2000)
+      } catch (error) {
+        toast.error('自动保存失败')
+        console.error(error)
+        setSaveStatus('idle')
+      }
+    }, 800)
+  }, [])
+
+  // 监听配置变化自动保存
+  useEffect(() => {
+    if (isInitialLoad.current || !config) return
+    debouncedSave(config)
+  }, [config, debouncedSave])
 
   useEffect(() => {
     const fetchData = async () => {
@@ -267,6 +295,8 @@ export default function SettingsPage() {
         }
         
         setConfig(merged)
+        // 标记初始加载完成
+        setTimeout(() => { isInitialLoad.current = false }, 100)
 
         // 获取所有模型
         const channels = (channelsRes as any)?.data || []
@@ -362,7 +392,9 @@ export default function SettingsPage() {
     setSaving(true)
     try {
       await configApi.update(config)
+      setSaveStatus('saved')
       toast.success('配置已保存')
+      setTimeout(() => setSaveStatus('idle'), 2000)
     } catch (error) {
       toast.error('保存失败')
       console.error(error)
@@ -374,7 +406,8 @@ export default function SettingsPage() {
   const updateConfig = (path: string, value: unknown) => {
     if (!config) return
     const keys = path.split('.')
-    const newConfig = { ...config }
+    // 深拷贝以确保 React 能检测到状态变化
+    const newConfig = JSON.parse(JSON.stringify(config))
     let obj: Record<string, unknown> = newConfig
     for (let i = 0; i < keys.length - 1; i++) {
       obj = obj[keys[i]] as Record<string, unknown>
@@ -408,10 +441,17 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold">系统设置</h2>
-        <Button onClick={handleSave} disabled={saving}>
-          {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-          保存配置
-        </Button>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-muted-foreground">
+            {saveStatus === 'saving' && <><Loader2 className="inline h-4 w-4 animate-spin mr-1" />保存中</>}
+            {saveStatus === 'saved' && <><Check className="inline h-4 w-4 text-green-500 mr-1" />已保存</>}
+            {saveStatus === 'idle' && '自动保存'}
+          </span>
+          <Button onClick={handleSave} disabled={saving} size="sm">
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            保存
+          </Button>
+        </div>
       </div>
 
       <Tabs defaultValue="trigger" className="w-full">
@@ -820,8 +860,9 @@ export default function SettingsPage() {
               {config.bym?.enable && (
                 <>
                   <div className="space-y-2">
-                    <div className="flex justify-between"><Label>触发概率</Label><span className="text-sm text-muted-foreground">{((config.bym?.probability || 0.02) * 100).toFixed(0)}%</span></div>
-                    <Slider value={[config.bym?.probability || 0.02]} min={0} max={1} step={0.01} onValueChange={(v) => updateConfig('bym.probability', v[0])} />
+                    <div className="flex justify-between"><Label>触发概率</Label><span className="text-sm text-muted-foreground">{((config.bym?.probability ?? 0.02) * 100).toFixed(0)}%</span></div>
+                    <Slider value={[config.bym?.probability ?? 0.02]} min={0.01} max={1} step={0.01} onValueChange={(v) => updateConfig('bym.probability', v[0])} />
+                    <p className="text-xs text-muted-foreground">最小1%，如需完全禁用请关闭伪人模式开关</p>
                   </div>
                   <div className="space-y-2">
                     <div className="flex justify-between"><Label>回复温度</Label><span className="text-sm text-muted-foreground">{config.bym?.temperature || 0.9}</span></div>

@@ -62,18 +62,33 @@ export class bym extends plugin {
         }
 
         // 随机触发概率 - 确保配置值有效
-        let probability = config.get('bym.probability')
-        if (probability === undefined || probability === null || isNaN(probability)) {
+        let probabilityRaw = config.get('bym.probability')
+        let probability = probabilityRaw
+        
+        // 调试：打印原始值
+        logger.debug(`[BYM] probability原始值: ${probabilityRaw}, 类型: ${typeof probabilityRaw}`)
+        
+        if (probability === undefined || probability === null || isNaN(Number(probability))) {
             probability = 0.02 // 默认2%
+        } else {
+            probability = Number(probability)
         }
-        probability = Math.max(0, Math.min(1, Number(probability))) // 确保在0-1范围内
+        probability = Math.max(0, Math.min(1, probability)) // 确保在0-1范围内
+        
+        // 如果概率为0，直接不触发
+        if (probability === 0) {
+            logger.debug('[BYM] 概率为0，不触发')
+            return false
+        }
         
         const randomValue = Math.random()
+        logger.debug(`[BYM] 触发判定: random=${randomValue.toFixed(4)}, probability=${probability}`)
+        
         if (randomValue > probability) {
             return false
         }
         
-        logger.info(`[BYM] 触发判定: random=${randomValue.toFixed(4)}, probability=${probability}, 触发成功`)
+        logger.info(`[BYM] 触发成功: random=${randomValue.toFixed(4)} <= probability=${probability}`)
 
         try {
             // 标记消息已处理

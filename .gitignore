@@ -11,3 +11,4 @@ data/presets.json
 vue-frontend/dist/
 vue-frontend/node_modules/
 !resources/web/
+config/config.yaml
