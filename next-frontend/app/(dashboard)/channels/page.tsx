@@ -70,6 +70,7 @@ export default function ChannelsPage() {
   const [modelSelectorOpen, setModelSelectorOpen] = useState(false)
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [selectedModels, setSelectedModels] = useState<string[]>([])
+  const [customModelInput, setCustomModelInput] = useState('')
 
   const [form, setForm] = useState({
     name: '',
@@ -500,6 +501,46 @@ export default function ChannelsPage() {
                         点击"获取模型"自动获取可用模型，或"选择模型"从列表中选择
                       </p>
                     )}
+                    {/* 自定义模型输入 */}
+                    <div className="flex gap-2">
+                      <Input
+                        value={customModelInput}
+                        onChange={(e) => setCustomModelInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && customModelInput.trim()) {
+                            e.preventDefault()
+                            const newModels = customModelInput.split(',').map(m => m.trim()).filter(Boolean)
+                            const currentModels = form.models.split(',').map(m => m.trim()).filter(Boolean)
+                            const uniqueNew = newModels.filter(m => !currentModels.includes(m))
+                            if (uniqueNew.length > 0) {
+                              setForm({ ...form, models: [...currentModels, ...uniqueNew].join(', ') })
+                            }
+                            setCustomModelInput('')
+                          }
+                        }}
+                        placeholder="输入模型名称，多个用逗号分隔..."
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={!customModelInput.trim()}
+                        onClick={() => {
+                          const newModels = customModelInput.split(',').map(m => m.trim()).filter(Boolean)
+                          if (newModels.length === 0) return
+                          const currentModels = form.models.split(',').map(m => m.trim()).filter(Boolean)
+                          const uniqueNew = newModels.filter(m => !currentModels.includes(m))
+                          if (uniqueNew.length > 0) {
+                            setForm({ ...form, models: [...currentModels, ...uniqueNew].join(', ') })
+                          }
+                          setCustomModelInput('')
+                        }}
+                      >
+                        <Plus className="h-4 w-4 mr-1" />
+                        添加
+                      </Button>
+                    </div>
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="priority">优先级</Label>

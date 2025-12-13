@@ -43,6 +43,12 @@ export class OpenAIClient extends AbstractClient {
         const clientOptions = {
             apiKey,
             baseURL: this.baseUrl,
+            // 添加浏览器请求头避免 CF 拦截
+            defaultHeaders: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            },
         }
         
         // 如果有代理配置，添加到客户端选项
@@ -278,6 +284,13 @@ export class OpenAIClient extends AbstractClient {
             throw error
         }
 
+        // 检查是否返回了错误
+        if (chatCompletion?.error) {
+            const errMsg = chatCompletion.error.message || chatCompletion.error.type || JSON.stringify(chatCompletion.error)
+            logger.error('[OpenAI适配器] API返回错误:', errMsg)
+            throw new Error(errMsg)
+        }
+
         // Defensive check
         if (!chatCompletion || !chatCompletion.choices || !Array.isArray(chatCompletion.choices)) {
             logger.error('[OpenAI适配器] 响应格式错误，完整响应:', JSON.stringify(chatCompletion))
@@ -332,6 +345,12 @@ export class OpenAIClient extends AbstractClient {
         const client = new OpenAI({
             apiKey,
             baseURL: this.baseUrl,
+            // 添加浏览器请求头避免 CF 拦截
+            defaultHeaders: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            },
         })
 
         const messages = []
@@ -598,6 +617,9 @@ export class OpenAIClient extends AbstractClient {
         const client = new OpenAI({
             apiKey,
             baseURL: this.baseUrl,
+            defaultHeaders: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
         })
 
         const embeddings = await client.embeddings.create({

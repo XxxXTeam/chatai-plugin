@@ -16,6 +16,15 @@ export default function DashboardLayout({
   const [authenticated, setAuthenticated] = useState(false)
 
   useEffect(() => {
+    // 检查 URL 参数中的 auth_token（从后端重定向过来）
+    const urlParams = new URLSearchParams(window.location.search)
+    const authTokenFromUrl = urlParams.get('auth_token')
+    if (authTokenFromUrl) {
+      localStorage.setItem('chaite_token', authTokenFromUrl)
+      // 清除 URL 参数
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+    
     const token = localStorage.getItem('chaite_token')
     if (!token) {
       router.push('/login/')

@@ -259,21 +259,19 @@ export class ChannelManager {
         const OpenAI = (await import('openai')).default
         const openai = new OpenAI({
             apiKey: channel.apiKey,
-            baseURL: channel.baseUrl
+            baseURL: channel.baseUrl,
+            // 添加浏览器请求头避免 CF 拦截
+            defaultHeaders: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            },
         })
 
         const modelsList = await openai.models.list()
+        // 不过滤模型，返回所有
         const models = modelsList.data
             .map(m => m.id)
-            .filter(id => {
-                // Filter for chat and embedding models
-                return id.includes('gpt') ||
-                    id.includes('text-embedding') ||
-                    id.includes('o1') ||
-                    id.includes('davinci') ||
-                    id.includes('babbage') ||
-                    id.includes('curie')
-            })
             .sort()
 
         return models

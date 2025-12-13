@@ -1429,7 +1429,13 @@ export class WebServer {
                     const OpenAI = (await import('openai')).default
                     const openai = new OpenAI({
                         apiKey: apiKey || config.get('openai.apiKey'),
-                        baseURL: baseUrl || config.get('openai.baseUrl')
+                        baseURL: baseUrl || config.get('openai.baseUrl'),
+                        // 添加浏览器请求头避免 CF 拦截
+                        defaultHeaders: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                            'Accept': 'application/json, text/plain, */*',
+                            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                        },
                     })
 
                     logger.info('[获取模型] 正在请求模型列表...')

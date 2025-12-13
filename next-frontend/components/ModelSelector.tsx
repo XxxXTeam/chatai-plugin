@@ -6,12 +6,14 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Search, ChevronDown, ChevronUp, CheckCircle } from 'lucide-react'
+import { Search, ChevronDown, ChevronUp, CheckCircle, Plus, X } from 'lucide-react'
 
 interface ModelSelectorProps {
   value: string[]
   allModels: string[]
   onChange: (models: string[]) => void
+  allowCustom?: boolean  // 是否允许自定义模型
+  singleSelect?: boolean // 是否单选模式
 }
 
 // 模型分组规则
@@ -34,10 +36,14 @@ function getModelGroup(model: string): string {
   return '其他'
 }
 
-export function ModelSelector({ value, allModels, onChange }: ModelSelectorProps) {
+export function ModelSelector({ value, allModels, onChange, allowCustom = true, singleSelect = false }: ModelSelectorProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [expandedGroup, setExpandedGroup] = useState<string>('')
+  const [customInput, setCustomInput] = useState('')
   const selectedSet = new Set(value)
+  
+  // 自定义模型（不在allModels中的已选模型）
+  const customModels = value.filter(m => !allModels.includes(m))
 
   // 分组后的模型
   const groupedModels = useMemo(() => {
@@ -62,13 +68,35 @@ export function ModelSelector({ value, allModels, onChange }: ModelSelectorProps
   }, [allModels, searchQuery])
 
   const toggleModel = (model: string) => {
-    const newSet = new Set(selectedSet)
-    if (newSet.has(model)) {
-      newSet.delete(model)
+    if (singleSelect) {
+      // 单选模式
+      onChange(selectedSet.has(model) ? [] : [model])
     } else {
-      newSet.add(model)
+      const newSet = new Set(selectedSet)
+      if (newSet.has(model)) {
+        newSet.delete(model)
+      } else {
+        newSet.add(model)
+      }
+      onChange(Array.from(newSet))
     }
-    onChange(Array.from(newSet))
+  }
+  
+  // 添加自定义模型
+  const addCustomModel = () => {
+    const trimmed = customInput.trim()
+    if (!trimmed) return
+    if (singleSelect) {
+      onChange([trimmed])
+    } else if (!selectedSet.has(trimmed)) {
+      onChange([...value, trimmed])
+    }
+    setCustomInput('')
+  }
+  
+  // 删除自定义模型
+  const removeCustomModel = (model: string) => {
+    onChange(value.filter(m => m !== model))
   }
 
   const selectAll = () => {
@@ -101,17 +129,55 @@ export function ModelSelector({ value, allModels, onChange }: ModelSelectorProps
       <div className="flex items-center justify-between">
         <Badge variant="secondary" className="gap-1">
           <CheckCircle className="h-3 w-3" />
-          已选择 {value.length} / {allModels.length}
+          已选择 {value.length}{!singleSelect && ` / ${allModels.length}`}
         </Badge>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={selectAll}>
-            全选
-          </Button>
-          <Button variant="outline" size="sm" onClick={deselectAll}>
-            取消全选
-          </Button>
-        </div>
+        {!singleSelect && (
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={selectAll}>
+              全选
+            </Button>
+            <Button variant="outline" size="sm" onClick={deselectAll}>
+              取消全选
+            </Button>
+          </div>
+        )}
       </div>
+      
+      {/* 自定义模型输入 */}
+      {allowCustom && (
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <Input
+              value={customInput}
+              onChange={(e) => setCustomInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addCustomModel()}
+              placeholder="输入自定义模型名称..."
+              className="flex-1"
+            />
+            <Button variant="outline" size="sm" onClick={addCustomModel} disabled={!customInput.trim()}>
+              <Plus className="h-4 w-4 mr-1" />
+              添加
+            </Button>
+          </div>
+          {/* 显示自定义模型 */}
+          {customModels.length > 0 && (
+            <div className="flex flex-wrap gap-1 p-2 border rounded-lg bg-muted/30">
+              <span className="text-xs text-muted-foreground mr-1">自定义:</span>
+              {customModels.map(model => (
+                <Badge key={model} variant="secondary" className="gap-1 pr-1">
+                  {model}
+                  <button
+                    onClick={() => removeCustomModel(model)}
+                    className="ml-1 hover:bg-muted-foreground/20 rounded-full p-0.5"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 搜索框 */}
       <div className="relative">
