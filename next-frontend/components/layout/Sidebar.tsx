@@ -41,6 +41,8 @@ const navItems = [
     { href: '/settings', label: '基础设置' },
     { href: '/settings/trigger', label: '触发配置' },
     { href: '/settings/context', label: '上下文' },
+    { href: '/settings/proxy', label: '代理设置' },
+    { href: '/settings/links', label: '登录链接' },
   ]},
   { href: '/channels', label: '渠道管理', icon: Plug },
   { href: '/presets', label: '预设管理', icon: Palette },

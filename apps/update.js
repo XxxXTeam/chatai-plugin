@@ -81,7 +81,7 @@ export class update extends plugin {
             uping = true
             upingTimeout = Date.now() + UPING_TIMEOUT
 
-            let command = `git -C "${pluginPath}" pull --rebase`
+            let command = `git -C "${pluginPath}" pull `
             if (isForce) {
                 await this.reply('正在执行强制更新，重置本地修改...')
                 let resetRet = await this.execSync(`git -C "${pluginPath}" checkout . && git -C "${pluginPath}" clean -fd`)

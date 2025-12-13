@@ -174,3 +174,45 @@ export const tokenApi = {
   revokePermanent: () => api.delete('/api/auth/token/permanent'),
   getStatus: () => api.get('/api/auth/token/status'),
 }
+
+// Proxy API
+export interface ProxyProfile {
+  id: string
+  name: string
+  type: 'http' | 'https' | 'socks5' | 'socks4'
+  host: string
+  port: number
+  username?: string
+  password?: string
+  enabled: boolean
+  createdAt?: number
+}
+
+export interface ProxyScope {
+  enabled: boolean
+  profileId: string | null
+}
+
+export interface ProxyConfig {
+  enabled: boolean
+  profiles: ProxyProfile[]
+  scopes: {
+    browser: ProxyScope
+    api: ProxyScope
+    channel: ProxyScope
+  }
+}
+
+export const proxyApi = {
+  get: () => api.get('/api/proxy'),
+  update: (data: { enabled: boolean }) => api.put('/api/proxy', data),
+  getProfiles: () => api.get('/api/proxy/profiles'),
+  addProfile: (profile: Omit<ProxyProfile, 'id' | 'createdAt'>) => api.post('/api/proxy/profiles', profile),
+  updateProfile: (id: string, updates: Partial<ProxyProfile>) => api.put(`/api/proxy/profiles/${id}`, updates),
+  deleteProfile: (id: string) => api.delete(`/api/proxy/profiles/${id}`),
+  setScope: (scope: 'browser' | 'api' | 'channel', profileId: string | null, enabled: boolean) => 
+    api.put(`/api/proxy/scopes/${scope}`, { profileId, enabled }),
+  test: (data: { profileId?: string; type?: string; host?: string; port?: number; username?: string; password?: string; testUrl?: string }) => 
+    api.post('/api/proxy/test', data),
+}
+

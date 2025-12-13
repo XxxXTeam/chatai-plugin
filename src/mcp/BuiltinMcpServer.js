@@ -10,6 +10,7 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth'
 import TurndownService from 'turndown'
 import common from '../../../../lib/common/common.js'
 import fetch from 'node-fetch'
+import { proxyService } from '../services/ProxyService.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -4034,17 +4035,25 @@ export class BuiltinMcpServer {
                         }
                         
                         // 启动浏览器
+                        const browserArgs = [
+                            '--no-sandbox',
+                            '--disable-setuid-sandbox',
+                            '--disable-dev-shm-usage',
+                            '--disable-accelerated-2d-canvas',
+                            '--disable-gpu',
+                            '--window-size=1920x1080'
+                        ]
+                        
+                        // 获取浏览器代理配置
+                        const browserProxy = proxyService.getBrowserProxyArgs()
+                        if (browserProxy) {
+                            browserArgs.push(`--proxy-server=${browserProxy}`)
+                            logger.debug('[BuiltinMCP] 浏览器使用代理:', browserProxy)
+                        }
+                        
                         browser = await puppeteer.launch({
                             headless: true,
-                            args: [
-                                '--no-sandbox',
-                                '--disable-setuid-sandbox',
-                                '--disable-dev-shm-usage',
-                                '--disable-accelerated-2d-canvas',
-                                '--disable-gpu',
-                                '--window-size=1920x1080',
-                                '--proxy-server=http://127.0.0.1:10808'
-                            ]
+                            args: browserArgs
                         })
                         
                         // 创建新页面

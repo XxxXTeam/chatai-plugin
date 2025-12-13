@@ -16,13 +16,36 @@ function TokenLoginContent() {
   useEffect(() => {
     const token = searchParams.get('token')
     
+    // 1. 先检查是否已有有效的JWT token
+    const existingToken = localStorage.getItem('chaite_token')
+    if (existingToken) {
+      // 尝试验证现有token是否有效（简单检查JWT格式和过期）
+      try {
+        const parts = existingToken.split('.')
+        if (parts.length === 3) {
+          const payload = JSON.parse(atob(parts[1]))
+          const exp = payload.exp * 1000 // JWT exp是秒，转毫秒
+          if (exp > Date.now()) {
+            // Token有效，直接跳转
+            setStatus('success')
+            setMessage('已登录，正在跳转...')
+            router.push('/')
+            return
+          }
+        }
+      } catch {
+        // Token解析失败，继续正常登录流程
+        localStorage.removeItem('chaite_token')
+      }
+    }
+    
     if (!token) {
       setStatus('error')
       setMessage('无效的登录链接')
       return
     }
 
-    // 验证 token
+    // 2. 验证 URL token
     const verifyToken = async () => {
       try {
         const res: any = await authApi.verifyToken(token)

@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import { AbstractClient, preprocessImageUrls, needsImageBase64Preprocess } from '../AbstractClient.js'
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
+import { proxyService } from '../../../services/ProxyService.js'
 
 /**
  * @typedef {import('../../types').BaseClientOptions} BaseClientOptions
@@ -36,10 +37,21 @@ export class OpenAIClient extends AbstractClient {
      * @returns {Promise<HistoryMessage & { usage: ModelUsage }>}
      */
     async _sendMessage(histories, apiKey, options) {
-        const client = new OpenAI({
+        // 获取渠道代理配置
+        const channelProxy = proxyService.getChannelProxyAgent(this.baseUrl)
+        
+        const clientOptions = {
             apiKey,
             baseURL: this.baseUrl,
-        })
+        }
+        
+        // 如果有代理配置，添加到客户端选项
+        if (channelProxy) {
+            clientOptions.httpAgent = channelProxy
+            logger.debug('[OpenAI适配器] 使用代理:', proxyService.getProfileForScope('channel')?.name)
+        }
+        
+        const client = new OpenAI(clientOptions)
 
         const messages = []
         const model = options.model || 'gpt-4o-mini'

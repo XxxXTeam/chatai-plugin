@@ -238,7 +238,16 @@ export class WebServer {
         this.app.use(express.json({ limit: '50mb' }))
         this.app.use(express.urlencoded({ extended: true, limit: '50mb' }))
         this.app.use(cookieParser())
-        this.app.use(express.static(path.join(__dirname, '../../resources/web')))
+        
+        // 静态文件服务 - 排除 /login/token 路径，让后端路由处理
+        const staticPath = path.join(__dirname, '../../resources/web')
+        this.app.use((req, res, next) => {
+            // /login/token 路径由后端路由处理，不使用静态文件
+            if (req.path === '/login/token' || req.path === '/login/token/') {
+                return next()
+            }
+            express.static(staticPath)(req, res, next)
+        })
 
 
 
@@ -840,6 +849,182 @@ export class WebServer {
                 res.json(ChaiteResponse.ok(data))
             } else {
                 res.status(404).json(ChaiteResponse.fail(null, `Config section not found: ${section}`))
+            }
+        })
+
+        // ==================== Token Management API ====================
+        // POST /api/auth/token/permanent - Generate permanent token
+        this.app.post('/api/auth/token/permanent', this.authMiddleware.bind(this), (req, res) => {
+            try {
+                const token = authHandler.generateToken(0, true)
+                res.json(ChaiteResponse.ok({ token }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/auth/token/permanent - Revoke permanent token
+        this.app.delete('/api/auth/token/permanent', this.authMiddleware.bind(this), (req, res) => {
+            try {
+                authHandler.revokePermanentToken()
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/auth/token/status - Get token status
+        this.app.get('/api/auth/token/status', this.authMiddleware.bind(this), (req, res) => {
+            try {
+                const hasPermanent = authHandler.hasPermanentToken()
+                const token = hasPermanent ? config.get('web.permanentAuthToken') : null
+                res.json(ChaiteResponse.ok({ 
+                    hasPermanentToken: hasPermanent,
+                    token 
+                }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // ==================== Proxy Management API ====================
+        // GET /api/proxy - 获取代理配置
+        this.app.get('/api/proxy', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { proxyService } = await import('./ProxyService.js')
+                const proxyConfig = config.get('proxy') || {
+                    enabled: false,
+                    profiles: [],
+                    scopes: {
+                        browser: { enabled: false, profileId: null },
+                        api: { enabled: false, profileId: null },
+                        channel: { enabled: false, profileId: null }
+                    }
+                }
+                res.json(ChaiteResponse.ok(proxyConfig))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // PUT /api/proxy - 更新代理全局设置
+        this.app.put('/api/proxy', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { proxyService } = await import('./ProxyService.js')
+                const { enabled } = req.body
+                if (enabled !== undefined) {
+                    proxyService.setEnabled(enabled)
+                }
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/proxy/profiles - 获取代理配置列表
+        this.app.get('/api/proxy/profiles', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { proxyService } = await import('./ProxyService.js')
+                const profiles = proxyService.getProfiles()
+                res.json(ChaiteResponse.ok(profiles))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/proxy/profiles - 添加代理配置
+        this.app.post('/api/proxy/profiles', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { proxyService } = await import('./ProxyService.js')
+                const { name, type, host, port, username, password } = req.body
+                if (!host || !port) {
+                    return res.status(400).json(ChaiteResponse.fail(null, 'host and port are required'))
+                }
+                const profile = proxyService.addProfile({
+                    name, type, host, port: parseInt(port), username, password
+                })
+                res.status(201).json(ChaiteResponse.ok(profile))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // PUT /api/proxy/profiles/:id - 更新代理配置
+        this.app.put('/api/proxy/profiles/:id', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { proxyService } = await import('./ProxyService.js')
+                const { id } = req.params
+                const updates = req.body
+                if (updates.port) updates.port = parseInt(updates.port)
+                const profile = proxyService.updateProfile(id, updates)
+                if (!profile) {
+                    return res.status(404).json(ChaiteResponse.fail(null, 'Profile not found'))
+                }
+                res.json(ChaiteResponse.ok(profile))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/proxy/profiles/:id - 删除代理配置
+        this.app.delete('/api/proxy/profiles/:id', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { proxyService } = await import('./ProxyService.js')
+                const { id } = req.params
+                const success = proxyService.deleteProfile(id)
+                if (!success) {
+                    return res.status(404).json(ChaiteResponse.fail(null, 'Profile not found'))
+                }
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // PUT /api/proxy/scopes/:scope - 设置作用域代理
+        this.app.put('/api/proxy/scopes/:scope', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { proxyService } = await import('./ProxyService.js')
+                const { scope } = req.params
+                const { profileId, enabled } = req.body
+                
+                const validScopes = ['browser', 'api', 'channel']
+                if (!validScopes.includes(scope)) {
+                    return res.status(400).json(ChaiteResponse.fail(null, `Invalid scope: ${scope}`))
+                }
+                
+                proxyService.setScopeProxy(scope, profileId, enabled)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/proxy/test - 测试代理连接
+        this.app.post('/api/proxy/test', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { proxyService } = await import('./ProxyService.js')
+                const { profileId, testUrl } = req.body
+                
+                let profile
+                if (profileId) {
+                    profile = proxyService.getProfileById(profileId)
+                    if (!profile) {
+                        return res.status(404).json(ChaiteResponse.fail(null, 'Profile not found'))
+                    }
+                } else {
+                    // 使用请求体中的临时配置进行测试
+                    const { type, host, port, username, password } = req.body
+                    if (!host || !port) {
+                        return res.status(400).json(ChaiteResponse.fail(null, 'host and port are required'))
+                    }
+                    profile = { type, host, port: parseInt(port), username, password }
+                }
+                
+                const result = await proxyService.testProxy(profile, testUrl || 'https://www.google.com')
+                res.json(ChaiteResponse.ok(result))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
 

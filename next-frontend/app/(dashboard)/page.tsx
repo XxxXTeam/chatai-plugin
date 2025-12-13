@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -39,6 +40,19 @@ interface DashboardData {
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
+  const searchParams = useSearchParams()
+  const router = useRouter()
+
+  // 处理从后端重定向过来的 auth_token 参数
+  useEffect(() => {
+    const authToken = searchParams.get('auth_token')
+    if (authToken) {
+      // 保存token到localStorage
+      localStorage.setItem('chaite_token', authToken)
+      // 清除URL中的token参数
+      router.replace('/')
+    }
+  }, [searchParams, router])
 
   useEffect(() => {
     const fetchData = async () => {
