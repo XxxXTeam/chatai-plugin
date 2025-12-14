@@ -279,8 +279,6 @@ export class LlmService {
     /**
      * 根据场景自动选择最佳模型
      * @param {Object} options
-     * @param {boolean} options.needsTools - 是否需要工具调用
-     * @param {boolean} options.needsReasoning - 是否需要深度推理
      * @param {boolean} options.isRoleplay - 是否是伪人模式
      * @param {boolean} options.needsSearch - 是否需要搜索
      */
@@ -288,14 +286,6 @@ export class LlmService {
         // 伪人模式优先 - 使用伪人模型
         if (options.isRoleplay) {
             const model = this.getRoleplayModel()
-            if (model) return model
-            // 伪人模式如果没配置专用模型，回退到对话模型或默认模型
-            return this.getChatModel() || this.getDefaultModel()
-        }
-        
-        // 深度推理需求
-        if (options.needsReasoning) {
-            const model = this.getReasoningModel()
             if (model) return model
         }
         
@@ -305,18 +295,11 @@ export class LlmService {
             if (model) return model
         }
         
-        // 工具调用需求 - 优先使用工具调用模型（因为对话模型可能不支持工具）
-        if (options.needsTools) {
-            const toolModel = this.getToolCallModel()
-            if (toolModel) return toolModel
-            // 如果没有专门的工具调用模型，使用对话模型
-        }
-        
         // 使用对话模型
         const chatModel = this.getChatModel()
         if (chatModel) return chatModel
         
-        // 最后使用默认模型
+        // 回退到默认模型
         return this.getDefaultModel()
     }
 
