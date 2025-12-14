@@ -1471,26 +1471,108 @@ export class BuiltinMcpServer {
 
             {
                 name: 'at_user',
-                description: '发送@用户的消息',
+                description: '发送@用户的消息。支持通过QQ号或昵称/群名片来@用户。在群聊中可以通过昵称模糊匹配群成员。',
                 inputSchema: {
                     type: 'object',
                     properties: {
                         user_id: { type: 'string', description: '要@的用户QQ号，设为 "sender" 表示@当前发送者，设为 "all" 表示@全体' },
+                        nickname: { type: 'string', description: '通过昵称或群名片查找用户（仅群聊有效）。支持模糊匹配，会自动查找最匹配的成员。' },
                         message: { type: 'string', description: '附带的消息内容' }
-                    },
-                    required: ['user_id']
+                    }
                 },
                 handler: async (args, ctx) => {
                     try {
                         const e = ctx.getEvent()
+                        const bot = ctx.getBot()
                         if (!e) {
                             return { success: false, error: '没有可用的会话上下文' }
                         }
 
                         const msgParts = []
-                        
-                        // 确定要@的用户
                         let targetId = args.user_id
+                        let matchedName = null
+                        
+                        // 如果提供了昵称，尝试在群成员中查找
+                        if (args.nickname && e.group_id) {
+                            const searchName = args.nickname.toLowerCase().trim()
+                            let memberList = []
+                            
+                            try {
+                                // 获取群成员列表
+                                if (bot.getGroupMemberList) {
+                                    memberList = await bot.getGroupMemberList(e.group_id) || []
+                                } else {
+                                    const group = bot.pickGroup?.(e.group_id)
+                                    if (group?.getMemberMap) {
+                                        const memberMap = await group.getMemberMap()
+                                        for (const [uid, member] of memberMap) {
+                                            memberList.push({ user_id: uid, ...member })
+                                        }
+                                    } else if (group?.getMemberList) {
+                                        memberList = await group.getMemberList() || []
+                                    }
+                                }
+                            } catch (err) {
+                                logger.warn('[at_user] 获取群成员列表失败:', err.message)
+                            }
+                            
+                            if (memberList.length > 0) {
+                                // 搜索匹配的成员（优先精确匹配，其次模糊匹配）
+                                let bestMatch = null
+                                let bestScore = 0
+                                
+                                for (const member of memberList) {
+                                    const card = (member.card || '').toLowerCase()
+                                    const nickname = (member.nickname || member.nick || '').toLowerCase()
+                                    const uid = String(member.user_id || member.uid || '')
+                                    
+                                    // 精确匹配（最高优先级）
+                                    if (card === searchName || nickname === searchName || uid === args.nickname) {
+                                        bestMatch = member
+                                        bestScore = 100
+                                        break
+                                    }
+                                    
+                                    // 包含匹配
+                                    let score = 0
+                                    if (card.includes(searchName)) {
+                                        score = Math.max(score, 80 - (card.length - searchName.length))
+                                    }
+                                    if (nickname.includes(searchName)) {
+                                        score = Math.max(score, 70 - (nickname.length - searchName.length))
+                                    }
+                                    if (searchName.includes(card) && card.length > 0) {
+                                        score = Math.max(score, 60)
+                                    }
+                                    if (searchName.includes(nickname) && nickname.length > 0) {
+                                        score = Math.max(score, 50)
+                                    }
+                                    
+                                    if (score > bestScore) {
+                                        bestScore = score
+                                        bestMatch = member
+                                    }
+                                }
+                                
+                                if (bestMatch && bestScore >= 50) {
+                                    targetId = String(bestMatch.user_id || bestMatch.uid)
+                                    matchedName = bestMatch.card || bestMatch.nickname || bestMatch.nick
+                                    logger.info(`[at_user] 昵称"${args.nickname}"匹配到: ${matchedName}(${targetId}), 分数:${bestScore}`)
+                                } else {
+                                    return { 
+                                        success: false, 
+                                        error: `未找到昵称包含"${args.nickname}"的群成员`,
+                                        suggestion: '请尝试使用更准确的昵称或直接使用QQ号'
+                                    }
+                                }
+                            } else {
+                                return { success: false, error: '无法获取群成员列表，请直接使用QQ号' }
+                            }
+                        } else if (!targetId) {
+                            return { success: false, error: '必须提供 user_id 或 nickname 参数' }
+                        }
+                        
+                        // 处理特殊值
                         if (targetId === 'sender') {
                             targetId = e.user_id
                         }
@@ -1509,7 +1591,12 @@ export class BuiltinMcpServer {
                         }
 
                         const result = await e.reply(msgParts)
-                        return { success: true, message_id: result?.message_id, at_target: targetId }
+                        return { 
+                            success: true, 
+                            message_id: result?.message_id, 
+                            at_target: targetId,
+                            matched_name: matchedName
+                        }
                     } catch (err) {
                         return { success: false, error: `@用户失败: ${err.message}` }
                     }

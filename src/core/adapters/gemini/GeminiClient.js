@@ -125,15 +125,21 @@ export class GeminiClient extends AbstractClient {
         let responseContents = chaiteMessage.content || []
         let toolCalls = chaiteMessage.toolCalls || []
         
-        // 检查文本内容中是否有 XML 格式的工具调用 (<tools>...</tools>)
+        // 检查文本内容中是否有非原生格式的工具调用
+        // 支持: <tools>, <tool_call>, ```json, JSON数组
         const textContents = responseContents.filter(c => c.type === 'text')
         for (const textItem of textContents) {
-            if (textItem.text && textItem.text.includes('<tools>')) {
-                const { cleanText, toolCalls: xmlToolCalls } = parseXmlToolCalls(textItem.text)
-                if (xmlToolCalls.length > 0) {
+            if (textItem.text && (
+                textItem.text.includes('<tools>') || 
+                textItem.text.includes('<tool_call>') ||
+                textItem.text.includes('```') ||
+                textItem.text.includes('"name"')
+            )) {
+                const { cleanText, toolCalls: parsedToolCalls } = parseXmlToolCalls(textItem.text)
+                if (parsedToolCalls.length > 0) {
                     textItem.text = cleanText
-                    toolCalls = [...toolCalls, ...xmlToolCalls]
-                    logger.info(`[Gemini适配器] 从文本中解析到 ${xmlToolCalls.length} 个XML格式工具调用`)
+                    toolCalls = [...toolCalls, ...parsedToolCalls]
+                    logger.info(`[Gemini适配器] 从文本中解析到 ${parsedToolCalls.length} 个工具调用`)
                 }
             }
         }

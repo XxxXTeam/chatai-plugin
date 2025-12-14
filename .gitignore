@@ -1,5 +1,6 @@
 node_modules/
 data/*
+!data/*.example.json
 utils/processors
 utils/tools
 utils/triggers

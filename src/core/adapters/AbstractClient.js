@@ -4,8 +4,6 @@ import DefaultHistoryManager from '../utils/history.js'
 import { asyncLocalStorage, extractClassName, getKey } from '../utils/index.js'
 
 /**
- * 解析文本中的 XML 格式工具调用
- * 支持格式: <tools>{"name": "xxx", "arguments": {...}}</tools>
  * @param {string} text - 响应文本
  * @returns {{ cleanText: string, toolCalls: Array }} 清理后的文本和解析出的工具调用
  */
@@ -15,18 +13,14 @@ export function parseXmlToolCalls(text) {
     }
     
     const toolCalls = []
-    // 匹配 <tools>...</tools> 标签（支持多行）
-    const toolsRegex = /<tools>([\s\S]*?)<\/tools>/gi
     let cleanText = text
+    const toolsRegex = /<tools>([\s\S]*?)<\/tools>/gi
     let match
     
     while ((match = toolsRegex.exec(text)) !== null) {
         const toolContent = match[1].trim()
         try {
-            // 尝试解析 JSON
             const toolData = JSON.parse(toolContent)
-            
-            // 转换为标准 tool_calls 格式
             const toolCall = {
                 id: `xml_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                 type: 'function',
@@ -38,15 +32,125 @@ export function parseXmlToolCalls(text) {
                 }
             }
             toolCalls.push(toolCall)
-            logger.debug(`[XML Tool Parser] 解析到工具调用: ${toolData.name}`)
+            logger.debug(`[Tool Parser] 解析到<tools>格式: ${toolData.name}`)
         } catch (parseErr) {
-            logger.warn(`[XML Tool Parser] 解析失败:`, parseErr.message, toolContent.substring(0, 100))
+            logger.warn(`[Tool Parser] <tools>解析失败:`, parseErr.message)
+        }
+    }
+    cleanText = cleanText.replace(toolsRegex, '').trim()
+    const toolCallRegex = /<tool_call>([\s\S]*?)<\/tool_call>/gi
+    
+    while ((match = toolCallRegex.exec(text)) !== null) {
+        const toolContent = match[1].trim()
+        try {
+            const nameMatch = toolContent.match(/^([^<\s]+)/)
+            if (!nameMatch) continue
+            const toolName = nameMatch[1].trim()
+            
+            const args = {}
+            const argKeyRegex = /<arg_key>([\s\S]*?)<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>/gi
+            let argMatch
+            while ((argMatch = argKeyRegex.exec(toolContent)) !== null) {
+                const key = argMatch[1].trim()
+                let value = argMatch[2].trim()
+                
+                if (/^-?\d+$/.test(value)) value = parseInt(value, 10)
+                else if (/^-?\d+\.\d+$/.test(value)) value = parseFloat(value)
+                else if (value === 'true') value = true
+                else if (value === 'false') value = false
+                else if (value === 'null') value = null
+                
+                args[key] = value
+            }
+            
+            toolCalls.push({
+                id: `xml_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                type: 'function',
+                function: { name: toolName, arguments: JSON.stringify(args) }
+            })
+            logger.debug(`[Tool Parser] 解析到<tool_call>格式: ${toolName}`)
+        } catch (parseErr) {
+            logger.warn(`[Tool Parser] <tool_call>解析失败:`, parseErr.message)
+        }
+    }
+    cleanText = cleanText.replace(toolCallRegex, '').trim()
+    
+    // ===== 格式3: ```json [...] ``` (Markdown代码块中的JSON数组) =====
+    const jsonCodeBlockRegex = /```(?:json)?\s*\n?([\s\S]*?)\n?```/gi
+    const codeBlockMatches = [...text.matchAll(jsonCodeBlockRegex)]
+    
+    for (const blockMatch of codeBlockMatches) {
+        const blockContent = blockMatch[1].trim()
+        // 检查是否是工具调用格式的JSON
+        if (blockContent.startsWith('[') || blockContent.startsWith('{')) {
+            try {
+                let parsed = JSON.parse(blockContent)
+                // 统一为数组
+                if (!Array.isArray(parsed)) parsed = [parsed]
+                
+                for (const item of parsed) {
+                    if (item.name && (item.arguments !== undefined || Object.keys(item).length > 1)) {
+                        toolCalls.push({
+                            id: `json_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                            type: 'function',
+                            function: {
+                                name: item.name,
+                                arguments: typeof item.arguments === 'string'
+                                    ? item.arguments
+                                    : JSON.stringify(item.arguments || {})
+                            }
+                        })
+                        logger.debug(`[Tool Parser] 解析到JSON代码块格式: ${item.name}`)
+                    }
+                }
+                // 只有成功解析为工具调用时才移除代码块
+                if (toolCalls.length > 0) {
+                    cleanText = cleanText.replace(blockMatch[0], '').trim()
+                }
+            } catch {
+                // 不是有效的工具调用JSON，保留原文
+            }
         }
     }
     
-    // 从文本中移除 <tools>...</tools> 部分
-    if (toolCalls.length > 0) {
-        cleanText = text.replace(toolsRegex, '').trim()
+    // ===== 格式4: 纯JSON数组 [{"name": "xxx", "arguments": {...}}] =====
+    // 只在没有从其他格式解析到工具调用时尝试
+    if (toolCalls.length === 0) {
+        // 匹配独立的JSON数组（以[开头，以]结尾）
+        const jsonArrayRegex = /\[\s*\{[\s\S]*?"name"\s*:\s*"[^"]+[\s\S]*?\}\s*\]/g
+        const arrayMatches = cleanText.match(jsonArrayRegex)
+        
+        if (arrayMatches) {
+            for (const arrayStr of arrayMatches) {
+                try {
+                    const parsed = JSON.parse(arrayStr)
+                    if (Array.isArray(parsed)) {
+                        let foundTools = false
+                        for (const item of parsed) {
+                            if (item.name) {
+                                toolCalls.push({
+                                    id: `json_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                    type: 'function',
+                                    function: {
+                                        name: item.name,
+                                        arguments: typeof item.arguments === 'string'
+                                            ? item.arguments
+                                            : JSON.stringify(item.arguments || {})
+                                    }
+                                })
+                                foundTools = true
+                                logger.debug(`[Tool Parser] 解析到纯JSON数组格式: ${item.name}`)
+                            }
+                        }
+                        if (foundTools) {
+                            cleanText = cleanText.replace(arrayStr, '').trim()
+                        }
+                    }
+                } catch {
+                    // 解析失败，跳过
+                }
+            }
+        }
     }
     
     return { cleanText, toolCalls }

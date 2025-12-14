@@ -314,19 +314,22 @@ export class OpenAIClient extends AbstractClient {
             .map(ch => ch.toolCalls)
             .reduce((a, b) => [...a, ...b], [])
         
-        // 检查文本内容中是否有 XML 格式的工具调用 (<tools>...</tools>)
-        // 某些模型/API 不支持原生 function calling，会在文本中输出 XML 格式
+        // 检查文本内容中是否有非原生格式的工具调用
+        // 支持: <tools>, <tool_call>, ```json, JSON数组
         const textContents = contents.filter(c => c.type === 'text')
         for (let i = 0; i < textContents.length; i++) {
             const textItem = textContents[i]
-            if (textItem.text && textItem.text.includes('<tools>')) {
-                const { cleanText, toolCalls: xmlToolCalls } = parseXmlToolCalls(textItem.text)
-                if (xmlToolCalls.length > 0) {
-                    // 更新文本内容（移除 <tools> 标签）
+            if (textItem.text && (
+                textItem.text.includes('<tools>') || 
+                textItem.text.includes('<tool_call>') ||
+                textItem.text.includes('```') ||
+                textItem.text.includes('"name"')
+            )) {
+                const { cleanText, toolCalls: parsedToolCalls } = parseXmlToolCalls(textItem.text)
+                if (parsedToolCalls.length > 0) {
                     textItem.text = cleanText
-                    // 合并工具调用
-                    toolCalls = [...toolCalls, ...xmlToolCalls]
-                    logger.info(`[OpenAI适配器] 从文本中解析到 ${xmlToolCalls.length} 个XML格式工具调用`)
+                    toolCalls = [...toolCalls, ...parsedToolCalls]
+                    logger.info(`[OpenAI适配器] 从文本中解析到 ${parsedToolCalls.length} 个工具调用`)
                 }
             }
         }
