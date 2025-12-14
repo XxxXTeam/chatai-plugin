@@ -313,9 +313,6 @@ export class OpenAIClient extends AbstractClient {
             .filter(ch => ch.toolCalls)
             .map(ch => ch.toolCalls)
             .reduce((a, b) => [...a, ...b], [])
-        
-        // 检查文本内容中是否有非原生格式的工具调用
-        // 支持: <tools>, <tool_call>, ```json, JSON数组
         const textContents = contents.filter(c => c.type === 'text')
         for (let i = 0; i < textContents.length; i++) {
             const textItem = textContents[i]

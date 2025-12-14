@@ -104,6 +104,15 @@ export const knowledgeApi = {
     api.post(`/api/knowledge/${docId}/link/${presetId}`),
   unlinkFromPreset: (docId: string, presetId: string) => 
     api.delete(`/api/knowledge/${docId}/link/${presetId}`),
+  // 导入知识库（支持 OpenIE 等格式）
+  import: (data: { 
+    data: any; 
+    format?: 'openie' | 'raw'; 
+    name?: string; 
+    tags?: string[];
+    presetIds?: string[];
+    mergeMode?: 'create' | 'merge' | 'replace';
+  }) => api.post('/api/knowledge/import', data),
 }
 
 // Tools API

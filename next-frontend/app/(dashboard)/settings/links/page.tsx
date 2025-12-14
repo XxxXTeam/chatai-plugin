@@ -49,17 +49,24 @@ export default function LoginLinksPage() {
   const [tokenLoading, setTokenLoading] = useState(false)
   const [generatingToken, setGeneratingToken] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  
+  // 公网地址配置
+  const [publicUrl, setPublicUrl] = useState('')
+  const [savingPublicUrl, setSavingPublicUrl] = useState(false)
 
   // 获取配置
   const fetchConfig = async () => {
     try {
       setLoading(true)
-      const res = await configApi.get() as { data?: { web?: { loginLinks?: LoginLink[], permanentAuthToken?: string } } }
+      const res = await configApi.get() as { data?: { web?: { loginLinks?: LoginLink[], permanentAuthToken?: string, publicUrl?: string } } }
       if (res?.data?.web?.loginLinks) {
         setLinks(res.data.web.loginLinks)
       }
       if (res?.data?.web?.permanentAuthToken) {
         setPermanentToken(res.data.web.permanentAuthToken)
+      }
+      if (res?.data?.web?.publicUrl) {
+        setPublicUrl(res.data.web.publicUrl)
       }
     } catch (error) {
       console.error('Failed to fetch config:', error)
@@ -90,8 +97,20 @@ export default function LoginLinksPage() {
 
     setSaving(true)
     try {
+      // 兼容性 UUID 生成
+      const generateId = () => {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+          return crypto.randomUUID()
+        }
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0
+          const v = c === 'x' ? r : (r & 0x3) | 0x8
+          return v.toString(16)
+        })
+      }
+      
       const newLink: LoginLink = {
-        id: crypto.randomUUID(),
+        id: generateId(),
         label: newLabel.trim(),
         baseUrl: newUrl.trim().replace(/\/$/, '') // 去除末尾斜杠
       }
@@ -173,6 +192,35 @@ export default function LoginLinksPage() {
       toast.error('撤销Token失败')
     } finally {
       setTokenLoading(false)
+    }
+  }
+
+  // 保存公网地址
+  const handleSavePublicUrl = async () => {
+    setSavingPublicUrl(true)
+    try {
+      // 验证 URL 格式（如果不为空）
+      if (publicUrl.trim()) {
+        try {
+          new URL(publicUrl.trim())
+        } catch {
+          toast.error('请输入有效的URL地址')
+          setSavingPublicUrl(false)
+          return
+        }
+      }
+      
+      await configApi.update({ 
+        web: { 
+          publicUrl: publicUrl.trim() ? publicUrl.trim().replace(/\/$/, '') : '' 
+        } 
+      })
+      toast.success('公网地址已保存')
+    } catch (error) {
+      console.error('Failed to save public URL:', error)
+      toast.error('保存失败')
+    } finally {
+      setSavingPublicUrl(false)
     }
   }
 
@@ -286,6 +334,42 @@ export default function LoginLinksPage() {
               </Button>
             </>
           )}
+        </CardContent>
+      </Card>
+
+      {/* 公网地址配置 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ExternalLink className="h-5 w-5" />
+            公网地址
+          </CardTitle>
+          <CardDescription>
+            手动配置公网访问地址，用于 #ai管理面板 命令显示
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Input
+              value={publicUrl}
+              onChange={(e) => setPublicUrl(e.target.value)}
+              placeholder="http://your-public-ip:3000"
+              className="flex-1"
+            />
+            <Button onClick={handleSavePublicUrl} disabled={savingPublicUrl}>
+              {savingPublicUrl ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                '保存'
+              )}
+            </Button>
+          </div>
+          <Alert>
+            <Info className="h-4 w-4" />
+            <AlertDescription>
+              如果自动检测公网 IP 不可靠，可以手动配置公网地址。留空则使用自动检测。
+            </AlertDescription>
+          </Alert>
         </CardContent>
       </Card>
 

@@ -467,20 +467,41 @@ export class Chat extends plugin {
         const isReplyToBot = isReplyToBotMessage(e)
         const hasReply = !!e.source
         
+        // 从消息中去除 @机器人 部分
+        const cleanAtBot = (text) => {
+          if (!text) return ''
+          // 获取机器人QQ号
+          const botId = e.self_id || e.bot?.uin || Bot?.uin
+          if (!botId) return text
+          
+          // 去除 @机器人 的各种格式
+          let cleaned = text
+            // 去除 @QQ号 格式（带空格）
+            .replace(new RegExp(`\\s*@${botId}\\s*`, 'g'), ' ')
+            // 去除 @昵称 格式（如果有机器人昵称）
+            .replace(new RegExp(`\\s*@${e.bot?.nickname || ''}\\s*`, 'gi'), ' ')
+            // 清理多余空格
+            .replace(/\s+/g, ' ')
+            .trim()
+          return cleaned
+        }
+        
+        const cleanedMsg = cleanAtBot(rawMsg)
+        
         if (isReplyToBot) {
           // 引用机器人消息：检查 replyBot 配置
           if (groupCfg.replyBot) {
-            msg = rawMsg
+            msg = cleanedMsg
             triggerReason = '引用机器人消息'
           }
           // 如果 replyBot=false，则不触发（防止重复响应）
         } else if (hasReply && !groupCfg.reply) {
           // 引用其他消息但 reply=false：仍然允许 @ 触发
-          msg = rawMsg
+          msg = cleanedMsg
           triggerReason = '@机器人(含引用)'
         } else {
           // 正常 @ 触发
-          msg = rawMsg
+          msg = cleanedMsg
           triggerReason = '@机器人'
         }
       }

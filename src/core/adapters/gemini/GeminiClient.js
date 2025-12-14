@@ -124,9 +124,6 @@ export class GeminiClient extends AbstractClient {
 
         let responseContents = chaiteMessage.content || []
         let toolCalls = chaiteMessage.toolCalls || []
-        
-        // 检查文本内容中是否有非原生格式的工具调用
-        // 支持: <tools>, <tool_call>, ```json, JSON数组
         const textContents = responseContents.filter(c => c.type === 'text')
         for (const textItem of textContents) {
             if (textItem.text && (

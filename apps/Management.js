@@ -221,15 +221,27 @@ export class AIManagement extends plugin {
             }
             
             // 备用：直接私聊发送文本
-            const textMsg = [
+            const textParts = [
                 `🔐 AI插件管理面板（${validityText}）`,
                 '',
                 `📍 本地地址：`,
-                localUrl,
-                publicUrl ? `\n🌐 公网地址：\n${publicUrl}` : '',
-                '',
-                `📌 链接包含登录凭证，请勿分享${warningText}`
-            ].filter(Boolean).join('\n')
+                localUrl
+            ]
+            
+            if (publicUrl) {
+                textParts.push('', `🌐 公网地址：`, publicUrl)
+            }
+            
+            // 添加自定义地址
+            if (customUrls && customUrls.length > 0) {
+                for (const custom of customUrls) {
+                    textParts.push('', `🔗 ${custom.label}：`, custom.url)
+                }
+            }
+            
+            textParts.push('', `📌 链接包含登录凭证，请勿分享${warningText}`)
+            
+            const textMsg = textParts.filter(Boolean).join('\n')
             
             if (this.e.friend?.sendMsg) {
                 await this.e.friend.sendMsg(textMsg)

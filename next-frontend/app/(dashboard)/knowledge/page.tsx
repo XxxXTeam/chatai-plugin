@@ -29,8 +29,10 @@ import { knowledgeApi, presetsApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { 
   Plus, Trash2, Loader2, BookOpen, FileText, Search, 
-  Link2, Unlink, RefreshCw, Upload, FileDown, Tags, Edit
+  Link2, Unlink, RefreshCw, Upload, FileDown, Tags, Edit as EditIcon, Import, Maximize2
 } from 'lucide-react'
+import { MarkdownEditor } from '@/components/ui/markdown-editor'
+import { useRouter } from 'next/navigation'
 
 interface KnowledgeDocument {
   id: string
@@ -51,6 +53,7 @@ interface Preset {
 }
 
 export default function KnowledgePage() {
+  const router = useRouter()
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
   const [loading, setLoading] = useState(true)
@@ -60,6 +63,18 @@ export default function KnowledgePage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [linkDialogOpen, setLinkDialogOpen] = useState(false)
   const [linkingDocId, setLinkingDocId] = useState<string | null>(null)
+
+  // 导入对话框
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importForm, setImportForm] = useState({
+    name: '',
+    format: 'openie' as 'openie' | 'raw',
+    mergeMode: 'create' as 'create' | 'merge' | 'replace',
+    tags: '',
+    fileContent: null as any,
+    fileName: ''
+  })
 
   const [form, setForm] = useState({
     name: '',
@@ -104,19 +119,33 @@ export default function KnowledgePage() {
     setEditingDoc(null)
   }
 
-  const handleOpenDialog = (doc?: KnowledgeDocument) => {
+  const handleOpenDialog = async (doc?: KnowledgeDocument) => {
     if (doc) {
       setEditingDoc(doc)
+      // 先显示摘要，然后异步获取完整内容
       setForm({
         name: doc.name,
         content: doc.content || '',
         type: doc.type || 'text',
         tags: (doc.tags || []).join(', '),
       })
+      setDialogOpen(true)
+      
+      // 如果内容被截断，获取完整内容
+      if ((doc as any).truncated || (doc as any).contentLength > 500) {
+        try {
+          const res = await knowledgeApi.get(doc.id) as any
+          if (res?.data?.content) {
+            setForm(prev => ({ ...prev, content: res.data.content }))
+          }
+        } catch (error) {
+          console.error('获取完整内容失败:', error)
+        }
+      }
     } else {
       resetForm()
+      setDialogOpen(true)
     }
-    setDialogOpen(true)
   }
 
   const handleSave = async () => {
@@ -202,6 +231,94 @@ export default function KnowledgePage() {
     }
   }
 
+  // 处理文件选择
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    try {
+      const text = await file.text()
+      let content: any
+
+      if (file.name.endsWith('.json')) {
+        content = JSON.parse(text)
+        // 自动检测格式
+        if (content.docs && Array.isArray(content.docs)) {
+          setImportForm(prev => ({ 
+            ...prev, 
+            format: 'openie',
+            fileContent: content,
+            fileName: file.name,
+            name: prev.name || file.name.replace(/\.[^.]+$/, '')
+          }))
+        } else {
+          setImportForm(prev => ({ 
+            ...prev, 
+            format: 'raw',
+            fileContent: content,
+            fileName: file.name,
+            name: prev.name || file.name.replace(/\.[^.]+$/, '')
+          }))
+        }
+      } else {
+        // 非 JSON 文件作为原始文本
+        setImportForm(prev => ({ 
+          ...prev, 
+          format: 'raw',
+          fileContent: text,
+          fileName: file.name,
+          name: prev.name || file.name.replace(/\.[^.]+$/, '')
+        }))
+      }
+      toast.success(`已加载文件: ${file.name}`)
+    } catch (error) {
+      toast.error('文件解析失败，请确保是有效的 JSON 文件')
+      console.error(error)
+    }
+  }
+
+  // 导入知识库
+  const handleImport = async () => {
+    if (!importForm.fileContent) {
+      toast.error('请先选择文件')
+      return
+    }
+
+    setImporting(true)
+    try {
+      const res = await knowledgeApi.import({
+        data: importForm.fileContent,
+        format: importForm.format,
+        name: importForm.name || importForm.fileName,
+        tags: importForm.tags.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+        mergeMode: importForm.mergeMode
+      }) as any
+
+      const stats = res?.data?.stats
+      if (stats) {
+        toast.success(`导入成功！共 ${stats.imported} 条记录，${stats.entityCount} 个实体，${stats.tripleCount} 个关系`)
+      } else {
+        toast.success('导入成功')
+      }
+      
+      setImportDialogOpen(false)
+      setImportForm({
+        name: '',
+        format: 'openie',
+        mergeMode: 'create',
+        tags: '',
+        fileContent: null,
+        fileName: ''
+      })
+      fetchDocuments()
+    } catch (error: any) {
+      toast.error('导入失败: ' + (error?.response?.data?.message || error?.message || '未知错误'))
+      console.error(error)
+    } finally {
+      setImporting(false)
+    }
+  }
+
   const getPresetName = (presetId: string) => {
     const preset = presets.find(p => p.id === presetId)
     return preset?.name || presetId
@@ -269,19 +386,24 @@ export default function KnowledgePage() {
             <RefreshCw className="mr-2 h-4 w-4" />
             刷新
           </Button>
+          <Button variant="outline" size="sm" onClick={() => setImportDialogOpen(true)}>
+            <Upload className="mr-2 h-4 w-4" />
+            导入
+          </Button>
+          <Button size="sm" onClick={() => router.push('/knowledge/new')}>
+            <Plus className="mr-2 h-4 w-4" />
+            添加文档
+          </Button>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-              <Button size="sm" onClick={() => handleOpenDialog()}>
-                <Plus className="mr-2 h-4 w-4" />
-                添加文档
-              </Button>
+              <span className="hidden" />
             </DialogTrigger>
-            <DialogContent className="max-w-2xl max-h-[90vh]">
+            <DialogContent className="max-w-[95vw] max-h-[98vh] w-[95vw] h-[95vh]">
               <DialogHeader>
                 <DialogTitle>{editingDoc ? '编辑文档' : '添加文档'}</DialogTitle>
                 <DialogDescription>创建或编辑知识库文档</DialogDescription>
               </DialogHeader>
-              <ScrollArea className="max-h-[60vh] pr-4">
+              <div className="flex-1 overflow-auto pr-4" style={{ maxHeight: 'calc(95vh - 140px)' }}>
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
                     <div className="grid gap-2">
@@ -319,19 +441,17 @@ export default function KnowledgePage() {
                       placeholder="角色, 设定, 参考"
                     />
                   </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="content">文档内容</Label>
-                    <Textarea
-                      id="content"
+                  <div className="grid gap-2 flex-1">
+                    <Label>文档内容 (支持 Markdown)</Label>
+                    <MarkdownEditor
                       value={form.content}
-                      onChange={(e) => setForm({ ...form, content: e.target.value })}
-                      placeholder="输入知识库内容..."
-                      rows={12}
-                      className="font-mono text-sm"
+                      onChange={(content) => setForm({ ...form, content })}
+                      placeholder="输入知识库内容，支持 Markdown 格式..."
+                      minHeight="calc(95vh - 280px)"
                     />
                   </div>
                 </div>
-              </ScrollArea>
+              </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setDialogOpen(false)}>
                   取消
@@ -381,7 +501,7 @@ export default function KnowledgePage() {
             <p className="text-sm text-muted-foreground mt-2">
               知识库文档可以关联到预设，为AI提供额外的参考信息
             </p>
-            <Button className="mt-4" onClick={() => handleOpenDialog()}>
+            <Button className="mt-4" onClick={() => router.push('/knowledge/new')}>
               <Plus className="mr-2 h-4 w-4" />
               创建第一个文档
             </Button>
@@ -405,9 +525,14 @@ export default function KnowledgePage() {
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="text-sm text-muted-foreground line-clamp-3 bg-muted/50 p-2 rounded font-mono">
-                  {doc.content?.substring(0, 150) || '(无内容)'}
-                  {(doc.content?.length || 0) > 150 ? '...' : ''}
+                  {doc.content?.substring(0, 200) || '(无内容)'}
+                  {(doc.content?.length || 0) > 200 ? '...' : ''}
                 </div>
+                {(doc as any).contentLength > 0 && (
+                  <div className="text-xs text-muted-foreground">
+                    内容长度: {((doc as any).contentLength / 1000).toFixed(1)}K 字符
+                  </div>
+                )}
                 
                 {/* 标签 */}
                 {doc.tags && doc.tags.length > 0 && (
@@ -456,9 +581,9 @@ export default function KnowledgePage() {
                     variant="outline"
                     size="sm"
                     className="flex-1"
-                    onClick={() => handleOpenDialog(doc)}
+                    onClick={() => router.push(`/knowledge/new?id=${doc.id}`)}
                   >
-                    <Edit className="mr-1 h-3 w-3" />
+                    <Maximize2 className="mr-1 h-3 w-3" />
                     编辑
                   </Button>
                   <Button
@@ -486,6 +611,94 @@ export default function KnowledgePage() {
           ))}
         </div>
       )}
+
+      {/* 导入对话框 */}
+      <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>导入知识库</DialogTitle>
+            <DialogDescription>
+              支持导入 OpenIE 格式的知识图谱文件（包含实体和三元组）或普通文本/JSON 文件
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid gap-2">
+              <Label>选择文件</Label>
+              <Input
+                type="file"
+                accept=".json,.txt,.md"
+                onChange={handleFileSelect}
+              />
+              {importForm.fileName && (
+                <p className="text-sm text-muted-foreground">
+                  已选择: {importForm.fileName}
+                  {importForm.format === 'openie' && (
+                    <Badge variant="secondary" className="ml-2">OpenIE 格式</Badge>
+                  )}
+                </p>
+              )}
+            </div>
+            <div className="grid gap-2">
+              <Label>文档名称</Label>
+              <Input
+                value={importForm.name}
+                onChange={(e) => setImportForm({ ...importForm, name: e.target.value })}
+                placeholder="导入的知识库名称"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label>导入格式</Label>
+                <Select
+                  value={importForm.format}
+                  onValueChange={(v: 'openie' | 'raw') => setImportForm({ ...importForm, format: v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="openie">OpenIE (知识图谱)</SelectItem>
+                    <SelectItem value="raw">原始文本/JSON</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>合并模式</Label>
+                <Select
+                  value={importForm.mergeMode}
+                  onValueChange={(v: 'create' | 'merge' | 'replace') => setImportForm({ ...importForm, mergeMode: v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="create">创建新文档</SelectItem>
+                    <SelectItem value="merge">合并到同名文档</SelectItem>
+                    <SelectItem value="replace">替换同名文档</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label>标签（逗号分隔）</Label>
+              <Input
+                value={importForm.tags}
+                onChange={(e) => setImportForm({ ...importForm, tags: e.target.value })}
+                placeholder="角色, 设定"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setImportDialogOpen(false)}>
+              取消
+            </Button>
+            <Button onClick={handleImport} disabled={importing || !importForm.fileContent}>
+              {importing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              导入
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

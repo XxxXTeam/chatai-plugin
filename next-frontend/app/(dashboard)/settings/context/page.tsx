@@ -10,7 +10,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
 import { configApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Save, Loader2, MessageCircle, Users, Timer, Check } from 'lucide-react'
+import { Save, Loader2, MessageCircle, Users, Timer, Check, Globe, FileText } from 'lucide-react'
+import { Textarea } from '@/components/ui/textarea'
 
 interface ContextConfig {
   context: {
@@ -338,6 +339,62 @@ export default function ContextPage() {
               )}
             </>
           )}
+        </CardContent>
+      </Card>
+
+      {/* 群上下文传递 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Globe className="h-5 w-5" />
+            群聊上下文传递
+          </CardTitle>
+          <CardDescription>控制群聊消息是否作为上下文传递给 AI</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>启用群上下文传递</Label>
+              <p className="text-sm text-muted-foreground">
+                {(config.context as any)?.groupContextSharing === true || (config.context as any)?.groupContextSharing === undefined
+                  ? '群内其他消息会作为上下文传递给 AI' 
+                  : '仅传递@消息，不携带群聊上下文'}
+              </p>
+            </div>
+            <Switch
+              checked={(config.context as any)?.groupContextSharing === true || (config.context as any)?.groupContextSharing === undefined}
+              onCheckedChange={(checked) => updateConfig('context.groupContextSharing', checked)}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 全局提示词 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileText className="h-5 w-5" />
+            全局提示词
+          </CardTitle>
+          <CardDescription>
+            对所有对话生效的系统提示词，会追加到预设提示词之后。对于没有预设的对话，这将作为唯一的系统提示词。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-2">
+            <Label htmlFor="globalSystemPrompt">全局系统提示词</Label>
+            <Textarea
+              id="globalSystemPrompt"
+              value={(config.context as any)?.globalSystemPrompt || ''}
+              onChange={(e) => updateConfig('context.globalSystemPrompt', e.target.value)}
+              placeholder="输入全局系统提示词，例如：你是一个友善的助手..."
+              rows={6}
+              className="font-mono text-sm"
+            />
+            <p className="text-xs text-muted-foreground">
+              此提示词会追加到所有对话的系统提示词末尾。留空则不添加。
+            </p>
+          </div>
         </CardContent>
       </Card>
     </div>

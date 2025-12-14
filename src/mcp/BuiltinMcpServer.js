@@ -358,6 +358,15 @@ export class BuiltinMcpServer {
         const { databaseService } = await import('../services/DatabaseService.js')
         const { memoryManager } = await import('../services/MemoryManager.js')
         const { channelManager } = await import('../services/ChannelManager.js')
+        const { contextManager } = await import('../services/ContextManager.js')
+        const { knowledgeService } = await import('../services/KnowledgeService.js')
+        const { presetManager } = await import('../services/PresetManager.js')
+        
+        // 获取当前会话信息
+        const event = ctx?.getEvent?.()
+        const userId = event?.user_id?.toString()
+        const groupId = event?.group_id?.toString()
+        const conversationId = userId ? contextManager.getConversationId(userId, groupId) : null
         
         return {
             // 核心服务
@@ -366,12 +375,85 @@ export class BuiltinMcpServer {
             logger: logger,
             Bot: ctx?.getBot?.() || global.Bot,
             
+            // 当前会话上下文
+            context: {
+                userId,
+                groupId,
+                conversationId,
+                event,
+                isGroup: !!groupId,
+                isPrivate: !groupId && !!userId
+            },
+            
             // 服务访问
             services: {
                 chat: chatService,
                 database: databaseService,
                 memory: memoryManager,
-                channel: channelManager
+                channel: channelManager,
+                context: contextManager,
+                knowledge: knowledgeService,
+                preset: presetManager
+            },
+            
+            // 知识库快捷访问
+            knowledge: {
+                // 搜索知识库
+                search: (query, options = {}) => knowledgeService.search(query, options),
+                // 获取文档
+                get: (id) => knowledgeService.get(id),
+                // 获取预设关联的知识库
+                getForPreset: (presetId) => knowledgeService.getPresetKnowledge(presetId),
+                // 构建知识库提示词
+                buildPrompt: (presetId, options) => knowledgeService.buildKnowledgePrompt(presetId, options)
+            },
+            
+            // 记忆快捷访问
+            memory: {
+                // 获取用户记忆
+                get: async (targetUserId) => {
+                    const uid = targetUserId || userId
+                    if (!uid) return []
+                    return memoryManager.getMemories(uid)
+                },
+                // 添加记忆
+                add: async (content, targetUserId, metadata = {}) => {
+                    const uid = targetUserId || userId
+                    if (!uid) throw new Error('无法确定用户ID')
+                    return memoryManager.addMemory(uid, content, metadata)
+                },
+                // 搜索记忆
+                search: async (query, targetUserId) => {
+                    const uid = targetUserId || userId
+                    if (!uid) return []
+                    return memoryManager.searchMemories(uid, query)
+                },
+                // 删除记忆
+                delete: async (memoryId) => memoryManager.deleteMemory(memoryId)
+            },
+            
+            // 上下文快捷访问
+            conversation: {
+                // 获取历史
+                getHistory: async (convId) => {
+                    const id = convId || conversationId
+                    if (!id) return []
+                    return contextManager.getContextHistory(id)
+                },
+                // 清除历史
+                clear: async (convId) => {
+                    const id = convId || conversationId
+                    if (!id) return false
+                    const historyManager = (await import('../core/utils/history.js')).default
+                    await historyManager.deleteConversation(id)
+                    return true
+                },
+                // 获取统计
+                getStats: async (convId) => {
+                    const id = convId || conversationId
+                    if (!id) return null
+                    return contextManager.getContextStats(id)
+                }
             },
             
             // 工具函数
@@ -4203,6 +4285,359 @@ export class BuiltinMcpServer {
                                 await browser.close()
                             } catch (err) {}
                         }
+                    }
+                }
+            },
+
+            // ==================== 知识库工具 ====================
+            {
+                name: 'search_knowledge',
+                description: '搜索知识库文档。可以在预设关联的知识库中搜索信息，返回相关文档片段。支持实体名称和关键词搜索。',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        query: { type: 'string', description: '搜索关键词（支持实体名称、属性值等）' },
+                        preset_id: { type: 'string', description: '预设ID，只搜索该预设关联的知识库（可选）' },
+                        limit: { type: 'number', description: '返回结果数量，默认3' },
+                        extract_relevant: { type: 'boolean', description: '是否只提取相关片段（默认true）' }
+                    },
+                    required: ['query']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const { knowledgeService } = await import('../services/KnowledgeService.js')
+                        await knowledgeService.init()
+                        
+                        const limit = args.limit || 3
+                        const extractRelevant = args.extract_relevant !== false
+                        
+                        const results = knowledgeService.search(args.query, {
+                            limit,
+                            presetId: args.preset_id
+                        })
+                        
+                        if (results.length === 0) {
+                            return { 
+                                success: true, 
+                                message: `未找到与"${args.query}"相关的知识库内容`,
+                                results: []
+                            }
+                        }
+                        
+                        // 提取相关内容
+                        const formattedResults = results.map(r => {
+                            let content
+                            if (extractRelevant) {
+                                content = knowledgeService.extractRelevantSection(r.doc.content, args.query)
+                                // 限制长度
+                                if (content.length > 1500) {
+                                    content = content.substring(0, 1500) + '\n...(内容已截断)'
+                                }
+                            } else {
+                                content = r.doc.content.substring(0, 800) + (r.doc.content.length > 800 ? '...' : '')
+                            }
+                            
+                            return {
+                                name: r.doc.name,
+                                content,
+                                score: r.score,
+                                matches: r.matches?.slice(0, 3),
+                                tags: r.doc.tags
+                            }
+                        })
+                        
+                        return {
+                            success: true,
+                            query: args.query,
+                            total: results.length,
+                            results: formattedResults
+                        }
+                    } catch (err) {
+                        return { success: false, error: `搜索知识库失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'get_knowledge_document',
+                description: '获取知识库文档的完整内容',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        id: { type: 'string', description: '文档ID' },
+                        name: { type: 'string', description: '文档名称（如果不知道ID可用名称查找）' }
+                    }
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const { knowledgeService } = await import('../services/KnowledgeService.js')
+                        await knowledgeService.init()
+                        
+                        let doc = null
+                        if (args.id) {
+                            doc = knowledgeService.get(args.id)
+                        } else if (args.name) {
+                            doc = knowledgeService.getByName(args.name)
+                        }
+                        
+                        if (!doc) {
+                            return { success: false, error: '未找到指定文档' }
+                        }
+                        
+                        return {
+                            success: true,
+                            document: {
+                                id: doc.id,
+                                name: doc.name,
+                                content: doc.content,
+                                type: doc.type,
+                                tags: doc.tags
+                            }
+                        }
+                    } catch (err) {
+                        return { success: false, error: `获取文档失败: ${err.message}` }
+                    }
+                }
+            },
+
+            // ==================== 记忆工具 ====================
+            {
+                name: 'get_user_memory',
+                description: '获取用户的记忆信息。记忆是AI关于用户的长期知识，包括偏好、习惯、个人信息等。',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        user_id: { type: 'string', description: '用户QQ号，不填则获取当前用户的记忆' },
+                        query: { type: 'string', description: '搜索关键词，用于筛选相关记忆（可选）' }
+                    }
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const { memoryManager } = await import('../services/MemoryManager.js')
+                        await memoryManager.init()
+                        
+                        const e = ctx.getEvent()
+                        const userId = args.user_id || e?.user_id?.toString()
+                        
+                        if (!userId) {
+                            return { success: false, error: '无法确定用户ID' }
+                        }
+                        
+                        let memories
+                        if (args.query) {
+                            memories = await memoryManager.searchMemory(userId, args.query, 10)
+                        } else {
+                            memories = await memoryManager.getMemories(userId)
+                        }
+                        
+                        return {
+                            success: true,
+                            user_id: userId,
+                            total: memories.length,
+                            memories: memories.slice(0, 20).map(m => ({
+                                id: m.id,
+                                content: m.content,
+                                importance: m.importance,
+                                source: m.source,
+                                created_at: m.timestamp ? new Date(m.timestamp).toLocaleString('zh-CN') : null
+                            }))
+                        }
+                    } catch (err) {
+                        return { success: false, error: `获取记忆失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'save_user_memory',
+                description: '保存用户记忆。将重要信息保存到用户的长期记忆中，以便未来对话时参考。',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        content: { type: 'string', description: '记忆内容，简洁明了，不超过100字' },
+                        user_id: { type: 'string', description: '用户QQ号，不填则保存到当前用户' },
+                        importance: { type: 'number', description: '重要程度1-10，默认5' }
+                    },
+                    required: ['content']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const { memoryManager } = await import('../services/MemoryManager.js')
+                        await memoryManager.init()
+                        
+                        const e = ctx.getEvent()
+                        const userId = args.user_id || e?.user_id?.toString()
+                        
+                        if (!userId) {
+                            return { success: false, error: '无法确定用户ID' }
+                        }
+                        
+                        if (!args.content || args.content.length < 3) {
+                            return { success: false, error: '记忆内容太短' }
+                        }
+                        
+                        if (args.content.length > 200) {
+                            return { success: false, error: '记忆内容太长，请控制在200字以内' }
+                        }
+                        
+                        const result = await memoryManager.saveMemory(userId, args.content, {
+                            source: 'tool_save',
+                            importance: args.importance || 5
+                        })
+                        
+                        return {
+                            success: true,
+                            memory_id: result?.id,
+                            user_id: userId,
+                            content: args.content
+                        }
+                    } catch (err) {
+                        return { success: false, error: `保存记忆失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'delete_user_memory',
+                description: '删除用户记忆',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        memory_id: { type: 'number', description: '记忆ID' },
+                        user_id: { type: 'string', description: '用户QQ号' }
+                    },
+                    required: ['memory_id']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const { memoryManager } = await import('../services/MemoryManager.js')
+                        await memoryManager.init()
+                        
+                        const e = ctx.getEvent()
+                        const userId = args.user_id || e?.user_id?.toString()
+                        
+                        const success = await memoryManager.deleteMemory(userId, args.memory_id)
+                        
+                        return { success, memory_id: args.memory_id }
+                    } catch (err) {
+                        return { success: false, error: `删除记忆失败: ${err.message}` }
+                    }
+                }
+            },
+            {
+                name: 'get_conversation_context',
+                description: '获取当前对话的上下文信息，包括历史消息统计',
+                inputSchema: {
+                    type: 'object',
+                    properties: {}
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const { contextManager } = await import('../services/ContextManager.js')
+                        await contextManager.init()
+                        
+                        const e = ctx.getEvent()
+                        const userId = e?.user_id?.toString()
+                        const groupId = e?.group_id?.toString()
+                        
+                        if (!userId) {
+                            return { success: false, error: '无法确定用户' }
+                        }
+                        
+                        const conversationId = contextManager.getConversationId(userId, groupId)
+                        const stats = await contextManager.getContextStats(conversationId)
+                        const isolation = contextManager.getIsolationMode()
+                        
+                        return {
+                            success: true,
+                            conversation_id: conversationId,
+                            user_id: userId,
+                            group_id: groupId,
+                            is_group: !!groupId,
+                            stats,
+                            isolation_mode: isolation.description
+                        }
+                    } catch (err) {
+                        return { success: false, error: `获取上下文失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'clear_conversation',
+                description: '清除当前对话历史，开始新会话',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        confirm: { type: 'boolean', description: '确认清除，必须为true' }
+                    },
+                    required: ['confirm']
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        if (args.confirm !== true) {
+                            return { success: false, error: '需要确认清除操作' }
+                        }
+                        
+                        const { contextManager } = await import('../services/ContextManager.js')
+                        const historyManager = (await import('../core/utils/history.js')).default
+                        await contextManager.init()
+                        
+                        const e = ctx.getEvent()
+                        const userId = e?.user_id?.toString()
+                        const groupId = e?.group_id?.toString()
+                        
+                        if (!userId) {
+                            return { success: false, error: '无法确定用户' }
+                        }
+                        
+                        const conversationId = contextManager.getConversationId(userId, groupId)
+                        await historyManager.deleteConversation(conversationId)
+                        contextManager.clearSessionState(conversationId)
+                        
+                        return {
+                            success: true,
+                            message: '对话历史已清除',
+                            conversation_id: conversationId
+                        }
+                    } catch (err) {
+                        return { success: false, error: `清除对话失败: ${err.message}` }
+                    }
+                }
+            },
+
+            {
+                name: 'get_group_context',
+                description: '获取群聊上下文信息，包括话题、用户关系等（仅群聊有效）',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        group_id: { type: 'string', description: '群号，不填则使用当前群' }
+                    }
+                },
+                handler: async (args, ctx) => {
+                    try {
+                        const { memoryManager } = await import('../services/MemoryManager.js')
+                        await memoryManager.init()
+                        
+                        const e = ctx.getEvent()
+                        const groupId = args.group_id || e?.group_id?.toString()
+                        
+                        if (!groupId) {
+                            return { success: false, error: '需要群号参数或在群聊中使用' }
+                        }
+                        
+                        const context = await memoryManager.getGroupContext(groupId)
+                        
+                        return {
+                            success: true,
+                            group_id: groupId,
+                            topics: context.topics?.slice(0, 10).map(t => t.content) || [],
+                            relations: context.relations?.slice(0, 10).map(r => r.content) || [],
+                            user_count: context.userInfos?.length || 0
+                        }
+                    } catch (err) {
+                        return { success: false, error: `获取群上下文失败: ${err.message}` }
                     }
                 }
             }

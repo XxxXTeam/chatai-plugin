@@ -79,6 +79,8 @@ interface Config {
       enabled: boolean
       maxRounds: number
     }
+    groupContextSharing: boolean
+    globalSystemPrompt: string
   }
   bym: {
     enable: boolean
@@ -158,7 +160,7 @@ const defaultConfig: Config = {
     models: { chat: [], roleplay: [], search: [] },
     fallback: { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false }
   },
-  context: { maxMessages: 20, autoEnd: { enabled: false, maxRounds: 50 } },
+  context: { maxMessages: 20, autoEnd: { enabled: false, maxRounds: 50 }, groupContextSharing: true, globalSystemPrompt: '' },
   bym: { enable: false, probability: 0.02, temperature: 0.9, maxTokens: 100, recall: false, model: '', systemPrompt: '', inheritPersonality: true },
   tools: { showCallLogs: true, useForwardMsg: true, parallelExecution: true, sendIntermediateReply: true },
   personality: { isolateContext: { enabled: false, clearOnSwitch: false } },

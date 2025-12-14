@@ -194,18 +194,21 @@ export class ChatListener extends plugin {
             const isReplyToBot = isReplyToBotMessage(e)
             const hasReply = !!e.source
             
+            // 从消息中去除 @机器人 部分
+            const cleanedMsg = this.cleanAtBot(rawMsg, e)
+            
             if (isReplyToBot) {
                 // 引用机器人消息：检查 replyBot 配置
                 if (groupCfg.replyBot) {
-                    return { triggered: true, msg: rawMsg, reason: '引用机器人消息' }
+                    return { triggered: true, msg: cleanedMsg, reason: '引用机器人消息' }
                 }
                 // 不触发（防止重复响应）
             } else if (hasReply) {
                 // 引用其他消息：@ 仍然有效
-                return { triggered: true, msg: rawMsg, reason: '@机器人(含引用)' }
+                return { triggered: true, msg: cleanedMsg, reason: '@机器人(含引用)' }
             } else {
                 // 正常 @ 触发
-                return { triggered: true, msg: rawMsg, reason: '@机器人' }
+                return { triggered: true, msg: cleanedMsg, reason: '@机器人' }
             }
         }
         
@@ -299,6 +302,30 @@ export class ChatListener extends plugin {
             }
         }
         return { matched: false }
+    }
+    
+    /**
+     * 从消息中去除 @机器人 部分
+     * @param {string} text - 原始消息
+     * @param {Object} e - 事件对象
+     * @returns {string} 清理后的消息
+     */
+    cleanAtBot(text, e) {
+        if (!text) return ''
+        // 获取机器人QQ号
+        const botId = e.self_id || e.bot?.uin || Bot?.uin
+        if (!botId) return text
+        
+        // 去除 @机器人 的各种格式
+        let cleaned = text
+            // 去除 @QQ号 格式（带空格）
+            .replace(new RegExp(`\\s*@${botId}\\s*`, 'g'), ' ')
+            // 去除 @昵称 格式（如果有机器人昵称）
+            .replace(new RegExp(`\\s*@${e.bot?.nickname || ''}\\s*`, 'gi'), ' ')
+            // 清理多余空格
+            .replace(/\s+/g, ' ')
+            .trim()
+        return cleaned
     }
     
     /**

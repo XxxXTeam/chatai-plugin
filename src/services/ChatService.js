@@ -263,6 +263,22 @@ export class ChatService {
         // Determine model - 确保获取到有效模型
         let llmModel = model || LlmService.getModel(mode)
         
+        // 检查群组是否有独立模型配置
+        if (groupId && !model) {
+            try {
+                const sm = await ensureScopeManager()
+                const groupSettings = await sm.getGroupSettings(String(groupId))
+                const groupModelId = groupSettings?.modelId || groupSettings?.settings?.modelId
+                if (groupModelId) {
+                    // 模型格式：channelId:modelId
+                    llmModel = groupModelId
+                    logger.debug(`[ChatService] 使用群组独立模型: ${llmModel}`)
+                }
+            } catch (e) {
+                logger.debug('[ChatService] 获取群组模型配置失败:', e.message)
+            }
+        }
+        
         // 如果模型为空或不是字符串，直接抛出错误
         if (!llmModel || typeof llmModel !== 'string') {
             throw new Error('未配置模型，请先在管理面板「设置 → 模型配置」中配置默认模型')
@@ -384,19 +400,27 @@ export class ChatService {
             }
         }
 
-        // 1.3 Knowledge Base Context (知识库上下文)
-        if (!isNewSession) {
-            try {
-                const { knowledgeService } = await import('./KnowledgeService.js')
-                await knowledgeService.init()
-                const knowledgePrompt = knowledgeService.buildKnowledgePrompt(effectivePresetId)
-                if (knowledgePrompt) {
-                    systemPrompt += '\n\n' + knowledgePrompt
-                    logger.debug(`[ChatService] 已添加知识库上下文 (${knowledgePrompt.length} 字符)`)
-                }
-            } catch (err) {
-                logger.debug('[ChatService] 知识库服务未加载或无内容:', err.message)
+        // 1.3 Knowledge Base Context (知识库上下文) - 始终加载，不受会话状态限制
+        try {
+            const { knowledgeService } = await import('./KnowledgeService.js')
+            await knowledgeService.init()
+            const knowledgePrompt = knowledgeService.buildKnowledgePrompt(effectivePresetId, {
+                maxLength: config.get('knowledge.maxLength') || 15000,
+                includeTriples: config.get('knowledge.includeTriples') !== false
+            })
+            if (knowledgePrompt) {
+                systemPrompt += '\n\n' + knowledgePrompt
+                logger.info(`[ChatService] 已添加知识库上下文 (${knowledgePrompt.length} 字符)`)
             }
+        } catch (err) {
+            logger.debug('[ChatService] 知识库服务未加载或无内容:', err.message)
+        }
+
+        // 1.4 全局系统提示词 - 追加到所有对话
+        const globalSystemPrompt = config.get('context.globalSystemPrompt')
+        if (globalSystemPrompt && typeof globalSystemPrompt === 'string' && globalSystemPrompt.trim()) {
+            systemPrompt += '\n\n' + globalSystemPrompt.trim()
+            logger.debug(`[ChatService] 已添加全局系统提示词 (${globalSystemPrompt.length} 字符)`)
         }
 
         // Construct Messages
@@ -410,9 +434,12 @@ export class ChatService {
             return true
         })
         
+        // 群聊上下文传递开关（默认开启）
+        const groupContextSharingEnabled = config.get('context.groupContextSharing') !== false
+        
         // 群聊共享模式下，添加用户标签以区分不同用户
         const isolation = contextManager.getIsolationMode()
-        if (groupId && !isolation.groupUserIsolation) {
+        if (groupId && !isolation.groupUserIsolation && groupContextSharingEnabled) {
             validHistory = contextManager.buildLabeledContext(validHistory)
             
             // 当前用户信息
@@ -436,10 +463,8 @@ export class ChatService {
 你正在群聊中与多位用户对话。每条用户消息都以 [用户名(QQ号)]: 格式标注发送者。
 消息中的 [提及用户 QQ:xxx ...] 表示被@的用户，包含其QQ号、群名片、昵称等信息。
 请根据消息前的用户标签区分不同用户，回复时针对当前用户。`
-        }
-        
-        // 非群聊隔离模式下也添加群信息（如果是群聊）
-        if (groupId && isolation.groupUserIsolation) {
+        } else if (groupId && (!groupContextSharingEnabled || isolation.groupUserIsolation)) {
+            // 群上下文传递关闭或用户隔离模式：只添加基本群信息，不传递群聊历史
             const groupName = event?.group_name || event?.group?.name || ''
             const currentUserLabel = event?.sender?.card || event?.sender?.nickname || `用户${userId}`
             const currentUserUin = event?.user_id || userId
@@ -447,6 +472,10 @@ export class ChatService {
 群号: ${groupId}${groupName ? `\n群名: ${groupName}` : ''}
 当前用户: ${currentUserLabel}(QQ:${currentUserUin})
 消息中的 [提及用户 QQ:xxx ...] 表示被@的用户，包含其QQ号、群名片、昵称等信息。`
+            
+            if (!groupContextSharingEnabled) {
+                logger.debug(`[ChatService] 群上下文传递已禁用，不携带群聊历史`)
+            }
         }
         
         let messages = [

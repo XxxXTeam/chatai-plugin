@@ -26,20 +26,27 @@ import {
 } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
-import { scopeApi, presetsApi } from '@/lib/api'
+import { scopeApi, presetsApi, channelsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, Trash2, Loader2, Users, RefreshCw, Settings, FileText } from 'lucide-react'
+import { Plus, Trash2, Loader2, Users, RefreshCw, Settings, FileText, Bot } from 'lucide-react'
 
 interface GroupScope {
   groupId: string
   groupName?: string
   presetId?: string
   systemPrompt?: string
+  modelId?: string
   enabled: boolean
   triggerMode?: string
   settings?: any
   createdAt?: number
   updatedAt?: number
+}
+
+interface Channel {
+  id: string
+  name: string
+  models?: string[]
 }
 
 interface Preset {
@@ -50,6 +57,7 @@ interface Preset {
 export default function GroupsPage() {
   const [groups, setGroups] = useState<GroupScope[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
+  const [channels, setChannels] = useState<Channel[]>([])
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingGroup, setEditingGroup] = useState<GroupScope | null>(null)
@@ -61,18 +69,21 @@ export default function GroupsPage() {
     groupName: '',
     presetId: '__default__',
     systemPrompt: '',
+    modelId: '__default__',
     enabled: true,
     triggerMode: 'default',
   })
 
   const fetchData = async () => {
     try {
-      const [groupsRes, presetsRes]: any[] = await Promise.all([
+      const [groupsRes, presetsRes, channelsRes]: any[] = await Promise.all([
         scopeApi.getGroups(),
-        presetsApi.list()
+        presetsApi.list(),
+        channelsApi.list()
       ])
       setGroups(groupsRes?.data || [])
       setPresets(presetsRes?.data || [])
+      setChannels(channelsRes?.data || [])
     } catch (error) {
       toast.error('加载数据失败')
       console.error(error)
@@ -91,6 +102,7 @@ export default function GroupsPage() {
       groupName: '',
       presetId: '__default__',
       systemPrompt: '',
+      modelId: '__default__',
       enabled: true,
       triggerMode: 'default',
     })
@@ -107,6 +119,7 @@ export default function GroupsPage() {
         groupName: group.groupName || settings.groupName || '',
         presetId: group.presetId || settings.presetId || '__default__',
         systemPrompt: group.systemPrompt || settings.systemPrompt || '',
+        modelId: group.modelId || settings.modelId || '__default__',
         enabled: group.enabled ?? settings.enabled ?? true,
         triggerMode: group.triggerMode || settings.triggerMode || 'default',
       })
@@ -128,6 +141,7 @@ export default function GroupsPage() {
         groupName: form.groupName,
         presetId: form.presetId === '__default__' ? '' : form.presetId,
         systemPrompt: form.systemPrompt || null,
+        modelId: form.modelId === '__default__' ? '' : form.modelId,
         enabled: form.enabled,
         triggerMode: form.triggerMode,
       })
@@ -225,6 +239,29 @@ export default function GroupsPage() {
                         <SelectItem key={preset.id} value={preset.id}>
                           {preset.name}
                         </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="modelId">
+                    使用模型 <span className="text-xs text-muted-foreground">(设置后群聊将使用指定模型)</span>
+                  </Label>
+                  <Select
+                    value={form.modelId}
+                    onValueChange={(value) => setForm({ ...form, modelId: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="使用默认模型" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__default__">使用默认模型</SelectItem>
+                      {channels.map((channel) => (
+                        channel.models?.map((modelId) => (
+                          <SelectItem key={`${channel.id}:${modelId}`} value={`${channel.id}:${modelId}`}>
+                            [{channel.name}] {modelId}
+                          </SelectItem>
+                        ))
                       ))}
                     </SelectContent>
                   </Select>
@@ -330,7 +367,7 @@ export default function GroupsPage() {
                           {(group.enabled ?? group.settings?.enabled) ? '已启用' : '已禁用'}
                         </Badge>
                       </div>
-                      <div className="flex gap-4 text-sm text-muted-foreground">
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
                         {group.systemPrompt ? (
                           <span className="flex items-center gap-1">
                             <FileText className="h-3 w-3" />
@@ -338,6 +375,12 @@ export default function GroupsPage() {
                           </span>
                         ) : (
                           <span>预设: {presets.find(p => p.id === group.presetId)?.name || '默认'}</span>
+                        )}
+                        {(group.modelId || group.settings?.modelId) && (
+                          <span className="flex items-center gap-1">
+                            <Bot className="h-3 w-3" />
+                            独立模型
+                          </span>
                         )}
                         <span>模式: {group.triggerMode || '默认'}</span>
                       </div>

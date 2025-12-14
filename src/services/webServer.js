@@ -187,6 +187,8 @@ async function getServerAddresses(port) {
             const services = [
                 { url: 'https://api.ipify.org', https: true },
                 { url: 'https://icanhazip.com', https: true },
+                { url: 'https://ifconfig.me/ip', https: true },
+                { url: 'https://ipinfo.io/ip', https: true },
                 { url: 'http://ip-api.com/line/?fields=query', https: false }
             ]
             
@@ -194,32 +196,38 @@ async function getServerAddresses(port) {
             const timeout = setTimeout(() => {
                 if (!resolved) {
                     resolved = true
+                    logger.debug('[WebServer] 公网IP获取超时')
                     resolve(null)
                 }
-            }, 5000)
+            }, 8000) // 增加超时时间
             
             for (const service of services) {
                 const client = service.https ? https : http
-                client.get(service.url, { timeout: 3000 }, (res) => {
+                const req = client.get(service.url, { timeout: 5000 }, (res) => {
                     let data = ''
                     res.on('data', chunk => data += chunk)
                     res.on('end', () => {
-                        if (!resolved && data.trim()) {
+                        const ip = data.trim()
+                        if (!resolved && ip && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
                             resolved = true
                             clearTimeout(timeout)
-                            resolve(data.trim())
+                            logger.debug(`[WebServer] 公网IP获取成功: ${ip} (from ${service.url})`)
+                            resolve(ip)
                         }
                     })
-                }).on('error', () => {})
+                })
+                req.on('error', (err) => {
+                    logger.debug(`[WebServer] 公网IP服务 ${service.url} 失败: ${err.message}`)
+                })
             }
         })
         
         const publicIP = await getPublicIP()
-        if (publicIP && /^\d+\.\d+\.\d+\.\d+$/.test(publicIP)) {
+        if (publicIP) {
             addresses.public = `http://${publicIP}:${port}`
         }
     } catch (e) {
-        // 忽略公网获取失败
+        logger.debug('[WebServer] 公网地址获取失败:', e.message)
     }
     
     return addresses
@@ -691,6 +699,7 @@ export class WebServer {
                 },
                 context: {
                     maxMessages: config.get('context.maxMessages') || 20,
+                    maxTokens: config.get('context.maxTokens') || 4000,
                     cleaningStrategy: config.get('context.cleaningStrategy') || 'truncate',
                     isolation: config.get('context.isolation') || {
                         groupUserIsolation: false,
@@ -700,7 +709,15 @@ export class WebServer {
                         enabled: true,
                         maxHistoryMessages: 20,
                         includeToolCalls: false
-                    }
+                    },
+                    autoEnd: config.get('context.autoEnd') || {
+                        enabled: false,
+                        maxRounds: 50,
+                        notifyUser: true,
+                        notifyMessage: '对话已达到最大轮数限制，已自动开始新会话。'
+                    },
+                    groupContextSharing: config.get('context.groupContextSharing'),
+                    globalSystemPrompt: config.get('context.globalSystemPrompt') || ''
                 },
                 memory: config.get('memory') || {
                     enabled: false,
@@ -784,6 +801,9 @@ export class WebServer {
                 if (context.maxMessages) {
                     config.set('context.maxMessages', context.maxMessages)
                 }
+                if (context.maxTokens) {
+                    config.set('context.maxTokens', context.maxTokens)
+                }
                 if (context.cleaningStrategy) {
                     config.set('context.cleaningStrategy', context.cleaningStrategy)
                 }
@@ -800,6 +820,21 @@ export class WebServer {
                         ...config.get('context.autoContext'),
                         ...context.autoContext
                     })
+                }
+                // 自动结束配置
+                if (context.autoEnd) {
+                    config.set('context.autoEnd', {
+                        ...config.get('context.autoEnd'),
+                        ...context.autoEnd
+                    })
+                }
+                // 群上下文传递开关
+                if (context.groupContextSharing !== undefined) {
+                    config.set('context.groupContextSharing', context.groupContextSharing)
+                }
+                // 全局系统提示词
+                if (context.globalSystemPrompt !== undefined) {
+                    config.set('context.globalSystemPrompt', context.globalSystemPrompt)
                 }
             }
 
@@ -1241,13 +1276,22 @@ export class WebServer {
         })
 
         // ==================== 知识库 API ====================
-        // GET /api/knowledge - 获取所有知识库文档
+        // GET /api/knowledge - 获取所有知识库文档（列表模式返回摘要）
         this.app.get('/api/knowledge', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const { knowledgeService } = await import('./KnowledgeService.js')
                 await knowledgeService.init()
                 const docs = knowledgeService.getAll()
-                res.json(ChaiteResponse.ok(docs))
+                
+                // 列表模式只返回摘要，避免传输大量数据
+                const summaryDocs = docs.map(doc => ({
+                    ...doc,
+                    content: doc.content?.substring(0, 500) || '',
+                    contentLength: doc.content?.length || 0,
+                    truncated: (doc.content?.length || 0) > 500
+                }))
+                
+                res.json(ChaiteResponse.ok(summaryDocs))
             } catch (err) {
                 res.status(500).json(ChaiteResponse.fail(null, err.message))
             }
@@ -1352,6 +1396,41 @@ export class WebServer {
                 const { q, presetId, limit } = req.query
                 const results = knowledgeService.search(q || '', { presetId, limit: parseInt(limit) || 10 })
                 res.json(ChaiteResponse.ok(results))
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
+        })
+
+        // POST /api/knowledge/import - 导入知识库（支持 OpenIE 等格式）
+        this.app.post('/api/knowledge/import', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { knowledgeService } = await import('./KnowledgeService.js')
+                await knowledgeService.init()
+                
+                const { data, format = 'openie', name, tags, presetIds, mergeMode } = req.body
+                
+                if (!data) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '缺少导入数据'))
+                }
+
+                let result
+                if (format === 'openie') {
+                    result = await knowledgeService.importOpenIE(data, { name, tags, presetIds, mergeMode })
+                } else if (format === 'raw') {
+                    // 直接导入原始文本
+                    const doc = await knowledgeService.create({
+                        name: name || '导入的文档',
+                        content: typeof data === 'string' ? data : JSON.stringify(data, null, 2),
+                        type: typeof data === 'string' ? 'text' : 'json',
+                        tags: tags || ['imported'],
+                        presetIds: presetIds || []
+                    })
+                    result = { success: true, document: doc }
+                } else {
+                    return res.status(400).json(ChaiteResponse.fail(null, `不支持的格式: ${format}`))
+                }
+
+                res.json(ChaiteResponse.ok(result))
             } catch (err) {
                 res.status(500).json(ChaiteResponse.fail(null, err.message))
             }
@@ -2765,11 +2844,12 @@ export default {
                 const { contextManager } = await import('./ContextManager.js')
                 await contextManager.init()
                 // 清除所有锁和处理标记
-                contextManager.locks.clear()
-                contextManager.lockQueues.clear()
-                contextManager.processingFlags.clear()
-                contextManager.messageQueues.clear()
-                contextManager.requestCounters.clear()
+                contextManager.locks?.clear()
+                contextManager.processingFlags?.clear()
+                contextManager.messageQueues?.clear()
+                contextManager.requestCounters?.clear()
+                contextManager.groupContextCache?.clear()
+                contextManager.sessionStates?.clear()
                 
                 logger.info(`[WebServer] 清空所有对话完成, 删除: ${deletedCount}条消息`)
                 res.json(ChaiteResponse.ok({ success: true, deletedCount }))
@@ -3392,6 +3472,7 @@ export default {
         
         // 从配置中获取自定义登录地址
         const loginLinks = config.get('web.loginLinks') || []
+        logger.debug(`[WebServer] getLoginInfo: loginLinks =`, JSON.stringify(loginLinks))
         const customUrls = loginLinks.map(link => ({
             label: link.label,
             url: `${link.baseUrl.replace(/\/$/, '')}/login/token?token=${token}`
@@ -3400,9 +3481,11 @@ export default {
         // 使用配置的公网地址或自动检测的公网地址
         let publicUrl = null
         const configPublicUrl = config.get('web.publicUrl')
+        logger.debug(`[WebServer] getLoginInfo: configPublicUrl=${configPublicUrl}, addresses.public=${this.addresses?.public}`)
         if (configPublicUrl) {
             publicUrl = `${configPublicUrl.replace(/\/$/, '')}/login/token?token=${token}`
-        } else if (this.addresses?.public && this.addresses.public !== this.addresses?.local?.[0]) {
+        } else if (this.addresses?.public) {
+            // 只要检测到公网地址就显示
             publicUrl = `${this.addresses.public}/login/token?token=${token}`
         }
         
