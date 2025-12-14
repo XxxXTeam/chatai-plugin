@@ -4,6 +4,55 @@ import DefaultHistoryManager from '../utils/history.js'
 import { asyncLocalStorage, extractClassName, getKey } from '../utils/index.js'
 
 /**
+ * 解析文本中的 XML 格式工具调用
+ * 支持格式: <tools>{"name": "xxx", "arguments": {...}}</tools>
+ * @param {string} text - 响应文本
+ * @returns {{ cleanText: string, toolCalls: Array }} 清理后的文本和解析出的工具调用
+ */
+export function parseXmlToolCalls(text) {
+    if (!text || typeof text !== 'string') {
+        return { cleanText: text || '', toolCalls: [] }
+    }
+    
+    const toolCalls = []
+    // 匹配 <tools>...</tools> 标签（支持多行）
+    const toolsRegex = /<tools>([\s\S]*?)<\/tools>/gi
+    let cleanText = text
+    let match
+    
+    while ((match = toolsRegex.exec(text)) !== null) {
+        const toolContent = match[1].trim()
+        try {
+            // 尝试解析 JSON
+            const toolData = JSON.parse(toolContent)
+            
+            // 转换为标准 tool_calls 格式
+            const toolCall = {
+                id: `xml_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                type: 'function',
+                function: {
+                    name: toolData.name,
+                    arguments: typeof toolData.arguments === 'string' 
+                        ? toolData.arguments 
+                        : JSON.stringify(toolData.arguments || {})
+                }
+            }
+            toolCalls.push(toolCall)
+            logger.debug(`[XML Tool Parser] 解析到工具调用: ${toolData.name}`)
+        } catch (parseErr) {
+            logger.warn(`[XML Tool Parser] 解析失败:`, parseErr.message, toolContent.substring(0, 100))
+        }
+    }
+    
+    // 从文本中移除 <tools>...</tools> 部分
+    if (toolCalls.length > 0) {
+        cleanText = text.replace(toolsRegex, '').trim()
+    }
+    
+    return { cleanText, toolCalls }
+}
+
+/**
  * 将URL资源转换为base64
  * @param {string} url - 资源URL
  * @param {string} [defaultMimeType] - 默认MIME类型

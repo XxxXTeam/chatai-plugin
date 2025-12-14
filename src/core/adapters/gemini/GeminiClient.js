@@ -1,6 +1,6 @@
 import { GoogleGenerativeAI, HarmBlockThreshold, HarmCategory } from '@google/generative-ai'
 import crypto from 'node:crypto'
-import { AbstractClient, preprocessImageUrls } from '../AbstractClient.js'
+import { AbstractClient, preprocessImageUrls, parseXmlToolCalls } from '../AbstractClient.js'
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
 
@@ -122,6 +122,25 @@ export class GeminiClient extends AbstractClient {
         // Convert response to Chaite format
         const chaiteMessage = toChaiteConverter(response)
 
+        let responseContents = chaiteMessage.content || []
+        let toolCalls = chaiteMessage.toolCalls || []
+        
+        // 检查文本内容中是否有 XML 格式的工具调用 (<tools>...</tools>)
+        const textContents = responseContents.filter(c => c.type === 'text')
+        for (const textItem of textContents) {
+            if (textItem.text && textItem.text.includes('<tools>')) {
+                const { cleanText, toolCalls: xmlToolCalls } = parseXmlToolCalls(textItem.text)
+                if (xmlToolCalls.length > 0) {
+                    textItem.text = cleanText
+                    toolCalls = [...toolCalls, ...xmlToolCalls]
+                    logger.info(`[Gemini适配器] 从文本中解析到 ${xmlToolCalls.length} 个XML格式工具调用`)
+                }
+            }
+        }
+        
+        // 过滤空文本
+        responseContents = responseContents.filter(c => c.type !== 'text' || (c.text && c.text.trim()))
+
         const usage = {
             promptTokens: response.usageMetadata?.promptTokenCount,
             completionTokens: response.usageMetadata?.candidatesTokenCount,
@@ -132,8 +151,8 @@ export class GeminiClient extends AbstractClient {
             id,
             parentId: options.parentMessageId,
             role: 'assistant',
-            content: chaiteMessage.content || [],
-            toolCalls: chaiteMessage.toolCalls || [],
+            content: responseContents,
+            toolCalls,
             usage,
         }
     }

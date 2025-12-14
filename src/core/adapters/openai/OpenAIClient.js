@@ -1,6 +1,6 @@
 import OpenAI from 'openai'
 import crypto from 'node:crypto'
-import { AbstractClient, preprocessImageUrls, needsImageBase64Preprocess } from '../AbstractClient.js'
+import { AbstractClient, preprocessImageUrls, needsImageBase64Preprocess, parseXmlToolCalls } from '../AbstractClient.js'
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
 import { proxyService } from '../../../services/ProxyService.js'
@@ -300,24 +300,46 @@ export class OpenAIClient extends AbstractClient {
         const id = crypto.randomUUID()
         const toChaiteConverter = getIntoChaiteConverter('openai')
 
-        const contents = chatCompletion.choices
+        let contents = chatCompletion.choices
             .map(ch => ch.message)
             .map(toChaiteConverter)
             .filter(ch => ch.content && ch.content.length > 0)
             .map(ch => ch.content)
             .reduce((a, b) => [...a, ...b], [])
 
+        let toolCalls = chatCompletion.choices
+            .map(ch => ch.message)
+            .map(toChaiteConverter)
+            .filter(ch => ch.toolCalls)
+            .map(ch => ch.toolCalls)
+            .reduce((a, b) => [...a, ...b], [])
+        
+        // 检查文本内容中是否有 XML 格式的工具调用 (<tools>...</tools>)
+        // 某些模型/API 不支持原生 function calling，会在文本中输出 XML 格式
+        const textContents = contents.filter(c => c.type === 'text')
+        for (let i = 0; i < textContents.length; i++) {
+            const textItem = textContents[i]
+            if (textItem.text && textItem.text.includes('<tools>')) {
+                const { cleanText, toolCalls: xmlToolCalls } = parseXmlToolCalls(textItem.text)
+                if (xmlToolCalls.length > 0) {
+                    // 更新文本内容（移除 <tools> 标签）
+                    textItem.text = cleanText
+                    // 合并工具调用
+                    toolCalls = [...toolCalls, ...xmlToolCalls]
+                    logger.info(`[OpenAI适配器] 从文本中解析到 ${xmlToolCalls.length} 个XML格式工具调用`)
+                }
+            }
+        }
+        
+        // 过滤空文本
+        contents = contents.filter(c => c.type !== 'text' || (c.text && c.text.trim()))
+
         const result = {
             id,
             parentId: options.parentMessageId,
             role: 'assistant',
             content: contents,
-            toolCalls: chatCompletion.choices
-                .map(ch => ch.message)
-                .map(toChaiteConverter)
-                .filter(ch => ch.toolCalls)
-                .map(ch => ch.toolCalls)
-                .reduce((a, b) => [...a, ...b], []),
+            toolCalls,
         }
 
         const usage = {
@@ -557,11 +579,26 @@ export class OpenAIClient extends AbstractClient {
                         yield { type: 'reasoning', text: thinkContent }
                     }
                     if (restContent) {
-                        yield { type: 'text', text: restContent }
+                        // 检查剩余内容是否有 XML 工具调用
+                        const { cleanText, toolCalls: xmlToolCalls } = parseXmlToolCalls(restContent)
+                        if (xmlToolCalls.length > 0) {
+                            logger.info(`[OpenAI适配器] 流式响应中解析到 ${xmlToolCalls.length} 个XML格式工具调用`)
+                            yield { type: 'tool_calls', toolCalls: xmlToolCalls }
+                        }
+                        if (cleanText) {
+                            yield { type: 'text', text: cleanText }
+                        }
                     }
                 } else if (!checkedThinkTag) {
-                    // 内容太短，没检查过<think>，直接作为text输出
-                    yield { type: 'text', text: allContent }
+                    // 内容太短，没检查过<think>，检查 XML 工具调用后输出
+                    const { cleanText, toolCalls: xmlToolCalls } = parseXmlToolCalls(allContent)
+                    if (xmlToolCalls.length > 0) {
+                        logger.info(`[OpenAI适配器] 流式响应中解析到 ${xmlToolCalls.length} 个XML格式工具调用`)
+                        yield { type: 'tool_calls', toolCalls: xmlToolCalls }
+                    }
+                    if (cleanText) {
+                        yield { type: 'text', text: cleanText }
+                    }
                 }
             }
             

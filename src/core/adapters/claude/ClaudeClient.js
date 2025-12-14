@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import crypto from 'node:crypto'
-import { AbstractClient } from '../AbstractClient.js'
+import { AbstractClient, parseXmlToolCalls } from '../AbstractClient.js'
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
 
@@ -90,6 +90,25 @@ export class ClaudeClient extends AbstractClient {
         // Convert response to Chaite format
         const chaiteMessage = toChaiteConverter(response)
 
+        let contents = chaiteMessage.content || []
+        let toolCalls = chaiteMessage.toolCalls || []
+        
+        // 检查文本内容中是否有 XML 格式的工具调用 (<tools>...</tools>)
+        const textContents = contents.filter(c => c.type === 'text')
+        for (const textItem of textContents) {
+            if (textItem.text && textItem.text.includes('<tools>')) {
+                const { cleanText, toolCalls: xmlToolCalls } = parseXmlToolCalls(textItem.text)
+                if (xmlToolCalls.length > 0) {
+                    textItem.text = cleanText
+                    toolCalls = [...toolCalls, ...xmlToolCalls]
+                    logger.info(`[Claude适配器] 从文本中解析到 ${xmlToolCalls.length} 个XML格式工具调用`)
+                }
+            }
+        }
+        
+        // 过滤空文本
+        contents = contents.filter(c => c.type !== 'text' || (c.text && c.text.trim()))
+
         const usage = {
             promptTokens: response.usage?.input_tokens,
             completionTokens: response.usage?.output_tokens,
@@ -100,8 +119,8 @@ export class ClaudeClient extends AbstractClient {
             id,
             parentId: options.parentMessageId,
             role: 'assistant',
-            content: chaiteMessage.content || [],
-            toolCalls: chaiteMessage.toolCalls || [],
+            content: contents,
+            toolCalls,
             usage,
         }
     }
