@@ -272,27 +272,23 @@ export class ChatService {
         if (event) {
             setToolContext({ event, bot: event.bot || Bot })
         }
-
-        // Get best channel
         const channel = channelManager.getBestChannel(llmModel)
-
-        // Get preset ID
         const effectivePresetId = presetId || preset?.id || config.get('llm.defaultChatPresetId') || 'default'
+        const isNewSession = presetManager.isContextCleared(conversationId)
 
         // Channel advanced config
         const channelAdvanced = channel?.advanced || {}
         const channelLlm = channelAdvanced.llm || {}
         const channelThinking = channelAdvanced.thinking || {}
         const channelStreaming = channelAdvanced.streaming || {}
-
-        // Create LLM client options
         const clientOptions = {
-            enableTools: true,
+            enableTools: !isNewSession && (preset?.tools?.enableBuiltinTools !== false),
             enableReasoning: preset?.enableReasoning ?? channelThinking.enableReasoning,
             reasoningEffort: channelThinking.defaultLevel || 'low',
             adapterType: adapterType,
             event,
-            presetId: effectivePresetId
+            presetId: effectivePresetId,
+            userPermission: event?.sender?.role || 'member'
         }
 
         if (channel) {
@@ -350,8 +346,8 @@ export class ChatService {
             logger.debug(`[ChatService] 使用前缀人格覆盖`)
         }
 
-        // 1.2 Memory Context
-        if (config.get('memory.enabled')) {
+        // 1.2 Memory Context (新对话不加载之前的记忆上下文)
+        if (config.get('memory.enabled') && !isNewSession) {
             try {
                 await memoryManager.init()
                 // 获取用户个人记忆
@@ -385,6 +381,21 @@ export class ChatService {
                 }
             } catch (err) {
                 logger.warn('[ChatService] 获取记忆上下文失败:', err.message)
+            }
+        }
+
+        // 1.3 Knowledge Base Context (知识库上下文)
+        if (!isNewSession) {
+            try {
+                const { knowledgeService } = await import('./KnowledgeService.js')
+                await knowledgeService.init()
+                const knowledgePrompt = knowledgeService.buildKnowledgePrompt(effectivePresetId)
+                if (knowledgePrompt) {
+                    systemPrompt += '\n\n' + knowledgePrompt
+                    logger.debug(`[ChatService] 已添加知识库上下文 (${knowledgePrompt.length} 字符)`)
+                }
+            } catch (err) {
+                logger.debug('[ChatService] 知识库服务未加载或无内容:', err.message)
             }
         }
 
@@ -795,6 +806,11 @@ export class ChatService {
         const conversationId = contextManager.getConversationId(userId, groupId)
         await historyManager.deleteConversation(conversationId)
         await contextManager.cleanContext(conversationId)
+        
+        // 标记上下文已清除，新对话不会传递之前的人设状态
+        presetManager.markContextCleared(conversationId)
+        
+        logger.debug(`[ChatService] 对话已清除: ${conversationId}`)
     }
     
     async exportHistory(userId, format = 'json', groupId = null) {

@@ -141,13 +141,13 @@ export default function LoginLinksPage() {
   }
 
   // 生成/刷新永久Token
-  const handleGenerateToken = async () => {
+  const handleGenerateToken = async (forceNew = false) => {
     setGeneratingToken(true)
     try {
-      const res = await tokenApi.generatePermanent() as { data?: { token?: string } }
+      const res = await tokenApi.generatePermanent(forceNew) as { data?: { token?: string, isNew?: boolean } }
       if (res?.data?.token) {
         setPermanentToken(res.data.token)
-        toast.success('永久Token已生成')
+        toast.success(forceNew ? '已重新生成永久Token' : '永久Token已生成')
       } else {
         // 重新获取配置
         await fetchConfig()
@@ -246,7 +246,7 @@ export default function LoginLinksPage() {
               <div className="flex gap-2">
                 <Button
                   variant="outline"
-                  onClick={handleGenerateToken}
+                  onClick={() => handleGenerateToken(true)}
                   disabled={generatingToken}
                 >
                   {generatingToken ? (
@@ -276,7 +276,7 @@ export default function LoginLinksPage() {
                 <ShieldOff className="h-5 w-5 text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">永久Token未启用</span>
               </div>
-              <Button onClick={handleGenerateToken} disabled={generatingToken}>
+              <Button onClick={() => handleGenerateToken(false)} disabled={generatingToken}>
                 {generatingToken ? (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 ) : (

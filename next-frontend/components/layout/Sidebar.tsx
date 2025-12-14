@@ -18,6 +18,7 @@ import {
   ChevronRight,
   UserCog,
   Brain,
+  BookOpen,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useUiStore } from '@/lib/store'
@@ -46,6 +47,7 @@ const navItems = [
   ]},
   { href: '/channels', label: '渠道管理', icon: Plug },
   { href: '/presets', label: '预设管理', icon: Palette },
+  { href: '/knowledge', label: '知识库', icon: BookOpen },
   { href: '/tools', label: '工具配置', icon: Wrench },
   { href: '/mcp', label: 'MCP服务', icon: Bot },
   { href: '/conversations', label: '对话历史', icon: MessageSquare },

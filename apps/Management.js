@@ -129,11 +129,11 @@ export class AIManagement extends plugin {
     }
 
     /**
-     * 获取管理面板链接（永久token）
+     * 获取管理面板链接（永久token，复用现有）
      */
     async permanentPanel() {
         try {
-            await this.sendPanelInfo(true)
+            await this.sendPanelInfo(true, false)
         } catch (err) {
             await this.reply(`获取管理面板失败: ${err.message}`, true)
         }
@@ -142,15 +142,18 @@ export class AIManagement extends plugin {
     /**
      * 发送面板登录信息（私聊+合并转发）
      * @param {boolean} permanent - 是否永久有效
+     * @param {boolean} forceNew - 是否强制生成新token
      */
-    async sendPanelInfo(permanent = false) {
+    async sendPanelInfo(permanent = false, forceNew = false) {
         const webServer = getWebServer()
-        const addresses = webServer.getAddresses()
-        const localUrl = webServer.generateLoginUrl(false, permanent)
-        const publicUrl = addresses.public ? webServer.generateLoginUrl(true, permanent) : null
         
-        const validityText = permanent ? '永久有效' : '5分钟内有效'
+        // 使用新的getLoginInfo方法获取完整登录信息
+        const loginInfo = webServer.getLoginInfo(permanent, forceNew)
+        const { localUrl, publicUrl, customUrls, validity } = loginInfo
+        
+        const validityText = validity
         const warningText = permanent ? '\n\n⚠️ 请妥善保管此链接，不要泄露给他人！' : ''
+        const newTokenText = forceNew ? '（已重新生成）' : ''
         
         // 构建消息内容
         const messages = []
@@ -176,6 +179,17 @@ export class AIManagement extends plugin {
                 nickname: 'AI管理面板',
                 user_id: this.e.self_id
             })
+        }
+        
+        // 自定义地址
+        if (customUrls && customUrls.length > 0) {
+            for (const custom of customUrls) {
+                messages.push({
+                    message: `🔗 ${custom.label}：\n${custom.url}`,
+                    nickname: 'AI管理面板',
+                    user_id: this.e.self_id
+                })
+            }
         }
         
         // 使用说明
@@ -452,7 +466,8 @@ export class AIManagement extends plugin {
         const msg = `AI插件命令帮助：
 
 ${cmdPrefix}管理面板 - 获取管理面板链接（5分钟有效）
-${cmdPrefix}管理面板 永久 - 获取永久管理面板链接
+${cmdPrefix}管理面板 永久 - 获取永久管理面板链接（复用现有）
+${cmdPrefix}管理面板 永久 新 - 获取永久管理面板链接（重新生成）
 ${cmdPrefix}结束对话 - 结束当前对话
 ${cmdPrefix}设置人格 <内容> - 设置个人专属人格
 ${cmdPrefix}设置群人格 <内容> - 设置群组人格（管理员）

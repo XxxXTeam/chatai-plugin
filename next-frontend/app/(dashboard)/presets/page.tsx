@@ -19,9 +19,10 @@ import {
   DialogFooter
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { presetsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, Trash2, Loader2, Palette, Copy, Star, Upload, FileDown, RefreshCw, User, MessageSquare, Sparkles, Heart, ThumbsDown, Tags, BookOpen } from 'lucide-react'
+import { Plus, Trash2, Loader2, Palette, Copy, Star, Upload, FileDown, RefreshCw, User, MessageSquare, Sparkles, Heart, ThumbsDown, Tags, BookOpen, Library, Wand2 } from 'lucide-react'
 
 interface PersonaConfig {
   name?: string
@@ -41,22 +42,39 @@ interface Preset {
   systemPrompt: string
   isDefault: boolean
   enableReasoning: boolean
+  isBuiltin?: boolean
+  isReadonly?: boolean
+  category?: string
   modelParams?: {
     temperature?: number
     max_tokens?: number
   }
   persona?: PersonaConfig
+  tools?: {
+    enableBuiltinTools?: boolean
+    disabledTools?: string[]
+  }
   // 兼容旧字段
   temperature?: number
   maxTokens?: number
 }
 
+interface PresetCategory {
+  name: string
+  icon: string
+  description: string
+}
+
 export default function PresetsPage() {
   const [presets, setPresets] = useState<Preset[]>([])
+  const [builtinPresets, setBuiltinPresets] = useState<Preset[]>([])
+  const [categories, setCategories] = useState<Record<string, PresetCategory>>({})
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingPreset, setEditingPreset] = useState<Preset | null>(null)
   const [saving, setSaving] = useState(false)
+  const [activeTab, setActiveTab] = useState('custom')
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
 
   const [form, setForm] = useState({
     name: '',
@@ -79,7 +97,9 @@ export default function PresetsPage() {
   const fetchPresets = async () => {
     try {
       const res = await presetsApi.list() as { data: Preset[] }
-      setPresets(res.data || [])
+      // 只获取自定义预设（后端list接口返回全部，需要过滤）
+      const all = res.data || []
+      setPresets(all.filter(p => !p.isBuiltin))
     } catch (error) {
       toast.error('加载预设失败')
       console.error(error)
@@ -88,9 +108,56 @@ export default function PresetsPage() {
     }
   }
 
+  const fetchBuiltinPresets = async () => {
+    try {
+      const res = await presetsApi.listBuiltin() as { data: Preset[] }
+      const builtins = res.data || []
+      console.log('[Presets] 加载内置预设:', builtins.length)
+      setBuiltinPresets(builtins)
+    } catch (error) {
+      console.error('加载内置预设失败:', error)
+      // 如果单独API失败，尝试从list接口获取
+      try {
+        const res = await presetsApi.list() as { data: Preset[] }
+        const all = res.data || []
+        setBuiltinPresets(all.filter(p => p.isBuiltin))
+      } catch (e) {
+        console.error('备用加载也失败:', e)
+      }
+    }
+  }
+
+  const fetchCategories = async () => {
+    try {
+      const res = await presetsApi.getCategories() as { data: Record<string, PresetCategory> }
+      setCategories(res.data || {})
+    } catch (error) {
+      console.error('加载分类失败:', error)
+    }
+  }
+
   useEffect(() => {
-    fetchPresets()
+    const loadData = async () => {
+      await Promise.all([
+        fetchPresets(),
+        fetchBuiltinPresets(),
+        fetchCategories()
+      ])
+    }
+    loadData()
   }, [])
+
+  const handleUseBuiltin = async (builtinId: string) => {
+    try {
+      await presetsApi.createFromBuiltin(builtinId)
+      toast.success('已从内置预设创建副本')
+      fetchPresets()
+      setActiveTab('custom')
+    } catch (error) {
+      toast.error('创建失败')
+      console.error(error)
+    }
+  }
 
   const resetForm = () => {
     setForm({
@@ -548,15 +615,36 @@ export default function PresetsPage() {
         </div>
       </div>
 
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <TabsList className="grid w-full max-w-md grid-cols-2">
+          <TabsTrigger value="custom" className="flex items-center gap-2">
+            <Palette className="h-4 w-4" />
+            我的预设 ({presets.length})
+          </TabsTrigger>
+          <TabsTrigger value="builtin" className="flex items-center gap-2">
+            <Library className="h-4 w-4" />
+            内置预设库 ({builtinPresets.length})
+          </TabsTrigger>
+        </TabsList>
+
+        {/* 自定义预设 */}
+        <TabsContent value="custom" className="mt-4">
       {presets.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Palette className="h-12 w-12 text-muted-foreground mb-4" />
-            <p className="text-muted-foreground">暂无预设配置</p>
-            <Button className="mt-4" onClick={() => handleOpenDialog()}>
-              <Plus className="mr-2 h-4 w-4" />
-              创建第一个预设
-            </Button>
+            <p className="text-muted-foreground">暂无自定义预设</p>
+            <p className="text-sm text-muted-foreground mt-2">可以从内置预设库中选择一个开始</p>
+            <div className="flex gap-2 mt-4">
+              <Button onClick={() => handleOpenDialog()}>
+                <Plus className="mr-2 h-4 w-4" />
+                创建预设
+              </Button>
+              <Button variant="outline" onClick={() => setActiveTab('builtin')}>
+                <Library className="mr-2 h-4 w-4" />
+                浏览内置库
+              </Button>
+            </div>
           </CardContent>
         </Card>
       ) : (
@@ -642,6 +730,92 @@ export default function PresetsPage() {
           ))}
         </div>
       )}
+        </TabsContent>
+
+        {/* 内置预设库 */}
+        <TabsContent value="builtin" className="mt-4">
+          {/* 分类筛选 */}
+          <div className="flex flex-wrap gap-2 mb-4">
+            <Button
+              variant={selectedCategory === null ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setSelectedCategory(null)}
+            >
+              全部
+            </Button>
+            {Object.entries(categories).map(([key, cat]) => (
+              <Button
+                key={key}
+                variant={selectedCategory === key ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setSelectedCategory(key)}
+              >
+                {cat.icon} {cat.name}
+              </Button>
+            ))}
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {builtinPresets
+              .filter(p => !selectedCategory || p.category === selectedCategory)
+              .map((preset) => (
+              <Card key={preset.id} className="border-dashed">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      {preset.name}
+                      <Badge variant="secondary" className="text-xs">内置</Badge>
+                    </CardTitle>
+                  </div>
+                  <CardDescription className="line-clamp-2">
+                    {preset.description || '无描述'}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="text-sm text-muted-foreground line-clamp-3 bg-muted/50 p-2 rounded">
+                    {preset.systemPrompt?.substring(0, 120) || '无系统提示词'}
+                    {(preset.systemPrompt?.length || 0) > 120 ? '...' : ''}
+                  </div>
+                  {preset.persona?.name && (
+                    <div className="flex flex-wrap gap-1">
+                      <Badge variant="outline" className="text-xs">
+                        {preset.persona.name}
+                      </Badge>
+                      {preset.persona.traits?.slice(0, 2).map((trait) => (
+                        <Badge key={trait} variant="outline" className="text-xs">
+                          {trait}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                  {preset.category && categories[preset.category] && (
+                    <Badge variant="secondary" className="text-xs">
+                      {categories[preset.category].icon} {categories[preset.category].name}
+                    </Badge>
+                  )}
+                  <Button
+                    className="w-full"
+                    size="sm"
+                    onClick={() => handleUseBuiltin(preset.id)}
+                  >
+                    <Wand2 className="mr-2 h-4 w-4" />
+                    使用此预设
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          {builtinPresets.filter(p => !selectedCategory || p.category === selectedCategory).length === 0 && (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-12">
+                <Library className="h-12 w-12 text-muted-foreground mb-4" />
+                <p className="text-muted-foreground">此分类暂无内置预设</p>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

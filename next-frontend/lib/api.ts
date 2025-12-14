@@ -82,6 +82,28 @@ export const presetsApi = {
   getPrompt: (id: string) => api.get(`/api/preset/${id}/prompt`),
   getConfig: () => api.get('/api/presets/config'),
   updateConfig: (data: any) => api.put('/api/presets/config', data),
+  // 内置预设库 API
+  listBuiltin: () => api.get('/api/presets/builtin'),
+  getCategories: () => api.get('/api/presets/categories'),
+  createFromBuiltin: (builtinId: string, overrides?: any) => 
+    api.post(`/api/preset/from-builtin/${builtinId}`, overrides || {}),
+  // 知识库关联
+  getKnowledge: (id: string) => api.get(`/api/preset/${id}/knowledge`),
+}
+
+// Knowledge API (知识库)
+export const knowledgeApi = {
+  list: () => api.get('/api/knowledge'),
+  get: (id: string) => api.get(`/api/knowledge/${id}`),
+  create: (data: any) => api.post('/api/knowledge', data),
+  update: (id: string, data: any) => api.put(`/api/knowledge/${id}`, data),
+  delete: (id: string) => api.delete(`/api/knowledge/${id}`),
+  search: (query: string, options?: { presetId?: string; limit?: number }) => 
+    api.get('/api/knowledge/search', { params: { q: query, ...options } }),
+  linkToPreset: (docId: string, presetId: string) => 
+    api.post(`/api/knowledge/${docId}/link/${presetId}`),
+  unlinkFromPreset: (docId: string, presetId: string) => 
+    api.delete(`/api/knowledge/${docId}/link/${presetId}`),
 }
 
 // Tools API
@@ -170,7 +192,7 @@ export const systemApi = {
 
 // Auth Token Management API
 export const tokenApi = {
-  generatePermanent: () => api.post('/api/auth/token/permanent'),
+  generatePermanent: (forceNew = false) => api.post('/api/auth/token/permanent', { forceNew }),
   revokePermanent: () => api.delete('/api/auth/token/permanent'),
   getStatus: () => api.get('/api/auth/token/status'),
 }

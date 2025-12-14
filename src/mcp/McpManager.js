@@ -419,18 +419,49 @@ export class McpManager {
 
     /**
      * Get all available tools
+     * @param {Object} options - 过滤选项
+     * @param {boolean} options.applyConfig - 是否应用配置过滤，默认true
      * @returns {Array} List of tools
      */
-    getTools() {
-        const tools = []
+    getTools(options = {}) {
+        const { applyConfig = true } = options
+        const builtinConfig = config.get('builtinTools') || { enabled: true }
+        
+        let tools = []
         for (const [name, tool] of this.tools) {
             tools.push({
                 name,
                 description: tool.description,
                 inputSchema: tool.inputSchema,
-                serverName: tool.serverName
+                serverName: tool.serverName,
+                isBuiltin: tool.isBuiltin,
+                isJsTool: tool.isJsTool,
+                isCustom: tool.isCustom
             })
         }
+        
+        // 应用配置过滤
+        if (applyConfig) {
+            // 过滤禁用的工具
+            if (builtinConfig.disabledTools?.length > 0) {
+                tools = tools.filter(t => !builtinConfig.disabledTools.includes(t.name))
+            }
+            
+            // 过滤危险工具（如果不允许）
+            if (!builtinConfig.allowDangerous) {
+                const dangerous = builtinConfig.dangerousTools || []
+                tools = tools.filter(t => !dangerous.includes(t.name))
+            }
+            
+            // 过滤允许的工具（白名单模式）
+            if (builtinConfig.allowedTools?.length > 0) {
+                tools = tools.filter(t => 
+                    builtinConfig.allowedTools.includes(t.name) || 
+                    t.isJsTool || t.isCustom  // JS工具和自定义工具不受白名单限制
+                )
+            }
+        }
+        
         return tools
     }
 

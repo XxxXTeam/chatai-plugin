@@ -1,5 +1,6 @@
 import { mcpManager } from '../../mcp/McpManager.js'
 import config from '../../../config/config.js'
+import { toolFilterService } from '../../services/ToolFilterService.js'
 
 /**
  * Convert MCP tools to Chaite tool format
@@ -71,10 +72,13 @@ export function convertMcpTools(mcpTools, requestContext = null) {
  * Get all tools from MCP Manager (including builtin tools)
  * @param {Object} [options] - Options
  * @param {Object} [options.event] - Yunzai event for context
+ * @param {Object} [options.toolsConfig] - Preset tools config for filtering
+ * @param {string} [options.presetId] - Preset ID for filtering
+ * @param {string} [options.userPermission] - User permission level
  * @returns {Promise<Array>} - All tools in Chaite format
  */
 export async function getAllTools(options = {}) {
-    const { event } = options
+    const { event, toolsConfig, presetId, userPermission } = options
 
     // 创建请求级上下文（用于并发隔离）
     const requestContext = event ? { event, bot: event.bot || Bot } : null
@@ -87,7 +91,19 @@ export async function getAllTools(options = {}) {
     // Initialize and get all tools (builtin + external MCP)
     try {
         await mcpManager.init()
-        const mcpTools = mcpManager.getTools()
+        let mcpTools = mcpManager.getTools()
+        
+        // 应用预设级别的工具过滤
+        if (presetId || toolsConfig) {
+            await toolFilterService.init()
+            const filterOptions = {
+                userPermission: userPermission || event?.sender?.role || 'member',
+                groupId: event?.group_id,
+                userId: event?.user_id
+            }
+            mcpTools = toolFilterService.filterTools(mcpTools, presetId || 'default', filterOptions)
+        }
+        
         // 传递请求级上下文到工具，通过闭包捕获实现并发隔离
         return convertMcpTools(mcpTools, requestContext)
     } catch (error) {
@@ -105,7 +121,7 @@ export async function getAllTools(options = {}) {
  * @returns {Promise<Object>} - Tool result in MCP format
  */
 export async function executeTool(toolName, args, context, options = {}) {
-    const { event } = options
+    const { event, presetId } = options
 
     // 创建请求级上下文
     const requestContext = event ? { event, bot: event.bot || Bot } : null
@@ -113,6 +129,42 @@ export async function executeTool(toolName, args, context, options = {}) {
     // 仍然设置全局上下文以兼容旧代码
     if (requestContext) {
         mcpManager.setToolContext(requestContext)
+    }
+    
+    // 工具调用前验证
+    await toolFilterService.init()
+    
+    // 检查工具访问权限
+    const accessCheck = toolFilterService.checkToolAccess(
+        toolName, 
+        presetId || 'default',
+        {
+            userPermission: event?.sender?.role || 'member',
+            groupId: event?.group_id,
+            userId: event?.user_id
+        }
+    )
+    
+    if (!accessCheck.allowed) {
+        logger.warn(`[ToolAdapter] 工具访问被拒绝: ${toolName}, 原因: ${accessCheck.reason}`)
+        return {
+            content: [{ type: 'text', text: accessCheck.reason }],
+            isError: true
+        }
+    }
+    
+    // 验证工具调用参数
+    const validateResult = toolFilterService.validateToolCall(toolName, args, {
+        groupId: event?.group_id,
+        userId: event?.user_id
+    })
+    
+    if (!validateResult.valid) {
+        logger.warn(`[ToolAdapter] 工具参数验证失败: ${toolName}, 原因: ${validateResult.reason}`)
+        return {
+            content: [{ type: 'text', text: validateResult.reason }],
+            isError: true
+        }
     }
 
     await mcpManager.init()
@@ -138,9 +190,29 @@ export function getBuiltinToolsList() {
  * @returns {boolean}
  */
 export function isDangerousTool(toolName) {
-    const builtinConfig = config.get('builtinTools') || {}
-    const dangerousTools = builtinConfig.dangerousTools || []
+    const dangerousTools = toolFilterService.getDangerousTools()
     return dangerousTools.includes(toolName)
+}
+
+/**
+ * 检查工具是否可用（综合检查权限、禁用状态等）
+ * @param {string} toolName - 工具名称
+ * @param {string} presetId - 预设ID
+ * @param {Object} options - 额外选项
+ * @returns {Promise<{allowed: boolean, reason?: string}>}
+ */
+export async function checkToolAvailable(toolName, presetId = 'default', options = {}) {
+    await toolFilterService.init()
+    return toolFilterService.checkToolAccess(toolName, presetId, options)
+}
+
+/**
+ * 获取预设的工具调用限制
+ * @param {string} presetId - 预设ID
+ * @returns {Object}
+ */
+export function getToolCallLimits(presetId = 'default') {
+    return toolFilterService.getToolCallLimits(presetId)
 }
 
 /**

@@ -70,15 +70,18 @@ class FrontendAuthHandler {
      * 生成登录Token
      * @param {number} timeout - 超时时间（秒）
      * @param {boolean} permanent - 是否永久有效
+     * @param {boolean} forceNew - 是否强制生成新token（永久token也会重新生成）
      * @returns {string} - 生成的token
      */
-    generateToken(timeout = 5 * 60, permanent = false) {
+    generateToken(timeout = 5 * 60, permanent = false, forceNew = false) {
         // 永久Token存储到配置文件
         if (permanent) {
             let permanentToken = config.get('web.permanentAuthToken')
-            if (!permanentToken) {
+            // 如果不存在或者强制生成新token，则生成新的
+            if (!permanentToken || forceNew) {
                 permanentToken = crypto.randomUUID()
                 config.set('web.permanentAuthToken', permanentToken)
+                logger.info('[Auth] 已生成新的永久登录Token')
             }
             return permanentToken
         }
@@ -858,10 +861,15 @@ export class WebServer {
 
         // ==================== Token Management API ====================
         // POST /api/auth/token/permanent - Generate permanent token
+        // 支持 forceNew 参数强制生成新token
         this.app.post('/api/auth/token/permanent', this.authMiddleware.bind(this), (req, res) => {
             try {
-                const token = authHandler.generateToken(0, true)
-                res.json(ChaiteResponse.ok({ token }))
+                const forceNew = req.body?.forceNew === true
+                // 在生成之前检查是否已有token
+                const hadToken = authHandler.hasPermanentToken()
+                const token = authHandler.generateToken(0, true, forceNew)
+                // isNew: 如果强制重新生成，或者之前没有token
+                res.json(ChaiteResponse.ok({ token, isNew: forceNew || !hadToken }))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
@@ -871,7 +879,8 @@ export class WebServer {
         this.app.delete('/api/auth/token/permanent', this.authMiddleware.bind(this), (req, res) => {
             try {
                 authHandler.revokePermanentToken()
-                res.json(ChaiteResponse.ok({ success: true }))
+                logger.info('[Auth] 永久Token已撤销')
+                res.json(ChaiteResponse.ok({ success: true, message: 'Token已撤销' }))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
@@ -1177,6 +1186,157 @@ export class WebServer {
                 res.json(ChaiteResponse.ok({ success: true }))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // ==================== 内置预设库 API ====================
+        // GET /api/presets/builtin - 获取所有内置预设
+        this.app.get('/api/presets/builtin', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                await presetManager.init()
+                const builtinPresets = presetManager.getAllBuiltin()
+                res.json(ChaiteResponse.ok(builtinPresets))
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
+        })
+
+        // GET /api/presets/categories - 获取预设分类
+        this.app.get('/api/presets/categories', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                await presetManager.init()
+                const categories = presetManager.getCategories()
+                res.json(ChaiteResponse.ok(categories))
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
+        })
+
+        // POST /api/preset/from-builtin/:builtinId - 从内置预设创建副本
+        this.app.post('/api/preset/from-builtin/:builtinId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                await presetManager.init()
+                const preset = await presetManager.createFromBuiltin(req.params.builtinId, req.body)
+                res.status(201).json(ChaiteResponse.ok(preset))
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
+        })
+
+        // ==================== 知识库 API ====================
+        // GET /api/knowledge - 获取所有知识库文档
+        this.app.get('/api/knowledge', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { knowledgeService } = await import('./KnowledgeService.js')
+                await knowledgeService.init()
+                const docs = knowledgeService.getAll()
+                res.json(ChaiteResponse.ok(docs))
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
+        })
+
+        // GET /api/knowledge/:id - 获取单个知识库文档
+        this.app.get('/api/knowledge/:id', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { knowledgeService } = await import('./KnowledgeService.js')
+                await knowledgeService.init()
+                const doc = knowledgeService.get(req.params.id)
+                if (doc) {
+                    res.json(ChaiteResponse.ok(doc))
+                } else {
+                    res.status(404).json(ChaiteResponse.fail(null, 'Document not found'))
+                }
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
+        })
+
+        // POST /api/knowledge - 创建知识库文档
+        this.app.post('/api/knowledge', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { knowledgeService } = await import('./KnowledgeService.js')
+                await knowledgeService.init()
+                const doc = await knowledgeService.create(req.body)
+                res.status(201).json(ChaiteResponse.ok(doc))
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
+        })
+
+        // PUT /api/knowledge/:id - 更新知识库文档
+        this.app.put('/api/knowledge/:id', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { knowledgeService } = await import('./KnowledgeService.js')
+                await knowledgeService.init()
+                const doc = await knowledgeService.update(req.params.id, req.body)
+                res.json(ChaiteResponse.ok(doc))
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
+        })
+
+        // DELETE /api/knowledge/:id - 删除知识库文档
+        this.app.delete('/api/knowledge/:id', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { knowledgeService } = await import('./KnowledgeService.js')
+                await knowledgeService.init()
+                const deleted = await knowledgeService.delete(req.params.id)
+                if (deleted) {
+                    res.json(ChaiteResponse.ok(null))
+                } else {
+                    res.status(404).json(ChaiteResponse.fail(null, 'Document not found'))
+                }
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
+        })
+
+        // POST /api/knowledge/:id/link/:presetId - 关联知识库到预设
+        this.app.post('/api/knowledge/:id/link/:presetId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { knowledgeService } = await import('./KnowledgeService.js')
+                await knowledgeService.init()
+                await knowledgeService.linkToPreset(req.params.id, req.params.presetId)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
+        })
+
+        // DELETE /api/knowledge/:id/link/:presetId - 取消关联
+        this.app.delete('/api/knowledge/:id/link/:presetId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { knowledgeService } = await import('./KnowledgeService.js')
+                await knowledgeService.init()
+                await knowledgeService.unlinkFromPreset(req.params.id, req.params.presetId)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
+        })
+
+        // GET /api/preset/:id/knowledge - 获取预设关联的知识库
+        this.app.get('/api/preset/:id/knowledge', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                await presetManager.init()
+                const docs = presetManager.getPresetKnowledge(req.params.id)
+                res.json(ChaiteResponse.ok(docs))
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
+            }
+        })
+
+        // GET /api/knowledge/search - 搜索知识库
+        this.app.get('/api/knowledge/search', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { knowledgeService } = await import('./KnowledgeService.js')
+                await knowledgeService.init()
+                const { q, presetId, limit } = req.query
+                const results = knowledgeService.search(q || '', { presetId, limit: parseInt(limit) || 10 })
+                res.json(ChaiteResponse.ok(results))
+            } catch (err) {
+                res.status(500).json(ChaiteResponse.fail(null, err.message))
             }
         })
 
@@ -2802,39 +2962,6 @@ export default {
             }
         })
 
-        // ==================== Auth Token Management API ====================
-        // POST /api/auth/token/permanent - 生成永久Token
-        this.app.post('/api/auth/token/permanent', this.authMiddleware.bind(this), async (req, res) => {
-            try {
-                const token = authHandler.generateToken(0, true)
-                res.json(ChaiteResponse.ok({ token, permanent: true }))
-            } catch (error) {
-                res.status(500).json(ChaiteResponse.fail(null, error.message))
-            }
-        })
-
-        // DELETE /api/auth/token/permanent - 撤销永久Token
-        this.app.delete('/api/auth/token/permanent', this.authMiddleware.bind(this), async (req, res) => {
-            try {
-                authHandler.revokePermanentToken()
-                res.json(ChaiteResponse.ok({ success: true }))
-            } catch (error) {
-                res.status(500).json(ChaiteResponse.fail(null, error.message))
-            }
-        })
-
-        // GET /api/auth/token/status - 获取Token状态
-        this.app.get('/api/auth/token/status', this.authMiddleware.bind(this), async (req, res) => {
-            try {
-                res.json(ChaiteResponse.ok({
-                    hasPermanentToken: authHandler.hasPermanentToken(),
-                    tempTokenCount: authHandler.tokens.size
-                }))
-            } catch (error) {
-                res.status(500).json(ChaiteResponse.fail(null, error.message))
-            }
-        })
-
         // GET /api/auth/token/generate - 生成临时登录Token并输出到控制台（与管理面板命令相同）
         this.app.get('/api/auth/token/generate', async (req, res) => {
             try {
@@ -3210,14 +3337,66 @@ export default {
      * Generate login URL with token
      * @param {boolean} usePublic - 是否使用公网地址
      * @param {boolean} permanent - 是否永久有效
+     * @param {boolean} forceNew - 是否强制生成新token
      * @returns {string}
      */
-    generateLoginUrl(usePublic = false, permanent = false) {
-        const token = authHandler.generateToken(permanent ? 0 : 5 * 60, permanent)
-        const baseUrl = usePublic && this.addresses.public 
-            ? this.addresses.public 
-            : (this.addresses.local[0] || `http://127.0.0.1:${this.port}`)
+    generateLoginUrl(usePublic = false, permanent = false, forceNew = false) {
+        const token = authHandler.generateToken(permanent ? 0 : 5 * 60, permanent, forceNew)
+        
+        // 获取基础URL
+        let baseUrl
+        if (usePublic) {
+            // 优先使用配置的公网地址
+            const configPublicUrl = config.get('web.publicUrl')
+            if (configPublicUrl) {
+                baseUrl = configPublicUrl.replace(/\/$/, '') // 移除末尾斜杠
+            } else if (this.addresses?.public) {
+                baseUrl = this.addresses.public
+            }
+        }
+        
+        // 回退到本地地址
+        if (!baseUrl) {
+            baseUrl = this.addresses?.local?.[0] || `http://127.0.0.1:${this.port}`
+        }
+        
         return `${baseUrl}/login/token?token=${token}`
+    }
+
+    /**
+     * 获取登录信息（用于发送给用户）
+     * @param {boolean} permanent - 是否永久token
+     * @param {boolean} forceNew - 是否强制生成新token
+     * @returns {Object}
+     */
+    getLoginInfo(permanent = false, forceNew = false) {
+        const token = authHandler.generateToken(permanent ? 0 : 5 * 60, permanent, forceNew)
+        const localUrl = this.generateLoginUrl(false, permanent, false) // 不重复生成
+        
+        // 从配置中获取自定义登录地址
+        const loginLinks = config.get('web.loginLinks') || []
+        const customUrls = loginLinks.map(link => ({
+            label: link.label,
+            url: `${link.baseUrl.replace(/\/$/, '')}/login/token?token=${token}`
+        }))
+        
+        // 使用配置的公网地址或自动检测的公网地址
+        let publicUrl = null
+        const configPublicUrl = config.get('web.publicUrl')
+        if (configPublicUrl) {
+            publicUrl = `${configPublicUrl.replace(/\/$/, '')}/login/token?token=${token}`
+        } else if (this.addresses?.public && this.addresses.public !== this.addresses?.local?.[0]) {
+            publicUrl = `${this.addresses.public}/login/token?token=${token}`
+        }
+        
+        return {
+            localUrl,
+            publicUrl,
+            customUrls: customUrls.length > 0 ? customUrls : null,
+            validity: permanent ? '永久有效' : '5分钟内有效',
+            isPermanent: permanent,
+            token // 也返回token方便前端使用
+        }
     }
 
     /**

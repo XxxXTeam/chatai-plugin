@@ -2,16 +2,7 @@ import { redisClient } from '../core/cache/RedisClient.js'
 import config from '../../config/config.js'
 import historyManager from '../core/utils/history.js'
 
-/**
- * Context Manager - 管理用户上下文和会话隔离
- * 
- * 支持:
- * - 用户 uin 标签
- * - 最多 20 条上文构建请求
- * - 群聊用户隔离模式
- * - 多用户消息区分
- * - 异步锁防止并发冲突
- */
+
 export class ContextManager {
     constructor() {
         this.locks = new Map()          // 异步锁: key -> { promise, resolve, acquiredAt }
@@ -20,6 +11,8 @@ export class ContextManager {
         this.requestCounters = new Map() // 请求计数器（用于检测并发）
         this.messageQueues = new Map()  // 消息队列（确保消息不丢失）
         this.processingFlags = new Map() // 处理中标记
+        this.groupContextCache = new Map() // 群聊上下文缓存 (groupId -> context)
+        this.sessionStates = new Map()   // 会话状态 (conversationId -> state)
     }
 
     /**
@@ -280,16 +273,35 @@ export class ContextManager {
      * 
      * @param {Array} history - 历史消息
      * @param {Object} currentSender - 当前发送者信息
+     * @param {Object} options - 额外选项
      * @returns {Array} 带用户标签的消息
      */
-    buildLabeledContext(history, currentSender = null) {
-        return history.map((msg, index) => {
+    buildLabeledContext(history, currentSender = null, options = {}) {
+        const { includeTimestamp = false, maxAge = 0 } = options
+        const now = Date.now()
+        // 过滤过期消息
+        let filtered = history
+        if (maxAge > 0) {
+            filtered = history.filter(msg => {
+                if (!msg.timestamp) return true
+                return (now - msg.timestamp) < maxAge
+            })
+        }
+
+        return filtered.map((msg, index) => {
             // 只处理用户消息
             if (msg.role === 'user') {
                 // 有 sender 信息
                 if (msg.sender && msg.sender.user_id) {
                     const label = msg.sender.card || msg.sender.nickname || `用户`
-                    const labeledContent = this.addUserLabelToContent(msg.content, label, msg.sender.user_id)
+                    let labeledContent = this.addUserLabelToContent(msg.content, label, msg.sender.user_id)
+                    
+                    // 添加时间戳（可选）
+                    if (includeTimestamp && msg.timestamp) {
+                        const timeStr = new Date(msg.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+                        labeledContent = this.prependTimeToContent(labeledContent, timeStr)
+                    }
+                    
                     return {
                         ...msg,
                         content: labeledContent
@@ -305,6 +317,34 @@ export class ContextManager {
             }
             return msg
         })
+    }
+
+    /**
+     * 在内容前添加时间戳
+     * @param {Array|string} content
+     * @param {string} timeStr
+     * @returns {Array}
+     */
+    prependTimeToContent(content, timeStr) {
+        if (!content) return content
+        
+        if (typeof content === 'string') {
+            return [{ type: 'text', text: `[${timeStr}] ${content}` }]
+        }
+        
+        if (Array.isArray(content)) {
+            const labeled = [...content]
+            const textIndex = labeled.findIndex(c => c.type === 'text')
+            if (textIndex >= 0) {
+                const existingText = labeled[textIndex].text || ''
+                // 在用户标签后插入时间
+                const updated = existingText.replace(/^(\[[^\]]+\])/, `$1[${timeStr}]`)
+                labeled[textIndex] = { ...labeled[textIndex], text: updated }
+            }
+            return labeled
+        }
+        
+        return content
     }
 
     /**
@@ -482,6 +522,86 @@ export class ContextManager {
     }
     
     /**
+     * 缓存群聊上下文
+     * @param {string} groupId
+     * @param {Object} context
+     */
+    cacheGroupContext(groupId, context) {
+        this.groupContextCache.set(groupId, {
+            context,
+            timestamp: Date.now()
+        })
+        
+        // 清理过期缓存
+        if (this.groupContextCache.size > 100) {
+            const expireTime = 30 * 60 * 1000 // 30分钟
+            const now = Date.now()
+            for (const [id, cached] of this.groupContextCache) {
+                if (now - cached.timestamp > expireTime) {
+                    this.groupContextCache.delete(id)
+                }
+            }
+        }
+    }
+
+    /**
+     * 获取缓存的群聊上下文
+     * @param {string} groupId
+     * @returns {Object|null}
+     */
+    getCachedGroupContext(groupId) {
+        const cached = this.groupContextCache.get(groupId)
+        if (!cached) return null
+        
+        // 检查是否过期（5分钟）
+        if (Date.now() - cached.timestamp > 5 * 60 * 1000) {
+            this.groupContextCache.delete(groupId)
+            return null
+        }
+        
+        return cached.context
+    }
+
+    /**
+     * 清除群聊上下文缓存
+     * @param {string} groupId
+     */
+    clearGroupContextCache(groupId) {
+        this.groupContextCache.delete(groupId)
+    }
+
+    /**
+     * 设置会话状态
+     * @param {string} conversationId
+     * @param {Object} state
+     */
+    setSessionState(conversationId, state) {
+        const existing = this.sessionStates.get(conversationId) || {}
+        this.sessionStates.set(conversationId, {
+            ...existing,
+            ...state,
+            updatedAt: Date.now()
+        })
+    }
+
+    /**
+     * 获取会话状态
+     * @param {string} conversationId
+     * @returns {Object|null}
+     */
+    getSessionState(conversationId) {
+        return this.sessionStates.get(conversationId) || null
+    }
+
+    /**
+     * 清除会话状态
+     * @param {string} conversationId
+     */
+    clearSessionState(conversationId) {
+        this.sessionStates.delete(conversationId)
+    }
+
+    /**
      * 获取上下文统计信息
      * @param {string} conversationId
      * @returns {Object}
@@ -542,12 +662,55 @@ export class ContextManager {
         try {
             await historyManager.deleteConversation(conversationId)
             await this.cleanContext(conversationId)
+            this.clearSessionState(conversationId)
             logger.debug(`[ContextManager] 自动结束对话: ${conversationId}`)
             return true
         } catch (error) {
             logger.error(`[ContextManager] 自动结束对话失败: ${error.message}`)
             return false
         }
+    }
+
+    /**
+     * 构建群聊上下文摘要
+     * 用于在系统提示词中提供群聊背景信息
+     * @param {string} groupId
+     * @param {Object} options
+     * @returns {Promise<string>}
+     */
+    async buildGroupContextSummary(groupId, options = {}) {
+        const { includeMembers = true, includeTopics = true, maxLength = 500 } = options
+        
+        const cached = this.getCachedGroupContext(groupId)
+        if (cached?.summary) {
+            return cached.summary
+        }
+        
+        const parts = []
+        
+        // 获取群信息
+        try {
+            const bot = global.Bot
+            if (bot?.pickGroup) {
+                const group = bot.pickGroup(parseInt(groupId))
+                const info = await group.getInfo?.()
+                if (info) {
+                    parts.push(`群名: ${info.group_name || groupId}`)
+                    if (info.member_count) {
+                        parts.push(`成员数: ${info.member_count}`)
+                    }
+                }
+            }
+        } catch (e) {
+            // ignore
+        }
+        
+        const summary = parts.join('\n').substring(0, maxLength)
+        
+        // 缓存摘要
+        this.cacheGroupContext(groupId, { summary })
+        
+        return summary
     }
 }
 

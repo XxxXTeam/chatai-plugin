@@ -2,12 +2,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import crypto from 'node:crypto'
+import { BUILTIN_PRESETS, getPresetCategories, getBuiltinPreset } from './BuiltinPresets.js'
+import config from '../../config/config.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const DATA_DIR = path.join(__dirname, '../../data')
 const PRESETS_FILE = path.join(DATA_DIR, 'presets.json')
+const PERSONA_DIR = path.join(DATA_DIR, 'persona')
 
 /**
  * 预设/人设配置结构
@@ -76,7 +79,10 @@ const PRESETS_FILE = path.join(DATA_DIR, 'presets.json')
 export class PresetManager {
     constructor() {
         this.presets = new Map()
+        this.builtinPresets = new Map()
+        this.knowledgeService = null
         this.initialized = false
+        this.clearedContexts = new Map()
     }
 
     async init() {
@@ -86,9 +92,41 @@ export class PresetManager {
         if (!fs.existsSync(DATA_DIR)) {
             fs.mkdirSync(DATA_DIR, { recursive: true })
         }
+        if (!fs.existsSync(PERSONA_DIR)) {
+            fs.mkdirSync(PERSONA_DIR, { recursive: true })
+        }
 
+        // 加载内置预设
+        this.loadBuiltinPresets()
+        
+        // 加载用户预设
         await this.loadPresets()
+        
+        // 懒加载知识库服务
+        try {
+            const { knowledgeService } = await import('./KnowledgeService.js')
+            this.knowledgeService = knowledgeService
+            await knowledgeService.init()
+        } catch (err) {
+            console.warn('[PresetManager] 知识库服务加载失败:', err.message)
+        }
+        
         this.initialized = true
+    }
+
+    /**
+     * 加载内置预设
+     */
+    loadBuiltinPresets() {
+        this.builtinPresets.clear()
+        for (const preset of BUILTIN_PRESETS) {
+            this.builtinPresets.set(preset.id, {
+                ...preset,
+                isBuiltin: true,
+                isReadonly: true
+            })
+        }
+        logger.debug(`[PresetManager] 加载 ${this.builtinPresets.size} 个内置预设`)
     }
 
     async loadPresets() {
@@ -162,12 +200,69 @@ export class PresetManager {
         }
     }
 
-    getAll() {
-        return Array.from(this.presets.values())
+    /**
+     * 获取所有预设（包括内置和用户自定义）
+     * @param {Object} options - 选项
+     * @param {boolean} options.includeBuiltin - 是否包含内置预设，默认true
+     * @param {string} options.category - 按分类过滤
+     * @returns {Array}
+     */
+    getAll(options = {}) {
+        const { includeBuiltin = true, category } = options
+        let presets = Array.from(this.presets.values())
+        
+        if (includeBuiltin) {
+            const builtins = Array.from(this.builtinPresets.values())
+            presets = [...builtins, ...presets]
+        }
+        
+        if (category) {
+            presets = presets.filter(p => p.category === category)
+        }
+        
+        return presets
     }
 
+    /**
+     * 获取预设分类列表
+     * @returns {Object}
+     */
+    getCategories() {
+        return getPresetCategories()
+    }
+
+    /**
+     * 获取预设（优先用户预设，其次内置预设）
+     * @param {string} id
+     * @returns {Object|null}
+     */
     get(id) {
-        return this.presets.get(id)
+        // 优先返回用户预设
+        if (this.presets.has(id)) {
+            return this.presets.get(id)
+        }
+        // 其次返回内置预设
+        if (this.builtinPresets.has(id)) {
+            return this.builtinPresets.get(id)
+        }
+        return null
+    }
+
+    /**
+     * 获取内置预设
+     * @param {string} id
+     * @returns {Object|null}
+     */
+    getBuiltin(id) {
+        return this.builtinPresets.get(id) || null
+    }
+
+    /**
+     * 获取所有内置预设
+     * @returns {Array}
+     */
+    getAllBuiltin() {
+        return Array.from(this.builtinPresets.values())
     }
 
     async create(data) {
@@ -195,9 +290,18 @@ export class PresetManager {
      * 根据人设配置生成完整的系统提示词
      * @param {string} id 预设ID
      * @param {Object} context 上下文变量
+     * @param {Object} options 选项
      * @returns {string} 完整的系统提示词
      */
-    buildSystemPrompt(id, context = {}) {
+    buildSystemPrompt(id, context = {}, options = {}) {
+        const { includeKnowledge = true, conversationId } = options
+        
+        // 检查是否是已清除的上下文（#结束对话后）
+        if (conversationId && this.isContextCleared(conversationId)) {
+            // 返回基础提示词，不包含之前的人设和上下文
+            return this.getCleanPrompt(id, context)
+        }
+        
         const preset = this.get(id)
         if (!preset) return '你是一个有帮助的AI助手。'
 
@@ -277,7 +381,84 @@ export class PresetManager {
         // 替换变量
         prompt = this.replaceVariables(prompt, context)
         
+        // 添加知识库内容
+        if (includeKnowledge && this.knowledgeService) {
+            const knowledgePrompt = this.knowledgeService.buildKnowledgePrompt(id)
+            if (knowledgePrompt) {
+                prompt += '\n\n' + knowledgePrompt
+            }
+        }
+        
         return prompt
+    }
+
+    /**
+     * 获取干净的提示词（不包含之前的人设状态）
+     * 用于 #结束对话 后的新会话
+     * @param {string} id - 预设ID
+     * @param {Object} context - 上下文变量
+     * @returns {string}
+     */
+    getCleanPrompt(id, context = {}) {
+        const preset = this.get(id)
+        if (!preset) return '你是一个有帮助的AI助手。'
+        
+        // 只返回基础提示词，不包含累积的上下文
+        let prompt = preset.systemPrompt || '你是一个有帮助的AI助手。'
+        prompt = this.replaceVariables(prompt, context)
+        
+        return prompt
+    }
+
+    /**
+     * 标记上下文已被清除（#结束对话）
+     * @param {string} conversationId
+     */
+    markContextCleared(conversationId) {
+        this.clearedContexts.set(conversationId, {
+            clearedAt: Date.now(),
+            isNewSession: true
+        })
+        logger.debug(`[PresetManager] 标记上下文已清除: ${conversationId}`)
+    }
+
+    /**
+     * 检查上下文是否已被清除
+     * @param {string} conversationId
+     * @returns {boolean}
+     */
+    isContextCleared(conversationId) {
+        const state = this.clearedContexts.get(conversationId)
+        if (!state) return false
+        
+        // 标记在第一次使用后自动失效
+        if (state.isNewSession) {
+            // 消费这个标记
+            state.isNewSession = false
+            return true
+        }
+        return false
+    }
+
+    /**
+     * 清除上下文清除标记（开始新对话后）
+     * @param {string} conversationId
+     */
+    clearContextMark(conversationId) {
+        this.clearedContexts.delete(conversationId)
+    }
+
+    /**
+     * 清理过期的上下文标记
+     */
+    cleanExpiredContextMarks() {
+        const expireTime = 30 * 60 * 1000 // 30分钟
+        const now = Date.now()
+        for (const [id, state] of this.clearedContexts) {
+            if (now - state.clearedAt > expireTime) {
+                this.clearedContexts.delete(id)
+            }
+        }
     }
 
     /**
@@ -335,6 +516,63 @@ export class PresetManager {
     }
 
     /**
+     * 从内置预设复制创建新预设
+     * @param {string} builtinId - 内置预设ID
+     * @param {Object} overrides - 覆盖的字段
+     * @returns {Promise<Object>}
+     */
+    async createFromBuiltin(builtinId, overrides = {}) {
+        const builtin = this.builtinPresets.get(builtinId)
+        if (!builtin) {
+            throw new Error(`内置预设不存在: ${builtinId}`)
+        }
+        
+        // 深拷贝内置预设
+        const newPreset = JSON.parse(JSON.stringify(builtin))
+        delete newPreset.isBuiltin
+        delete newPreset.isReadonly
+        
+        // 应用覆盖
+        Object.assign(newPreset, overrides)
+        newPreset.name = overrides.name || `${builtin.name} (副本)`
+        newPreset.sourceBuiltinId = builtinId // 记录来源
+        
+        return this.create(newPreset)
+    }
+
+    /**
+     * 获取预设关联的知识库
+     * @param {string} id - 预设ID
+     * @returns {Array}
+     */
+    getPresetKnowledge(id) {
+        if (!this.knowledgeService) return []
+        return this.knowledgeService.getPresetKnowledge(id)
+    }
+
+    /**
+     * 关联知识库到预设
+     * @param {string} presetId
+     * @param {string} knowledgeId
+     */
+    async linkKnowledge(presetId, knowledgeId) {
+        if (!this.knowledgeService) {
+            throw new Error('知识库服务未初始化')
+        }
+        await this.knowledgeService.linkToPreset(knowledgeId, presetId)
+    }
+
+    /**
+     * 取消关联知识库
+     * @param {string} presetId
+     * @param {string} knowledgeId
+     */
+    async unlinkKnowledge(presetId, knowledgeId) {
+        if (!this.knowledgeService) return
+        await this.knowledgeService.unlinkFromPreset(knowledgeId, presetId)
+    }
+
+    /**
      * 获取预设的上下文配置
      * @param {string} id 预设ID
      * @returns {ContextConfig|null}
@@ -368,9 +606,23 @@ export class PresetManager {
     }
 
     async delete(id) {
-        if (id === 'default') {
-            throw new Error('Cannot delete default preset')
+        // 检查是否是内置预设
+        if (this.builtinPresets.has(id)) {
+            throw new Error('不能删除内置预设')
         }
+        
+        // 检查预设是否存在
+        const preset = this.presets.get(id)
+        if (!preset) {
+            return false
+        }
+        
+        // 检查是否是当前默认预设
+        const defaultPresetId = config.get('presets.defaultId') || config.get('llm.defaultChatPresetId')
+        if (id === defaultPresetId) {
+            throw new Error('不能删除当前默认预设，请先设置其他预设为默认')
+        }
+        
         if (this.presets.delete(id)) {
             await this.savePresets()
             return true
