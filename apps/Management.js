@@ -271,12 +271,14 @@ export class AIManagement extends plugin {
     }
 
     /**
-     * 结束全部对话
+     * 结束全部对话（清除数据库中所有对话历史）
      */
     async endAllConversations() {
         try {
-            // TODO: 实现清除所有用户对话的逻辑
-            await this.reply('已结束全部对话。', true)
+            databaseService.init()
+            // 清除所有对话历史
+            const cleared = databaseService.clearAllConversations?.() || 0
+            await this.reply(`✅ 已结束全部对话，共清除 ${cleared} 条消息记录`, true)
         } catch (err) {
             await this.reply(`结束全部对话失败: ${err.message}`, true)
         }
@@ -503,97 +505,4 @@ ${cmdPrefix}帮助 - 显示此帮助信息
         return true
     }
 
-    /**
-     * 发送私聊消息给主人
-     * @param {string|Array} msg 消息内容
-     * @returns {Promise<boolean>} 是否发送成功
-     */
-    async sendToMaster(msg) {
-        try {
-            const bot = this.e?.bot || Bot
-            const masters = bot?.config?.master || []
-            
-            for (const masterId of masters) {
-                await this.sendPrivateMsg(masterId, msg)
-            }
-            return true
-        } catch (err) {
-            logger.debug('[Management] sendToMaster failed:', err.message)
-            return false
-        }
-    }
-
-    /**
-     * 发送私聊消息
-     * @param {string|number} userId 用户ID
-     * @param {string|Array} msg 消息内容
-     * @returns {Promise<boolean>} 是否发送成功
-     */
-    async sendPrivateMsg(userId, msg) {
-        try {
-            const bot = this.e?.bot || Bot
-            
-            if (typeof bot?.sendPrivateMsg === 'function') {
-                await bot.sendPrivateMsg(userId, msg)
-                return true
-            }
-            if (typeof bot?.pickFriend === 'function') {
-                const friend = bot.pickFriend(userId)
-                if (friend?.sendMsg) {
-                    await friend.sendMsg(msg)
-                    return true
-                }
-            }
-            if (typeof Bot?.sendFriendMsg === 'function') {
-                await Bot.sendFriendMsg(bot?.uin, userId, msg)
-                return true
-            }
-            
-            return false
-        } catch (err) {
-            logger.debug('[Management] sendPrivateMsg failed:', err.message)
-            return false
-        }
-    }
-
-    /**
-     * 发送合并转发消息
-     * @param {string} title 标题
-     * @param {Array} messages 消息数组
-     * @returns {Promise<boolean>} 是否发送成功
-     */
-    async sendForwardMsg(title, messages) {
-        const e = this.e
-        if (!e) return false
-        
-        try {
-            const bot = e.bot || Bot
-            const botId = bot?.uin || e.self_id || 10000
-            
-            const forwardNodes = messages.map(msg => ({
-                user_id: botId,
-                nickname: title || 'Bot',
-                message: Array.isArray(msg) ? msg : [msg]
-            }))
-            
-            if (e.isGroup && e.group?.makeForwardMsg) {
-                const forwardMsg = await e.group.makeForwardMsg(forwardNodes)
-                if (forwardMsg) {
-                    await e.group.sendMsg(forwardMsg)
-                    return true
-                }
-            } else if (!e.isGroup && e.friend?.makeForwardMsg) {
-                const forwardMsg = await e.friend.makeForwardMsg(forwardNodes)
-                if (forwardMsg) {
-                    await e.friend.sendMsg(forwardMsg)
-                    return true
-                }
-            }
-            
-            return false
-        } catch (err) {
-            logger.debug('[Management] sendForwardMsg failed:', err.message)
-            return false
-        }
-    }
 }

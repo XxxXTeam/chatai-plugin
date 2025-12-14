@@ -255,56 +255,6 @@ export class update extends plugin {
     }
 
     /**
-     * 发送合并转发消息
-     * @param {string} title 标题
-     * @param {Array} messages 消息数组
-     * @returns {Promise<boolean>} 是否发送成功
-     */
-    async sendForwardMsg(title, messages) {
-        const e = this.e
-        if (!e) return false
-        
-        try {
-            const bot = e.bot || Bot
-            const botId = bot?.uin || e.self_id || 10000
-            
-            const forwardNodes = messages.map(msg => ({
-                user_id: botId,
-                nickname: title || 'Bot',
-                message: Array.isArray(msg) ? msg : [msg]
-            }))
-            
-            if (e.isGroup && e.group?.makeForwardMsg) {
-                const forwardMsg = await e.group.makeForwardMsg(forwardNodes)
-                if (forwardMsg) {
-                    await e.group.sendMsg(forwardMsg)
-                    return true
-                }
-            } else if (!e.isGroup && e.friend?.makeForwardMsg) {
-                const forwardMsg = await e.friend.makeForwardMsg(forwardNodes)
-                if (forwardMsg) {
-                    await e.friend.sendMsg(forwardMsg)
-                    return true
-                }
-            }
-            
-            // 回退
-            if (e.isGroup && bot?.pickGroup) {
-                const group = bot.pickGroup(e.group_id)
-                if (group?.sendForwardMsg) {
-                    await group.sendForwardMsg(forwardNodes)
-                    return true
-                }
-            }
-            
-            return false
-        } catch (err) {
-            logger.debug('[Update] sendForwardMsg failed:', err.message)
-            return false
-        }
-    }
-
-    /**
      * 检查pnpm
      */
     async checkPnpm() {
@@ -335,9 +285,14 @@ export class update extends plugin {
         }
 
         if (errMsg.includes('be overwritten by merge')) {
+            // 提取被修改的文件列表
+            const files = errMsg.match(/\t(.+)/g)?.map(f => f.trim()).join('\n') || ''
             await this.reply(
-                msg + `存在冲突：\n${errMsg}\n` +
-                '请解决冲突后再更新，或者执行#强制更新，放弃本地修改'
+                msg + `本地文件有未提交的修改：\n${files}\n\n` +
+                '这不是冲突，是本地修改未保存。\n' +
+                '选择：\n' +
+                '1. #ai强制更新 - 放弃本地修改，使用远程版本\n' +
+                '2. 手动备份修改后再更新'
             )
             return
         }

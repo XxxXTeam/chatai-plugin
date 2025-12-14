@@ -207,45 +207,4 @@ export class bym extends plugin {
             return false
         }
     }
-
-    /**
-     * 发送合并转发消息
-     * @param {string} title 标题
-     * @param {Array} messages 消息数组
-     * @returns {Promise<boolean>} 是否发送成功
-     */
-    async sendForwardMsg(title, messages) {
-        const e = this.e
-        if (!e) return false
-        
-        try {
-            const bot = e.bot || Bot
-            const botId = bot?.uin || e.self_id || 10000
-            
-            const forwardNodes = messages.map(msg => ({
-                user_id: botId,
-                nickname: title || 'Bot',
-                message: Array.isArray(msg) ? msg : [msg]
-            }))
-            
-            if (e.isGroup && e.group?.makeForwardMsg) {
-                const forwardMsg = await e.group.makeForwardMsg(forwardNodes)
-                if (forwardMsg) {
-                    await e.group.sendMsg(forwardMsg)
-                    return true
-                }
-            } else if (!e.isGroup && e.friend?.makeForwardMsg) {
-                const forwardMsg = await e.friend.makeForwardMsg(forwardNodes)
-                if (forwardMsg) {
-                    await e.friend.sendMsg(forwardMsg)
-                    return true
-                }
-            }
-            
-            return false
-        } catch (err) {
-            logger.debug('[BYM] sendForwardMsg failed:', err.message)
-            return false
-        }
-    }
 }

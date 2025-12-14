@@ -521,16 +521,362 @@ export function buildSegment(type, data, targetPlatform = 'icqq') {
     }
 }
 
+/**
+ * 撤回消息 - 统一接口
+ * @param {Object} e - 事件对象
+ * @param {string|number} messageId - 消息ID
+ * @returns {Promise<boolean>} 是否成功
+ */
+export async function deleteMessage(e, messageId) {
+    const bot = e?.bot || Bot
+    const platform = detectAdapter(e)
+    
+    try {
+        switch (platform) {
+            case 'icqq': {
+                // icqq: recallMsg
+                if (e?.group_id) {
+                    const group = bot.pickGroup(parseInt(e.group_id))
+                    await group.recallMsg?.(messageId)
+                } else if (e?.user_id) {
+                    const friend = bot.pickFriend(e.user_id)
+                    await friend.recallMsg?.(messageId)
+                }
+                return true
+            }
+            
+            case 'napcat':
+            case 'onebot':
+            case 'go-cqhttp':
+            case 'lagrange': {
+                // OneBot: delete_msg
+                await bot.deleteMsg?.(messageId) ||
+                      await bot.delete_msg?.({ message_id: messageId })
+                return true
+            }
+            
+            case 'trss': {
+                await bot.deleteMsg?.(messageId)
+                return true
+            }
+        }
+    } catch (err) {
+        logger.debug(`[PlatformAdapter] 撤回消息失败: ${err.message}`)
+    }
+    
+    return false
+}
+
+/**
+ * 获取群聊历史记录 - 统一接口
+ * @param {Object} e - 事件对象
+ * @param {string|number} groupId - 群ID
+ * @param {number} [count=20] - 获取数量
+ * @param {number} [messageSeq=0] - 起始消息序号
+ * @returns {Promise<Array>} 消息列表
+ */
+export async function getGroupChatHistory(e, groupId, count = 20, messageSeq = 0) {
+    const bot = e?.bot || Bot
+    const platform = detectAdapter(e)
+    groupId = parseInt(groupId)
+    
+    try {
+        switch (platform) {
+            case 'icqq': {
+                const group = bot.pickGroup(groupId)
+                if (group.getChatHistory) {
+                    return await group.getChatHistory(messageSeq, count)
+                }
+                break
+            }
+            
+            case 'napcat':
+            case 'onebot':
+            case 'go-cqhttp':
+            case 'lagrange': {
+                // OneBot 扩展 API
+                const history = await bot.getGroupMsgHistory?.(groupId, count, messageSeq) ||
+                               await bot.get_group_msg_history?.({ group_id: groupId, count, message_seq: messageSeq })
+                return history?.messages || history || []
+            }
+            
+            case 'trss': {
+                const group = bot.pickGroup?.(groupId)
+                if (group?.getChatHistory) {
+                    return await group.getChatHistory(messageSeq, count)
+                }
+                break
+            }
+        }
+    } catch (err) {
+        logger.debug(`[PlatformAdapter] 获取群聊历史失败: ${err.message}`)
+    }
+    
+    return []
+}
+
+/**
+ * 发送群消息 - 统一接口
+ * @param {Object} e - 事件对象
+ * @param {string|number} groupId - 群ID
+ * @param {string|Array} message - 消息内容
+ * @returns {Promise<Object|null>} 发送结果
+ */
+export async function sendGroupMessage(e, groupId, message) {
+    const bot = e?.bot || Bot
+    const platform = detectAdapter(e)
+    groupId = parseInt(groupId)
+    
+    try {
+        switch (platform) {
+            case 'icqq': {
+                const group = bot.pickGroup(groupId)
+                return await group.sendMsg(message)
+            }
+            
+            case 'napcat':
+            case 'onebot':
+            case 'go-cqhttp':
+            case 'lagrange': {
+                return await bot.sendGroupMsg?.(groupId, message) ||
+                       await bot.send_group_msg?.({ group_id: groupId, message })
+            }
+            
+            case 'trss': {
+                const group = bot.pickGroup?.(groupId)
+                return await group?.sendMsg?.(message)
+            }
+        }
+    } catch (err) {
+        logger.debug(`[PlatformAdapter] 发送群消息失败: ${err.message}`)
+    }
+    
+    return null
+}
+
+/**
+ * 发送私聊消息 - 统一接口
+ * @param {Object} e - 事件对象
+ * @param {string|number} userId - 用户ID
+ * @param {string|Array} message - 消息内容
+ * @returns {Promise<Object|null>} 发送结果
+ */
+export async function sendPrivateMessage(e, userId, message) {
+    const bot = e?.bot || Bot
+    const platform = detectAdapter(e)
+    userId = parseInt(userId)
+    
+    try {
+        switch (platform) {
+            case 'icqq': {
+                const friend = bot.pickFriend(userId)
+                return await friend.sendMsg(message)
+            }
+            
+            case 'napcat':
+            case 'onebot':
+            case 'go-cqhttp':
+            case 'lagrange': {
+                return await bot.sendPrivateMsg?.(userId, message) ||
+                       await bot.send_private_msg?.({ user_id: userId, message })
+            }
+            
+            case 'trss': {
+                const friend = bot.pickFriend?.(userId)
+                return await friend?.sendMsg?.(message)
+            }
+        }
+    } catch (err) {
+        logger.debug(`[PlatformAdapter] 发送私聊消息失败: ${err.message}`)
+    }
+    
+    return null
+}
+
+/**
+ * 设置群禁言 - 统一接口
+ * @param {Object} e - 事件对象
+ * @param {string|number} groupId - 群ID
+ * @param {string|number} userId - 用户ID
+ * @param {number} duration - 禁言时长（秒），0为解除
+ * @returns {Promise<boolean>}
+ */
+export async function setGroupBan(e, groupId, userId, duration = 60) {
+    const bot = e?.bot || Bot
+    const platform = detectAdapter(e)
+    groupId = parseInt(groupId)
+    userId = parseInt(userId)
+    
+    try {
+        switch (platform) {
+            case 'icqq': {
+                const group = bot.pickGroup(groupId)
+                await group.muteMember?.(userId, duration) ||
+                      group.pickMember?.(userId).mute?.(duration)
+                return true
+            }
+            
+            case 'napcat':
+            case 'onebot':
+            case 'go-cqhttp':
+            case 'lagrange': {
+                await bot.setGroupBan?.(groupId, userId, duration) ||
+                      bot.set_group_ban?.({ group_id: groupId, user_id: userId, duration })
+                return true
+            }
+            
+            case 'trss': {
+                const group = bot.pickGroup?.(groupId)
+                await group?.muteMember?.(userId, duration)
+                return true
+            }
+        }
+    } catch (err) {
+        logger.debug(`[PlatformAdapter] 设置禁言失败: ${err.message}`)
+    }
+    
+    return false
+}
+
+/**
+ * 设置群名片 - 统一接口
+ * @param {Object} e - 事件对象
+ * @param {string|number} groupId - 群ID
+ * @param {string|number} userId - 用户ID
+ * @param {string} card - 群名片
+ * @returns {Promise<boolean>}
+ */
+export async function setGroupCard(e, groupId, userId, card) {
+    const bot = e?.bot || Bot
+    const platform = detectAdapter(e)
+    groupId = parseInt(groupId)
+    userId = parseInt(userId)
+    
+    try {
+        switch (platform) {
+            case 'icqq': {
+                const group = bot.pickGroup(groupId)
+                await group.setCard?.(userId, card) ||
+                      group.pickMember?.(userId).setCard?.(card)
+                return true
+            }
+            
+            case 'napcat':
+            case 'onebot':
+            case 'go-cqhttp':
+            case 'lagrange': {
+                await bot.setGroupCard?.(groupId, userId, card) ||
+                      bot.set_group_card?.({ group_id: groupId, user_id: userId, card })
+                return true
+            }
+            
+            case 'trss': {
+                const group = bot.pickGroup?.(groupId)
+                await group?.setCard?.(userId, card)
+                return true
+            }
+        }
+    } catch (err) {
+        logger.debug(`[PlatformAdapter] 设置群名片失败: ${err.message}`)
+    }
+    
+    return false
+}
+
+/**
+ * 获取好友列表 - 统一接口
+ * @param {Object} e - 事件对象
+ * @returns {Promise<Array>}
+ */
+export async function getFriendList(e) {
+    const bot = e?.bot || Bot
+    const platform = detectAdapter(e)
+    
+    try {
+        switch (platform) {
+            case 'icqq': {
+                const friendMap = bot.fl || bot.friend_map || new Map()
+                return Array.from(friendMap.values())
+            }
+            
+            case 'napcat':
+            case 'onebot':
+            case 'go-cqhttp':
+            case 'lagrange': {
+                const list = await bot.getFriendList?.() ||
+                            await bot.get_friend_list?.()
+                return list || []
+            }
+            
+            case 'trss': {
+                const list = await bot.getFriendList?.()
+                return list || []
+            }
+        }
+    } catch (err) {
+        logger.debug(`[PlatformAdapter] 获取好友列表失败: ${err.message}`)
+    }
+    
+    return []
+}
+
+/**
+ * 获取群列表 - 统一接口
+ * @param {Object} e - 事件对象
+ * @returns {Promise<Array>}
+ */
+export async function getGroupList(e) {
+    const bot = e?.bot || Bot
+    const platform = detectAdapter(e)
+    
+    try {
+        switch (platform) {
+            case 'icqq': {
+                const groupMap = bot.gl || bot.group_map || new Map()
+                return Array.from(groupMap.values())
+            }
+            
+            case 'napcat':
+            case 'onebot':
+            case 'go-cqhttp':
+            case 'lagrange': {
+                const list = await bot.getGroupList?.() ||
+                            await bot.get_group_list?.()
+                return list || []
+            }
+            
+            case 'trss': {
+                const list = await bot.getGroupList?.()
+                return list || []
+            }
+        }
+    } catch (err) {
+        logger.debug(`[PlatformAdapter] 获取群列表失败: ${err.message}`)
+    }
+    
+    return []
+}
+
 export default {
+    detectFramework,
+    detectAdapter,
     detectPlatform,
     getBotInfo,
     getUserInfo,
     getGroupInfo,
     getGroupMemberList,
     getMessage,
+    deleteMessage,
     sendPoke,
     getAvatarUrl,
     getGroupAvatarUrl,
     normalizeSegment,
-    buildSegment
+    buildSegment,
+    getGroupChatHistory,
+    sendGroupMessage,
+    sendPrivateMessage,
+    setGroupBan,
+    setGroupCard,
+    getFriendList,
+    getGroupList
 }
