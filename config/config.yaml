@@ -17,15 +17,13 @@ admin:
   sensitiveCommandMasterOnly: true
 llm:
   defaultModel: qwen/qwen3-next-80b-a3b-thinking
-  defaultChatPresetId: f6732fbd-e809-451a-9533-717839de5318
+  defaultChatPresetId: 842dd283-2811-480d-a4bc-04604eddb34d
   embeddingModel: gemini-3-pro-preview
   dimensions: 1536
   models:
     chat: []
     roleplay: []
-    toolCall: []
     search: []
-    reasoning: []
   fallback:
     enabled: true
     models: []
@@ -94,14 +92,28 @@ channels:
       - key: sk-lgrpDhWB7Mm5L521zGdwDO6JescMn9m7xtmQLkAgL0iMXf4h
         enabled: true
     strategy: round-robin
+    status: idle
     lastHealthCheck: 1765619852101
     testedAt: 1765619852101
   - id: openai-12c1cc32
     name: "111111"
     adapterType: openai
-    baseUrl: https://api.openai.com/v1
-    apiKey: 166824c7-9a88-47ad-8964-d4ee0b5319cf
-    models: []
+    baseUrl: https://api.openel.top/v1
+    apiKey: sk-c1833f6e813db072211a815e7bbbacc952ed3b927185213d
+    models:
+      - claude-3-5-haiku-20241022
+      - claude-3-5-sonnet-20241022
+      - claude-3-haiku-20240307
+      - claude-3-opus-20240229
+      - claude-haiku-4-5-20251001
+      - claude-opus-4-1-20250805
+      - claude-opus-4-20250514
+      - claude-opus-4-5-20251101
+      - claude-sonnet-4-20250514
+      - claude-sonnet-4-20250514-thinking
+      - claude-sonnet-4-5
+      - claude-sonnet-4-5-20250929
+      - claude-sonnet-4-5-20250929-thinking
     priority: 100
     enabled: true
     advanced:
@@ -121,8 +133,8 @@ channels:
         presencePenalty: 0
     apiKeys: []
     strategy: round-robin
-    status: idle
-    lastHealthCheck: null
+    status: error
+    lastHealthCheck: 1765628090915
     testedAt: null
 mcp:
   enabled: true
@@ -147,7 +159,11 @@ images:
     - webp
 web:
   port: 3000
-  permanentAuthToken: 8ceb8747-46d1-408c-bd20-20e5f029bb7f
+  permanentAuthToken: 7d041d42-1f7d-4763-a5f7-e8a0b2fb0a09
+  loginLinks:
+    - id: 0044f6d4-4feb-4c84-8a04-cf846bc92744
+      label: "111"
+      baseUrl: https://chatie.134086.xyz
 context:
   maxMessages: 20
   maxTokens: 8096
@@ -180,7 +196,7 @@ memory:
     extractRelations: true
   minScore: 0.7
 presets:
-  defaultId: f6732fbd-e809-451a-9533-717839de5318
+  defaultId: 842dd283-2811-480d-a4bc-04604eddb34d
   allowUserSwitch: true
   perUserPreset: false
   perGroupPreset: false
@@ -197,11 +213,11 @@ personality:
 loadBalancing:
   strategy: round-robin
 thinking:
+  enabled: false
   defaultLevel: low
   enableReasoning: true
   showThinkingContent: true
   useForwardMsg: true
-  enabled: false
 features:
   groupSummary:
     enabled: true
@@ -281,6 +297,8 @@ features:
           - gemini-3-pro-search
           - gemini-3-pro-video
     videoModel: gemini-3-pro-preview-video
+    customModels: ""
+    statusUrl: ""
   autoCleanOnError:
     enabled: true
     notifyUser: false
@@ -325,48 +343,4 @@ listener:
   blacklistGroups: []
   whitelistGroups: []
   priority: 99999
-customTools:
-  - name: execute_command
-    description: 执行shell命令（注意安全）
-    parameters:
-      type: object
-      properties:
-        command:
-          type: string
-          description: 要执行的命令
-      required:
-        - command
-    handler: >-
-      const { command } = args
-
-
-      // 安全检查 - 禁止危险命令
-
-      const dangerous = ['rm -rf', 'mkfs', 'dd if=', ':(){', 'chmod -R 777']
-
-      if (dangerous.some(d => command.includes(d))) {
-        return { error: '检测到危险命令，已拒绝执行' }
-      }
-
-
-      try {
-        const { stdout, stderr } = await runtime.utils.exec(command)
-        // 返回详细的执行结果，让模型明确知道命令已成功执行
-        const result = {
-          success: true,
-          command: command,
-          stdout: stdout || '(无输出)',
-          stderr: stderr || '(无错误)'
-        }
-        // 返回结构化结果，模型可以清楚看到命令已执行成功
-        return {
-          text: `命令执行成功\n命令: ${command}\n输出: ${stdout || '(命令已执行，无标准输出)'}\n${stderr ? '错误输出: ' + stderr : ''}`.trim()
-        }
-      } catch (error) {
-        return { 
-          text: `命令执行失败\n命令: ${command}\n错误: ${error.message}`,
-          error: error.message 
-        }
-      }
-    custom: true
-    createdAt: 1764500123529
+customTools: []
