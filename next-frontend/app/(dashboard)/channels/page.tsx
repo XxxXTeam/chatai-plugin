@@ -28,6 +28,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Progress } from '@/components/ui/progress'
+import { PageHeader, PageContainer } from '@/components/layout/PageHeader'
 import { channelsApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { Plus, Trash2, TestTube, Loader2, Plug, RefreshCw, Download, Eye, EyeOff, List, CheckCircle, XCircle, ChevronDown, ChevronUp, Settings2, Upload, FileDown, X, Zap, Globe, Key, Layers, MoreHorizontal, Copy, Power, PowerOff } from 'lucide-react'
@@ -345,29 +346,32 @@ export default function ChannelsPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold">渠道管理</h2>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={importChannels}>
-            <Upload className="mr-2 h-4 w-4" />
-            导入
-          </Button>
-          <Button variant="outline" size="sm" onClick={exportChannels} disabled={channels.length === 0}>
-            <FileDown className="mr-2 h-4 w-4" />
-            导出
-          </Button>
-          <Button variant="outline" size="sm" onClick={fetchChannels}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            刷新
-          </Button>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button size="sm" onClick={() => handleOpenDialog()}>
-                <Plus className="mr-2 h-4 w-4" />
-                添加渠道
-              </Button>
-            </DialogTrigger>
+    <PageContainer>
+      <PageHeader
+        title="渠道管理"
+        description="管理API渠道和模型配置"
+        icon={Plug}
+        actions={
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={importChannels}>
+              <Upload className="mr-2 h-4 w-4" />
+              导入
+            </Button>
+            <Button variant="outline" size="sm" onClick={exportChannels} disabled={channels.length === 0}>
+              <FileDown className="mr-2 h-4 w-4" />
+              导出
+            </Button>
+            <Button variant="outline" size="sm" onClick={fetchChannels}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              刷新
+            </Button>
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              <DialogTrigger asChild>
+                <Button size="sm" onClick={() => handleOpenDialog()}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  添加渠道
+                </Button>
+              </DialogTrigger>
             <DialogContent className="max-w-lg">
               <DialogHeader>
                 <DialogTitle>{editingChannel ? '编辑渠道' : '添加渠道'}</DialogTitle>
@@ -692,8 +696,9 @@ export default function ChannelsPage() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {channels.length === 0 ? (
         <Card>
@@ -832,6 +837,6 @@ export default function ChannelsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageContainer>
   )
 }

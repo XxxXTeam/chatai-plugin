@@ -31,9 +31,13 @@ import {
   DialogTitle 
 } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
+import { PageHeader, PageContainer } from '@/components/layout/PageHeader'
 import { configApi, channelsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Save, Loader2, Info, X, RefreshCw, Settings2, Plus, Check } from 'lucide-react'
+import { 
+  Save, Loader2, Info, X, RefreshCw, Settings2, Plus, Check,
+  Settings, Zap, Bot, Wrench, Brain, Sparkles, MessageSquare, Shield
+} from 'lucide-react'
 
 interface PrefixPersona {
   prefix: string
@@ -436,32 +440,52 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold">系统设置</h2>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-muted-foreground">
-            {saveStatus === 'saving' && <><Loader2 className="inline h-4 w-4 animate-spin mr-1" />保存中</>}
-            {saveStatus === 'saved' && <><Check className="inline h-4 w-4 text-green-500 mr-1" />已保存</>}
-            {saveStatus === 'idle' && '自动保存'}
-          </span>
-          <Button onClick={handleSave} disabled={saving} size="sm">
-            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-            保存
-          </Button>
-        </div>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="系统设置"
+        description="配置插件的核心功能和行为"
+        icon={Settings}
+        actions={
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-muted-foreground hidden sm:inline-flex items-center">
+              {saveStatus === 'saving' && <><Loader2 className="h-4 w-4 animate-spin mr-1" />保存中</>}
+              {saveStatus === 'saved' && <><Check className="h-4 w-4 text-green-500 mr-1" />已保存</>}
+              {saveStatus === 'idle' && '自动保存'}
+            </span>
+            <Button onClick={handleSave} disabled={saving} size="sm">
+              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+              保存
+            </Button>
+          </div>
+        }
+      />
 
       <Tabs defaultValue="trigger" className="w-full">
-        <TabsList className="flex flex-wrap h-auto gap-1">
-          <TabsTrigger value="trigger">触发配置</TabsTrigger>
-          <TabsTrigger value="basic">基础设置</TabsTrigger>
-          <TabsTrigger value="admin">管理配置</TabsTrigger>
-          <TabsTrigger value="llm">模型配置</TabsTrigger>
-          <TabsTrigger value="bym">伪人模式</TabsTrigger>
-          <TabsTrigger value="tools">工具调用</TabsTrigger>
-          <TabsTrigger value="thinking">深度思考</TabsTrigger>
-          <TabsTrigger value="features">高级功能</TabsTrigger>
+        <TabsList className="w-full justify-start flex-wrap h-auto gap-1.5 bg-muted/50 p-1.5 rounded-xl mb-4">
+          <TabsTrigger value="trigger" className="data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg px-3 py-1.5 text-sm transition-all">
+            <Zap className="h-4 w-4 mr-1.5" />触发
+          </TabsTrigger>
+          <TabsTrigger value="basic" className="data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg px-3 py-1.5 text-sm transition-all">
+            <Settings className="h-4 w-4 mr-1.5" />基础
+          </TabsTrigger>
+          <TabsTrigger value="admin" className="data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg px-3 py-1.5 text-sm transition-all">
+            <Shield className="h-4 w-4 mr-1.5" />管理
+          </TabsTrigger>
+          <TabsTrigger value="llm" className="data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg px-3 py-1.5 text-sm transition-all">
+            <Bot className="h-4 w-4 mr-1.5" />模型
+          </TabsTrigger>
+          <TabsTrigger value="bym" className="data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg px-3 py-1.5 text-sm transition-all">
+            <MessageSquare className="h-4 w-4 mr-1.5" />伪人
+          </TabsTrigger>
+          <TabsTrigger value="tools" className="data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg px-3 py-1.5 text-sm transition-all">
+            <Wrench className="h-4 w-4 mr-1.5" />工具
+          </TabsTrigger>
+          <TabsTrigger value="thinking" className="data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg px-3 py-1.5 text-sm transition-all">
+            <Brain className="h-4 w-4 mr-1.5" />思考
+          </TabsTrigger>
+          <TabsTrigger value="features" className="data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg px-3 py-1.5 text-sm transition-all">
+            <Sparkles className="h-4 w-4 mr-1.5" />高级
+          </TabsTrigger>
         </TabsList>
 
         {/* AI触发配置 */}
@@ -1277,6 +1301,6 @@ export default function SettingsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageContainer>
   )
 }

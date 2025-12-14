@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader, PageContainer } from '@/components/layout/PageHeader'
 import { configApi, channelsApi, toolsApi, mcpApi } from '@/lib/api'
 import { 
   Bot, 
@@ -21,6 +22,10 @@ import {
   ArrowRight,
   History,
   UsersRound,
+  LayoutDashboard,
+  Zap,
+  BookOpen,
+  Brain,
 } from 'lucide-react'
 
 interface Channel {
@@ -141,69 +146,94 @@ export default function DashboardPage() {
     },
   ]
 
-  // 快捷入口
-  const quickLinks = [
-    { label: '系统设置', icon: Settings, href: '/settings', color: 'text-blue-500' },
-    { label: '渠道管理', icon: Plug, href: '/channels', color: 'text-green-500' },
-    { label: '预设管理', icon: Palette, href: '/presets', color: 'text-purple-500' },
-    { label: '工具配置', icon: Wrench, href: '/tools', color: 'text-amber-500' },
-    { label: 'MCP服务', icon: Server, href: '/mcp', color: 'text-cyan-500' },
-    { label: '对话历史', icon: MessageSquare, href: '/conversations', color: 'text-pink-500' },
-    { label: '调用记录', icon: History, href: '/history', color: 'text-orange-500' },
-    { label: '用户管理', icon: Users, href: '/users', color: 'text-indigo-500' },
-    { label: '群组管理', icon: UsersRound, href: '/groups', color: 'text-teal-500' },
+  // 快捷入口 - 与侧边栏分组一致
+  const quickGroups = [
+    {
+      title: '配置中心',
+      items: [
+        { label: '系统设置', icon: Settings, href: '/settings', color: 'text-blue-500' },
+        { label: '渠道管理', icon: Plug, href: '/channels', color: 'text-green-500' },
+        { label: '预设管理', icon: Palette, href: '/presets', color: 'text-purple-500' },
+      ]
+    },
+    {
+      title: 'AI扩展',
+      items: [
+        { label: '工具配置', icon: Wrench, href: '/tools', color: 'text-amber-500' },
+        { label: 'MCP服务', icon: Server, href: '/mcp', color: 'text-cyan-500' },
+        { label: '知识库', icon: BookOpen, href: '/knowledge', color: 'text-emerald-500' },
+      ]
+    },
+    {
+      title: '数据记录',
+      items: [
+        { label: '对话历史', icon: MessageSquare, href: '/conversations', color: 'text-pink-500' },
+        { label: '调用记录', icon: History, href: '/history', color: 'text-orange-500' },
+        { label: '用户管理', icon: Users, href: '/users', color: 'text-indigo-500' },
+      ]
+    }
   ]
 
   return (
-    <div className="space-y-6">
+    <PageContainer>
+      <PageHeader 
+        title="仪表盘" 
+        description="系统概览与快捷入口"
+        icon={LayoutDashboard}
+      />
+      
       {/* Stats Grid */}
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat) => (
-          <Link key={stat.title} href={stat.href}>
-            <Card className="group relative overflow-hidden hover:shadow-lg transition-all duration-300 cursor-pointer h-full border-0 shadow-md">
-              <div className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${stat.gradient}`} />
+        {stats.map((stat, index) => (
+          <Link key={stat.title} href={stat.href} className="animate-fade-in" style={{ animationDelay: `${index * 50}ms` }}>
+            <Card className="group relative overflow-hidden hover:shadow-xl hover:-translate-y-1 transition-all duration-300 cursor-pointer h-full border-0 shadow-md dark:shadow-none dark:border dark:border-border/50">
+              <div className={`absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r ${stat.gradient}`} />
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground">
                   {stat.title}
                 </CardTitle>
-                <div className={`p-2 rounded-lg bg-muted/50 group-hover:bg-muted transition-colors`}>
-                  <stat.icon className={`h-4 w-4 ${stat.iconColor}`} />
+                <div className={`p-2.5 rounded-xl bg-muted/50 group-hover:scale-110 transition-all duration-300`}>
+                  <stat.icon className={`h-5 w-5 ${stat.iconColor}`} />
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="text-3xl font-bold">{stat.value}</div>
-                <p className="text-xs text-muted-foreground mt-1">{stat.description}</p>
+                <div className="text-3xl font-bold tracking-tight">{stat.value}</div>
+                <p className="text-xs text-muted-foreground mt-1.5">{stat.description}</p>
               </CardContent>
             </Card>
           </Link>
         ))}
       </div>
 
-      {/* 快捷入口 */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ArrowRight className="h-5 w-5" />
-            快捷入口
-          </CardTitle>
-          <CardDescription>快速跳转到各功能页面</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 grid-cols-3 sm:grid-cols-5 lg:grid-cols-9">
-            {quickLinks.map((link) => (
-              <Link key={link.href} href={link.href}>
-                <Button
-                  variant="ghost"
-                  className="w-full h-auto flex flex-col gap-2 py-4 hover:bg-accent"
-                >
-                  <link.icon className={`h-6 w-6 ${link.color}`} />
-                  <span className="text-xs font-medium">{link.label}</span>
-                </Button>
-              </Link>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+      {/* 快捷入口 - 分组展示 */}
+      <div className="grid gap-4 md:grid-cols-3">
+        {quickGroups.map((group, groupIndex) => (
+          <Card key={group.title} className="overflow-hidden border-border/50 animate-fade-in" style={{ animationDelay: `${200 + groupIndex * 80}ms` }}>
+            <CardHeader className="pb-3 pt-4 border-b border-border/30">
+              <CardTitle className="text-sm font-semibold text-foreground/80 tracking-wide uppercase">
+                {group.title}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-4 pb-4">
+              <div className="grid grid-cols-2 gap-2">
+                {group.items.map((item) => (
+                  <Link key={item.href} href={item.href}>
+                    <Button
+                      variant="ghost"
+                      className="w-full h-auto flex flex-col gap-2 py-4 hover:bg-accent hover:scale-105 transition-all duration-200 rounded-xl group"
+                    >
+                      <div className="p-2 rounded-lg bg-muted group-hover:bg-background transition-colors">
+                        <item.icon className={`h-5 w-5 ${item.color}`} />
+                      </div>
+                      <span className="text-xs font-medium">{item.label}</span>
+                    </Button>
+                  </Link>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
 
       {/* Status Cards */}
       <div className="grid gap-4 md:grid-cols-2">
@@ -282,6 +312,6 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
-    </div>
+    </PageContainer>
   )
 }

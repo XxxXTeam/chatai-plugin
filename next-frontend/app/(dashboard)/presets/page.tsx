@@ -23,6 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { presetsApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { Plus, Trash2, Loader2, Palette, Copy, Star, Upload, FileDown, RefreshCw, User, MessageSquare, Sparkles, Heart, ThumbsDown, Tags, BookOpen, Library, Wand2 } from 'lucide-react'
+import { PageHeader, PageContainer } from '@/components/layout/PageHeader'
 
 interface PersonaConfig {
   name?: string
@@ -375,10 +376,13 @@ export default function PresetsPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold">预设管理</h2>
-        <div className="flex gap-2">
+    <PageContainer>
+      <PageHeader
+        title="预设管理"
+        description="管理AI对话预设和人格配置"
+        icon={Palette}
+        actions={
+          <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={importPresets}>
             <Upload className="mr-2 h-4 w-4" />
             导入
@@ -612,8 +616,9 @@ export default function PresetsPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid w-full max-w-md grid-cols-2">
@@ -816,6 +821,6 @@ export default function PresetsPage() {
           )}
         </TabsContent>
       </Tabs>
-    </div>
+    </PageContainer>
   )
 }
