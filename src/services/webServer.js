@@ -565,9 +565,26 @@ export class WebServer {
         // POST /api/config - Update configuration (protected)
         this.app.post('/api/config', this.authMiddleware.bind(this), (req, res) => {
             try {
-                const { basic, llm, bym, thinking, streaming, admin, tools, features, memory, trigger } = req.body
+                const { basic, llm, bym, thinking, streaming, admin, tools, features, memory, trigger, web } = req.body
 
                 if (basic) config.set('basic', { ...config.get('basic'), ...basic })
+                
+                // web配置（登录链接等）
+                if (web) {
+                    const currentWeb = config.get('web') || {}
+                    // loginLinks 是数组，直接覆盖而非合并
+                    const mergedWeb = { ...currentWeb }
+                    for (const [key, value] of Object.entries(web)) {
+                        if (Array.isArray(value)) {
+                            mergedWeb[key] = value  // 数组直接覆盖
+                        } else if (typeof value === 'object' && value !== null) {
+                            mergedWeb[key] = { ...(currentWeb[key] || {}), ...value }
+                        } else {
+                            mergedWeb[key] = value
+                        }
+                    }
+                    config.set('web', mergedWeb)
+                }
                 if (llm) {
                     const currentLlm = config.get('llm') || {}
                     config.set('llm', { 
