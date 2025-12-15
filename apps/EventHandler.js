@@ -5,6 +5,7 @@
  * 兼容 icqq / NapCat / OneBot / go-cqhttp
  */
 import config from '../config/config.js'
+import { getBotIds } from '../src/utils/messageDedup.js'
 
 /**
  * 获取用户昵称（多平台兼容）
@@ -95,16 +96,7 @@ export class PokeHandler extends plugin {
         
         // 获取机器人ID（多平台兼容）
         const bot = e.bot || Bot
-        
-        // 收集所有可能的机器人ID
-        const botIds = new Set()
-        if (bot?.uin) botIds.add(String(bot.uin))
-        if (e.self_id) botIds.add(String(e.self_id))
-        if (bot?.self_id) botIds.add(String(bot.self_id))
-        if (Bot?.uin) botIds.add(String(Bot.uin))
-        // NapCat/Lagrange 可能使用这些字段
-        if (bot?.config?.qq) botIds.add(String(bot.config.qq))
-        if (bot?.qq) botIds.add(String(bot.qq))
+        const botIds = getBotIds()
         
         // 获取操作者和目标（多平台兼容）
         // NapCat: operator_id=戳人者, target_id=被戳者
@@ -233,13 +225,7 @@ export class PrivatePokeHandler extends plugin {
         
         // 获取机器人ID（多平台兼容）
         const bot = e.bot || Bot
-        const botIds = new Set()
-        if (bot?.uin) botIds.add(String(bot.uin))
-        if (e.self_id) botIds.add(String(e.self_id))
-        if (bot?.self_id) botIds.add(String(bot.self_id))
-        if (Bot?.uin) botIds.add(String(Bot.uin))
-        if (bot?.config?.qq) botIds.add(String(bot.config.qq))
-        if (bot?.qq) botIds.add(String(bot.qq))
+        const botIds = getBotIds()
         
         // 获取操作者和目标
         const operator = e.operator_id || e.user_id || e.sender_id
@@ -337,11 +323,7 @@ export class MessageReactionHandler extends plugin {
         
         // 获取机器人ID（多平台兼容）
         const bot = e.bot || Bot
-        const botIds = new Set()
-        if (bot?.uin) botIds.add(String(bot.uin))
-        if (e.self_id) botIds.add(String(e.self_id))
-        if (bot?.self_id) botIds.add(String(bot.self_id))
-        if (Bot?.uin) botIds.add(String(Bot.uin))
+        const botIds = getBotIds()
         
         // 检查被回应的消息是否是机器人发的
         // NapCat: e.message_sender_id 表示原消息发送者

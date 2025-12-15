@@ -1,13 +1,8 @@
-/**
- * 消息检查器插件
- * #取 - 获取消息完整raw/pb信息
- * 仅主人可用，使用图片+合并转发输出
- */
-import { getBotFramework, getAdapter } from '../src/utils/bot.js'
+import { detectFramework as getBotFramework, detectAdapter as getAdapter } from '../src/utils/platformAdapter.js'
 import { formatTimeToBeiJing } from '../src/utils/common.js'
 import { renderService } from '../src/services/RenderService.js'
-
-// 缓存主人列表
+import { statsService } from '../src/services/StatsService.js'
+import { databaseService } from '../src/services/DatabaseService.js'
 let masterList = null
 async function getMasterList() {
     if (masterList === null) {
@@ -65,6 +60,26 @@ export class MessageInspector extends plugin {
                 {
                     reg: '^#消息详情(\\d*)$',
                     fnc: 'inspectMessage',
+                    permission: 'master'
+                },
+                {
+                    reg: '^#(ai)?统计$',
+                    fnc: 'showStats',
+                    permission: 'master'
+                },
+                {
+                    reg: '^#(ai)?统计详情$',
+                    fnc: 'showDetailedStats',
+                    permission: 'master'
+                },
+                {
+                    reg: '^#(ai)?debug(信息)?$',
+                    fnc: 'showDebugInfo',
+                    permission: 'master'
+                },
+                {
+                    reg: '^#(ai)?重置统计$',
+                    fnc: 'resetStats',
                     permission: 'master'
                 }
             ]
@@ -473,5 +488,362 @@ export class MessageInspector extends plugin {
             }
             return value
         }, 2))
+    }
+
+    /**
+     * 显示统计信息（图片版）
+     */
+    async showStats() {
+        await this.reply('📊 正在生成统计信息...', true)
+        
+        try {
+            const stats = statsService.getOverview()
+            const imageBuffer = await this.renderStatsImage(stats)
+            await this.reply(segment.image(imageBuffer))
+        } catch (err) {
+            logger.error('[MessageInspector] 生成统计失败:', err)
+            // 回退到文本版
+            await this.showStatsText()
+        }
+        return true
+    }
+
+    /**
+     * 显示详细统计（合并转发）
+     */
+    async showDetailedStats() {
+        const stats = statsService.getOverview()
+        const msgs = []
+        
+        // 1. 概览
+        msgs.push([
+            '📊 AI 统计概览',
+            '━━━━━━━━━━━━━━━━',
+            `🕐 运行时间: ${stats.uptime.days}天${stats.uptime.hours}小时`,
+            `📨 消息总数: ${stats.messages.total}`,
+            `💬 对话数: ${stats.messages.conversations}`,
+            `🤖 模型调用: ${stats.models.totalCalls}`,
+            `🔧 工具调用: ${stats.tools.totalCalls}`,
+            `📝 Tokens: ${this.formatNumber(stats.tokens.totalSum)}`
+        ].join('\n'))
+        
+        // 2. 消息类型分布
+        if (Object.keys(stats.messages.types).length > 0) {
+            const typeLines = Object.entries(stats.messages.types)
+                .sort((a, b) => b[1] - a[1])
+                .map(([type, count]) => `  ${type}: ${count}`)
+            msgs.push([
+                '📝 消息类型分布',
+                '━━━━━━━━━━━━━━━━',
+                ...typeLines
+            ].join('\n'))
+        }
+        
+        // 3. 模型使用统计
+        if (stats.models.byModel.length > 0) {
+            const modelLines = stats.models.byModel.slice(0, 15).map(m => 
+                `  ${m.name.split('/').pop()}: ${m.calls}次 (${this.formatNumber(m.inputTokens + m.outputTokens)} tokens)`
+            )
+            msgs.push([
+                '🤖 模型使用统计',
+                '━━━━━━━━━━━━━━━━',
+                ...modelLines
+            ].join('\n'))
+        }
+        
+        // 4. Tokens 统计
+        msgs.push([
+            '📊 Tokens 统计',
+            '━━━━━━━━━━━━━━━━',
+            `总输入: ${this.formatNumber(stats.tokens.total.input)}`,
+            `总输出: ${this.formatNumber(stats.tokens.total.output)}`,
+            `总计: ${this.formatNumber(stats.tokens.totalSum)}`
+        ].join('\n'))
+        
+        // 5. 群组 Top 10
+        if (stats.messages.topGroups.length > 0) {
+            const groupLines = stats.messages.topGroups.map((g, i) => 
+                `  ${i + 1}. ${g.id}: ${g.count}条`
+            )
+            msgs.push([
+                '👥 活跃群组 Top 10',
+                '━━━━━━━━━━━━━━━━',
+                ...groupLines
+            ].join('\n'))
+        }
+        
+        // 6. 用户 Top 10
+        if (stats.messages.topUsers.length > 0) {
+            const userLines = stats.messages.topUsers.map((u, i) => 
+                `  ${i + 1}. ${u.id}: ${u.count}条`
+            )
+            msgs.push([
+                '👤 活跃用户 Top 10',
+                '━━━━━━━━━━━━━━━━',
+                ...userLines
+            ].join('\n'))
+        }
+        
+        // 7. 工具使用 Top 10
+        if (stats.tools.byTool.length > 0) {
+            const toolLines = stats.tools.byTool.slice(0, 10).map(t => 
+                `  ${t.name}: ${t.calls}次 (成功${t.success})`
+            )
+            msgs.push([
+                '🔧 工具使用 Top 10',
+                '━━━━━━━━━━━━━━━━',
+                ...toolLines
+            ].join('\n'))
+        }
+        
+        // 8. 小时分布
+        if (Object.keys(stats.messages.hourlyDistribution).length > 0) {
+            const hourLines = []
+            for (let h = 0; h < 24; h++) {
+                const count = stats.messages.hourlyDistribution[h] || 0
+                if (count > 0) {
+                    hourLines.push(`  ${String(h).padStart(2, '0')}:00 - ${count}条`)
+                }
+            }
+            if (hourLines.length > 0) {
+                msgs.push([
+                    '⏰ 消息时段分布',
+                    '━━━━━━━━━━━━━━━━',
+                    ...hourLines
+                ].join('\n'))
+            }
+        }
+        
+        const sendResult = await this.sendForwardMsg(this.e, 'AI 详细统计', msgs)
+        if (!sendResult) {
+            await this.reply(msgs.slice(0, 3).join('\n\n'))
+        }
+        return true
+    }
+
+    /**
+     * 显示调试信息
+     */
+    async showDebugInfo() {
+        const e = this.e
+        const bot = e.bot || Bot
+        
+        const framework = getBotFramework()
+        const adapter = getAdapter(e)
+        
+        // 收集调试信息
+        const debugInfo = {
+            framework,
+            adapter,
+            bot: {
+                uin: bot?.uin,
+                nickname: bot?.nickname,
+                status: bot?.status,
+                fl: bot?.fl?.size || 0,
+                gl: bot?.gl?.size || 0
+            },
+            event: {
+                message_type: e.message_type,
+                sub_type: e.sub_type,
+                message_id: e.message_id,
+                user_id: e.user_id,
+                group_id: e.group_id,
+                self_id: e.self_id,
+                atBot: e.atBot,
+                atme: e.atme,
+                hasReply: !!e.source
+            },
+            sender: e.sender,
+            message: e.message,
+            raw_message: e.raw_message
+        }
+        
+        // 内存使用
+        const memUsage = process.memoryUsage()
+        debugInfo.memory = {
+            rss: this.formatBytes(memUsage.rss),
+            heapUsed: this.formatBytes(memUsage.heapUsed),
+            heapTotal: this.formatBytes(memUsage.heapTotal)
+        }
+        
+        // 统计概览
+        const stats = statsService.getOverview()
+        debugInfo.stats = {
+            messages: stats.messages.total,
+            modelCalls: stats.models.totalCalls,
+            toolCalls: stats.tools.totalCalls,
+            tokens: stats.tokens.totalSum
+        }
+        
+        try {
+            const markdown = [
+                `## 🔧 Debug 信息`,
+                ``,
+                `### 📋 环境信息`,
+                `| 项目 | 数值 |`,
+                `|------|------|`,
+                `| 框架 | ${framework} |`,
+                `| 适配器 | ${adapter} |`,
+                `| Bot QQ | ${debugInfo.bot.uin || 'N/A'} |`,
+                `| 好友数 | ${debugInfo.bot.fl} |`,
+                `| 群数 | ${debugInfo.bot.gl} |`,
+                ``,
+                `### 📨 当前事件`,
+                `| 项目 | 数值 |`,
+                `|------|------|`,
+                `| 类型 | ${debugInfo.event.message_type} |`,
+                `| 用户 | ${debugInfo.event.user_id} |`,
+                `| 群号 | ${debugInfo.event.group_id || '私聊'} |`,
+                `| @Bot | ${debugInfo.event.atBot ? '是' : '否'} |`,
+                ``,
+                `### 💾 内存使用`,
+                `| 项目 | 数值 |`,
+                `|------|------|`,
+                `| RSS | ${debugInfo.memory.rss} |`,
+                `| Heap Used | ${debugInfo.memory.heapUsed} |`,
+                `| Heap Total | ${debugInfo.memory.heapTotal} |`,
+                ``,
+                `### 📊 统计概览`,
+                `| 项目 | 数值 |`,
+                `|------|------|`,
+                `| 消息 | ${debugInfo.stats.messages} |`,
+                `| 模型调用 | ${debugInfo.stats.modelCalls} |`,
+                `| 工具调用 | ${debugInfo.stats.toolCalls} |`,
+                `| Tokens | ${this.formatNumber(debugInfo.stats.tokens)} |`
+            ]
+            
+            const imageBuffer = await renderService.renderMarkdownToImage({
+                markdown: markdown.join('\n'),
+                title: 'Debug 信息',
+                icon: '🔧',
+                showTimestamp: true
+            })
+            await this.reply(segment.image(imageBuffer))
+        } catch (err) {
+            // 文本回退
+            await this.reply([
+                '🔧 Debug 信息',
+                '━━━━━━━━━━━━━━━━',
+                `框架: ${framework}`,
+                `适配器: ${adapter}`,
+                `Bot: ${debugInfo.bot.uin}`,
+                `内存: ${debugInfo.memory.heapUsed}`,
+                `消息: ${debugInfo.stats.messages}`,
+                `模型调用: ${debugInfo.stats.modelCalls}`,
+                `Tokens: ${this.formatNumber(debugInfo.stats.tokens)}`
+            ].join('\n'), true)
+        }
+        return true
+    }
+
+    /**
+     * 重置统计
+     */
+    async resetStats() {
+        statsService.reset()
+        await this.reply('✅ 统计数据已重置', true)
+        return true
+    }
+
+    /**
+     * 渲染统计图片
+     */
+    async renderStatsImage(stats) {
+        const markdown = [
+            `## 📊 AI 使用统计`,
+            ``,
+            `### 📋 概览`,
+            `| 项目 | 数值 |`,
+            `|------|------|`,
+            `| 🕐 运行时间 | ${stats.uptime.days}天${stats.uptime.hours}小时 |`,
+            `| 📨 消息总数 | ${stats.messages.total} |`,
+            `| 💬 对话数 | ${stats.messages.conversations} |`,
+            `| 🤖 模型调用 | ${stats.models.totalCalls} |`,
+            `| 🔧 工具调用 | ${stats.tools.totalCalls} |`,
+            `| 📝 总Tokens | ${this.formatNumber(stats.tokens.totalSum)} |`,
+            ``,
+            `### 🤖 模型使用 Top 5`
+        ]
+        
+        if (stats.models.byModel.length > 0) {
+            markdown.push(`| 模型 | 调用 | Tokens |`)
+            markdown.push(`|------|------|--------|`)
+            stats.models.byModel.slice(0, 5).forEach(m => {
+                const shortName = m.name.split('/').pop().substring(0, 20)
+                markdown.push(`| ${shortName} | ${m.calls} | ${this.formatNumber(m.inputTokens + m.outputTokens)} |`)
+            })
+        } else {
+            markdown.push(`暂无数据`)
+        }
+        
+        markdown.push(``, `### 👥 活跃群组 Top 5`)
+        if (stats.messages.topGroups.length > 0) {
+            markdown.push(`| 群号 | 消息数 |`)
+            markdown.push(`|------|--------|`)
+            stats.messages.topGroups.slice(0, 5).forEach(g => {
+                markdown.push(`| ${g.id} | ${g.count} |`)
+            })
+        } else {
+            markdown.push(`暂无数据`)
+        }
+        
+        markdown.push(``, `### 👤 活跃用户 Top 5`)
+        if (stats.messages.topUsers.length > 0) {
+            markdown.push(`| 用户 | 消息数 |`)
+            markdown.push(`|------|--------|`)
+            stats.messages.topUsers.slice(0, 5).forEach(u => {
+                markdown.push(`| ${u.id} | ${u.count} |`)
+            })
+        } else {
+            markdown.push(`暂无数据`)
+        }
+        
+        return renderService.renderMarkdownToImage({
+            markdown: markdown.join('\n'),
+            title: 'AI 统计',
+            subtitle: `更新于 ${new Date().toLocaleString('zh-CN')}`,
+            icon: '📊',
+            showTimestamp: false
+        })
+    }
+
+    /**
+     * 文本版统计
+     */
+    async showStatsText() {
+        const stats = statsService.getOverview()
+        const text = [
+            '📊 AI 统计概览',
+            '━━━━━━━━━━━━━━━━',
+            `🕐 运行: ${stats.uptime.days}天${stats.uptime.hours}小时`,
+            `📨 消息: ${stats.messages.total}`,
+            `💬 对话: ${stats.messages.conversations}`,
+            `🤖 模型调用: ${stats.models.totalCalls}`,
+            `🔧 工具调用: ${stats.tools.totalCalls}`,
+            `📝 Tokens: ${this.formatNumber(stats.tokens.totalSum)}`,
+            '━━━━━━━━━━━━━━━━',
+            '发送 #ai统计详情 查看完整统计'
+        ].join('\n')
+        await this.reply(text, true)
+    }
+
+    /**
+     * 格式化数字
+     */
+    formatNumber(num) {
+        if (!num) return '0'
+        if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M'
+        if (num >= 1000) return (num / 1000).toFixed(1) + 'K'
+        return String(num)
+    }
+
+    /**
+     * 格式化字节
+     */
+    formatBytes(bytes) {
+        if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + ' GB'
+        if (bytes >= 1048576) return (bytes / 1048576).toFixed(2) + ' MB'
+        if (bytes >= 1024) return (bytes / 1024).toFixed(2) + ' KB'
+        return bytes + ' B'
     }
 }

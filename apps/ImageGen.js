@@ -1,55 +1,195 @@
 /**
  * AI 图片/视频生成插件
  * 支持文生图、图生图、文生视频、图生视频和预设提示词模式
- * 使用 Gemini 图片/视频生成模型
  * 兼容 icqq / NapCat / OneBot
  */
 import config from '../config/config.js'
 import { segment, MessageApi } from '../src/utils/messageParser.js'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 
-// 预设提示词组
-const PRESET_PROMPTS = [
-    {
-        keywords: ['手办', '手办化', '变手办', '转手办'],
-        needImage: true,
-        prompt: 'Please accurately transform the main subject in this photo into a realistic, masterpiece-like 1/7 scale PVC statue. Behind this statue, a packaging box should be placed: the box has a large clear front window on its front side, and is printed with subject artwork, product name, brand logo, barcode, as well as a small specifications or authenticity verification panel. A small price tag sticker must also be attached to one corner of the box. Meanwhile, a computer monitor is placed at the back, and the monitor screen needs to display the ZBrush modeling process of this statue. In front of the packaging box, this statue should be placed on a round plastic base. The statue must have 3D dimensionality and a sense of realism, and the texture of the PVC material needs to be clearly represented. The human figure\'s expression and movements must be exactly consistent with those in the photo.',
-    },
-    {
-        keywords: ['Q版', 'q版', '表情包'],
-        needImage: true,
-        prompt: '请以图片中的主要人物生成q版半身像表情符号包中的人物形象给我。丰富多彩的手绘风格，采用4x6的布局，涵盖了各种常见的聊天用语。要求:1.注意正确的头饰。2.不要复制原始图像。3.所有注释都应该是手写的简体中文。4.每个表情符号行动应该是独特的。5.生成的图像需要是4K，分辨率为16:9。',
-    },
-    {
-        keywords: ['动漫化', '二次元化', '卡通化'],
-        needImage: true,
-        prompt: '将图片中的人物转换为高质量动漫风格，保持人物的主要特征和表情，使用精美的日系动漫画风，色彩鲜艳，线条流畅。',
-    },
-    {
-        keywords: ['赛博朋克', '赛博'],
-        needImage: true,
-        prompt: '将图片转换为赛博朋克风格，添加霓虹灯效果、科幻元素、未来都市背景，保持主体人物特征，整体色调偏蓝紫色调。',
-    },
-    {
-        keywords: ['油画', '油画风'],
-        needImage: true,
-        prompt: '将图片转换为古典油画风格，模仿文艺复兴时期大师的画风，注重光影效果和细节质感，保持人物特征。',
-    },
-    {
-        keywords: ['水彩', '水彩画'],
-        needImage: true,
-        prompt: '将图片转换为精美的水彩画风格，色彩透明、层次丰富，有水彩特有的晕染效果和纸张质感。',
-    },
-]
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const PRESET_CACHE_DIR = path.join(__dirname, '../data/presets')
 
-// 构建预设关键词正则
-const presetKeywords = PRESET_PROMPTS
-    .flatMap(p => p.keywords)
-    .map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    .join('|')
-const presetReg = new RegExp(`^#?(${presetKeywords})$`, 'i')
+// ================ 预设管理器 ================
+class PresetManager {
+    constructor() {
+        this.builtinPresets = []      // 内置预设
+        this.remotePresets = {}       // 远程预设 { sourceName: presets[] }
+        this.customPresets = []       // 自定义预设（配置文件）
+        this.allPresets = []          // 合并后的所有预设
+        this.presetReg = /^$/         // 预设匹配正则
+        this.initialized = false
+    }
+
+    // 内置预设（硬编码）
+    getBuiltinPresets() {
+        return [
+            { keywords: ['手办', '手办化', '变手办', '转手办'], needImage: true, source: 'builtin',
+              prompt: 'Please accurately transform the main subject in this photo into a realistic, masterpiece-like 1/7 scale PVC statue. Behind this statue, a packaging box should be placed: the box has a large clear front window on its front side, and is printed with subject artwork, product name, brand logo, barcode, as well as a small specifications or authenticity verification panel. A small price tag sticker must also be attached to one corner of the box. Meanwhile, a computer monitor is placed at the back, and the monitor screen needs to display the ZBrush modeling process of this statue. In front of the packaging box, this statue should be placed on a round plastic base. The statue must have 3D dimensionality and a sense of realism, and the texture of the PVC material needs to be clearly represented. The human figure\'s expression and movements must be exactly consistent with those in the photo.' },
+            { keywords: ['Q版', 'q版', '表情包'], needImage: true, source: 'builtin',
+              prompt: '请以图片中的主要人物生成q版半身像表情符号包中的人物形象给我。丰富多彩的手绘风格，采用4x6的布局，涵盖了各种常见的聊天用语。要求:1.注意正确的头饰。2.不要复制原始图像。3.所有注释都应该是手写的简体中文。4.每个表情符号行动应该是独特的。5.生成的图像需要是4K，分辨率为16:9。' },
+            { keywords: ['动漫化', '二次元化', '卡通化'], needImage: true, source: 'builtin',
+              prompt: '将图片中的人物转换为高质量动漫风格，保持人物的主要特征和表情，使用精美的日系动漫画风，色彩鲜艳，线条流畅。' },
+            { keywords: ['赛博朋克', '赛博'], needImage: true, source: 'builtin',
+              prompt: '将图片转换为赛博朋克风格，添加霓虹灯效果、科幻元素、未来都市背景，保持主体人物特征，整体色调偏蓝紫色调。' },
+            { keywords: ['油画', '油画风'], needImage: true, source: 'builtin',
+              prompt: '将图片转换为古典油画风格，模仿文艺复兴时期大师的画风，注重光影效果和细节质感，保持人物特征。' },
+            { keywords: ['水彩', '水彩画'], needImage: true, source: 'builtin',
+              prompt: '将图片转换为精美的水彩画风格，色彩透明、层次丰富，有水彩特有的晕染效果和纸张质感。' },
+        ]
+    }
+
+    // 初始化
+    async init() {
+        if (this.initialized) return
+        this.builtinPresets = this.getBuiltinPresets()
+        await this.loadAllPresets()
+        this.initialized = true
+    }
+
+    // 加载所有预设（热重载入口）
+    async loadAllPresets() {
+        // 1. 加载自定义预设（从配置）
+        this.customPresets = (config.get('features.imageGen.customPresets') || [])
+            .map(p => ({ ...p, source: 'custom' }))
+        await this.loadRemotePresetsFromCache()
+        this.mergeAllPresets()
+        
+        logger.info(`[ImageGen] 预设加载完成: 内置${this.builtinPresets.length} + 远程${Object.values(this.remotePresets).flat().length} + 自定义${this.customPresets.length} = ${this.allPresets.length}`)
+    }
+    async loadRemotePresetsFromCache() {
+        const sources = config.get('features.imageGen.presetSources') || []
+        
+        for (const source of sources) {
+            if (!source.enabled || !source.url) continue
+            const cacheFile = path.join(PRESET_CACHE_DIR, `${this.urlToFilename(source.url)}.json`)
+            
+            try {
+                if (fs.existsSync(cacheFile)) {
+                    const data = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'))
+                    if (Array.isArray(data)) {
+                        this.remotePresets[source.name] = data.map(p => ({ ...p, source: source.name }))
+                    }
+                }
+            } catch (err) {
+                logger.debug(`[ImageGen] 加载远程预设缓存失败 [${source.name}]:`, err.message)
+            }
+        }
+    }
+
+    // 从远程更新预设
+    async updateFromRemote(sourceName = null) {
+        const sources = config.get('features.imageGen.presetSources') || []
+        const results = []
+        
+        if (!fs.existsSync(PRESET_CACHE_DIR)) {
+            fs.mkdirSync(PRESET_CACHE_DIR, { recursive: true })
+        }
+
+        for (const source of sources) {
+            if (!source.enabled || !source.url) continue
+            if (sourceName && source.name !== sourceName) continue
+
+            try {
+                const response = await fetch(source.url, { signal: AbortSignal.timeout(15000) })
+                if (!response.ok) throw new Error(`HTTP ${response.status}`)
+                
+                const data = await response.json()
+                if (!Array.isArray(data)) throw new Error('数据格式错误')
+
+                // 保存缓存
+                const cacheFile = path.join(PRESET_CACHE_DIR, `${this.urlToFilename(source.url)}.json`)
+                fs.writeFileSync(cacheFile, JSON.stringify(data, null, 2), 'utf-8')
+                
+                this.remotePresets[source.name] = data.map(p => ({ ...p, source: source.name }))
+                results.push({ name: source.name, success: true, count: data.length })
+            } catch (err) {
+                results.push({ name: source.name, success: false, error: err.message })
+            }
+        }
+
+        this.mergeAllPresets()
+        return results
+    }
+
+    // 合并所有预设（去重）
+    mergeAllPresets() {
+        const usedKeywords = new Set()
+        const merged = []
+
+        // 优先级：自定义 > 内置 > 远程
+        const addPresets = (presets) => {
+            for (const p of presets) {
+                const newKeywords = p.keywords.filter(k => !usedKeywords.has(k.toLowerCase()))
+                if (newKeywords.length > 0) {
+                    merged.push({ ...p, keywords: newKeywords })
+                    newKeywords.forEach(k => usedKeywords.add(k.toLowerCase()))
+                }
+            }
+        }
+
+        addPresets(this.customPresets)
+        addPresets(this.builtinPresets)
+        Object.values(this.remotePresets).forEach(addPresets)
+
+        this.allPresets = merged
+        this.presetReg = this.buildPresetReg()
+    }
+
+    // 构建正则
+    buildPresetReg() {
+        const keywords = this.allPresets
+            .flatMap(p => p.keywords)
+            .map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+            .join('|')
+        return keywords ? new RegExp(`^#?(${keywords})$`, 'i') : /^$/
+    }
+
+    // URL 转文件名
+    urlToFilename(url) {
+        return url.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50)
+    }
+
+    // 查找预设
+    findPreset(msg) {
+        const pureMsg = msg.replace(/^#?/, '').toLowerCase()
+        return this.allPresets.find(p => p.keywords.some(k => k.toLowerCase() === pureMsg))
+    }
+
+    // 获取预设统计
+    getStats() {
+        const remoteCount = Object.values(this.remotePresets).flat().length
+        return {
+            builtin: this.builtinPresets.length,
+            remote: remoteCount,
+            custom: this.customPresets.length,
+            total: this.allPresets.length,
+            sources: Object.keys(this.remotePresets).map(name => ({
+                name,
+                count: this.remotePresets[name].length
+            }))
+        }
+    }
+
+    // 获取所有预设（供API使用）
+    getAllPresets() {
+        return this.allPresets
+    }
+}
+
+// 全局预设管理器实例
+const presetMgr = new PresetManager()
+
+// 导出预设管理器供 webServer 使用
+export { presetMgr as imageGenPresetManager }
 
 export class ImageGen extends plugin {
     constructor() {
+        // 初始化预设管理器
+        presetMgr.init().catch(err => logger.warn('[ImageGen] 预设初始化失败:', err.message))
+        
         super({
             name: 'AI-ImageGen',
             dsc: 'AI图片/视频生成 - 文生图/图生图/文生视频/图生视频',
@@ -60,13 +200,87 @@ export class ImageGen extends plugin {
                 { reg: /^#?图生图\s*(.*)$/s, fnc: 'img2img' },
                 { reg: /^#?文生视频\s*(.+)$/s, fnc: 'text2video' },
                 { reg: /^#?图生视频\s*(.*)$/s, fnc: 'img2video' },
-                { reg: presetReg, fnc: 'presetHandler' },
+                { reg: /^.+$/, fnc: 'presetHandler', log: false },  // 动态匹配预设
                 { reg: /^#?(谷歌状态|画图状态|api状态)$/i, fnc: 'apiStatus' },
+                { reg: /^#?(绘图帮助|画图帮助|皮皮绘图帮助)$/i, fnc: 'showHelp' },
+                { reg: /^#?(更新预设|皮皮更新焚决|刷新预设|重载预设)$/i, fnc: 'updatePresets' },
             ]
         })
         
-        this.timeout = 600000 // 10分钟超时（视频生成需要更长时间）
-        this.maxImages = 3
+        this.timeout = config.get('features.imageGen.timeout') || 600000
+        this.maxImages = config.get('features.imageGen.maxImages') || 3
+    }
+
+    /**
+     * 显示绘图帮助
+     */
+    async showHelp() {
+        const e = this.e
+        const stats = presetMgr.getStats()
+        
+        // 构建预设列表
+        const presetLines = presetMgr.getAllPresets().map((p, i) => {
+            const keys = p.keywords.join(' / ')
+            const sourceTag = p.source === 'builtin' ? '' : p.source === 'custom' ? ' [自定义]' : ` [云端]`
+            return `${i + 1}. ${keys}${sourceTag}`
+        }).join('\n')
+        
+        const helpContent = [
+            '【AI绘图指令帮助】',
+            '',
+            '一、基础命令',
+            '  #文生图 [描述] - 根据文字生成图片',
+            '  #图生图 [描述] - 根据图片+文字重绘',
+            '  #文生视频 [描述] - 根据文字生成视频',
+            '  #图生视频 [描述] - 根据图片生成视频',
+            '',
+            `二、预设模板 (共${stats.total}个: 内置${stats.builtin} + 云端${stats.remote} + 自定义${stats.custom})`,
+            presetLines,
+            '',
+            '三、使用方式',
+            '  发送指令时带图片，或引用他人图片发送指令',
+            '',
+            '四、管理命令',
+            '  #更新预设 - 从云端拉取最新预设',
+            '  #重载预设 - 热重载所有预设',
+            '  #画图状态 - 查看API状态'
+        ].join('\n')
+        
+        await e.reply(helpContent, true)
+        return true
+    }
+
+    /**
+     * 更新/重载预设（支持热重载）
+     */
+    async updatePresets() {
+        const e = this.e
+        const isReload = e.msg.includes('重载')
+        
+        if (isReload) {
+            // 热重载：仅重新加载配置和缓存
+            await e.reply('正在热重载预设...', true)
+            await presetMgr.loadAllPresets()
+            const stats = presetMgr.getStats()
+            await e.reply(`✅ 预设重载成功！\n内置: ${stats.builtin} 条\n云端: ${stats.remote} 条\n自定义: ${stats.custom} 条\n合计: ${stats.total} 条`, true)
+        } else {
+            // 更新：从远程拉取新数据
+            await e.reply('正在从云端拉取最新预设...', true)
+            const results = await presetMgr.updateFromRemote()
+            
+            if (results.length === 0) {
+                await e.reply('❌ 没有配置任何启用的预设来源', true)
+                return true
+            }
+            
+            const lines = results.map(r => 
+                r.success ? `✅ ${r.name}: ${r.count} 条` : `❌ ${r.name}: ${r.error}`
+            )
+            const stats = presetMgr.getStats()
+            await e.reply(`预设更新结果:\n${lines.join('\n')}\n\n合计: ${stats.total} 条预设`, true)
+        }
+        
+        return true
     }
 
     /**
@@ -320,7 +534,7 @@ export class ImageGen extends plugin {
     }
 
     /**
-     * 预设提示词处理
+     * 预设提示词处理（动态匹配）
      */
     async presetHandler() {
         const e = this.e
@@ -329,11 +543,8 @@ export class ImageGen extends plugin {
             return false
         }
         
-        const pureMsg = e.msg.replace(/^#?/, '').toLowerCase()
-        const preset = PRESET_PROMPTS.find(p => 
-            p.keywords.some(k => k.toLowerCase() === pureMsg)
-        )
-        
+        // 使用预设管理器查找匹配的预设
+        const preset = presetMgr.findPreset(e.msg)
         if (!preset) return false
         
         const urls = preset.needImage ? await this.getAllImages(e) : []
@@ -342,6 +553,7 @@ export class ImageGen extends plugin {
             return true
         }
         
+        const pureMsg = e.msg.replace(/^#?/, '')
         await e.reply(`正在生成${pureMsg}效果，请稍候...`, true, { recallMsg: 60 })
         
         try {
@@ -446,44 +658,35 @@ export class ImageGen extends plugin {
     }
 
     /**
-     * 调用图片生成 API（支持多API轮询和自动重试）
+     * 通用 API 调用方法（支持多API轮询和自动重试）
+     * @param {Object} options - 配置选项
+     * @param {string} options.prompt - 提示词
+     * @param {string[]} options.imageUrls - 图片URL列表
+     * @param {Function} options.getApiConfig - 获取API配置的方法
+     * @param {Function} options.extractResult - 提取结果的方法
+     * @param {number} options.maxEmptyRetries - 空响应重试次数
+     * @param {number} options.retryDelay - 重试延迟(ms)
+     * @param {string} options.logPrefix - 日志前缀
      */
-    async generateImage({ prompt, imageUrls = [] }) {
+    async callGenApi({ prompt, imageUrls = [], getApiConfig, extractResult, maxEmptyRetries = 2, retryDelay = 1000, logPrefix = '' }) {
         const startTime = Date.now()
-        const maxApiRetries = this.getApiCount()  // 最多尝试的API数量
-        const maxEmptyRetries = 2  // 每个API空响应时的重试次数
-        
+        const maxApiCount = this.getApiCount()
         let lastError = null
         
-        // 遍历所有可用API
-        for (let apiIndex = 0; apiIndex < maxApiRetries; apiIndex++) {
-            const apiConf = this.getImageApiConfig(apiIndex)
+        for (let apiIndex = 0; apiIndex < maxApiCount; apiIndex++) {
+            const apiConf = getApiConfig(apiIndex)
             if (!apiConf) break
             
-            // 每个API尝试多次（应对空响应）
             for (let retry = 0; retry <= maxEmptyRetries; retry++) {
                 try {
                     if (apiIndex > 0 || retry > 0) {
-                        logger.info(`[ImageGen] 图片生成重试 (API=${apiIndex}, retry=${retry})`)
+                        logger.info(`[ImageGen] ${logPrefix}重试 (API=${apiIndex}, retry=${retry})`)
                     }
                     
-                    // 构建消息内容
                     const content = []
-                    if (prompt) {
-                        content.push({ type: 'text', text: prompt })
-                    }
+                    if (prompt) content.push({ type: 'text', text: prompt })
                     if (imageUrls.length) {
-                        content.push(...imageUrls.map(url => ({
-                            type: 'image_url',
-                            image_url: { url }
-                        })))
-                    }
-                    
-                    const requestData = {
-                        model: apiConf.model,
-                        messages: [{ role: 'user', content }],
-                        stream: false,
-                        temperature: 0.7,
+                        content.push(...imageUrls.map(url => ({ type: 'image_url', image_url: { url } })))
                     }
                     
                     const response = await fetch(apiConf.apiUrl, {
@@ -492,49 +695,70 @@ export class ImageGen extends plugin {
                             'Content-Type': 'application/json',
                             'Authorization': `Bearer ${apiConf.apiKey}`,
                         },
-                        body: JSON.stringify(requestData),
+                        body: JSON.stringify({
+                            model: apiConf.model,
+                            messages: [{ role: 'user', content }],
+                            stream: false,
+                            temperature: 0.7,
+                        }),
                         signal: AbortSignal.timeout(this.timeout),
                     })
                     
                     if (!response.ok) {
-                        throw new Error(`API 错误: ${response.status}`)
+                        const errorText = await response.text().catch(() => '')
+                        throw new Error(`API 错误: ${response.status} ${errorText.substring(0, 100)}`)
                     }
                     
                     const data = await response.json()
-                    const resultImages = this.extractImages(data)
+                    const result = extractResult(data)
                     
-                    if (resultImages.length) {
-                        const duration = Date.now() - startTime
+                    if (result && result.length) {
                         return {
                             success: true,
-                            images: resultImages,
-                            duration: this.formatDuration(duration),
+                            result,
+                            duration: this.formatDuration(Date.now() - startTime),
                             apiUsed: apiIndex > 0 ? `备用API${apiIndex}` : '主API'
                         }
                     }
                     
-                    // 空响应，继续重试
-                    logger.warn(`[ImageGen] API返回空图片，准备重试...`)
-                    await new Promise(r => setTimeout(r, 1000))
-                    
+                    logger.warn(`[ImageGen] ${logPrefix}API返回空结果，准备重试...`)
+                    await new Promise(r => setTimeout(r, retryDelay))
                 } catch (err) {
                     lastError = err
                     if (err.name === 'TimeoutError') {
-                        logger.warn(`[ImageGen] 请求超时，切换下一个API`)
-                        break // 超时直接切换API
+                        logger.warn(`[ImageGen] ${logPrefix}请求超时，切换下一个API`)
+                        break
                     }
-                    logger.warn(`[ImageGen] API请求失败: ${err.message}`)
-                    await new Promise(r => setTimeout(r, 500))
+                    logger.warn(`[ImageGen] ${logPrefix}API请求失败: ${err.message}`)
+                    await new Promise(r => setTimeout(r, retryDelay / 2))
                 }
             }
         }
         
-        const duration = Date.now() - startTime
         return {
             success: false,
-            error: lastError?.message || '所有API均未能生成图片，请稍后重试',
-            duration: this.formatDuration(duration)
+            error: lastError?.message || `所有API均未能完成${logPrefix}，请稍后重试`,
+            duration: this.formatDuration(Date.now() - startTime)
         }
+    }
+
+    /**
+     * 调用图片生成 API
+     */
+    async generateImage({ prompt, imageUrls = [] }) {
+        const result = await this.callGenApi({
+            prompt,
+            imageUrls,
+            getApiConfig: (idx) => this.getImageApiConfig(idx),
+            extractResult: (data) => this.extractImages(data),
+            maxEmptyRetries: 2,
+            retryDelay: 1000,
+            logPrefix: '图片生成'
+        })
+        
+        return result.success
+            ? { success: true, images: result.result, duration: result.duration, apiUsed: result.apiUsed }
+            : result
     }
 
     /**
@@ -554,123 +778,38 @@ export class ImageGen extends plugin {
     }
 
     /**
-     * 调用视频生成 API（支持多API轮询和空响应自动重试）
+     * 调用视频生成 API（使用通用方法，支持视频/图片回退）
      */
     async generateVideo({ prompt, imageUrls = [] }) {
-        const startTime = Date.now()
-        const maxApiCount = this.getApiCount()
-        const maxEmptyRetries = 3  // 空响应时的重试次数（视频生成需要更多重试）
-        
-        let lastError = null
-        
-        // 遍历所有可用API
-        for (let apiIndex = 0; apiIndex < maxApiCount; apiIndex++) {
-            const apiConf = this.getVideoApiConfig(apiIndex)
-            if (!apiConf) break
-            
-            // 每个API尝试多次（应对空响应）
-            for (let retry = 0; retry <= maxEmptyRetries; retry++) {
-                try {
-                    if (apiIndex > 0 || retry > 0) {
-                        logger.info(`[ImageGen] 视频生成重试 (API=${apiIndex}, retry=${retry})`)
-                    }
-                    
-                    // 构建消息内容
-                    const content = []
-                    if (prompt) {
-                        content.push({ type: 'text', text: prompt })
-                    }
-                    if (imageUrls.length) {
-                        content.push(...imageUrls.map(url => ({
-                            type: 'image_url',
-                            image_url: { url }
-                        })))
-                    }
-                    
-                    const requestData = {
-                        model: apiConf.model,
-                        messages: [{ role: 'user', content }],
-                        stream: false,
-                        temperature: 0.7,
-                    }
-                    
-                    const response = await fetch(apiConf.apiUrl, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${apiConf.apiKey}`,
-                        },
-                        body: JSON.stringify(requestData),
-                        signal: AbortSignal.timeout(this.timeout),
-                    })
-                    
-                    if (!response.ok) {
-                        const errorText = await response.text().catch(() => '')
-                        throw new Error(`API 错误: ${response.status} ${errorText.substring(0, 100)}`)
-                    }
-                    
-                    const data = await response.json()
-                    
-                    // 调试日志
-                    logger.debug('[ImageGen] 视频API响应:', JSON.stringify(data, null, 2))
-                    
-                    // 解析返回的视频
-                    const resultVideos = this.extractVideos(data)
-                    
-                    if (resultVideos.length) {
-                        const duration = Date.now() - startTime
-                        return {
-                            success: true,
-                            videos: resultVideos,
-                            duration: this.formatDuration(duration),
-                            apiUsed: apiIndex > 0 ? `备用API${apiIndex}` : '主API'
-                        }
-                    }
-                    
-                    // 如果没有视频，尝试提取图片作为备选
-                    const resultImages = this.extractImages(data)
-                    if (resultImages.length) {
-                        const duration = Date.now() - startTime
-                        return {
-                            success: true,
-                            images: resultImages,
-                            isImage: true,
-                            duration: this.formatDuration(duration)
-                        }
-                    }
-                    
-                    // 空响应，等待后重试
-                    logger.warn(`[ImageGen] 视频API返回空结果，等待后重试...`)
-                    await new Promise(r => setTimeout(r, 2000))  // 视频需要更长等待
-                    
-                } catch (err) {
-                    lastError = err
-                    const isNetworkError = err.cause?.code === 'UND_ERR_SOCKET' || 
-                                           err.message.includes('fetch failed') ||
-                                           err.message.includes('socket')
-                    
-                    if (isNetworkError) {
-                        logger.warn(`[ImageGen] 网络错误，准备重试: ${err.message}`)
-                        await new Promise(r => setTimeout(r, 1500))
-                        continue
-                    }
-                    
-                    if (err.name === 'TimeoutError') {
-                        logger.warn(`[ImageGen] 请求超时，切换下一个API`)
-                        break // 超时直接切换API
-                    }
-                    
-                    logger.warn(`[ImageGen] 视频API请求失败: ${err.message}`)
-                    await new Promise(r => setTimeout(r, 1000))
-                }
-            }
+        // 自定义提取器：优先视频，回退图片
+        const extractVideoOrImage = (data) => {
+            const videos = this.extractVideos(data)
+            if (videos.length) return { type: 'video', data: videos }
+            const images = this.extractImages(data)
+            if (images.length) return { type: 'image', data: images }
+            return null
         }
         
-        const duration = Date.now() - startTime
-        return {
-            success: false,
-            error: lastError?.message || '所有API均未能生成视频，请稍后重试',
-            duration: this.formatDuration(duration)
+        const result = await this.callGenApi({
+            prompt,
+            imageUrls,
+            getApiConfig: (idx) => this.getVideoApiConfig(idx),
+            extractResult: (data) => {
+                const extracted = extractVideoOrImage(data)
+                return extracted ? [extracted] : []
+            },
+            maxEmptyRetries: 3,
+            retryDelay: 2000,
+            logPrefix: '视频生成'
+        })
+        
+        if (!result.success) return result
+        
+        const extracted = result.result[0]
+        if (extracted.type === 'video') {
+            return { success: true, videos: extracted.data, duration: result.duration, apiUsed: result.apiUsed }
+        } else {
+            return { success: true, images: extracted.data, isImage: true, duration: result.duration }
         }
     }
 

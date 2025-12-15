@@ -3,8 +3,9 @@ import { parseUserMessage, segment, CardParser, MessageApi, MessageUtils } from 
 import { setToolContext } from '../src/core/utils/toolAdapter.js'
 import { mcpManager } from '../src/mcp/McpManager.js'
 import { memoryManager } from '../src/services/MemoryManager.js'
+import { statsService } from '../src/services/StatsService.js'
 import config from '../config/config.js'
-import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMessage, recordSentMessage } from './chat.js'
+import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMessage, recordSentMessage } from '../src/utils/messageDedup.js'
 
 export class ChatListener extends plugin {
     constructor() {
@@ -39,7 +40,6 @@ export class ChatListener extends plugin {
         // === 检查监听器总开关 ===
         const listenerEnabled = config.get('listener.enabled')
         if (listenerEnabled === false) {
-            // 监听器关闭时，只采集群消息（如果启用），不处理触发
             if (e.isGroup && e.group_id && config.get('trigger.collectGroupMsg') !== false) {
                 try {
                     memoryManager.collectGroupMessage(String(e.group_id), {
@@ -54,8 +54,6 @@ export class ChatListener extends plugin {
             }
             return false
         }
-        
-        // 获取配置（优先使用新trigger配置，兼容旧listener配置）
         let triggerCfg = config.get('trigger')
         if (!triggerCfg || !triggerCfg.private) {
             // 使用旧配置并转换
@@ -73,11 +71,8 @@ export class ChatListener extends plugin {
                     raw_message: e.raw_message
                 })
             } catch {
-                // 静默失败
             }
         }
-        
-        // 检查消息是否已被其他插件处理
         if (isMessageProcessed(e)) {
             return false
         }
@@ -146,18 +141,12 @@ export class ChatListener extends plugin {
     checkTrigger(cfg) {
         const e = this.e
         const rawMsg = e.msg || ''
-        
-        // 兼容旧配置：如果是listener配置，转换为新trigger配置
         const triggerCfg = cfg.private ? cfg : this.convertLegacyConfig(cfg)
-        
-        // === 私聊判断 ===
         if (!e.isGroup) {
             const privateCfg = triggerCfg.private || {}
-            // 私聊默认启用（enabled 不存在或为 true 时启用）
             if (privateCfg.enabled === false) {
                 return { triggered: false, msg: '', reason: '私聊已禁用' }
             }
-            
             const mode = privateCfg.mode || 'always'
             if (mode === 'always') {
                 return { triggered: true, msg: rawMsg, reason: '私聊总是响应' }
@@ -175,15 +164,12 @@ export class ChatListener extends plugin {
                 }
                 return { triggered: false, msg: '', reason: '私聊需要前缀' }
             }
-            // mode === 'off' 时不触发
             if (mode === 'off') {
                 return { triggered: false, msg: '', reason: '私聊模式关闭' }
             }
-            // 未知模式默认响应
             return { triggered: true, msg: rawMsg, reason: '私聊默认响应' }
         }
-        
-        // === 群聊判断 ===
+
         const groupCfg = triggerCfg.group || {}
         if (!groupCfg.enabled) {
             return { triggered: false, msg: '', reason: '群聊已禁用' }
@@ -384,10 +370,36 @@ export class ChatListener extends plugin {
             includeDebugInfo: false
         })
 
+        // 使用已处理的消息（去除触发词后），如果没有则从解析结果获取
+        const rawTextContent = userMessage.content?.find(c => c.type === 'text')?.text?.trim()
+        const textContent = processedMsg?.trim() || rawTextContent
+        
         // 检查消息是否有效
-        const textContent = userMessage.content?.find(c => c.type === 'text')?.text?.trim()
         if (!textContent && userMessage.content?.length === 0) {
             return false
+        }
+        
+        // 记录消息统计
+        try {
+            const msgTypes = userMessage.content?.map(c => c.type) || ['text']
+            for (const type of msgTypes) {
+                statsService.recordMessage({
+                    type,
+                    groupId,
+                    userId,
+                    source: e.adapter || 'unknown'
+                })
+            }
+        } catch (e) {
+            // 统计失败不影响主流程
+        }
+        
+        // 更新 userMessage 中的文本内容（去除触发词后的版本）
+        if (processedMsg && userMessage.content) {
+            const textItem = userMessage.content.find(c => c.type === 'text')
+            if (textItem) {
+                textItem.text = textContent
+            }
         }
 
         // 设置工具上下文

@@ -1,341 +1,25 @@
 import config from '../config/config.js'
 import { cleanCQCode, parseUserMessage } from '../src/utils/messageParser.js'
 import { isDebugEnabled } from './Commands.js'
+import {
+    escapeRegExp,
+    recordSentMessage,
+    markMessageProcessed,
+    startProcessingMessage,
+    isMessageProcessed,
+    isSelfMessage,
+    isReplyToBotMessage,
+    getBotIds
+} from '../src/utils/messageDedup.js'
 
-/**
- * 转义正则特殊字符
- */
-function escapeRegExp(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-const processedMessages = new WeakMap()
-const recentMessageHashes = new Map() // hash -> timestamp
-const processedMessageIds = new Map() // message_id -> timestamp (基于消息ID的去重)
-const sentMessageFingerprints = new Map() // fingerprint -> timestamp (机器人发送的消息)
-const processingMessages = new Set() // 正在处理中的消息ID（防止并发）
-const MESSAGE_DEDUP_EXPIRE = 10000 // 消息去重过期时间(ms) 增加到10秒
-const SENT_MSG_EXPIRE = 30000 // 发送消息指纹过期时间(ms)
-const MSG_ID_EXPIRE = 60000 // 消息ID过期时间(ms) 1分钟
-
-/**
- * 生成消息hash用于去重 - 增强版
- * 使用多个字段组合，确保唯一性
- */
-function getMessageHash(e) {
-    const userId = e.user_id || ''
-    const groupId = e.group_id || ''
-    const msg = e.msg || e.raw_message || ''
-    const msgId = e.message_id || ''
-    const time = e.time || ''
-    const seq = e.seq || e.source?.seq || ''
-    // 组合多个字段增强唯一性
-    return `${userId}_${groupId}_${msgId}_${time}_${seq}_${msg.substring(0, 80)}`
-}
-
-/**
- * 生成消息内容指纹（用于检测是否是自己发送的消息被回显）
- */
-function getContentFingerprint(content) {
-    if (!content) return ''
-    const text = typeof content === 'string' ? content : 
-        (Array.isArray(content) ? content.filter(c => c.type === 'text').map(c => c.text || c.data?.text || '').join('') : '')
-    // 只取前100字符作为指纹
-    return text.substring(0, 100).trim()
-}
-
-/**
- * 记录机器人发送的消息指纹
- * @param {string} content - 发送的消息内容
- */
-export function recordSentMessage(content) {
-    const fingerprint = getContentFingerprint(content)
-    if (fingerprint) {
-        sentMessageFingerprints.set(fingerprint, Date.now())
-        // 定期清理
-        if (sentMessageFingerprints.size > 200) {
-            cleanExpiredSentFingerprints()
-        }
-    }
-}
-
-/**
- * 检查消息是否可能是机器人发送后被回显的
- */
-function isSentMessageEcho(e) {
-    const msg = e.msg || e.raw_message || ''
-    const fingerprint = getContentFingerprint(msg)
-    if (!fingerprint) return false
-    
-    const sentTime = sentMessageFingerprints.get(fingerprint)
-    if (sentTime && Date.now() - sentTime < SENT_MSG_EXPIRE) {
-        return true
-    }
-    return false
-}
-
-/**
- * 清理过期的发送消息指纹
- */
-function cleanExpiredSentFingerprints() {
-    const now = Date.now()
-    for (const [fp, time] of sentMessageFingerprints) {
-        if (now - time > SENT_MSG_EXPIRE) {
-            sentMessageFingerprints.delete(fp)
-        }
-    }
-}
-
-/**
- * 清理过期的消息hash
- */
-function cleanExpiredHashes() {
-    const now = Date.now()
-    for (const [hash, time] of recentMessageHashes) {
-        if (now - time > MESSAGE_DEDUP_EXPIRE) {
-            recentMessageHashes.delete(hash)
-        }
-    }
-}
-
-/**
- * 标记消息已被处理
- * @param {Object} e - 事件对象
- */
-export function markMessageProcessed(e) {
-    processedMessages.set(e, true)
-    const now = Date.now()
-    
-    // 同时记录消息hash
-    const hash = getMessageHash(e)
-    recentMessageHashes.set(hash, now)
-    
-    // 记录 message_id（更可靠的去重方式）
-    const msgId = e.message_id
-    if (msgId) {
-        processedMessageIds.set(String(msgId), now)
-        // 从处理中列表移除
-        processingMessages.delete(String(msgId))
-    }
-    
-    // 定期清理
-    if (recentMessageHashes.size > 100) {
-        cleanExpiredHashes()
-    }
-    if (processedMessageIds.size > 500) {
-        cleanExpiredMessageIds()
-    }
-}
-
-/**
- * 清理过期的消息ID记录
- */
-function cleanExpiredMessageIds() {
-    const now = Date.now()
-    for (const [id, time] of processedMessageIds) {
-        if (now - time > MSG_ID_EXPIRE) {
-            processedMessageIds.delete(id)
-        }
-    }
-}
-
-/**
- * 标记消息开始处理（防止并发重复处理）
- * @param {Object} e - 事件对象
- * @returns {boolean} 如果返回 false 表示已有相同消息在处理中
- */
-export function startProcessingMessage(e) {
-    const msgId = e.message_id
-    if (!msgId) return true // 没有 message_id 则无法防并发
-    
-    const msgIdStr = String(msgId)
-    if (processingMessages.has(msgIdStr)) {
-        logger.debug(`[Chat] 消息正在处理中，跳过: ${msgIdStr}`)
-        return false
-    }
-    
-    processingMessages.add(msgIdStr)
-    // 60秒后自动清理（防止处理异常导致永久阻塞）
-    setTimeout(() => processingMessages.delete(msgIdStr), 60000)
-    return true
-}
-
-/**
- * 检查消息是否已被处理（包括重复消息检测）- 增强版
- * @param {Object} e - 事件对象
- * @returns {boolean}
- */
-export function isMessageProcessed(e) {
-    // 1. 检查事件对象是否已处理（WeakMap）
-    if (processedMessages.has(e)) {
-        logger.debug('[Chat] 消息已处理(WeakMap)')
-        return true
-    }
-    
-    // 2. 检查 message_id 是否已处理（最可靠）
-    const msgId = e.message_id
-    if (msgId) {
-        const msgIdStr = String(msgId)
-        if (processedMessageIds.has(msgIdStr)) {
-            const lastTime = processedMessageIds.get(msgIdStr)
-            if (Date.now() - lastTime < MSG_ID_EXPIRE) {
-                logger.debug(`[Chat] 消息已处理(message_id): ${msgIdStr}`)
-                return true
-            }
-        }
-        // 检查是否正在处理中
-        if (processingMessages.has(msgIdStr)) {
-            logger.debug(`[Chat] 消息正在处理中: ${msgIdStr}`)
-            return true
-        }
-    }
-    
-    // 3. 检查消息hash是否重复（兜底）
-    const hash = getMessageHash(e)
-    if (recentMessageHashes.has(hash)) {
-        const lastTime = recentMessageHashes.get(hash)
-        if (Date.now() - lastTime < MESSAGE_DEDUP_EXPIRE) {
-            logger.debug('[Chat] 消息已处理(hash)')
-            return true
-        }
-    }
-    
-    return false
-}
-
-export function isSelfMessage(e) {
-  try {
-    // stdin 适配器是测试用，不应该被判断为自身消息
-    if (e?.adapter?.name === 'stdin' || e?.adapter?.id === 'stdin' || 
-        e?.self_id === 'stdin' || e?.bot?.adapter?.name === 'stdin') {
-      return false
-    }
-    
-    const bot = e?.bot || Bot
-    // 获取所有可能的机器人ID
-    const selfIds = new Set()
-    
-    // 主要ID
-    if (bot?.uin) selfIds.add(String(bot.uin))
-    if (e?.self_id) selfIds.add(String(e.self_id))
-    if (bot?.self_id) selfIds.add(String(bot.self_id))
-    
-    // TRSS多账号 - 安全检查
-    if (Bot?.uin) selfIds.add(String(Bot.uin))
-    if (Bot?.bots && typeof Bot.bots[Symbol.iterator] === 'function') {
-      for (const [id] of Bot.bots) {
-        selfIds.add(String(id))
-      }
-    } else if (Bot?.bots && typeof Bot.bots === 'object') {
-      // 如果是普通对象，遍历键
-      for (const id of Object.keys(Bot.bots)) {
-        selfIds.add(String(id))
-      }
-    }
-    
-    // 检查发送者ID
-    const senderId = String(e?.user_id || e?.sender?.user_id || '')
-    if (senderId && selfIds.has(senderId)) {
-      logger.debug('[SelfGuard] 检测到自身ID消息:', senderId)
-      return true
-    }
-    
-    // 检查消息来源标记（OneBot/NapCat标准）
-    if (e?.post_type === 'message_sent' || e?.message_type === 'self') {
-      logger.debug('[SelfGuard] 检测到message_sent类型')
-      return true
-    }
-    
-    // 检查 sub_type（部分协议使用）
-    if (e?.sub_type === 'self' || e?.sub_type === 'send') {
-      logger.debug('[SelfGuard] 检测到self/send sub_type')
-      return true
-    }
-    
-    // 检查是否是回显消息（机器人发送后被协议端回传）
-    if (isSentMessageEcho(e)) {
-      logger.debug('[SelfGuard] 检测到发送消息回显')
-      return true
-    }
-    
-    // 检查 sender.user_id 与 self_id 是否相同（NapCat兼容）
-    if (e?.sender?.user_id && e?.self_id) {
-      if (String(e.sender.user_id) === String(e.self_id)) {
-        logger.debug('[SelfGuard] sender.user_id === self_id')
-        return true
-      }
-    }
-    
-    // 检查是否有 from_self 标记（部分协议）
-    if (e?.from_self === true || e?.message?.from_self === true) {
-      logger.debug('[SelfGuard] 检测到from_self标记')
-      return true
-    }
-    
-    return false
-  } catch (err) {
-    // 出错时不阻止消息处理
-    logger.debug('[SelfGuard] 检测出错:', err.message)
-    return false
-  }
-}
-
-/**
- * 获取所有机器人ID集合
- * @returns {Set<string>}
- */
-export function getBotIds() {
-  const selfIds = new Set()
-  try {
-    if (Bot?.uin) selfIds.add(String(Bot.uin))
-    if (Bot?.self_id) selfIds.add(String(Bot.self_id))
-    if (Bot?.bots && typeof Bot.bots[Symbol.iterator] === 'function') {
-      for (const [id] of Bot.bots) {
-        selfIds.add(String(id))
-      }
-    } else if (Bot?.bots && typeof Bot.bots === 'object') {
-      for (const id of Object.keys(Bot.bots)) {
-        selfIds.add(String(id))
-      }
-    }
-  } catch (err) {
-    // ignore
-  }
-  return selfIds
-}
-
-/**
- * 检查是否是引用机器人消息触发（需要排除）
- * 当用户引用机器人的消息并且被识别为 atBot 时，应排除这种情况
- * @param {Object} e - 事件对象
- * @returns {boolean} true 表示是引用机器人消息触发，应该忽略
- */
-export function isReplyToBotMessage(e) {
-  try {
-    // 没有引用消息则不是
-    if (!e?.source) return false
-    
-    // 获取机器人ID集合
-    const botIds = getBotIds()
-    
-    // 检查引用消息的发送者是否是机器人
-    const sourceUserId = String(e.source.user_id || e.source.sender?.user_id || '')
-    if (sourceUserId && botIds.has(sourceUserId)) {
-      // 引用的是机器人的消息
-      // 检查当前消息是否只有引用没有真正的 @
-      const hasRealAt = e.message?.some(seg => 
-        seg.type === 'at' && botIds.has(String(seg.qq))
-      )
-      
-      // 如果没有真正的 @ 但 atBot 为 true，说明是框架因为引用而设置的
-      if (e.atBot && !hasRealAt) {
-        return true
-      }
-    }
-    
-    return false
-  } catch (err) {
-    return false
-  }
+export {
+    recordSentMessage,
+    markMessageProcessed,
+    startProcessingMessage,
+    isMessageProcessed,
+    isSelfMessage,
+    isReplyToBotMessage,
+    getBotIds
 }
 
 export class Chat extends plugin {
@@ -456,7 +140,37 @@ export class Chat extends plugin {
       }
     } else {
       // === 群聊处理 ===
-      const groupCfg = triggerCfg.group || {}
+      let groupCfg = { ...(triggerCfg.group || {}) }
+      
+      // 检查群组特定的触发模式配置
+      try {
+        const { ScopeManager } = await import('../src/services/ScopeManager.js')
+        const sm = new ScopeManager()
+        await sm.init()
+        const groupSettings = await sm.getGroupSettings(String(e.group_id))
+        const groupTriggerMode = groupSettings?.settings?.triggerMode || groupSettings?.triggerMode
+        
+        // 如果群组设置了特定触发模式且不是默认，则覆盖全局配置
+        if (groupTriggerMode && groupTriggerMode !== 'default') {
+          if (groupTriggerMode === 'at') {
+            groupCfg = { ...groupCfg, at: true, prefix: false, keyword: false, random: false }
+          } else if (groupTriggerMode === 'prefix') {
+            groupCfg = { ...groupCfg, at: false, prefix: true, keyword: false, random: false }
+          } else if (groupTriggerMode === 'both') {
+            groupCfg = { ...groupCfg, at: true, prefix: true, keyword: true, random: false }
+          } else if (groupTriggerMode === 'keyword') {
+            groupCfg = { ...groupCfg, at: false, prefix: false, keyword: true, random: false }
+          } else if (groupTriggerMode === 'random') {
+            groupCfg = { ...groupCfg, at: false, prefix: false, keyword: false, random: true }
+          } else if (groupTriggerMode === 'off') {
+            groupCfg = { ...groupCfg, enabled: false }
+          }
+          logger.debug(`[Chat] 群 ${e.group_id} 使用独立触发模式: ${groupTriggerMode}`)
+        }
+      } catch (err) {
+        logger.debug(`[Chat] 获取群组触发配置失败: ${err.message}`)
+      }
+      
       // 群聊未启用则跳过
       if (!groupCfg.enabled) {
         return false
@@ -1053,99 +767,6 @@ export class Chat extends plugin {
     return `出错了: ${shortMsg}${msg.length > 100 ? '...' : ''}`
   }
 
-  /**
-   * Clear chat history (alias for endConversation)
-   */
-  async clearHistory() {
-    return this.endConversation()
-  }
-
-  /**
-   * 结束当前对话/开始新对话
-   */
-  async endConversation() {
-    try {
-      const { chatService } = await import('../src/services/ChatService.js')
-      const userId = this.e.user_id || this.e.sender?.user_id || 'unknown'
-      const groupId = this.e.group_id || null
-      await chatService.clearHistory(userId, groupId)
-      await this.reply('✅ 已结束当前对话，下次对话将开始新会话', true)
-    } catch (error) {
-      await this.reply('操作失败: ' + error.message, true)
-    }
-    return true
-  }
-
-  /**
-   * 清除用户记忆
-   */
-  async clearMemory() {
-    try {
-      const { memoryManager } = await import('../src/services/MemoryManager.js')
-      const userId = this.e.user_id || this.e.sender?.user_id || 'unknown'
-      const groupId = this.e.group_id || (this.e.isGroup ? this.e.group_id : null)
-      const fullUserId = groupId ? `${groupId}_${userId}` : String(userId)
-      await memoryManager.init()
-      await memoryManager.clearMemory(fullUserId)
-      await this.reply('✅ 已清除你的所有记忆数据', true)
-    } catch (error) {
-      await this.reply('清除记忆失败: ' + error.message, true)
-    }
-    return true
-  }
-
-  /**
-   * 查看对话状态
-   */
-  async conversationStatus() {
-    try {
-      const { databaseService } = await import('../src/services/DatabaseService.js')
-      const { memoryManager } = await import('../src/services/MemoryManager.js')
-
-      const userId = this.e.user_id || this.e.sender?.user_id || 'unknown'
-      const groupId = this.e.group_id || (this.e.isGroup ? this.e.group_id : null)
-      const fullUserId = groupId ? `${groupId}_${userId}` : userId
-
-      databaseService.init()
-      await memoryManager.init()
-
-      // 获取对话历史
-      const messages = databaseService.getMessages(fullUserId, 100)
-      const messageCount = messages.length
-
-      // 获取记忆数量
-      const memories = await memoryManager.getMemories(String(userId))
-      const memoryCount = memories?.length || 0
-
-      // 获取最后活动时间
-      let lastActive = '无'
-      if (messages.length > 0) {
-        const lastMsg = messages[messages.length - 1]
-        if (lastMsg?.timestamp) {
-          const date = new Date(lastMsg.timestamp)
-          lastActive = date.toLocaleString('zh-CN')
-        }
-      }
-
-      const status = [
-        '📊 对话状态',
-        `━━━━━━━━━━━━`,
-        `💬 当前会话消息: ${messageCount} 条`,
-        `🧠 记忆条目: ${memoryCount} 条`,
-        `⏰ 最后活动: ${lastActive}`,
-        `━━━━━━━━━━━━`,
-        `💡 提示:`,
-        `  #结束对话 - 开始新会话`,
-        `  #清除记忆 - 清除记忆数据`
-      ].join('\n')
-
-      await this.reply(status, true)
-    } catch (error) {
-      await this.reply('获取状态失败: ' + error.message, true)
-    }
-
-    return true
-  }
 
   /**
    * 发送合并转发消息
@@ -1277,221 +898,4 @@ export class Chat extends plugin {
     }
   }
 
-  /**
-   * 检查功能是否可用（伪人模式限制）
-   */
-  checkFeatureAvailable(featureName) {
-    const exclusiveFeatures = config.get('bym.exclusiveFeatures') || []
-    const bymEnabled = config.get('bym.enable')
-    
-    if (exclusiveFeatures.includes(featureName) && !bymEnabled) {
-      return { available: false, reason: '此功能需要开启伪人模式' }
-    }
-    return { available: true }
-  }
-
-  /**
-   * 群聊总结
-   */
-  async groupSummary() {
-    const e = this.e
-    if (!e.group_id) {
-      await this.reply('此功能仅支持群聊', true)
-      return true
-    }
-
-    // 检查功能是否启用
-    if (!config.get('features.groupSummary.enabled')) {
-      await this.reply('群聊总结功能未启用', true)
-      return true
-    }
-
-    // 检查伪人模式限制
-    const check = this.checkFeatureAvailable('groupSummary')
-    if (!check.available) {
-      await this.reply(check.reason, true)
-      return true
-    }
-
-    try {
-      await this.reply('正在分析群聊消息...', true)
-      
-      const { chatService } = await import('../src/services/ChatService.js')
-      const { databaseService } = await import('../src/services/DatabaseService.js')
-      
-      databaseService.init()
-      
-      const maxMessages = config.get('features.groupSummary.maxMessages') || 100
-      
-      // 使用正确的 conversationId 格式 (与 ContextManager.getConversationId 一致)
-      const { contextManager } = await import('../src/services/ContextManager.js')
-      await contextManager.init()
-      const groupKey = contextManager.getConversationId(e.user_id, e.group_id)
-      
-      // 获取群聊历史消息 (从 historyManager 获取，因为消息存储在那里)
-      const historyManager = (await import('../src/core/utils/history.js')).default
-      const historyMessages = await historyManager.getHistory(undefined, groupKey, maxMessages)
-      
-      // 转换格式
-      const messages = historyMessages.map(m => ({
-        role: m.role,
-        content: Array.isArray(m.content) 
-          ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') 
-          : m.content
-      }))
-      
-      if (messages.length < 5) {
-        await this.reply('群聊消息太少，无法生成总结', true)
-        return true
-      }
-
-      // 构造总结请求
-      const summaryPrompt = `请总结以下群聊对话的主要内容，提取关键话题和讨论要点：\n\n${
-        messages.map(m => `${m.role}: ${m.content}`).join('\n')
-      }\n\n请用简洁的方式总结：
-1. 主要讨论话题
-2. 关键观点
-3. 参与度分析`
-
-      const result = await chatService.sendMessage({
-        userId: `summary_${e.group_id}`,
-        message: summaryPrompt,
-        mode: 'chat'
-      })
-
-      let summaryText = ''
-      if (result.response && Array.isArray(result.response)) {
-        summaryText = result.response
-          .filter(c => c.type === 'text')
-          .map(c => c.text)
-          .join('\n')
-      }
-
-      if (summaryText) {
-        // 尝试使用合并转发发送
-        const sent = await this.sendForwardMsg('群聊总结', [`📊 群聊总结 (最近${messages.length}条消息)\n\n${summaryText}`])
-        if (!sent) {
-          await this.reply(`📊 群聊总结\n\n${summaryText}`, true)
-        }
-      } else {
-        await this.reply('总结生成失败', true)
-      }
-    } catch (error) {
-      logger.error('[AI-Chat] Group summary error:', error)
-      await this.reply('群聊总结失败: ' + error.message, true)
-    }
-
-    return true
-  }
-
-  /**
-   * 个人画像分析（分析自己）
-   */
-  async userPortrait() {
-    return this._generatePortrait(this.e.user_id, this.e.sender?.nickname || '用户')
-  }
-
-  /**
-   * 个人画像分析（@指定用户）
-   */
-  async userPortraitAt() {
-    const atUser = this.e.message?.find(m => m.type === 'at')
-    if (!atUser) {
-      await this.reply('请@要分析的用户', true)
-      return true
-    }
-    return this._generatePortrait(atUser.qq, atUser.text?.replace('@', '') || '用户')
-  }
-
-  /**
-   * 生成用户画像
-   */
-  async _generatePortrait(targetUserId, nickname) {
-    const e = this.e
-    // 检查功能是否启用
-    if (!config.get('features.userPortrait.enabled')) {
-      await this.reply('个人画像功能未启用', true)
-      return true
-    }
-
-    // 检查伪人模式限制
-    const check = this.checkFeatureAvailable('userPortrait')
-    if (!check.available) {
-      await this.reply(check.reason, true)
-      return true
-    }
-
-    try {
-      await this.reply('正在分析用户画像...', true)
-      
-      const { chatService } = await import('../src/services/ChatService.js')
-      const { databaseService } = await import('../src/services/DatabaseService.js')
-      
-      databaseService.init()
-
-      const groupId = e.group_id
-      const minMessages = config.get('features.userPortrait.minMessages') || 10
-      
-      // 获取用户在群里的消息
-      const userKey = groupId ? `${groupId}_${targetUserId}` : String(targetUserId)
-      const messages = databaseService.getMessages(userKey, 200)
-      
-      // 过滤出用户发送的消息
-      const userMessages = messages.filter(m => m.role === 'user')
-      
-      if (userMessages.length < minMessages) {
-        await this.reply(`消息数量不足（需要至少${minMessages}条），无法生成画像`, true)
-        return true
-      }
-
-      // 构造画像分析请求
-      const portraitPrompt = `请根据以下用户的发言记录，分析并生成用户画像：
-
-用户昵称：${nickname}
-发言记录：
-${userMessages.slice(-50).map(m => {
-  const text = Array.isArray(m.content) 
-    ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') 
-    : m.content
-  return text
-}).join('\n')}
-
-请从以下维度分析：
-1. 🎭 性格特点
-2. 💬 说话风格
-3. 🎯 兴趣爱好
-4. 🧠 思维方式
-5. 📊 活跃度评估
-6. 🏷️ 标签总结（3-5个关键词）`
-
-      const result = await chatService.sendMessage({
-        userId: `portrait_${targetUserId}`,
-        message: portraitPrompt,
-        mode: 'chat'
-      })
-
-      let portraitText = ''
-      if (result.response && Array.isArray(result.response)) {
-        portraitText = result.response
-          .filter(c => c.type === 'text')
-          .map(c => c.text)
-          .join('\n')
-      }
-
-      if (portraitText) {
-        // 尝试使用合并转发发送
-        const sent = await this.sendForwardMsg('用户画像分析', [`👤 ${nickname} 的用户画像\n\n${portraitText}`])
-        if (!sent) {
-          await this.reply(`👤 ${nickname} 的用户画像\n\n${portraitText}`, true)
-        }
-      } else {
-        await this.reply('画像生成失败', true)
-      }
-    } catch (error) {
-      logger.error('[AI-Chat] User portrait error:', error)
-      await this.reply('用户画像分析失败: ' + error.message, true)
-    }
-
-    return true
-  }
 }

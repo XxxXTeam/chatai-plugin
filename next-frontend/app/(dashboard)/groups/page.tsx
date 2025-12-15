@@ -63,6 +63,9 @@ export default function GroupsPage() {
   const [editingGroup, setEditingGroup] = useState<GroupScope | null>(null)
   const [saving, setSaving] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deletingGroup, setDeletingGroup] = useState<GroupScope | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const [form, setForm] = useState({
     groupId: '',
@@ -112,16 +115,18 @@ export default function GroupsPage() {
   const handleOpenDialog = (group?: GroupScope) => {
     if (group) {
       setEditingGroup(group)
-      // 兼容 settings 嵌套结构
+      // 兼容 settings 嵌套结构 - 优先从 settings 中读取
       const settings = group.settings || {}
+      // modelId 被存储在 settings JSON 字段中
+      const savedModelId = settings.modelId || group.modelId || ''
       setForm({
         groupId: group.groupId,
-        groupName: group.groupName || settings.groupName || '',
+        groupName: settings.groupName || group.groupName || '',
         presetId: group.presetId || settings.presetId || '__default__',
         systemPrompt: group.systemPrompt || settings.systemPrompt || '',
-        modelId: group.modelId || settings.modelId || '__default__',
+        modelId: savedModelId || '__default__',
         enabled: group.enabled ?? settings.enabled ?? true,
-        triggerMode: group.triggerMode || settings.triggerMode || 'default',
+        triggerMode: settings.triggerMode || group.triggerMode || 'default',
       })
     } else {
       resetForm()
@@ -155,6 +160,29 @@ export default function GroupsPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleDelete = async () => {
+    if (!deletingGroup) return
+    
+    setDeleting(true)
+    try {
+      await scopeApi.deleteGroup(deletingGroup.groupId)
+      toast.success('群配置已删除')
+      setDeleteDialogOpen(false)
+      setDeletingGroup(null)
+      fetchData()
+    } catch (error) {
+      toast.error('删除失败')
+      console.error(error)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const openDeleteDialog = (group: GroupScope) => {
+    setDeletingGroup(group)
+    setDeleteDialogOpen(true)
   }
 
   const filteredGroups = groups.filter(group => 
@@ -376,10 +404,10 @@ export default function GroupsPage() {
                         ) : (
                           <span>预设: {presets.find(p => p.id === group.presetId)?.name || '默认'}</span>
                         )}
-                        {(group.modelId || group.settings?.modelId) && (
+                        {(group.settings?.modelId || group.modelId) && (
                           <span className="flex items-center gap-1">
                             <Bot className="h-3 w-3" />
-                            独立模型
+                            独立模型: {(group.settings?.modelId || group.modelId)?.split(':').pop()?.substring(0, 20)}
                           </span>
                         )}
                         <span>模式: {group.triggerMode || '默认'}</span>
@@ -393,6 +421,14 @@ export default function GroupsPage() {
                       >
                         <Settings className="h-4 w-4" />
                       </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openDeleteDialog(group)}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                     </div>
                   </div>
                 </CardContent>
@@ -401,6 +437,29 @@ export default function GroupsPage() {
           </div>
         </ScrollArea>
       )}
+
+      {/* 删除确认对话框 */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认删除</DialogTitle>
+            <DialogDescription>
+              确定要删除群 {deletingGroup?.groupId} 
+              {deletingGroup?.groupName && ` (${deletingGroup.groupName})`} 的配置吗？
+              此操作不可撤销。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>
+              取消
+            </Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
+              {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

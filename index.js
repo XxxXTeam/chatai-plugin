@@ -24,9 +24,15 @@ const colors = {
 const pluginName = 'Chaite-AI'
 const pluginVersion = '1.0.0'
 
-logger.info(`${colors.cyan}╔════════════════════════════════════╗${colors.reset}`)
-logger.info(`${colors.cyan}║${colors.reset}  ${colors.bright}${colors.magenta}${pluginName}${colors.reset} ${colors.dim}v${pluginVersion}${colors.reset}  ${colors.cyan}║${colors.reset}`)
-logger.info(`${colors.cyan}╚════════════════════════════════════╝${colors.reset}`)
+// 居中显示的启动横幅
+const bannerWidth = 36
+const title = `${pluginName} v${pluginVersion}`
+const padding = Math.max(0, Math.floor((bannerWidth - title.length) / 2))
+const paddedTitle = ' '.repeat(padding) + title + ' '.repeat(bannerWidth - title.length - padding)
+
+logger.info(`${colors.cyan}╔${'═'.repeat(bannerWidth)}╗${colors.reset}`)
+logger.info(`${colors.cyan}║${colors.reset}${colors.bright}${colors.magenta}${paddedTitle}${colors.reset}${colors.cyan}║${colors.reset}`)
+logger.info(`${colors.cyan}╚${'═'.repeat(bannerWidth)}╝${colors.reset}`)
 
 // Initialize global object if needed
 if (!global.segment) {

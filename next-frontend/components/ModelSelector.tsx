@@ -127,18 +127,18 @@ export function ModelSelector({ value, allModels, onChange, allowCustom = true, 
 
   return (
     <div className="space-y-4">
-      {/* 顶部统计 */}
-      <div className="flex items-center justify-between">
+      {/* 顶部统计 - 移动端优化 */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <Badge variant="secondary" className="gap-1">
           <CheckCircle className="h-3 w-3" />
           已选择 {value.length}{!singleSelect && ` / ${allModels.length}`}
         </Badge>
         {!singleSelect && (
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={selectAll}>
+            <Button variant="outline" size="sm" onClick={selectAll} className="text-xs px-2 py-1 h-7">
               全选
             </Button>
-            <Button variant="outline" size="sm" onClick={deselectAll}>
+            <Button variant="outline" size="sm" onClick={deselectAll} className="text-xs px-2 py-1 h-7">
               取消全选
             </Button>
           </div>
@@ -192,8 +192,8 @@ export function ModelSelector({ value, allModels, onChange, allowCustom = true, 
         />
       </div>
 
-      {/* 分组列表 */}
-      <ScrollArea className="h-[400px] pr-4">
+      {/* 分组列表 - 移动端高度自适应 */}
+      <ScrollArea className="h-[300px] sm:h-[400px] pr-2 sm:pr-4">
         <div className="space-y-2">
           {groupedModels.length === 0 ? (
             <p className="text-center text-muted-foreground py-8">没有找到模型</p>
@@ -207,10 +207,10 @@ export function ModelSelector({ value, allModels, onChange, allowCustom = true, 
                 <div key={group.name} className="border rounded-lg overflow-hidden">
                   {/* 分组头部 */}
                   <div
-                    className="flex items-center gap-3 px-3 py-2 bg-muted/50 cursor-pointer hover:bg-muted/80"
+                    className="flex flex-wrap items-center gap-2 sm:gap-3 px-2 sm:px-3 py-2 bg-muted/50 cursor-pointer hover:bg-muted/80"
                     onClick={() => setExpandedGroup(isExpanded ? '' : group.name)}
                   >
-                    <span className="font-medium flex-1">{group.name}</span>
+                    <span className="font-medium flex-1 text-sm">{group.name}</span>
                     <Badge variant="outline" className="text-xs">
                       {selectedCount}/{group.models.length}
                     </Badge>
@@ -218,7 +218,7 @@ export function ModelSelector({ value, allModels, onChange, allowCustom = true, 
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-6 px-2 text-xs"
+                        className="h-6 px-2 text-xs hidden sm:inline-flex"
                         onClick={(e) => {
                           e.stopPropagation()
                           if (isAllSelected) {
@@ -232,15 +232,15 @@ export function ModelSelector({ value, allModels, onChange, allowCustom = true, 
                       </Button>
                     )}
                     {isExpanded ? (
-                      <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                      <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                     ) : (
-                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                      <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                     )}
                   </div>
 
-                  {/* 展开的模型列表 */}
+                  {/* 展开的模型列表 - 移动端单列 */}
                   {isExpanded && (
-                    <div className="grid grid-cols-2 gap-1 p-2 bg-background max-h-[250px] overflow-y-auto">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 p-2 bg-background max-h-[200px] sm:max-h-[250px] overflow-y-auto">
                       {group.models.map((model) => (
                         <label
                           key={model}

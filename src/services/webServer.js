@@ -569,6 +569,40 @@ export class WebServer {
             }))
         })
 
+        // ==================== Stats API ====================
+        // GET /api/stats - 获取统计概览
+        this.app.get('/api/stats', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { statsService } = await import('./StatsService.js')
+                const stats = statsService.getOverview()
+                res.json(ChaiteResponse.ok(stats))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/stats/full - 获取完整统计
+        this.app.get('/api/stats/full', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { statsService } = await import('./StatsService.js')
+                const stats = statsService.getStats()
+                res.json(ChaiteResponse.ok(stats))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/stats/reset - 重置统计
+        this.app.post('/api/stats/reset', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { statsService } = await import('./StatsService.js')
+                statsService.reset()
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
         // ==================== Config Routes ====================
         // GET /api/config - Get configuration
         this.app.get('/api/config', this.authMiddleware.bind(this), (req, res) => {
@@ -723,7 +757,8 @@ export class WebServer {
                         notifyMessage: '对话已达到最大轮数限制，已自动开始新会话。'
                     },
                     groupContextSharing: config.get('context.groupContextSharing'),
-                    globalSystemPrompt: config.get('context.globalSystemPrompt') || ''
+                    globalSystemPrompt: config.get('context.globalSystemPrompt') || '',
+                    globalPromptMode: config.get('context.globalPromptMode') || 'append'
                 },
                 memory: config.get('memory') || {
                     enabled: false,
@@ -841,6 +876,10 @@ export class WebServer {
                 // 全局系统提示词
                 if (context.globalSystemPrompt !== undefined) {
                     config.set('context.globalSystemPrompt', context.globalSystemPrompt)
+                }
+                // 全局提示词模式
+                if (context.globalPromptMode !== undefined) {
+                    config.set('context.globalPromptMode', context.globalPromptMode)
                 }
             }
 
@@ -3336,6 +3375,163 @@ export default {
         })
         this.app.put('/api/listener/config', this.authMiddleware.bind(this), (req, res) => {
             res.redirect(307, '/api/trigger/config')
+        })
+
+        // ==================== 绘图预设管理 API ====================
+        // GET /api/imagegen/presets - 获取所有预设
+        this.app.get('/api/imagegen/presets', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { imageGenPresetManager } = await import('../../apps/ImageGen.js')
+                await imageGenPresetManager.init()
+                res.json(ChaiteResponse.ok({
+                    presets: imageGenPresetManager.getAllPresets(),
+                    stats: imageGenPresetManager.getStats()
+                }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/imagegen/presets/reload - 热重载预设
+        this.app.post('/api/imagegen/presets/reload', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { imageGenPresetManager } = await import('../../apps/ImageGen.js')
+                await imageGenPresetManager.loadAllPresets()
+                res.json(ChaiteResponse.ok({
+                    message: '预设重载成功',
+                    stats: imageGenPresetManager.getStats()
+                }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/imagegen/presets/update - 从远程更新预设
+        this.app.post('/api/imagegen/presets/update', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { sourceName } = req.body || {}
+                const { imageGenPresetManager } = await import('../../apps/ImageGen.js')
+                const results = await imageGenPresetManager.updateFromRemote(sourceName)
+                res.json(ChaiteResponse.ok({
+                    results,
+                    stats: imageGenPresetManager.getStats()
+                }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/imagegen/config - 获取绘图配置
+        this.app.get('/api/imagegen/config', this.authMiddleware.bind(this), (req, res) => {
+            const imageGenConfig = config.get('features.imageGen') || {}
+            res.json(ChaiteResponse.ok(imageGenConfig))
+        })
+
+        // PUT /api/imagegen/config - 更新绘图配置
+        this.app.put('/api/imagegen/config', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const updates = req.body
+                const current = config.get('features.imageGen') || {}
+                const merged = { ...current, ...updates }
+                config.set('features.imageGen', merged)
+                
+                // 如果更新了预设相关配置，触发热重载
+                if (updates.presetSources || updates.customPresets) {
+                    const { imageGenPresetManager } = await import('../../apps/ImageGen.js')
+                    await imageGenPresetManager.loadAllPresets()
+                }
+                
+                res.json(ChaiteResponse.ok({ message: '配置已更新', config: merged }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/imagegen/sources - 添加预设来源
+        this.app.post('/api/imagegen/sources', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { name, url, enabled = true } = req.body
+                if (!name || !url) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '缺少 name 或 url'))
+                }
+                
+                const sources = config.get('features.imageGen.presetSources') || []
+                if (sources.some(s => s.url === url)) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '来源已存在'))
+                }
+                
+                sources.push({ name, url, enabled })
+                config.set('features.imageGen.presetSources', sources)
+                
+                res.json(ChaiteResponse.ok({ message: '来源已添加', sources }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/imagegen/sources/:index - 删除预设来源
+        this.app.delete('/api/imagegen/sources/:index', this.authMiddleware.bind(this), (req, res) => {
+            try {
+                const index = parseInt(req.params.index)
+                const sources = config.get('features.imageGen.presetSources') || []
+                
+                if (index < 0 || index >= sources.length) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '索引无效'))
+                }
+                
+                sources.splice(index, 1)
+                config.set('features.imageGen.presetSources', sources)
+                
+                res.json(ChaiteResponse.ok({ message: '来源已删除', sources }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/imagegen/custom-presets - 添加自定义预设
+        this.app.post('/api/imagegen/custom-presets', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { keywords, prompt, needImage = true } = req.body
+                if (!keywords || !prompt) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '缺少 keywords 或 prompt'))
+                }
+                
+                const keywordArr = Array.isArray(keywords) ? keywords : [keywords]
+                const presets = config.get('features.imageGen.customPresets') || []
+                presets.push({ keywords: keywordArr, prompt, needImage })
+                config.set('features.imageGen.customPresets', presets)
+                
+                // 热重载
+                const { imageGenPresetManager } = await import('../../apps/ImageGen.js')
+                await imageGenPresetManager.loadAllPresets()
+                
+                res.json(ChaiteResponse.ok({ message: '预设已添加', presets }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/imagegen/custom-presets/:index - 删除自定义预设
+        this.app.delete('/api/imagegen/custom-presets/:index', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const index = parseInt(req.params.index)
+                const presets = config.get('features.imageGen.customPresets') || []
+                
+                if (index < 0 || index >= presets.length) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '索引无效'))
+                }
+                
+                presets.splice(index, 1)
+                config.set('features.imageGen.customPresets', presets)
+                
+                // 热重载
+                const { imageGenPresetManager } = await import('../../apps/ImageGen.js')
+                await imageGenPresetManager.loadAllPresets()
+                
+                res.json(ChaiteResponse.ok({ message: '预设已删除', presets }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
         })
 
         // ==================== Platform & Message API ====================

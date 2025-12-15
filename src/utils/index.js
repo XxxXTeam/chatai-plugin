@@ -1,10 +1,13 @@
 /**
  * 工具函数统一导出
- * 合并自 utils/ 目录
+ * @module utils
  */
 
-// Bot 框架工具
-export * from './bot.js'
+// 消息去重与自身消息防护
+export * from './messageDedup.js'
+
+// 平台适配器（包含框架检测）
+export * from './platformAdapter.js'
 
 // 通用工具函数
 export * from './common.js'
@@ -15,5 +18,5 @@ export * from './group.js'
 // 消息解析工具
 export * from './messageParser.js'
 
-// 平台适配器
-export * from './platformAdapter.js'
+// 旧版兼容（deprecated，将在未来版本移除）
+export * from './bot.js'

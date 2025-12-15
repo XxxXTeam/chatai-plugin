@@ -15,6 +15,7 @@ import { contextTools } from './context.js'
 import { mediaTools } from './media.js'
 import { searchTools } from './search.js'
 import { utilsTools } from './utils.js'
+import { botTools } from './bot.js'
 
 /**
  * 工具类别配置
@@ -92,6 +93,12 @@ export const toolCategories = {
         description: '对话上下文、群聊上下文等',
         icon: 'History',
         tools: contextTools
+    },
+    bot: {
+        name: 'Bot信息',
+        description: '获取机器人自身信息、状态、好友列表等',
+        icon: 'Bot',
+        tools: botTools
     }
 }
 

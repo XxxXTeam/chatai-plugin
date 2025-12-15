@@ -32,6 +32,9 @@ interface ContextConfig {
       notifyUser: boolean
       notifyMessage: string
     }
+    groupContextSharing?: boolean
+    globalSystemPrompt?: string
+    globalPromptMode?: 'append' | 'prepend' | 'override'
   }
 }
 
@@ -377,22 +380,45 @@ export default function ContextPage() {
             全局提示词
           </CardTitle>
           <CardDescription>
-            对所有对话生效的系统提示词，会追加到预设提示词之后。对于没有预设的对话，这将作为唯一的系统提示词。
+            对所有对话生效的系统提示词。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-2">
+            <Label>拼接模式</Label>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { value: 'append', label: '追加到末尾', desc: '不覆盖预设' },
+                { value: 'prepend', label: '放到最前面', desc: '不覆盖预设' },
+                { value: 'override', label: '覆盖模式', desc: '替换所有预设' }
+              ].map(mode => (
+                <Button
+                  key={mode.value}
+                  variant={config.context?.globalPromptMode === mode.value || (!config.context?.globalPromptMode && mode.value === 'append') ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => updateConfig('context.globalPromptMode', mode.value)}
+                  className="flex-1 sm:flex-none"
+                >
+                  {mode.label}
+                </Button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              追加模式不会覆盖预设；覆盖模式会替换整个系统提示词。
+            </p>
+          </div>
+          <div className="grid gap-2">
             <Label htmlFor="globalSystemPrompt">全局系统提示词</Label>
             <Textarea
               id="globalSystemPrompt"
-              value={(config.context as any)?.globalSystemPrompt || ''}
+              value={config.context?.globalSystemPrompt || ''}
               onChange={(e) => updateConfig('context.globalSystemPrompt', e.target.value)}
               placeholder="输入全局系统提示词，例如：你是一个友善的助手..."
               rows={6}
               className="font-mono text-sm"
             />
             <p className="text-xs text-muted-foreground">
-              此提示词会追加到所有对话的系统提示词末尾。留空则不添加。
+              留空则不添加。
             </p>
           </div>
         </CardContent>

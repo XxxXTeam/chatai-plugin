@@ -291,9 +291,6 @@ export async function parseUserMessage(e, options = {}) {
                 }
                 
                 case 'image': {
-                    // 获取图片URL - 兼容NC/NapCat和icqq格式
-                    // NapCat格式: { type: 'image', data: { url, file, path, file_id, ... } }
-                    
                     // 调试日志：记录原始消息段
                     logger.info('[MessageParser][Image] 原始消息段:', JSON.stringify({
                         type: val.type,
@@ -307,8 +304,6 @@ export async function parseUserMessage(e, options = {}) {
                     }))
                     
                     let imgUrl = getMediaUrl(segData, true) || val.url
-                    
-                    // 如果没有直接 URL，尝试通过 file_id 获取 (NapCat)
                     if (!imgUrl && segData.file_id && e.bot?.sendApi) {
                         try {
                             logger.info(`[MessageParser][Image] 尝试通过 file_id 获取: ${segData.file_id}`)
@@ -340,7 +335,6 @@ export async function parseUserMessage(e, options = {}) {
                     
                     if (imgUrl) {
                         try {
-                            // 优先直接使用URL（更高效）
                             if (imgUrl.startsWith('http')) {
                                 contents.push({
                                     type: 'image_url',
@@ -348,7 +342,6 @@ export async function parseUserMessage(e, options = {}) {
                                     source: 'message'
                                 })
                             } else if (imgUrl.startsWith('file://') || imgUrl.startsWith('/')) {
-                                // 本地文件，转 base64
                                 const imageData = await fetchImage(imgUrl)
                                 if (imageData) {
                                     contents.push({
@@ -358,14 +351,12 @@ export async function parseUserMessage(e, options = {}) {
                                     })
                                 }
                             } else if (imgUrl.startsWith('base64://')) {
-                                // 已经是 base64
                                 contents.push({
                                     type: 'image',
                                     image: imgUrl.replace('base64://', ''),
                                     mimeType: 'image/png'
                                 })
                             } else {
-                                // 其他格式，尝试下载
                                 const imageData = await fetchImage(imgUrl)
                                 if (imageData) {
                                     contents.push({
@@ -377,11 +368,9 @@ export async function parseUserMessage(e, options = {}) {
                             }
                         } catch (err) {
                             logger.warn(`[MessageParser][Image] 获取图片失败: ${imgUrl}`, err.message)
-                            // 失败时也记录URL信息
                             text += `[图片:${imgUrl.substring(0, 50)}...]`
                         }
                     } else {
-                        // 无法获取 URL，记录原始信息用于调试
                         const debugInfo = segData.file_id || segData.file || segData.file_unique || '未知'
                         text += `[图片:${debugInfo}]`
                         logger.warn('[MessageParser][Image] 无法获取图片URL，原始数据:', JSON.stringify(val).substring(0, 300))
@@ -390,12 +379,10 @@ export async function parseUserMessage(e, options = {}) {
                 }
                 
                 case 'face': {
-                    // 表情转文字描述
                     const faceId = segData.id || val.id || ''
                     text += `[表情:${faceId}]`
                     break
                 }
-                
                 case 'file': {
                     // 文件信息
                     const fileName = segData.name || val.name || segData.fid || val.fid || '未知文件'
@@ -403,19 +390,14 @@ export async function parseUserMessage(e, options = {}) {
                     text += `[文件:${fileName}${fileUrl ? ' URL:' + fileUrl : ''}]`
                     break
                 }
-                
                 case 'json':
-                    // JSON 卡片消息 - 特别处理合并转发类型
                     try {
                         const jsonData = JSON.parse(val.data)
-                        
-                        // 检查是否是合并转发消息 (com.tencent.multimsg)
                         if (jsonData.app === 'com.tencent.multimsg' && handleForward) {
                             if (debugInfo) debugInfo.parseSteps.push('解析JSON合并转发消息')
                             try {
                                 const resid = jsonData.meta?.detail?.resid
                                 if (resid && e.group?.getForwardMsg) {
-                                    // 使用 resid 获取转发内容
                                     const forwardResult = await parseForwardMessage(e, { id: resid, resid })
                                     if (forwardResult.text) {
                                         text += forwardResult.text
@@ -503,8 +485,29 @@ export async function parseUserMessage(e, options = {}) {
                 }
                 
                 case 'poke': {
-                    // 戳一戳
-                    text += '[戳一戳]'
+                    // 戳一戳消息
+                    const pokeType = segData.type || segData.poke_type || val.type || ''
+                    const pokeId = segData.id || val.id || ''
+                    const pokeName = segData.name || val.name || ''
+                    const pokeStrength = segData.strength || val.strength || ''
+                    
+                    let pokeText = '[戳一戳'
+                    if (pokeName) pokeText += `:${pokeName}`
+                    else if (pokeType) pokeText += `:类型${pokeType}`
+                    if (pokeStrength) pokeText += ` 力度:${pokeStrength}`
+                    pokeText += ']'
+                    text += pokeText
+                    
+                    // 添加结构化数据
+                    contents.push({
+                        type: 'poke_info',
+                        poke: {
+                            type: pokeType,
+                            id: pokeId,
+                            name: pokeName,
+                            strength: pokeStrength
+                        }
+                    })
                     break
                 }
                 
@@ -540,16 +543,37 @@ export async function parseUserMessage(e, options = {}) {
                 
                 case 'dice': {
                     // 骰子
-                    const diceResult = segData.result || val.result || '?'
+                    const diceResult = segData.result || segData.value || val.result || val.value || '?'
                     text += `[骰子:点数${diceResult}]`
+                    contents.push({ type: 'dice_info', result: diceResult })
+                    break
+                }
+                
+                case 'new_dice': {
+                    // 新版骰子 (NC)
+                    const newDiceResult = segData.result || segData.value || val.result || '?'
+                    text += `[骰子:点数${newDiceResult}]`
+                    contents.push({ type: 'dice_info', result: newDiceResult, version: 'new' })
                     break
                 }
                 
                 case 'rps': {
                     // 猜拳
-                    const rpsResult = segData.result || val.result || '?'
-                    const rpsMap = { '1': '石头', '2': '剪刀', '3': '布' }
-                    text += `[猜拳:${rpsMap[rpsResult] || rpsResult}]`
+                    const rpsResult = segData.result || segData.value || val.result || '?'
+                    const rpsMap = { '0': '石头', '1': '石头', '2': '剪刀', '3': '布', '4': '剪刀', '5': '布' }
+                    const rpsName = rpsMap[rpsResult] || rpsResult
+                    text += `[猜拳:${rpsName}]`
+                    contents.push({ type: 'rps_info', result: rpsResult, name: rpsName })
+                    break
+                }
+                
+                case 'new_rps': {
+                    // 新版猜拳 (NC)
+                    const newRpsResult = segData.result || segData.value || val.result || '?'
+                    const newRpsMap = { '0': '石头', '1': '石头', '2': '剪刀', '3': '布' }
+                    const newRpsName = newRpsMap[newRpsResult] || newRpsResult
+                    text += `[猜拳:${newRpsName}]`
+                    contents.push({ type: 'rps_info', result: newRpsResult, name: newRpsName, version: 'new' })
                     break
                 }
                 
@@ -580,7 +604,51 @@ export async function parseUserMessage(e, options = {}) {
                 
                 case 'gift': {
                     // 礼物
-                    text += '[礼物]'
+                    const giftId = segData.id || val.id || ''
+                    const giftQq = segData.qq || val.qq || ''
+                    text += `[礼物${giftId ? ':' + giftId : ''}${giftQq ? ' 给:' + giftQq : ''}]`
+                    break
+                }
+                
+                case 'shake': {
+                    // 窗口抖动
+                    text += '[窗口抖动]'
+                    break
+                }
+                
+                case 'anonymous': {
+                    // 匿名消息标记
+                    const anonIgnore = segData.ignore || val.ignore || '0'
+                    text += anonIgnore === '1' ? '[匿名(强制)]' : '[匿名]'
+                    break
+                }
+                
+                case 'basketball': {
+                    // 篮球表情
+                    const basketResult = segData.result || val.result || '?'
+                    text += `[篮球:${basketResult}]`
+                    break
+                }
+                
+                case 'bubble_face': {
+                    // 气泡表情
+                    const bubbleId = segData.id || val.id || ''
+                    const bubbleCount = segData.count || val.count || '1'
+                    text += `[气泡表情:${bubbleId}${bubbleCount > 1 ? ' x' + bubbleCount : ''}]`
+                    break
+                }
+                
+                case 'tts': {
+                    // TTS 语音
+                    const ttsText = segData.text || val.text || ''
+                    text += `[TTS语音:${ttsText.substring(0, 50)}${ttsText.length > 50 ? '...' : ''}]`
+                    break
+                }
+                
+                case 'touch': {
+                    // 触摸/拍一拍
+                    const touchId = segData.id || val.id || ''
+                    text += `[拍一拍${touchId ? ':' + touchId : ''}]`
                     break
                 }
                 
@@ -1582,19 +1650,22 @@ export function getImages(message) {
  */
 export { cleanCQCode }
 
-// ==================== 标准化消息段构建器 ====================
-// 兼容 icqq / OneBot v11 / NapCat
 
-/**
- * 消息段构建器 - 标准化API
- * @see https://icqq.pages.dev/
- * @see https://napneko.github.io/onebot/sement
- */
 export const segment = {
+    /**
+     * 自定义消息段
+     * @param {string} type - 消息类型
+     * @param {Object} data - 消息内容
+     */
+    custom: (type, data) => ({ type, ...data }),
+    
+    /**
+     * Raw消息 (TRSS)
+     * @param {Object} data - raw内容
+     */
+    raw: (data) => ({ type: 'raw', data }),
     /** 文本消息 */
     text: (text) => ({ type: 'text', data: { text: String(text) } }),
-    
-    /** 图片消息 - file可以是URL/base64/本地路径 */
     image: (file, opts = {}) => ({ 
         type: 'image', 
         data: { file, ...opts } 
@@ -1685,18 +1756,53 @@ export const segment = {
     
     /** 骰子 */
     dice: () => ({ type: 'dice', data: {} }),
-    
     /** 猜拳 */
     rps: () => ({ type: 'rps', data: {} }),
+    /** Markdown消息 (NapCat/TRSS) */
+    markdown: (content, params) => ({ 
+        type: 'markdown', 
+        data: typeof content === 'object' 
+            ? content 
+            : { content, ...(params || {}) }
+    }),
     
-    /** Markdown消息 (NapCat) */
-    markdown: (content) => ({ type: 'markdown', data: { content } }),
+    /** 按钮键盘 (NapCat) */
+    keyboard: (content) => ({
+        type: 'keyboard',
+        data: typeof content === 'object' 
+            ? content 
+            : { content }
+    }),
     
     /** 推荐联系人/群 */
-    contact: (type, id) => ({ type: 'contact', data: { type, id: String(id) } })
+    contact: (type, id) => ({ type: 'contact', data: { type, id: String(id) } }),
+    
+    /** TTS语音 */
+    tts: (text) => ({ type: 'tts', data: { text } }),
+    
+    /** 触摸/拍一拍 */
+    touch: (id) => ({ type: 'touch', data: { id: String(id) } }),
+    /** 礼物消息 */
+    gift: (qq, id) => ({ type: 'gift', data: { qq: String(qq), id } }),
+    /** 窗口抖动 */
+    shake: () => ({ type: 'shake', data: {} }),
+    /** 匿名消息 */
+    anonymous: (ignore = false) => ({ type: 'anonymous', data: { ignore: ignore ? 1 : 0 } }),
+    /** 按钮消息  */
+    button: (buttons) => ({ type: 'button', data: { buttons } }),
+    /** 气泡表情 */
+    bubble_face: (id, count = 1) => ({ type: 'bubble_face', data: { id, count } }),
+    /** 篮球表情 */
+    basketball: () => ({ type: 'basketball', data: {} }),
+    /** 新版骰子 (可指定点数 1-6，默认随机) */
+    new_dice: (value) => ({ type: 'new_dice', data: value ? { id: value } : {} }),
+    /** 新版猜拳 (可指定 1石头/2剪刀/3布，默认随机) */
+    new_rps: (value) => ({ type: 'new_rps', data: value ? { id: value } : {} }),
+    /** 长消息 (NapCat) */
+    long_msg: (id) => ({ type: 'long_msg', data: { id } }),
+    /** 天气分享 (NapCat) */
+    weather: (city, code) => ({ type: 'weather', data: { city, code } })
 }
-
-// ==================== 卡片消息解析器 ====================
 
 /**
  * JSON卡片类型
@@ -1707,7 +1813,6 @@ export const CardType = {
     MINIAPP: 'com.tencent.miniapp',       // 小程序
     MUSIC: 'com.tencent.music',           // 音乐分享
 }
-
 /**
  * 卡片消息解析器
  */
@@ -1777,7 +1882,6 @@ export const CardParser = {
             return null
         }
     },
-
     /** 判断是否是转发消息卡片 */
     isForward: (json) => CardParser.parse(json)?.type === 'forward',
     

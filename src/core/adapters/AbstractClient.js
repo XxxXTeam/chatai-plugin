@@ -86,26 +86,45 @@ export function parseXmlToolCalls(text) {
         if (blockContent.startsWith('[') || blockContent.startsWith('{')) {
             try {
                 let parsed = JSON.parse(blockContent)
-                // 统一为数组
-                if (!Array.isArray(parsed)) parsed = [parsed]
-                
-                for (const item of parsed) {
-                    if (item.name && (item.arguments !== undefined || Object.keys(item).length > 1)) {
-                        toolCalls.push({
-                            id: `json_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                            type: 'function',
-                            function: {
-                                name: item.name,
-                                arguments: typeof item.arguments === 'string'
-                                    ? item.arguments
-                                    : JSON.stringify(item.arguments || {})
-                            }
-                        })
-                        logger.debug(`[Tool Parser] 解析到JSON代码块格式: ${item.name}`)
+                const beforeCount = toolCalls.length
+                if (parsed.tool_calls && Array.isArray(parsed.tool_calls)) {
+                    for (const tc of parsed.tool_calls) {
+                        const funcName = tc.function?.name || tc.name
+                        const funcArgs = tc.function?.arguments || tc.arguments
+                        if (funcName) {
+                            toolCalls.push({
+                                id: tc.id || `json_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                type: 'function',
+                                function: {
+                                    name: funcName,
+                                    arguments: typeof funcArgs === 'string' ? funcArgs : JSON.stringify(funcArgs || {})
+                                }
+                            })
+                            logger.debug(`[Tool Parser] 解析到tool_calls格式: ${funcName}`)
+                        }
+                    }
+                } else {
+                    // 格式B: [{"name": "xxx", "arguments": {...}}] 或 {"name": "xxx"}
+                    if (!Array.isArray(parsed)) parsed = [parsed]
+                    for (const item of parsed) {
+                        // 支持 function.name 或直接 name
+                        const funcName = item.function?.name || item.name
+                        const funcArgs = item.function?.arguments || item.arguments
+                        if (funcName && (funcArgs !== undefined || Object.keys(item).length > 1)) {
+                            toolCalls.push({
+                                id: item.id || `json_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                type: 'function',
+                                function: {
+                                    name: funcName,
+                                    arguments: typeof funcArgs === 'string' ? funcArgs : JSON.stringify(funcArgs || {})
+                                }
+                            })
+                            logger.debug(`[Tool Parser] 解析到JSON代码块格式: ${funcName}`)
+                        }
                     }
                 }
                 // 只有成功解析为工具调用时才移除代码块
-                if (toolCalls.length > 0) {
+                if (toolCalls.length > beforeCount) {
                     cleanText = cleanText.replace(blockMatch[0], '').trim()
                 }
             } catch {

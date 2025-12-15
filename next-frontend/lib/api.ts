@@ -1,8 +1,5 @@
 import axios from 'axios'
-
-// 静态导出时使用空字符串，API 请求使用相对路径
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || ''
-
 export const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
@@ -10,8 +7,6 @@ export const api = axios.create({
     'Content-Type': 'application/json',
   },
 })
-
-// Request interceptor - add auth token
 api.interceptors.request.use((config) => {
   const token = typeof window !== 'undefined' ? localStorage.getItem('chaite_token') : null
   if (token) {
@@ -19,13 +14,10 @@ api.interceptors.request.use((config) => {
   }
   return config
 })
-
-// Response interceptor - extract data and handle errors
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
     if (error.response?.status === 401) {
-      // Redirect to login (避免在登录页循环)
       if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
         localStorage.removeItem('chaite_token')
         window.location.href = '/login/'
@@ -34,16 +26,12 @@ api.interceptors.response.use(
     throw error
   }
 )
-
-// Config API
 export const configApi = {
   get: () => api.get('/api/config'),
   update: (data: any) => api.post('/api/config', data),
   getAdvanced: () => api.get('/api/config/advanced'),
   updateAdvanced: (data: any) => api.put('/api/config/advanced', data),
 }
-
-// Channels API
 export const channelsApi = {
   list: (withStats = false) => api.get(`/api/channels/list?withStats=${withStats}`),
   get: (id: string) => api.get(`/api/channels/${id}`),
@@ -54,8 +42,6 @@ export const channelsApi = {
   fetchModels: (data: any) => api.post('/api/channels/fetch-models', data),
   getStats: () => api.get('/api/channels/stats'),
 }
-
-// Auth API
 export const authApi = {
   login: (password: string) => api.post('/api/auth/login', { password }),
   loginWithToken: (token: string) => api.post('/api/auth/login', { token }),
@@ -70,8 +56,6 @@ export const conversationsApi = {
   delete: (id: string) => api.delete(`/api/conversations/${id}`),
   clearAll: () => api.delete('/api/conversations/clear-all'),
 }
-
-// Presets API (后端用 /api/preset 单数)
 export const presetsApi = {
   list: () => api.get('/api/preset/list'),
   get: (id: string) => api.get(`/api/preset/${id}`),
@@ -265,5 +249,24 @@ export const placeholdersApi = {
   list: () => api.get('/api/placeholders'),
   preview: (template: string, context?: Record<string, string>) => 
     api.post('/api/placeholders/preview', { template, context }),
+}
+
+export const statsApi = {
+  getOverview: () => api.get('/api/stats'),
+  getFull: () => api.get('/api/stats/full'),
+  reset: () => api.post('/api/stats/reset'),
+}
+
+export const imageGenApi = {
+  getPresets: () => api.get('/api/imagegen/presets'),
+  reloadPresets: () => api.post('/api/imagegen/presets/reload'),
+  updatePresets: (sourceName?: string) => api.post('/api/imagegen/presets/update', { sourceName }),
+  getConfig: () => api.get('/api/imagegen/config'),
+  updateConfig: (data: any) => api.put('/api/imagegen/config', data),
+  addSource: (data: { name: string; url: string; enabled?: boolean }) => api.post('/api/imagegen/sources', data),
+  deleteSource: (index: number) => api.delete(`/api/imagegen/sources/${index}`),
+  addCustomPreset: (data: { keywords: string[]; prompt: string; needImage?: boolean }) => 
+    api.post('/api/imagegen/custom-presets', data),
+  deleteCustomPreset: (index: number) => api.delete(`/api/imagegen/custom-presets/${index}`),
 }
 

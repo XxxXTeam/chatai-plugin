@@ -1074,173 +1074,6 @@ export default function SettingsPage() {
           </Card>
 
           <Card>
-            <CardHeader><CardTitle>AI图片/视频生成</CardTitle></CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div><Label>启用</Label><p className="text-sm text-muted-foreground">可使用 #文生图、#图生图、#文生视频、#图生视频、#谷歌状态 等命令</p></div>
-                <Switch checked={config.features?.imageGen?.enabled ?? true} onCheckedChange={(v) => updateConfig('features.imageGen.enabled', v)} />
-              </div>
-              {config.features?.imageGen?.enabled && (
-                <>
-                  <Separator />
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <Label>API配置</Label>
-                        <p className="text-xs text-muted-foreground">支持多个API，会按顺序轮询和故障转移</p>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          const apis = config.features?.imageGen?.apis || []
-                          updateConfig('features.imageGen.apis', [...apis, { baseUrl: '', apiKey: '', models: [] }])
-                        }}
-                      >
-                        <Plus className="h-4 w-4 mr-1" /> 添加API
-                      </Button>
-                    </div>
-                    
-                    {(config.features?.imageGen?.apis || []).map((api, index) => (
-                      <div key={index} className="p-3 border rounded-lg space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm font-medium">API {index + 1}</span>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6"
-                            onClick={() => {
-                              const apis = [...(config.features?.imageGen?.apis || [])]
-                              apis.splice(index, 1)
-                              updateConfig('features.imageGen.apis', apis)
-                            }}
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
-                        <div className="grid gap-2">
-                          <Label className="text-xs">API地址</Label>
-                          <Input
-                            value={api.baseUrl || ''}
-                            onChange={(e) => {
-                              const apis = [...(config.features?.imageGen?.apis || [])]
-                              apis[index] = { ...apis[index], baseUrl: e.target.value }
-                              updateConfig('features.imageGen.apis', apis)
-                            }}
-                            placeholder="https://business.928100.xyz"
-                          />
-                        </div>
-                        <div className="grid gap-2">
-                          <Label className="text-xs">API密钥</Label>
-                          <Input
-                            type="password"
-                            value={api.apiKey || ''}
-                            onChange={(e) => {
-                              const apis = [...(config.features?.imageGen?.apis || [])]
-                              apis[index] = { ...apis[index], apiKey: e.target.value }
-                              updateConfig('features.imageGen.apis', apis)
-                            }}
-                            placeholder="sk-..."
-                          />
-                        </div>
-                        <div className="grid gap-2">
-                          <div className="flex items-center justify-between">
-                            <Label className="text-xs">可用模型 ({api.models?.length || 0})</Label>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 text-xs"
-                              disabled={!api.baseUrl}
-                              onClick={async () => {
-                                if (!api.baseUrl) return
-                                try {
-                                  const res = await channelsApi.fetchModels({
-                                    adapterType: 'openai',
-                                    baseUrl: api.baseUrl,
-                                    apiKey: api.apiKey
-                                  })
-                                  const models = (res as any)?.data?.models || []
-                                  const apis = [...(config.features?.imageGen?.apis || [])]
-                                  apis[index] = { ...apis[index], models }
-                                  updateConfig('features.imageGen.apis', apis)
-                                  toast.success(`获取到 ${models.length} 个模型`)
-                                } catch (err) {
-                                  toast.error('获取模型失败')
-                                }
-                              }}
-                            >
-                              <RefreshCw className="h-3 w-3 mr-1" /> 获取模型
-                            </Button>
-                          </div>
-                          {api.models?.length > 0 && (
-                            <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
-                              {api.models.slice(0, 20).map((m) => (
-                                <Badge key={m} variant="secondary" className="text-xs">{m}</Badge>
-                              ))}
-                              {api.models.length > 20 && (
-                                <Badge variant="outline" className="text-xs">+{api.models.length - 20}</Badge>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                    
-                    {(config.features?.imageGen?.apis || []).length === 0 && (
-                      <div className="text-center py-4 text-sm text-muted-foreground border border-dashed rounded-lg">
-                        暂无API配置，点击上方按钮添加
-                      </div>
-                    )}
-                  </div>
-                  
-                  <Separator />
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div className="grid gap-2">
-                      <Label>图片模型</Label>
-                      <Select 
-                        value={config.features?.imageGen?.model || ''} 
-                        onValueChange={(v) => updateConfig('features.imageGen.model', v)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="选择或输入模型" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {/* 从所有API的models中汇总 */}
-                          {Array.from(new Set((config.features?.imageGen?.apis || []).flatMap(a => a.models || []))).map(m => (
-                            <SelectItem key={m} value={m}>{m}</SelectItem>
-                          ))}
-                          {(config.features?.imageGen?.apis || []).flatMap(a => a.models || []).length === 0 && (
-                            <SelectItem value="gemini-3-pro-image">gemini-3-pro-image</SelectItem>
-                          )}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="grid gap-2">
-                      <Label>视频模型</Label>
-                      <Select 
-                        value={config.features?.imageGen?.videoModel || ''} 
-                        onValueChange={(v) => updateConfig('features.imageGen.videoModel', v)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="选择或输入模型" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {Array.from(new Set((config.features?.imageGen?.apis || []).flatMap(a => a.models || []))).map(m => (
-                            <SelectItem key={m} value={m}>{m}</SelectItem>
-                          ))}
-                          {(config.features?.imageGen?.apis || []).flatMap(a => a.models || []).length === 0 && (
-                            <SelectItem value="veo-2.0-generate-001">veo-2.0-generate-001</SelectItem>
-                          )}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
             <CardHeader><CardTitle>错误处理</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
@@ -1274,29 +1107,31 @@ export default function SettingsPage() {
         </TabsContent>
       </Tabs>
 
-      {/* 模型选择对话框 */}
+      {/* 模型选择对话框 - 移动端优化 */}
       <Dialog open={modelDialogOpen} onOpenChange={setModelDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[80vh]">
-          <DialogHeader>
+        <DialogContent className="w-[95vw] max-w-2xl max-h-[85vh] sm:max-h-[80vh] flex flex-col overflow-hidden">
+          <DialogHeader className="flex-shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <Settings2 className="h-5 w-5" />
               配置{MODEL_CATEGORY_LABELS[editingModelCategory]}
             </DialogTitle>
             <DialogDescription>
-              从列表中选择需要使用的模型，支持搜索和分组选择
+              从列表中选择需要使用的模型
             </DialogDescription>
           </DialogHeader>
-          <ModelSelector
-            value={tempSelectedModels}
-            allModels={availableModels}
-            onChange={setTempSelectedModels}
-            singleSelect={editingModelCategory === 'default'}
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setModelDialogOpen(false)}>
+          <div className="flex-1 overflow-hidden min-h-0">
+            <ModelSelector
+              value={tempSelectedModels}
+              allModels={availableModels}
+              onChange={setTempSelectedModels}
+              singleSelect={editingModelCategory === 'default'}
+            />
+          </div>
+          <DialogFooter className="flex-shrink-0 pt-4 border-t mt-2 gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setModelDialogOpen(false)} className="flex-1 sm:flex-none">
               取消
             </Button>
-            <Button onClick={confirmModelSelection}>
+            <Button onClick={confirmModelSelection} className="flex-1 sm:flex-none">
               确认选择 ({tempSelectedModels.length})
             </Button>
           </DialogFooter>

@@ -231,7 +231,7 @@ export class OpenAIClient extends AbstractClient {
         }))
         if (requestPayload.tools?.length > 0) {
             const toolNames = requestPayload.tools.map(t => t.function?.name).filter(Boolean)
-            logger.debug('[OpenAI适配器] 可用工具:', toolNames.join(', '))
+           
         }
         if (logger.level === 'debug') {
             const sanitizedMessages = this.sanitizeMessagesForLog(requestPayload.messages)

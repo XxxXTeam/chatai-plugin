@@ -250,6 +250,24 @@ class Config {
                 reaction: {
                     enabled: false,          // 启用表情回应处理
                 },
+                // AI绘图
+                imageGen: {
+                    enabled: true,           // 启用绘图功能
+                    model: 'gemini-3-pro-image',  // 默认模型
+                    videoModel: 'veo-2.0-generate-001',  // 视频生成模型
+                    timeout: 600000,         // 超时时间（毫秒）
+                    maxImages: 3,            // 最大图片数
+                    // API列表
+                    apis: [
+                        { baseUrl: 'https://business.928100.xyz/v1/chat/completions', apiKey: 'X-Free' }
+                    ],
+                    // 预设来源配置
+                    presetSources: [
+                        { name: '云端预设', url: 'https://ht.pippi.top/data.json', enabled: true }
+                    ],
+                    // 自定义预设（面板可编辑）
+                    customPresets: [],
+                },
                 // 语音回复
                 voiceReply: {
                     enabled: false,          // 启用语音回复

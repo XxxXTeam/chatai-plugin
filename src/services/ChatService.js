@@ -13,6 +13,7 @@ import { memoryManager } from './MemoryManager.js'
 import { mcpManager } from '../mcp/McpManager.js'
 import { getScopeManager } from './ScopeManager.js'
 import { databaseService } from './DatabaseService.js'
+import { statsService } from './StatsService.js'
 
 // 获取 scopeManager 实例
 let scopeManager = null
@@ -288,7 +289,9 @@ export class ChatService {
         if (event) {
             setToolContext({ event, bot: event.bot || Bot })
         }
+        await channelManager.init()
         const channel = channelManager.getBestChannel(llmModel)
+        logger.debug(`[ChatService] Channel: ${channel?.id}, hasAdvanced=${!!channel?.advanced}, streaming=${JSON.stringify(channel?.advanced?.streaming)}`)
         const effectivePresetId = presetId || preset?.id || config.get('llm.defaultChatPresetId') || 'default'
         const isNewSession = presetManager.isContextCleared(conversationId)
 
@@ -298,7 +301,7 @@ export class ChatService {
         const channelThinking = channelAdvanced.thinking || {}
         const channelStreaming = channelAdvanced.streaming || {}
         const clientOptions = {
-            enableTools: !isNewSession && (preset?.tools?.enableBuiltinTools !== false),
+            enableTools: preset?.tools?.enableBuiltinTools !== false,
             enableReasoning: preset?.enableReasoning ?? channelThinking.enableReasoning,
             reasoningEffort: channelThinking.defaultLevel || 'low',
             adapterType: adapterType,
@@ -343,6 +346,15 @@ export class ChatService {
         // 获取默认预设的Prompt
         const defaultPrompt = preset?.systemPrompt || presetManager.buildSystemPrompt(effectivePresetId, promptContext)
         
+        // 1.0 全局系统提示词配置
+        const globalSystemPrompt = config.get('context.globalSystemPrompt')
+        const globalPromptMode = config.get('context.globalPromptMode') || 'append' // append | prepend | override
+        let globalPromptText = ''
+        if (globalSystemPrompt && typeof globalSystemPrompt === 'string' && globalSystemPrompt.trim()) {
+            globalPromptText = globalSystemPrompt.trim()
+            logger.info(`[ChatService] 已加载全局系统提示词 (${globalPromptText.length} 字符, 模式: ${globalPromptMode})`)
+        }
+        
         // 1.1 Scope-based Prompts (独立人设逻辑)
         // 如果用户/群组设置了独立人设，则直接使用，不拼接默认人设
         const sm = await ensureScopeManager()
@@ -350,35 +362,24 @@ export class ChatService {
         
         try {
             const scopeGroupId = event?.group_id?.toString() || null
-            // 从 event 获取原始 userId，而不是使用组合的 fullUserId
-            // 因为数据库中存储的是纯 userId，不带群号前缀
             const scopeUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
-            // 如果 userId 包含下划线（fullUserId 格式），提取纯 userId
             const pureUserId = scopeUserId.includes('_') ? scopeUserId.split('_').pop() : scopeUserId
-            
             const independentResult = await sm.getIndependentPrompt(scopeGroupId, pureUserId, defaultPrompt)
-            
-            // 使用独立人设或默认人设
             systemPrompt = independentResult.prompt
-            
             if (independentResult.isIndependent) {
                 logger.debug(`[ChatService] 使用独立人设 (来源: ${independentResult.source})`)
             }
         } catch (e) { 
             logger.warn(`[ChatService] 获取独立人设失败:`, e.message) 
         }
-        
         // 1.1.5 前缀人格覆盖（最高优先级，仅限本次对话）
         if (prefixPersona) {
             systemPrompt = prefixPersona
             logger.debug(`[ChatService] 使用前缀人格覆盖`)
         }
-
-        // 1.2 Memory Context (新对话不加载之前的记忆上下文)
         if (config.get('memory.enabled') && !isNewSession) {
             try {
                 await memoryManager.init()
-                // 获取用户个人记忆
                 const memoryContext = await memoryManager.getMemoryContext(userId, message || '')
                 if (memoryContext) {
                     systemPrompt += memoryContext
@@ -428,11 +429,18 @@ export class ChatService {
             logger.debug('[ChatService] 知识库服务未加载或无内容:', err.message)
         }
 
-        // 1.4 全局系统提示词 - 追加到所有对话
-        const globalSystemPrompt = config.get('context.globalSystemPrompt')
-        if (globalSystemPrompt && typeof globalSystemPrompt === 'string' && globalSystemPrompt.trim()) {
-            systemPrompt += '\n\n' + globalSystemPrompt.trim()
-            logger.debug(`[ChatService] 已添加全局系统提示词 (${globalSystemPrompt.length} 字符)`)
+        // 1.4 全局系统提示词 - 根据模式拼接
+        if (globalPromptText) {
+            if (globalPromptMode === 'prepend') {
+                // 放到最前面
+                systemPrompt = globalPromptText + '\n\n' + systemPrompt
+            } else if (globalPromptMode === 'override') {
+                // 覆盖模式 - 替换整个 systemPrompt
+                systemPrompt = globalPromptText
+            } else {
+                // 默认 append - 追加到末尾
+                systemPrompt += '\n\n' + globalPromptText
+            }
         }
 
         // Construct Messages
@@ -497,9 +505,10 @@ export class ChatService {
         ]
 
         const hasTools = client.tools && client.tools.length > 0
-        const useStreaming = (stream || channelStreaming.enabled === true) && !hasTools    
+        // 现代 API 支持流式 + 工具调用，不再禁用
+        const useStreaming = stream || channelStreaming.enabled === true
         
-        logger.debug(`[ChatService] Request: model=${llmModel}, stream=${useStreaming}, tools=${hasTools ? client.tools.length : 0}`)
+        logger.debug(`[ChatService] Request: model=${llmModel}, stream=${useStreaming}, tools=${hasTools ? client.tools.length : 0}, channelStreaming=${JSON.stringify(channelStreaming)}`)
 
         let finalResponse = null
         let finalUsage = null
@@ -726,6 +735,27 @@ export class ChatService {
             if (channel) {
                 channelManager.endRequest(channel.id)
                 if (finalUsage) channelManager.reportUsage(channel.id, finalUsage?.totalTokens || 0)
+            }
+            
+            // 记录统计
+            try {
+                statsService.recordModelCall({
+                    model: debugInfo?.usedModel || llmModel,
+                    channelId: channel?.id,
+                    userId,
+                    inputTokens: finalUsage?.promptTokens || 0,
+                    outputTokens: finalUsage?.completionTokens || 0,
+                    success: !!finalResponse?.length
+                })
+                
+                // 记录工具调用
+                if (allToolLogs?.length > 0) {
+                    for (const log of allToolLogs) {
+                        statsService.recordToolCall(log.name, !log.isError)
+                    }
+                }
+            } catch (e) {
+                // 统计失败不影响主流程
             }
         }
 

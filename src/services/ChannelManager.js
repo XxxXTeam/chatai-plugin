@@ -11,8 +11,25 @@ const DEFAULT_BASE_URLS = {
     gemini: 'https://generativelanguage.googleapis.com'
 }
 
+/*
+ * @param {string} url 
+ * @returns {boolean}
+ */
+function hasCustomPath(url) {
+    try {
+        const parsed = new URL(url)
+        // 如果路径不为空且不是单独的 /，说明用户指定了自定义路径
+        const path = parsed.pathname.replace(/\/+$/, '')
+        return path && path !== ''
+    } catch (e) {
+        // URL 解析失败时，检查是否包含版本号或 API 路径
+        return /\/v\d+/.test(url) || /\/api\//.test(url) || /\/openai\//.test(url)
+    }
+}
+
 /**
  * 规范化 API Base URL
+ * 默认添加 /v1，除非用户已指定自定义路径
  * @param {string} baseUrl 
  * @param {string} adapterType 
  * @returns {string}
@@ -25,19 +42,14 @@ function normalizeBaseUrl(baseUrl, adapterType) {
     
     // 移除末尾斜杠
     let url = baseUrl.trim().replace(/\/+$/, '')
-    
-    // OpenAI 兼容 API 自动添加 /v1
-    if (adapterType === 'openai') {
-        if (!url.endsWith('/v1') && !url.includes('/chat/') && !url.includes('/models')) {
-            url = url + '/v1'
-        }
+    if (hasCustomPath(url)) {
+        return url
     }
-    
-    // Claude API 自动添加 /v1
+    if (adapterType === 'openai') {
+        url = url + '/v1'
+    }
     if (adapterType === 'claude') {
-        if (!url.endsWith('/v1') && !url.includes('/messages')) {
-            url = url + '/v1'
-        }
+        url = url + '/v1'
     }
     
     return url

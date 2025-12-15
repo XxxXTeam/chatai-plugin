@@ -243,7 +243,19 @@ export default function ChannelsPage() {
     return defaults[adapterType] || ''
   }
 
+  // 检测 URL 是否已包含自定义路径
+  const hasCustomPath = (url: string) => {
+    try {
+      const parsed = new URL(url)
+      const path = parsed.pathname.replace(/\/+$/, '')
+      return path && path !== ''
+    } catch {
+      return /\/v\d+/.test(url) || /\/api\//.test(url) || /\/openai\//.test(url)
+    }
+  }
+
   // 获取完整的 API 路径预览
+  // 默认添加 /v1，除非用户已指定自定义路径
   const getApiPathPreview = (baseUrl: string, adapterType: string) => {
     const url = baseUrl || getDefaultBaseUrl(adapterType)
     if (!url) return ''
@@ -251,17 +263,19 @@ export default function ChannelsPage() {
     // 移除尾部斜杠
     const cleanUrl = url.replace(/\/+$/, '')
     
-    // 根据适配器类型显示不同的路径
+    // 检测是否有自定义路径
+    const hasPath = hasCustomPath(cleanUrl)
+    
+    // 根据适配器类型显示完整路径
     switch (adapterType) {
       case 'openai':
-        // 如果用户已经包含了自定义路径，直接添加 /chat/completions
-        // 如果没有，添加 /v1/chat/completions
-        if (cleanUrl.match(/\/v\d+$/) || cleanUrl.includes('/api/')) {
+        // 没有自定义路径时默认添加 /v1
+        if (hasPath) {
           return `${cleanUrl}/chat/completions`
         }
         return `${cleanUrl}/v1/chat/completions`
       case 'claude':
-        if (cleanUrl.match(/\/v\d+$/)) {
+        if (hasPath) {
           return `${cleanUrl}/messages`
         }
         return `${cleanUrl}/v1/messages`
@@ -461,7 +475,7 @@ export default function ChannelsPage() {
                     />
                     <div className="space-y-1">
                       <p className="text-xs text-muted-foreground">
-                        留空使用官方地址。支持自定义路径，如 <code className="bg-muted px-1 rounded">xxx.com/api/paas/v4</code>
+                        留空使用官方地址。支持自定义路径，如 <code className="bg-muted px-1 rounded">openai.com/api/paas/v4</code>
                       </p>
                       {(form.baseUrl || getDefaultBaseUrl(form.adapterType)) && (
                         <p className="text-xs text-blue-500 dark:text-blue-400 font-mono truncate">
@@ -928,7 +942,7 @@ export default function ChannelsPage() {
               </CardHeader>
               
               <CardContent className="space-y-3">
-                {/* 状态和优先级 */}
+                {/* 状态和统计 */}
                 <div className="flex items-center justify-between text-sm">
                   <div className="flex items-center gap-2">
                     {channel.status === 'active' ? (
@@ -942,6 +956,23 @@ export default function ChannelsPage() {
                     ) : (
                       <Badge variant="secondary" className="text-xs">未测试</Badge>
                     )}
+                    {channel.stats?.totalCalls ? (
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge variant="outline" className="text-xs cursor-help">
+                              <Zap className="h-3 w-3 mr-1" />
+                              {channel.stats.totalCalls}次
+                            </Badge>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>成功率: {channel.stats.successCalls && channel.stats.totalCalls 
+                              ? Math.round(channel.stats.successCalls / channel.stats.totalCalls * 100) 
+                              : 0}%</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    ) : null}
                   </div>
                   <span className="text-xs text-muted-foreground">优先级: {channel.priority || 0}</span>
                 </div>
@@ -1003,10 +1034,10 @@ export default function ChannelsPage() {
         </div>
       )}
 
-      {/* 模型选择对话框 */}
+      {/* 模型选择对话框 - 移动端优化 */}
       <Dialog open={modelSelectorOpen} onOpenChange={setModelSelectorOpen}>
-        <DialogContent className="max-w-2xl max-h-[80vh]">
-          <DialogHeader>
+        <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] sm:max-h-[80vh] flex flex-col">
+          <DialogHeader className="flex-shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <List className="h-5 w-5" />
               选择模型
@@ -1015,16 +1046,18 @@ export default function ChannelsPage() {
               从列表中选择需要使用的模型
             </DialogDescription>
           </DialogHeader>
-          <ModelSelector
-            value={selectedModels}
-            allModels={availableModels}
-            onChange={setSelectedModels}
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setModelSelectorOpen(false)}>
+          <div className="flex-1 overflow-hidden min-h-0">
+            <ModelSelector
+              value={selectedModels}
+              allModels={availableModels}
+              onChange={setSelectedModels}
+            />
+          </div>
+          <DialogFooter className="flex-shrink-0 pt-4 border-t mt-2 gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setModelSelectorOpen(false)} className="flex-1 sm:flex-none">
               取消
             </Button>
-            <Button onClick={handleConfirmModels}>
+            <Button onClick={handleConfirmModels} className="flex-1 sm:flex-none">
               确认选择 ({selectedModels.length})
             </Button>
           </DialogFooter>

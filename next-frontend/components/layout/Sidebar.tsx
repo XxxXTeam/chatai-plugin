@@ -22,6 +22,8 @@ import {
   BookOpen,
   Cpu,
   Database,
+  BarChart3,
+  Wand2,
   type LucideIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -86,6 +88,7 @@ const navGroups: NavGroup[] = [
     items: [
       { href: '/tools', label: '工具配置', icon: Wrench },
       { href: '/mcp', label: 'MCP服务', icon: Bot },
+      { href: '/imagegen', label: '绘图预设', icon: Wand2 },
       { href: '/knowledge', label: '知识库', icon: BookOpen },
       { href: '/memory', label: '记忆管理', icon: Brain },
     ],
@@ -95,6 +98,7 @@ const navGroups: NavGroup[] = [
     label: '数据记录',
     icon: Database,
     items: [
+      { href: '/stats', label: '使用统计', icon: BarChart3 },
       { href: '/conversations', label: '对话历史', icon: MessageSquare },
       { href: '/history', label: '调用记录', icon: History },
     ],
