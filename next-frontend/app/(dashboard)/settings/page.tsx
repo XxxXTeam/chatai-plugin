@@ -65,9 +65,9 @@ interface Config {
   llm: {
     defaultModel: string
     models: {
-      chat: string[]
-      roleplay: string[]
-      search: string[]
+      chat: string
+      roleplay: string
+      search: string
     }
     fallback: {
       enabled: boolean
@@ -167,7 +167,7 @@ const defaultConfig: Config = {
   admin: { masterQQ: [], loginNotifyPrivate: true, sensitiveCommandMasterOnly: true },
   llm: { 
     defaultModel: '', 
-    models: { chat: [], roleplay: [], search: [] },
+    models: { chat: '', roleplay: '', search: '' },
     fallback: { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false }
   },
   context: { maxMessages: 20, autoEnd: { enabled: false, maxRounds: 50 }, groupContextSharing: true, globalSystemPrompt: '' },
@@ -280,19 +280,8 @@ export default function SettingsPage() {
         
         // 确保 llm 和 llm.models 对象存在
         if (!merged.llm) merged.llm = { defaultModel: '', models: {}, fallback: { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false } }
-        if (!merged.llm.models) merged.llm.models = {}
+        if (!merged.llm.models) merged.llm.models = { chat: '', roleplay: '', search: '' }
         if (!merged.llm.fallback) merged.llm.fallback = { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false }
-        
-        // 确保模型配置是数组格式 (后端返回string，前端需要string[])
-        const modelKeys = ['chat', 'roleplay', 'search']
-        modelKeys.forEach(key => {
-          const val = merged.llm.models[key]
-          if (typeof val === 'string') {
-            merged.llm.models[key] = val ? [val] : []
-          } else if (!Array.isArray(val)) {
-            merged.llm.models[key] = []
-          }
-        })
         
         // 确保 prefixPersonas 是数组
         if (!Array.isArray(merged.trigger?.prefixPersonas)) {
@@ -360,29 +349,36 @@ export default function SettingsPage() {
     // 获取当前模型配置
     let currentModels: string[] = []
     if (category === 'default') {
-      // 默认模型是单个值，转为数组
       currentModels = config.llm?.defaultModel ? [config.llm.defaultModel] : []
     } else if (category === 'fallback') {
       currentModels = config.llm?.fallback?.models || []
     } else {
-      currentModels = config.llm?.models?.[category] || []
+      // chat/roleplay/search 是单个字符串
+      const model = config.llm?.models?.[category]
+      currentModels = model ? [model] : []
     }
-    setTempSelectedModels(Array.isArray(currentModels) ? currentModels : [])
+    setTempSelectedModels(currentModels)
     setModelDialogOpen(true)
   }
-
-  // 确认模型选择
   const confirmModelSelection = () => {
     if (!config) return
     if (editingModelCategory === 'default') {
-      // 默认模型只取第一个
       updateConfig('llm.defaultModel', tempSelectedModels[0] || '')
     } else if (editingModelCategory === 'fallback') {
       updateConfig('llm.fallback.models', tempSelectedModels)
     } else {
-      updateConfig(`llm.models.${editingModelCategory}`, tempSelectedModels)
+      // chat/roleplay/search 只保存第一个选中的模型
+      updateConfig(`llm.models.${editingModelCategory}`, tempSelectedModels[0] || '')
     }
     setModelDialogOpen(false)
+  }
+  
+  // 判断是否是单选模式
+  const isSingleSelectMode = () => {
+    return editingModelCategory === 'default' || 
+           editingModelCategory === 'chat' || 
+           editingModelCategory === 'roleplay' || 
+           editingModelCategory === 'search'
   }
 
   // 获取模型数量显示
@@ -394,7 +390,7 @@ export default function SettingsPage() {
     if (category === 'fallback') {
       return config.llm?.fallback?.models?.length || 0
     }
-    return config.llm?.models?.[category]?.length || 0
+    return config.llm?.models?.[category] ? 1 : 0
   }
 
   const handleSave = async () => {
@@ -794,28 +790,20 @@ export default function SettingsPage() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">模型分类</CardTitle>
-              <CardDescription>为不同场景配置专用模型</CardDescription>
+              <CardDescription>为不同场景配置专用模型（同一模型配置多个渠道时自动轮询）</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               {(['chat', 'roleplay', 'search'] as ModelCategory[]).map((category) => (
                 <div key={category} className="flex items-center justify-between p-3 border rounded-lg">
                   <div>
                     <Label>{MODEL_CATEGORY_LABELS[category]}</Label>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {(config.llm?.models?.[category] || []).slice(0, 3).map((m) => (
-                        <Badge key={m} variant="secondary" className="text-xs">{m}</Badge>
-                      ))}
-                      {(config.llm?.models?.[category]?.length || 0) > 3 && (
-                        <Badge variant="outline" className="text-xs">+{(config.llm?.models?.[category]?.length || 0) - 3}</Badge>
-                      )}
-                      {!config.llm?.models?.[category]?.length && (
-                        <span className="text-xs text-muted-foreground">未配置，使用默认模型</span>
-                      )}
-                    </div>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      {config.llm?.models?.[category] || '使用默认模型'}
+                    </p>
                   </div>
                   <Button variant="outline" size="sm" onClick={() => openModelDialog(category)} disabled={availableModels.length === 0}>
                     <Settings2 className="mr-2 h-4 w-4" />
-                    配置 ({getModelCount(category)})
+                    配置
                   </Button>
                 </div>
               ))}
@@ -1203,7 +1191,9 @@ export default function SettingsPage() {
               配置{MODEL_CATEGORY_LABELS[editingModelCategory]}
             </DialogTitle>
             <DialogDescription>
-              从列表中选择需要使用的模型
+              {isSingleSelectMode() 
+                ? '选择一个模型（多个渠道支持此模型时自动轮询）' 
+                : '选择多个备选模型，按优先级排序'}
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-hidden min-h-0">
@@ -1211,7 +1201,7 @@ export default function SettingsPage() {
               value={tempSelectedModels}
               allModels={availableModels}
               onChange={setTempSelectedModels}
-              singleSelect={editingModelCategory === 'default'}
+              singleSelect={isSingleSelectMode()}
             />
           </div>
           <DialogFooter className="flex-shrink-0 pt-4 border-t mt-2 gap-2 sm:gap-0">

@@ -74,9 +74,7 @@ export function parseXmlToolCalls(text) {
             logger.warn(`[Tool Parser] <tool_call>解析失败:`, parseErr.message)
         }
     }
-    cleanText = cleanText.replace(toolCallRegex, '').trim()
-    
-    // ===== 格式3: ```json [...] ``` (Markdown代码块中的JSON数组) =====
+    cleanText = cleanText.replace(toolCallRegex, '').trim() 
     const jsonCodeBlockRegex = /```(?:json)?\s*\n?([\s\S]*?)\n?```/gi
     const codeBlockMatches = [...text.matchAll(jsonCodeBlockRegex)]
     
@@ -132,9 +130,6 @@ export function parseXmlToolCalls(text) {
             }
         }
     }
-    
-    // ===== 格式4: 纯JSON数组 [{"name": "xxx", "arguments": {...}}] =====
-    // 只在没有从其他格式解析到工具调用时尝试
     if (toolCalls.length === 0) {
         // 匹配独立的JSON数组（以[开头，以]结尾）
         const jsonArrayRegex = /\[\s*\{[\s\S]*?"name"\s*:\s*"[^"]+[\s\S]*?\}\s*\]/g
@@ -622,7 +617,11 @@ export class AbstractClient {
 
             // Save model response
             if (this.shouldPersistHistory(modelResponse)) {
-                await this.historyManager.saveHistory(modelResponse, options.conversationId)
+                const filteredResponse = this.filterToolCallJsonFromResponse(modelResponse)
+                // 过滤后内容不为空才保存
+                if (filteredResponse.content?.length > 0) {
+                    await this.historyManager.saveHistory(filteredResponse, options.conversationId)
+                }
             }
 
             options.parentMessageId = modelResponse.id
@@ -724,7 +723,7 @@ export class AbstractClient {
                 model: options.model,
                 contents: modelResponse.content,
                 usage: modelResponse.usage,
-                toolCallLogs: options.toolCallLogs || [], // 返回工具调用日志
+                toolCallLogs: options._toolCallLogs || [], // 返回工具调用日志
             }
         }
 
@@ -857,7 +856,59 @@ export class AbstractClient {
         throw new Error('Method not implemented.')
     }
 
-    // ==================== 工具调用辅助方法 ====================
+    /**
+     * @param {Object} response - 模型响应
+     * @returns {Object} 过滤后的响应
+     */
+    filterToolCallJsonFromResponse(response) {
+        if (!response || !response.content || !Array.isArray(response.content)) {
+            return response
+        }
+        
+        const filteredContent = response.content.filter(item => {
+            if (item.type !== 'text' || !item.text) return true
+            
+            const text = item.text.trim()
+            
+            // 检测纯 JSON 格式的工具调用
+            if (text.startsWith('{') && text.endsWith('}')) {
+                try {
+                    const parsed = JSON.parse(text)
+                    if (parsed.tool_calls && Array.isArray(parsed.tool_calls)) {
+                        // 检查是否只有 tool_calls 字段
+                        const keys = Object.keys(parsed)
+                        if (keys.length === 1) return false // 过滤掉
+                    }
+                } catch {
+                    // 不是有效 JSON，保留
+                }
+            }
+            
+            // 检测代码块包裹的工具调用 JSON
+            const codeBlockMatch = text.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i)
+            if (codeBlockMatch) {
+                const inner = codeBlockMatch[1].trim()
+                if (inner.startsWith('{') && inner.endsWith('}')) {
+                    try {
+                        const parsed = JSON.parse(inner)
+                        if (parsed.tool_calls && Array.isArray(parsed.tool_calls)) {
+                            const keys = Object.keys(parsed)
+                            if (keys.length === 1) return false
+                        }
+                    } catch {
+                        // 不是有效 JSON，保留
+                    }
+                }
+            }
+            
+            return true
+        })
+        
+        return {
+            ...response,
+            content: filteredContent
+        }
+    }
 
     /**
      * 初始化工具调用追踪状态
@@ -903,8 +954,6 @@ export class AbstractClient {
         if (limitConfig.maxTotalToolCalls && options._totalToolCallCount > limitConfig.maxTotalToolCalls) {
             return `工具调用总次数超过限制(${limitConfig.maxTotalToolCalls})，已自动停止`
         }
-
-        // ===== 精确签名检测（完全相同的调用）=====
         const signature = this.buildToolCallSignature(toolCalls)
         
         // 检查是否与上次调用完全相同
@@ -921,11 +970,7 @@ export class AbstractClient {
             options._consecutiveIdenticalToolCallCount > limitConfig.maxConsecutiveIdenticalCalls) {
             return `检测到连续${options._consecutiveIdenticalToolCallCount}次完全相同的工具调用，已自动停止`
         }
-        
-        // ===== 简化签名检测（功能相似的调用，如 rmdir 和 rd）=====
         const simplifiedSig = this.buildSimplifiedSignature(toolCalls)
-        
-        // 检查是否与上次调用功能相似
         if (options._lastSimplifiedSignature === simplifiedSig) {
             options._consecutiveSimilarToolCallCount = (options._consecutiveSimilarToolCallCount || 0) + 1
             this.logger.warn(`[Tool] 检测到功能相似的重复调用 #${options._consecutiveSimilarToolCallCount}: ${simplifiedSig.substring(0, 80)}`)
@@ -939,8 +984,6 @@ export class AbstractClient {
             options._consecutiveSimilarToolCallCount > limitConfig.maxSimilarCalls) {
             return `检测到连续${options._consecutiveSimilarToolCallCount}次功能相似的工具调用`
         }
-        
-        // ===== 历史签名检测（防止循环调用）=====
         if (!options._toolCallSignatureHistory) {
             options._toolCallSignatureHistory = new Map()
         }
@@ -951,8 +994,6 @@ export class AbstractClient {
         if (prevCount >= 2) {
             return `工具调用"${toolCalls[0]?.function?.name}"已重复${prevCount + 1}次，检测到循环调用`
         }
-        
-        // ===== 简化签名历史检测 =====
         if (!options._simplifiedSignatureHistory) {
             options._simplifiedSignatureHistory = new Map()
         }
@@ -963,14 +1004,11 @@ export class AbstractClient {
         if (prevSimCount >= 3) {
             return `功能相似的工具调用已重复${prevSimCount + 1}次，检测到循环调用`
         }
-        
-        // ===== 检测同一请求中的重复工具调用 =====
         if (toolCalls.length > 1) {
             const callSignatures = toolCalls.map(tc => `${tc.function?.name}:${tc.function?.arguments}`)
             const uniqueSignatures = new Set(callSignatures)
             if (uniqueSignatures.size < toolCalls.length) {
                 this.logger.warn(`[Tool] 检测到同一响应中的重复工具调用，去重处理`)
-                // 返回去重建议（但不阻止，由调用方决定是否去重）
             }
         }
 

@@ -8,7 +8,6 @@
  * @type {Array<import('./PresetManager.js').Preset>}
  */
 export const BUILTIN_PRESETS = [
-    // ==================== 通用助手类 ====================
     {
         id: 'builtin_assistant',
         name: '智能助手',
@@ -79,8 +78,6 @@ JavaScript、TypeScript、Python、Java、Go、Rust、C/C++等主流语言`,
             enableMcpTools: true
         }
     },
-
-    // ==================== 角色扮演类 ====================
     {
         id: 'builtin_catgirl',
         name: '可爱猫娘',
@@ -206,8 +203,6 @@ JavaScript、TypeScript、Python、Java、Go、Rust、C/C++等主流语言`,
             enableBuiltinTools: true
         }
     },
-
-    // ==================== 功能类 ====================
     {
         id: 'builtin_translator',
         name: '翻译助手',
@@ -326,8 +321,6 @@ JavaScript、TypeScript、Python、Java、Go、Rust、C/C++等主流语言`,
             enableMcpTools: true
         }
     },
-
-    // ==================== 群聊管理类 ====================
     {
         id: 'builtin_group_manager',
         name: '群管理员',
@@ -417,8 +410,6 @@ JavaScript、TypeScript、Python、Java、Go、Rust、C/C++等主流语言`,
             disabledTools: ['kick_member', 'mute_member', 'execute_command']
         }
     },
-
-    // ==================== 知识问答类 ====================
     {
         id: 'builtin_tutor',
         name: '学习导师',

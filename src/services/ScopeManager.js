@@ -371,9 +371,6 @@ export class ScopeManager {
 
     return mergedPrompt
   }
-
-  // ==================== 群用户组合作用域方法 ====================
-
   /**
    * 获取群用户组合配置
    * @param {string} groupId 群组ID

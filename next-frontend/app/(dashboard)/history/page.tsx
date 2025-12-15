@@ -97,9 +97,34 @@ export default function HistoryPage() {
     return `${(duration / 1000).toFixed(2)}s`
   }
 
-  const formatJson = (data: unknown) => {
+  const formatJson = (data: unknown): string => {
     try {
-      return JSON.stringify(data, null, 2)
+      // 递归解析嵌套的 JSON 字符串
+      const deepParse = (obj: unknown): unknown => {
+        if (typeof obj === 'string') {
+          // 尝试解析 JSON 字符串
+          try {
+            const parsed = JSON.parse(obj)
+            return deepParse(parsed)
+          } catch {
+            return obj
+          }
+        }
+        if (Array.isArray(obj)) {
+          return obj.map(deepParse)
+        }
+        if (obj && typeof obj === 'object') {
+          const result: Record<string, unknown> = {}
+          for (const [key, value] of Object.entries(obj)) {
+            result[key] = deepParse(value)
+          }
+          return result
+        }
+        return obj
+      }
+      
+      const parsed = deepParse(data)
+      return JSON.stringify(parsed, null, 2)
     } catch {
       return String(data)
     }

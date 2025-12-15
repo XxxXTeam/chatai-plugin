@@ -154,6 +154,9 @@ class StatsService {
         this.stats.tools.byTool[toolName].calls++
         if (success) this.stats.tools.byTool[toolName].success++
         else this.stats.tools.byTool[toolName].failed++
+        
+        // 保存统计数据
+        this.save()
     }
 
     /**

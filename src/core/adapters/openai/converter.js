@@ -111,17 +111,11 @@ registerFromChaiteConverter('openai', (source) => {
             }
         }
         case 'tool': {
-            const toolMsgs = source.content.map(tcr => {
-                console.log('[OpenAI Converter] tool消息转换:', {
-                    原始tool_call_id: tcr.tool_call_id,
-                    content长度: tcr.content?.length
-                })
-                return {
-                    role: 'tool',
-                    tool_call_id: tcr.tool_call_id,
-                    content: tcr.content,
-                }
-            })
+            const toolMsgs = source.content.map(tcr => ({
+                role: 'tool',
+                tool_call_id: tcr.tool_call_id,
+                content: tcr.content,
+            }))
             return toolMsgs
         }
         case 'system': {

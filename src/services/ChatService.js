@@ -505,34 +505,28 @@ export class ChatService {
         ]
 
         const hasTools = client.tools && client.tools.length > 0
-        // 现代 API 支持流式 + 工具调用，不再禁用
         const useStreaming = stream || channelStreaming.enabled === true
-        
         logger.debug(`[ChatService] Request: model=${llmModel}, stream=${useStreaming}, tools=${hasTools ? client.tools.length : 0}, channelStreaming=${JSON.stringify(channelStreaming)}`)
-
         let finalResponse = null
         let finalUsage = null
         let allToolLogs = []
-        
         try {
-            // 设置工具调用中间消息回调（用于发送工具调用过程中的消息）
-            // 当模型返回文本+工具调用时，先发送文本再执行工具
             if (event && event.reply) {
                 client.setOnMessageWithToolCall(async (data) => {
-                    // 新格式：data = { intermediateText, contents, toolCalls, isIntermediate }
                     if (data?.intermediateText && data.isIntermediate) {
-                        const text = data.intermediateText.trim()
+                        let text = data.intermediateText.trim()
                         if (text) {
+                            if (this.isPureToolCallJson(text)) {
+                                return
+                            }
                             await event.reply(text, true)
                         }
                     }
-                    // 兼容旧格式：data = content对象
                     else if (data?.type === 'text' && data.text) {
                         await event.reply(data.text, true)
                     }
                 })
             }
-            
             const requestOptions = {
                 model: llmModel,
                 maxToken: channelLlm.maxTokens || 4000,
@@ -831,13 +825,10 @@ export class ChatService {
      */
     async sendVoiceReply(event, text, voiceConfig) {
         const provider = voiceConfig.ttsProvider || 'system'
-        
-        // 截取文本长度
         const maxLength = voiceConfig.maxTextLength || 500
         const truncatedText = text.length > maxLength ? text.substring(0, maxLength) + '...' : text
         
         try {
-            // 尝试使用 Miao-Yunzai 的 TTS
             if (provider === 'miao' && global.Bot?.app?.getService) {
                 const Miao = global.Bot.app.getService('Miao')
                 if (Miao && Miao.tts) {
@@ -845,23 +836,13 @@ export class ChatService {
                     return
                 }
             }
-            
-            // TODO: 支持其他 TTS 提供者 (vits, edge-tts, openai)
-            // 需要在 Phase 4 实现 TTSService
-            
             logger.warn('[ChatService] No TTS provider available')
         } catch (err) {
             logger.error('[ChatService] TTS error:', err.message)
             throw err
         }
     }
-
-    /**
-     * Stream chat message - 流式输出（简化版）
-     */
     async *streamMessage(options) {
-        // 简化实现：将流式输出委托给 LlmService
-        // 工具调用在流式模式下更复杂，建议使用 sendMessage
         const response = await this.sendMessage(options)
         yield* response.response
     }
@@ -877,11 +858,46 @@ export class ChatService {
         const conversationId = contextManager.getConversationId(userId, groupId)
         await historyManager.deleteConversation(conversationId)
         await contextManager.cleanContext(conversationId)
-        
-        // 标记上下文已清除，新对话不会传递之前的人设状态
         presetManager.markContextCleared(conversationId)
-        
         logger.debug(`[ChatService] 对话已清除: ${conversationId}`)
+    }
+    isPureToolCallJson(text) {
+        if (!text || typeof text !== 'string') return false
+        
+        const trimmed = text.trim()
+        if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+            try {
+                const parsed = JSON.parse(trimmed)
+                const keys = Object.keys(parsed)
+                if (keys.length === 1 && keys[0] === 'tool_calls' && Array.isArray(parsed.tool_calls)) {
+                    return parsed.tool_calls.every(tc => 
+                        tc && typeof tc === 'object' && 
+                        (tc.function?.name || tc.name) 
+                    )
+                }
+            } catch {
+                return false
+            }
+        }
+        const codeBlockMatch = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i)
+        if (codeBlockMatch) {
+            const inner = codeBlockMatch[1].trim()
+            if (inner.startsWith('{') && inner.endsWith('}')) {
+                try {
+                    const parsed = JSON.parse(inner)
+                    const keys = Object.keys(parsed)
+                    if (keys.length === 1 && keys[0] === 'tool_calls' && Array.isArray(parsed.tool_calls)) {
+                        return parsed.tool_calls.every(tc => 
+                            tc && typeof tc === 'object' && 
+                            (tc.function?.name || tc.name)
+                        )
+                    }
+                } catch {
+                    return false
+                }
+            }
+        }
+        return false
     }
     
     async exportHistory(userId, format = 'json', groupId = null) {

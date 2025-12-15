@@ -71,8 +71,6 @@ class DatabaseService {
         `)
     }
     
-    // ==================== 记忆相关方法 ====================
-    
     /**
      * 保存记忆
      */
@@ -394,22 +392,63 @@ class DatabaseService {
 
     /**
      * 获取所有会话列表
-     * @returns {Array<{id: string, userId: string, messageCount: number, lastActivity: number}>}
+     * @returns {Array<{id: string, userId: string, messageCount: number, updatedAt: number, lastMessage: string}>}
      */
     getConversations() {
         const stmt = this.db.prepare(`
-            SELECT conversation_id, COUNT(*) as message_count, MAX(timestamp) as last_message
-            FROM messages
-            GROUP BY conversation_id
-            ORDER BY last_message DESC
+            SELECT 
+                m.conversation_id,
+                COUNT(*) as message_count,
+                MAX(m.timestamp) as last_timestamp,
+                (SELECT content FROM messages m2 
+                 WHERE m2.conversation_id = m.conversation_id 
+                 ORDER BY m2.timestamp DESC LIMIT 1) as last_content
+            FROM messages m
+            GROUP BY m.conversation_id
+            ORDER BY last_timestamp DESC
             LIMIT 100
         `)
-        return stmt.all().map(row => ({
-            id: row.conversation_id,
-            userId: row.conversation_id.split(':')[0] || row.conversation_id,
-            messageCount: row.message_count,
-            lastActivity: row.last_message
-        }))
+        return stmt.all().map(row => {
+            // 解析最后消息内容
+            let lastMessage = ''
+            try {
+                if (row.last_content) {
+                    const content = JSON.parse(row.last_content)
+                    if (Array.isArray(content)) {
+                        lastMessage = content
+                            .filter(c => c.type === 'text')
+                            .map(c => c.text || '')
+                            .join('')
+                            .substring(0, 100)
+                    } else if (typeof content === 'string') {
+                        lastMessage = content.substring(0, 100)
+                    }
+                }
+            } catch {
+                lastMessage = String(row.last_content || '').substring(0, 100)
+            }
+            
+            // 解析 userId 和 groupId
+            const parts = row.conversation_id.split(':')
+            let userId = row.conversation_id
+            let groupId = undefined
+            
+            if (parts[0] === 'user') {
+                userId = parts[1] || parts[0]
+            } else if (parts[0] === 'group') {
+                groupId = parts[1]
+                userId = parts[3] || parts[1]
+            }
+            
+            return {
+                id: row.conversation_id,
+                userId,
+                groupId,
+                messageCount: row.message_count,
+                updatedAt: row.last_timestamp || Date.now(),
+                lastMessage: lastMessage || '无消息内容'
+            }
+        })
     }
 
     /**

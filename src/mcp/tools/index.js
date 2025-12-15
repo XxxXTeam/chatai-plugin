@@ -16,6 +16,7 @@ import { mediaTools } from './media.js'
 import { searchTools } from './search.js'
 import { utilsTools } from './utils.js'
 import { botTools } from './bot.js'
+import { voiceTools } from './voice.js'
 
 /**
  * 工具类别配置
@@ -99,6 +100,12 @@ export const toolCategories = {
         description: '获取机器人自身信息、状态、好友列表等',
         icon: 'Bot',
         tools: botTools
+    },
+    voice: {
+        name: '语音/声聊',
+        description: 'AI语音对话、TTS语音合成、语音识别等',
+        icon: 'Mic',
+        tools: voiceTools
     }
 }
 

@@ -31,9 +31,10 @@ import { Input } from '@/components/ui/input'
 
 interface Message {
   id: string
-  role: 'user' | 'assistant' | 'system'
-  content: string | Array<{ type: string; text?: string }>
+  role: 'user' | 'assistant' | 'system' | 'tool'
+  content: string | Array<{ type: string; text?: string; tool_call_id?: string }>
   timestamp: number
+  toolCalls?: Array<{ id: string; function: { name: string; arguments: string } }>
 }
 
 interface Conversation {
@@ -290,7 +291,14 @@ export default function ConversationsPage() {
           ) : (
             <ScrollArea className="h-[50vh]">
               <div className="space-y-4 pr-4">
-                {messages.map((message, index) => (
+                {messages
+                  .filter(m => m.role === 'user' || m.role === 'assistant')
+                  .filter(m => {
+                    // 过滤掉空内容和只有工具调用的消息
+                    const text = getMessageText(m.content)
+                    return text && text.trim().length > 0
+                  })
+                  .map((message, index) => (
                   <div
                     key={message.id || index}
                     className={`flex gap-3 ${message.role === 'assistant' ? '' : 'flex-row-reverse'}`}

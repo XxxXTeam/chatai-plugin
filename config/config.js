@@ -83,7 +83,7 @@ class Config {
                 defaultChatPresetId: 'default',
                 embeddingModel: 'text-embedding-004',  // Gemini embedding 模型
                 dimensions: 1536,
-                // 模型分类配置
+                // 模型分类配置（每个分类配置一个模型名，空则使用默认模型）
                 models: {
                     // 对话模型 - 用于普通聊天
                     chat: '',
@@ -295,7 +295,7 @@ class Config {
                     // 自定义预设（面板可编辑）
                     customPresets: [],
                 },
-                // 语音回复
+                // 语音回复（旧配置，兼容）
                 voiceReply: {
                     enabled: false,          // 启用语音回复
                     ttsProvider: 'system',   // TTS提供者
@@ -303,6 +303,12 @@ class Config {
                     triggerAlways: false,    // 总是语音回复
                     maxTextLength: 500,      // 最大文本长度
                 },
+            },
+            // AI声聊配置（QQ原生功能）
+            voice: {
+                enabled: false,              // 全局开关
+                defaultCharacter: '',        // 默认AI声聊角色
+                maxTextLength: 500,          // 最大文本长度
             },
             streaming: {
                 enabled: true,

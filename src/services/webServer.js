@@ -2095,8 +2095,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== JS 工具文件 API ====================
         const jsToolsDir = path.join(__dirname, '../../data/tools')
         
         // GET /api/tools/js - 列出 JS 工具文件
@@ -2332,9 +2330,6 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-
-        // ==================== MCP API (Enhanced) ====================
         // GET /api/mcp/servers - List all MCP servers (protected)
         this.app.get('/api/mcp/servers', this.authMiddleware.bind(this), (req, res) => {
             res.json(ChaiteResponse.ok(mcpManager.getServers()))
@@ -2511,8 +2506,6 @@ export default {
                 res.json(ChaiteResponse.error(error))
             }
         })
-
-        // ==================== Memory API ====================
         // GET /api/memory/users - Get all users with memories
         this.app.get('/api/memory/users', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -2596,8 +2589,6 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== State Routes ====================
         // GET /api/state - Get state information (protected)
         this.app.get('/api/state', this.authMiddleware.bind(this), (req, res) => {
             res.json(ChaiteResponse.ok({
@@ -2605,8 +2596,6 @@ export default {
                 uptime: process.uptime()
             }))
         })
-
-        // ==================== Processors Routes ====================
         // GET /api/processors/list - List all processors (protected)
         this.app.get('/api/processors/list', this.authMiddleware.bind(this), (req, res) => {
             res.json(ChaiteResponse.ok([]))
