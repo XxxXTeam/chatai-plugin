@@ -118,6 +118,12 @@ interface Config {
     userPortrait: { enabled: boolean; minMessages: number }
     poke: { enabled: boolean; pokeBack: boolean; message: string }
     reaction: { enabled: boolean }
+    recall: { enabled: boolean; aiResponse: boolean }
+    welcome: { enabled: boolean; message: string }
+    goodbye: { enabled: boolean; aiResponse: boolean }
+    luckyKing: { enabled: boolean }
+    honor: { enabled: boolean }
+    essence: { enabled: boolean }
     imageGen: { 
       enabled: boolean
       apis: Array<{
@@ -174,6 +180,12 @@ const defaultConfig: Config = {
     userPortrait: { enabled: true, minMessages: 10 },
     poke: { enabled: false, pokeBack: false, message: '别戳了~' },
     reaction: { enabled: false },
+    recall: { enabled: false, aiResponse: true },
+    welcome: { enabled: false, message: '' },
+    goodbye: { enabled: false, aiResponse: false },
+    luckyKing: { enabled: false },
+    honor: { enabled: false },
+    essence: { enabled: false },
     imageGen: { 
       enabled: true, 
       apis: [],  // [{baseUrl, apiKey, models: []}]
@@ -211,16 +223,12 @@ export default function SettingsPage() {
   const [allModels, setAllModels] = useState<string[]>([])
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [fetchingModels, setFetchingModels] = useState(false)
-  
-  // 模型选择对话框状态
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
   const [editingModelCategory, setEditingModelCategory] = useState<ModelCategory>('chat')
   const [tempSelectedModels, setTempSelectedModels] = useState<string[]>([])
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
   const isInitialLoad = useRef(true)
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-
-  // 防抖自动保存
   const debouncedSave = useCallback(async (configToSave: Config) => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current)
@@ -1069,6 +1077,85 @@ export default function SettingsPage() {
               <div className="flex items-center justify-between">
                 <div><Label>启用</Label><p className="text-sm text-muted-foreground">收到表情回应时使用AI人设处理</p></div>
                 <Switch checked={config.features?.reaction?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.reaction.enabled', v)} />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>消息撤回响应</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div><Label>启用</Label><p className="text-sm text-muted-foreground">群成员撤回消息时响应</p></div>
+                <Switch checked={config.features?.recall?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.recall.enabled', v)} />
+              </div>
+              {config.features?.recall?.enabled && (
+                <div className="flex items-center justify-between">
+                  <div><Label>AI响应</Label><p className="text-sm text-muted-foreground">使用AI人设调侃撤回</p></div>
+                  <Switch checked={config.features?.recall?.aiResponse ?? true} onCheckedChange={(v) => updateConfig('features.recall.aiResponse', v)} />
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>入群欢迎</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div><Label>启用</Label><p className="text-sm text-muted-foreground">新成员入群时发送欢迎消息</p></div>
+                <Switch checked={config.features?.welcome?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.welcome.enabled', v)} />
+              </div>
+              {config.features?.welcome?.enabled && (
+                <div className="grid gap-2">
+                  <Label>默认欢迎语</Label>
+                  <Input value={config.features?.welcome?.message || ''} onChange={(e) => updateConfig('features.welcome.message', e.target.value)} placeholder="留空则使用AI生成" />
+                  <p className="text-xs text-muted-foreground">留空时使用AI人设生成欢迎语</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>退群通知</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div><Label>启用</Label><p className="text-sm text-muted-foreground">成员退群时发送通知</p></div>
+                <Switch checked={config.features?.goodbye?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.goodbye.enabled', v)} />
+              </div>
+              {config.features?.goodbye?.enabled && (
+                <div className="flex items-center justify-between">
+                  <div><Label>AI响应</Label><p className="text-sm text-muted-foreground">使用AI人设表达</p></div>
+                  <Switch checked={config.features?.goodbye?.aiResponse ?? false} onCheckedChange={(v) => updateConfig('features.goodbye.aiResponse', v)} />
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>运气王响应</CardTitle></CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div><Label>启用</Label><p className="text-sm text-muted-foreground">机器人成为运气王时庆祝</p></div>
+                <Switch checked={config.features?.luckyKing?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.luckyKing.enabled', v)} />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>荣誉变更响应</CardTitle></CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div><Label>启用</Label><p className="text-sm text-muted-foreground">机器人获得龙王、群聊之火等荣誉时响应</p></div>
+                <Switch checked={config.features?.honor?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.honor.enabled', v)} />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>精华消息响应</CardTitle></CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div><Label>启用</Label><p className="text-sm text-muted-foreground">机器人的消息被设为精华时响应</p></div>
+                <Switch checked={config.features?.essence?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.essence.enabled', v)} />
               </div>
             </CardContent>
           </Card>
