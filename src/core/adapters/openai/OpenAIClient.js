@@ -19,6 +19,31 @@ import { requestTemplateService } from '../../../services/RequestTemplateService
  */
 
 /**
+ * 递归清理工具定义中的 enum 值，确保都是字符串类型（Gemini API 要求）
+ * @param {object} obj - 工具定义对象
+ * @returns {object} - 清理后的对象
+ */
+function sanitizeToolEnums(obj) {
+    if (!obj || typeof obj !== 'object') return obj
+    if (Array.isArray(obj)) {
+        return obj.map(item => sanitizeToolEnums(item))
+    }
+    
+    const result = {}
+    for (const [key, value] of Object.entries(obj)) {
+        if (key === 'enum' && Array.isArray(value)) {
+            // 将所有 enum 值转换为字符串
+            result[key] = value.map(v => String(v))
+        } else if (typeof value === 'object' && value !== null) {
+            result[key] = sanitizeToolEnums(value)
+        } else {
+            result[key] = value
+        }
+    }
+    return result
+}
+
+/**
  * OpenAI client implementation
  */
 export class OpenAIClient extends AbstractClient {
@@ -158,7 +183,12 @@ export class OpenAIClient extends AbstractClient {
 
         // 当 toolChoice 为 'none' 时，完全不传递 tools 参数，强制LLM只生成文本
         const shouldDisableTools = toolChoice === 'none'
-        const tools = shouldDisableTools ? [] : this.tools.map(toolConvert)
+        let tools = shouldDisableTools ? [] : this.tools.map(toolConvert)
+        
+        // Gemini API 要求 enum 值必须是字符串类型，清理所有工具定义
+        if (isGeminiModel && tools.length > 0) {
+            tools = tools.map(tool => sanitizeToolEnums(tool))
+        }
 
         // 根据 options.stream 决定是否使用流式
         const useStream = options.stream === true

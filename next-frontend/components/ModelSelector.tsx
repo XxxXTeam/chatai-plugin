@@ -40,10 +40,12 @@ export function ModelSelector({ value, allModels, onChange, allowCustom = true, 
   const [searchQuery, setSearchQuery] = useState('')
   const [expandedGroup, setExpandedGroup] = useState<string>('')
   const [customInput, setCustomInput] = useState('')
-  const selectedSet = new Set(value)
+  
+  // 使用 useMemo 确保 selectedSet 与 value 同步
+  const selectedSet = useMemo(() => new Set(value), [value])
   
   // 自定义模型（不在allModels中的已选模型）
-  const customModels = value.filter(m => !allModels.includes(m))
+  const customModels = useMemo(() => value.filter(m => !allModels.includes(m)), [value, allModels])
 
   // 分组后的模型
   const groupedModels = useMemo(() => {
@@ -212,21 +214,23 @@ export function ModelSelector({ value, allModels, onChange, allowCustom = true, 
                     <Badge variant="outline" className="text-xs">
                       {selectedCount}/{group.models.length}
                     </Badge>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-2 text-xs"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        if (isAllSelected) {
-                          deselectAllInGroup(group.models)
-                        } else {
-                          selectAllInGroup(group.models)
-                        }
-                      }}
-                    >
-                      {isAllSelected ? '取消' : '全选'}
-                    </Button>
+                    {!singleSelect && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-xs"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (isAllSelected) {
+                            deselectAllInGroup(group.models)
+                          } else {
+                            selectAllInGroup(group.models)
+                          }
+                        }}
+                      >
+                        {isAllSelected ? '取消' : '全选'}
+                      </Button>
+                    )}
                     {isExpanded ? (
                       <ChevronUp className="h-4 w-4 text-muted-foreground" />
                     ) : (

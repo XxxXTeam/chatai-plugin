@@ -1290,6 +1290,7 @@ export default function SettingsPage() {
             value={tempSelectedModels}
             allModels={availableModels}
             onChange={setTempSelectedModels}
+            singleSelect={editingModelCategory === 'default'}
           />
           <DialogFooter>
             <Button variant="outline" onClick={() => setModelDialogOpen(false)}>

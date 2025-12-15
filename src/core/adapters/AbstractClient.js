@@ -249,11 +249,18 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
             } catch (fetchErr) {
                 lastError = fetchErr
                 
-                // 4xx 客户端错误不重试（URL过期、权限问题等）
-                const is4xxError = fetchErr.status >= 400 && fetchErr.status < 500
-                if (is4xxError) {
-                    // 静默处理 4xx 错误，只记录 debug 日志
-                    logger.debug(`[urlToBase64] 客户端错误 ${fetchErr.status}，跳过: ${url.substring(0, 80)}...`)
+                // 检测客户端错误（4xx）- 多种检测方式
+                const is4xxError = (fetchErr.status >= 400 && fetchErr.status < 500) ||
+                    /HTTP\s*4\d{2}/i.test(fetchErr.message)
+                
+                // QQ 多媒体 URL 过期是常见情况，完全静默
+                const isQQMedia = url.includes('multimedia.nt.qq.com.cn') || 
+                    url.includes('gchat.qpic.cn') ||
+                    url.includes('c2cpicdw.qpic.cn')
+                
+                if (is4xxError || isQQMedia) {
+                    // 静默处理，只记录 debug 日志
+                    logger.debug(`[urlToBase64] 媒体获取失败(${fetchErr.status || '4xx'})，跳过: ${url.substring(0, 60)}...`)
                     break
                 }
                 
@@ -265,22 +272,40 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
             }
         }
         
-        // 所有重试都失败，静默返回空结果而不是抛错
+        // 所有重试都失败
         if (lastError) {
-            const is4xxError = lastError.status >= 400 && lastError.status < 500
-            if (is4xxError) {
-                // 4xx 错误静默返回空数据，不刷屏
+            // 检测客户端错误或 QQ 媒体 URL
+            const is4xxError = (lastError.status >= 400 && lastError.status < 500) ||
+                /HTTP\s*4\d{2}/i.test(lastError.message)
+            const isQQMedia = url.includes('multimedia.nt.qq.com.cn') || 
+                url.includes('gchat.qpic.cn') ||
+                url.includes('c2cpicdw.qpic.cn')
+            
+            if (is4xxError || isQQMedia) {
+                // 静默返回空数据，不记录错误日志
                 return { mimeType: defaultMimeType, data: '', error: lastError.message }
             }
-            // 其他错误记录并抛出
+            // 只有非 4xx 且非 QQ 媒体的错误才记录
             logService.mediaError('url', url, lastError)
         }
-        throw new Error(`获取媒体文件失败: ${lastError?.message || '未知错误'}`)
+        
+        // 标记错误已记录，避免外层 catch 重复记录
+        const err = new Error(`获取媒体文件失败 (${URL_TO_BASE64_CONFIG.maxRetries + 1}次尝试): ${lastError?.message || '未知错误'}`)
+        err.logged = true
+        throw err
         
     } catch (error) {
-        // 记录所有未捕获的错误
+        // 只记录未标记的错误
         if (!error.logged) {
-            logService.mediaError('media', url, error)
+            // 再次检查是否为 QQ 媒体 URL 的 4xx 错误
+            const is4xxError = /HTTP\s*4\d{2}/i.test(error.message)
+            const isQQMedia = url.includes('multimedia.nt.qq.com.cn') || 
+                url.includes('gchat.qpic.cn') ||
+                url.includes('c2cpicdw.qpic.cn')
+            
+            if (!is4xxError && !isQQMedia) {
+                logService.mediaError('media', url, error)
+            }
             error.logged = true
         }
         throw error

@@ -132,7 +132,7 @@ export const userTools = [
             properties: {
                 type: { type: 'string', description: '类型: user 或 group', enum: ['user', 'group'] },
                 id: { type: 'string', description: 'QQ号或群号' },
-                size: { type: 'number', description: '头像尺寸，默认640', enum: [40, 100, 140, 640] }
+                size: { type: 'string', description: '头像尺寸，默认640', enum: ['40', '100', '140', '640'] }
             },
             required: ['type', 'id']
         },

@@ -1,11 +1,10 @@
 /**
  * 消息解析工具
  * 兼容多种协议:
- * - icqq/miao-adapter: Yunzai默认协议 (adapter=0)
- * - NapCat(NC): https://napneko.github.io/develop/msg (adapter=1)
- * - OneBot v11: https://github.com/botuniverse/onebot-11 (adapter=1)
- * - go-cqhttp: https://docs.go-cqhttp.org/cqcode (adapter=1)
- * - TRSS/Lagrange: (adapter=2)
+ * - icqq: Yunzai默认协议
+ * - NapCat(NC): https://napneko.github.io/develop/msg
+ * - OneBot v11: https://github.com/botuniverse/onebot-11
+ * - go-cqhttp: https://docs.go-cqhttp.org/cqcode
  * 
  * 支持的消息类型:
  * - text: 文本消息
@@ -26,70 +25,6 @@
  * - mface: 商城表情
  * - markdown: Markdown消息
  */
-
-/**
- * 适配器类型枚举
- * 0: miao-adapter/icqq (默认协议)
- * 1: OneBot/NapCat/go-cqhttp
- * 2: TRSS/Lagrange
- */
-export const AdapterType = {
-    MIAO: 0,      // miao-adapter/icqq
-    ONEBOT: 1,    // OneBot/NapCat/go-cqhttp
-    TRSS: 2       // TRSS/Lagrange
-}
-
-/**
- * 检测当前使用的适配器类型
- * @param {Object} e - 事件对象
- * @returns {number} 适配器类型
- */
-export function detectAdapter(e) {
-    // 检测方式1: 通过 Bot 对象特征
-    const bot = e?.bot || global.Bot
-    
-    // TRSS/Lagrange 特征: 有 sendApi 且有 version 包含 trss/lagrange
-    if (bot?.version?.name?.toLowerCase()?.includes('trss') ||
-        bot?.version?.name?.toLowerCase()?.includes('lagrange')) {
-        return AdapterType.TRSS
-    }
-    
-    // OneBot/NapCat 特征: 有 sendApi 方法，消息数据在 data 字段中
-    if (bot?.sendApi && typeof bot.sendApi === 'function') {
-        // 检查消息格式是否为 OneBot 标准 ({ type, data })
-        if (e?.message?.[0]?.data && typeof e.message[0].data === 'object') {
-            return AdapterType.ONEBOT
-        }
-    }
-    
-    // miao-adapter/icqq 特征: 消息数据直接在消息段上
-    // 或者有 source 字段包含 seq
-    if (e?.source?.seq !== undefined || 
-        (e?.message?.[0] && !e.message[0].data)) {
-        return AdapterType.MIAO
-    }
-    
-    // 默认返回 OneBot（更通用）
-    return AdapterType.ONEBOT
-}
-
-/**
- * 检查是否为 miao-adapter/icqq
- * @param {Object} e - 事件对象
- * @returns {boolean}
- */
-export function isMiaoAdapter(e) {
-    return detectAdapter(e) === AdapterType.MIAO
-}
-
-/**
- * 检查是否为 OneBot/NapCat
- * @param {Object} e - 事件对象
- * @returns {boolean}
- */
-export function isOneBotAdapter(e) {
-    return detectAdapter(e) === AdapterType.ONEBOT
-}
 
 /**
  * 统一获取消息段数据 - 兼容 NC/icqq/OneBot 格式
@@ -157,7 +92,6 @@ function getMediaUrl(data, debug = false) {
                 if (debug) logger.info(`[getMediaUrl] 找到 HTTP URL: ${candidate.substring(0, 80)}...`)
                 return candidate
             }
-            // base64 图片
             if (candidate.startsWith('base64://')) {
                 if (debug) logger.info('[getMediaUrl] 找到 base64 数据')
                 return candidate
@@ -267,18 +201,13 @@ export async function parseUserMessage(e, options = {}) {
                         
                         // 如果是@机器人且需要排除，跳过
                         if (excludeAtBot && (qq === e.bot?.uin || String(qq) === String(e.self_id))) {
-                            logger.info(`[MessageParser][AT] 跳过@机器人自己: qq=${qq}`)
                             continue
                         }
-                        
-                        // 增强的 @ 信息：自动获取群成员详细信息
                         let memberInfo = null
                         let groupCard = ''
                         let nickname = atCard || ''
                         let role = ''
                         let title = ''
-                        
-                        // 如果是群聊，尝试获取群成员详细信息
                         if (e.group_id && qq && qq !== 'all') {
                             logger.info(`[MessageParser][AT] 开始获取群成员信息: group_id=${e.group_id}, qq=${qq}`)
                             try {
@@ -297,8 +226,6 @@ export async function parseUserMessage(e, options = {}) {
                                             title = memberInfo.title || ''
                                             logger.info(`[MessageParser][AT] 从 pickMember 获取: card=${groupCard}, nickname=${nickname}, role=${role}`)
                                         }
-                                        
-                                        // 如果 pickMember 没有信息，尝试从 getMemberMap 获取
                                         if (!memberInfo && group.getMemberMap) {
                                             try {
                                                 logger.info(`[MessageParser][AT] 尝试 getMemberMap`)
