@@ -250,6 +250,33 @@ class Config {
                 reaction: {
                     enabled: false,          // 启用表情回应处理
                 },
+                // 消息撤回响应（默认关闭）
+                recall: {
+                    enabled: false,          // 启用撤回响应
+                    aiResponse: true,        // 使用AI响应撤回
+                },
+                // 入群欢迎（默认关闭）
+                welcome: {
+                    enabled: false,          // 启用入群欢迎
+                    message: '',             // 默认欢迎语（空则使用AI生成）
+                },
+                // 退群通知（默认关闭）
+                goodbye: {
+                    enabled: false,          // 启用退群通知
+                    aiResponse: false,       // 使用AI响应退群
+                },
+                // 运气王响应（默认关闭）
+                luckyKing: {
+                    enabled: false,          // 启用运气王响应
+                },
+                // 荣誉变更响应（默认关闭）
+                honor: {
+                    enabled: false,          // 启用荣誉响应（龙王、群聊之火等）
+                },
+                // 精华消息响应（默认关闭）
+                essence: {
+                    enabled: false,          // 启用精华消息响应
+                },
                 // AI绘图
                 imageGen: {
                     enabled: true,           // 启用绘图功能

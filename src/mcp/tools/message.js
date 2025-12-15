@@ -943,6 +943,218 @@ export const messageTools = [
                 return { success: false, error: `移除精华消息失败: ${err.message}` }
             }
         }
+    },
+
+    {
+        name: 'poke_user',
+        description: '戳一戳用户（发送戳一戳消息）',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                user_id: { type: 'string', description: '目标用户QQ号，"sender"表示戳发送者' },
+                group_id: { type: 'string', description: '群号（群聊戳一戳时需要）' }
+            },
+            required: ['user_id']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || global.Bot
+                
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                let userId = args.user_id
+                if (userId === 'sender') {
+                    userId = e?.user_id || e?.sender?.user_id
+                    if (!userId) {
+                        return { success: false, error: '无法获取发送者ID' }
+                    }
+                }
+                userId = parseInt(userId)
+                
+                const groupId = args.group_id ? parseInt(args.group_id) : (e?.group_id || null)
+                
+                // 群聊戳一戳
+                if (groupId) {
+                    // NapCat API
+                    if (bot.sendApi) {
+                        await bot.sendApi('group_poke', { group_id: groupId, user_id: userId })
+                        return { success: true, user_id: userId, group_id: groupId, type: 'group' }
+                    }
+                    // go-cqhttp / OneBot
+                    if (bot.sendGroupPoke) {
+                        await bot.sendGroupPoke(groupId, userId)
+                        return { success: true, user_id: userId, group_id: groupId, type: 'group' }
+                    }
+                    if (bot.send_group_poke) {
+                        await bot.send_group_poke(groupId, userId)
+                        return { success: true, user_id: userId, group_id: groupId, type: 'group' }
+                    }
+                    // icqq
+                    const group = bot.pickGroup?.(groupId)
+                    if (group?.pokeMember) {
+                        await group.pokeMember(userId)
+                        return { success: true, user_id: userId, group_id: groupId, type: 'group' }
+                    }
+                    if (group?.pickMember) {
+                        const member = group.pickMember(userId)
+                        if (member?.poke) {
+                            await member.poke()
+                            return { success: true, user_id: userId, group_id: groupId, type: 'group' }
+                        }
+                    }
+                }
+                
+                // 私聊戳一戳
+                // NapCat API
+                if (bot.sendApi) {
+                    await bot.sendApi('friend_poke', { user_id: userId })
+                    return { success: true, user_id: userId, type: 'private' }
+                }
+                // go-cqhttp
+                if (bot.sendFriendPoke) {
+                    await bot.sendFriendPoke(userId)
+                    return { success: true, user_id: userId, type: 'private' }
+                }
+                if (bot.send_friend_poke) {
+                    await bot.send_friend_poke(userId)
+                    return { success: true, user_id: userId, type: 'private' }
+                }
+                // icqq
+                const friend = bot.pickFriend?.(userId)
+                if (friend?.poke) {
+                    await friend.poke()
+                    return { success: true, user_id: userId, type: 'private' }
+                }
+                
+                return { success: false, error: '当前协议不支持戳一戳' }
+            } catch (err) {
+                return { success: false, error: `戳一戳失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'set_msg_emoji_like',
+        description: '对消息发送表情回应（表情贴）',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                message_id: { type: 'string', description: '目标消息ID' },
+                emoji_id: { type: 'string', description: '表情ID，常用：76=赞, 124=爱心, 66=笑脸, 277=火, 179=doge, 42=鼓掌' },
+                set: { type: 'boolean', description: '是否设置（true=添加回应，false=取消回应），默认true' }
+            },
+            required: ['message_id', 'emoji_id']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || global.Bot
+                
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                const messageId = args.message_id
+                const emojiId = parseInt(args.emoji_id)
+                const isSet = args.set !== false
+                
+                // NapCat API - set_msg_emoji_like
+                if (bot.sendApi) {
+                    await bot.sendApi('set_msg_emoji_like', {
+                        message_id: messageId,
+                        emoji_id: emojiId,
+                        set: isSet
+                    })
+                    return { 
+                        success: true, 
+                        message_id: messageId, 
+                        emoji_id: emojiId,
+                        action: isSet ? 'add' : 'remove'
+                    }
+                }
+                
+                // OneBot 扩展
+                if (bot.setMsgEmojiLike) {
+                    await bot.setMsgEmojiLike(messageId, emojiId, isSet)
+                    return { 
+                        success: true, 
+                        message_id: messageId, 
+                        emoji_id: emojiId,
+                        action: isSet ? 'add' : 'remove'
+                    }
+                }
+                
+                if (bot.set_msg_emoji_like) {
+                    await bot.set_msg_emoji_like(messageId, emojiId, isSet)
+                    return { 
+                        success: true, 
+                        message_id: messageId, 
+                        emoji_id: emojiId,
+                        action: isSet ? 'add' : 'remove'
+                    }
+                }
+                
+                return { success: false, error: '当前协议不支持表情回应' }
+            } catch (err) {
+                return { success: false, error: `表情回应失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_msg',
+        description: '获取消息详情（通过消息ID）',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                message_id: { type: 'string', description: '消息ID' }
+            },
+            required: ['message_id']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || global.Bot
+                
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                let msg = null
+                
+                // NapCat / OneBot API
+                if (bot.getMsg) {
+                    msg = await bot.getMsg(args.message_id)
+                } else if (bot.get_msg) {
+                    msg = await bot.get_msg(args.message_id)
+                } else if (bot.sendApi) {
+                    const result = await bot.sendApi('get_msg', { message_id: args.message_id })
+                    msg = result?.data || result
+                }
+                
+                if (!msg) {
+                    return { success: false, error: '获取消息失败或消息不存在' }
+                }
+                
+                return {
+                    success: true,
+                    message_id: msg.message_id,
+                    sender: {
+                        user_id: msg.sender?.user_id || msg.user_id,
+                        nickname: msg.sender?.nickname || msg.sender?.card || ''
+                    },
+                    time: msg.time,
+                    message_type: msg.message_type,
+                    content: parseForwardContent(msg.message || msg.content || []),
+                    raw_message: msg.raw_message
+                }
+            } catch (err) {
+                return { success: false, error: `获取消息失败: ${err.message}` }
+            }
+        }
     }
 ]
 
