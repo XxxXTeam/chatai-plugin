@@ -712,6 +712,349 @@ export class ContextManager {
         
         return summary
     }
+
+    /**
+     * 获取群聊天历史记录
+     * 兼容 miao-adapter/icqq 和 OneBot/NapCat
+     * @param {Object} group - 群对象 (Bot.pickGroup(groupId))
+     * @param {number} num - 获取数量
+     * @param {Object} options - 选项
+     * @returns {Promise<Array>} 聊天记录数组
+     */
+    async getChatHistoryGroup(group, num = 20, options = {}) {
+        if (!group || typeof group.getChatHistory !== 'function') {
+            return []
+        }
+
+        const { formatMessages = false } = options
+        const allowedMessageTypes = ['text', 'at', 'image', 'video', 'bface', 'forward', 'json', 'reply']
+        const seenMessageIds = new Set()
+
+        try {
+            // 处理和过滤消息
+            const processChats = (rawChats) => {
+                return rawChats.filter(chat => {
+                    const messageId = chat.seq || chat.message_seq || chat.message_id
+                    if (seenMessageIds.has(messageId)) {
+                        return false
+                    }
+                    if (!chat.sender?.user_id || !chat.message?.length) {
+                        return false
+                    }
+                    if (!chat.message.some(msgPart => allowedMessageTypes.includes(msgPart.type))) {
+                        return false
+                    }
+                    seenMessageIds.add(messageId)
+                    return true
+                })
+            }
+
+            // 获取初始消息
+            let initialChats = await group.getChatHistory(0, 20)
+            if (!initialChats || initialChats.length === 0) {
+                return []
+            }
+
+            let chats = processChats(initialChats)
+            let seq = initialChats[0]?.seq || initialChats[0]?.message_seq || initialChats[0]?.message_id
+
+            // 继续获取更多消息直到达到数量
+            while (chats.length < num && seq) {
+                try {
+                    const chatHistory = await group.getChatHistory(seq, 20)
+                    const newSeq = chatHistory[0]?.seq || chatHistory[0]?.message_seq || chatHistory[0]?.message_id
+
+                    if (!chatHistory || chatHistory.length === 0 || seq === newSeq) {
+                        break
+                    }
+
+                    seq = newSeq
+                    const newChats = processChats(chatHistory)
+
+                    if (newChats.length === 0) {
+                        break
+                    }
+
+                    chats.unshift(...newChats)
+                } catch (err) {
+                    logger.debug(`[ContextManager] 获取更多聊天记录失败: ${err.message}`)
+                    break
+                }
+            }
+
+            // 只保留最近的 num 条
+            chats = chats.slice(Math.max(0, chats.length - num))
+
+            return chats
+        } catch (err) {
+            logger.error('[ContextManager] 获取群聊天记录失败:', err.message)
+            return []
+        }
+    }
+
+    /**
+     * 格式化聊天消息内容
+     * @param {Object} group - 群对象
+     * @param {Object} chat - 聊天消息
+     * @returns {Promise<string>} 格式化后的消息文本
+     */
+    async formatChatMessage(group, chat) {
+        const roleMap = { owner: '群主', admin: '管理员', member: '普通成员' }
+        const sender = chat.sender || {}
+        const chatTime = chat.time || Math.floor(Date.now() / 1000)
+        const senderId = sender.user_id
+
+        // 获取成员信息
+        let senderName = sender.card || sender.nickname || senderId || '未知用户'
+        let memberInfo = null
+        try {
+            const member = group.pickMember?.(senderId)
+            memberInfo = member?.info || await member?.getInfo?.(true)
+            if (memberInfo) {
+                senderName = memberInfo.card || memberInfo.nickname || senderName
+            }
+        } catch {
+            try {
+                memberInfo = (await group.pickMember(Number(senderId)))?.info
+                if (memberInfo) {
+                    senderName = memberInfo.card || memberInfo.nickname || senderName
+                }
+            } catch {}
+        }
+
+        const senderRole = roleMap[sender.role] || '普通成员'
+        const timeStr = new Date(chatTime * 1000).toLocaleTimeString('zh-CN', { hour12: false })
+
+        // 构建消息头
+        let messageHeader = `【${senderName}】(QQ:${senderId}, 角色:${senderRole}`
+        if (sender.title) {
+            messageHeader += `, 头衔:${sender.title}`
+        }
+        messageHeader += `, 时间:${timeStr}`
+        const seq = chat.seq || chat.message_seq
+        if (seq) {
+            messageHeader += `, seq:${seq}`
+        }
+
+        // 处理引用消息
+        const replyPart = chat.message?.find(msg => msg.type === 'reply')
+        if (replyPart) {
+            const replyId = replyPart.id || replyPart.data?.id
+            if (replyId) {
+                try {
+                    const originalMsgArray = await group.getChatHistory(replyId, 1)
+                    const originalMsg = originalMsgArray?.[0]
+                    if (originalMsg?.sender) {
+                        const originalSenderId = originalMsg.sender.user_id
+                        let originalSenderName = originalMsg.sender.card || originalMsg.sender.nickname || originalSenderId
+                        const originalContent = this._extractMessageText(originalMsg.message)
+                        messageHeader += `, 引用了${originalSenderName}(QQ:${originalSenderId})的消息"${originalContent.substring(0, 50)}"`
+                    }
+                } catch {}
+            }
+        }
+
+        messageHeader += `) 说：`
+
+        // 提取消息内容
+        const messageContent = this._extractMessageText(chat.message?.filter(m => m.type !== 'reply'))
+
+        return `${messageHeader}${messageContent}`
+    }
+
+    /**
+     * 从消息段数组提取文本内容
+     * @private
+     */
+    _extractMessageText(messageParts) {
+        if (!messageParts || !Array.isArray(messageParts)) return ''
+        
+        const contentParts = []
+        for (const msgPart of messageParts) {
+            const data = msgPart.data || msgPart
+            switch (msgPart.type) {
+                case 'text':
+                    contentParts.push(data.text || msgPart.text || '')
+                    break
+                case 'at':
+                    contentParts.push(`@${data.qq || msgPart.qq}`)
+                    break
+                case 'image': {
+                    const isAnimated = data.asface === true || data.sub_type === 1
+                    contentParts.push(isAnimated ? '[动画表情]' : '[图片]')
+                    break
+                }
+                case 'video':
+                    contentParts.push('[视频]')
+                    break
+                case 'bface':
+                    contentParts.push(data.text || msgPart.text || '[表情]')
+                    break
+                case 'forward':
+                    contentParts.push('[聊天记录]')
+                    break
+                case 'json':
+                    try {
+                        const jsonData = typeof data.data === 'string' ? JSON.parse(data.data) : data.data
+                        if (jsonData?.meta?.detail?.resid) {
+                            contentParts.push('[聊天记录]')
+                        } else {
+                            contentParts.push('[卡片消息]')
+                        }
+                    } catch {
+                        contentParts.push('[卡片消息]')
+                    }
+                    break
+                case 'face':
+                    contentParts.push(`[表情:${data.id || msgPart.id}]`)
+                    break
+                case 'record':
+                    contentParts.push('[语音]')
+                    break
+            }
+        }
+        return contentParts.join('').replace(/\n/g, ' ')
+    }
+
+    /**
+     * 构建完整的群聊上下文提示
+     * 包含群信息、当前用户、聊天历史
+     * @param {string|number} groupId - 群号
+     * @param {Object} options - 选项
+     * @returns {Promise<string>} 群聊上下文提示
+     */
+    async buildGroupPrompt(groupId, options = {}) {
+        const { sender, contextLength = 20, promptHeader = null } = options
+        let systemPromptWithContext = ''
+
+        const bot = global.Bot
+        const group = bot?.pickGroup?.(parseInt(groupId))
+        if (!group) return ''
+
+        // 构建头部信息
+        if (promptHeader) {
+            systemPromptWithContext += promptHeader
+        } else {
+            // 获取机器人在群内的信息
+            let botName = bot.nickname || bot.uin
+            try {
+                const botMember = group.pickMember?.(bot.uin)
+                const botInfo = botMember?.info || await botMember?.getInfo?.(true)
+                if (botInfo) {
+                    botName = botInfo.card || botInfo.nickname || botName
+                }
+            } catch {}
+
+            // 获取群信息
+            let groupName = groupId
+            try {
+                const groupInfo = await group.getInfo?.()
+                groupName = groupInfo?.group_name || groupInfo?.name || groupId
+            } catch {}
+
+            systemPromptWithContext += `你目前正在一个QQ群聊中。`
+            systemPromptWithContext += `\n群名称: ${groupName}, 群号: ${groupId}。`
+            systemPromptWithContext += `你现在是这个QQ群的成员，你的昵称是"${botName}"(QQ:${bot.uin})。`
+
+            // 当前用户信息
+            if (sender) {
+                const latestSenderName = sender.card || sender.nickname || sender.user_id
+                const roleMap = { owner: '群主', admin: '管理员', member: '普通成员' }
+                systemPromptWithContext += `\n当前向你提问的用户是: ${latestSenderName}(QQ:${sender.user_id})。`
+                systemPromptWithContext += ` (角色: ${roleMap[sender.role] || '普通成员'}`
+                if (sender.title) systemPromptWithContext += `, 群头衔: ${sender.title}`
+                systemPromptWithContext += `)。\n`
+            }
+        }
+
+        // 获取聊天历史
+        let chats = []
+        try {
+            chats = await this.getChatHistoryGroup(group, contextLength)
+        } catch (err) {
+            logger.debug(`[ContextManager] 获取群聊历史失败: ${err.message}`)
+        }
+
+        // 格式化聊天历史
+        if (chats && chats.length > 0) {
+            systemPromptWithContext += `\n当你需要艾特(@)别人时，可以直接在回复中添加'@QQ'，其中QQ为你需要艾特(@)的人的QQ号，如'@123456'。以下是最近群内的聊天记录。请你仔细阅读这些记录，理解群内成员的对话内容和趋势，并以此为基础来生成你的回复。你的回复应该自然融入当前对话，就像一个真正的群成员一样：\n`
+            
+            const formattedChats = await Promise.all(
+                chats.map(chat => this.formatChatMessage(group, chat))
+            )
+            systemPromptWithContext += formattedChats.join('\n')
+        }
+
+        // 缓存结果
+        this.cacheGroupContext(groupId, { prompt: systemPromptWithContext })
+
+        return systemPromptWithContext
+    }
+
+    /**
+     * 获取引用消息内容
+     * 兼容 miao-adapter 和 OneBot
+     * @param {Object} e - 事件对象
+     * @returns {Promise<string>} 引用消息文本
+     */
+    async getQuoteContent(e) {
+        let quoteText = ''
+
+        if (!e.group || typeof e.group.getChatHistory !== 'function') {
+            return quoteText
+        }
+
+        let originalMsg = null
+
+        // 尝试获取引用消息
+        // miao-adapter: 使用 e.source.seq
+        if (e.source?.seq) {
+            try {
+                const history = await e.group.getChatHistory(e.source.seq, 1)
+                originalMsg = history?.[0]
+            } catch (err) {
+                logger.debug(`[ContextManager] 获取引用消息失败(seq): ${err.message}`)
+            }
+        }
+        // OneBot/NapCat: 使用 reply.id
+        else {
+            const replyPart = e.message?.find(msg => msg.type === 'reply')
+            if (replyPart?.id || replyPart?.data?.id) {
+                try {
+                    const messageId = replyPart.id || replyPart.data.id
+                    const originalMsgArray = await e.group.getChatHistory(messageId, 1)
+                    originalMsg = originalMsgArray?.[0]
+                } catch (err) {
+                    logger.debug(`[ContextManager] 获取引用消息失败(id): ${err.message}`)
+                }
+            }
+        }
+
+        // 格式化引用内容
+        if (originalMsg?.message) {
+            const originalSenderId = originalMsg.sender?.user_id
+            let originalSenderName = originalMsg.sender?.card || originalMsg.sender?.nickname || originalSenderId || '未知用户'
+            
+            // 尝试获取更准确的昵称
+            try {
+                const member = e.group.pickMember?.(originalSenderId)
+                const memberInfo = member?.info || await member?.getInfo?.(true)
+                if (memberInfo) {
+                    originalSenderName = memberInfo.card || memberInfo.nickname || originalSenderName
+                }
+            } catch {}
+
+            const originalContent = this._extractMessageText(originalMsg.message)
+            quoteText = ` 引用了${originalSenderName}(QQ:${originalSenderId})的消息"${originalContent}"`
+            
+            const originalSeq = originalMsg.seq || originalMsg.message_seq
+            if (originalSeq) {
+                quoteText += `(seq:${originalSeq})`
+            }
+        }
+
+        return quoteText
+    }
 }
 
 export const contextManager = new ContextManager()

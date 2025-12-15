@@ -1,10 +1,11 @@
 /**
  * 消息解析工具
  * 兼容多种协议:
- * - icqq: Yunzai默认协议
- * - NapCat(NC): https://napneko.github.io/develop/msg
- * - OneBot v11: https://github.com/botuniverse/onebot-11
- * - go-cqhttp: https://docs.go-cqhttp.org/cqcode
+ * - icqq/miao-adapter: Yunzai默认协议 (adapter=0)
+ * - NapCat(NC): https://napneko.github.io/develop/msg (adapter=1)
+ * - OneBot v11: https://github.com/botuniverse/onebot-11 (adapter=1)
+ * - go-cqhttp: https://docs.go-cqhttp.org/cqcode (adapter=1)
+ * - TRSS/Lagrange: (adapter=2)
  * 
  * 支持的消息类型:
  * - text: 文本消息
@@ -25,6 +26,70 @@
  * - mface: 商城表情
  * - markdown: Markdown消息
  */
+
+/**
+ * 适配器类型枚举
+ * 0: miao-adapter/icqq (默认协议)
+ * 1: OneBot/NapCat/go-cqhttp
+ * 2: TRSS/Lagrange
+ */
+export const AdapterType = {
+    MIAO: 0,      // miao-adapter/icqq
+    ONEBOT: 1,    // OneBot/NapCat/go-cqhttp
+    TRSS: 2       // TRSS/Lagrange
+}
+
+/**
+ * 检测当前使用的适配器类型
+ * @param {Object} e - 事件对象
+ * @returns {number} 适配器类型
+ */
+export function detectAdapter(e) {
+    // 检测方式1: 通过 Bot 对象特征
+    const bot = e?.bot || global.Bot
+    
+    // TRSS/Lagrange 特征: 有 sendApi 且有 version 包含 trss/lagrange
+    if (bot?.version?.name?.toLowerCase()?.includes('trss') ||
+        bot?.version?.name?.toLowerCase()?.includes('lagrange')) {
+        return AdapterType.TRSS
+    }
+    
+    // OneBot/NapCat 特征: 有 sendApi 方法，消息数据在 data 字段中
+    if (bot?.sendApi && typeof bot.sendApi === 'function') {
+        // 检查消息格式是否为 OneBot 标准 ({ type, data })
+        if (e?.message?.[0]?.data && typeof e.message[0].data === 'object') {
+            return AdapterType.ONEBOT
+        }
+    }
+    
+    // miao-adapter/icqq 特征: 消息数据直接在消息段上
+    // 或者有 source 字段包含 seq
+    if (e?.source?.seq !== undefined || 
+        (e?.message?.[0] && !e.message[0].data)) {
+        return AdapterType.MIAO
+    }
+    
+    // 默认返回 OneBot（更通用）
+    return AdapterType.ONEBOT
+}
+
+/**
+ * 检查是否为 miao-adapter/icqq
+ * @param {Object} e - 事件对象
+ * @returns {boolean}
+ */
+export function isMiaoAdapter(e) {
+    return detectAdapter(e) === AdapterType.MIAO
+}
+
+/**
+ * 检查是否为 OneBot/NapCat
+ * @param {Object} e - 事件对象
+ * @returns {boolean}
+ */
+export function isOneBotAdapter(e) {
+    return detectAdapter(e) === AdapterType.ONEBOT
+}
 
 /**
  * 统一获取消息段数据 - 兼容 NC/icqq/OneBot 格式
@@ -71,31 +136,23 @@ function getMediaUrl(data, debug = false) {
             file_id: innerData.file_id
         }))
     }
-    
-    // 按优先级尝试获取URL - 根据 NapCat 文档顺序
     const urlCandidates = [
-        // 优先使用 url 字段 (NapCat [收] 字段)
         innerData.url,
         data.url,
-        // 其次使用 path (NapCat [收] 本地路径)
         innerData.path,
         data.path,
-        // file 字段可能是 URL 或文件标识
         innerData.file,
         data.file,
-        // NC 扩展字段
         innerData.file_url,
         data.file_url,
         innerData.download_url,
         data.download_url,
-        // 图片特殊字段
         innerData.image,
         data.image,
     ]
     
     for (const candidate of urlCandidates) {
         if (candidate && typeof candidate === 'string') {
-            // http(s) URL 直接返回
             if (candidate.startsWith('http://') || candidate.startsWith('https://')) {
                 if (debug) logger.info(`[getMediaUrl] 找到 HTTP URL: ${candidate.substring(0, 80)}...`)
                 return candidate
@@ -105,12 +162,10 @@ function getMediaUrl(data, debug = false) {
                 if (debug) logger.info('[getMediaUrl] 找到 base64 数据')
                 return candidate
             }
-            // file:// 协议
             if (candidate.startsWith('file://')) {
                 if (debug) logger.info(`[getMediaUrl] 找到 file:// 路径: ${candidate}`)
                 return candidate
             }
-            // 本地绝对路径 (NapCat path 字段可能是本地路径)
             if (candidate.startsWith('/') || candidate.match(/^[A-Za-z]:\\/)) {
                 if (debug) logger.info(`[getMediaUrl] 找到本地路径: ${candidate}`)
                 return `file://${candidate}`

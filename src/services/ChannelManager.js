@@ -79,13 +79,11 @@ export class ChannelManager {
             this.channels.set(channelConfig.id, {
                 ...channelConfig,
                 baseUrl: normalizedUrl,
-                // 保留已保存的状态，否则使用默认值
                 status: channelConfig.status || 'idle',
                 lastHealthCheck: channelConfig.lastHealthCheck || null,
                 testedAt: channelConfig.testedAt || null,
                 // 自定义请求头
                 customHeaders: channelConfig.customHeaders || {},
-                // JSON模板
                 headersTemplate: channelConfig.headersTemplate || '',
                 requestBodyTemplate: channelConfig.requestBodyTemplate || '',
                 modelsCached: false,

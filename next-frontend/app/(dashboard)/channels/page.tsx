@@ -233,15 +233,43 @@ export default function ChannelsPage() {
     }
   }
 
-  // 获取模型列表并打开选择器
   // 获取默认 baseUrl
   const getDefaultBaseUrl = (adapterType: string) => {
     const defaults: Record<string, string> = {
-      openai: 'https://api.openai.com/v1',
-      claude: 'https://api.anthropic.com/v1',
+      openai: 'https://api.openai.com',
+      claude: 'https://api.anthropic.com',
       gemini: 'https://generativelanguage.googleapis.com'
     }
     return defaults[adapterType] || ''
+  }
+
+  // 获取完整的 API 路径预览
+  const getApiPathPreview = (baseUrl: string, adapterType: string) => {
+    const url = baseUrl || getDefaultBaseUrl(adapterType)
+    if (!url) return ''
+    
+    // 移除尾部斜杠
+    const cleanUrl = url.replace(/\/+$/, '')
+    
+    // 根据适配器类型显示不同的路径
+    switch (adapterType) {
+      case 'openai':
+        // 如果用户已经包含了自定义路径，直接添加 /chat/completions
+        // 如果没有，添加 /v1/chat/completions
+        if (cleanUrl.match(/\/v\d+$/) || cleanUrl.includes('/api/')) {
+          return `${cleanUrl}/chat/completions`
+        }
+        return `${cleanUrl}/v1/chat/completions`
+      case 'claude':
+        if (cleanUrl.match(/\/v\d+$/)) {
+          return `${cleanUrl}/messages`
+        }
+        return `${cleanUrl}/v1/messages`
+      case 'gemini':
+        return `${cleanUrl}/v1beta/models/{model}:generateContent`
+      default:
+        return `${cleanUrl}/chat/completions`
+    }
   }
 
   const handleFetchModels = async () => {
@@ -429,15 +457,18 @@ export default function ChannelsPage() {
                       id="baseUrl"
                       value={form.baseUrl}
                       onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
-                      placeholder={
-                        form.adapterType === 'openai' ? 'https://api.openai.com' :
-                        form.adapterType === 'claude' ? 'https://api.anthropic.com' :
-                        'https://generativelanguage.googleapis.com'
-                      }
+                      placeholder={getDefaultBaseUrl(form.adapterType)}
                     />
-                    <p className="text-xs text-muted-foreground">
-                      留空使用官方地址，自定义时无需 /v1 后缀
-                    </p>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">
+                        留空使用官方地址。支持自定义路径，如 <code className="bg-muted px-1 rounded">xxx.com/api/paas/v4</code>
+                      </p>
+                      {(form.baseUrl || getDefaultBaseUrl(form.adapterType)) && (
+                        <p className="text-xs text-blue-500 dark:text-blue-400 font-mono truncate">
+                          → {getApiPathPreview(form.baseUrl, form.adapterType)}
+                        </p>
+                      )}
+                    </div>
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="apiKey">API Key</Label>

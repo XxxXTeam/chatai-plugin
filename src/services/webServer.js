@@ -1907,6 +1907,50 @@ export class WebServer {
             }
         })
 
+        // GET /api/tools/builtin/categories - Get tool categories
+        this.app.get('/api/tools/builtin/categories', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                await mcpManager.init()
+                const categories = mcpManager.builtinServer?.getToolCategories?.() || []
+                // 直接返回类别数组，前端期望的格式
+                res.json(ChaiteResponse.ok(categories))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/tools/builtin/category/toggle - Toggle tool category
+        this.app.post('/api/tools/builtin/category/toggle', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { category, enabled } = req.body
+                if (!category) {
+                    return res.status(400).json(ChaiteResponse.fail(null, 'category is required'))
+                }
+                
+                await mcpManager.init()
+                const result = await mcpManager.builtinServer?.toggleCategory?.(category, enabled)
+                res.json(ChaiteResponse.ok(result))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/tools/builtin/tool/toggle - Toggle single tool
+        this.app.post('/api/tools/builtin/tool/toggle', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { toolName, enabled } = req.body
+                if (!toolName) {
+                    return res.status(400).json(ChaiteResponse.fail(null, 'toolName is required'))
+                }
+                
+                await mcpManager.init()
+                const result = await mcpManager.builtinServer?.toggleTool?.(toolName, enabled)
+                res.json(ChaiteResponse.ok(result))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
         // GET /api/tools/custom - List custom tools (protected)
         this.app.get('/api/tools/custom', this.authMiddleware.bind(this), async (req, res) => {
             const yamlTools = config.get('customTools') || []

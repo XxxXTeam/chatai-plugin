@@ -167,9 +167,9 @@ export function parseXmlToolCalls(text) {
  * URL转Base64配置
  */
 const URL_TO_BASE64_CONFIG = {
-    maxRetries: 2,
-    retryDelay: 1000,
-    timeout: 30000,
+    maxRetries: 1,  // 减少重试次数（4xx错误不重试）
+    retryDelay: 500,
+    timeout: 15000,
     // 浏览器UA避免被拦截
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 }
@@ -249,17 +249,33 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
             } catch (fetchErr) {
                 lastError = fetchErr
                 
-                // 记录错误但不立即抛出（除非是最后一次尝试）
+                // 4xx 客户端错误不重试（URL过期、权限问题等）
+                const is4xxError = fetchErr.status >= 400 && fetchErr.status < 500
+                if (is4xxError) {
+                    // 静默处理 4xx 错误，只记录 debug 日志
+                    logger.debug(`[urlToBase64] 客户端错误 ${fetchErr.status}，跳过: ${url.substring(0, 80)}...`)
+                    break
+                }
+                
+                // 其他错误（5xx、网络等）才重试
                 if (attempt < maxRetries) {
-                    logger.warn(`[urlToBase64] 第${attempt + 1}次获取失败，${retryDelay}ms后重试: ${fetchErr.message}`)
+                    logger.debug(`[urlToBase64] 第${attempt + 1}次获取失败，${retryDelay}ms后重试: ${fetchErr.message}`)
                     await new Promise(r => setTimeout(r, retryDelay))
                 }
             }
         }
         
-        // 所有重试都失败，记录并抛出错误
-        logService.mediaError('url', url, lastError)
-        throw new Error(`获取媒体文件失败 (${maxRetries + 1}次尝试): ${lastError?.message || '未知错误'}`)
+        // 所有重试都失败，静默返回空结果而不是抛错
+        if (lastError) {
+            const is4xxError = lastError.status >= 400 && lastError.status < 500
+            if (is4xxError) {
+                // 4xx 错误静默返回空数据，不刷屏
+                return { mimeType: defaultMimeType, data: '', error: lastError.message }
+            }
+            // 其他错误记录并抛出
+            logService.mediaError('url', url, lastError)
+        }
+        throw new Error(`获取媒体文件失败: ${lastError?.message || '未知错误'}`)
         
     } catch (error) {
         // 记录所有未捕获的错误
@@ -314,28 +330,42 @@ export async function preprocessMediaToBase64(histories, options = {}) {
                 try {
                     // 处理 image 类型
                     if (item.type === 'image' && item.image && !item.image.startsWith('data:')) {
-                        const { mimeType, data } = await urlToBase64(item.image, 'image/jpeg')
-                        newContent.push({
-                            type: 'image',
-                            image: `data:${mimeType};base64,${data}`
-                        })
-                        logger.debug('[MediaPreprocess] 图片转base64:', item.image?.substring(0, 50))
+                        const { mimeType, data, error } = await urlToBase64(item.image, 'image/jpeg')
+                        if (data && !error) {
+                            newContent.push({
+                                type: 'image',
+                                image: `data:${mimeType};base64,${data}`
+                            })
+                            logger.debug('[MediaPreprocess] 图片转base64:', item.image?.substring(0, 50))
+                        } else {
+                            // 图片获取失败，跳过（不添加空数据）
+                            logger.debug('[MediaPreprocess] 图片跳过:', item.image?.substring(0, 50))
+                        }
                     }
                     // 处理 image_url 类型
                     else if (item.type === 'image_url' && item.image_url?.url && !item.image_url.url.startsWith('data:')) {
-                        const { mimeType, data } = await urlToBase64(item.image_url.url, 'image/jpeg')
-                        newContent.push({
-                            type: 'image',
-                            image: `data:${mimeType};base64,${data}`
-                        })
-                        logger.debug('[MediaPreprocess] image_url转base64:', item.image_url.url?.substring(0, 50))
+                        const { mimeType, data, error } = await urlToBase64(item.image_url.url, 'image/jpeg')
+                        if (data && !error) {
+                            newContent.push({
+                                type: 'image',
+                                image: `data:${mimeType};base64,${data}`
+                            })
+                            logger.debug('[MediaPreprocess] image_url转base64:', item.image_url.url?.substring(0, 50))
+                        } else {
+                            logger.debug('[MediaPreprocess] image_url跳过:', item.image_url.url?.substring(0, 50))
+                        }
                     }
                     // 处理视频类型
                     else if (processVideo && (item.type === 'video' || item.type === 'video_info')) {
                         const videoUrl = item.url || item.video || item.file
                         if (videoUrl && !videoUrl.startsWith('data:')) {
                             try {
-                                const { mimeType, data } = await urlToBase64(videoUrl, 'video/mp4')
+                                const { mimeType, data, error } = await urlToBase64(videoUrl, 'video/mp4')
+                                if (!data || error) {
+                                    logger.debug('[MediaPreprocess] 视频跳过:', videoUrl?.substring(0, 50))
+                                    newContent.push(item)
+                                    continue
+                                }
                                 // 检查大小限制
                                 const sizeBytes = (data.length * 3) / 4
                                 if (sizeBytes <= maxVideoSize) {
@@ -362,15 +392,20 @@ export async function preprocessMediaToBase64(histories, options = {}) {
                         const audioUrl = item.url || item.data || item.file
                         if (audioUrl && typeof audioUrl === 'string' && !audioUrl.startsWith('data:')) {
                             try {
-                                const { mimeType, data } = await urlToBase64(audioUrl, 'audio/mpeg')
-                                newContent.push({
-                                    type: 'audio',
-                                    data,
-                                    format: mimeType.split('/')[1] || 'mp3'
-                                })
-                                logger.debug('[MediaPreprocess] 音频转base64:', audioUrl?.substring(0, 50))
+                                const { mimeType, data, error } = await urlToBase64(audioUrl, 'audio/mpeg')
+                                if (data && !error) {
+                                    newContent.push({
+                                        type: 'audio',
+                                        data,
+                                        format: mimeType.split('/')[1] || 'mp3'
+                                    })
+                                    logger.debug('[MediaPreprocess] 音频转base64:', audioUrl?.substring(0, 50))
+                                } else {
+                                    logger.debug('[MediaPreprocess] 音频跳过:', audioUrl?.substring(0, 50))
+                                    newContent.push(item)
+                                }
                             } catch (err) {
-                                logger.warn('[MediaPreprocess] 音频转换失败:', err.message)
+                                logger.debug('[MediaPreprocess] 音频转换失败:', err.message)
                                 newContent.push(item)
                             }
                         } else {
@@ -381,7 +416,8 @@ export async function preprocessMediaToBase64(histories, options = {}) {
                         newContent.push(item)
                     }
                 } catch (err) {
-                    logger.warn('[MediaPreprocess] 处理失败:', err.message)
+                    // 静默处理媒体转换错误
+                    logger.debug('[MediaPreprocess] 处理失败:', err.message)
                     newContent.push(item)
                 }
             }

@@ -104,10 +104,12 @@ export class OpenAIClient extends AbstractClient {
         const messages = []
 
         // Gemini模型需要将图片URL转为base64
+        const isGeminiModel = model.toLowerCase().includes('gemini')
         if (needsImageBase64Preprocess(model)) {
             histories = await preprocessImageUrls(histories)
         }
-        const isThinkingModel = options.enableReasoning || options.isThinkingModel
+        // Gemini模型不支持thinking model的特殊参数（developer角色、max_completion_tokens等）
+        const isThinkingModel = !isGeminiModel && (options.enableReasoning || options.isThinkingModel)
 
         if (options.systemOverride) {
             if (isThinkingModel) {
@@ -430,10 +432,12 @@ export class OpenAIClient extends AbstractClient {
         const model = options.model || 'gpt-4o-mini'
 
         // Gemini模型需要将图片URL转为base64
+        const isGeminiModel = model.toLowerCase().includes('gemini')
         if (needsImageBase64Preprocess(model)) {
             histories = await preprocessImageUrls(histories)
         }
-        const isThinkingModel = options.enableReasoning || options.isThinkingModel
+        // Gemini模型不支持thinking model的特殊参数（developer角色、max_completion_tokens等）
+        const isThinkingModel = !isGeminiModel && (options.enableReasoning || options.isThinkingModel)
 
         if (options.systemOverride) {
             if (isThinkingModel) {

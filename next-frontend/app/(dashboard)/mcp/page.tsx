@@ -27,9 +27,36 @@ import {
 } from '@/components/ui/select'
 import { mcpApi, toolsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { RefreshCw, Server, Wrench, CheckCircle, XCircle, Loader2, Plus, Trash2, RotateCcw, FileJson, Pencil, Code, Eye, Play, Copy } from 'lucide-react'
+import { RefreshCw, Server, Wrench, CheckCircle, XCircle, Loader2, Plus, Trash2, RotateCcw, FileJson, Pencil, Code, Eye, Play, Copy, ChevronDown, ChevronUp, Settings2, Image, Search, Clock, User, Users, MessageSquare, Shield, FolderOpen, Globe, Brain, History } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
-import { CodeBlock } from '@/components/ui/code-block' 
+import { CodeBlock } from '@/components/ui/code-block'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+
+// 工具类别图标映射
+const categoryIcons: Record<string, React.ComponentType<{ className?: string }>> = {
+  basic: Clock,
+  user: User,
+  group: Users,
+  message: MessageSquare,
+  admin: Shield,
+  file: FolderOpen,
+  media: Image,
+  web: Globe,
+  search: Search,
+  utils: Wrench,
+  memory: Brain,
+  context: History
+}
+
+interface ToolCategory {
+  key: string
+  name: string
+  description: string
+  icon: string
+  toolCount: number
+  tools: { name: string; description: string }[]
+  enabled?: boolean
+}
 
 interface McpServer {
   name: string
@@ -90,16 +117,24 @@ export default function McpPage() {
   const [testResult, setTestResult] = useState('')
   const [testLoading, setTestLoading] = useState(false)
 
+  // 工具类别
+  const [categories, setCategories] = useState<ToolCategory[]>([])
+  const [expandedCategory, setExpandedCategory] = useState<string | null>(null)
+  const [togglingCategory, setTogglingCategory] = useState<string | null>(null)
+
   const fetchData = async () => {
     try {
-      const [serversRes, toolsRes] = await Promise.all([
+      const [serversRes, toolsRes, categoriesRes] = await Promise.all([
         mcpApi.listServers(),
-        toolsApi.list()
+        toolsApi.list(),
+        toolsApi.getCategories().catch(() => ({ data: [] }))
       ])
       const serversData = (serversRes as any)?.data || serversRes || []
       const toolsData = (toolsRes as any)?.data || toolsRes || []
+      const categoriesData = (categoriesRes as any)?.data || categoriesRes || []
       setServers(Array.isArray(serversData) ? serversData : [])
       setTools(Array.isArray(toolsData) ? toolsData : [])
+      setCategories(Array.isArray(categoriesData) ? categoriesData : [])
     } catch (error) {
       toast.error('加载MCP数据失败')
       console.error(error)
@@ -338,6 +373,26 @@ export default {
     }
   }
 
+  // 切换工具类别
+  const handleToggleCategory = async (categoryKey: string, enabled: boolean) => {
+    setTogglingCategory(categoryKey)
+    try {
+      await toolsApi.toggleCategory(categoryKey, enabled)
+      setCategories(prev => prev.map(cat => 
+        cat.key === categoryKey ? { ...cat, enabled } : cat
+      ))
+      toast.success(`${enabled ? '启用' : '禁用'}成功`)
+      // 刷新工具列表
+      const toolsRes = await toolsApi.list()
+      const toolsData = (toolsRes as any)?.data || toolsRes || []
+      setTools(Array.isArray(toolsData) ? toolsData : [])
+    } catch (error: any) {
+      toast.error('操作失败: ' + (error?.response?.data?.message || error?.message || '未知错误'))
+    } finally {
+      setTogglingCategory(null)
+    }
+  }
+
   // 安全的工具分类
   const builtinTools = tools.filter(t => t?.isBuiltin || t?.serverName === 'builtin')
   const externalTools = tools.filter(t => t && !t.isBuiltin && t.serverName !== 'builtin')
@@ -522,62 +577,96 @@ export default {
               <TabsTrigger value="external">外部工具 ({externalTools.length})</TabsTrigger>
             </TabsList>
 
-            {/* 内置工具 */}
-            <TabsContent value="builtin">
-              {builtinTools.length === 0 ? (
+            {/* 内置工具 - 按类别分组 */}
+            <TabsContent value="builtin" className="space-y-4">
+              {categories.length > 0 ? (
+                <ScrollArea className="h-[600px]">
+                  <div className="space-y-3 pr-4">
+                    {categories.map((category) => {
+                      const IconComponent = categoryIcons[category.key] || Wrench
+                      const isExpanded = expandedCategory === category.key
+                      const categoryTools = builtinTools.filter(t => 
+                        category.tools.some(ct => ct.name === t.name)
+                      )
+                      
+                      return (
+                        <Card key={category.key} className={`transition-all ${category.enabled === false ? 'opacity-60' : ''}`}>
+                          <Collapsible open={isExpanded} onOpenChange={() => setExpandedCategory(isExpanded ? null : category.key)}>
+                            <CollapsibleTrigger asChild>
+                              <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors py-3">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-3">
+                                    <div className="p-2 rounded-lg bg-primary/10">
+                                      <IconComponent className="h-5 w-5 text-primary" />
+                                    </div>
+                                    <div>
+                                      <CardTitle className="text-base flex items-center gap-2">
+                                        {category.name}
+                                        <Badge variant="secondary" className="text-xs">
+                                          {category.toolCount} 工具
+                                        </Badge>
+                                      </CardTitle>
+                                      <CardDescription className="text-xs mt-0.5">
+                                        {category.description}
+                                      </CardDescription>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                                      <Switch
+                                        checked={category.enabled !== false}
+                                        onCheckedChange={(checked) => handleToggleCategory(category.key, checked)}
+                                        disabled={togglingCategory === category.key}
+                                      />
+                                      {togglingCategory === category.key && (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                      )}
+                                    </div>
+                                    {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                                  </div>
+                                </div>
+                              </CardHeader>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                              <CardContent className="pt-0">
+                                <div className="grid gap-2 sm:grid-cols-1 lg:grid-cols-2">
+                                  {categoryTools.map((tool) => (
+                                    <div key={tool.name} className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors group">
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2">
+                                          <Code className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                          <span className="font-medium text-sm truncate">{tool.name}</span>
+                                        </div>
+                                        <p className="text-xs text-muted-foreground mt-1 line-clamp-1 pl-5">
+                                          {tool.description || '无描述'}
+                                        </p>
+                                      </div>
+                                      <div className="flex gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleViewDetail(tool)}>
+                                          <Eye className="h-3.5 w-3.5" />
+                                        </Button>
+                                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleOpenTest(tool)}>
+                                          <Play className="h-3.5 w-3.5" />
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </CardContent>
+                            </CollapsibleContent>
+                          </Collapsible>
+                        </Card>
+                      )
+                    })}
+                  </div>
+                </ScrollArea>
+              ) : (
                 <Card>
                   <CardContent className="flex flex-col items-center justify-center py-12">
                     <Wrench className="h-12 w-12 text-muted-foreground mb-4" />
-                    <p className="text-muted-foreground">暂无内置工具</p>
+                    <p className="text-muted-foreground">暂无内置工具类别</p>
                   </CardContent>
                 </Card>
-              ) : (
-                <ScrollArea className="h-[500px]">
-                  <div className="grid gap-3 sm:grid-cols-1 lg:grid-cols-2">
-                    {builtinTools.map((tool) => (
-                      <Card key={tool.name} className="hover:shadow-md transition-shadow group">
-                        <CardContent className="p-4">
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-2">
-                                <Code className="h-4 w-4 text-primary" />
-                                <span className="font-medium truncate">{tool.name}</span>
-                              </div>
-                              <p className="text-sm text-muted-foreground line-clamp-2">
-                                {tool.description || '无描述'}
-                              </p>
-                              {tool.inputSchema?.properties && (
-                                <div className="mt-2 flex flex-wrap gap-1">
-                                  {Object.keys(tool.inputSchema.properties).slice(0, 3).map((param) => (
-                                    <Badge key={param} variant="secondary" className="text-xs">
-                                      {param}
-                                    </Badge>
-                                  ))}
-                                  {Object.keys(tool.inputSchema.properties).length > 3 && (
-                                    <Badge variant="secondary" className="text-xs">
-                                      +{Object.keys(tool.inputSchema.properties).length - 3}
-                                    </Badge>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleViewDetail(tool)}>
-                                <Eye className="h-4 w-4" />
-                              </Button>
-                              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleOpenTest(tool)}>
-                                <Play className="h-4 w-4" />
-                              </Button>
-                              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleCopyToJsTool(tool)} title="复制为 JS 工具">
-                                <Copy className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                </ScrollArea>
               )}
             </TabsContent>
 

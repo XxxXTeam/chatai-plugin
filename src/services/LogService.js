@@ -151,13 +151,20 @@ class LogService {
      * @param {Error} error - 错误对象
      */
     mediaError(type, url, error) {
+        // 4xx 客户端错误（URL过期等）静默处理，只记录 debug
+        const is4xxError = error?.status >= 400 && error?.status < 500
+        if (is4xxError) {
+            // 静默处理，避免刷屏
+            return
+        }
+        
         const context = {
             mediaType: type,
             url: this.truncateUrl(url),
             urlLength: url?.length
         }
         
-        this.error(`[Media] ${type}处理失败`, error, context)
+        this.warn(`[Media] ${type}处理失败`, error, context)
     }
 
     /**

@@ -122,6 +122,13 @@ export const toolsApi = {
   updateBuiltinConfig: (data: any) => api.put('/api/tools/builtin/config', data),
   getBuiltinList: () => api.get('/api/tools/builtin/list'),
   refreshBuiltin: () => api.post('/api/tools/builtin/refresh'),
+  // 工具类别和开关
+  getCategories: () => api.get('/api/tools/builtin/categories'),
+  toggleCategory: (category: string, enabled: boolean) => 
+    api.post('/api/tools/builtin/category/toggle', { category, enabled }),
+  toggleTool: (toolName: string, enabled: boolean) => 
+    api.post('/api/tools/builtin/tool/toggle', { toolName, enabled }),
+  // 自定义工具
   getCustom: () => api.get('/api/tools/custom'),
   createCustom: (data: any) => api.post('/api/tools/custom', data),
   updateCustom: (name: string, data: any) => api.put(`/api/tools/custom/${name}`, data),

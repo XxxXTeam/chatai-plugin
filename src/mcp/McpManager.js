@@ -25,6 +25,13 @@ export class McpManager {
     }
 
     /**
+     * 获取内置 MCP 服务器实例
+     */
+    get builtinServer() {
+        return builtinMcpServer
+    }
+
+    /**
      * 加载 MCP 服务器配置
      */
     loadServersConfig() {
