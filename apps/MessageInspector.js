@@ -1,10 +1,11 @@
 /**
  * 消息检查器插件
  * #取 - 获取消息完整raw/pb信息
- * 仅主人可用，使用合并转发输出
+ * 仅主人可用，使用图片+合并转发输出
  */
-import { getBotFramework } from '../src/utils/bot.js'
+import { getBotFramework, getAdapter } from '../src/utils/bot.js'
 import { formatTimeToBeiJing } from '../src/utils/common.js'
+import { renderService } from '../src/services/RenderService.js'
 
 // 缓存主人列表
 let masterList = null
@@ -30,49 +31,17 @@ async function isMaster(userId) {
 }
 
 /**
- * 检测适配器类型
- * @param {Object} e - 事件对象
- * @returns {string} 适配器类型
- */
-function detectAdapter(e) {
-    const bot = e?.bot || Bot
-    
-    // 检查适配器名称
-    if (bot?.adapter?.name) {
-        const name = bot.adapter.name.toLowerCase()
-        if (name.includes('icqq')) return 'icqq'
-        if (name.includes('napcat') || name.includes('nc')) return 'NapCat'
-        if (name.includes('gocq') || name.includes('go-cqhttp')) return 'go-cqhttp'
-        if (name.includes('lagrange')) return 'Lagrange'
-        if (name.includes('onebot')) return 'OneBot'
-    }
-    
-    // 通过特征检测
-    if (bot?.version?.app_name) {
-        const appName = bot.version.app_name.toLowerCase()
-        if (appName.includes('napcat')) return 'NapCat'
-        if (appName.includes('go-cqhttp')) return 'go-cqhttp'
-        if (appName.includes('lagrange')) return 'Lagrange'
-    }
-    
-    // icqq 特征: 有 pickGroup 且有 gml
-    if (typeof bot?.pickGroup === 'function' && bot?.gml) {
-        return 'icqq'
-    }
-    
-    // 通用 OneBot
-    if (typeof bot?.getMsg === 'function') {
-        return 'OneBot'
-    }
-    
-    return 'Unknown'
-}
-
-/**
  * 获取框架类型
  */
 function getFramework() {
     return getBotFramework()  // 'trss' 或 'miao'
+}
+
+/**
+ * 检测适配器类型 (使用 bot.js 的 getAdapter)
+ */
+function detectAdapter(e) {
+    return getAdapter(e)
 }
 
 export class MessageInspector extends plugin {
@@ -146,12 +115,8 @@ export class MessageInspector extends plugin {
             }
             
             let rawMsg = null
-            
-            // 群聊消息
             if (e.group_id) {
                 const group = bot.pickGroup(e.group_id)
-                
-                // 方式1: group.getMsg
                 if (group?.getMsg) {
                     try {
                         rawMsg = await group.getMsg(targetSeq || targetMsgId)
@@ -160,8 +125,6 @@ export class MessageInspector extends plugin {
                         result.methods.push({ name: 'group.getMsg', success: false, error: err.message })
                     }
                 }
-                
-                // 方式2: group.getChatHistory
                 if (!rawMsg && group?.getChatHistory && targetSeq) {
                     try {
                         const history = await group.getChatHistory(targetSeq, 1)
@@ -233,15 +196,25 @@ export class MessageInspector extends plugin {
                 }
             }
             
-            // 构建合并转发消息
-            const forwardMsgs = await this.buildForwardMessages(e, result, rawMsg)
-            
-            // 发送合并转发
-            const sendResult = await this.sendForwardMsg(e, '消息详情', forwardMsgs)
-            
-            if (!sendResult) {
-                // 回退: 发送简要信息
-                await this.sendFallbackReply(result, rawMsg)
+            // 优先尝试渲染为图片
+            try {
+                const imageBuffer = await this.renderMessageDetails(result, rawMsg)
+                await this.reply(segment.image(imageBuffer))
+                
+                // PB数据较多时，额外发送合并转发
+                if (result.pb?.exists && result.pb.base64) {
+                    const forwardMsgs = await this.buildForwardMessages(e, result, rawMsg)
+                    await this.sendForwardMsg(e, '消息PB数据', forwardMsgs)
+                }
+            } catch (renderErr) {
+                logger.warn('[MessageInspector] 渲染图片失败:', renderErr.message)
+                // 回退: 构建合并转发消息
+                const forwardMsgs = await this.buildForwardMessages(e, result, rawMsg)
+                const sendResult = await this.sendForwardMsg(e, '消息详情', forwardMsgs)
+                
+                if (!sendResult) {
+                    await this.sendFallbackReply(result, rawMsg)
+                }
             }
             
         } catch (error) {
@@ -252,6 +225,67 @@ export class MessageInspector extends plugin {
         return true
     }
     
+    /**
+     * 渲染消息详情为图片
+     */
+    async renderMessageDetails(result, rawMsg) {
+        const markdown = [
+            `## 📝 消息详情`,
+            ``,
+            `### 📋 基本信息`,
+            `| 项目 | 数值 |`,
+            `|------|------|`,
+            `| 🖥️ 框架 | ${result.framework} |`,
+            `| 🔌 适配器 | ${result.adapter} |`,
+            `| 🔢 Seq | ${rawMsg.seq || 'N/A'} |`,
+            `| 🆔 消息ID | ${rawMsg.message_id || rawMsg.id || 'N/A'} |`,
+            `| ⏰ 时间 | ${rawMsg.time ? formatTimeToBeiJing(rawMsg.time) : 'N/A'} |`,
+            `| 👤 发送者 | ${rawMsg.sender?.nickname || rawMsg.sender?.card || 'N/A'} |`,
+            `| 🆔 发送者ID | ${rawMsg.sender?.user_id || 'N/A'} |`,
+            rawMsg.group_id ? `| 👥 群号 | ${rawMsg.group_id} |` : '',
+            ``,
+            `### 💬 消息内容`,
+            '```',
+            rawMsg.raw_message || '(无)',
+            '```',
+            ``,
+            `### 📦 消息段`,
+            '```json',
+            JSON.stringify(rawMsg.message || [], null, 2).substring(0, 800),
+            '```',
+        ].filter(Boolean)
+        
+        // icqq 特有字段
+        if (rawMsg.rand !== undefined || rawMsg.font !== undefined) {
+            markdown.push(``, `### 🎲 icqq 特有字段`)
+            markdown.push(`- **Rand:** ${rawMsg.rand ?? 'N/A'}`)
+            markdown.push(`- **Font:** ${rawMsg.font ?? 'N/A'}`)
+            markdown.push(`- **PktNum:** ${rawMsg.pktnum ?? 'N/A'}`)
+        }
+        
+        // PB 数据
+        if (result.pb?.exists) {
+            markdown.push(``, `### 📦 PB 原始数据`)
+            markdown.push(`- **类型:** ${result.pb.type}`)
+            markdown.push(`- **是否Buffer:** ${result.pb.isBuffer}`)
+            markdown.push(`- **长度:** ${result.pb.length} bytes`)
+        }
+        
+        // 查询方法
+        markdown.push(``, `### 🛠️ 查询方法`)
+        result.methods.forEach(m => {
+            markdown.push(`- ${m.success ? '✅' : '❌'} **${m.name}**${m.error ? ` - ${m.error}` : ''}`)
+        })
+        
+        return renderService.renderMarkdownToImage({
+            markdown: markdown.join('\n'),
+            title: '消息检查器',
+            subtitle: `Seq: ${rawMsg.seq || 'N/A'}`,
+            icon: '🔍',
+            showTimestamp: true
+        })
+    }
+
     /**
      * 构建合并转发消息
      */

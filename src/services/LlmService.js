@@ -88,14 +88,32 @@ export class LlmService {
         }
 
         // Create client
-        const client = new ClientClass({
+        const clientConfig = {
             apiKey,
             baseUrl,
             features: ['chat'],
             tools,
             enableReasoning,
             reasoningEffort
-        })
+        }
+        
+        // 传递自定义请求头（支持 XFF/Auth/UA 等复写）
+        if (options.customHeaders && Object.keys(options.customHeaders).length > 0) {
+            clientConfig.customHeaders = options.customHeaders
+        }
+        
+        // 传递JSON模板配置（支持占位符）
+        if (options.headersTemplate) {
+            clientConfig.headersTemplate = options.headersTemplate
+        }
+        if (options.requestBodyTemplate) {
+            clientConfig.requestBodyTemplate = options.requestBodyTemplate
+        }
+        if (options.channelName) {
+            clientConfig.channelName = options.channelName
+        }
+        
+        const client = new ClientClass(clientConfig)
 
         return client
     }

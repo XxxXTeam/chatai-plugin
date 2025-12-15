@@ -53,6 +53,7 @@ interface Channel {
   lastError?: string
   lastUsed?: number
   testedAt?: number
+  customHeaders?: Record<string, string>
   stats?: {
     totalCalls?: number
     successCalls?: number
@@ -81,12 +82,18 @@ export default function ChannelsPage() {
     models: '',
     enabled: true,
     priority: 0,
+    customHeaders: {} as Record<string, string>,
+    headersTemplate: '',
+    requestBodyTemplate: '',
     advanced: {
       streaming: { enabled: false, chunkSize: 1024 },
       thinking: { enableReasoning: false, defaultLevel: 'medium', adaptThinking: true, sendThinkingAsMessage: false },
       llm: { temperature: 0.7, maxTokens: 4000, topP: 1, frequencyPenalty: 0, presencePenalty: 0 }
     }
   })
+  const [newHeaderKey, setNewHeaderKey] = useState('')
+  const [newHeaderValue, setNewHeaderValue] = useState('')
+  const [showJsonEditor, setShowJsonEditor] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
 
   const fetchChannels = async () => {
@@ -121,10 +128,16 @@ export default function ChannelsPage() {
       models: '',
       enabled: true,
       priority: 0,
+      customHeaders: {},
+      headersTemplate: '',
+      requestBodyTemplate: '',
       advanced: { ...defaultAdvanced }
     })
     setEditingChannel(null)
     setShowAdvanced(false)
+    setShowJsonEditor(false)
+    setNewHeaderKey('')
+    setNewHeaderValue('')
   }
 
   const handleOpenDialog = (channel?: Channel) => {
@@ -138,6 +151,9 @@ export default function ChannelsPage() {
         models: channel.models?.join(', ') || '',
         enabled: channel.enabled !== false,
         priority: channel.priority || 0,
+        customHeaders: channel.customHeaders || {},
+        headersTemplate: (channel as any).headersTemplate || '',
+        requestBodyTemplate: (channel as any).requestBodyTemplate || '',
         advanced: (channel as any).advanced || { ...defaultAdvanced }
       })
     } else {
@@ -157,6 +173,9 @@ export default function ChannelsPage() {
       const data = {
         ...form,
         models: form.models.split(',').map(m => m.trim()).filter(Boolean),
+        customHeaders: form.customHeaders,
+        headersTemplate: form.headersTemplate,
+        requestBodyTemplate: form.requestBodyTemplate,
       }
 
       if (editingChannel) {
@@ -680,6 +699,149 @@ export default function ChannelsPage() {
                             })}
                           />
                         </div>
+                      </div>
+
+                      {/* 自定义请求头 */}
+                      <div className="space-y-3 p-3 border rounded-lg">
+                        <h4 className="font-medium text-sm">自定义请求头</h4>
+                        <p className="text-xs text-muted-foreground">
+                          支持覆写 X-Forwarded-For、Authorization、User-Agent 等请求头
+                        </p>
+                        
+                        {/* 已添加的请求头列表 */}
+                        {Object.keys(form.customHeaders).length > 0 && (
+                          <div className="space-y-2">
+                            {Object.entries(form.customHeaders).map(([key, value]) => (
+                              <div key={key} className="flex items-center gap-2 p-2 bg-muted/50 rounded">
+                                <code className="text-xs font-mono flex-1 truncate">{key}</code>
+                                <code className="text-xs font-mono flex-1 truncate text-muted-foreground">
+                                  {value.length > 30 ? value.substring(0, 30) + '...' : value}
+                                </code>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 w-6 p-0 text-destructive hover:text-destructive"
+                                  onClick={() => {
+                                    const newHeaders = { ...form.customHeaders }
+                                    delete newHeaders[key]
+                                    setForm({ ...form, customHeaders: newHeaders })
+                                  }}
+                                >
+                                  <X className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        
+                        {/* 添加新请求头 */}
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="Header名称 (如 X-Forwarded-For)"
+                            value={newHeaderKey}
+                            onChange={(e) => setNewHeaderKey(e.target.value)}
+                            className="flex-1 text-xs"
+                          />
+                          <Input
+                            placeholder="Header值"
+                            value={newHeaderValue}
+                            onChange={(e) => setNewHeaderValue(e.target.value)}
+                            className="flex-1 text-xs"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={!newHeaderKey.trim() || !newHeaderValue.trim()}
+                            onClick={() => {
+                              if (newHeaderKey.trim() && newHeaderValue.trim()) {
+                                setForm({
+                                  ...form,
+                                  customHeaders: {
+                                    ...form.customHeaders,
+                                    [newHeaderKey.trim()]: newHeaderValue.trim()
+                                  }
+                                })
+                                setNewHeaderKey('')
+                                setNewHeaderValue('')
+                              }
+                            }}
+                          >
+                            <Plus className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        
+                        {/* 常用请求头快捷添加 */}
+                        <div className="flex flex-wrap gap-1">
+                          {['X-Forwarded-For', 'Authorization', 'User-Agent', 'X-Real-IP'].map((header) => (
+                            !form.customHeaders[header] && (
+                              <Badge
+                                key={header}
+                                variant="outline"
+                                className="text-xs cursor-pointer hover:bg-muted"
+                                onClick={() => setNewHeaderKey(header)}
+                              >
+                                + {header}
+                              </Badge>
+                            )
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* JSON模板编辑器 */}
+                      <div className="space-y-3 p-3 border rounded-lg">
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-medium text-sm">JSON模板（高级）</h4>
+                          <Switch
+                            checked={showJsonEditor}
+                            onCheckedChange={setShowJsonEditor}
+                          />
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          使用JSON格式定义请求头，支持占位符
+                        </p>
+                        
+                        {showJsonEditor && (
+                          <>
+                            {/* 占位符说明 */}
+                            <div className="p-2 bg-muted/50 rounded text-xs">
+                              <p className="font-medium mb-1">可用占位符：</p>
+                              <div className="grid grid-cols-2 gap-1 text-muted-foreground">
+                                <span><code className="text-primary">{'{{API_KEY}}'}</code> API密钥</span>
+                                <span><code className="text-primary">{'{{MODEL}}'}</code> 模型名称</span>
+                                <span><code className="text-primary">{'{{USER_AGENT}}'}</code> 随机UA</span>
+                                <span><code className="text-primary">{'{{XFF}}'}</code> 随机IP</span>
+                                <span><code className="text-primary">{'{{RANDOM_IP}}'}</code> 随机IP</span>
+                                <span><code className="text-primary">{'{{TIMESTAMP}}'}</code> 时间戳</span>
+                                <span><code className="text-primary">{'{{UUID}}'}</code> 随机UUID</span>
+                                <span><code className="text-primary">{'{{NONCE}}'}</code> 随机串</span>
+                              </div>
+                            </div>
+                            
+                            {/* 请求头JSON模板 */}
+                            <div className="space-y-2">
+                              <Label className="text-sm">请求头模板 (JSON)</Label>
+                              <textarea
+                                className="w-full h-24 p-2 text-xs font-mono border rounded bg-background resize-y"
+                                placeholder={`{\n  "User-Agent": "{{USER_AGENT}}",\n  "X-Forwarded-For": "{{XFF}}"\n}`}
+                                value={form.headersTemplate}
+                                onChange={(e) => setForm({ ...form, headersTemplate: e.target.value })}
+                              />
+                            </div>
+                            
+                            {/* 请求体JSON模板 */}
+                            <div className="space-y-2">
+                              <Label className="text-sm">请求体扩展 (JSON)</Label>
+                              <textarea
+                                className="w-full h-24 p-2 text-xs font-mono border rounded bg-background resize-y"
+                                placeholder={`{\n  "extra_headers": {\n    "custom-key": "value"\n  }\n}`}
+                                value={form.requestBodyTemplate}
+                                onChange={(e) => setForm({ ...form, requestBodyTemplate: e.target.value })}
+                              />
+                            </div>
+                          </>
+                        )}
                       </div>
                     </CollapsibleContent>
                   </Collapsible>

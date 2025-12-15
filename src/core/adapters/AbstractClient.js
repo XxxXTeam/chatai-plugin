@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import { BaseClientOptions, ChaiteContext, DefaultLogger, MultipleKeyStrategyChoice, SendMessageOption } from '../types/index.js'
 import DefaultHistoryManager from '../utils/history.js'
 import { asyncLocalStorage, extractClassName, getKey } from '../utils/index.js'
+import { logService } from '../../services/LogService.js'
 
 /**
  * @param {string} text - 响应文本
@@ -162,13 +163,40 @@ export function parseXmlToolCalls(text) {
  * @param {string} [defaultMimeType] - 默认MIME类型
  * @returns {Promise<{mimeType: string, data: string}>}
  */
-async function urlToBase64(url, defaultMimeType = 'application/octet-stream') {
+/**
+ * URL转Base64配置
+ */
+const URL_TO_BASE64_CONFIG = {
+    maxRetries: 2,
+    retryDelay: 1000,
+    timeout: 30000,
+    // 浏览器UA避免被拦截
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+}
+
+/**
+ * 将URL资源转换为base64（增强版，带重试和错误处理）
+ * @param {string} url - 资源URL
+ * @param {string} [defaultMimeType] - 默认MIME类型
+ * @param {Object} [options] - 选项
+ * @returns {Promise<{mimeType: string, data: string}>}
+ */
+async function urlToBase64(url, defaultMimeType = 'application/octet-stream', options = {}) {
+    const { maxRetries = URL_TO_BASE64_CONFIG.maxRetries, retryDelay = URL_TO_BASE64_CONFIG.retryDelay } = options
+    
     try {
         // 处理本地文件路径
-        if (url.startsWith('file://') || url.startsWith('/')) {
+        if (url.startsWith('file://') || (url.startsWith('/') && !url.startsWith('//'))) {
             const fs = await import('node:fs')
             const path = await import('node:path')
             const filePath = url.replace('file://', '')
+            
+            if (!fs.existsSync(filePath)) {
+                const err = new Error(`本地文件不存在: ${filePath}`)
+                logService.mediaError('file', url, err)
+                throw err
+            }
+            
             const buffer = fs.readFileSync(filePath)
             const ext = path.extname(filePath).toLowerCase().slice(1)
             const mimeType = getMimeType(ext) || defaultMimeType
@@ -185,18 +213,60 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream') {
             return { mimeType, data }
         }
         
-        // HTTP/HTTPS URL
-        const response = await fetch(url)
-        if (!response.ok) {
-            throw new Error(`Failed to fetch: ${response.statusText}`)
+        // HTTP/HTTPS URL - 带重试
+        let lastError = null
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                const controller = new AbortController()
+                const timeoutId = setTimeout(() => controller.abort(), URL_TO_BASE64_CONFIG.timeout)
+                
+                const response = await fetch(url, {
+                    signal: controller.signal,
+                    headers: {
+                        'User-Agent': URL_TO_BASE64_CONFIG.userAgent,
+                        'Accept': '*/*',
+                        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                        'Referer': new URL(url).origin + '/',
+                    }
+                })
+                
+                clearTimeout(timeoutId)
+                
+                if (!response.ok) {
+                    const err = new Error(`HTTP ${response.status}: ${response.statusText}`)
+                    err.status = response.status
+                    err.statusText = response.statusText
+                    throw err
+                }
+                
+                const contentType = response.headers.get('content-type') || defaultMimeType
+                const buffer = Buffer.from(await response.arrayBuffer())
+                
+                return {
+                    mimeType: contentType.split(';')[0],
+                    data: buffer.toString('base64')
+                }
+            } catch (fetchErr) {
+                lastError = fetchErr
+                
+                // 记录错误但不立即抛出（除非是最后一次尝试）
+                if (attempt < maxRetries) {
+                    logger.warn(`[urlToBase64] 第${attempt + 1}次获取失败，${retryDelay}ms后重试: ${fetchErr.message}`)
+                    await new Promise(r => setTimeout(r, retryDelay))
+                }
+            }
         }
-        const contentType = response.headers.get('content-type') || defaultMimeType
-        const buffer = Buffer.from(await response.arrayBuffer())
-        return {
-            mimeType: contentType.split(';')[0],
-            data: buffer.toString('base64')
-        }
+        
+        // 所有重试都失败，记录并抛出错误
+        logService.mediaError('url', url, lastError)
+        throw new Error(`获取媒体文件失败 (${maxRetries + 1}次尝试): ${lastError?.message || '未知错误'}`)
+        
     } catch (error) {
+        // 记录所有未捕获的错误
+        if (!error.logged) {
+            logService.mediaError('media', url, error)
+            error.logged = true
+        }
         throw error
     }
 }

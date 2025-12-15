@@ -311,6 +311,18 @@ export class ChatService {
             clientOptions.adapterType = channel.adapterType
             clientOptions.baseUrl = channel.baseUrl
             clientOptions.apiKey = channelManager.getChannelKey(channel)
+            clientOptions.channelName = channel.name
+            // 传递渠道的自定义请求头
+            if (channel.customHeaders && Object.keys(channel.customHeaders).length > 0) {
+                clientOptions.customHeaders = channel.customHeaders
+            }
+            // 传递JSON模板配置
+            if (channel.headersTemplate) {
+                clientOptions.headersTemplate = channel.headersTemplate
+            }
+            if (channel.requestBodyTemplate) {
+                clientOptions.requestBodyTemplate = channel.requestBodyTemplate
+            }
             channelManager.startRequest(channel.id)
         }
 

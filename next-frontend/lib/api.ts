@@ -247,3 +247,16 @@ export const proxyApi = {
     api.post('/api/proxy/test', data),
 }
 
+// Logs API
+export const logsApi = {
+  list: () => api.get('/api/logs'),
+  getRecent: (lines = 100) => api.get(`/api/logs/recent?lines=${lines}`),
+}
+
+// Placeholders API (模板占位符)
+export const placeholdersApi = {
+  list: () => api.get('/api/placeholders'),
+  preview: (template: string, context?: Record<string, string>) => 
+    api.post('/api/placeholders/preview', { template, context }),
+}
+

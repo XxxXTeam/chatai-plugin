@@ -2,16 +2,105 @@
  * 机器人框架工具函数
  * 从 utils/bot.js 迁移
  */
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+// 缓存框架类型
+let _frameworkCache = null
+let _adapterCache = null
 
 /**
- * 获取机器人框架
- * @returns {'trss'|'miao'}
+ * 获取Yunzai框架类型
+ * @returns {'trss'|'miao'|'unknown'}
  */
 export function getBotFramework() {
+    if (_frameworkCache) return _frameworkCache
     if (typeof Bot !== 'undefined' && Bot.bots) {
+        _frameworkCache = 'trss'
         return 'trss'
     }
+    try {
+        const possiblePaths = [
+            path.join(__dirname, '../../../../package.json'),  // plugins/xxx/src/utils -> root
+            path.join(__dirname, '../../../../../package.json'),
+            path.join(process.cwd(), 'package.json')
+        ]
+        
+        for (const pkgPath of possiblePaths) {
+            if (fs.existsSync(pkgPath)) {
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+                if (pkg.name === 'trss-yunzai') {
+                    _frameworkCache = 'trss'
+                    return 'trss'
+                }
+                if (pkg.name === 'miao-yunzai') {
+                    _frameworkCache = 'miao'
+                    return 'miao'
+                }
+            }
+        }
+    } catch (err) {
+    }
+    if (typeof Bot !== 'undefined') {
+        if (Bot.adapter) {
+            _frameworkCache = 'trss'
+            return 'trss'
+        }
+    }
+    
+    _frameworkCache = 'miao'
     return 'miao'
+}
+
+/**
+ * 获取适配器类型（icqq/NapCat/go-cqhttp/Lagrange/OneBot）
+ * @param {Object} [e] - 事件对象
+ * @returns {string}
+ */
+export function getAdapter(e) {
+    const bot = e?.bot || Bot
+    if (bot?.adapter?.name) {
+        const name = bot.adapter.name.toLowerCase()
+        if (name.includes('icqq')) return 'icqq'
+        if (name.includes('napcat') || name.includes('nc')) return 'NapCat'
+        if (name.includes('gocq') || name.includes('go-cqhttp')) return 'go-cqhttp'
+        if (name.includes('lagrange')) return 'Lagrange'
+        if (name.includes('llonebot')) return 'LLOneBot'
+        if (name.includes('onebot')) return 'OneBot'
+    }
+    if (bot?.version?.app_name) {
+        const appName = bot.version.app_name.toLowerCase()
+        if (appName.includes('napcat')) return 'NapCat'
+        if (appName.includes('go-cqhttp')) return 'go-cqhttp'
+        if (appName.includes('lagrange')) return 'Lagrange'
+        if (appName.includes('llonebot')) return 'LLOneBot'
+    }
+    if (typeof bot?.pickGroup === 'function' && bot?.gml) {
+        return 'icqq'
+    }
+    
+    // 通用 OneBot 特征
+    if (typeof bot?.getMsg === 'function' || typeof bot?.sendPrivateMsg === 'function') {
+        return 'OneBot'
+    }
+    
+    return 'Unknown'
+}
+
+/**
+ * 获取完整框架信息
+ * @param {Object} [e] - 事件对象
+ * @returns {{ framework: string, adapter: string }}
+ */
+export function getFrameworkInfo(e) {
+    return {
+        framework: getBotFramework(),
+        adapter: getAdapter(e)
+    }
 }
 
 /**
@@ -60,15 +149,12 @@ export function getAllBots() {
  */
 export function isBotOnline(bot) {
     bot = bot || Bot
-    // icqq: isOnline()
     if (typeof bot?.isOnline === 'function') {
         return bot.isOnline()
     }
-    // TRSS/OneBot: 检查 status
     if (bot?.status !== undefined) {
         return bot.status === 'online' || bot.status === 11
     }
-    // 默认假设在线
     return true
 }
 

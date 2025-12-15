@@ -17,6 +17,7 @@
     "https-proxy-agent": "^7.0.6",
     "ioredis": "^5.8.2",
     "jsonwebtoken": "^9.0.2",
+    "marked": "^17.0.1",
     "multer": "^2.0.2",
     "openai": "^4.77.0",
     "puppeteer-extra": "^3.3.6",

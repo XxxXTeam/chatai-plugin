@@ -4,6 +4,8 @@ import { AbstractClient, preprocessImageUrls, needsImageBase64Preprocess, parseX
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
 import { proxyService } from '../../../services/ProxyService.js'
+import { logService } from '../../../services/LogService.js'
+import { requestTemplateService } from '../../../services/RequestTemplateService.js'
 
 /**
  * @typedef {import('../../types').BaseClientOptions} BaseClientOptions
@@ -40,15 +42,55 @@ export class OpenAIClient extends AbstractClient {
         // 获取渠道代理配置
         const channelProxy = proxyService.getChannelProxyAgent(this.baseUrl)
         
+        // 构建请求头 - 支持JSON模板和占位符
+        const model = options.model || 'gpt-4o-mini'
+        const templateContext = {
+            apiKey,
+            model,
+            baseUrl: this.baseUrl,
+            channelName: this.options?.channelName || '',
+            userAgent: this.options?.userAgent,
+            xff: this.options?.xff
+        }
+        
+        const defaultHeaders = {
+            'User-Agent': '{{USER_AGENT}}',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        }
+        
+        // 处理JSON模板（如果有）
+        const headersTemplate = this.options?.headersTemplate || options.headersTemplate
+        let mergedHeaders
+        if (headersTemplate) {
+            // 使用JSON模板（支持占位符）
+            mergedHeaders = requestTemplateService.buildHeaders(headersTemplate, templateContext)
+        } else {
+            // 应用自定义请求头（支持复写）
+            const customHeaders = this.options?.customHeaders || options.customHeaders || {}
+            mergedHeaders = requestTemplateService.buildHeaders(
+                { ...defaultHeaders, ...customHeaders },
+                templateContext
+            )
+        }
+        
+        // 处理特殊头复写
+        const customHeaders = this.options?.customHeaders || options.customHeaders || {}
+        if (customHeaders['X-Forwarded-For']) {
+            mergedHeaders['X-Forwarded-For'] = requestTemplateService.replaceplaceholders(
+                customHeaders['X-Forwarded-For'], templateContext
+            )
+        }
+        if (customHeaders['Authorization']) {
+            mergedHeaders['Authorization'] = requestTemplateService.replaceplaceholders(
+                customHeaders['Authorization'], templateContext
+            )
+        }
+        
         const clientOptions = {
             apiKey,
             baseURL: this.baseUrl,
-            // 添加浏览器请求头避免 CF 拦截
-            defaultHeaders: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            },
+            defaultHeaders: mergedHeaders,
         }
         
         // 如果有代理配置，添加到客户端选项
@@ -60,7 +102,6 @@ export class OpenAIClient extends AbstractClient {
         const client = new OpenAI(clientOptions)
 
         const messages = []
-        const model = options.model || 'gpt-4o-mini'
 
         // Gemini模型需要将图片URL转为base64
         if (needsImageBase64Preprocess(model)) {
@@ -258,6 +299,16 @@ export class OpenAIClient extends AbstractClient {
                 message: error.message,
                 error: error.error,
                 headers: error.headers
+            })
+            
+            // 保存错误日志到文件
+            logService.apiError('OpenAI', model, error, {
+                baseUrl: this.baseUrl,
+                messages: messages,
+                tools: requestPayload.tools,
+                stream: useStream,
+                temperature: requestPayload.temperature,
+                maxTokens: requestPayload.max_tokens || requestPayload.max_completion_tokens
             })
             
             // 检查是否启用错误时自动结清功能

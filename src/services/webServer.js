@@ -102,16 +102,18 @@ class FrontendAuthHandler {
     }
 
     /**
-     * 验证Token
+     * 验证Token（临时token或永久token）
      * @param {string} token
+     * @param {boolean} consumeTemp - 是否消耗临时token（用于登录时）
      * @returns {boolean}
      */
-    validateToken(token) {
+    validateToken(token, consumeTemp = true) {
         if (!token) return false
 
-        // 检查永久Token
+        // 优先检查永久Token（不消耗）
         const permanentToken = config.get('web.permanentAuthToken')
         if (permanentToken && token === permanentToken) {
+            logger.debug('[Auth] 永久Token验证成功')
             return true // 永久token可重复使用
         }
 
@@ -119,10 +121,14 @@ class FrontendAuthHandler {
         const expiry = this.tokens.get(token)
         if (expiry && Date.now() < expiry) {
             // 验证成功后删除（一次性使用）
-            this.tokens.delete(token)
+            if (consumeTemp) {
+                this.tokens.delete(token)
+                logger.debug('[Auth] 临时Token验证成功并已消耗')
+            }
             return true
         }
 
+        logger.debug('[Auth] Token验证失败:', token?.substring(0, 8) + '...')
         return false
     }
 
@@ -1088,6 +1094,54 @@ export class WebServer {
                 
                 const result = await proxyService.testProxy(profile, testUrl || 'https://www.google.com')
                 res.json(ChaiteResponse.ok(result))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // ==================== Template Placeholders API ====================
+        // GET /api/placeholders - 获取可用占位符列表
+        this.app.get('/api/placeholders', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { requestTemplateService } = await import('./RequestTemplateService.js')
+                const placeholders = requestTemplateService.getAvailablePlaceholders()
+                res.json(ChaiteResponse.ok(placeholders))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/placeholders/preview - 预览占位符替换结果
+        this.app.post('/api/placeholders/preview', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { requestTemplateService } = await import('./RequestTemplateService.js')
+                const { template, context } = req.body
+                const result = requestTemplateService.previewTemplate(template, context || {})
+                res.json(ChaiteResponse.ok({ result }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // ==================== Log Management API ====================
+        // GET /api/logs - 获取日志文件列表
+        this.app.get('/api/logs', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { logService } = await import('./LogService.js')
+                const files = logService.getLogFiles()
+                res.json(ChaiteResponse.ok(files))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/logs/recent - 获取最近的错误日志
+        this.app.get('/api/logs/recent', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { logService } = await import('./LogService.js')
+                const lines = parseInt(req.query.lines) || 100
+                const errors = logService.getRecentErrors(lines)
+                res.json(ChaiteResponse.ok(errors))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }

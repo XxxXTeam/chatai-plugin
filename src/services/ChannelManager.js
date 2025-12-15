@@ -83,6 +83,11 @@ export class ChannelManager {
                 status: channelConfig.status || 'idle',
                 lastHealthCheck: channelConfig.lastHealthCheck || null,
                 testedAt: channelConfig.testedAt || null,
+                // 自定义请求头
+                customHeaders: channelConfig.customHeaders || {},
+                // JSON模板
+                headersTemplate: channelConfig.headersTemplate || '',
+                requestBodyTemplate: channelConfig.requestBodyTemplate || '',
                 modelsCached: false,
                 keyIndex: 0
             })
@@ -129,6 +134,12 @@ export class ChannelManager {
             advanced: channelData.advanced || {},
             apiKeys: channelData.apiKeys || [],
             strategy: channelData.strategy || 'round-robin',
+            // 自定义请求头配置（支持JSON模板和占位符）
+            customHeaders: channelData.customHeaders || {},
+            // 请求头JSON模板（支持占位符如 {{API_KEY}}, {{UA}}, {{XFF}} 等）
+            headersTemplate: channelData.headersTemplate || '',
+            // 自定义请求体模板（JSON格式）
+            requestBodyTemplate: channelData.requestBodyTemplate || '',
             status: 'idle',
             lastHealthCheck: null,
             modelsCached: false,
@@ -152,7 +163,7 @@ export class ChannelManager {
         if (!channel) return null
 
         // Update allowed fields
-        const allowedFields = ['name', 'adapterType', 'baseUrl', 'apiKey', 'apiKeys', 'strategy', 'models', 'priority', 'enabled', 'advanced']
+        const allowedFields = ['name', 'adapterType', 'baseUrl', 'apiKey', 'apiKeys', 'strategy', 'models', 'priority', 'enabled', 'advanced', 'customHeaders', 'headersTemplate', 'requestBodyTemplate']
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
                 // 规范化 baseUrl
@@ -647,6 +658,11 @@ export class ChannelManager {
                 advanced: ch.advanced,
                 apiKeys: ch.apiKeys,
                 strategy: ch.strategy,
+                // 自定义请求头
+                customHeaders: ch.customHeaders,
+                // 请求头/请求体JSON模板
+                headersTemplate: ch.headersTemplate,
+                requestBodyTemplate: ch.requestBodyTemplate,
                 // 保存状态信息
                 status: ch.status,
                 lastHealthCheck: ch.lastHealthCheck,
