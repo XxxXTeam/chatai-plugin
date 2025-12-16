@@ -119,7 +119,12 @@ export class ChatService {
             response: {}, 
             context: {},
             toolCalls: [],
-            timing: { start: Date.now() }
+            timing: { start: Date.now() },
+            channel: {},
+            memory: {},
+            knowledge: {},
+            preset: {},
+            scope: {}
         } : null
 
         if (!userId) {
@@ -136,8 +141,6 @@ export class ChatService {
         // 提取纯userId（不带群号前缀）
         const pureUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
         const cleanUserId = pureUserId?.includes('_') ? pureUserId.split('_').pop() : pureUserId
-        
-        // 检查用户是否有独立人格设置（如果有，需要强制独立会话）
         let forceIsolation = false
         if (groupId) {
             const sm = await ensureScopeManager()
@@ -148,10 +151,6 @@ export class ChatService {
                 forceIsolation = true
             }
         }
-        
-        // Get conversation ID with proper isolation:
-        // - Group chat: isolated by group (group:xxx) or by user if forceIsolation
-        // - Private chat: isolated by user (user:xxx)
         let conversationId
         if (forceIsolation && groupId) {
             // 强制独立会话：使用群+用户的组合ID
@@ -293,6 +292,26 @@ export class ChatService {
         await channelManager.init()
         const channel = channelManager.getBestChannel(llmModel)
         logger.debug(`[ChatService] Channel: ${channel?.id}, hasAdvanced=${!!channel?.advanced}, streaming=${JSON.stringify(channel?.advanced?.streaming)}`)
+        
+        // 收集渠道调试信息
+        if (debugInfo && channel) {
+            debugInfo.channel = {
+                id: channel.id,
+                name: channel.name,
+                adapterType: channel.adapterType,
+                baseUrl: channel.baseUrl,
+                enabled: channel.enabled,
+                priority: channel.priority,
+                models: channel.models?.slice(0, 10),
+                modelsCount: channel.models?.length || 0,
+                hasAdvanced: !!channel.advanced,
+                streaming: channel.advanced?.streaming,
+                llmConfig: channel.advanced?.llm,
+                thinkingConfig: channel.advanced?.thinking,
+                hasCustomHeaders: !!channel.customHeaders && Object.keys(channel.customHeaders).length > 0,
+                hasTemplates: !!(channel.headersTemplate || channel.requestBodyTemplate)
+            }
+        }
         const effectivePresetId = presetId || preset?.id || config.get('llm.defaultChatPresetId') || 'default'
         const isNewSession = presetManager.isContextCleared(conversationId)
 
@@ -347,6 +366,25 @@ export class ChatService {
         // 获取默认预设的Prompt
         const defaultPrompt = preset?.systemPrompt || presetManager.buildSystemPrompt(effectivePresetId, promptContext)
         
+        // 收集预设调试信息
+        if (debugInfo) {
+            debugInfo.preset = {
+                id: effectivePresetId,
+                name: preset?.name || effectivePresetId,
+                hasSystemPrompt: !!preset?.systemPrompt,
+                enableTools: preset?.tools?.enableBuiltinTools !== false,
+                enableReasoning: preset?.enableReasoning,
+                toolsConfig: preset?.tools ? {
+                    enableBuiltinTools: preset.tools.enableBuiltinTools,
+                    enableMcpTools: preset.tools.enableMcpTools,
+                    allowedTools: preset.tools.allowedTools?.slice(0, 10),
+                    blockedTools: preset.tools.blockedTools?.slice(0, 10)
+                } : null,
+                isNewSession,
+                promptContext
+            }
+        }
+        
         // 1.0 全局系统提示词配置
         const globalSystemPrompt = config.get('context.globalSystemPrompt')
         const globalPromptMode = config.get('context.globalPromptMode') || 'append' // append | prepend | override
@@ -370,6 +408,18 @@ export class ChatService {
             if (independentResult.isIndependent) {
                 logger.debug(`[ChatService] 使用独立人设 (来源: ${independentResult.source})`)
             }
+            // 收集 scope 调试信息
+            if (debugInfo) {
+                debugInfo.scope = {
+                    groupId: scopeGroupId,
+                    userId: pureUserId,
+                    isIndependent: independentResult.isIndependent,
+                    source: independentResult.source,
+                    forceIsolation,
+                    conversationId,
+                    hasPrefixPersona: !!prefixPersona
+                }
+            }
         } catch (e) { 
             logger.warn(`[ChatService] 获取独立人设失败:`, e.message) 
         }
@@ -385,8 +435,19 @@ export class ChatService {
                 if (memoryContext) {
                     systemPrompt += memoryContext
                     logger.debug(`[ChatService] 已添加记忆上下文到系统提示 (${memoryContext.length} 字符)`)
+                    // 收集记忆调试信息
+                    if (debugInfo) {
+                        debugInfo.memory.userMemory = {
+                            hasMemory: true,
+                            length: memoryContext.length,
+                            preview: memoryContext.substring(0, 500) + (memoryContext.length > 500 ? '...' : '')
+                        }
+                    }
                 } else {
                     logger.debug(`[ChatService] 无用户记忆`)
+                    if (debugInfo) {
+                        debugInfo.memory.userMemory = { hasMemory: false }
+                    }
                 }
                 
                 // 获取群聊记忆上下文
@@ -407,6 +468,16 @@ export class ChatService {
                             systemPrompt += `\n【群聊记忆】\n${parts.join('\n')}\n`
                             logger.debug(`[ChatService] 已添加群聊记忆上下文`)
                         }
+                        // 收集群聊记忆调试信息
+                        if (debugInfo) {
+                            debugInfo.memory.groupMemory = {
+                                hasMemory: parts.length > 0,
+                                userInfoCount: groupMemory.userInfo?.length || 0,
+                                topicsCount: groupMemory.topics?.length || 0,
+                                relationsCount: groupMemory.relations?.length || 0,
+                                preview: parts.join('\n').substring(0, 300)
+                            }
+                        }
                     }
                 }
             } catch (err) {
@@ -425,6 +496,17 @@ export class ChatService {
             if (knowledgePrompt) {
                 systemPrompt += '\n\n' + knowledgePrompt
                 logger.info(`[ChatService] 已添加知识库上下文 (${knowledgePrompt.length} 字符)`)
+                // 收集知识库调试信息
+                if (debugInfo) {
+                    debugInfo.knowledge = {
+                        hasKnowledge: true,
+                        length: knowledgePrompt.length,
+                        presetId: effectivePresetId,
+                        preview: knowledgePrompt.substring(0, 500) + (knowledgePrompt.length > 500 ? '...' : '')
+                    }
+                }
+            } else if (debugInfo) {
+                debugInfo.knowledge = { hasKnowledge: false }
             }
         } catch (err) {
             logger.debug('[ChatService] 知识库服务未加载或无内容:', err.message)
@@ -547,11 +629,29 @@ export class ChatService {
                     historyCount: validHistory.length,
                     toolsCount: hasTools ? client.tools.length : 0,
                     systemPromptLength: systemPrompt.length,
+                    userMessageLength: message?.length || 0,
+                    imagesCount: images.length,
+                    useStreaming,
                     options: {
                         maxToken: requestOptions.maxToken,
                         temperature: requestOptions.temperature,
                         topP: requestOptions.topP
-                    }
+                    },
+                    // 完整的请求体结构摘要
+                    messagesStructure: messages.map((msg, idx) => ({
+                        index: idx,
+                        role: msg.role,
+                        contentTypes: Array.isArray(msg.content) 
+                            ? msg.content.map(c => c.type)
+                            : ['text'],
+                        contentLength: Array.isArray(msg.content)
+                            ? msg.content.reduce((sum, c) => sum + (c.text?.length || 0), 0)
+                            : (typeof msg.content === 'string' ? msg.content.length : 0),
+                        hasSender: !!msg.sender,
+                        hasToolCalls: !!msg.toolCalls?.length
+                    })),
+                    // 系统提示词完整内容
+                    systemPromptFull: systemPrompt
                 }
                 // 上下文历史摘要
                 debugInfo.context = {

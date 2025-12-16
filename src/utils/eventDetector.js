@@ -41,7 +41,7 @@ export function detectPoke(e) {
     // icqq: notice_type='group'/'friend', sub_type='poke'
     if ((e.notice_type === 'group' || e.notice_type === 'friend') && e.sub_type === 'poke') {
         result.isPoke = true
-        result.isGroup = e.notice_type === 'group'
+        result.isGroup = e.notice_type === 'group' || !!e.group_id
         result.operator = e.user_id || e.operator_id
         result.target = e.target || e.target_id
         return result
@@ -63,6 +63,24 @@ export function detectPoke(e) {
         result.operator = e.operator_id || e.user_id
         result.target = e.target_id || e.target
         return result
+    }
+    
+    // TRSS-Yunzai / icqq 兼容：notice_type='group' 且有 target_id
+    // 戳一戳的特征：有 target_id 且没有 message_id（区分表情回应）
+    if (e.notice_type === 'group' && e.target_id) {
+        // 排除已知的其他事件类型
+        const nonPokeSubTypes = ['recall', 'admin', 'upload', 'ban', 'lift_ban', 'increase', 'decrease', 'essence']
+        if (!e.sub_type || !nonPokeSubTypes.includes(e.sub_type)) {
+            // 排除表情回应（有 message_id 和 emoji 相关字段）
+            if (!e.message_id && !e.emoji_id && !e.likes) {
+                result.isPoke = true
+                result.isGroup = true
+                result.operator = e.operator_id || e.user_id
+                result.target = e.target_id
+                result.action = e.action
+                return result
+            }
+        }
     }
     
     return result
@@ -117,6 +135,22 @@ export function detectReaction(e) {
         result.messageId = e.message_id
         result.userId = e.user_id || e.operator_id
         result.emojiId = e.emoji_id
+        return result
+    }
+    
+    // TRSS-Yunzai / icqq 兼容：notice_type='group' 且有表情回应相关字段
+    if (e.notice_type === 'group' && (e.likes || e.emoji_id || e.face_id)) {
+        result.isReaction = true
+        result.messageId = e.message_id
+        result.userId = e.user_id || e.operator_id
+        // 处理 likes 数组格式
+        if (e.likes && Array.isArray(e.likes) && e.likes.length > 0) {
+            result.emojiId = e.likes[0].emoji_id || e.likes[0].id
+            result.count = e.likes[0].count
+        } else {
+            result.emojiId = e.emoji_id || e.face_id
+        }
+        result.msgSenderId = e.message_sender_id || e.target_id
         return result
     }
     

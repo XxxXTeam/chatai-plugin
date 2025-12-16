@@ -512,34 +512,126 @@ export class Chat extends plugin {
       
       // 收集调试信息
       if (debugMode && result.debugInfo) {
-        addDebugLog('📤 请求信息', result.debugInfo.request || '无')
-        addDebugLog('📥 响应信息', result.debugInfo.response || '无')
-        addDebugLog('📊 Token用量', result.usage || '无')
+        const di = result.debugInfo
         
-        // 添加上下文信息
-        if (result.debugInfo.context) {
-          addDebugLog('📜 上下文摘要', {
-            systemPromptPreview: result.debugInfo.context.systemPromptPreview,
-            historyLength: result.debugInfo.context.totalHistoryLength,
-            recentMessages: result.debugInfo.context.historyMessages,
-            isolationMode: result.debugInfo.context.isolationMode,
-            hasUserLabels: result.debugInfo.context.hasUserLabels
+        // 1. 渠道信息
+        if (di.channel) {
+          addDebugLog('📡 渠道信息', {
+            id: di.channel.id,
+            name: di.channel.name,
+            adapter: di.channel.adapterType,
+            baseUrl: di.channel.baseUrl,
+            priority: di.channel.priority,
+            modelsCount: di.channel.modelsCount,
+            models: di.channel.models?.join(', '),
+            streaming: di.channel.streaming,
+            llmConfig: di.channel.llmConfig,
+            hasCustomHeaders: di.channel.hasCustomHeaders,
+            hasTemplates: di.channel.hasTemplates
           })
         }
         
-        // 添加可用工具列表
-        if (result.debugInfo.availableTools?.length > 0) {
-          addDebugLog('🛠️ 可用工具', result.debugInfo.availableTools.join(', '))
+        // 2. 预设信息
+        if (di.preset) {
+          addDebugLog('🎭 预设信息', {
+            id: di.preset.id,
+            name: di.preset.name,
+            hasSystemPrompt: di.preset.hasSystemPrompt,
+            enableTools: di.preset.enableTools,
+            enableReasoning: di.preset.enableReasoning,
+            toolsConfig: di.preset.toolsConfig,
+            isNewSession: di.preset.isNewSession,
+            promptContext: di.preset.promptContext
+          })
         }
         
-        // 添加工具调用详情（多轮）
-        if (result.debugInfo.toolCalls?.length > 0) {
-          addDebugLog('🔧 工具调用详情', result.debugInfo.toolCalls)
+        // 3. Scope 信息
+        if (di.scope) {
+          addDebugLog('🎯 Scope信息', {
+            groupId: di.scope.groupId,
+            userId: di.scope.userId,
+            conversationId: di.scope.conversationId,
+            isIndependent: di.scope.isIndependent,
+            source: di.scope.source,
+            forceIsolation: di.scope.forceIsolation,
+            hasPrefixPersona: di.scope.hasPrefixPersona
+          })
         }
         
-        // 添加耗时信息
-        if (result.debugInfo.timing) {
-          addDebugLog('⏱️ 耗时', `${result.debugInfo.timing.duration}ms`)
+        // 4. 记忆信息
+        if (di.memory) {
+          addDebugLog('🧠 记忆信息', {
+            userMemory: di.memory.userMemory,
+            groupMemory: di.memory.groupMemory
+          })
+        }
+        
+        // 5. 知识库信息
+        if (di.knowledge) {
+          addDebugLog('📚 知识库', {
+            hasKnowledge: di.knowledge.hasKnowledge,
+            length: di.knowledge.length,
+            presetId: di.knowledge.presetId,
+            preview: di.knowledge.preview?.substring(0, 200)
+          })
+        }
+        
+        // 6. 请求信息
+        addDebugLog('📤 请求信息', {
+          model: di.request?.model,
+          usedModel: di.usedModel,
+          fallbackUsed: di.fallbackUsed,
+          conversationId: di.request?.conversationId,
+          messagesCount: di.request?.messagesCount,
+          historyCount: di.request?.historyCount,
+          toolsCount: di.request?.toolsCount,
+          systemPromptLength: di.request?.systemPromptLength,
+          userMessageLength: di.request?.userMessageLength,
+          imagesCount: di.request?.imagesCount,
+          useStreaming: di.request?.useStreaming,
+          options: di.request?.options
+        })
+        
+        // 7. 消息结构
+        if (di.request?.messagesStructure) {
+          addDebugLog('📝 消息结构', di.request.messagesStructure)
+        }
+        
+        // 8. 系统提示词完整内容
+        if (di.request?.systemPromptFull) {
+          addDebugLog('📋 系统提示词', di.request.systemPromptFull)
+        }
+        
+        // 9. 上下文历史
+        if (di.context) {
+          addDebugLog('📜 上下文历史', {
+            totalHistoryLength: di.context.totalHistoryLength,
+            maxContextMessages: di.context.maxContextMessages,
+            isolationMode: di.context.isolationMode,
+            hasUserLabels: di.context.hasUserLabels,
+            recentMessages: di.context.historyMessages
+          })
+        }
+        
+        // 10. 可用工具列表
+        if (di.availableTools?.length > 0) {
+          addDebugLog('🛠️ 可用工具', `共 ${di.availableTools.length} 个: ${di.availableTools.join(', ')}`)
+        }
+        
+        // 11. 工具调用详情
+        if (di.toolCalls?.length > 0) {
+          addDebugLog('🔧 工具调用详情', di.toolCalls)
+        }
+        
+        // 12. 响应信息
+        addDebugLog('📥 响应信息', di.response || '无')
+        
+        // 13. Token用量
+        addDebugLog('📊 Token用量', result.usage || '无')
+        
+        // 14. 耗时信息
+        if (di.timing) {
+          addDebugLog('⏱️ 耗时', `${di.timing.duration}ms`)
         }
       }
       
@@ -588,7 +680,7 @@ export class Chat extends plugin {
       const thinkingUseForward = config.get('thinking.useForwardMsg') !== false
       const showToolLogs = config.get('tools.showCallLogs') !== false
       const toolsUseForward = config.get('tools.useForwardMsg') !== false
-      const quoteReply = config.get('basic.quoteReply') !== false
+      const quoteReply = config.get('basic.quoteReply') === true
       
       // 获取工具调用日志
       const toolCallLogs = result.toolCallLogs || []

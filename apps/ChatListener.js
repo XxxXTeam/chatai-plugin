@@ -6,6 +6,7 @@ import { memoryManager } from '../src/services/MemoryManager.js'
 import { statsService } from '../src/services/StatsService.js'
 import config from '../config/config.js'
 import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMessage, recordSentMessage } from '../src/utils/messageDedup.js'
+import { isDebugEnabled } from './Commands.js'
 
 export class ChatListener extends plugin {
     constructor() {
@@ -75,6 +76,20 @@ export class ChatListener extends plugin {
         }
         if (isMessageProcessed(e)) {
             return false
+        }
+        
+        // 过滤系统命令（避免抢占 Commands.js 的命令）
+        const rawMsg = e.msg || ''
+        const systemCmdPatterns = [
+            /^#(结束对话|清除记忆|我的记忆|删除记忆|群聊总结|总结群聊|群消息总结|画像总结)/,
+            /^#chatdebug/i,
+            /^#ai/i
+        ]
+        for (const pattern of systemCmdPatterns) {
+            if (pattern.test(rawMsg)) {
+                logger.debug(`[ChatListener] 跳过系统命令: ${rawMsg.substring(0, 20)}`)
+                return false
+            }
         }
 
         // 检查黑白名单
@@ -358,6 +373,23 @@ export class ChatListener extends plugin {
         // 前缀人格配置
         const { persona, isPersonaPrefix } = personaOptions
         
+        // 检测 debug 模式
+        let debugMode = isDebugEnabled(e)
+        let msgForChat = processedMsg
+        if (msgForChat && /\s+debug\s*$/i.test(msgForChat)) {
+            debugMode = true
+            msgForChat = msgForChat.replace(/\s+debug\s*$/i, '').trim()
+            logger.info('[ChatListener] Debug模式已启用(单次)')
+        }
+        
+        // debug 日志收集
+        const debugLogs = []
+        const addDebugLog = (title, content) => {
+            if (debugMode) {
+                debugLogs.push({ title, content: typeof content === 'string' ? content : JSON.stringify(content, null, 2) })
+            }
+        }
+        
         // 解析用户消息
         const userMessage = await parseUserMessage(e, {
             handleReplyText: featuresConfig.replyQuote?.handleText ?? true,
@@ -372,7 +404,7 @@ export class ChatListener extends plugin {
 
         // 使用已处理的消息（去除触发词后），如果没有则从解析结果获取
         const rawTextContent = userMessage.content?.find(c => c.type === 'text')?.text?.trim()
-        const textContent = processedMsg?.trim() || rawTextContent
+        const textContent = msgForChat?.trim() || rawTextContent
         
         // 检查消息是否有效
         if (!textContent && userMessage.content?.length === 0) {
@@ -420,7 +452,8 @@ export class ChatListener extends plugin {
             images,
             event: e,
             mode: 'chat',
-            parsedMessage: userMessage
+            parsedMessage: userMessage,
+            debugMode
         }
         
         // 如果使用前缀人格，传递人格配置
@@ -436,15 +469,104 @@ export class ChatListener extends plugin {
                 const replyContent = this.formatReply(result.response)
                 if (replyContent) {
                     // 记录发送的消息（用于防止自身消息循环）
-                    const textContent = result.response
+                    const replyTextContent = result.response
                         .filter(c => c.type === 'text')
                         .map(c => c.text)
                         .join('\n')
-                    if (textContent) {
-                        recordSentMessage(textContent)
+                    if (replyTextContent) {
+                        recordSentMessage(replyTextContent)
                     }
                     
-                    await this.reply(replyContent, true)
+                    const quoteReply = config.get('basic.quoteReply') === true
+                    await this.reply(replyContent, quoteReply)
+                }
+            }
+            
+            // 处理 debug 信息
+            if (debugMode && result.debugInfo) {
+                const di = result.debugInfo
+                
+                // 收集调试信息
+                if (di.channel) {
+                    addDebugLog('📡 渠道信息', {
+                        id: di.channel.id,
+                        name: di.channel.name,
+                        adapter: di.channel.adapterType,
+                        baseUrl: di.channel.baseUrl,
+                        modelsCount: di.channel.modelsCount
+                    })
+                }
+                
+                if (di.preset) {
+                    addDebugLog('🎭 预设信息', {
+                        id: di.preset.id,
+                        name: di.preset.name,
+                        enableTools: di.preset.enableTools
+                    })
+                }
+                
+                if (di.scope) {
+                    addDebugLog('🎯 Scope信息', di.scope)
+                }
+                
+                if (di.memory) {
+                    addDebugLog('🧠 记忆信息', di.memory)
+                }
+                
+                if (di.knowledge) {
+                    addDebugLog('📚 知识库', {
+                        hasKnowledge: di.knowledge.hasKnowledge,
+                        length: di.knowledge.length
+                    })
+                }
+                
+                addDebugLog('📤 请求信息', {
+                    model: di.request?.model,
+                    usedModel: di.usedModel,
+                    messagesCount: di.request?.messagesCount,
+                    toolsCount: di.request?.toolsCount,
+                    systemPromptLength: di.request?.systemPromptLength
+                })
+                
+                if (di.request?.systemPromptFull) {
+                    // 限制系统提示词长度，避免转发消息过长
+                    const maxLen = 2000
+                    let prompt = di.request.systemPromptFull
+                    if (prompt.length > maxLen) {
+                        prompt = prompt.substring(0, maxLen) + `\n\n... (已截断，共 ${di.request.systemPromptFull.length} 字符)`
+                    }
+                    addDebugLog('📋 系统提示词', prompt)
+                }
+                
+                if (di.availableTools?.length > 0) {
+                    addDebugLog('🛠️ 可用工具', `共 ${di.availableTools.length} 个: ${di.availableTools.join(', ')}`)
+                }
+                
+                if (di.toolCalls?.length > 0) {
+                    addDebugLog('🔧 工具调用', di.toolCalls)
+                }
+                
+                addDebugLog('📥 响应信息', di.response || '无')
+                addDebugLog('📊 Token用量', result.usage || '无')
+                
+                if (di.timing) {
+                    addDebugLog('⏱️ 耗时', `${di.timing.duration}ms`)
+                }
+                
+                // 发送调试信息
+                if (debugLogs.length > 0) {
+                    try {
+                        const debugMessages = debugLogs.map(log => {
+                            let content = log.content
+                            if (typeof content === 'object') {
+                                content = JSON.stringify(content, null, 2)
+                            }
+                            return `【${log.title}】\n${content}`
+                        })
+                        await this.sendForwardMsg('🔍 Debug调试信息', debugMessages)
+                    } catch (err) {
+                        logger.warn('[ChatListener] 调试信息发送失败:', err.message)
+                    }
                 }
             }
 
