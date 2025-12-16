@@ -132,8 +132,11 @@ export class AI_Poke extends plugin {
         
         logger.info(`[AI-Poke] ${nickname}(${operator}) ${isGroup ? '群聊' : '私聊'}戳了机器人`)
         
-        // 调用AI响应
-        const eventDesc = `[事件通知] ${nickname} 戳了你一下。请根据你的人设性格，给出一个简短自然的回应。`
+        // 获取自定义提示词模板，支持 {nickname} 占位符
+        const defaultPrompt = `[事件通知] {nickname} 戳了你一下。请根据你的人设性格，给出一个简短自然的回应。`
+        const promptTemplate = config.get('features.poke.prompt') || defaultPrompt
+        const eventDesc = promptTemplate.replace(/\{nickname\}/g, nickname)
+        
         const aiReply = await getAIResponse(eventDesc, {
             userId: operator,
             groupId: e.group_id,

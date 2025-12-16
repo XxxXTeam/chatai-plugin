@@ -157,6 +157,15 @@ class Config {
             web: {
                 port: 3000,
             },
+            proxy: {
+                enabled: false,
+                profiles: [],
+                scopes: {
+                    browser: { enabled: false, profileId: null },
+                    api: { enabled: false, profileId: null },
+                    channel: { enabled: false, profileId: null }
+                }
+            },
             context: {
                 maxMessages: 20,
                 maxTokens: 4000,

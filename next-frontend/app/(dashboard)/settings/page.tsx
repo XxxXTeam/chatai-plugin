@@ -116,8 +116,8 @@ interface Config {
   features: {
     groupSummary: { enabled: boolean; maxMessages: number }
     userPortrait: { enabled: boolean; minMessages: number }
-    poke: { enabled: boolean; pokeBack: boolean; message: string }
-    reaction: { enabled: boolean }
+    poke: { enabled: boolean; pokeBack: boolean; message: string; prompt?: string }
+    reaction: { enabled: boolean; prompt?: string }
     recall: { enabled: boolean; aiResponse: boolean }
     welcome: { enabled: boolean; message: string }
     goodbye: { enabled: boolean; aiResponse: boolean }
@@ -178,8 +178,8 @@ const defaultConfig: Config = {
   features: {
     groupSummary: { enabled: true, maxMessages: 100 },
     userPortrait: { enabled: true, minMessages: 10 },
-    poke: { enabled: false, pokeBack: false, message: '别戳了~' },
-    reaction: { enabled: false },
+    poke: { enabled: false, pokeBack: false, message: '别戳了~', prompt: '' },
+    reaction: { enabled: false, prompt: '' },
     recall: { enabled: false, aiResponse: true },
     welcome: { enabled: false, message: '' },
     goodbye: { enabled: false, aiResponse: false },
@@ -1054,6 +1054,16 @@ export default function SettingsPage() {
                     <Label>备用回复</Label>
                     <Input value={config.features?.poke?.message || ''} onChange={(e) => updateConfig('features.poke.message', e.target.value)} placeholder="AI回复失败时的备用回复" />
                   </div>
+                  <div className="grid gap-2">
+                    <Label>自定义提示词</Label>
+                    <Textarea 
+                      value={(config.features?.poke as any)?.prompt || ''} 
+                      onChange={(e) => updateConfig('features.poke.prompt', e.target.value)} 
+                      placeholder="[事件通知] {nickname} 戳了你一下。请根据你的人设性格，给出一个简短自然的回应。"
+                      rows={2}
+                    />
+                    <p className="text-xs text-muted-foreground">支持占位符: {'{nickname}'} - 用户昵称</p>
+                  </div>
                 </>
               )}
             </CardContent>
@@ -1061,11 +1071,23 @@ export default function SettingsPage() {
 
           <Card>
             <CardHeader><CardTitle>表情回应</CardTitle></CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div><Label>启用</Label><p className="text-sm text-muted-foreground">收到表情回应时使用AI人设处理</p></div>
                 <Switch checked={config.features?.reaction?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.reaction.enabled', v)} />
               </div>
+              {config.features?.reaction?.enabled && (
+                <div className="grid gap-2">
+                  <Label>自定义提示词</Label>
+                  <Textarea 
+                    value={(config.features?.reaction as any)?.prompt || ''} 
+                    onChange={(e) => updateConfig('features.reaction.prompt', e.target.value)} 
+                    placeholder='[事件通知] {nickname} 对你之前的消息做出了"{emoji}"的表情回应。这是对你消息的反馈，你可以简短回应表示感谢或互动，也可以选择不回复。'
+                    rows={2}
+                  />
+                  <p className="text-xs text-muted-foreground">支持占位符: {'{nickname}'} - 用户昵称, {'{emoji}'} - 表情描述</p>
+                </div>
+              )}
             </CardContent>
           </Card>
 

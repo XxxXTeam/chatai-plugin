@@ -10,7 +10,7 @@ import { SocksProxyAgent } from 'socks-proxy-agent'
  * - api: 通用API请求 (fetch/axios)
  * - channel: 渠道API请求 (OpenAI等LLM API)
  */
-class ProxyService {m
+class ProxyService {
     constructor() {
         this.agentCache = new Map()
     }

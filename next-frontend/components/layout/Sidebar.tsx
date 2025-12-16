@@ -24,6 +24,7 @@ import {
   Database,
   BarChart3,
   Wand2,
+  Globe,
   type LucideIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -79,6 +80,7 @@ const navGroups: NavGroup[] = [
       { href: '/channels', label: '渠道管理', icon: Plug },
       { href: '/presets', label: '预设管理', icon: Palette },
       { href: '/scope', label: '人设管理', icon: UserCog },
+      { href: '/settings/proxy', label: '代理设置', icon: Globe },
     ],
   },
   {

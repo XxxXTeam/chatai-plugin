@@ -17,7 +17,7 @@
  */
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'
-import { MessageApi } from '../src/services/messageParser.js'
+import { MessageApi } from '../src/utils/messageParser.js'
 
 // 表情ID映射表（QQ官方表情）
 // 参考: https://bot.q.qq.com/wiki/develop/api-v2/openapi/emoji/model.html
@@ -110,123 +110,148 @@ async function getAIResponse(eventDesc, options = {}) {
     }
 }
 
-export class AI_Reaction extends plugin {
-    constructor() {
-        super({
-            name: 'AI-Reaction',
-            dsc: 'AI表情回应处理',
-            event: 'notice.group.reaction',
-            priority: -200,
-            rule: [{ fnc: 'handleReaction', log: false }]
-        })
-    }
+// 标记是否已注册事件监听器
+let reactionListenerRegistered = false
+
+/**
+ * 注册 reaction 事件监听器到所有 Bot 实例
+ */
+function registerReactionListener() {
+    if (reactionListenerRegistered) return
+    reactionListenerRegistered = true
     
-    async handleReaction() {
-        const e = this.e
-        
-        // 功能开关
+    // 延迟注册，确保 Bot 已初始化
+    setTimeout(() => {
+        try {
+            // 遍历所有 Bot 实例
+            const bots = Bot?.uin ? [Bot] : (Bot?.bots ? Object.values(Bot.bots) : [])
+            if (bots.length === 0 && global.Bot) {
+                bots.push(global.Bot)
+            }
+            
+            for (const bot of bots) {
+                if (!bot || bot._reactionListenerAdded) continue
+                bot._reactionListenerAdded = true
+                
+                // 监听 notice.group.reaction 事件
+                bot.on?.('notice.group.reaction', async (e) => {
+                    await handleReactionEvent(e, bot)
+                })
+                
+                // 兼容其他可能的事件名
+                bot.on?.('notice.group.emoji_like', async (e) => {
+                    await handleReactionEvent(e, bot)
+                })
+                
+                logger.debug(`[AI-Reaction] 已为Bot ${bot.uin || 'unknown'} 注册事件监听器`)
+            }
+        } catch (err) {
+            logger.error('[AI-Reaction] 注册事件监听器失败:', err)
+        }
+    }, 3000)
+}
+
+async function handleReactionEvent(e, bot) {
+    try {
         if (!config.get('features.reaction.enabled')) {
-            return false
+            return
         }
         
         const botIds = getBotIds()
-        const selfId = e.self_id || e.bot?.uin || Bot?.uin
+        const selfId = e.self_id || bot?.uin || Bot?.uin
         const userId = e.user_id
-        
-        // 防止机器人自己触发
         if (userId === selfId || botIds.has(String(userId))) {
-            return false
+            return
         }
-        
-        // 检查是否是对机器人消息的回应
-        const isTargetBot = await this.checkIfTargetBot(e, selfId, botIds)
+        const isTargetBot = await checkIfTargetBotStatic(e, selfId, botIds, bot)
         if (!isTargetBot) {
-            logger.debug('[AI-Reaction] 非机器人消息的回应，忽略')
-            return false
+            return
         }
         
-        // icqq 事件属性: e.id(表情ID), e.seq(消息序号), e.user_id(操作者)
         const emojiId = e.id || e.emoji_id
         const nickname = await getUserNickname(e, userId)
         const emojiDesc = getEmojiDescription(emojiId)
         
         logger.info(`[AI-Reaction] ${nickname}(${userId}) 对机器人消息做出了 ${emojiDesc} 回应`)
         
-        const eventDesc = `[事件通知] ${nickname} 对你之前的消息做出了"${emojiDesc}"的表情回应。这是对你消息的反馈，你可以简短回应表示感谢或互动，也可以选择不回复。`
+        // 获取自定义提示词模板，支持 {nickname} 和 {emoji} 占位符
+        const defaultPrompt = `[事件通知] {nickname} 对你之前的消息做出了"{emoji}"的表情回应。这是对你消息的反馈，你可以简短回应表示感谢或互动，也可以选择不回复。`
+        const promptTemplate = config.get('features.reaction.prompt') || defaultPrompt
+        const eventDesc = promptTemplate
+            .replace(/\{nickname\}/g, nickname)
+            .replace(/\{emoji\}/g, emojiDesc)
+        
         const aiReply = await getAIResponse(eventDesc, {
             userId,
             groupId: e.group_id,
             maxLength: 50
         })
         
-        if (aiReply) {
-            await this.reply(aiReply)
-            return true
+        if (aiReply && e.group_id) {
+            const group = bot.pickGroup?.(e.group_id)
+            if (group?.sendMsg) {
+                await group.sendMsg(aiReply)
+            }
+        }
+    } catch (err) {
+        logger.error('[AI-Reaction] 处理reaction事件失败:', err)
+    }
+}
+async function checkIfTargetBotStatic(e, selfId, botIds, bot) {
+    try {
+        const targetId = e.target_id || e.sender_id || e.target_user_id
+        if (targetId) {
+            return targetId === selfId || botIds.has(String(targetId))
         }
         
-        return false
-    }
-    
-    /**
-     * 检查被回应的消息是否是机器人发送的
-     * 兼容多种适配器：
-     * - 优先使用 target_id / sender_id (部分适配器直接提供)
-     * - 其次通过 message_id / seq 获取消息信息
-     */
-    async checkIfTargetBot(e, selfId, botIds) {
-        try {
-            // 方式1: 部分适配器直接提供被回应消息的发送者
-            const targetId = e.target_id || e.sender_id || e.target_user_id
-            if (targetId) {
-                return targetId === selfId || botIds.has(String(targetId))
-            }
-            
-            // 方式2: 通过消息ID获取消息信息
-            const messageId = e.message_id || e.seq || e.msg_id
-            if (messageId && e.group_id) {
-                const bot = e.bot || Bot
-                
-                // 尝试 icqq 方式
-                if (bot.pickGroup) {
-                    try {
-                        const group = bot.pickGroup(e.group_id)
-                        if (group?.getChatHistory) {
-                            // 获取最近消息历史，查找对应消息
-                            const history = await group.getChatHistory(messageId, 1)
-                            if (history?.length > 0) {
-                                const msg = history[0]
-                                const senderId = msg.sender?.user_id || msg.user_id
-                                return senderId === selfId || botIds.has(String(senderId))
-                            }
-                        }
-                    } catch {}
-                }
-                
-                // 尝试 OneBot/NapCat API
+        const messageId = e.message_id || e.seq || e.msg_id
+        if (messageId && e.group_id) {
+            if (bot.pickGroup) {
                 try {
-                    const msgInfo = await MessageApi.getMsg(bot, messageId)
-                    if (msgInfo?.sender?.user_id) {
-                        const senderId = msgInfo.sender.user_id
-                        return senderId === selfId || botIds.has(String(senderId))
+                    const group = bot.pickGroup(e.group_id)
+                    if (group?.getChatHistory) {
+                        const history = await group.getChatHistory(messageId, 1)
+                        if (history?.length > 0) {
+                            const msg = history[0]
+                            const senderId = msg.sender?.user_id || msg.user_id
+                            return senderId === selfId || botIds.has(String(senderId))
+                        }
                     }
                 } catch {}
             }
             
-            // 方式3: 检查 e.set (icqq 特殊属性 - 操作类型)
-            // 如果是 add 操作且没有其他信息，保守处理：允许触发
-            // 这样即使获取不到消息信息，也不会完全阻止功能
-            if (e.set === true || e.set === 'add') {
-                // 有些适配器不提供足够信息，放行以保持功能可用
-                // 但记录警告
-                logger.debug('[AI-Reaction] 无法确认被回应消息发送者，默认允许触发')
-                return true
-            }
-            
-            // 默认不触发（安全策略）
-            return false
-        } catch (err) {
-            logger.debug('[AI-Reaction] 检查目标消息失败:', err.message)
-            return false
+            try {
+                const msgInfo = await MessageApi.getMsg(bot, messageId)
+                if (msgInfo?.sender?.user_id) {
+                    const senderId = msgInfo.sender.user_id
+                    return senderId === selfId || botIds.has(String(senderId))
+                }
+            } catch {}
         }
+        
+        if (e.set === true || e.set === 'add') {
+            return true
+        }
+        
+        return false
+    } catch (err) {
+        logger.warn('[AI-Reaction] 检查目标消息失败:', err.message)
+        return false
+    }
+}
+
+export class AI_Reaction extends plugin {
+    constructor() {
+        super({
+            name: 'AI-Reaction',
+            dsc: 'AI表情回应处理',
+            event: 'message',
+            priority: 9999,
+            rule: []
+        })
+        registerReactionListener()
+    }
+    async accept() {
+        return false
     }
 }
