@@ -1,29 +1,26 @@
 basic:
   commandPrefix: "#ai"
-  debug: true
-  showThinkingMessage: false
+  debug: false
+  showThinkingMessage: true
   debugToConsoleOnly: true
-  quoteReply: false
+  quoteReply: true
   autoRecall:
     enabled: false
     delay: 60
     recallError: true
-  toggleMode: both
-  togglePrefix: "#111"
-  showTokenUsage: true
 admin:
   masterQQ: []
   loginNotifyPrivate: true
   sensitiveCommandMasterOnly: true
 llm:
-  defaultModel: qwen/qwen3-next-80b-a3b-thinking
+  defaultModel: GLM-4.6-Thinking
   defaultChatPresetId: 842dd283-2811-480d-a4bc-04604eddb34d
-  embeddingModel: gemini-3-pro-preview
+  embeddingModel: text-embedding-004
   dimensions: 1536
   models:
-    chat: []
-    roleplay: []
-    search: []
+    chat: GLM-4.5-Thinking
+    roleplay: GLM-4.5
+    search: gemini-2.5-flash-search
   fallback:
     enabled: true
     models: []
@@ -35,10 +32,10 @@ llm:
   translationModel: ""
 bym:
   enable: false
-  probability: 0.5
+  probability: 0.02
   temperature: 0.9
   maxTokens: 100
-  recall: true
+  recall: false
   model: ""
   systemPrompt: 你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。
   inheritPersonality: true
@@ -47,31 +44,53 @@ bym:
     - groupSummary
     - userPortrait
 tools:
-  showCallLogs: true
+  showCallLogs: false
   useForwardMsg: true
   parallelExecution: true
   sendIntermediateReply: true
 builtinTools:
   enabled: true
   allowedTools: []
-  disabledTools:
-    - kick_member
-    - mute_member
-    - recall_message
+  disabledTools: []
   dangerousTools:
     - kick_member
     - mute_member
     - recall_message
   allowDangerous: false
+  enabledCategories:
+    - basic
+    - user
+    - group
+    - message
+    - admin
+    - file
+    - media
+    - web
+    - search
+    - utils
+    - memory
+    - context
+    - bot
+    - voice
 channels:
-  - id: openai-44dc5dab
-    name: my
+  - id: openai-90858c49
+    name: glm
     adapterType: openai
-    baseUrl: http://103.109.22.74:3000/v1
-    apiKey: sk-lgrpDhWB7Mm5L521zGdwDO6JescMn9m7xtmQLkAgL0iMXf4h
+    baseUrl: https://glm.openel.top/v1
+    apiKey: sk-3d2f9b84e7f510b1a08f7b3d6c9a6a7f17fbbad5624ea29f22d9c742bf39c863
     models:
-      - qwen/qwen3-next-80b-a3b-thinking
-    priority: 1
+      - GLM-4.5
+      - GLM-4.5-Air
+      - GLM-4.5-Search
+      - GLM-4.5-Thinking
+      - GLM-4.5-V
+      - GLM-4.6
+      - GLM-4.6-Search
+      - GLM-4.6-Thinking
+      - GLM-4.6-V
+      - glm-4-air-250414
+      - glm-4-flash
+    priority: 100
     enabled: true
     advanced:
       streaming:
@@ -88,32 +107,36 @@ channels:
         topP: 1
         frequencyPenalty: 0
         presencePenalty: 0
-    apiKeys:
-      - key: sk-lgrpDhWB7Mm5L521zGdwDO6JescMn9m7xtmQLkAgL0iMXf4h
-        enabled: true
+    apiKeys: []
     strategy: round-robin
-    status: idle
-    lastHealthCheck: 1765619852101
-    testedAt: 1765619852101
-  - id: openai-12c1cc32
-    name: "111111"
+    customHeaders: {}
+    headersTemplate: ""
+    requestBodyTemplate: ""
+    status: active
+    lastHealthCheck: 1765817671491
+    testedAt: 1765817671491
+  - id: openai-c85187c7
+    name: bus2
     adapterType: openai
-    baseUrl: https://api.openel.top/v1
-    apiKey: sk-c1833f6e813db072211a815e7bbbacc952ed3b927185213d
+    baseUrl: https://business2api.openel.top
+    apiKey: sk-3d2f9b84e7f510b1a08f7b3d6c9a6a7f17fbbad5624ea29f22d9c742bf39c863
     models:
-      - claude-3-5-haiku-20241022
-      - claude-3-5-sonnet-20241022
-      - claude-3-haiku-20240307
-      - claude-3-opus-20240229
-      - claude-haiku-4-5-20251001
-      - claude-opus-4-1-20250805
-      - claude-opus-4-20250514
-      - claude-opus-4-5-20251101
-      - claude-sonnet-4-20250514
-      - claude-sonnet-4-20250514-thinking
-      - claude-sonnet-4-5
-      - claude-sonnet-4-5-20250929
-      - claude-sonnet-4-5-20250929-thinking
+      - gemini-2.5-flash
+      - gemini-2.5-flash-image
+      - gemini-2.5-flash-search
+      - gemini-2.5-flash-video
+      - gemini-2.5-pro
+      - gemini-2.5-pro-image
+      - gemini-2.5-pro-search
+      - gemini-2.5-pro-video
+      - gemini-3-pro
+      - gemini-3-pro-image
+      - gemini-3-pro-preview
+      - gemini-3-pro-preview-image
+      - gemini-3-pro-preview-search
+      - gemini-3-pro-preview-video
+      - gemini-3-pro-search
+      - gemini-3-pro-video
     priority: 100
     enabled: true
     advanced:
@@ -133,15 +156,13 @@ channels:
         presencePenalty: 0
     apiKeys: []
     strategy: round-robin
-    status: error
-    lastHealthCheck: 1765628090915
+    customHeaders: {}
+    headersTemplate: ""
+    requestBodyTemplate: ""
+    lastHealthCheck: 1765818903145
     testedAt: null
 mcp:
   enabled: true
-  servers:
-    context7:
-      type: sse
-      url: https://mcp.context7.com/mcp
 redis:
   enabled: true
   host: 127.0.0.1
@@ -159,14 +180,10 @@ images:
     - webp
 web:
   port: 3000
-  permanentAuthToken: 7d041d42-1f7d-4763-a5f7-e8a0b2fb0a09
-  loginLinks:
-    - id: 0044f6d4-4feb-4c84-8a04-cf846bc92744
-      label: "111"
-      baseUrl: https://chatie.134086.xyz
+  permanentAuthToken: 2d5c2bd2-1ee0-4209-8ee1-16c7c648afe3
 context:
   maxMessages: 20
-  maxTokens: 8096
+  maxTokens: 4000
   cleaningStrategy: auto
   isolation:
     groupUserIsolation: false
@@ -194,7 +211,6 @@ memory:
     extractUserInfo: true
     extractTopics: true
     extractRelations: true
-  minScore: 0.7
 presets:
   defaultId: 842dd283-2811-480d-a4bc-04604eddb34d
   allowUserSwitch: true
@@ -211,11 +227,11 @@ personality:
     enabled: false
     clearOnSwitch: false
 loadBalancing:
-  strategy: round-robin
+  strategy: priority
 thinking:
   enabled: false
   defaultLevel: low
-  enableReasoning: true
+  enableReasoning: false
   showThinkingContent: true
   useForwardMsg: true
 features:
@@ -229,56 +245,33 @@ features:
   poke:
     enabled: true
     pokeBack: true
-    message: 别戳了，戳我干嘛~
-    useAI: true
+    message: 别戳了~
   reaction:
     enabled: true
-    useAI: false
-  voiceReply:
+  recall:
     enabled: false
-    ttsProvider: system
-    triggerOnTool: false
-    triggerAlways: false
-    maxTextLength: 500
+    aiResponse: true
+  welcome:
+    enabled: false
+    message: ""
+  goodbye:
+    enabled: false
+    aiResponse: false
+  luckyKing:
+    enabled: false
+  honor:
+    enabled: false
+  essence:
+    enabled: false
   imageGen:
     enabled: true
-    apiUrl: https://business.928100.xyz/v1/chat/completions
-    apiKey: sk-3d2f9b84e7f510b1a08f7b3d6c9a6a7f17fbbad5624ea29f22d9c742bf39c863
-    model: gemini-3-pro-preview-image
+    model: gemini-3-pro-image
+    videoModel: gemini-3-pro-preview-video
+    timeout: 600000
+    maxImages: 3
     apis:
-      - "0": h
-        "1": t
-        "2": t
-        "3": p
-        "4": s
-        "5": ":"
-        "6": /
-        "7": /
-        "8": b
-        "9": u
-        "10": s
-        "11": i
-        "12": n
-        "13": e
-        "14": s
-        "15": s
-        "16": "2"
-        "17": a
-        "18": p
-        "19": i
-        "20": .
-        "21": o
-        "22": p
-        "23": e
-        "24": n
-        "25": e
-        "26": l
-        "27": .
-        "28": t
-        "29": o
-        "30": p
+      - baseUrl: https://business2api.openel.top
         apiKey: sk-3d2f9b84e7f510b1a08f7b3d6c9a6a7f17fbbad5624ea29f22d9c742bf39c863
-        baseUrl: http://45.142.115.211:19000
         models:
           - gemini-2.5-flash
           - gemini-2.5-flash-image
@@ -296,12 +289,24 @@ features:
           - gemini-3-pro-preview-video
           - gemini-3-pro-search
           - gemini-3-pro-video
-    videoModel: gemini-3-pro-preview-video
-    customModels: ""
-    statusUrl: ""
+    presetSources:
+      - name: 云端预设
+        url: https://ht.pippi.top/data.json
+        enabled: true
+    customPresets: []
+  voiceReply:
+    enabled: false
+    ttsProvider: system
+    triggerOnTool: false
+    triggerAlways: false
+    maxTextLength: 500
   autoCleanOnError:
     enabled: true
     notifyUser: false
+voice:
+  enabled: false
+  defaultCharacter: ""
+  maxTextLength: 500
 streaming:
   enabled: true
 trigger:
@@ -315,8 +320,6 @@ trigger:
     keyword: false
     random: false
     randomRate: 0.05
-    reply: false
-    replyBot: false
   prefixes:
     - "#chat"
   keywords: []
@@ -326,21 +329,3 @@ trigger:
   blacklistGroups: []
   whitelistGroups: []
   prefixPersonas: []
-listener:
-  enabled: true
-  triggerMode: at
-  triggerPrefix: "#chat"
-  triggerKeywords: []
-  randomReplyRate: 0.1
-  privateChat:
-    enabled: true
-    alwaysReply: true
-  groupChat:
-    enabled: true
-    collectMessages: true
-  blacklistUsers: []
-  whitelistUsers: []
-  blacklistGroups: []
-  whitelistGroups: []
-  priority: 99999
-customTools: []

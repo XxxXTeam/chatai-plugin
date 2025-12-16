@@ -12,6 +12,64 @@ import {
     batchSendMessages 
 } from './helpers.js'
 
+// ======================= 消息发送去重机制 =======================
+const SEND_DEDUP_EXPIRE = 5000  // 发送去重过期时间(ms)
+const recentSentMessages = new Map()  // key -> { content, timestamp, count }
+
+/**
+ * 生成消息发送的去重键
+ * @param {Object} ctx - 上下文
+ * @param {string} content - 消息内容
+ * @returns {string}
+ */
+function getSendDedupKey(ctx, content) {
+    const e = ctx?.getEvent?.() || {}
+    const groupId = e.group_id || ''
+    const userId = e.user_id || ''
+    // 取消息前100字符作为指纹
+    const contentFp = (content || '').substring(0, 100).trim()
+    return `${groupId}_${userId}_${contentFp}`
+}
+
+/**
+ * 检查是否是重复发送（短时间内发送相同内容）
+ * @param {Object} ctx - 上下文
+ * @param {string} content - 消息内容
+ * @returns {{ isDuplicate: boolean, count: number }}
+ */
+function checkSendDuplicate(ctx, content) {
+    const key = getSendDedupKey(ctx, content)
+    const now = Date.now()
+    
+    // 清理过期记录
+    for (const [k, v] of recentSentMessages) {
+        if (now - v.timestamp > SEND_DEDUP_EXPIRE) {
+            recentSentMessages.delete(k)
+        }
+    }
+    
+    const existing = recentSentMessages.get(key)
+    if (existing && now - existing.timestamp < SEND_DEDUP_EXPIRE) {
+        existing.count++
+        existing.timestamp = now
+        return { isDuplicate: true, count: existing.count }
+    }
+    
+    // 记录本次发送
+    recentSentMessages.set(key, { content, timestamp: now, count: 1 })
+    return { isDuplicate: false, count: 1 }
+}
+
+/**
+ * 标记消息已发送（用于跨工具去重）
+ * @param {Object} ctx - 上下文
+ * @param {string} content - 消息内容
+ */
+function markMessageSent(ctx, content) {
+    const key = getSendDedupKey(ctx, content)
+    recentSentMessages.set(key, { content, timestamp: Date.now(), count: 1 })
+}
+
 export const messageTools = [
     {
         name: 'send_private_message',
@@ -27,6 +85,12 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
+                // 去重检查
+                const dedupResult = checkSendDuplicate(ctx, args.message)
+                if (dedupResult.isDuplicate) {
+                    return { success: false, error: `检测到重复发送(${dedupResult.count}次)，已跳过`, skipped: true }
+                }
+                
                 const bot = ctx.getBot()
                 const userId = parseInt(args.user_id)
                 const friend = bot.pickFriend(userId)
@@ -62,6 +126,12 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
+                // 去重检查
+                const dedupResult = checkSendDuplicate(ctx, args.message)
+                if (dedupResult.isDuplicate) {
+                    return { success: false, error: `检测到重复发送(${dedupResult.count}次)，已跳过`, skipped: true }
+                }
+                
                 const bot = ctx.getBot()
                 const groupId = parseInt(args.group_id)
                 const group = bot.pickGroup(groupId)
@@ -99,6 +169,12 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
+                // 去重检查
+                const dedupResult = checkSendDuplicate(ctx, args.message)
+                if (dedupResult.isDuplicate) {
+                    return { success: false, error: `检测到重复发送(${dedupResult.count}次)，已跳过`, skipped: true }
+                }
+                
                 const e = ctx.getEvent()
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
@@ -138,6 +214,12 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
+                // 去重检查
+                const dedupResult = checkSendDuplicate(ctx, args.message)
+                if (dedupResult.isDuplicate) {
+                    return { success: false, error: `检测到重复发送(${dedupResult.count}次)，已跳过`, skipped: true }
+                }
+                
                 const e = ctx.getEvent()
                 const bot = ctx.getBot()
                 if (!e) {
@@ -947,7 +1029,7 @@ export const messageTools = [
 
     {
         name: 'poke_user',
-        description: '戳一戳用户（发送戳一戳消息）',
+        description: '戳一戳用户',
         inputSchema: {
             type: 'object',
             properties: {
@@ -978,58 +1060,90 @@ export const messageTools = [
                 
                 // 群聊戳一戳
                 if (groupId) {
-                    // NapCat API
-                    if (bot.sendApi) {
-                        await bot.sendApi('group_poke', { group_id: groupId, user_id: userId })
-                        return { success: true, user_id: userId, group_id: groupId, type: 'group' }
+                    // 方式1: icqq - group.pokeMember (优先)
+                    if (bot.pickGroup) {
+                        const group = bot.pickGroup(groupId)
+                        if (typeof group?.pokeMember === 'function') {
+                            await group.pokeMember(userId)
+                            return { success: true, user_id: userId, group_id: groupId, type: 'group' }
+                        }
+                        // 方式2: icqq - pickMember().poke()
+                        if (group?.pickMember) {
+                            const member = group.pickMember(userId)
+                            if (typeof member?.poke === 'function') {
+                                await member.poke()
+                                return { success: true, user_id: userId, group_id: groupId, type: 'group' }
+                            }
+                        }
                     }
-                    // go-cqhttp / OneBot
-                    if (bot.sendGroupPoke) {
+                    
+                    // 方式3: NapCat - send_group_poke (推荐)
+                    if (bot.sendApi) {
+                        try {
+                            const result = await bot.sendApi('send_group_poke', { group_id: groupId, user_id: userId })
+                            if (result?.status === 'ok' || result?.retcode === 0 || !result?.error) {
+                                return { success: true, user_id: userId, group_id: groupId, type: 'group' }
+                            }
+                        } catch {}
+                        // 方式4: NapCat/go-cqhttp - group_poke
+                        try {
+                            const result = await bot.sendApi('group_poke', { group_id: groupId, user_id: userId })
+                            if (result?.status === 'ok' || result?.retcode === 0 || !result?.error) {
+                                return { success: true, user_id: userId, group_id: groupId, type: 'group' }
+                            }
+                        } catch {}
+                    }
+                    
+                    // 方式5: go-cqhttp / OneBot 直接方法
+                    if (typeof bot.sendGroupPoke === 'function') {
                         await bot.sendGroupPoke(groupId, userId)
                         return { success: true, user_id: userId, group_id: groupId, type: 'group' }
                     }
-                    if (bot.send_group_poke) {
+                    if (typeof bot.send_group_poke === 'function') {
                         await bot.send_group_poke(groupId, userId)
                         return { success: true, user_id: userId, group_id: groupId, type: 'group' }
                     }
-                    // icqq
-                    const group = bot.pickGroup?.(groupId)
-                    if (group?.pokeMember) {
-                        await group.pokeMember(userId)
-                        return { success: true, user_id: userId, group_id: groupId, type: 'group' }
-                    }
-                    if (group?.pickMember) {
-                        const member = group.pickMember(userId)
-                        if (member?.poke) {
-                            await member.poke()
-                            return { success: true, user_id: userId, group_id: groupId, type: 'group' }
-                        }
-                    }
+                    
+                    return { success: false, error: '当前协议不支持群聊戳一戳' }
                 }
                 
                 // 私聊戳一戳
-                // NapCat API
-                if (bot.sendApi) {
-                    await bot.sendApi('friend_poke', { user_id: userId })
-                    return { success: true, user_id: userId, type: 'private' }
+                // 方式1: icqq - friend.poke()
+                if (bot.pickFriend) {
+                    const friend = bot.pickFriend(userId)
+                    if (typeof friend?.poke === 'function') {
+                        await friend.poke()
+                        return { success: true, user_id: userId, type: 'private' }
+                    }
                 }
-                // go-cqhttp
-                if (bot.sendFriendPoke) {
+                
+                // 方式2: NapCat - send_friend_poke / friend_poke
+                if (bot.sendApi) {
+                    try {
+                        const result = await bot.sendApi('send_friend_poke', { user_id: userId })
+                        if (result?.status === 'ok' || result?.retcode === 0 || !result?.error) {
+                            return { success: true, user_id: userId, type: 'private' }
+                        }
+                    } catch {}
+                    try {
+                        const result = await bot.sendApi('friend_poke', { user_id: userId })
+                        if (result?.status === 'ok' || result?.retcode === 0 || !result?.error) {
+                            return { success: true, user_id: userId, type: 'private' }
+                        }
+                    } catch {}
+                }
+                
+                // 方式3: go-cqhttp 直接方法
+                if (typeof bot.sendFriendPoke === 'function') {
                     await bot.sendFriendPoke(userId)
                     return { success: true, user_id: userId, type: 'private' }
                 }
-                if (bot.send_friend_poke) {
+                if (typeof bot.send_friend_poke === 'function') {
                     await bot.send_friend_poke(userId)
                     return { success: true, user_id: userId, type: 'private' }
                 }
-                // icqq
-                const friend = bot.pickFriend?.(userId)
-                if (friend?.poke) {
-                    await friend.poke()
-                    return { success: true, user_id: userId, type: 'private' }
-                }
                 
-                return { success: false, error: '当前协议不支持戳一戳' }
+                return { success: false, error: '当前协议不支持私聊戳一戳' }
             } catch (err) {
                 return { success: false, error: `戳一戳失败: ${err.message}` }
             }
@@ -1042,11 +1156,11 @@ export const messageTools = [
         inputSchema: {
             type: 'object',
             properties: {
-                message_id: { type: 'string', description: '目标消息ID' },
-                emoji_id: { type: 'string', description: '表情ID，常用：76=赞, 124=爱心, 66=笑脸, 277=火, 179=doge, 42=鼓掌' },
+                message_id: { type: 'string', description: '目标消息ID，不填则使用当前消息' },
+                emoji_id: { type: 'string', description: '表情ID。经典: 76(赞) 77(踩) 66(爱心) 63(玫瑰) 179(doge)。Unicode: 128077(👍) 128078(👎) 128514(😂) 128525(😍)' },
                 set: { type: 'boolean', description: '是否设置（true=添加回应，false=取消回应），默认true' }
             },
-            required: ['message_id', 'emoji_id']
+            required: ['emoji_id']
         },
         handler: async (args, ctx) => {
             try {
@@ -1057,27 +1171,67 @@ export const messageTools = [
                     return { success: false, error: '无法获取Bot实例' }
                 }
                 
-                const messageId = args.message_id
-                const emojiId = parseInt(args.emoji_id)
-                const isSet = args.set !== false
-                
-                // NapCat API - set_msg_emoji_like
-                if (bot.sendApi) {
-                    await bot.sendApi('set_msg_emoji_like', {
-                        message_id: messageId,
-                        emoji_id: emojiId,
-                        set: isSet
-                    })
-                    return { 
-                        success: true, 
-                        message_id: messageId, 
-                        emoji_id: emojiId,
-                        action: isSet ? 'add' : 'remove'
-                    }
+                const messageId = args.message_id || e?.message_id
+                if (!messageId) {
+                    return { success: false, error: '需要指定消息ID' }
                 }
                 
-                // OneBot 扩展
-                if (bot.setMsgEmojiLike) {
+                const emojiId = String(args.emoji_id)
+                const isSet = args.set !== false
+                
+                // 方式1: NapCat - set_msg_emoji_like (推荐)
+                if (bot.sendApi) {
+                    try {
+                        const result = await bot.sendApi('set_msg_emoji_like', {
+                            message_id: messageId,
+                            emoji_id: emojiId,
+                            set: isSet
+                        })
+                        if (result?.status === 'ok' || result?.retcode === 0 || !result?.error) {
+                            return { 
+                                success: true, 
+                                message_id: messageId, 
+                                emoji_id: emojiId,
+                                action: isSet ? 'add' : 'remove'
+                            }
+                        }
+                    } catch {}
+                    
+                    // 方式2: NapCat 变体 - send_msg_emoji_like
+                    try {
+                        const result = await bot.sendApi('send_msg_emoji_like', {
+                            message_id: messageId,
+                            emoji_id: emojiId
+                        })
+                        if (result?.status === 'ok' || result?.retcode === 0 || !result?.error) {
+                            return { 
+                                success: true, 
+                                message_id: messageId, 
+                                emoji_id: emojiId,
+                                action: 'add'
+                            }
+                        }
+                    } catch {}
+                    
+                    // 方式3: LLOneBot/Lagrange 变体
+                    try {
+                        const result = await bot.sendApi('set_message_emoji_like', {
+                            message_id: messageId,
+                            emoji_id: parseInt(emojiId)
+                        })
+                        if (result?.status === 'ok' || result?.retcode === 0 || !result?.error) {
+                            return { 
+                                success: true, 
+                                message_id: messageId, 
+                                emoji_id: emojiId,
+                                action: isSet ? 'add' : 'remove'
+                            }
+                        }
+                    } catch {}
+                }
+                
+                // 方式4: OneBot 直接方法
+                if (typeof bot.setMsgEmojiLike === 'function') {
                     await bot.setMsgEmojiLike(messageId, emojiId, isSet)
                     return { 
                         success: true, 
@@ -1087,7 +1241,7 @@ export const messageTools = [
                     }
                 }
                 
-                if (bot.set_msg_emoji_like) {
+                if (typeof bot.set_msg_emoji_like === 'function') {
                     await bot.set_msg_emoji_like(messageId, emojiId, isSet)
                     return { 
                         success: true, 
@@ -1097,7 +1251,11 @@ export const messageTools = [
                     }
                 }
                 
-                return { success: false, error: '当前协议不支持表情回应' }
+                return { 
+                    success: false, 
+                    error: '当前协议不支持表情回应',
+                    note: '表情回应功能需要 NapCat / LLOneBot / Lagrange 等支持该API的协议端'
+                }
             } catch (err) {
                 return { success: false, error: `表情回应失败: ${err.message}` }
             }

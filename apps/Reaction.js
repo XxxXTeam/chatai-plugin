@@ -11,11 +11,13 @@
  * - e.id / e.emoji_id  表情ID
  * - e.seq / e.message_id  消息标识
  * - e.user_id  操作者
+ * - e.target_id / e.sender_id  被回应消息的发送者 (部分适配器)
  * 
  * 表情ID参考: https://bot.q.qq.com/wiki/develop/api-v2/openapi/emoji/model.html
  */
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'
+import { MessageApi } from '../src/services/messageParser.js'
 
 // 表情ID映射表（QQ官方表情）
 // 参考: https://bot.q.qq.com/wiki/develop/api-v2/openapi/emoji/model.html
@@ -128,15 +130,23 @@ export class AI_Reaction extends plugin {
         }
         
         const botIds = getBotIds()
+        const selfId = e.self_id || e.bot?.uin || Bot?.uin
         const userId = e.user_id
         
         // 防止机器人自己触发
-        if (userId === e.self_id || botIds.has(String(userId))) {
+        if (userId === selfId || botIds.has(String(userId))) {
+            return false
+        }
+        
+        // 检查是否是对机器人消息的回应
+        const isTargetBot = await this.checkIfTargetBot(e, selfId, botIds)
+        if (!isTargetBot) {
+            logger.debug('[AI-Reaction] 非机器人消息的回应，忽略')
             return false
         }
         
         // icqq 事件属性: e.id(表情ID), e.seq(消息序号), e.user_id(操作者)
-        const emojiId = e.id
+        const emojiId = e.id || e.emoji_id
         const nickname = await getUserNickname(e, userId)
         const emojiDesc = getEmojiDescription(emojiId)
         
@@ -155,5 +165,68 @@ export class AI_Reaction extends plugin {
         }
         
         return false
+    }
+    
+    /**
+     * 检查被回应的消息是否是机器人发送的
+     * 兼容多种适配器：
+     * - 优先使用 target_id / sender_id (部分适配器直接提供)
+     * - 其次通过 message_id / seq 获取消息信息
+     */
+    async checkIfTargetBot(e, selfId, botIds) {
+        try {
+            // 方式1: 部分适配器直接提供被回应消息的发送者
+            const targetId = e.target_id || e.sender_id || e.target_user_id
+            if (targetId) {
+                return targetId === selfId || botIds.has(String(targetId))
+            }
+            
+            // 方式2: 通过消息ID获取消息信息
+            const messageId = e.message_id || e.seq || e.msg_id
+            if (messageId && e.group_id) {
+                const bot = e.bot || Bot
+                
+                // 尝试 icqq 方式
+                if (bot.pickGroup) {
+                    try {
+                        const group = bot.pickGroup(e.group_id)
+                        if (group?.getChatHistory) {
+                            // 获取最近消息历史，查找对应消息
+                            const history = await group.getChatHistory(messageId, 1)
+                            if (history?.length > 0) {
+                                const msg = history[0]
+                                const senderId = msg.sender?.user_id || msg.user_id
+                                return senderId === selfId || botIds.has(String(senderId))
+                            }
+                        }
+                    } catch {}
+                }
+                
+                // 尝试 OneBot/NapCat API
+                try {
+                    const msgInfo = await MessageApi.getMsg(bot, messageId)
+                    if (msgInfo?.sender?.user_id) {
+                        const senderId = msgInfo.sender.user_id
+                        return senderId === selfId || botIds.has(String(senderId))
+                    }
+                } catch {}
+            }
+            
+            // 方式3: 检查 e.set (icqq 特殊属性 - 操作类型)
+            // 如果是 add 操作且没有其他信息，保守处理：允许触发
+            // 这样即使获取不到消息信息，也不会完全阻止功能
+            if (e.set === true || e.set === 'add') {
+                // 有些适配器不提供足够信息，放行以保持功能可用
+                // 但记录警告
+                logger.debug('[AI-Reaction] 无法确认被回应消息发送者，默认允许触发')
+                return true
+            }
+            
+            // 默认不触发（安全策略）
+            return false
+        } catch (err) {
+            logger.debug('[AI-Reaction] 检查目标消息失败:', err.message)
+            return false
+        }
     }
 }

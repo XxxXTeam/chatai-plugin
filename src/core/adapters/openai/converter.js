@@ -111,11 +111,27 @@ registerFromChaiteConverter('openai', (source) => {
             }
         }
         case 'tool': {
-            const toolMsgs = source.content.map(tcr => ({
-                role: 'tool',
-                tool_call_id: tcr.tool_call_id,
-                content: tcr.content,
-            }))
+            const toolMsgs = source.content.map(tcr => {
+                // Gemini API 要求 tool result 必须包含 name 字段，不能为空
+                // 优先从 tcr.name 获取，其次从 tool_call_id 推断，最后使用默认值
+                let toolName = tcr.name
+                if (!toolName && tcr.tool_call_id) {
+                    // 尝试从 tool_call_id 中提取工具名（某些格式如 call_xxx_toolname）
+                    const match = tcr.tool_call_id.match(/(?:call_)?(?:[a-zA-Z0-9]+_)?(.+)$/)
+                    if (match && match[1] && !match[1].startsWith('call')) {
+                        toolName = match[1]
+                    }
+                }
+                // 确保 name 不为空（Gemini API 强制要求）
+                toolName = toolName || 'tool_result'
+                
+                return {
+                    role: 'tool',
+                    tool_call_id: tcr.tool_call_id,
+                    content: tcr.content,
+                    name: toolName,
+                }
+            })
             return toolMsgs
         }
         case 'system': {

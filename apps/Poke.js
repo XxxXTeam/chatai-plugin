@@ -16,6 +16,27 @@
  */
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'
+/**
+ * 调用 OneBot API (支持 NapCat/go-cqhttp/LLOneBot)
+ */
+async function callOneBotApi(bot, action, params = {}) {
+    if (bot.sendApi) {
+        return await bot.sendApi(action, params)
+    }
+    if (bot[action]) {
+        return await bot[action](params)
+    }
+    if (bot.config?.baseUrl || bot.adapter?.config?.baseUrl) {
+        const baseUrl = bot.config?.baseUrl || bot.adapter?.config?.baseUrl
+        const res = await fetch(`${baseUrl}/${action}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(params)
+        })
+        return await res.json()
+    }
+    throw new Error('不支持的协议类型')
+}
 
 /**
  * 获取用户昵称
@@ -89,15 +110,24 @@ export class AI_Poke extends plugin {
             return false
         }
         
-        // 检查是否戳的是机器人
-        if (e.target_id !== e.self_id) {
+        const botIds = getBotIds()
+        const selfId = e.self_id || e.bot?.uin || Bot?.uin
+        const targetId = e.target_id || e.poke_uid || e.target_uid
+        const operator = e.operator_id || e.user_id || e.sender_id
+        
+        // 检查是否戳的是机器人 (兼容多种适配器属性名)
+        if (targetId !== selfId && !botIds.has(String(targetId))) {
+            return false
+        }
+        
+        // 防止机器人自己触发 (回戳导致的循环)
+        if (operator === selfId || botIds.has(String(operator))) {
             return false
         }
         
         // 群聊检查
         const isGroup = !!e.group_id
         
-        const operator = e.operator_id || e.user_id
         const nickname = await getUserNickname(e, operator)
         
         logger.info(`[AI-Poke] ${nickname}(${operator}) ${isGroup ? '群聊' : '私聊'}戳了机器人`)
@@ -125,19 +155,65 @@ export class AI_Poke extends plugin {
         return true
     }
     
+    /**
+     * 回戳用户 - 全适配器兼容
+     * 支持: icqq / NapCat / go-cqhttp / LLOneBot / Lagrange
+     */
     async pokeBack(e, userId) {
         try {
             const bot = e.bot || Bot
-            if (e.group_id) {
-                const group = bot.pickGroup(e.group_id)
+            const groupId = e.group_id
+            
+            if (!groupId) return
+            
+            // 方式1: icqq - group.pokeMember
+            if (bot.pickGroup) {
+                const group = bot.pickGroup(groupId)
                 if (typeof group?.pokeMember === 'function') {
                     await group.pokeMember(userId)
-                } else if (group?.pickMember) {
-                    await group.pickMember(userId).poke?.()
-                } else if (typeof bot?.sendGroupPoke === 'function') {
-                    await bot.sendGroupPoke(e.group_id, userId)
+                    return
+                }
+                // 方式2: icqq - pickMember().poke()
+                if (group?.pickMember) {
+                    const member = group.pickMember(userId)
+                    if (typeof member?.poke === 'function') {
+                        await member.poke()
+                        return
+                    }
                 }
             }
+            
+            // 方式3: NapCat/go-cqhttp - send_group_poke / group_poke API
+            try {
+                // NapCat 扩展 API
+                await callOneBotApi(bot, 'send_group_poke', {
+                    group_id: parseInt(groupId),
+                    user_id: parseInt(userId)
+                })
+                return
+            } catch {}
+            
+            try {
+                // go-cqhttp API
+                await callOneBotApi(bot, 'group_poke', {
+                    group_id: parseInt(groupId),
+                    user_id: parseInt(userId)
+                })
+                return
+            } catch {}
+            
+            // 方式4: bot.sendGroupPoke
+            if (typeof bot?.sendGroupPoke === 'function') {
+                await bot.sendGroupPoke(groupId, userId)
+                return
+            }
+            
+            // 方式5: 发送戳一戳消息段 (部分适配器支持)
+            try {
+                const pokeMsg = { type: 'poke', data: { qq: String(userId) } }
+                await bot.sendGroupMsg?.(groupId, [pokeMsg])
+            } catch {}
+            
         } catch (err) {
             logger.debug('[AI-Poke] 回戳失败:', err.message)
         }
