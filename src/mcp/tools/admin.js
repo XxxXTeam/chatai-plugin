@@ -240,5 +240,422 @@ export const adminTools = [
                 return { success: false, error: `发送公告失败: ${err.message}` }
             }
         }
+    },
+
+    {
+        name: 'set_group_add_request',
+        description: '处理加群申请',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                flag: { type: 'string', description: '申请标识（从事件获取）' },
+                approve: { type: 'boolean', description: '是否同意，默认true' },
+                reason: { type: 'string', description: '拒绝理由（仅拒绝时需要）' }
+            },
+            required: ['flag']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const approve = args.approve !== false
+                
+                // icqq 方式
+                if (bot.setGroupAddRequest) {
+                    await bot.setGroupAddRequest(args.flag, approve, args.reason || '')
+                    return { success: true, flag: args.flag, approved: approve }
+                }
+                
+                // NapCat/go-cqhttp 方式
+                if (bot.sendApi) {
+                    await bot.sendApi('set_group_add_request', {
+                        flag: args.flag,
+                        approve,
+                        reason: args.reason || ''
+                    })
+                    return { success: true, flag: args.flag, approved: approve }
+                }
+                
+                return { success: false, error: '当前协议不支持处理加群申请' }
+            } catch (err) {
+                return { success: false, error: `处理加群申请失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'set_friend_add_request',
+        description: '处理好友申请',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                flag: { type: 'string', description: '申请标识（从事件获取）' },
+                approve: { type: 'boolean', description: '是否同意，默认true' },
+                remark: { type: 'string', description: '好友备注（同意时可设置）' }
+            },
+            required: ['flag']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const approve = args.approve !== false
+                
+                // icqq 方式
+                if (bot.setFriendAddRequest) {
+                    await bot.setFriendAddRequest(args.flag, approve, args.remark || '')
+                    return { success: true, flag: args.flag, approved: approve }
+                }
+                
+                // NapCat/go-cqhttp 方式
+                if (bot.sendApi) {
+                    await bot.sendApi('set_friend_add_request', {
+                        flag: args.flag,
+                        approve,
+                        remark: args.remark || ''
+                    })
+                    return { success: true, flag: args.flag, approved: approve }
+                }
+                
+                return { success: false, error: '当前协议不支持处理好友申请' }
+            } catch (err) {
+                return { success: false, error: `处理好友申请失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_group_muted_list',
+        description: '获取群禁言列表',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = ctx.getBot()
+                const groupId = parseInt(args.group_id || e?.group_id)
+                
+                if (!groupId) {
+                    return { success: false, error: '需要群号参数或在群聊中使用' }
+                }
+                
+                // NapCat API
+                if (bot.sendApi) {
+                    try {
+                        const result = await bot.sendApi('get_group_shut_list', { group_id: groupId })
+                        const list = result?.data || result || []
+                        return {
+                            success: true,
+                            group_id: groupId,
+                            count: list.length,
+                            muted_members: list.map(m => ({
+                                user_id: m.user_id || m.uin,
+                                nickname: m.nickname || m.nick || '',
+                                mute_time: m.shut_up_timestamp || m.mute_time,
+                                remaining: m.remaining_time
+                            }))
+                        }
+                    } catch (e) {}
+                }
+                
+                // icqq 方式 - 通过成员列表筛选
+                const group = bot.pickGroup?.(groupId)
+                if (group?.getMemberMap) {
+                    const memberMap = await group.getMemberMap()
+                    const mutedMembers = []
+                    const now = Math.floor(Date.now() / 1000)
+                    
+                    for (const [uid, member] of memberMap) {
+                        if (member.shutup_time && member.shutup_time > now) {
+                            mutedMembers.push({
+                                user_id: uid,
+                                nickname: member.nickname || member.nick || '',
+                                card: member.card || '',
+                                mute_time: member.shutup_time,
+                                remaining: member.shutup_time - now
+                            })
+                        }
+                    }
+                    
+                    return {
+                        success: true,
+                        group_id: groupId,
+                        count: mutedMembers.length,
+                        muted_members: mutedMembers
+                    }
+                }
+                
+                return { success: false, error: '当前协议不支持获取禁言列表' }
+            } catch (err) {
+                return { success: false, error: `获取禁言列表失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'set_group_leave',
+        description: '退出群聊（需谨慎使用）',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号' },
+                is_dismiss: { type: 'boolean', description: '是否解散群（仅群主）' },
+                confirm: { type: 'boolean', description: '确认退群，必须为true' }
+            },
+            required: ['group_id', 'confirm']
+        },
+        handler: async (args, ctx) => {
+            try {
+                if (args.confirm !== true) {
+                    return { success: false, error: '需要确认退群操作' }
+                }
+                
+                const bot = ctx.getBot()
+                const groupId = parseInt(args.group_id)
+                
+                // icqq 方式
+                const group = bot.pickGroup?.(groupId)
+                if (group?.quit) {
+                    await group.quit(args.is_dismiss || false)
+                    return { success: true, group_id: groupId, action: args.is_dismiss ? 'dismiss' : 'leave' }
+                }
+                
+                // NapCat/go-cqhttp 方式
+                if (bot.sendApi) {
+                    await bot.sendApi('set_group_leave', {
+                        group_id: groupId,
+                        is_dismiss: args.is_dismiss || false
+                    })
+                    return { success: true, group_id: groupId, action: args.is_dismiss ? 'dismiss' : 'leave' }
+                }
+                
+                return { success: false, error: '当前协议不支持退群操作' }
+            } catch (err) {
+                return { success: false, error: `退群失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'delete_friend',
+        description: '删除好友（需谨慎使用）',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                user_id: { type: 'string', description: '用户QQ号' },
+                confirm: { type: 'boolean', description: '确认删除，必须为true' }
+            },
+            required: ['user_id', 'confirm']
+        },
+        handler: async (args, ctx) => {
+            try {
+                if (args.confirm !== true) {
+                    return { success: false, error: '需要确认删除好友操作' }
+                }
+                
+                const bot = ctx.getBot()
+                const userId = parseInt(args.user_id)
+                
+                // icqq 方式
+                const friend = bot.pickFriend?.(userId)
+                if (friend?.delete) {
+                    await friend.delete()
+                    return { success: true, user_id: userId }
+                }
+                
+                // NapCat/go-cqhttp 方式
+                if (bot.sendApi) {
+                    await bot.sendApi('delete_friend', { user_id: userId })
+                    return { success: true, user_id: userId }
+                }
+                
+                return { success: false, error: '当前协议不支持删除好友' }
+            } catch (err) {
+                return { success: false, error: `删除好友失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'set_group_portrait',
+        description: '设置群头像（需要管理员权限）',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号' },
+                file: { type: 'string', description: '图片文件路径或URL' }
+            },
+            required: ['group_id', 'file']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = parseInt(args.group_id)
+                
+                // icqq 方式
+                const group = bot.pickGroup?.(groupId)
+                if (group?.setAvatar) {
+                    await group.setAvatar(args.file)
+                    return { success: true, group_id: groupId }
+                }
+                
+                // NapCat/go-cqhttp 方式
+                if (bot.sendApi) {
+                    await bot.sendApi('set_group_portrait', {
+                        group_id: groupId,
+                        file: args.file
+                    })
+                    return { success: true, group_id: groupId }
+                }
+                
+                return { success: false, error: '当前协议不支持设置群头像' }
+            } catch (err) {
+                return { success: false, error: `设置群头像失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_group_at_all_remain',
+        description: '获取群@全体成员剩余次数',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = ctx.getBot()
+                const groupId = parseInt(args.group_id || e?.group_id)
+                
+                if (!groupId) {
+                    return { success: false, error: '需要群号参数或在群聊中使用' }
+                }
+                
+                // NapCat/go-cqhttp API
+                if (bot.sendApi) {
+                    const result = await bot.sendApi('get_group_at_all_remain', { group_id: groupId })
+                    const data = result?.data || result
+                    return {
+                        success: true,
+                        group_id: groupId,
+                        can_at_all: data?.can_at_all ?? true,
+                        remain_at_all_count_for_group: data?.remain_at_all_count_for_group,
+                        remain_at_all_count_for_uin: data?.remain_at_all_count_for_uin
+                    }
+                }
+                
+                return { success: false, error: '当前协议不支持获取@全体剩余次数' }
+            } catch (err) {
+                return { success: false, error: `获取@全体剩余次数失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'set_group_anonymous_ban',
+        description: '禁言群匿名成员',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号' },
+                anonymous_flag: { type: 'string', description: '匿名用户标识（从消息获取）' },
+                duration: { type: 'number', description: '禁言时长(秒)，0表示解禁' }
+            },
+            required: ['group_id', 'anonymous_flag', 'duration']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = parseInt(args.group_id)
+                const duration = Math.min(Math.max(args.duration, 0), 30 * 24 * 3600)
+                
+                // NapCat/go-cqhttp API
+                if (bot.sendApi) {
+                    await bot.sendApi('set_group_anonymous_ban', {
+                        group_id: groupId,
+                        anonymous_flag: args.anonymous_flag,
+                        duration
+                    })
+                    return { success: true, group_id: groupId, duration }
+                }
+                
+                return { success: false, error: '当前协议不支持禁言匿名成员' }
+            } catch (err) {
+                return { success: false, error: `禁言匿名成员失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'set_group_anonymous',
+        description: '设置群匿名功能开关',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号' },
+                enable: { type: 'boolean', description: '是否开启匿名' }
+            },
+            required: ['group_id', 'enable']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = parseInt(args.group_id)
+                
+                // icqq 方式
+                const group = bot.pickGroup?.(groupId)
+                if (group?.setAnonymous) {
+                    await group.setAnonymous(args.enable)
+                    return { success: true, group_id: groupId, enabled: args.enable }
+                }
+                
+                // NapCat/go-cqhttp API
+                if (bot.sendApi) {
+                    await bot.sendApi('set_group_anonymous', {
+                        group_id: groupId,
+                        enable: args.enable
+                    })
+                    return { success: true, group_id: groupId, enabled: args.enable }
+                }
+                
+                return { success: false, error: '当前协议不支持设置匿名功能' }
+            } catch (err) {
+                return { success: false, error: `设置匿名功能失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_group_system_msg',
+        description: '获取群系统消息（加群请求、邀请等）',
+        inputSchema: {
+            type: 'object',
+            properties: {}
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                
+                // NapCat/go-cqhttp API
+                if (bot.sendApi) {
+                    const result = await bot.sendApi('get_group_system_msg', {})
+                    const data = result?.data || result
+                    return {
+                        success: true,
+                        invited_requests: data?.invited_requests || [],
+                        join_requests: data?.join_requests || []
+                    }
+                }
+                
+                return { success: false, error: '当前协议不支持获取群系统消息' }
+            } catch (err) {
+                return { success: false, error: `获取群系统消息失败: ${err.message}` }
+            }
+        }
     }
 ]

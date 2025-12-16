@@ -1033,8 +1033,10 @@ export const messageTools = [
         inputSchema: {
             type: 'object',
             properties: {
-                user_id: { type: 'string', description: '目标用户QQ号，"sender"表示戳发送者' },
-                group_id: { type: 'string', description: '群号（群聊戳一戳时需要）' }
+                user_id: { type: 'string', description: '目标用户QQ号，"sender"表示戳发送者，"random"表示随机戳一个群成员' },
+                group_id: { type: 'string', description: '群号（群聊戳一戳时需要）' },
+                exclude_bot: { type: 'boolean', description: '随机戳时是否排除机器人，默认true' },
+                exclude_self: { type: 'boolean', description: '随机戳时是否排除触发者，默认true' }
             },
             required: ['user_id']
         },
@@ -1048,15 +1050,46 @@ export const messageTools = [
                 }
                 
                 let userId = args.user_id
+                const groupId = args.group_id ? parseInt(args.group_id) : (e?.group_id || null)
+                
+                // 处理特殊值: sender
                 if (userId === 'sender') {
                     userId = e?.user_id || e?.sender?.user_id
                     if (!userId) {
                         return { success: false, error: '无法获取发送者ID' }
                     }
                 }
-                userId = parseInt(userId)
+                // 处理特殊值: random - 随机选择群成员
+                else if (userId === 'random') {
+                    if (!groupId) {
+                        return { success: false, error: '随机戳一戳仅在群聊中有效' }
+                    }
+                    
+                    const botId = bot.uin || bot.self_id
+                    const memberList = await getGroupMemberList({ bot, event: e })
+                    
+                    if (memberList.length === 0) {
+                        return { success: false, error: '获取群成员列表失败' }
+                    }
+                    
+                    const excludeUsers = []
+                    if (args.exclude_self !== false) excludeUsers.push(String(e?.user_id))
+                    
+                    const candidates = filterMembers(memberList, {
+                        excludeBot: args.exclude_bot !== false,
+                        excludeUsers,
+                        botId
+                    })
+                    
+                    if (candidates.length === 0) {
+                        return { success: false, error: '没有符合条件的群成员可供选择' }
+                    }
+                    
+                    const selected = randomSelectMembers(candidates, 1)[0]
+                    userId = selected.user_id || selected.uid
+                }
                 
-                const groupId = args.group_id ? parseInt(args.group_id) : (e?.group_id || null)
+                userId = parseInt(userId)
                 
                 // 群聊戳一戳
                 if (groupId) {

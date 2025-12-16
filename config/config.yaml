@@ -181,6 +181,19 @@ images:
 web:
   port: 3000
   permanentAuthToken: 2d5c2bd2-1ee0-4209-8ee1-16c7c648afe3
+proxy:
+  enabled: false
+  profiles: []
+  scopes:
+    browser:
+      enabled: false
+      profileId: null
+    api:
+      enabled: false
+      profileId: null
+    channel:
+      enabled: false
+      profileId: null
 context:
   maxMessages: 20
   maxTokens: 4000
@@ -246,8 +259,11 @@ features:
     enabled: true
     pokeBack: true
     message: 别戳了~
+    prompt: "[事件通知] {nickname} 戳了你一下。请根据你的人设性格，给出一个简短自然的回应。 "
   reaction:
     enabled: true
+    prompt: '[事件通知] {nickname}
+      对你之前的消息做出了"{emoji}"的表情回应。这是对你消息的反馈，你可以简短回应表示感谢或互动，也可以选择不回复。'
   recall:
     enabled: false
     aiResponse: true
@@ -271,7 +287,7 @@ features:
     maxImages: 3
     apis:
       - baseUrl: https://business2api.openel.top
-        apiKey: sk-3d2f9b84e7f510b1a08f7b3d6c9a6a7f17fbbad5624ea29f22d9c742bf39c863
+        apiKey: ghk_6a94559e7e218aa8ca0981afa1e2257c
         models:
           - gemini-2.5-flash
           - gemini-2.5-flash-image

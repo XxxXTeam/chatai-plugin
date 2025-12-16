@@ -417,5 +417,461 @@ export const utilsTools = [
                 return { success: false, error: `计算失败: ${err.message}` }
             }
         }
+    },
+
+    {
+        name: 'regex_match',
+        description: '使用正则表达式匹配文本',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                text: { type: 'string', description: '要匹配的文本' },
+                pattern: { type: 'string', description: '正则表达式模式' },
+                flags: { type: 'string', description: '正则标志（g/i/m等），默认gi' }
+            },
+            required: ['text', 'pattern']
+        },
+        handler: async (args) => {
+            try {
+                const regex = new RegExp(args.pattern, args.flags || 'gi')
+                const matches = args.text.match(regex) || []
+                
+                return {
+                    success: true,
+                    pattern: args.pattern,
+                    count: matches.length,
+                    matches
+                }
+            } catch (err) {
+                return { success: false, error: `正则匹配失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'regex_replace',
+        description: '使用正则表达式替换文本',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                text: { type: 'string', description: '原文本' },
+                pattern: { type: 'string', description: '正则表达式模式' },
+                replacement: { type: 'string', description: '替换内容' },
+                flags: { type: 'string', description: '正则标志，默认g' }
+            },
+            required: ['text', 'pattern', 'replacement']
+        },
+        handler: async (args) => {
+            try {
+                const regex = new RegExp(args.pattern, args.flags || 'g')
+                const result = args.text.replace(regex, args.replacement)
+                
+                return {
+                    success: true,
+                    original: args.text,
+                    result,
+                    replaced: args.text !== result
+                }
+            } catch (err) {
+                return { success: false, error: `正则替换失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'text_stats',
+        description: '统计文本信息（字数、行数等）',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                text: { type: 'string', description: '要统计的文本' }
+            },
+            required: ['text']
+        },
+        handler: async (args) => {
+            const text = args.text
+            const lines = text.split('\n')
+            const words = text.match(/[\u4e00-\u9fa5]|[a-zA-Z]+/g) || []
+            const chars = text.replace(/\s/g, '').length
+            const chineseChars = (text.match(/[\u4e00-\u9fa5]/g) || []).length
+            const englishWords = (text.match(/[a-zA-Z]+/g) || []).length
+            const numbers = (text.match(/\d+/g) || []).length
+            
+            return {
+                success: true,
+                char_count: text.length,
+                char_count_no_space: chars,
+                word_count: words.length,
+                line_count: lines.length,
+                chinese_chars: chineseChars,
+                english_words: englishWords,
+                numbers
+            }
+        }
+    },
+
+    {
+        name: 'text_transform',
+        description: '文本转换（大小写、繁简体等）',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                text: { type: 'string', description: '要转换的文本' },
+                transform: { 
+                    type: 'string', 
+                    description: '转换类型：upper(大写)、lower(小写)、capitalize(首字母大写)、reverse(反转)、trim(去空格)',
+                    enum: ['upper', 'lower', 'capitalize', 'reverse', 'trim']
+                }
+            },
+            required: ['text', 'transform']
+        },
+        handler: async (args) => {
+            let result
+            switch (args.transform) {
+                case 'upper':
+                    result = args.text.toUpperCase()
+                    break
+                case 'lower':
+                    result = args.text.toLowerCase()
+                    break
+                case 'capitalize':
+                    result = args.text.replace(/\b\w/g, c => c.toUpperCase())
+                    break
+                case 'reverse':
+                    result = [...args.text].reverse().join('')
+                    break
+                case 'trim':
+                    result = args.text.trim().replace(/\s+/g, ' ')
+                    break
+                default:
+                    result = args.text
+            }
+            
+            return {
+                success: true,
+                original: args.text,
+                result,
+                transform: args.transform
+            }
+        }
+    },
+
+    {
+        name: 'extract_urls',
+        description: '从文本中提取URL链接',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                text: { type: 'string', description: '要提取的文本' }
+            },
+            required: ['text']
+        },
+        handler: async (args) => {
+            const urlRegex = /https?:\/\/[^\s<>\[\]()]+/gi
+            const urls = args.text.match(urlRegex) || []
+            
+            return {
+                success: true,
+                count: urls.length,
+                urls
+            }
+        }
+    },
+
+    {
+        name: 'extract_emails',
+        description: '从文本中提取邮箱地址',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                text: { type: 'string', description: '要提取的文本' }
+            },
+            required: ['text']
+        },
+        handler: async (args) => {
+            const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/gi
+            const emails = args.text.match(emailRegex) || []
+            
+            return {
+                success: true,
+                count: emails.length,
+                emails
+            }
+        }
+    },
+
+    {
+        name: 'extract_phones',
+        description: '从文本中提取手机号码',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                text: { type: 'string', description: '要提取的文本' }
+            },
+            required: ['text']
+        },
+        handler: async (args) => {
+            const phoneRegex = /1[3-9]\d{9}/g
+            const phones = args.text.match(phoneRegex) || []
+            
+            return {
+                success: true,
+                count: phones.length,
+                phones
+            }
+        }
+    },
+
+    {
+        name: 'split_text',
+        description: '按分隔符分割文本',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                text: { type: 'string', description: '要分割的文本' },
+                delimiter: { type: 'string', description: '分隔符，默认换行' },
+                trim: { type: 'boolean', description: '是否去除每项空白，默认true' },
+                filter_empty: { type: 'boolean', description: '是否过滤空项，默认true' }
+            },
+            required: ['text']
+        },
+        handler: async (args) => {
+            const delimiter = args.delimiter || '\n'
+            let parts = args.text.split(delimiter)
+            
+            if (args.trim !== false) {
+                parts = parts.map(p => p.trim())
+            }
+            if (args.filter_empty !== false) {
+                parts = parts.filter(p => p.length > 0)
+            }
+            
+            return {
+                success: true,
+                count: parts.length,
+                parts
+            }
+        }
+    },
+
+    {
+        name: 'join_text',
+        description: '将数组合并为文本',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                items: { 
+                    type: 'array', 
+                    items: { type: 'string' },
+                    description: '要合并的项' 
+                },
+                delimiter: { type: 'string', description: '分隔符，默认换行' }
+            },
+            required: ['items']
+        },
+        handler: async (args) => {
+            const delimiter = args.delimiter ?? '\n'
+            const result = args.items.join(delimiter)
+            
+            return {
+                success: true,
+                count: args.items.length,
+                result
+            }
+        }
+    },
+
+    {
+        name: 'truncate_text',
+        description: '截断文本到指定长度',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                text: { type: 'string', description: '要截断的文本' },
+                length: { type: 'number', description: '最大长度' },
+                suffix: { type: 'string', description: '后缀，默认...' }
+            },
+            required: ['text', 'length']
+        },
+        handler: async (args) => {
+            const suffix = args.suffix ?? '...'
+            const maxLen = args.length - suffix.length
+            
+            if (args.text.length <= args.length) {
+                return { success: true, result: args.text, truncated: false }
+            }
+            
+            const result = args.text.substring(0, maxLen) + suffix
+            return { success: true, result, truncated: true }
+        }
+    },
+
+    {
+        name: 'escape_html',
+        description: 'HTML转义/反转义',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                text: { type: 'string', description: '要处理的文本' },
+                unescape: { type: 'boolean', description: 'true反转义，false转义（默认）' }
+            },
+            required: ['text']
+        },
+        handler: async (args) => {
+            let result
+            if (args.unescape) {
+                result = args.text
+                    .replace(/&amp;/g, '&')
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .replace(/&quot;/g, '"')
+                    .replace(/&#39;/g, "'")
+            } else {
+                result = args.text
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;')
+            }
+            
+            return {
+                success: true,
+                original: args.text,
+                result,
+                action: args.unescape ? 'unescape' : 'escape'
+            }
+        }
+    },
+
+    {
+        name: 'generate_password',
+        description: '生成随机密码',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                length: { type: 'number', description: '密码长度，默认16' },
+                include_upper: { type: 'boolean', description: '包含大写字母，默认true' },
+                include_lower: { type: 'boolean', description: '包含小写字母，默认true' },
+                include_numbers: { type: 'boolean', description: '包含数字，默认true' },
+                include_symbols: { type: 'boolean', description: '包含符号，默认true' }
+            }
+        },
+        handler: async (args) => {
+            const length = args.length || 16
+            let chars = ''
+            
+            if (args.include_upper !== false) chars += 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+            if (args.include_lower !== false) chars += 'abcdefghijklmnopqrstuvwxyz'
+            if (args.include_numbers !== false) chars += '0123456789'
+            if (args.include_symbols !== false) chars += '!@#$%^&*()_+-=[]{}|;:,.<>?'
+            
+            if (!chars) chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+            
+            let password = ''
+            for (let i = 0; i < length; i++) {
+                password += chars[Math.floor(Math.random() * chars.length)]
+            }
+            
+            return {
+                success: true,
+                password,
+                length
+            }
+        }
+    },
+
+    {
+        name: 'dice_roll',
+        description: '掷骰子',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                dice: { type: 'string', description: '骰子表达式，如 "2d6+3" 或 "d20"' },
+                count: { type: 'number', description: '掷几次，默认1' }
+            },
+            required: ['dice']
+        },
+        handler: async (args) => {
+            try {
+                const count = Math.min(args.count || 1, 10)
+                const results = []
+                
+                // 解析骰子表达式 如 2d6+3
+                const match = args.dice.toLowerCase().match(/^(\d*)d(\d+)([+-]\d+)?$/)
+                if (!match) {
+                    return { success: false, error: '无效的骰子表达式，格式如 "2d6+3" 或 "d20"' }
+                }
+                
+                const diceCount = parseInt(match[1]) || 1
+                const diceSides = parseInt(match[2])
+                const modifier = parseInt(match[3]) || 0
+                
+                if (diceSides < 2 || diceSides > 100) {
+                    return { success: false, error: '骰子面数必须在2-100之间' }
+                }
+                if (diceCount > 20) {
+                    return { success: false, error: '单次最多掷20个骰子' }
+                }
+                
+                for (let i = 0; i < count; i++) {
+                    const rolls = []
+                    for (let j = 0; j < diceCount; j++) {
+                        rolls.push(Math.floor(Math.random() * diceSides) + 1)
+                    }
+                    const sum = rolls.reduce((a, b) => a + b, 0) + modifier
+                    results.push({ rolls, modifier, total: sum })
+                }
+                
+                return {
+                    success: true,
+                    dice: args.dice,
+                    count,
+                    results,
+                    summary: results.map(r => r.total).join(', ')
+                }
+            } catch (err) {
+                return { success: false, error: `掷骰子失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'draw_lots',
+        description: '抽签/抽奖',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                options: { 
+                    type: 'array', 
+                    items: { type: 'string' },
+                    description: '选项列表，不填则使用默认签文' 
+                },
+                count: { type: 'number', description: '抽取数量，默认1' }
+            }
+        },
+        handler: async (args) => {
+            const defaultOptions = [
+                '大吉：万事如意，心想事成',
+                '中吉：诸事顺遂，稳中有进',
+                '小吉：平安顺利，小有收获',
+                '吉：普通运势，保持平常心',
+                '末吉：运势一般，需要努力',
+                '凶：注意小心，谨慎行事',
+                '大凶：多加注意，化险为夷'
+            ]
+            
+            const options = args.options?.length > 0 ? args.options : defaultOptions
+            const count = Math.min(args.count || 1, options.length)
+            
+            const shuffled = [...options].sort(() => Math.random() - 0.5)
+            const selected = shuffled.slice(0, count)
+            
+            return {
+                success: true,
+                count,
+                results: selected
+            }
+        }
     }
 ]

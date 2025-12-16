@@ -110,7 +110,8 @@ export class ChatService {
             event, // Yunzai event for tool context
             mode = 'chat',
             debugMode = false,  // 调试模式
-            prefixPersona = null  // 前缀人格（独立于普通人设）
+            prefixPersona = null,  // 前缀人格（独立于普通人设）
+            disableTools = false  // 禁用工具调用（用于防止递归）
         } = options
 
         // 调试信息收集
@@ -321,7 +322,7 @@ export class ChatService {
         const channelThinking = channelAdvanced.thinking || {}
         const channelStreaming = channelAdvanced.streaming || {}
         const clientOptions = {
-            enableTools: preset?.tools?.enableBuiltinTools !== false,
+            enableTools: disableTools ? false : (preset?.tools?.enableBuiltinTools !== false),
             enableReasoning: preset?.enableReasoning ?? channelThinking.enableReasoning,
             reasoningEffort: channelThinking.defaultLevel || 'low',
             adapterType: adapterType,

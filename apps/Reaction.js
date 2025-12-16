@@ -132,18 +132,12 @@ function registerReactionListener() {
             for (const bot of bots) {
                 if (!bot || bot._reactionListenerAdded) continue
                 bot._reactionListenerAdded = true
-                
-                // 监听 notice.group.reaction 事件
                 bot.on?.('notice.group.reaction', async (e) => {
                     await handleReactionEvent(e, bot)
                 })
-                
-                // 兼容其他可能的事件名
                 bot.on?.('notice.group.emoji_like', async (e) => {
                     await handleReactionEvent(e, bot)
                 })
-                
-                logger.debug(`[AI-Reaction] 已为Bot ${bot.uin || 'unknown'} 注册事件监听器`)
             }
         } catch (err) {
             logger.error('[AI-Reaction] 注册事件监听器失败:', err)
