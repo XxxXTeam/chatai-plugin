@@ -1134,7 +1134,7 @@ export class AbstractClient {
                     toolCallLogs.push(result.value.log)
                 } else {
                     // Promise rejected
-                    const fcName = toolCall.function?.name || 'unknown'
+                    const fcName = toolCall.function?.name || toolCall.name || 'unknown_tool'
                     toolCallResults.push({
                         tool_call_id: toolCall.id,
                         content: `执行失败: ${result.reason?.message || 'Unknown error'}`,
@@ -1168,7 +1168,7 @@ export class AbstractClient {
      * @returns {Promise<{toolResult: Object, log: Object}>}
      */
     async executeSingleToolCall(toolCall) {
-        const fcName = toolCall.function?.name || toolCall.name
+        const fcName = toolCall.function?.name || toolCall.name || 'unknown_tool'
         let fcArgs = toolCall.function?.arguments || toolCall.arguments
         
         // 解析参数

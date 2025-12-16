@@ -125,18 +125,19 @@ registerFromChaiteConverter('gemini', (source) => {
             }
         }
         case 'tool': {
-            // Gemini expects function responses as user messages with functionResponse parts
-            return source.content.map(tcr => ({
-                role: 'function',
-                parts: [{
-                    functionResponse: {
-                        name: tcr.name,
-                        response: {
-                            content: tcr.content,
+            return source.content
+                .filter(tcr => tcr.name && tcr.name.trim())
+                .map(tcr => ({
+                    role: 'function',
+                    parts: [{
+                        functionResponse: {
+                            name: tcr.name,
+                            response: {
+                                content: tcr.content || '',
+                            },
                         },
-                    },
-                }],
-            }))
+                    }],
+                }))
         }
         default: {
             throw new Error(`Unknown role: ${source.role}`)

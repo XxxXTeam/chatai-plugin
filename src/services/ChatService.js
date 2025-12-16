@@ -269,11 +269,13 @@ export class ChatService {
             try {
                 const sm = await ensureScopeManager()
                 const groupSettings = await sm.getGroupSettings(String(groupId))
-                const groupModelId = groupSettings?.modelId || groupSettings?.settings?.modelId
-                if (groupModelId) {
+                logger.debug(`[ChatService] 群组配置: groupId=${groupId}, settings=${JSON.stringify(groupSettings)}`)
+                // modelId 存储在 settings JSON 字段中
+                const groupModelId = groupSettings?.settings?.modelId
+                if (groupModelId && groupModelId.trim()) {
                     // 模型格式：channelId:modelId
                     llmModel = groupModelId
-                    logger.debug(`[ChatService] 使用群组独立模型: ${llmModel}`)
+                    logger.info(`[ChatService] 使用群组独立模型: ${llmModel}`)
                 }
             } catch (e) {
                 logger.debug('[ChatService] 获取群组模型配置失败:', e.message)

@@ -154,6 +154,7 @@ class PresetManager {
 
     // 查找预设
     findPreset(msg) {
+        if (!msg || typeof msg !== 'string') return null
         const pureMsg = msg.replace(/^#?/, '').toLowerCase()
         return this.allPresets.find(p => p.keywords.some(k => k.toLowerCase() === pureMsg))
     }

@@ -144,8 +144,12 @@ export class Chat extends plugin {
       
       // 检查群组特定的触发模式配置
       try {
-        const { ScopeManager } = await import('../src/services/ScopeManager.js')
-        const sm = new ScopeManager()
+        const { getScopeManager } = await import('../src/services/ScopeManager.js')
+        const { databaseService } = await import('../src/services/DatabaseService.js')
+        if (!databaseService.initialized) {
+          await databaseService.init()
+        }
+        const sm = getScopeManager(databaseService)
         await sm.init()
         const groupSettings = await sm.getGroupSettings(String(e.group_id))
         const groupTriggerMode = groupSettings?.settings?.triggerMode || groupSettings?.triggerMode

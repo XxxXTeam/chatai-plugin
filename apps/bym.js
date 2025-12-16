@@ -130,7 +130,9 @@ export class bym extends plugin {
             // 1. 尝试获取独立人格配置
             if (inheritPersonality) {
                 try {
-                    databaseService.init()
+                    if (!databaseService.initialized) {
+                        await databaseService.init()
+                    }
                     const scopeManager = getScopeManager(databaseService)
                     await scopeManager.init()
                     
