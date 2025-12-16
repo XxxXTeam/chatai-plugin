@@ -273,7 +273,6 @@ export class ChatService {
                 // modelId 存储在 settings JSON 字段中
                 const groupModelId = groupSettings?.settings?.modelId
                 if (groupModelId && groupModelId.trim()) {
-                    // 模型格式：channelId:modelId
                     llmModel = groupModelId
                     logger.info(`[ChatService] 使用群组独立模型: ${llmModel}`)
                 }

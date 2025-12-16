@@ -285,9 +285,9 @@ export default function GroupsPage() {
                     <SelectContent>
                       <SelectItem value="__default__">使用默认模型</SelectItem>
                       {channels.map((channel) => (
-                        channel.models?.map((modelId) => (
-                          <SelectItem key={`${channel.id}:${modelId}`} value={`${channel.id}:${modelId}`}>
-                            [{channel.name}] {modelId}
+                        channel.models?.map((model) => (
+                          <SelectItem key={`${channel.id}:${model}`} value={model}>
+                            [{channel.name}] {model}
                           </SelectItem>
                         ))
                       ))}
@@ -407,7 +407,7 @@ export default function GroupsPage() {
                         {(group.settings?.modelId || group.modelId) && (
                           <span className="flex items-center gap-1">
                             <Bot className="h-3 w-3" />
-                            独立模型: {(group.settings?.modelId || group.modelId)?.split(':').pop()?.substring(0, 20)}
+                            独立模型: {(group.settings?.modelId || group.modelId)?.substring(0, 20)}
                           </span>
                         )}
                         <span>模式: {group.triggerMode || '默认'}</span>
