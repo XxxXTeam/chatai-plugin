@@ -671,6 +671,7 @@ export class ChannelManager {
                         ?.map(c => c.text)
                         ?.join('') || ''
 
+                    // 使用插件计算 Token
                     // 记录统计（渠道测试）
                     try {
                         await usageStats.record({

@@ -145,9 +145,40 @@ function registerReactionListener() {
     }, 3000)
 }
 
+// 防重复响应：记录最近处理的事件
+const recentReactions = new Map()  // key: `${groupId}-${userId}-${messageId}`, value: timestamp
+const REACTION_COOLDOWN = 10000  // 10秒内同一用户对同一消息的回应不重复处理
+
+/**
+ * 检查是否为添加回应事件（而非取消）
+ * 兼容多种适配器格式
+ */
+function isAddReaction(e) {
+    // NapCat: set 字段
+    if (e.set === false || e.set === 'remove' || e.set === 0) return false
+    // LLOneBot/部分适配器: sub_type 字段
+    if (e.sub_type === 'remove' || e.sub_type === 'cancel' || e.sub_type === 'delete') return false
+    // 某些适配器: is_set 字段
+    if (e.is_set === false || e.is_set === 0) return false
+    // 某些适配器: action/operate 字段
+    if (e.action === 'remove' || e.operate === 'remove') return false
+    if (e.action === 'cancel' || e.operate === 'cancel') return false
+    // 某些适配器: type 字段区分
+    if (e.type === 'remove' || e.type === 'cancel') return false
+    // 默认认为是添加
+    return true
+}
+
 async function handleReactionEvent(e, bot) {
     try {
         if (!config.get('features.reaction.enabled')) {
+            return
+        }
+        
+        // 检查是否为取消回应事件
+        const isAdd = isAddReaction(e)
+        if (!isAdd) {
+            logger.debug(`[AI-Reaction] 忽略取消回应事件: set=${e.set}, sub_type=${e.sub_type}`)
             return
         }
         
@@ -162,11 +193,28 @@ async function handleReactionEvent(e, bot) {
             return
         }
         
+        // 防重复响应检查
+        const messageId = e.message_id || e.seq || e.msg_id || ''
+        const reactionKey = `${e.group_id}-${userId}-${messageId}`
+        const now = Date.now()
+        const lastTime = recentReactions.get(reactionKey)
+        if (lastTime && now - lastTime < REACTION_COOLDOWN) {
+            logger.debug(`[AI-Reaction] 忽略重复回应: ${reactionKey}, 距离上次 ${now - lastTime}ms`)
+            return
+        }
+        recentReactions.set(reactionKey, now)
+        // 清理过期记录
+        if (recentReactions.size > 100) {
+            for (const [key, time] of recentReactions) {
+                if (now - time > REACTION_COOLDOWN * 2) recentReactions.delete(key)
+            }
+        }
+        
         const emojiId = e.id || e.emoji_id
         const nickname = await getUserNickname(e, userId)
         const emojiDesc = getEmojiDescription(emojiId)
         
-        logger.info(`[AI-Reaction] ${nickname}(${userId}) 对机器人消息做出了 ${emojiDesc} 回应`)
+        logger.info(`[AI-Reaction] ${nickname}(${userId}) 对机器人消息做出了 ${emojiDesc} 回应 (添加)`)
         
         // 获取自定义提示词模板，支持 {nickname} 和 {emoji} 占位符
         const defaultPrompt = `[事件通知] {nickname} 对你之前的消息做出了"{emoji}"的表情回应。这是对你消息的反馈，你可以简短回应表示感谢或互动，也可以选择不回复。`

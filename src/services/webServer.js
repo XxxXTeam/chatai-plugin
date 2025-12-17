@@ -1827,9 +1827,9 @@ export class WebServer {
                         ? `连接成功！耗时 ${elapsed}ms，AI回复：${replyText.substring(0, 50)}${replyText.length > 50 ? '...' : ''}`
                         : `连接成功！耗时 ${elapsed}ms`
                     
-                    // 获取API返回的usage信息，如果没有则使用估算
-                    const inputTokens = apiUsage?.promptTokens || apiUsage?.prompt_tokens || apiUsage?.inputTokens || usageStats.estimateTokens(testMessage)
-                    const outputTokens = apiUsage?.completionTokens || apiUsage?.completion_tokens || apiUsage?.outputTokens || usageStats.estimateTokens(replyText || '')
+                    // 使用插件计算 Token（不依赖 API 返回）
+                    const inputTokens = usageStats.estimateTokens(testMessage)
+                    const outputTokens = usageStats.estimateTokens(replyText || '')
                     
                     // 记录使用统计
                     await usageStats.record({

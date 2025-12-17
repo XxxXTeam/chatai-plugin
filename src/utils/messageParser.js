@@ -1668,7 +1668,9 @@ export const segment = {
     text: (text) => ({ type: 'text', data: { text: String(text) } }),
     image: (file, opts = {}) => ({ 
         type: 'image', 
-        data: { file, ...opts } 
+        file,  // icqq 格式
+        ...opts,  // icqq 其他参数
+        data: { file, ...opts }  // NC/OneBot 格式
     }),
     
     /** @消息 - qq可以是QQ号或'all' */
@@ -1684,12 +1686,14 @@ export const segment = {
     face: (id) => ({ type: 'face', data: { id: Number(id) } }),
     
     /** 语音消息 */
-    record: (file) => ({ type: 'record', data: { file } }),
+    record: (file) => ({ type: 'record', file, data: { file } }),
     
     /** 视频消息 */
     video: (file, thumb) => ({ 
         type: 'video', 
-        data: { file, ...(thumb ? { thumb } : {}) } 
+        file,  // icqq 格式
+        ...(thumb ? { thumb } : {}),
+        data: { file, ...(thumb ? { thumb } : {}) }  // NC/OneBot 格式
     }),
     
     /** JSON卡片消息 */
@@ -1717,7 +1721,9 @@ export const segment = {
     /** 文件消息 */
     file: (file, name) => ({ 
         type: 'file', 
-        data: { file, ...(name ? { name } : {}) } 
+        file,  // icqq 格式
+        ...(name ? { name } : {}),
+        data: { file, ...(name ? { name } : {}) }  // NC/OneBot 格式
     }),
     
     /** 链接分享 */

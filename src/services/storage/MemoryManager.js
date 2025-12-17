@@ -320,7 +320,7 @@ ${dialogText}
     }
 
     /**
-     * 获取群聊上下文（简化接口）
+     * 获取群聊上下文
      * @param {string} groupId - 群ID
      * @returns {Object} 群聊记忆
      */
@@ -396,7 +396,7 @@ ${dialogText}
                 this.lastPollTime.set(userId, now)
                 
                 // 避免一次处理太多用户，限制单次轮询最多处理10个用户
-                if (processedUsers.size >= 10) {
+                if (processedUsers.size >= 100) {
                     logger.debug(`[MemoryManager] 单次轮询处理了 ${processedUsers.size} 个用户，等待下次轮询`)
                     break
                 }
@@ -474,6 +474,7 @@ ${dialogText}
             )
             
             const responseText = result.contents?.[0]?.text?.trim() || ''
+            // 使用插件计算 Token
             // 记录统计（用户记忆提取）
             try {
                 await usageStats.record({
@@ -554,6 +555,7 @@ ${dialogText}
             )
 
             const memoryContent = result.contents?.[0]?.text?.trim()
+            // 使用插件计算 Token
             // 记录统计（自动记忆提取）
             try {
                 await usageStats.record({

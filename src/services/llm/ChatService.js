@@ -850,17 +850,13 @@ export class ChatService {
                     success: !!finalResponse?.length
                 })
                 
-                // 记录详细使用统计（优先使用API返回，回退到内置估算）
+                // 记录详细使用统计（使用插件计算 Token，不依赖 API 返回）
                 const keyInfo = channel?.lastUsedKey || {}
                 const requestDuration = Date.now() - requestStartTime
-                // 内置tokens估算（仅在API未返回时使用）
-                const estimatedInputTokens = usageStats.estimateMessagesTokens(messages)
+                // 使用插件计算 tokens
+                const inputTokens = usageStats.estimateMessagesTokens(messages)
                 const responseText = finalResponse?.filter(c => c.type === 'text').map(c => c.text).join('') || ''
-                const estimatedOutputTokens = usageStats.estimateTokens(responseText)
-                // 优先使用API返回的usage（支持多种字段名格式）
-                const apiInputTokens = finalUsage?.promptTokens || finalUsage?.prompt_tokens || finalUsage?.inputTokens || finalUsage?.input_tokens
-                const apiOutputTokens = finalUsage?.completionTokens || finalUsage?.completion_tokens || finalUsage?.outputTokens || finalUsage?.output_tokens
-                const apiTotalTokens = finalUsage?.totalTokens || finalUsage?.total_tokens
+                const outputTokens = usageStats.estimateTokens(responseText)
                 await usageStats.record({
                     channelId: channel?.id || 'unknown',
                     channelName: channel?.name || 'Unknown',
@@ -868,9 +864,9 @@ export class ChatService {
                     keyIndex: keyInfo.keyIndex ?? -1,
                     keyName: keyInfo.keyName || '',
                     strategy: keyInfo.strategy || '',
-                    inputTokens: apiInputTokens || estimatedInputTokens,
-                    outputTokens: apiOutputTokens || estimatedOutputTokens,
-                    totalTokens: apiTotalTokens || (apiInputTokens || estimatedInputTokens) + (apiOutputTokens || estimatedOutputTokens),
+                    inputTokens,
+                    outputTokens,
+                    totalTokens: inputTokens + outputTokens,
                     duration: requestDuration,
                     success: !!finalResponse?.length,
                     channelSwitched: debugInfo?.fallbackUsed || false,

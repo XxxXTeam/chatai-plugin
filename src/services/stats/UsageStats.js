@@ -4,6 +4,7 @@
  */
 
 import { redisClient } from '../../core/cache/RedisClient.js'
+import { encode } from 'gpt-tokenizer'
 
 const STATS_KEY = 'chaite:usage_stats'
 const STATS_LIST_KEY = 'chaite:usage_list'
@@ -50,21 +51,21 @@ class UsageStats {
     }
 
     /**
-     * 基于字符数估算tokens：中文约1.5字符/token，英文约4字符/token
      * @param {string} text - 文本内容
-     * @returns {number} 估算的token数
+     * @returns {number} token数
      */
     estimateTokens(text) {
         if (!text) return 0
-        // 统计中文字符数
-        const chineseChars = (text.match(/[\u4e00-\u9fa5]/g) || []).length
-        // 统计英文单词数
-        const englishWords = (text.match(/[a-zA-Z]+/g) || []).length
-        // 其他字符（标点、数字等）
-        const otherChars = text.length - chineseChars - (text.match(/[a-zA-Z]+/g) || []).join('').length
-        
-        // 估算：中文1.5字符/token，英文单词约1.3token/word，其他4字符/token
-        return Math.ceil(chineseChars / 1.5 + englishWords * 1.3 + otherChars / 4)
+        try {
+            const tokens = encode(text)
+            return tokens.length
+        } catch (e) {
+            // 回退到估算方式
+            const chineseChars = (text.match(/[\u4e00-\u9fa5]/g) || []).length
+            const englishWords = (text.match(/[a-zA-Z]+/g) || []).length
+            const otherChars = text.length - chineseChars - (text.match(/[a-zA-Z]+/g) || []).join('').length
+            return Math.ceil(chineseChars / 1.5 + englishWords * 1.3 + otherChars / 4)
+        }
     }
 
     /**
@@ -88,8 +89,7 @@ class UsageStats {
                         }
                     }
                 }
-            }
-            // 每条消息的role/结构开销约4tokens
+            } 
             total += 4
         }
         return total
@@ -124,6 +124,7 @@ class UsageStats {
             userId: record.userId || null,
             groupId: record.groupId || null,
             stream: record.stream || false,
+            isEstimated: record.isEstimated || false,  // 标记是否为估算值
         }
 
         // 记录日志
@@ -145,6 +146,9 @@ class UsageStats {
 
             // 更新汇总统计
             await this.updateAggregateStats(fullRecord)
+            
+            // 更新用户统计
+            await this.updateUserStats(fullRecord)
         } catch (error) {
             logger.debug('[UsageStats] Redis保存失败，仅使用内存缓存:', error.message)
         }
@@ -355,6 +359,69 @@ class UsageStats {
         return Object.values(channelCounts)
             .sort((a, b) => b.calls - a.calls)
             .slice(0, limit)
+    }
+
+    /**
+     * 获取用户统计（真实统计，非估算）
+     * @param {string} userId - 用户ID
+     * @returns {Promise<Object>} 用户统计数据
+     */
+    async getUserStats(userId) {
+        if (!userId) return null
+        
+        const userKey = `${STATS_KEY}:user:${userId}`
+        
+        try {
+            // 先尝试从 Redis 获取
+            const stats = await redisClient.hgetall(userKey)
+            if (stats && Object.keys(stats).length > 0) {
+                return {
+                    userId,
+                    totalCalls: parseInt(stats.totalCalls || '0'),
+                    successCalls: parseInt(stats.successCalls || '0'),
+                    totalInputTokens: parseInt(stats.totalInputTokens || '0'),
+                    totalOutputTokens: parseInt(stats.totalOutputTokens || '0'),
+                    totalDuration: parseInt(stats.totalDuration || '0'),
+                    lastUpdated: parseInt(stats.lastUpdated || '0'),
+                }
+            }
+        } catch {}
+        
+        // 从内存记录计算
+        const userRecords = this.recentStats.filter(r => r.userId === userId)
+        if (userRecords.length === 0) return null
+        
+        return {
+            userId,
+            totalCalls: userRecords.length,
+            successCalls: userRecords.filter(r => r.success).length,
+            totalInputTokens: userRecords.reduce((sum, r) => sum + (r.inputTokens || 0), 0),
+            totalOutputTokens: userRecords.reduce((sum, r) => sum + (r.outputTokens || 0), 0),
+            totalDuration: userRecords.reduce((sum, r) => sum + (r.duration || 0), 0),
+            lastUpdated: userRecords[0]?.timestamp || 0,
+        }
+    }
+
+    /**
+     * 更新用户统计（在 record 时调用）
+     * @param {Object} record - 使用记录
+     */
+    async updateUserStats(record) {
+        if (!record.userId) return
+        
+        const userKey = `${STATS_KEY}:user:${record.userId}`
+        
+        try {
+            await redisClient.hincrby(userKey, 'totalCalls', 1)
+            await redisClient.hincrby(userKey, 'successCalls', record.success ? 1 : 0)
+            await redisClient.hincrby(userKey, 'totalInputTokens', record.inputTokens || 0)
+            await redisClient.hincrby(userKey, 'totalOutputTokens', record.outputTokens || 0)
+            await redisClient.hincrby(userKey, 'totalDuration', record.duration || 0)
+            await redisClient.hset(userKey, 'lastUpdated', Date.now())
+            await redisClient.expire(userKey, 86400 * 90) // 90天
+        } catch (error) {
+            logger.debug('[UsageStats] 更新用户统计失败:', error.message)
+        }
     }
 
     /**

@@ -131,7 +131,43 @@ export function parseXmlToolCalls(text) {
         }
     }
     if (toolCalls.length === 0) {
-        // 匹配独立的JSON数组（以[开头，以]结尾）
+        // 格式C: 裸JSON对象 {"tool_calls": [...]} （不在代码块内）
+        const toolCallsObjRegex = /\{\s*"tool_calls"\s*:\s*\[[\s\S]*?\]\s*\}/g
+        const objMatches = cleanText.match(toolCallsObjRegex)
+        
+        if (objMatches) {
+            for (const objStr of objMatches) {
+                try {
+                    const parsed = JSON.parse(objStr)
+                    if (parsed.tool_calls && Array.isArray(parsed.tool_calls)) {
+                        let foundTools = false
+                        for (const tc of parsed.tool_calls) {
+                            const funcName = tc.function?.name || tc.name
+                            const funcArgs = tc.function?.arguments || tc.arguments
+                            if (funcName) {
+                                toolCalls.push({
+                                    id: tc.id || `json_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                    type: 'function',
+                                    function: {
+                                        name: funcName,
+                                        arguments: typeof funcArgs === 'string' ? funcArgs : JSON.stringify(funcArgs || {})
+                                    }
+                                })
+                                foundTools = true
+                                logger.debug(`[Tool Parser] 解析到裸JSON tool_calls格式: ${funcName}`)
+                            }
+                        }
+                        if (foundTools) {
+                            cleanText = cleanText.replace(objStr, '').trim()
+                        }
+                    }
+                } catch {
+                    // 解析失败，跳过
+                }
+            }
+        }
+        
+        // 格式D: 匹配独立的JSON数组（以[开头，以]结尾）
         const jsonArrayRegex = /\[\s*\{[\s\S]*?"name"\s*:\s*"[^"]+[\s\S]*?\}\s*\]/g
         const arrayMatches = cleanText.match(jsonArrayRegex)
         

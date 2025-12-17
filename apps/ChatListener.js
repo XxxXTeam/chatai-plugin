@@ -78,8 +78,10 @@ export class ChatListener extends plugin {
             return false
         }
         
-        // 过滤系统命令（避免抢占 Commands.js 的命令）
+        // 过滤系统命令和其他插件命令（避免抢占）
         const rawMsg = e.msg || ''
+        
+        // 1. 本插件的系统命令
         const systemCmdPatterns = [
             /^#(结束对话|清除记忆|我的记忆|删除记忆|群聊总结|总结群聊|群消息总结|画像总结)/,
             /^#chatdebug/i,
@@ -88,6 +90,18 @@ export class ChatListener extends plugin {
         for (const pattern of systemCmdPatterns) {
             if (pattern.test(rawMsg)) {
                 logger.debug(`[ChatListener] 跳过系统命令: ${rawMsg.substring(0, 20)}`)
+                return false
+            }
+        }
+        
+        // 2. 其他插件命令：以 # 开头的命令交给其他插件处理
+        // 配置 trigger.allowHashCommands=true 可让AI处理 # 命令
+        const allowHashCmds = triggerCfg.allowHashCommands === true
+        if (!allowHashCmds && /^#\S/.test(rawMsg)) {
+            // 检查是否@了机器人，如果是则清理掉@部分再判断
+            const cleanedForCheck = this.cleanAtBot ? this.cleanAtBot(rawMsg, e) : rawMsg
+            if (/^#\S/.test(cleanedForCheck.trim())) {
+                logger.debug(`[ChatListener] 跳过#命令(交给其他插件): ${rawMsg.substring(0, 30)}`)
                 return false
             }
         }

@@ -7,6 +7,11 @@ import { chatService } from '../src/services/llm/ChatService.js'
 import { memoryManager } from '../src/services/storage/MemoryManager.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
 import { renderService } from '../src/services/media/RenderService.js'
+import { channelManager } from '../src/services/llm/ChannelManager.js'
+import { presetManager } from '../src/services/preset/PresetManager.js'
+import { usageStats } from '../src/services/stats/UsageStats.js'
+import { LlmService } from '../src/services/llm/LlmService.js'
+import { getScopeManager } from '../src/services/scope/ScopeManager.js'
 
 // Debug模式状态管理（运行时内存，重启后重置）
 const debugSessions = new Map()  // key: groupId或`private_${userId}`, value: boolean
@@ -123,28 +128,47 @@ export class AICommands extends plugin {
         logger.info(`[AI-Commands] Debug模式${status}: ${key}`)
         return true
     }
-
-    /**
-     * 结束对话/开始新对话
-     */
     async endConversation() {
         const e = this.e
         try {
             const userId = e.user_id || e.sender?.user_id || 'unknown'
             const groupId = e.group_id || null
+            const fullUserId = groupId ? `${groupId}_${userId}` : userId
 
+            // 获取清理前的统计
+            databaseService.init()
+            const messages = databaseService.getMessages(fullUserId, 1000)
+            const messageCount = messages.length
+            const userMsgCount = messages.filter(m => m.role === 'user').length
+            const assistantMsgCount = messages.filter(m => m.role === 'assistant').length
+
+            // 执行清理
             await chatService.clearHistory(userId, groupId)
-            await this.reply('✅ 已结束当前对话，下次对话将开始新会话', true)
+
+            // 构建反馈信息
+            const feedbackLines = [
+                '✅ 已结束当前对话',
+                `━━━━━━━━━━━━`,
+                `📊 本次会话统计:`,
+                `   💬 总消息: ${messageCount} 条`,
+                `   👤 你的消息: ${userMsgCount} 条`,
+                `   🤖 AI回复: ${assistantMsgCount} 条`,
+                ``,
+                `💡 下次对话将开始新会话`
+            ]
+
+            // 如果消息数为0，简化反馈
+            if (messageCount === 0) {
+                await this.reply('✅ 当前无对话记录，已准备好新会话', true)
+            } else {
+                await this.reply(feedbackLines.join('\n'), true)
+            }
         } catch (error) {
             logger.error('[AI-Commands] End conversation error:', error)
             await this.reply('操作失败: ' + error.message, true)
         }
         return true
     }
-
-    /**
-     * 清除用户记忆
-     */
     async clearMemory() {
         const e = this.e
         try {
@@ -153,23 +177,49 @@ export class AICommands extends plugin {
             const fullUserId = groupId ? `${groupId}_${userId}` : String(userId)
 
             await memoryManager.init()
-            await memoryManager.clearMemory(fullUserId)
-            await this.reply('✅ 已清除你的所有记忆数据', true)
+            
+            // 获取清理前的统计
+            const userMemories = await memoryManager.getMemories(String(userId)) || []
+            let groupUserMemories = []
+            if (groupId) {
+                groupUserMemories = await memoryManager.getMemories(fullUserId) || []
+            }
+            const totalMemories = userMemories.length + groupUserMemories.length
+
+            // 执行清理
+            await memoryManager.clearMemory(String(userId))
+            if (groupId) {
+                await memoryManager.clearMemory(fullUserId)
+            }
+
+            // 构建反馈
+            if (totalMemories === 0) {
+                await this.reply('📭 当前没有记忆数据需要清除', true)
+            } else {
+                const feedbackLines = [
+                    '✅ 已清除记忆数据',
+                    `━━━━━━━━━━━━`,
+                    `🧠 清除了 ${totalMemories} 条记忆`,
+                    userMemories.length > 0 ? `   · 个人记忆: ${userMemories.length} 条` : '',
+                    groupUserMemories.length > 0 ? `   · 群聊记忆: ${groupUserMemories.length} 条` : '',
+                    ``,
+                    `💡 AI将不再记得之前的信息`
+                ].filter(Boolean)
+                await this.reply(feedbackLines.join('\n'), true)
+            }
         } catch (error) {
             logger.error('[AI-Commands] Clear memory error:', error)
             await this.reply('清除记忆失败: ' + error.message, true)
         }
         return true
     }
-
-    /**
-     * 查看对话状态
-     */
     async conversationStatus() {
         const e = this.e
         try {
             await memoryManager.init()
             databaseService.init()
+            await channelManager.init()
+            await presetManager.init()
 
             const userId = e.user_id || e.sender?.user_id || 'unknown'
             const groupId = e.group_id || null
@@ -178,6 +228,8 @@ export class AICommands extends plugin {
             // 获取对话历史
             const messages = databaseService.getMessages(fullUserId, 100)
             const messageCount = messages.length
+            const userMsgCount = messages.filter(m => m.role === 'user').length
+            const assistantMsgCount = messages.filter(m => m.role === 'assistant').length
 
             // 获取记忆数量
             const memories = await memoryManager.getMemories(String(userId))
@@ -193,28 +245,96 @@ export class AICommands extends plugin {
                 }
             }
 
+            // 获取当前使用的模型配置
+            const llmService = new LlmService()
+            const chatModel = llmService.getModel('chat')
+            
+            // 获取渠道信息
+            let channelInfo = { name: '未知', status: '未知' }
+            try {
+                const channel = await channelManager.getBestChannel(chatModel)
+                if (channel) {
+                    channelInfo = {
+                        name: channel.name || channel.id?.substring(0, 8) || '默认',
+                        status: channel.status || 'active',
+                        adapter: channel.adapterType || 'openai'
+                    }
+                }
+            } catch {}
+
+            // 获取预设信息
+            let presetInfo = { name: '默认', id: 'default' }
+            try {
+                // 尝试获取群组/用户的预设配置
+                const scopeManager = getScopeManager(databaseService)
+                await scopeManager.init()
+                const scopeConfig = await scopeManager.getEffectiveConfig(groupId, String(userId))
+                if (scopeConfig?.presetId) {
+                    const preset = presetManager.get(scopeConfig.presetId)
+                    if (preset) {
+                        presetInfo = { name: preset.name || preset.id, id: scopeConfig.presetId }
+                    }
+                }
+            } catch {}
+
+            // 获取 Token 使用统计
+            let tokenStats = { input: 0, output: 0, total: 0 }
+            try {
+                const stats = await usageStats.getUserStats(String(userId))
+                if (stats) {
+                    tokenStats = {
+                        input: stats.totalInputTokens || 0,
+                        output: stats.totalOutputTokens || 0,
+                        total: (stats.totalInputTokens || 0) + (stats.totalOutputTokens || 0)
+                    }
+                }
+            } catch {}
+
             // Debug状态
             const debugEnabled = isDebugEnabled(e) ? '✅ 开启' : '❌ 关闭'
             const nickname = e.sender?.nickname || e.sender?.card || '用户'
             const scope = groupId ? `群聊 ${groupId}` : '私聊'
 
+            // 格式化 Token 数量
+            const formatTokens = (n) => {
+                if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
+                if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
+                return String(n)
+            }
+
             // 构建 Markdown
             const markdown = [
                 `## 📊 对话状态`,
                 ``,
+                `### 💬 会话信息`,
                 `| 项目 | 数值 |`,
                 `|------|------|`,
-                `| 💬 当前会话消息 | ${messageCount} 条 |`,
-                `| 🧠 记忆条目 | ${memoryCount} 条 |`,
-                `| ⏰ 最后活动 | ${lastActive} |`,
+                `| 总消息数 | ${messageCount} 条 |`,
+                `| 用户消息 | ${userMsgCount} 条 |`,
+                `| AI回复 | ${assistantMsgCount} 条 |`,
+                `| 最后活动 | ${lastActive} |`,
+                ``,
+                `### � 模型配置`,
+                `| 项目 | 数值 |`,
+                `|------|------|`,
+                `| 当前模型 | ${chatModel} |`,
+                `| 渠道 | ${channelInfo.name} (${channelInfo.status}) |`,
+                `| 预设 | ${presetInfo.name} |`,
+                ``,
+                `### 📈 统计信息`,
+                `| 项目 | 数值 |`,
+                `|------|------|`,
+                `| �� 记忆条目 | ${memoryCount} 条 |`,
+                `| 📥 输入Token | ${formatTokens(tokenStats.input)} |`,
+                `| 📤 输出Token | ${formatTokens(tokenStats.output)} |`,
                 `| 🔧 Debug模式 | ${debugEnabled} |`,
                 `| 📍 作用范围 | ${scope} |`,
                 ``,
                 `### 💡 常用命令`,
                 `- **#结束对话** - 开始新会话`,
                 `- **#清除记忆** - 清除记忆数据`,
-                `- **#chatdebug** - 切换调试模式`,
                 `- **#我的记忆** - 查看记忆列表`,
+                `- **#chatdebug** - 切换调试模式`,
             ].join('\n')
 
             try {
@@ -233,10 +353,14 @@ export class AICommands extends plugin {
                 const textStatus = [
                     '📊 对话状态',
                     `━━━━━━━━━━━━`,
-                    `💬 当前会话消息: ${messageCount} 条`,
+                    `💬 会话消息: ${messageCount} 条 (用户${userMsgCount}/AI${assistantMsgCount})`,
+                    `🤖 当前模型: ${chatModel}`,
+                    `📡 渠道: ${channelInfo.name}`,
+                    `🎭 预设: ${presetInfo.name}`,
                     `🧠 记忆条目: ${memoryCount} 条`,
+                    `📊 Token: ${formatTokens(tokenStats.input)}入/${formatTokens(tokenStats.output)}出`,
                     `⏰ 最后活动: ${lastActive}`,
-                    `🔧 Debug模式: ${debugEnabled}`,
+                    `🔧 Debug: ${debugEnabled}`,
                 ].join('\n')
                 await this.reply(textStatus, true)
             }
@@ -972,5 +1096,4 @@ async function getUserTextHistory(e, userId, num) {
     }
 }
 
-// 导出辅助函数供其他模块使用
 export { isDebugEnabled, setDebugMode, getDebugSessions }

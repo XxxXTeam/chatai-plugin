@@ -11,6 +11,7 @@ import {
     formatMemberInfo,
     batchSendMessages 
 } from './helpers.js'
+import { recordSentMessage } from '../../utils/messageDedup.js'
 
 // ======================= 消息发送去重机制 =======================
 const SEND_DEDUP_EXPIRE = 5000  // 发送去重过期时间(ms)
@@ -104,6 +105,8 @@ export const messageTools = [
                 }
 
                 const result = await friend.sendMsg(msgParts.length === 1 ? msgParts[0] : msgParts)
+                // 记录发送消息指纹，防止回显被重复处理
+                if (args.message) recordSentMessage(args.message)
                 return { success: true, message_id: result.message_id, user_id: userId }
             } catch (err) {
                 return { success: false, error: `发送私聊消息失败: ${err.message}` }
@@ -148,6 +151,8 @@ export const messageTools = [
                 }
 
                 const result = await group.sendMsg(msgParts.length === 1 ? msgParts[0] : msgParts)
+                // 记录发送消息指纹，防止回显被重复处理
+                if (args.message) recordSentMessage(args.message)
                 return { success: true, message_id: result.message_id, group_id: groupId }
             } catch (err) {
                 return { success: false, error: `发送群消息失败: ${err.message}` }
@@ -188,6 +193,8 @@ export const messageTools = [
                 msgParts.push(args.message)
 
                 const result = await e.reply(msgParts, args.quote || false)
+                // 记录发送消息指纹，防止回显被重复处理
+                if (args.message) recordSentMessage(args.message)
                 return { 
                     success: true, 
                     message_id: result?.message_id,
@@ -261,6 +268,9 @@ export const messageTools = [
                     count: args.count || 1,
                     interval: args.interval || 500
                 })
+                
+                // 记录发送消息指纹
+                if (args.message) recordSentMessage(args.message)
                 
                 const successCount = results.filter(r => r.success).length
                 return { 
@@ -354,6 +364,8 @@ export const messageTools = [
 
                     try {
                         const result = await e.reply(msgParts)
+                        // 记录发送消息指纹
+                        if (args.message) recordSentMessage(args.message)
                         allResults.push({
                             index: s + 1,
                             success: true,
@@ -444,6 +456,8 @@ export const messageTools = [
                 if (args.message) msgParts.push(args.message)
 
                 const result = await e.reply(msgParts)
+                // 记录发送消息指纹
+                if (args.message) recordSentMessage(args.message)
                 return {
                     success: true,
                     message_id: result?.message_id,
@@ -1284,10 +1298,62 @@ export const messageTools = [
                     }
                 }
                 
+                // 方式5: icqq - group.setReaction(seq, emoji_id, emoji_type)
+                // icqq 1.5.8+ 支持
+                // emoji_type: 1=QQ经典表情, 2=emoji表情, 3=超级表情
+                if (e?.group_id && bot.pickGroup) {
+                    try {
+                        const group = bot.pickGroup(e.group_id)
+                        if (typeof group?.setReaction === 'function') {
+                            // icqq 使用 seq 而非 message_id
+                            const seq = e?.seq || e?.source?.seq || parseInt(messageId) || 0
+                            const emojiIdNum = parseInt(emojiId)
+                            // 判断表情类型：大于200的是Unicode emoji，否则是QQ经典表情
+                            const emojiType = emojiIdNum > 200 ? 2 : 1
+                            
+                            if (isSet) {
+                                await group.setReaction(seq, emojiIdNum, emojiType)
+                            } else {
+                                // 取消回应可能需要不同的API或参数
+                                await group.setReaction(seq, emojiIdNum, emojiType)
+                            }
+                            return { 
+                                success: true, 
+                                message_id: messageId, 
+                                emoji_id: emojiId,
+                                emoji_type: emojiType,
+                                action: isSet ? 'add' : 'remove',
+                                method: 'icqq'
+                            }
+                        }
+                    } catch (icqqErr) {
+                        // icqq 可能不支持或版本过低
+                        logger.debug(`[set_msg_emoji_like] icqq setReaction 失败: ${icqqErr.message}`)
+                    }
+                }
+                
+                // 方式6: 尝试通过 pickGroup 获取 group 并直接调用
+                if (e?.group_id && bot.gl?.get?.(e.group_id)) {
+                    try {
+                        const group = bot.pickGroup(e.group_id)
+                        // 某些 icqq 变体使用 sendReaction
+                        if (typeof group?.sendReaction === 'function') {
+                            await group.sendReaction(messageId, parseInt(emojiId))
+                            return { 
+                                success: true, 
+                                message_id: messageId, 
+                                emoji_id: emojiId,
+                                action: 'add',
+                                method: 'icqq-sendReaction'
+                            }
+                        }
+                    } catch {}
+                }
+                
                 return { 
                     success: false, 
                     error: '当前协议不支持表情回应',
-                    note: '表情回应功能需要 NapCat / LLOneBot / Lagrange 等支持该API的协议端'
+                    note: '表情回应功能需要 NapCat / LLOneBot / Lagrange / icqq 1.5.8+ 等支持该API的协议端'
                 }
             } catch (err) {
                 return { success: false, error: `表情回应失败: ${err.message}` }
