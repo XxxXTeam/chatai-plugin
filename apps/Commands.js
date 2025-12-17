@@ -3,10 +3,10 @@
  * 高优先级处理各种命令，避免被其他插件抢占
  */
 import config from '../config/config.js'
-import { chatService } from '../src/services/ChatService.js'
-import { memoryManager } from '../src/services/MemoryManager.js'
-import { databaseService } from '../src/services/DatabaseService.js'
-import { renderService } from '../src/services/RenderService.js'
+import { chatService } from '../src/services/llm/ChatService.js'
+import { memoryManager } from '../src/services/storage/MemoryManager.js'
+import { databaseService } from '../src/services/storage/DatabaseService.js'
+import { renderService } from '../src/services/media/RenderService.js'
 
 // Debug模式状态管理（运行时内存，重启后重置）
 const debugSessions = new Map()  // key: groupId或`private_${userId}`, value: boolean

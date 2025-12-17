@@ -144,8 +144,8 @@ export class Chat extends plugin {
       
       // 检查群组特定的触发模式配置
       try {
-        const { getScopeManager } = await import('../src/services/ScopeManager.js')
-        const { databaseService } = await import('../src/services/DatabaseService.js')
+        const { getScopeManager } = await import('../src/services/scope/ScopeManager.js')
+        const { databaseService } = await import('../src/services/storage/DatabaseService.js')
         if (!databaseService.initialized) {
           await databaseService.init()
         }
@@ -344,10 +344,10 @@ export class Chat extends plugin {
 
     try {
       // Import services
-      const { chatService } = await import('../src/services/ChatService.js')
-      const { imageService } = await import('../src/services/ImageService.js')
-      const { presetManager } = await import('../src/services/PresetManager.js')
-      const { channelManager } = await import('../src/services/ChannelManager.js')
+      const { chatService } = await import('../src/services/llm/ChatService.js')
+      const { imageService } = await import('../src/services/media/ImageService.js')
+      const { presetManager } = await import('../src/services/preset/PresetManager.js')
+      const { channelManager } = await import('../src/services/llm/ChannelManager.js')
 
       // Check if any channel is configured and enabled
       await channelManager.init()
@@ -418,7 +418,7 @@ export class Chat extends plugin {
       })
 
       // 检查用户是否被封禁（检查 userId 和 fullUserId）
-      const { databaseService } = await import('../src/services/DatabaseService.js')
+      const { databaseService } = await import('../src/services/storage/DatabaseService.js')
       databaseService.init()
       if (databaseService.isUserBlocked(String(userId)) || databaseService.isUserBlocked(fullUserId)) {
         logger.info(`[AI-Chat] 用户 ${fullUserId} 已被封禁`)

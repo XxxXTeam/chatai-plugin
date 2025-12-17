@@ -257,6 +257,20 @@ export const statsApi = {
   reset: () => api.post('/api/stats/reset'),
 }
 
+// Usage Stats API (调用统计)
+export const usageStatsApi = {
+  get: () => api.get('/api/stats/usage'),
+  getRecent: (limit = 100, filter?: { source?: string; status?: string }) => {
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    if (filter?.source) params.set('source', filter.source)
+    if (filter?.status) params.set('status', filter.status)
+    return api.get(`/api/stats/usage/recent?${params.toString()}`)
+  },
+  getChannelStats: (channelId: string) => api.get(`/api/stats/usage/channel/${channelId}`),
+  clear: () => api.post('/api/stats/usage/clear'),
+}
+
 export const imageGenApi = {
   getPresets: () => api.get('/api/imagegen/presets'),
   reloadPresets: () => api.post('/api/imagegen/presets/reload'),

@@ -1,8 +1,8 @@
 import { detectFramework as getBotFramework, detectAdapter as getAdapter } from '../src/utils/platformAdapter.js'
 import { formatTimeToBeiJing } from '../src/utils/common.js'
-import { renderService } from '../src/services/RenderService.js'
-import { statsService } from '../src/services/StatsService.js'
-import { databaseService } from '../src/services/DatabaseService.js'
+import { renderService } from '../src/services/media/RenderService.js'
+import { statsService } from '../src/services/stats/StatsService.js'
+import { databaseService } from '../src/services/storage/DatabaseService.js'
 let masterList = null
 async function getMasterList() {
     if (masterList === null) {

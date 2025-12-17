@@ -1,10 +1,7 @@
 /**
  * 机器人框架工具函数
- * @deprecated 此模块已合并到 platformAdapter.js，请从那里导入
  * @module utils/bot
  */
-
-// 从 platformAdapter.js 重新导出所有函数
 export {
     // 平台检测
     detectFramework,
@@ -31,7 +28,6 @@ export {
     getFrameworkInfo
 } from './platformAdapter.js'
 
-// 消息段构建器（从 messageParser.js 的 segment 使用）
 import { segment } from './messageParser.js'
 
 /**

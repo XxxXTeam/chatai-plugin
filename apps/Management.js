@@ -4,9 +4,9 @@
  */
 import config from '../config/config.js'
 import { getWebServer } from '../src/services/webServer.js'
-import { getScopeManager } from '../src/services/ScopeManager.js'
-import { databaseService } from '../src/services/DatabaseService.js'
-import { chatService } from '../src/services/ChatService.js'
+import { getScopeManager } from '../src/services/scope/ScopeManager.js'
+import { databaseService } from '../src/services/storage/DatabaseService.js'
+import { chatService } from '../src/services/llm/ChatService.js'
 
 // 缓存 Yunzai 主人配置
 let yunzaiCfg = null

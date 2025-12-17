@@ -1,6 +1,5 @@
 /**
  * 消息去重与自身消息防护模块
- * 从 apps/chat.js 抽离，供全局使用
  * @module utils/messageDedup
  */
 

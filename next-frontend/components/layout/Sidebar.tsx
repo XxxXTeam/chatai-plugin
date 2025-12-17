@@ -25,6 +25,7 @@ import {
   BarChart3,
   Wand2,
   Globe,
+  Activity,
   type LucideIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -101,8 +102,9 @@ const navGroups: NavGroup[] = [
     icon: Database,
     items: [
       { href: '/stats', label: '使用统计', icon: BarChart3 },
+      { href: '/history/usage', label: '调用统计', icon: Activity },
       { href: '/conversations', label: '对话历史', icon: MessageSquare },
-      { href: '/history', label: '调用记录', icon: History },
+      { href: '/history', label: '工具调用', icon: History },
     ],
   },
   {
@@ -116,9 +118,23 @@ const navGroups: NavGroup[] = [
   },
 ]
 
+// 判断单个导航项是否激活（精确匹配优先）
+function isItemActive(itemHref: string, pathname: string, allItems: NavItem[]): boolean {
+  // 精确匹配
+  if (pathname === itemHref) return true
+  const hasMoreSpecificMatch = allItems.some(
+    other => other.href !== itemHref && 
+             other.href.startsWith(itemHref + '/') && 
+             (pathname === other.href || pathname.startsWith(other.href + '/'))
+  )
+  if (hasMoreSpecificMatch) return false
+  // 前缀匹配
+  return itemHref !== '/' && pathname.startsWith(itemHref + '/')
+}
+
 // 判断分组是否有激活项
 function isGroupActive(group: NavGroup, pathname: string): boolean {
-  return group.items.some(item => pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href + '/')))
+  return group.items.some(item => isItemActive(item.href, pathname, group.items))
 }
 
 // 导航分组组件
@@ -188,7 +204,7 @@ function NavGroupItem({
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-1 ml-6 pl-3 border-l-2 border-border/40 space-y-0.5">
         {group.items.map((item) => {
-          const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href + '/'))
+          const isActive = isItemActive(item.href, pathname, group.items)
           const ItemIcon = item.icon
           
           return (

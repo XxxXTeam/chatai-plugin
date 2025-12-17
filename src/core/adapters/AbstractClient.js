@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import { BaseClientOptions, ChaiteContext, DefaultLogger, MultipleKeyStrategyChoice, SendMessageOption } from '../types/index.js'
 import DefaultHistoryManager from '../utils/history.js'
 import { asyncLocalStorage, extractClassName, getKey } from '../utils/index.js'
-import { logService } from '../../services/LogService.js'
+import { logService } from '../../services/stats/LogService.js'
 
 /**
  * @param {string} text - 响应文本

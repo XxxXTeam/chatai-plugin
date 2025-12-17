@@ -1,6 +1,5 @@
 /**
  * 通用工具函数
- * 从 utils/common.js 迁移
  */
 import * as crypto from 'node:crypto'
 import path from 'path'

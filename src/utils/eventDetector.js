@@ -1,6 +1,5 @@
 /**
  * 特殊事件检测工具
- * 兼容 icqq / NapCat / OneBot v11 / go-cqhttp / TRSS-Yunzai
  */
 
 /**

@@ -10,11 +10,12 @@ import jwt from 'jsonwebtoken'
 import config from '../../config/config.js'
 import { mcpManager } from '../mcp/McpManager.js'
 import { builtinMcpServer } from '../mcp/BuiltinMcpServer.js'
-import { presetManager } from './PresetManager.js'
-import { channelManager } from './ChannelManager.js'
-import { imageService } from './ImageService.js'
-import { databaseService } from './DatabaseService.js'
-import { getScopeManager } from './ScopeManager.js'
+import { presetManager } from './preset/PresetManager.js'
+import { channelManager } from './llm/ChannelManager.js'
+import { imageService } from './media/ImageService.js'
+import { databaseService } from './storage/DatabaseService.js'
+import { getScopeManager } from './scope/ScopeManager.js'
+import { usageStats } from './stats/UsageStats.js'
 
 // 获取 scopeManager 实例
 let scopeManager = null
@@ -573,7 +574,7 @@ export class WebServer {
         // GET /api/stats - 获取统计概览
         this.app.get('/api/stats', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { statsService } = await import('./StatsService.js')
+                const { statsService } = await import('./stats/StatsService.js')
                 const stats = statsService.getOverview()
                 res.json(ChaiteResponse.ok(stats))
             } catch (error) {
@@ -584,7 +585,7 @@ export class WebServer {
         // GET /api/stats/full - 获取完整统计
         this.app.get('/api/stats/full', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { statsService } = await import('./StatsService.js')
+                const { statsService } = await import('./stats/StatsService.js')
                 const stats = statsService.getStats()
                 res.json(ChaiteResponse.ok(stats))
             } catch (error) {
@@ -595,8 +596,58 @@ export class WebServer {
         // POST /api/stats/reset - 重置统计
         this.app.post('/api/stats/reset', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { statsService } = await import('./StatsService.js')
+                const { statsService } = await import('./stats/StatsService.js')
                 statsService.reset()
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // ==================== Usage Stats API ====================
+        // GET /api/stats/usage - 获取API使用统计
+        this.app.get('/api/stats/usage', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const today = await usageStats.getTodayStats()
+                const recent = await usageStats.getRecent(50)
+                const modelRanking = await usageStats.getModelRanking(10)
+                const channelRanking = await usageStats.getChannelRanking(10)
+                res.json(ChaiteResponse.ok({ today, recent, modelRanking, channelRanking }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/stats/usage/recent - 获取最近使用记录
+        this.app.get('/api/stats/usage/recent', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { limit = 100, channelId, model, success, source } = req.query
+                const filter = {}
+                if (channelId) filter.channelId = channelId
+                if (model) filter.model = model
+                if (success !== undefined) filter.success = success === 'true'
+                if (source) filter.source = source
+                const records = await usageStats.getRecent(parseInt(limit), filter)
+                res.json(ChaiteResponse.ok(records))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/stats/usage/channel/:id - 获取渠道统计
+        this.app.get('/api/stats/usage/channel/:id', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const stats = await usageStats.getChannelStats(req.params.id)
+                res.json(ChaiteResponse.ok(stats))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/stats/usage/clear - 清除使用统计
+        this.app.post('/api/stats/usage/clear', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                await usageStats.clear()
                 res.json(ChaiteResponse.ok({ success: true }))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -1001,7 +1052,7 @@ export class WebServer {
         // GET /api/proxy - 获取代理配置
         this.app.get('/api/proxy', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { proxyService } = await import('./ProxyService.js')
+                const { proxyService } = await import('./proxy/ProxyService.js')
                 const proxyConfig = config.get('proxy') || {
                     enabled: false,
                     profiles: [],
@@ -1020,7 +1071,7 @@ export class WebServer {
         // PUT /api/proxy - 更新代理全局设置
         this.app.put('/api/proxy', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { proxyService } = await import('./ProxyService.js')
+                const { proxyService } = await import('./proxy/ProxyService.js')
                 const { enabled } = req.body
                 if (enabled !== undefined) {
                     proxyService.setEnabled(enabled)
@@ -1034,7 +1085,7 @@ export class WebServer {
         // GET /api/proxy/profiles - 获取代理配置列表
         this.app.get('/api/proxy/profiles', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { proxyService } = await import('./ProxyService.js')
+                const { proxyService } = await import('./proxy/ProxyService.js')
                 const profiles = proxyService.getProfiles()
                 res.json(ChaiteResponse.ok(profiles))
             } catch (error) {
@@ -1045,7 +1096,7 @@ export class WebServer {
         // POST /api/proxy/profiles - 添加代理配置
         this.app.post('/api/proxy/profiles', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { proxyService } = await import('./ProxyService.js')
+                const { proxyService } = await import('./proxy/ProxyService.js')
                 const { name, type, host, port, username, password } = req.body
                 if (!host || !port) {
                     return res.status(400).json(ChaiteResponse.fail(null, 'host and port are required'))
@@ -1062,7 +1113,7 @@ export class WebServer {
         // PUT /api/proxy/profiles/:id - 更新代理配置
         this.app.put('/api/proxy/profiles/:id', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { proxyService } = await import('./ProxyService.js')
+                const { proxyService } = await import('./proxy/ProxyService.js')
                 const { id } = req.params
                 const updates = req.body
                 if (updates.port) updates.port = parseInt(updates.port)
@@ -1079,7 +1130,7 @@ export class WebServer {
         // DELETE /api/proxy/profiles/:id - 删除代理配置
         this.app.delete('/api/proxy/profiles/:id', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { proxyService } = await import('./ProxyService.js')
+                const { proxyService } = await import('./proxy/ProxyService.js')
                 const { id } = req.params
                 const success = proxyService.deleteProfile(id)
                 if (!success) {
@@ -1094,7 +1145,7 @@ export class WebServer {
         // PUT /api/proxy/scopes/:scope - 设置作用域代理
         this.app.put('/api/proxy/scopes/:scope', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { proxyService } = await import('./ProxyService.js')
+                const { proxyService } = await import('./proxy/ProxyService.js')
                 const { scope } = req.params
                 const { profileId, enabled } = req.body
                 
@@ -1113,7 +1164,7 @@ export class WebServer {
         // POST /api/proxy/test - 测试代理连接
         this.app.post('/api/proxy/test', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { proxyService } = await import('./ProxyService.js')
+                const { proxyService } = await import('./proxy/ProxyService.js')
                 const { profileId, testUrl } = req.body
                 
                 let profile
@@ -1142,7 +1193,7 @@ export class WebServer {
         // GET /api/placeholders - 获取可用占位符列表
         this.app.get('/api/placeholders', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { requestTemplateService } = await import('./RequestTemplateService.js')
+                const { requestTemplateService } = await import('./tools/RequestTemplateService.js')
                 const placeholders = requestTemplateService.getAvailablePlaceholders()
                 res.json(ChaiteResponse.ok(placeholders))
             } catch (error) {
@@ -1153,7 +1204,7 @@ export class WebServer {
         // POST /api/placeholders/preview - 预览占位符替换结果
         this.app.post('/api/placeholders/preview', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { requestTemplateService } = await import('./RequestTemplateService.js')
+                const { requestTemplateService } = await import('./tools/RequestTemplateService.js')
                 const { template, context } = req.body
                 const result = requestTemplateService.previewTemplate(template, context || {})
                 res.json(ChaiteResponse.ok({ result }))
@@ -1166,7 +1217,7 @@ export class WebServer {
         // GET /api/logs - 获取日志文件列表
         this.app.get('/api/logs', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { logService } = await import('./LogService.js')
+                const { logService } = await import('./stats/LogService.js')
                 const files = logService.getLogFiles()
                 res.json(ChaiteResponse.ok(files))
             } catch (error) {
@@ -1177,7 +1228,7 @@ export class WebServer {
         // GET /api/logs/recent - 获取最近的错误日志
         this.app.get('/api/logs/recent', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { logService } = await import('./LogService.js')
+                const { logService } = await import('./stats/LogService.js')
                 const lines = parseInt(req.query.lines) || 100
                 const errors = logService.getRecentErrors(lines)
                 res.json(ChaiteResponse.ok(errors))
@@ -1372,7 +1423,7 @@ export class WebServer {
         // GET /api/knowledge - 获取所有知识库文档（列表模式返回摘要）
         this.app.get('/api/knowledge', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { knowledgeService } = await import('./KnowledgeService.js')
+                const { knowledgeService } = await import('./storage/KnowledgeService.js')
                 await knowledgeService.init()
                 const docs = knowledgeService.getAll()
                 
@@ -1393,7 +1444,7 @@ export class WebServer {
         // GET /api/knowledge/:id - 获取单个知识库文档
         this.app.get('/api/knowledge/:id', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { knowledgeService } = await import('./KnowledgeService.js')
+                const { knowledgeService } = await import('./storage/KnowledgeService.js')
                 await knowledgeService.init()
                 const doc = knowledgeService.get(req.params.id)
                 if (doc) {
@@ -1409,7 +1460,7 @@ export class WebServer {
         // POST /api/knowledge - 创建知识库文档
         this.app.post('/api/knowledge', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { knowledgeService } = await import('./KnowledgeService.js')
+                const { knowledgeService } = await import('./storage/KnowledgeService.js')
                 await knowledgeService.init()
                 const doc = await knowledgeService.create(req.body)
                 res.status(201).json(ChaiteResponse.ok(doc))
@@ -1421,7 +1472,7 @@ export class WebServer {
         // PUT /api/knowledge/:id - 更新知识库文档
         this.app.put('/api/knowledge/:id', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { knowledgeService } = await import('./KnowledgeService.js')
+                const { knowledgeService } = await import('./storage/KnowledgeService.js')
                 await knowledgeService.init()
                 const doc = await knowledgeService.update(req.params.id, req.body)
                 res.json(ChaiteResponse.ok(doc))
@@ -1433,7 +1484,7 @@ export class WebServer {
         // DELETE /api/knowledge/:id - 删除知识库文档
         this.app.delete('/api/knowledge/:id', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { knowledgeService } = await import('./KnowledgeService.js')
+                const { knowledgeService } = await import('./storage/KnowledgeService.js')
                 await knowledgeService.init()
                 const deleted = await knowledgeService.delete(req.params.id)
                 if (deleted) {
@@ -1449,7 +1500,7 @@ export class WebServer {
         // POST /api/knowledge/:id/link/:presetId - 关联知识库到预设
         this.app.post('/api/knowledge/:id/link/:presetId', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { knowledgeService } = await import('./KnowledgeService.js')
+                const { knowledgeService } = await import('./storage/KnowledgeService.js')
                 await knowledgeService.init()
                 await knowledgeService.linkToPreset(req.params.id, req.params.presetId)
                 res.json(ChaiteResponse.ok({ success: true }))
@@ -1461,7 +1512,7 @@ export class WebServer {
         // DELETE /api/knowledge/:id/link/:presetId - 取消关联
         this.app.delete('/api/knowledge/:id/link/:presetId', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { knowledgeService } = await import('./KnowledgeService.js')
+                const { knowledgeService } = await import('./storage/KnowledgeService.js')
                 await knowledgeService.init()
                 await knowledgeService.unlinkFromPreset(req.params.id, req.params.presetId)
                 res.json(ChaiteResponse.ok({ success: true }))
@@ -1484,7 +1535,7 @@ export class WebServer {
         // GET /api/knowledge/search - 搜索知识库
         this.app.get('/api/knowledge/search', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { knowledgeService } = await import('./KnowledgeService.js')
+                const { knowledgeService } = await import('./storage/KnowledgeService.js')
                 await knowledgeService.init()
                 const { q, presetId, limit } = req.query
                 const results = knowledgeService.search(q || '', { presetId, limit: parseInt(limit) || 10 })
@@ -1497,7 +1548,7 @@ export class WebServer {
         // POST /api/knowledge/import - 导入知识库（支持 OpenIE 等格式）
         this.app.post('/api/knowledge/import', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { knowledgeService } = await import('./KnowledgeService.js')
+                const { knowledgeService } = await import('./storage/KnowledgeService.js')
                 await knowledgeService.init()
                 
                 const { data, format = 'openie', name, tags, presetIds, mergeMode } = req.body
@@ -1613,8 +1664,52 @@ export class WebServer {
 
         // Test channel connection
         this.app.post('/api/channels/test', this.authMiddleware.bind(this), async (req, res) => {
-            let { id, adapterType, baseUrl, apiKey, models, advanced } = req.body
+            let { id, adapterType, baseUrl, apiKey, apiKeys, models, advanced, strategy } = req.body
             const startTime = Date.now()
+
+            // 处理多Key和渠道配置 - 优先使用已保存渠道的完整配置
+            let usedKeyIndex = -1
+            let usedKeyName = ''
+            let usedStrategy = ''
+            let channelName = id || '临时测试'
+            let channelConfig = null
+
+            if (id) {
+                const channel = channelManager.get(id)
+                if (channel) {
+                    channelConfig = channel
+                    channelName = channel.name || id
+                    // 使用渠道保存的配置（而非前端传入的）
+                    adapterType = channel.adapterType
+                    baseUrl = channel.baseUrl
+                    models = channel.models
+                    advanced = channel.advanced || advanced
+                    
+                    // 如果渠道有多个key，使用轮询获取
+                    if (channel.apiKeys && channel.apiKeys.length > 0) {
+                        const keyInfo = channelManager.getChannelKey(channel, { recordUsage: false })
+                        apiKey = keyInfo.key
+                        usedKeyIndex = keyInfo.keyIndex
+                        usedKeyName = keyInfo.keyName
+                        usedStrategy = keyInfo.strategy
+                        logger.info(`[测试渠道] 使用 ${channelName} 的 ${usedKeyName}, 策略: ${usedStrategy}`)
+                    } else {
+                        apiKey = channel.apiKey
+                    }
+                }
+            } else if (apiKeys && apiKeys.length > 0) {
+                // 前端传入的多key，根据策略选择
+                usedStrategy = strategy || 'round-robin'
+                let idx = 0
+                if (usedStrategy === 'random') {
+                    idx = Math.floor(Math.random() * apiKeys.length)
+                }
+                const keyObj = apiKeys[idx]
+                apiKey = typeof keyObj === 'string' ? keyObj : keyObj.key
+                usedKeyIndex = idx
+                usedKeyName = typeof keyObj === 'object' ? keyObj.name : `Key#${idx + 1}`
+                logger.info(`[测试渠道] 使用临时Key: ${usedKeyName}`)
+            }
 
             // Auto-append /v1 if missing for OpenAI-compatible APIs
             if (adapterType === 'openai' && baseUrl && !baseUrl.endsWith('/v1')) {
@@ -1639,25 +1734,38 @@ export class WebServer {
                     // Use first configured model or fallback to gpt-3.5-turbo
                     const testModel = (models && models.length > 0) ? models[0] : 'gpt-3.5-turbo'
 
-                    // Apply advanced settings
+                    // Apply advanced settings from channel config
                     const useStreaming = advanced?.streaming?.enabled || false
+                    const temperature = advanced?.llm?.temperature ?? 0.7
+                    const maxTokens = advanced?.llm?.maxTokens || 100
+                    const topP = advanced?.llm?.topP ?? 1
+                    const frequencyPenalty = advanced?.llm?.frequencyPenalty ?? 0
+                    const presencePenalty = advanced?.llm?.presencePenalty ?? 0
+                    
                     const options = {
                         model: testModel,
-                        maxToken: advanced?.llm?.maxTokens || 100,
-                        temperature: advanced?.llm?.temperature || 0.7,
+                        maxToken: maxTokens,
+                        temperature,
+                        topP,
+                        frequencyPenalty,
+                        presencePenalty,
                     }
 
-                    logger.info(`[测试渠道] 使用模型: ${testModel}, 流式输出: ${useStreaming}`)
+                    // 显示完整配置信息
+                    const keyInfo = usedKeyIndex >= 0 ? `, Key: ${usedKeyName}(#${usedKeyIndex + 1})` : ''
+                    logger.info(`[测试渠道] 使用模型: ${testModel}, 流式: ${useStreaming}, 温度: ${temperature}${keyInfo}`)
 
                     // Try a real chat completion request
                     logger.info('[测试渠道] 发送测试消息...')
 
                     let replyText = ''
+                    let apiUsage = null
+                    const testMessage = '说一声你好'
 
                     if (useStreaming) {
                         // Test with streaming mode
                         const stream = await client.streamMessage(
-                            [{ role: 'user', content: [{ type: 'text', text: '说一声你好' }] }],
+                            [{ role: 'user', content: [{ type: 'text', text: testMessage }] }],
                             options
                         )
 
@@ -1673,6 +1781,9 @@ export class WebServer {
                             } else if (chunk.type === 'text') {
                                 // 正常内容
                                 replyText += chunk.text
+                            } else if (chunk.type === 'usage' || chunk.usage) {
+                                // 获取流式模式的usage信息
+                                apiUsage = chunk.usage || chunk
                             }
                         }
 
@@ -1683,7 +1794,7 @@ export class WebServer {
                     } else {
                         // Test with non-streaming mode
                         const response = await client.sendMessage(
-                            { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
+                            { role: 'user', content: [{ type: 'text', text: testMessage }] },
                             options
                         )
 
@@ -1705,6 +1816,9 @@ export class WebServer {
                         // 如果没有 text 内容，检查是否有 reasoning 内容（说明连接成功）
                         const hasReasoning = response.contents.some(c => c && c.type === 'reasoning')
                         
+                        // 获取API返回的usage信息
+                        apiUsage = response.usage
+                        
                         logger.info(`[测试渠道] 测试成功，AI回复: ${replyText || (hasReasoning ? '(思考内容)' : '(无)')}`)
                     }
 
@@ -1713,6 +1827,25 @@ export class WebServer {
                         ? `连接成功！耗时 ${elapsed}ms，AI回复：${replyText.substring(0, 50)}${replyText.length > 50 ? '...' : ''}`
                         : `连接成功！耗时 ${elapsed}ms`
                     
+                    // 获取API返回的usage信息，如果没有则使用估算
+                    const inputTokens = apiUsage?.promptTokens || apiUsage?.prompt_tokens || apiUsage?.inputTokens || usageStats.estimateTokens(testMessage)
+                    const outputTokens = apiUsage?.completionTokens || apiUsage?.completion_tokens || apiUsage?.outputTokens || usageStats.estimateTokens(replyText || '')
+                    
+                    // 记录使用统计
+                    await usageStats.record({
+                        channelId: id || 'test',
+                        channelName,
+                        model: testModel,
+                        keyIndex: usedKeyIndex,
+                        keyName: usedKeyName,
+                        strategy: usedStrategy,
+                        inputTokens,
+                        outputTokens,
+                        duration: elapsed,
+                        success: true,
+                        source: 'test',
+                    })
+
                     // 如果有渠道 ID，更新渠道状态
                     if (id) {
                         const channel = channelManager.get(id)
@@ -1728,12 +1861,14 @@ export class WebServer {
                         success: true,
                         message: successMsg,
                         testResponse: replyText,
-                        elapsed
+                        elapsed,
+                        keyInfo: usedKeyIndex >= 0 ? { index: usedKeyIndex, name: usedKeyName, strategy: usedStrategy } : null
                     }))
                 } else {
                     res.json(ChaiteResponse.ok({ success: true, message: '该适配器暂不支持测试' }))
                 }
             } catch (error) {
+                const elapsed = Date.now() - startTime
                 logger.error('[测试渠道] 错误:', error)
                 logger.error('[测试渠道] 错误详情:', {
                     message: error.message,
@@ -1741,6 +1876,20 @@ export class WebServer {
                     code: error.code,
                     type: error.type,
                     error: error.error
+                })
+
+                // 记录失败统计
+                await usageStats.record({
+                    channelId: id || 'test',
+                    channelName,
+                    model: models?.[0] || 'unknown',
+                    keyIndex: usedKeyIndex,
+                    keyName: usedKeyName,
+                    strategy: usedStrategy,
+                    duration: elapsed,
+                    success: false,
+                    error: error.message,
+                    source: 'test',
                 })
 
                 // 如果有渠道 ID，更新渠道状态为错误
@@ -2509,7 +2658,7 @@ export default {
         // GET /api/memory/users - Get all users with memories
         this.app.get('/api/memory/users', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { memoryManager } = await import('./MemoryManager.js')
+                const { memoryManager } = await import('./storage/MemoryManager.js')
                 const users = await memoryManager.listUsers()
                 res.json(ChaiteResponse.ok(users))
             } catch (error) {
@@ -2520,7 +2669,7 @@ export default {
         // GET /api/memory/:userId - Get memories for a user
         this.app.get('/api/memory/:userId', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { memoryManager } = await import('./MemoryManager.js')
+                const { memoryManager } = await import('./storage/MemoryManager.js')
                 const memories = await memoryManager.getAllMemories(req.params.userId)
                 res.json(ChaiteResponse.ok(memories))
             } catch (error) {
@@ -2535,7 +2684,7 @@ export default {
                 if (!userId || !content) {
                     return res.status(400).json(ChaiteResponse.fail(null, 'userId and content are required'))
                 }
-                const { memoryManager } = await import('./MemoryManager.js')
+                const { memoryManager } = await import('./storage/MemoryManager.js')
                 const id = await memoryManager.addMemory(userId, content, metadata)
                 res.json(ChaiteResponse.ok({ id }))
             } catch (error) {
@@ -2546,7 +2695,7 @@ export default {
         // DELETE /api/memory/:userId/:memoryId - Delete a specific memory
         this.app.delete('/api/memory/:userId/:memoryId', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { memoryManager } = await import('./MemoryManager.js')
+                const { memoryManager } = await import('./storage/MemoryManager.js')
                 await memoryManager.deleteMemory(req.params.userId, req.params.memoryId)
                 res.json(ChaiteResponse.ok({ success: true }))
             } catch (error) {
@@ -2563,7 +2712,7 @@ export default {
                 const deletedCount = db.clearAllMemories()
                 
                 // 停止并重启MemoryManager的轮询
-                const { memoryManager } = await import('./MemoryManager.js')
+                const { memoryManager } = await import('./storage/MemoryManager.js')
                 memoryManager.stopPolling()
                 memoryManager.lastPollTime.clear()
                 if (memoryManager.groupMessageBuffer) {
@@ -2582,7 +2731,7 @@ export default {
         // DELETE /api/memory/:userId - Clear all memories for a user
         this.app.delete('/api/memory/:userId', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { memoryManager } = await import('./MemoryManager.js')
+                const { memoryManager } = await import('./storage/MemoryManager.js')
                 await memoryManager.clearMemory(req.params.userId)
                 res.json(ChaiteResponse.ok({ success: true }))
             } catch (error) {
@@ -2735,7 +2884,7 @@ export default {
         // GET /api/context/list - List active contexts
         this.app.get('/api/context/list', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { contextManager } = await import('./ContextManager.js')
+                const { contextManager } = await import('./llm/ContextManager.js')
                 await contextManager.init()
                 const contexts = await contextManager.getActiveContexts()
                 res.json(ChaiteResponse.ok(contexts))
@@ -2747,14 +2896,14 @@ export default {
         this.app.post('/api/context/clear', this.authMiddleware.bind(this), async (req, res) => {
             const { userId, conversationId } = req.body
             try {
-                const { contextManager } = await import('./ContextManager.js')
+                const { contextManager } = await import('./llm/ContextManager.js')
                 await contextManager.init()
 
                 const targetConvId = conversationId || contextManager.getConversationId(userId)
                 await contextManager.cleanContext(targetConvId)
 
                 // Also clear history completely?
-                const { default: historyManager } = await import('../core/utils/history.js')
+                const { default: historyManager } = await import('../../core/utils/history.js')
                 await historyManager.deleteConversation(targetConvId)
 
                 res.json(ChaiteResponse.ok({ success: true, message: 'Context cleared' }))
@@ -2767,7 +2916,7 @@ export default {
         // GET /api/memory/:userId - Get memories for user
         this.app.get('/api/memory/:userId', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { memoryManager } = await import('./MemoryManager.js')
+                const { memoryManager } = await import('./storage/MemoryManager.js')
                 await memoryManager.init()
                 const memories = await memoryManager.getAllMemories(req.params.userId)
                 res.json(ChaiteResponse.ok(memories))
@@ -2780,7 +2929,7 @@ export default {
         this.app.post('/api/memory', this.authMiddleware.bind(this), async (req, res) => {
             const { userId, content, metadata } = req.body
             try {
-                const { memoryManager } = await import('./MemoryManager.js')
+                const { memoryManager } = await import('./storage/MemoryManager.js')
                 await memoryManager.init()
                 const memory = await memoryManager.saveMemory(userId, content, metadata)
                 res.status(201).json(ChaiteResponse.ok(memory))
@@ -2792,7 +2941,7 @@ export default {
         // DELETE /api/memory/:userId/:memoryId - Delete memory
         this.app.delete('/api/memory/:userId/:memoryId', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { memoryManager } = await import('./MemoryManager.js')
+                const { memoryManager } = await import('./storage/MemoryManager.js')
                 await memoryManager.init()
                 const success = await memoryManager.deleteMemory(req.params.userId, req.params.memoryId)
                 if (success) {
@@ -2814,7 +2963,7 @@ export default {
                     return res.status(400).json(ChaiteResponse.fail(null, 'userId and query are required'))
                 }
 
-                const { memoryManager } = await import('./MemoryManager.js')
+                const { memoryManager } = await import('./storage/MemoryManager.js')
                 await memoryManager.init()
                 const memories = await memoryManager.searchMemory(userId, query, limit || 5)
                 res.json(ChaiteResponse.ok(memories))
@@ -2936,7 +3085,7 @@ export default {
                 
                 // 也清除记忆
                 try {
-                    const { memoryManager } = await import('./MemoryManager.js')
+                    const { memoryManager } = await import('./storage/MemoryManager.js')
                     await memoryManager.clearMemory(req.params.userId)
                 } catch (e) {}
                 
@@ -2967,7 +3116,7 @@ export default {
                 const deletedCount = db.clearAllConversations()
                 
                 // 同时清除上下文缓存
-                const { contextManager } = await import('./ContextManager.js')
+                const { contextManager } = await import('./llm/ContextManager.js')
                 await contextManager.init()
                 // 清除所有锁和处理标记
                 contextManager.locks?.clear()

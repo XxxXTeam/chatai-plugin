@@ -5,6 +5,7 @@
  */
 import config from '../config/config.js'
 import { segment, MessageApi } from '../src/utils/messageParser.js'
+import { usageStats } from '../src/services/stats/UsageStats.js'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -714,6 +715,49 @@ export class ImageGen extends plugin {
                     const result = extractResult(data)
                     
                     if (result && result.length) {
+                        // 记录统计（绘图API调用）
+                        try {
+                            const apiUsage = data.usage || {}
+                            const apiInputTokens = apiUsage.prompt_tokens || apiUsage.promptTokens || apiUsage.input_tokens || 0
+                            const apiOutputTokens = apiUsage.completion_tokens || apiUsage.completionTokens || apiUsage.output_tokens || 0
+                            
+                            // 基于实际数据大小估算tokens（每100字节约1token）
+                            const estimateImageTokens = (base64OrUrl) => {
+                                if (!base64OrUrl) return 1000
+                                if (base64OrUrl.startsWith('data:') || base64OrUrl.startsWith('base64:')) {
+                                    // base64数据：每4字符=3字节，每100字节≈1token
+                                    const base64Part = base64OrUrl.split(',').pop() || base64OrUrl
+                                    return Math.ceil(base64Part.length * 0.75 / 100)
+                                }
+                                return 1000 // URL图片默认估算
+                            }
+                            
+                            const textTokens = usageStats.estimateTokens(prompt || '')
+                            
+                            // 输入tokens：文本 + 输入图片
+                            let inputTokens = apiInputTokens
+                            if (imageUrls.length > 0 && apiInputTokens < 1000) {
+                                const imgTokens = imageUrls.reduce((sum, url) => sum + estimateImageTokens(url), 0)
+                                inputTokens = textTokens + imgTokens
+                            }
+                            
+                            // 输出tokens：基于生成的图片实际大小
+                            let outputTokens = apiOutputTokens
+                            if (result.length > 0 && apiOutputTokens < 1000) {
+                                outputTokens = result.reduce((sum, img) => sum + estimateImageTokens(img), 0)
+                            }
+                            
+                            await usageStats.record({
+                                channelId: `imagegen-api${apiIndex}`,
+                                channelName: `绘图API${apiIndex + 1}`,
+                                model: apiConf.model,
+                                inputTokens,
+                                outputTokens,
+                                duration: Date.now() - startTime,
+                                success: true,
+                                source: 'imagegen'
+                            })
+                        } catch (e) { /* 统计失败不影响主流程 */ }
                         return {
                             success: true,
                             result,

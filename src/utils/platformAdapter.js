@@ -17,7 +17,6 @@
  * @returns {'trss'|'miao'}
  */
 export function detectFramework() {
-    // 直接检测，避免循环依赖
     if (typeof Bot !== 'undefined' && Bot.bots) {
         return 'trss'
     }
@@ -63,10 +62,6 @@ export function detectAdapter(e) {
     return 'unknown'
 }
 
-/**
- * 兼容旧版API: detectPlatform
- * @deprecated 使用 detectAdapter 代替
- */
 export function detectPlatform(e) {
     return detectAdapter(e)
 }

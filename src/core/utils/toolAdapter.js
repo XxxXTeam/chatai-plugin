@@ -1,6 +1,6 @@
 import { mcpManager } from '../../mcp/McpManager.js'
 import config from '../../../config/config.js'
-import { toolFilterService } from '../../services/ToolFilterService.js'
+import { toolFilterService } from '../../services/tools/ToolFilterService.js'
 
 /**
  * Convert MCP tools to Chaite tool format

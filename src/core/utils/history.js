@@ -7,7 +7,7 @@
  * Default in-memory history manager
  * @implements {HistoryManager}
  */
-import { databaseService } from '../../services/DatabaseService.js'
+import { databaseService } from '../../services/storage/DatabaseService.js'
 
 /**
  * Default persistent history manager

@@ -64,6 +64,51 @@ class RedisClient {
         return await this.client.keys(pattern)
     }
 
+    async lpush(key, ...values) {
+        if (!this.isConnected) return 0
+        return await this.client.lpush(key, ...values)
+    }
+
+    async lrange(key, start, stop) {
+        if (!this.isConnected) return []
+        return await this.client.lrange(key, start, stop)
+    }
+
+    async ltrim(key, start, stop) {
+        if (!this.isConnected) return
+        return await this.client.ltrim(key, start, stop)
+    }
+
+    async hset(key, field, value) {
+        if (!this.isConnected) return
+        return await this.client.hset(key, field, value)
+    }
+
+    async hget(key, field) {
+        if (!this.isConnected) return null
+        return await this.client.hget(key, field)
+    }
+
+    async hgetall(key) {
+        if (!this.isConnected) return {}
+        return await this.client.hgetall(key)
+    }
+
+    async hincrby(key, field, increment) {
+        if (!this.isConnected) return 0
+        return await this.client.hincrby(key, field, increment)
+    }
+
+    async expire(key, seconds) {
+        if (!this.isConnected) return 0
+        return await this.client.expire(key, seconds)
+    }
+
+    async incr(key) {
+        if (!this.isConnected) return 0
+        return await this.client.incr(key)
+    }
+
     async quit() {
         if (this.client) {
             await this.client.quit()

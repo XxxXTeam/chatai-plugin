@@ -17,6 +17,4 @@ export * from './group.js'
 
 // 消息解析工具
 export * from './messageParser.js'
-
-// 旧版兼容（deprecated，将在未来版本移除）
 export * from './bot.js'

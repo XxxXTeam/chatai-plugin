@@ -3,9 +3,9 @@ import crypto from 'node:crypto'
 import { AbstractClient, preprocessImageUrls, needsImageBase64Preprocess, parseXmlToolCalls } from '../AbstractClient.js'
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
-import { proxyService } from '../../../services/ProxyService.js'
-import { logService } from '../../../services/LogService.js'
-import { requestTemplateService } from '../../../services/RequestTemplateService.js'
+import { proxyService } from '../../../services/proxy/ProxyService.js'
+import { logService } from '../../../services/stats/LogService.js'
+import { requestTemplateService } from '../../../services/proxy/RequestTemplateService.js'
 
 /**
  * @typedef {import('../../types').BaseClientOptions} BaseClientOptions
@@ -198,6 +198,7 @@ export class OpenAIClient extends AbstractClient {
             messages,
             model,
             stream: useStream,
+            stream_options: useStream ? { include_usage: true } : undefined,
             tools: tools.length > 0 ? tools : undefined,
             tool_choice: tools.length > 0 ? toolChoice : undefined,
         }
@@ -525,6 +526,7 @@ export class OpenAIClient extends AbstractClient {
             tools: tools.length > 0 ? tools : undefined,
             tool_choice: tools.length > 0 ? toolChoice : undefined,
             stream: true,
+            stream_options: { include_usage: true },
         }
 
         if (isThinkingModel) {
@@ -543,8 +545,6 @@ export class OpenAIClient extends AbstractClient {
                 delete requestPayload[key]
             }
         })
-
-        // 简化日志
         logger.info('[OpenAI适配器] Streaming请求:', JSON.stringify({
             model: requestPayload.model,
             messages_count: requestPayload.messages?.length,
@@ -569,13 +569,23 @@ export class OpenAIClient extends AbstractClient {
             // Tool calls 累积
             const toolCallsMap = new Map() // id -> {id, type, function: {name, arguments}}
             let hasToolCalls = false
+            let finalUsage = null  // 流式模式下的usage信息
 
             for await (const chunk of stream) {
-                const delta = chunk.choices[0]?.delta || {}
+                // 捕获usage信息（在最后一个chunk中）
+                if (chunk.usage) {
+                    finalUsage = {
+                        promptTokens: chunk.usage.prompt_tokens,
+                        completionTokens: chunk.usage.completion_tokens,
+                        totalTokens: chunk.usage.total_tokens
+                    }
+                }
+                
+                const delta = chunk.choices?.[0]?.delta || {}
                 const content = delta.content || ''
                 const reasoningContent = delta.reasoning_content || ''
                 const toolCallsDelta = delta.tool_calls || []
-                const finishReason = chunk.choices[0]?.finish_reason
+                const finishReason = chunk.choices?.[0]?.finish_reason
 
                 // 处理 tool_calls（流式累积）
                 for (const tc of toolCallsDelta) {
@@ -653,14 +663,18 @@ export class OpenAIClient extends AbstractClient {
                     yield { type: 'reasoning', text: allReasoning.trim() }
                 }
             } else if (allContent) {
-                // 检查 <think> 标签
-                const thinkMatch = allContent.match(/^\s*<think>([\s\S]*?)<\/think>\s*/i)
-                if (thinkMatch) {
-                    const thinkContent = thinkMatch[1].trim()
-                    const restContent = allContent.substring(thinkMatch[0].length).trim()
+                // 检查 <think> 标签（支持多种格式，包括不完整的标签）
+                // 匹配完整的 <think>...</think> 或只有开头的 <think>...
+                const fullThinkMatch = allContent.match(/^\s*<think>([\s\S]*?)<\/think>\s*/i)
+                const partialThinkMatch = !fullThinkMatch && allContent.match(/^\s*<think>([\s\S]*)/i)
+                
+                if (fullThinkMatch) {
+                    const thinkContent = fullThinkMatch[1].trim()
+                    // 移除整个 <think>...</think> 标签，获取剩余内容
+                    const restContent = allContent.substring(fullThinkMatch[0].length).trim()
 
                     if (thinkContent) {
-                        logger.info('[OpenAI适配器] 检测到<think>标签，输出思考内容，长度:', thinkContent.length)
+                        logger.info('[OpenAI适配器] 检测到完整<think>标签，输出思考内容，长度:', thinkContent.length)
                         yield { type: 'reasoning', text: thinkContent }
                     }
                     if (restContent) {
@@ -674,8 +688,35 @@ export class OpenAIClient extends AbstractClient {
                             yield { type: 'text', text: cleanText }
                         }
                     }
-                } else if (!checkedThinkTag) {
-                    // 内容太短，没检查过<think>，检查 XML 工具调用后输出
+                } else if (partialThinkMatch) {
+                    // 只有 <think> 开头但没有 </think> 结束，尝试分离
+                    let content = partialThinkMatch[1]
+                    // 查找 </think> 位置
+                    const endTagIndex = content.toLowerCase().indexOf('</think>')
+                    if (endTagIndex !== -1) {
+                        const thinkContent = content.substring(0, endTagIndex).trim()
+                        const restContent = content.substring(endTagIndex + 8).trim()  // 8 = '</think>'.length
+                        
+                        if (thinkContent) {
+                            logger.info('[OpenAI适配器] 检测到<think>标签（分离模式），输出思考内容，长度:', thinkContent.length)
+                            yield { type: 'reasoning', text: thinkContent }
+                        }
+                        if (restContent) {
+                            const { cleanText, toolCalls: xmlToolCalls } = parseXmlToolCalls(restContent)
+                            if (xmlToolCalls.length > 0) {
+                                yield { type: 'tool_calls', toolCalls: xmlToolCalls }
+                            }
+                            if (cleanText) {
+                                yield { type: 'text', text: cleanText }
+                            }
+                        }
+                    } else {
+                        // 没有结束标签，整个内容作为思考内容
+                        logger.info('[OpenAI适配器] 检测到<think>标签但无结束标签，整体作为思考内容')
+                        yield { type: 'reasoning', text: content.trim() }
+                    }
+                } else {
+                    // 没有<think>标签，检查 XML 工具调用后输出
                     const { cleanText, toolCalls: xmlToolCalls } = parseXmlToolCalls(allContent)
                     if (xmlToolCalls.length > 0) {
                         logger.info(`[OpenAI适配器] 流式响应中解析到 ${xmlToolCalls.length} 个XML格式工具调用`)
@@ -687,8 +728,13 @@ export class OpenAIClient extends AbstractClient {
                 }
             }
             
+            // 输出usage信息
+            if (finalUsage) {
+                yield { type: 'usage', usage: finalUsage }
+            }
+            
             // 日志：流式结束
-            logger.debug(`[OpenAI适配器] Stream完成: content=${allContent.length}字符, toolCalls=${hasToolCalls}`)
+            logger.debug(`[OpenAI适配器] Stream完成: content=${allContent.length}字符, toolCalls=${hasToolCalls}, usage=${JSON.stringify(finalUsage)}`)
         }
 
         return generator()

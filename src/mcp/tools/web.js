@@ -7,7 +7,7 @@ import puppeteer from 'puppeteer-extra'
 import StealthPlugin from 'puppeteer-extra-plugin-stealth'
 import TurndownService from 'turndown'
 import fetch from 'node-fetch'
-import { proxyService } from '../../services/ProxyService.js'
+import { proxyService } from '../../services/proxy/ProxyService.js'
 
 puppeteer.use(StealthPlugin())
 

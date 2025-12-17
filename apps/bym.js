@@ -2,8 +2,9 @@ import config from '../config/config.js'
 import { cleanCQCode } from '../src/utils/messageParser.js'
 // 从核心模块导入去重函数
 import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMessage } from '../src/utils/messageDedup.js'
-import { getScopeManager } from '../src/services/ScopeManager.js'
-import { databaseService } from '../src/services/DatabaseService.js'
+import { getScopeManager } from '../src/services/scope/ScopeManager.js'
+import { databaseService } from '../src/services/storage/DatabaseService.js'
+import { usageStats } from '../src/services/stats/UsageStats.js'
 
 /**
  * 伪人模式 (BYM - Be Yourself Mode)
@@ -182,6 +183,7 @@ export class bym extends plugin {
                 systemPrompt += `\n当前群聊: ${e.group_name}`
             }
 
+            const bymStartTime = Date.now()
             const response = await client.sendMessage(userMessage, {
                 model: bymModel,
                 conversationId: `bym_${e.group_id || e.user_id}_${Date.now()}`, // Use group_id for context if available
@@ -194,6 +196,22 @@ export class bym extends plugin {
                 .filter(c => c.type === 'text')
                 .map(c => c.text)
                 .join('\n')
+
+            // 记录统计（伪人模式）
+            try {
+                await usageStats.record({
+                    channelId: 'bym',
+                    channelName: '伪人模式',
+                    model: bymModel,
+                    inputTokens: usageStats.estimateTokens(messageText),
+                    outputTokens: usageStats.estimateTokens(replyText),
+                    duration: Date.now() - bymStartTime,
+                    success: !!replyText,
+                    source: 'bym',
+                    userId: String(e.user_id),
+                    groupId: e.group_id ? String(e.group_id) : null
+                })
+            } catch (err) { /* 统计失败不影响主流程 */ }
 
             if (replyText) {
                 // 添加延迟模拟打字

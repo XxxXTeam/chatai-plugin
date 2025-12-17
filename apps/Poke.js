@@ -69,7 +69,7 @@ async function getUserNickname(e, userId) {
 async function getAIResponse(eventDesc, options = {}) {
     const { userId, groupId, maxLength = 100 } = options
     try {
-        const { chatService } = await import('../src/services/ChatService.js')
+        const { chatService } = await import('../src/services/llm/ChatService.js')
         const result = await chatService.sendMessage({
             userId: String(userId),
             groupId: groupId ? String(groupId) : null,

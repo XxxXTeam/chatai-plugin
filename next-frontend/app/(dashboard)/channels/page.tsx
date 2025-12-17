@@ -60,6 +60,77 @@ interface Channel {
   }
 }
 
+// 渠道预设配置
+interface ChannelPreset {
+  name: string
+  adapterType: string
+  baseUrl: string
+  apiKey: string
+  models: string
+  description: string
+  authUrl?: string
+}
+
+const CHANNEL_PRESETS: Record<string, ChannelPreset> = {
+  'free-glm': {
+    name: '免费GLM',
+    adapterType: 'openai',
+    baseUrl: 'https://glm.openel.top/',
+    apiKey: 'sk-3d2f9b84e7f510b1a08f7b3d6c9a6a7f17fbbad5624ea29f22d9c742bf39c863',
+    models: 'GLM-4.5-Thinking, GLM-4.5, GLM-4-Flash',
+    description: '免费智谱GLM API（openel.top）',
+  },
+  'free-gemini': {
+    name: '免费Gemini',
+    adapterType: 'openai',
+    baseUrl: 'https://business2api.openel.top/',
+    apiKey: '',
+    models: 'gemini-2.5-flash, gemini-2.0-flash',
+    description: '免费Gemini API，需先获取Key',
+    authUrl: 'https://business2api.openel.top/auth',
+  },
+  'openai': {
+    name: 'OpenAI官方',
+    adapterType: 'openai',
+    baseUrl: 'https://api.openai.com',
+    apiKey: '',
+    models: 'gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-3.5-turbo',
+    description: 'OpenAI官方API',
+  },
+  'deepseek': {
+    name: 'DeepSeek',
+    adapterType: 'openai',
+    baseUrl: 'https://api.deepseek.com',
+    apiKey: '',
+    models: 'deepseek-chat, deepseek-reasoner',
+    description: 'DeepSeek官方API',
+  },
+  'zhipu': {
+    name: '智谱AI',
+    adapterType: 'openai',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    apiKey: '',
+    models: 'glm-4-plus, glm-4-flash, glm-4-long',
+    description: '智谱AI官方API',
+  },
+  'gemini': {
+    name: 'Gemini官方',
+    adapterType: 'gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    apiKey: '',
+    models: 'gemini-2.0-flash, gemini-1.5-pro, gemini-1.5-flash',
+    description: 'Google Gemini官方API',
+  },
+  'claude': {
+    name: 'Claude官方',
+    adapterType: 'claude',
+    baseUrl: 'https://api.anthropic.com',
+    apiKey: '',
+    models: 'claude-sonnet-4-20250514, claude-3-5-sonnet-20241022, claude-3-haiku-20240307',
+    description: 'Anthropic Claude官方API',
+  },
+}
+
 export default function ChannelsPage() {
   const [channels, setChannels] = useState<Channel[]>([])
   const [loading, setLoading] = useState(true)
@@ -440,6 +511,64 @@ export default function ChannelsPage() {
               </DialogHeader>
               <ScrollArea className="max-h-[60vh]">
                 <div className="space-y-4 p-1">
+                  {/* 预设选择器 - 仅新建时显示 */}
+                  {!editingChannel && (
+                    <div className="grid gap-2">
+                      <Label>快速预设</Label>
+                      <Select
+                        onValueChange={(key) => {
+                          const preset = CHANNEL_PRESETS[key]
+                          if (!preset) return
+                          
+                          setForm({
+                            ...form,
+                            name: preset.name,
+                            adapterType: preset.adapterType,
+                            baseUrl: preset.baseUrl,
+                            apiKey: preset.apiKey,
+                            models: preset.models,
+                          })
+                          
+                          // 根据预设类型显示不同提示
+                          if (key === 'free-glm') {
+                            toast.success('已填充免费GLM配置，API Key已内置，可直接保存使用')
+                          } else if (key === 'free-gemini') {
+                            toast.info(
+                              <div className="space-y-1">
+                                <p><strong>免费Gemini</strong> - 需手动获取API Key</p>
+                                <p className="text-xs">访问 <a href={preset.authUrl} target="_blank" rel="noopener" className="underline text-blue-500">{preset.authUrl}</a> 授权获取Key后填入</p>
+                              </div>,
+                              { duration: 8000 }
+                            )
+                          } else if (key === 'openai') {
+                            toast.info('OpenAI官方 - 请填入您的API Key（sk-xxx）')
+                          } else if (key === 'deepseek') {
+                            toast.info('DeepSeek - 请填入您的API Key，可在 platform.deepseek.com 获取')
+                          } else if (key === 'zhipu') {
+                            toast.info('智谱AI - 请填入您的API Key，可在 open.bigmodel.cn 获取')
+                          } else if (key === 'gemini') {
+                            toast.info('Gemini官方 - 请填入您的API Key，可在 aistudio.google.com 获取')
+                          } else if (key === 'claude') {
+                            toast.info('Claude官方 - 请填入您的API Key，可在 console.anthropic.com 获取')
+                          }
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="选择预设快速配置..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(CHANNEL_PRESETS).map(([key, preset]) => (
+                            <SelectItem key={key} value={key}>
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium">{preset.name}</span>
+                                <span className="text-xs text-muted-foreground">- {preset.description}</span>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                   <div className="grid gap-2">
                     <Label htmlFor="name">渠道名称</Label>
                     <Input

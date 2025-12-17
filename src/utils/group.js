@@ -1,6 +1,5 @@
 /**
  * 群组工具函数
- * 从 utils/group.js 迁移
  */
 import { getBotFramework } from './bot.js'
 import config from '../../config/config.js'
