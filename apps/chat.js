@@ -365,7 +365,7 @@ export class Chat extends plugin {
       const fullUserId = groupId ? `${groupId}_${userId}` : String(userId)
       
       // 获取隔离模式信息
-      const { contextManager } = await import('../src/services/ContextManager.js')
+      const { contextManager } = await import('../src/services/llm/ContextManager.js')
       const conversationId = contextManager.getConversationId(userId, groupId)
       
       // 检测框架和适配器
@@ -470,7 +470,7 @@ export class Chat extends plugin {
         preset = presetManager.get(presetId)
       }
 
-      const { LlmService } = await import('../src/services/LlmService.js')
+      const { LlmService } = await import('../src/services/llm/LlmService.js')
 
       // 使用 selectModel 自动选择最佳模型
       const model = LlmService.selectModel({
