@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -24,9 +24,16 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { conversationsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Trash2, MessageSquare, Eye, RefreshCw, Loader2, User, Bot, FileDown, Search } from 'lucide-react'
+import { Trash2, MessageSquare, Eye, RefreshCw, Loader2, User, Bot, FileDown, Search, Filter } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 
 interface Message {
@@ -45,6 +52,7 @@ interface Conversation {
   lastMessage: string
   updatedAt: number
 }
+const INTERNAL_PREFIXES = ['group_summary_', 'user_profile_', 'memory_', 'system_']
 
 export default function ConversationsPage() {
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -54,6 +62,8 @@ export default function ConversationsPage() {
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
+  const [showInternal, setShowInternal] = useState(false)
+  const [messageLimit, setMessageLimit] = useState(100)
 
   const fetchConversations = async () => {
     try {
@@ -66,25 +76,34 @@ export default function ConversationsPage() {
       setLoading(false)
     }
   }
+  const isInternalConversation = (id: string) => {
+    return INTERNAL_PREFIXES.some(prefix => id.startsWith(prefix))
+  }
 
   useEffect(() => {
     fetchConversations()
   }, [])
 
-  const handleViewMessages = async (conversation: Conversation) => {
+  const handleViewMessages = async (conversation: Conversation, limit = messageLimit) => {
     setSelectedConversation(conversation)
     setLoadingMessages(true)
     try {
-      const res = await conversationsApi.getMessages(conversation.id) as { data: Message[] }
-      console.log('[对话详情] API响应:', res)
+      const res = await conversationsApi.getMessages(conversation.id, limit) as { data: Message[] }
       const messageList = res.data || res || []
-      console.log('[对话详情] 消息列表:', messageList)
       setMessages(Array.isArray(messageList) ? messageList : [])
     } catch (error) {
       toast.error('加载消息失败')
-      console.error('[对话详情] 加载错误:', error)
+      console.error(error)
     } finally {
       setLoadingMessages(false)
+    }
+  }
+  
+  const loadMoreMessages = () => {
+    if (selectedConversation) {
+      const newLimit = messageLimit + 100
+      setMessageLimit(newLimit)
+      handleViewMessages(selectedConversation, newLimit)
     }
   }
 
@@ -190,12 +209,25 @@ export default function ConversationsPage() {
     return new Date(timestamp).toLocaleString('zh-CN')
   }
 
-  const filteredConversations = conversations.filter(c => 
-    c.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.userId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.groupId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.lastMessage?.toLowerCase().includes(searchTerm.toLowerCase())
-  )
+  // 过滤对话列表
+  const filteredConversations = conversations.filter(c => {
+    // 过滤内部记录
+    if (!showInternal && isInternalConversation(c.id)) return false
+    // 搜索过滤
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase()
+      return c.id.toLowerCase().includes(term) ||
+        c.userId?.toLowerCase().includes(term) ||
+        c.groupId?.toLowerCase().includes(term) ||
+        c.lastMessage?.toLowerCase().includes(term)
+    }
+    return true
+  })
+  
+  // 统计
+  const totalCount = conversations.length
+  const internalCount = conversations.filter(c => isInternalConversation(c.id)).length
+  const chatCount = totalCount - internalCount
 
   const exportConversation = () => {
     if (!selectedConversation || !messages.length) return
@@ -272,15 +304,31 @@ export default function ConversationsPage() {
         </div>
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="搜索对话ID、用户、群组或消息内容..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="pl-10"
-        />
+      {/* 统计和筛选 */}
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Badge variant="outline">{chatCount} 对话</Badge>
+          {internalCount > 0 && (
+            <Badge variant="secondary">{internalCount} 内部记录</Badge>
+          )}
+        </div>
+        <div className="flex-1 relative max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="搜索对话ID、用户、群组..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="pl-10"
+          />
+        </div>
+        <Button
+          variant={showInternal ? 'default' : 'outline'}
+          size="sm"
+          onClick={() => setShowInternal(!showInternal)}
+        >
+          <Filter className="mr-2 h-4 w-4" />
+          {showInternal ? '隐藏内部记录' : '显示内部记录'}
+        </Button>
       </div>
 
       {filteredConversations.length === 0 ? (
@@ -336,92 +384,85 @@ export default function ConversationsPage() {
 
       {/* Messages Dialog */}
       <Dialog open={!!selectedConversation} onOpenChange={() => setSelectedConversation(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh]">
-          <DialogHeader>
+        <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col">
+          <DialogHeader className="flex-shrink-0">
             <div className="flex items-center justify-between">
               <div>
-                <DialogTitle>对话详情</DialogTitle>
-                <DialogDescription>{selectedConversation?.id}</DialogDescription>
+                <DialogTitle className="flex items-center gap-2">
+                  对话详情
+                  {isInternalConversation(selectedConversation?.id || '') && (
+                    <Badge variant="secondary">内部记录</Badge>
+                  )}
+                </DialogTitle>
+                <DialogDescription className="truncate max-w-md">
+                  {selectedConversation?.id}
+                </DialogDescription>
               </div>
-              <Button variant="outline" size="sm" onClick={exportConversation} disabled={loadingMessages || messages.length === 0}>
-                <FileDown className="mr-2 h-4 w-4" />
-                导出
-              </Button>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={exportConversation} disabled={loadingMessages || messages.length === 0}>
+                  <FileDown className="mr-2 h-4 w-4" />
+                  导出
+                </Button>
+              </div>
             </div>
           </DialogHeader>
+          
           {loadingMessages ? (
-            <div className="flex justify-center py-8">
+            <div className="flex-1 flex justify-center items-center py-8">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
           ) : messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+            <div className="flex-1 flex flex-col items-center justify-center py-12 text-muted-foreground">
               <MessageSquare className="h-12 w-12 mb-4" />
               <p>暂无消息记录</p>
             </div>
           ) : (
-            <ScrollArea className="h-[50vh]">
-              <div className="space-y-4 p-4">
-                {messages.map((message, index) => {
-                  // 获取角色，支持多种格式
-                  let role = 'user'
-                  if (typeof message.role === 'string') {
-                    role = message.role
-                  }
-                  
-                  const isAssistant = role === 'assistant'
-                  
-                  // 获取消息文本 - 尝试多种方式
-                  let text = getMessageText(message.content)
-                  
-                  // 如果 content 解析失败，尝试从整个 message 对象解析
-                  if (!text && message.content) {
-                    // 可能整个对象就是消息内容
-                    text = typeof message.content === 'string' 
-                      ? message.content 
-                      : JSON.stringify(message.content, null, 2)
-                  }
-                  
-                  // 跳过完全空的消息
-                  if (!text) return null
-                  
-                  return (
-                    <div
-                      key={message.id || index}
-                      className={`flex gap-3 ${isAssistant ? '' : 'flex-row-reverse'}`}
-                    >
-                      <div className={`
-                        flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center
-                        ${isAssistant ? 'bg-primary text-primary-foreground' : 'bg-muted'}
-                      `}>
-                        {isAssistant ? <Bot className="h-4 w-4" /> : <User className="h-4 w-4" />}
+            <>
+              <ScrollArea className="flex-1 min-h-0">
+                <div className="space-y-2 p-4">
+                  {messages.map((message, index) => {
+                    let role = typeof message.role === 'string' ? message.role : 'user'
+                    const isAssistant = role === 'assistant'
+                    
+                    let text = getMessageText(message.content)
+                    if (!text && message.content) {
+                      text = typeof message.content === 'string' 
+                        ? message.content 
+                        : JSON.stringify(message.content, null, 2)
+                    }
+                    if (!text) return null
+                    
+                    return (
+                      <div key={index} className={`flex gap-3 ${isAssistant ? '' : 'flex-row-reverse'}`}>
+                        <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs
+                          ${isAssistant ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
+                          {isAssistant ? <Bot className="h-3.5 w-3.5" /> : <User className="h-3.5 w-3.5" />}
+                        </div>
+                        <div className={`rounded-lg px-3 py-2 max-w-[85%] min-w-0
+                          ${isAssistant ? 'bg-muted' : 'bg-primary/10 border'}`}>
+                          <p className="text-sm whitespace-pre-wrap break-words">{text}</p>
+                          {message.timestamp && (
+                            <p className="text-[10px] text-muted-foreground mt-1">
+                              {formatTime(message.timestamp)}
+                            </p>
+                          )}
+                        </div>
                       </div>
-                      <div className={`
-                        flex-1 rounded-lg p-3 max-w-[80%]
-                        ${isAssistant ? 'bg-muted' : 'bg-primary text-primary-foreground'}
-                      `}>
-                        <p className="text-sm whitespace-pre-wrap break-words">
-                          {text || <span className="opacity-50 italic">(无文本内容)</span>}
-                        </p>
-                        {message.timestamp && (
-                          <p className="text-xs opacity-70 mt-1">
-                            {formatTime(message.timestamp)}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  )
-                }).filter(Boolean)}
-                {messages.filter(m => {
-                  const r = typeof m.role === 'string' ? m.role : ''
-                  return r === 'user' || r === 'assistant'
-                }).length === 0 && (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <p>该对话只包含系统消息或工具调用</p>
-                    <p className="text-xs mt-2">共 {messages.length} 条原始消息</p>
-                  </div>
-                )}
-              </div>
-            </ScrollArea>
+                    )
+                  }).filter(Boolean)}
+                </div>
+              </ScrollArea>
+              
+              {/* 加载更多 */}
+              {messages.length >= messageLimit && (
+                <div className="flex-shrink-0 border-t pt-3 flex justify-center">
+                  <Button variant="outline" size="sm" onClick={loadMoreMessages} disabled={loadingMessages}>
+                    {loadingMessages ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    加载更多 (当前 {messages.length} 条)
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </DialogContent>
       </Dialog>

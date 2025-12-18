@@ -332,6 +332,15 @@ export default function ChannelsPage() {
       streaming: { enabled: false, chunkSize: 1024 },
       thinking: { enableReasoning: false, defaultLevel: 'medium', adaptThinking: true, sendThinkingAsMessage: false },
       llm: { temperature: 0.7, maxTokens: 4000, topP: 1, frequencyPenalty: 0, presencePenalty: 0 }
+    },
+    imageConfig: {
+      transferMode: 'auto' as 'base64' | 'url' | 'auto',
+      convertFormat: true,
+      targetFormat: 'auto' as 'png' | 'jpeg' | 'auto',
+      compress: true,
+      quality: 85,
+      maxSize: 4096,
+      processAnimated: true
     }
   })
   const [newHeaderKey, setNewHeaderKey] = useState('')
@@ -362,6 +371,16 @@ export default function ChannelsPage() {
     llm: { temperature: 0.7, maxTokens: 4000, topP: 1, frequencyPenalty: 0, presencePenalty: 0 }
   }
 
+  const defaultImageConfig = {
+    transferMode: 'auto' as 'base64' | 'url' | 'auto',
+    convertFormat: true,
+    targetFormat: 'auto' as 'png' | 'jpeg' | 'auto',
+    compress: true,
+    quality: 85,
+    maxSize: 4096,
+    processAnimated: true
+  }
+
   const resetForm = () => {
     setForm({
       name: '',
@@ -374,7 +393,8 @@ export default function ChannelsPage() {
       customHeaders: {},
       headersTemplate: '',
       requestBodyTemplate: '',
-      advanced: { ...defaultAdvanced }
+      advanced: { ...defaultAdvanced },
+      imageConfig: { ...defaultImageConfig }
     })
     setEditingChannel(null)
     setShowAdvanced(false)
@@ -397,7 +417,8 @@ export default function ChannelsPage() {
         customHeaders: channel.customHeaders || {},
         headersTemplate: (channel as any).headersTemplate || '',
         requestBodyTemplate: (channel as any).requestBodyTemplate || '',
-        advanced: (channel as any).advanced || { ...defaultAdvanced }
+        advanced: (channel as any).advanced || { ...defaultAdvanced },
+        imageConfig: (channel as any).imageConfig || { ...defaultImageConfig }
       })
     } else {
       resetForm()
@@ -419,6 +440,7 @@ export default function ChannelsPage() {
         customHeaders: form.customHeaders,
         headersTemplate: form.headersTemplate,
         requestBodyTemplate: form.requestBodyTemplate,
+        imageConfig: form.imageConfig,
       }
 
       if (editingChannel) {
@@ -1027,6 +1049,123 @@ export default function ChannelsPage() {
                             onCheckedChange={(checked) => setForm({
                               ...form,
                               advanced: { ...form.advanced, thinking: { ...form.advanced.thinking, adaptThinking: checked } }
+                            })}
+                          />
+                        </div>
+                      </div>
+
+                      {/* 图片处理设置 */}
+                      <div className="space-y-3 p-3 border rounded-lg">
+                        <h4 className="font-medium text-sm">图片处理</h4>
+                        <div className="grid gap-2">
+                          <Label className="text-sm">图片传递方式</Label>
+                          <Select
+                            value={form.imageConfig.transferMode}
+                            onValueChange={(value: 'base64' | 'url' | 'auto') => setForm({
+                              ...form,
+                              imageConfig: { ...form.imageConfig, transferMode: value }
+                            })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="auto">自动检测</SelectItem>
+                              <SelectItem value="base64">Base64 编码</SelectItem>
+                              <SelectItem value="url">URL 链接</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground">自动检测会根据API类型自动选择最佳方式</p>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label className="text-sm">转换图片格式</Label>
+                            <p className="text-xs text-muted-foreground">将GIF/WebP转为PNG/JPG</p>
+                          </div>
+                          <Switch
+                            checked={form.imageConfig.convertFormat}
+                            onCheckedChange={(checked) => setForm({
+                              ...form,
+                              imageConfig: { ...form.imageConfig, convertFormat: checked }
+                            })}
+                          />
+                        </div>
+                        {form.imageConfig.convertFormat && (
+                          <div className="grid gap-2">
+                            <Label className="text-sm">目标格式</Label>
+                            <Select
+                              value={form.imageConfig.targetFormat}
+                              onValueChange={(value: 'png' | 'jpeg' | 'auto') => setForm({
+                                ...form,
+                                imageConfig: { ...form.imageConfig, targetFormat: value }
+                              })}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="auto">自动选择</SelectItem>
+                                <SelectItem value="png">PNG (无损)</SelectItem>
+                                <SelectItem value="jpeg">JPEG (有损)</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label className="text-sm">压缩图片</Label>
+                            <p className="text-xs text-muted-foreground">压缩大图以减少传输大小</p>
+                          </div>
+                          <Switch
+                            checked={form.imageConfig.compress}
+                            onCheckedChange={(checked) => setForm({
+                              ...form,
+                              imageConfig: { ...form.imageConfig, compress: checked }
+                            })}
+                          />
+                        </div>
+                        {form.imageConfig.compress && (
+                          <>
+                            <div className="space-y-2">
+                              <div className="flex justify-between text-sm">
+                                <Label>压缩质量</Label>
+                                <span className="text-muted-foreground">{form.imageConfig.quality}%</span>
+                              </div>
+                              <Slider
+                                value={[form.imageConfig.quality]}
+                                min={10}
+                                max={100}
+                                step={5}
+                                onValueChange={(v) => setForm({
+                                  ...form,
+                                  imageConfig: { ...form.imageConfig, quality: v[0] }
+                                })}
+                              />
+                            </div>
+                            <div className="grid gap-2">
+                              <Label className="text-sm">最大尺寸 (像素)</Label>
+                              <Input
+                                type="number"
+                                value={form.imageConfig.maxSize}
+                                onChange={(e) => setForm({
+                                  ...form,
+                                  imageConfig: { ...form.imageConfig, maxSize: parseInt(e.target.value) || 4096 }
+                                })}
+                              />
+                              <p className="text-xs text-muted-foreground">超过此尺寸的图片会被缩放</p>
+                            </div>
+                          </>
+                        )}
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label className="text-sm">处理动图</Label>
+                            <p className="text-xs text-muted-foreground">将GIF动图转为静态图</p>
+                          </div>
+                          <Switch
+                            checked={form.imageConfig.processAnimated}
+                            onCheckedChange={(checked) => setForm({
+                              ...form,
+                              imageConfig: { ...form.imageConfig, processAnimated: checked }
                             })}
                           />
                         </div>

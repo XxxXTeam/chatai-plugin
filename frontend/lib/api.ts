@@ -52,7 +52,7 @@ export const authApi = {
 // Conversations API
 export const conversationsApi = {
   list: () => api.get('/api/conversations/list'),
-  getMessages: (id: string) => api.get(`/api/conversations/${id}/messages`),
+  getMessages: (id: string, limit = 100) => api.get(`/api/conversations/${id}/messages?limit=${limit}`),
   delete: (id: string) => api.delete(`/api/conversations/${id}`),
   clearAll: () => api.delete('/api/conversations/clear-all'),
 }

@@ -188,6 +188,12 @@ class Config {
                     notifyUser: true,           // 结束时是否通知用户
                     notifyMessage: '对话已达到最大轮数限制，已自动开始新会话。',
                 },
+                // 群聊上下文传递
+                groupContextSharing: true,
+                // 全局系统提示词
+                globalSystemPrompt: '',
+                // 全局提示词模式: append(追加) | prepend(前置) | override(覆盖)
+                globalPromptMode: 'append',
             },
             memory: {
                 enabled: false,
@@ -258,6 +264,8 @@ class Config {
                 // 表情回应处理（默认关闭，需在面板开启）
                 reaction: {
                     enabled: false,          // 启用表情回应处理
+                    prompt: '',              // 添加回应的提示词模板（留空使用默认）
+                    removePrompt: '',        // 取消回应的提示词模板（留空使用默认）
                 },
                 // 消息撤回响应（默认关闭）
                 recall: {

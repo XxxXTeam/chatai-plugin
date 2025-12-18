@@ -49,7 +49,8 @@ export function createConversationRoutes(authMiddleware) {
     router.get('/:id/messages', authMiddleware, async (req, res) => {
         try {
             const db = getDatabase()
-            const messages = db.getMessages(req.params.id, 100)
+            const limit = parseInt(req.query.limit) || 100
+            const messages = db.getMessages(req.params.id, limit)
             res.json(ChaiteResponse.ok(messages))
         } catch (error) {
             res.status(500).json(ChaiteResponse.fail(null, error.message))

@@ -272,4 +272,91 @@ export class GeminiClient extends AbstractClient {
             embeddings,
         }
     }
+
+    /**
+     * List available models from the API
+     * 使用 Gemini /v1beta/models 接口获取模型列表
+     * @returns {Promise<string[]>}
+     */
+    async listModels() {
+        const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
+        const baseUrl = this.baseUrl || 'https://generativelanguage.googleapis.com'
+        
+        try {
+            const response = await fetch(`${baseUrl}/v1beta/models?key=${apiKey}`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+            }
+            
+            const data = await response.json()
+            const models = data.models || []
+            
+            // 提取模型名称，过滤掉非生成模型
+            return models
+                .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
+                .map(m => m.name.replace('models/', ''))
+                .sort()
+        } catch (error) {
+            logger.error('[Gemini适配器] 获取模型列表失败:', error.message)
+            // 失败时返回已知模型列表作为后备
+            return [
+                'gemini-2.0-flash-exp',
+                'gemini-2.0-flash-thinking-exp',
+                'gemini-1.5-pro',
+                'gemini-1.5-pro-latest',
+                'gemini-1.5-flash',
+                'gemini-1.5-flash-latest',
+                'gemini-1.5-flash-8b',
+                'gemini-1.0-pro',
+            ]
+        }
+    }
+
+    /**
+     * Get model information
+     * 使用 Gemini /v1beta/models/{model} 接口获取模型信息
+     * @param {string} modelId - Model ID
+     * @returns {Promise<Object>}
+     */
+    async getModelInfo(modelId) {
+        const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
+        const baseUrl = this.baseUrl || 'https://generativelanguage.googleapis.com'
+        
+        try {
+            const modelName = modelId.startsWith('models/') ? modelId : `models/${modelId}`
+            const response = await fetch(`${baseUrl}/v1beta/${modelName}?key=${apiKey}`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+            }
+            
+            const model = await response.json()
+            return {
+                id: model.name?.replace('models/', '') || modelId,
+                name: model.displayName || modelId,
+                description: model.description || '',
+                version: model.version || '',
+                inputTokenLimit: model.inputTokenLimit,
+                outputTokenLimit: model.outputTokenLimit,
+                supportedGenerationMethods: model.supportedGenerationMethods || [],
+                temperature: model.temperature,
+                topP: model.topP,
+                topK: model.topK,
+            }
+        } catch (error) {
+            logger.error('[Gemini适配器] 获取模型信息失败:', error.message)
+            throw error
+        }
+    }
 }

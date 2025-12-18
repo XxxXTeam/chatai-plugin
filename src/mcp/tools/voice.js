@@ -1,43 +1,24 @@
 /**
- * AI语音/声聊工具
- * QQ原生AI声聊功能、语音消息操作
- * 
- * AI声聊是QQ的原生功能，通过 NapCat 的扩展API调用
- * 参考: https://napcat.apifox.cn/
- * 
  * 语音消息类型:
  * - PttElem: { type: 'record', file: string|Buffer, url?, fid?, md5?, size?, seconds? }
  * - segment.record(file, data) 构造语音消息段
  */
-
-/**
- * 检测协议类型
- */
 function detectProtocol(bot) {
     if (!bot) return 'unknown'
-    
-    // NapCat 特征检测
     if (bot.sendApi && (bot.adapter?.name?.includes?.('napcat') || bot.config?.protocol === 'napcat')) {
         return 'napcat'
     }
-    // go-cqhttp 特征
     if (bot.sendApi || bot.config?.baseUrl) {
         return 'onebot'
     }
-    // icqq 特征: 有 pickGroup, pickFriend, fl, gl 等属性
     if (bot.pickGroup && bot.pickFriend && bot.fl && bot.gl) {
         return 'icqq'
     }
-    // 其他 OneBot 实现
     if (bot.sendApi) {
         return 'onebot'
     }
     return 'unknown'
 }
-
-/**
- * 调用 OneBot API (支持 NapCat/go-cqhttp/icqq)
- */
 async function callOneBotApi(bot, action, params = {}) {
     if (bot.sendApi) {
         return await bot.sendApi(action, params)
@@ -83,8 +64,6 @@ export const voiceTools = [
                     return { success: false, error: '需要指定群号或在群聊中使用' }
                 }
                 const enable = args.enable !== false
-                
-                // NapCat API: set_group_ai_record
                 if (bot.sendApi) {
                     try {
                         await bot.sendApi('set_group_ai_record', {
@@ -142,8 +121,44 @@ export const voiceTools = [
                 
                 const protocol = detectProtocol(bot)
                 const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
+                try {
+                    const fs = await import('fs')
+                    const path = await import('path')
+                    const { fileURLToPath } = await import('url')
+                    const __dirname = path.dirname(fileURLToPath(import.meta.url))
+                    const configPath = path.join(__dirname, '../../../config/aivoice.json')
+                    
+                    if (fs.existsSync(configPath)) {
+                        const data = fs.readFileSync(configPath, 'utf8')
+                        const voiceConfig = JSON.parse(data)
+                        const allCharacters = []
+                        
+                        for (const category in voiceConfig) {
+                            for (const char of voiceConfig[category]) {
+                                allCharacters.push({
+                                    id: char.id,
+                                    name: char.name,
+                                    category: category
+                                })
+                            }
+                        }
+                        
+                        if (allCharacters.length > 0) {
+                            return {
+                                success: true,
+                                protocol,
+                                source: 'local_config',
+                                count: allCharacters.length,
+                                characters: allCharacters,
+                                usage: '使用 send_ai_voice 工具发送语音，character 参数填写角色ID'
+                            }
+                        }
+                    }
+                } catch (configErr) {
+                    // 配置文件不存在或读取失败，尝试API
+                }
                 
-                // NapCat API: get_ai_characters
+                // 方法2: NapCat API: get_ai_characters
                 if (bot.sendApi) {
                     try {
                         const result = await bot.sendApi('get_ai_characters', {
@@ -155,6 +170,7 @@ export const voiceTools = [
                             return {
                                 success: true,
                                 protocol,
+                                source: 'api',
                                 group_id: groupId,
                                 count: characters.length,
                                 characters: characters.map(c => ({
@@ -172,14 +188,14 @@ export const voiceTools = [
                 
                 if (bot.getAiCharacters) {
                     const characters = await bot.getAiCharacters(groupId)
-                    return { success: true, protocol, characters }
+                    return { success: true, protocol, source: 'bot_method', characters }
                 }
                 
                 return { 
                     success: false, 
                     protocol,
-                    error: 'AI声聊功能需要 NapCat 协议端支持',
-                    hint: '请确认协议端是否支持 get_ai_characters API',
+                    error: 'AI声聊功能需要 NapCat 协议端支持，或配置 config/aivoice.json',
+                    hint: '请确认协议端是否支持 get_ai_characters API，或创建 aivoice.json 配置文件',
                     alternatives: ['send_tts', 'send_voice']
                 }
             } catch (err) {
@@ -190,15 +206,15 @@ export const voiceTools = [
 
     {
         name: 'send_ai_voice',
-        description: '发送AI语音消息（需要NapCat协议端，使用QQ的AI声聊功能合成语音）',
+        description: '发送AI语音消息（需要NapCat协议端，使用QQ的AI声聊功能合成语音）。使用前先调用 get_ai_voice_characters 获取可用角色列表',
         inputSchema: {
             type: 'object',
             properties: {
-                text: { type: 'string', description: '要转为语音的文字' },
-                character: { type: 'string', description: '角色/音色ID（可选）' },
-                group_id: { type: 'string', description: '群号（可选）' }
+                text: { type: 'string', description: '要转为语音的文字内容' },
+                character: { type: 'string', description: '角色ID（必填，从 get_ai_voice_characters 获取）' },
+                group_id: { type: 'string', description: '群号（可选，不填则使用当前群）' }
             },
-            required: ['text']
+            required: ['text', 'character']
         },
         handler: async (args, ctx) => {
             try {
@@ -211,30 +227,62 @@ export const voiceTools = [
                 const protocol = detectProtocol(bot)
                 const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
                 
-                // NapCat API: send_group_ai_record
+                if (!groupId) {
+                    return { success: false, error: '需要指定群号或在群聊中使用' }
+                }
+                
+                if (!args.character) {
+                    return { 
+                        success: false, 
+                        error: '需要指定角色ID', 
+                        hint: '请先调用 get_ai_voice_characters 获取可用角色列表' 
+                    }
+                }
+                
+                // NapCat API: send_group_ai_record (与 aivoice.js 一致)
+                // 参数: character(角色ID), group_id(群号), text(文本)
                 if (bot.sendApi) {
                     try {
                         const result = await bot.sendApi('send_group_ai_record', {
+                            character: args.character,
                             group_id: groupId,
-                            text: args.text,
-                            character: args.character || ''
+                            text: args.text
                         })
-                        if (result?.message_id || result?.data?.message_id) {
+                        
+                        // 检查返回结果
+                        if (result?.message_id || result?.data?.message_id || result?.retcode === 0) {
                             return {
                                 success: true,
-                                protocol,
-                                group_id: groupId,
-                                text: args.text,
+                                completed: true,
+                                message: `AI语音消息已成功发送到群 ${groupId}，无需再次调用此工具`,
                                 message_id: result?.message_id || result?.data?.message_id
+                            }
+                        } else {
+                            return {
+                                success: false,
+                                error: 'API调用未返回有效结果',
+                                result: result
                             }
                         }
                     } catch (apiErr) {
-                        // API不存在
+                        return { 
+                            success: false, 
+                            protocol,
+                            error: `send_group_ai_record API 调用失败: ${apiErr.message}`,
+                            hint: '请确认 NapCat 版本是否支持此API'
+                        }
                     }
                 }
+                
+                // 备用方法
                 if (bot.sendGroupAiRecord) {
                     const result = await bot.sendGroupAiRecord(groupId, args.text, args.character)
-                    return { success: true, protocol, message_id: result?.message_id }
+                    return { 
+                        success: true, 
+                        completed: true,
+                        message: `AI语音消息已成功发送到群 ${groupId}`,
+                        message_id: result?.message_id 
+                    }
                 }
                 
                 return { 

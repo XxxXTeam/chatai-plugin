@@ -16,7 +16,6 @@ import { databaseService } from '../storage/DatabaseService.js'
 import { statsService } from '../stats/StatsService.js'
 import { usageStats } from '../stats/UsageStats.js'
 
-// 获取 scopeManager 实例
 let scopeManager = null
 const ensureScopeManager = async () => {
     if (!scopeManager) {
@@ -30,40 +29,55 @@ const ensureScopeManager = async () => {
 }
 
 /**
- * Chat Service - Unified chat message handling
+ * Chat Service - 统一的聊天消息处理服务
+ * 
+ * @description 提供 AI 对话功能，支持多模型、工具调用、上下文管理等
+ * 
+ * @example
+ * ```js
+ * const result = await chatService.sendMessage({
+ *   userId: '123456',
+ *   message: '你好',
+ *   event: e
+ * })
+ * ```
  */
 export class ChatService {
     /**
-     * Send a chat message with optional images
+     * 发送聊天消息
+     * 
+     * @param {Object} options - 消息选项
+     * @param {string} options.userId - 用户ID（必填）
+     * @param {string} [options.message] - 消息文本
+     * @param {Array<Object>} [options.images=[]] - 图片数组（支持URL或base64）
+     * @param {string} [options.model] - 指定模型（可选，默认使用配置）
+     * @param {boolean} [options.stream=false] - 是否使用流式响应
+     * @param {Object} [options.preset] - 预设配置对象
+     * @param {string} [options.presetId] - 预设ID
+     * @param {string} [options.adapterType] - 适配器类型
+     * @param {Object} [options.event] - Yunzai 事件对象（用于工具上下文）
+     * @param {string} [options.mode='chat'] - 对话模式
+     * @param {boolean} [options.debugMode=false] - 调试模式
+     * @param {string} [options.prefixPersona] - 前缀人格（独立于普通人设）
+     * @param {boolean} [options.disableTools=false] - 禁用工具调用
+     * @returns {Promise<{response: Array, usage: Object, debugInfo?: Object}>} 响应结果
+     * @throws {Error} 当 userId 未提供或模型未配置时抛出错误
      */
     async sendMessage(options) {
         try {
             return await this._sendMessageImpl(options)
         } catch (error) {
-            // 检查是否启用错误时自动结清功能
             const autoCleanConfig = config.get('features.autoCleanOnError')
             const autoCleanEnabled = autoCleanConfig?.enabled === true
             
             if (autoCleanEnabled) {
-                // 发生错误时自动执行结清操作（参考xiaozuo插件的autoclear.js）
-                logger.error('[ChatService] sendMessage 出错，执行自动结清:', error.message)
-                
                 try {
-                    // 提取纯userId（去除群号前缀）
                     const fullUserId = String(options.userId)
                     const pureUserId = fullUserId.includes('_') ? fullUserId.split('_').pop() : fullUserId
                     const groupId = options.event?.group_id ? String(options.event.group_id) : null
-                    
-                    // 导入所需服务
                     const historyManager = (await import("../../core/utils/history.js")).default
-                    
-                    // 获取当前格式的 conversationId（使用纯userId）
                     const currentConversationId = contextManager.getConversationId(pureUserId, groupId)
-                    
-                    // 兼容旧格式：group:群号:user:QQ号（使用纯userId）
                     const legacyConversationId = groupId ? `group:${groupId}:user:${pureUserId}` : `user:${pureUserId}`
-                    
-                    // 删除当前格式
                     await historyManager.deleteConversation(currentConversationId)
                     await contextManager.cleanContext(currentConversationId)
                     
@@ -73,7 +87,7 @@ export class ChatService {
                         await contextManager.cleanContext(legacyConversationId)
                     }
                     
-                    logger.info(`[ChatService] 自动结清完成: pureUserId=${pureUserId}, groupId=${groupId}`)
+                    logger.debug(`[ChatService] 自动结清完成: pureUserId=${pureUserId}, groupId=${groupId}`)
                     
                     // 向用户回复结清提示
                     if (options.event && options.event.reply) {
@@ -89,8 +103,6 @@ export class ChatService {
             } else {
                 logger.warn('[ChatService] 错误时自动结清功能已禁用，错误信息:', error.message)
             }
-            
-            // 重新抛出原始错误，让上层处理
             throw error
         }
     }
@@ -166,8 +178,6 @@ export class ChatService {
         if (message) {
             messageContent.push({ type: 'text', text: message })
         }
-
-        // Process images - 优先直接使用URL，避免下载大文件
         if (images.length > 0) {
             logger.debug(`[ChatService] 接收到图片: ${images.length} 张`)
         }
@@ -242,12 +252,9 @@ export class ChatService {
                 logger.error('[ChatService] Failed to process image:', error)
             }
         }
-
-        // Create user message - 包含发送者信息用于多用户上下文区分
         const userMessage = {
             role: 'user',
             content: messageContent,
-            // 添加发送者信息 (icqq/TRSS 兼容)
             sender: event?.sender ? {
                 user_id: event.user_id || event.sender.user_id,
                 nickname: event.sender.nickname || '用户',
@@ -258,31 +265,22 @@ export class ChatService {
             source_type: groupId ? 'group' : 'private',
             ...(groupId && { group_id: groupId })
         }
-
-        // Get context and history - 限制最多20条
         let history = await contextManager.getContextHistory(conversationId, 20)
-        
-        // Determine model - 确保获取到有效模型
         let llmModel = model || LlmService.getModel(mode)
-        
-        // 检查群组是否有独立模型配置
         if (groupId && !model) {
             try {
                 const sm = await ensureScopeManager()
                 const groupSettings = await sm.getGroupSettings(String(groupId))
                 logger.debug(`[ChatService] 群组配置: groupId=${groupId}, settings=${JSON.stringify(groupSettings)}`)
-                // modelId 存储在 settings JSON 字段中
                 const groupModelId = groupSettings?.settings?.modelId
                 if (groupModelId && groupModelId.trim()) {
                     llmModel = groupModelId
-                    logger.info(`[ChatService] 使用群组独立模型: ${llmModel}`)
+                    logger.debug(`[ChatService] 使用群组独立模型: ${llmModel}`)
                 }
             } catch (e) {
                 logger.debug('[ChatService] 获取群组模型配置失败:', e.message)
             }
         }
-        
-        // 如果模型为空或不是字符串，直接抛出错误
         if (!llmModel || typeof llmModel !== 'string') {
             throw new Error('未配置模型，请先在管理面板「设置 → 模型配置」中配置默认模型')
         }
@@ -355,8 +353,6 @@ export class ChatService {
         }
 
         const client = await LlmService.createClient(clientOptions)
-
-        // --- 1. System Prompt Construction (Including Scope Settings) ---
         await presetManager.init()
         
         const promptContext = {}
@@ -389,18 +385,13 @@ export class ChatService {
                 promptContext
             }
         }
-        
-        // 1.0 全局系统提示词配置
         const globalSystemPrompt = config.get('context.globalSystemPrompt')
         const globalPromptMode = config.get('context.globalPromptMode') || 'append' // append | prepend | override
         let globalPromptText = ''
         if (globalSystemPrompt && typeof globalSystemPrompt === 'string' && globalSystemPrompt.trim()) {
             globalPromptText = globalSystemPrompt.trim()
-            logger.info(`[ChatService] 已加载全局系统提示词 (${globalPromptText.length} 字符, 模式: ${globalPromptMode})`)
+            logger.debug(`[ChatService] 已加载全局系统提示词 (${globalPromptText.length} 字符, 模式: ${globalPromptMode})`)
         }
-        
-        // 1.1 Scope-based Prompts (独立人设逻辑)
-        // 如果用户/群组设置了独立人设，则直接使用，不拼接默认人设
         const sm = await ensureScopeManager()
         let systemPrompt = defaultPrompt
         
@@ -428,7 +419,6 @@ export class ChatService {
         } catch (e) { 
             logger.warn(`[ChatService] 获取独立人设失败:`, e.message) 
         }
-        // 1.1.5 前缀人格覆盖（最高优先级，仅限本次对话）
         if (prefixPersona) {
             systemPrompt = prefixPersona
             logger.debug(`[ChatService] 使用前缀人格覆盖`)
@@ -454,8 +444,6 @@ export class ChatService {
                         debugInfo.memory.userMemory = { hasMemory: false }
                     }
                 }
-                
-                // 获取群聊记忆上下文
                 if (groupId && config.get('memory.groupContext.enabled')) {
                     const groupMemory = await memoryManager.getGroupMemoryContext(String(groupId), userId)
                     if (groupMemory) {
@@ -473,7 +461,6 @@ export class ChatService {
                             systemPrompt += `\n【群聊记忆】\n${parts.join('\n')}\n`
                             logger.debug(`[ChatService] 已添加群聊记忆上下文`)
                         }
-                        // 收集群聊记忆调试信息
                         if (debugInfo) {
                             debugInfo.memory.groupMemory = {
                                 hasMemory: parts.length > 0,
@@ -489,8 +476,6 @@ export class ChatService {
                 logger.warn('[ChatService] 获取记忆上下文失败:', err.message)
             }
         }
-
-        // 1.3 Knowledge Base Context (知识库上下文) - 始终加载，不受会话状态限制
         try {
             const { knowledgeService } = await import('../storage/KnowledgeService.js')
             await knowledgeService.init()
@@ -500,7 +485,7 @@ export class ChatService {
             })
             if (knowledgePrompt) {
                 systemPrompt += '\n\n' + knowledgePrompt
-                logger.info(`[ChatService] 已添加知识库上下文 (${knowledgePrompt.length} 字符)`)
+                logger.debug(`[ChatService] 已添加知识库上下文 (${knowledgePrompt.length} 字符)`)
                 // 收集知识库调试信息
                 if (debugInfo) {
                     debugInfo.knowledge = {
@@ -516,23 +501,21 @@ export class ChatService {
         } catch (err) {
             logger.debug('[ChatService] 知识库服务未加载或无内容:', err.message)
         }
-
-        // 1.4 全局系统提示词 - 根据模式拼接
         if (globalPromptText) {
             if (globalPromptMode === 'prepend') {
                 // 放到最前面
                 systemPrompt = globalPromptText + '\n\n' + systemPrompt
+                logger.debug(`[ChatService] 全局提示词已前置应用`)
             } else if (globalPromptMode === 'override') {
                 // 覆盖模式 - 替换整个 systemPrompt
                 systemPrompt = globalPromptText
+                logger.debug(`[ChatService] 全局提示词已覆盖应用`)
             } else {
                 // 默认 append - 追加到末尾
                 systemPrompt += '\n\n' + globalPromptText
+                logger.debug(`[ChatService] 全局提示词已追加应用`)
             }
         }
-
-        // Construct Messages
-        // Filter invalid assistant messages
         let validHistory = history.filter(msg => {
             if (msg.role === 'assistant') {
                 if (!msg.content || msg.content.length === 0) return false
@@ -541,11 +524,7 @@ export class ChatService {
             }
             return true
         })
-        
-        // 群聊上下文传递开关（默认开启）
         const groupContextSharingEnabled = config.get('context.groupContextSharing') !== false
-        
-        // 群聊共享模式下，添加用户标签以区分不同用户
         const isolation = contextManager.getIsolationMode()
         if (groupId && !isolation.groupUserIsolation && groupContextSharingEnabled) {
             validHistory = contextManager.buildLabeledContext(validHistory)
@@ -598,7 +577,6 @@ export class ChatService {
         let finalResponse = null
         let finalUsage = null
         let allToolLogs = []
-        // 独立的计时记录（不依赖debugMode）
         const requestStartTime = Date.now()
         try {
             if (event && event.reply) {
@@ -684,17 +662,10 @@ export class ChatService {
                 // 工具列表
                 debugInfo.availableTools = hasTools ? client.tools.map(t => t.function?.name || t.name).slice(0, 20) : []
             }
-
-            // --- 2. 统一使用 Client 发送消息，工具调用由 AbstractClient 内部处理 ---
-            // 记录并发请求（仅用于日志，不阻塞）
             const concurrentCount = contextManager.recordRequest(conversationId)
             if (concurrentCount > 1) {
-                logger.debug(`[ChatService] 并发请求: ${conversationId}, 数量: ${concurrentCount}`)
             }
-            
-            // 不使用锁机制，直接处理请求（避免锁超时问题）
             {
-                // 获取备选模型配置
                 const fallbackConfig = config.get('llm.fallback') || {}
                 const fallbackEnabled = fallbackConfig.enabled !== false
                 const fallbackModels = fallbackConfig.models || []
@@ -710,17 +681,11 @@ export class ChatService {
                     const currentModel = modelsToTry[modelIndex]
                     const isMainModel = modelIndex === 0
                     let retryCount = 0
-                    
-                    // 每个模型最多重试 maxRetries 次
                     while (retryCount <= (isMainModel ? maxRetries : 1)) {
                         try {
-                            // 更新请求模型
                             const currentRequestOptions = { ...requestOptions, model: currentModel }
-                            
-                            // 如果是备选模型，需要创建新的 client
                             let currentClient = client
                             if (!isMainModel) {
-                                // 尝试获取支持该模型的渠道
                                 const fallbackChannel = channelManager.getBestChannel(currentModel)
                                 if (fallbackChannel) {
                                     const fallbackClientOptions = {
@@ -734,8 +699,6 @@ export class ChatService {
                             }
                             
                             response = await currentClient.sendMessage(userMessage, currentRequestOptions)
-                            
-                            // 判断是否有效响应
                             const hasToolCallLogs = response.toolCallLogs && response.toolCallLogs.length > 0
                             const hasContents = response.contents && response.contents.length > 0
                             const hasAnyContent = hasContents || hasToolCallLogs
@@ -746,8 +709,6 @@ export class ChatService {
                                 if (!isMainModel) {
                                     fallbackUsed = true
                                     logger.debug(`[ChatService] 使用备选模型成功: ${currentModel}`)
-                                    
-                                    // 通知用户（如果配置启用）
                                     if (notifyOnFallback && event && event.reply) {
                                         try {
                                             await event.reply(`[已切换至备选模型: ${currentModel}]`, false)
@@ -756,8 +717,6 @@ export class ChatService {
                                 }
                                 break
                             }
-                            
-                            // 空响应，重试
                             retryCount++
                             if (retryCount <= (isMainModel ? maxRetries : 1)) {
                                 logger.warn(`[ChatService] 模型${currentModel}返回空响应，重试第${retryCount}次...`)
@@ -778,8 +737,6 @@ export class ChatService {
                     if (response && (response.contents?.length > 0 || response.toolCallLogs?.length > 0)) {
                         break
                     }
-                    
-                    // 如果没有更多备选模型或未启用 fallback，退出
                     if (!fallbackEnabled || modelIndex >= modelsToTry.length - 1) {
                         break
                     }
@@ -884,7 +841,6 @@ export class ChatService {
                     }
                 }
             } catch (e) {
-                // 统计失败不影响主流程
             }
         }
 
@@ -902,8 +858,6 @@ export class ChatService {
                 memoryManager.extractMemoryFromConversation(userId, message, textContent)
                     .catch(err => logger.warn('[ChatService] Automatic memory extraction failed:', err.message))
             }
-            
-            // Voice Reply Logic - 工具调用后语音回复
             const voiceConfig = config.get('features.voiceReply')
             if (voiceConfig?.enabled && event && event.reply) {
                 const shouldVoice = voiceConfig.triggerAlways || 

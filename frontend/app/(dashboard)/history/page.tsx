@@ -308,23 +308,23 @@ export default function HistoryPage() {
             </DialogDescription>
           </DialogHeader>
           <ScrollArea className="max-h-[50vh]">
-            <div className="space-y-4">
+            <div className="space-y-4 pr-4">
               <div>
                 <h4 className="font-medium mb-2">参数</h4>
-                <pre className="bg-muted p-3 rounded-lg text-sm overflow-x-auto">
+                <pre className="bg-muted p-3 rounded-lg text-sm overflow-x-auto overflow-y-auto max-h-[200px] whitespace-pre-wrap break-all">
                   {formatJson(selectedLog?.arguments)}
                 </pre>
               </div>
               <div>
                 <h4 className="font-medium mb-2">结果</h4>
-                <pre className="bg-muted p-3 rounded-lg text-sm overflow-x-auto max-h-[200px]">
+                <pre className="bg-muted p-3 rounded-lg text-sm overflow-x-auto overflow-y-auto max-h-[300px] whitespace-pre-wrap break-all">
                   {formatJson(selectedLog?.result)}
                 </pre>
               </div>
               {selectedLog?.error && (
                 <div>
                   <h4 className="font-medium mb-2 text-destructive">错误</h4>
-                  <pre className="bg-destructive/10 text-destructive p-3 rounded-lg text-sm">
+                  <pre className="bg-destructive/10 text-destructive p-3 rounded-lg text-sm whitespace-pre-wrap break-all">
                     {selectedLog.error}
                   </pre>
                 </div>

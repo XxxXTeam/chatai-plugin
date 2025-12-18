@@ -117,7 +117,7 @@ interface Config {
     groupSummary: { enabled: boolean; maxMessages: number }
     userPortrait: { enabled: boolean; minMessages: number }
     poke: { enabled: boolean; pokeBack: boolean; message: string; prompt?: string }
-    reaction: { enabled: boolean; prompt?: string }
+    reaction: { enabled: boolean; prompt?: string; removePrompt?: string }
     recall: { enabled: boolean; aiResponse: boolean }
     welcome: { enabled: boolean; message: string }
     goodbye: { enabled: boolean; aiResponse: boolean }
@@ -179,7 +179,7 @@ const defaultConfig: Config = {
     groupSummary: { enabled: true, maxMessages: 100 },
     userPortrait: { enabled: true, minMessages: 10 },
     poke: { enabled: false, pokeBack: false, message: '别戳了~', prompt: '' },
-    reaction: { enabled: false, prompt: '' },
+    reaction: { enabled: false, prompt: '', removePrompt: '' },
     recall: { enabled: false, aiResponse: true },
     welcome: { enabled: false, message: '' },
     goodbye: { enabled: false, aiResponse: false },
@@ -1077,15 +1077,30 @@ export default function SettingsPage() {
                 <Switch checked={config.features?.reaction?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.reaction.enabled', v)} />
               </div>
               {config.features?.reaction?.enabled && (
-                <div className="grid gap-2">
-                  <Label>自定义提示词</Label>
-                  <Textarea 
-                    value={(config.features?.reaction as any)?.prompt || ''} 
-                    onChange={(e) => updateConfig('features.reaction.prompt', e.target.value)} 
-                    placeholder='[事件通知] {nickname} 对你之前的消息做出了"{emoji}"的表情回应。这是对你消息的反馈，你可以简短回应表示感谢或互动，也可以选择不回复。'
-                    rows={2}
-                  />
-                  <p className="text-xs text-muted-foreground">支持占位符: {'{nickname}'} - 用户昵称, {'{emoji}'} - 表情描述</p>
+                <div className="space-y-4">
+                  <div className="grid gap-2">
+                    <Label>添加回应提示词</Label>
+                    <Textarea 
+                      value={(config.features?.reaction as any)?.prompt || ''} 
+                      onChange={(e) => updateConfig('features.reaction.prompt', e.target.value)} 
+                      placeholder='[事件通知] {nickname} 对你之前的消息做出了"{emoji}"的表情回应。{context}这是对你消息的反馈，你可以简短回应表示感谢或互动，也可以选择不回复。'
+                      rows={2}
+                    />
+                    <p className="text-xs text-muted-foreground">留空使用默认模板</p>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>取消回应提示词</Label>
+                    <Textarea 
+                      value={(config.features?.reaction as any)?.removePrompt || ''} 
+                      onChange={(e) => updateConfig('features.reaction.removePrompt', e.target.value)} 
+                      placeholder='[事件通知] {nickname} 取消了对你之前消息的"{emoji}"表情回应。{context}你可以忽略这个事件，也可以简短回应。'
+                      rows={2}
+                    />
+                    <p className="text-xs text-muted-foreground">留空使用默认模板</p>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    支持占位符: {'{nickname}'} 用户昵称, {'{emoji}'} 表情, {'{message}'} 原消息, {'{context}'} 上下文, {'{action}'} 动作类型, {'{action_text}'} 动作描述, {'{user_id}'} 用户ID, {'{group_id}'} 群号
+                  </p>
                 </div>
               )}
             </CardContent>

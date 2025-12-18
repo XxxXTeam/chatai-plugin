@@ -1,18 +1,4 @@
 /**
- * 多平台适配器
- * 统一不同框架和适配器的 API 调用
- * 
- * 框架 (Framework):
- * - TRSS-Yunzai (trss)
- * - Miao-Yunzai (miao)
- * 
- * 适配器 (Adapter):
- * - icqq: https://icqq.pages.dev
- * - NapCat: https://napneko.github.io/develop/msg
- * - go-cqhttp / Lagrange / OneBot 等
- */
-
-/**
  * 检测框架类型
  * @returns {'trss'|'miao'}
  */

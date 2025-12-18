@@ -95,7 +95,7 @@ export class update extends plugin {
             let ret = await this.execSync(command)
 
             if (ret.error) {
-                logger.mark(`${this.e?.logFnc || 'update'} 更新失败：new-plugin`)
+                logger.mark(`${this.e?.logFnc || 'update'} 更新失败：chatai-plugin`)
                 this.gitErr(ret.error, ret.stdout)
                 return false
             }
@@ -126,9 +126,9 @@ export class update extends plugin {
             let time = await this.getTime()
 
             if (!hasUpdate) {
-                await this.reply(`new-plugin已经是最新版本\n最后更新时间：${time}`)
+                await this.reply(`chatai-plugin已经是最新版本\n最后更新时间：${time}`)
             } else {
-                await this.reply(`new-plugin更新成功\n最后更新时间：${time}`)
+                await this.reply(`chatai-plugin更新成功\n最后更新时间：${time}`)
                 let log = await this.getLog()
                 if (log) {
                     await this.reply(log)
@@ -181,7 +181,7 @@ export class update extends plugin {
         log = log.join('\n\n')
 
         let end = '更多详细信息，请前往github查看'
-        log = await this.makeForwardMsg(`new-plugin更新日志，共${line}条`, log, end)
+        log = await this.makeForwardMsg(`chatai-plugin更新日志，共${line}条`, log, end)
 
         return log
     }

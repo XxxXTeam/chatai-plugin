@@ -26,6 +26,7 @@ import {
   Wand2,
   Globe,
   Activity,
+  FileText,
   type LucideIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -78,6 +79,7 @@ const navGroups: NavGroup[] = [
     icon: Settings,
     items: [
       { href: '/settings', label: '系统设置', icon: Settings },
+      { href: '/settings/context', label: '上下文配置', icon: FileText },
       { href: '/channels', label: '渠道管理', icon: Plug },
       { href: '/presets', label: '预设管理', icon: Palette },
       { href: '/scope', label: '人设管理', icon: UserCog },

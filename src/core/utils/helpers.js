@@ -283,7 +283,6 @@ export function mergeAbortSignals(...signals) {
  * API 提供商信息
  */
 export const API_PROVIDERS = {
-    // 国际厂商
     openai: {
         name: 'OpenAI',
         baseUrl: 'https://api.openai.com/v1',
@@ -429,7 +428,6 @@ export function detectModelFeatures(model) {
     const modelLower = model.toLowerCase()
     
     return {
-        // 推理/思考能力
         isReasoning: /reasoner|thinking|o1|o3|r1|deepseek-r/i.test(model),
         
         // 视觉能力

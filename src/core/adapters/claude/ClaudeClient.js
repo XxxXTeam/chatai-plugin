@@ -199,4 +199,48 @@ export class ClaudeClient extends AbstractClient {
     async getEmbedding(_text, _options) {
         throw new Error('Claude does not support embeddings. Please use OpenAI or other providers.')
     }
+
+    /**
+     * List available models from the API
+     * Claude API 没有直接的模型列表接口，返回已知模型
+     * @returns {Promise<string[]>}
+     */
+    async listModels() {
+        return [
+            'claude-3-5-sonnet-20241022',
+            'claude-3-5-haiku-20241022',
+            'claude-3-opus-20240229',
+            'claude-3-sonnet-20240229',
+            'claude-3-haiku-20240307',
+            'claude-2.1',
+            'claude-2.0',
+            'claude-instant-1.2',
+        ]
+    }
+
+    /**
+     * Get model information
+     * @param {string} modelId - Model ID
+     * @returns {Promise<Object>}
+     */
+    async getModelInfo(modelId) {
+        const knownModels = {
+            'claude-3-5-sonnet-20241022': { contextWindow: 200000, maxOutput: 8192 },
+            'claude-3-5-haiku-20241022': { contextWindow: 200000, maxOutput: 8192 },
+            'claude-3-opus-20240229': { contextWindow: 200000, maxOutput: 4096 },
+            'claude-3-sonnet-20240229': { contextWindow: 200000, maxOutput: 4096 },
+            'claude-3-haiku-20240307': { contextWindow: 200000, maxOutput: 4096 },
+            'claude-2.1': { contextWindow: 200000, maxOutput: 4096 },
+            'claude-2.0': { contextWindow: 100000, maxOutput: 4096 },
+        }
+        
+        const info = knownModels[modelId]
+        return {
+            id: modelId,
+            name: modelId,
+            contextWindow: info?.contextWindow || 200000,
+            maxOutput: info?.maxOutput || 4096,
+            supported: !!info,
+        }
+    }
 }

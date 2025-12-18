@@ -15,3 +15,4 @@ vue-frontend/node_modules/
 config/config.yaml
 temp/
 logs/
+config/config.yaml.bak

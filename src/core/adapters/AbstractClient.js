@@ -893,6 +893,45 @@ export class AbstractClient {
     }
 
     /**
+     * List available models from the API
+     * @returns {Promise<string[]>}
+     */
+    async listModels() {
+        throw new Error('Method not implemented.')
+    }
+
+    /**
+     * Get model information
+     * @param {string} modelId - Model ID
+     * @returns {Promise<Object>}
+     */
+    async getModelInfo(modelId) {
+        throw new Error('Method not implemented.')
+    }
+
+    /**
+     * Check if the client supports a specific feature
+     * @param {string} feature - Feature name (e.g., 'vision', 'tools', 'streaming')
+     * @returns {boolean}
+     */
+    supportsFeature(feature) {
+        return this.features.includes(feature)
+    }
+
+    /**
+     * Validate API key by making a simple request
+     * @returns {Promise<{valid: boolean, error?: string}>}
+     */
+    async validateApiKey() {
+        try {
+            await this.listModels()
+            return { valid: true }
+        } catch (error) {
+            return { valid: false, error: error.message }
+        }
+    }
+
+    /**
      * @param {Object} response - 模型响应
      * @returns {Object} 过滤后的响应
      */

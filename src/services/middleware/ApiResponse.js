@@ -2,8 +2,6 @@
  * 统一API响应格式
  * 规范化HTTP状态码和响应结构
  */
-
-// HTTP状态码常量
 export const HttpStatus = {
     OK: 200,
     CREATED: 201,
@@ -18,8 +16,6 @@ export const HttpStatus = {
     INTERNAL_SERVER_ERROR: 500,
     SERVICE_UNAVAILABLE: 503
 }
-
-// 业务错误码
 export const ErrorCode = {
     SUCCESS: 0,
     UNKNOWN_ERROR: -1,
@@ -59,9 +55,6 @@ export const ErrorMessages = {
     [ErrorCode.EXTERNAL_API_ERROR]: '外部API调用失败'
 }
 
-/**
- * 统一API响应类
- */
 export class ApiResponse {
     constructor(code, data, message, meta = null) {
         this.code = code

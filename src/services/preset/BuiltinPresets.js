@@ -1,9 +1,4 @@
 /**
- * 内置预设库
- * 提供常用的预设模板
- */
-
-/**
  * 内置预设定义
  * @type {Array<import('./PresetManager.js').Preset>}
  */

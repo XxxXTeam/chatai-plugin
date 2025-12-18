@@ -219,16 +219,11 @@ export class OpenAIClient extends AbstractClient {
                 delete requestPayload[key]
             }
         })
-        logger.info('[OpenAI适配器] 请求参数:', JSON.stringify({
+        logger.debug('[OpenAI适配器] 请求:', JSON.stringify({
             model: requestPayload.model,
             stream: requestPayload.stream,
-            temperature: requestPayload.temperature,
-            max_tokens: requestPayload.max_tokens,
-            max_completion_tokens: requestPayload.max_completion_tokens,
-            reasoning_effort: requestPayload.reasoning_effort,
-            messages_count: requestPayload.messages?.length,
-            tools_count: requestPayload.tools?.length || 0,
-            tool_choice: requestPayload.tool_choice,
+            messages: requestPayload.messages?.length,
+            tools: requestPayload.tools?.length || 0
         }))
         if (requestPayload.tools?.length > 0) {
             const toolNames = requestPayload.tools.map(t => t.function?.name).filter(Boolean)
@@ -245,7 +240,7 @@ export class OpenAIClient extends AbstractClient {
             
             // 如果是流式响应，需要收集所有 chunk
             if (useStream) {
-                logger.info(`[OpenAI适配器] 开始流式响应处理...`)
+                logger.debug(`[OpenAI适配器] 流式响应处理开始`)
                 let allContent = ''
                 let allReasoningContent = ''
                 const toolCallsMap = new Map()
@@ -290,7 +285,7 @@ export class OpenAIClient extends AbstractClient {
                     }
                 }
                 
-                logger.info(`[OpenAI适配器] Stream完成: ${chunkCount} chunks`)
+                logger.debug(`[OpenAI适配器] Stream完成: ${chunkCount} chunks`)
                 
                 // 构建完整的响应对象
                 const toolCalls = Array.from(toolCallsMap.values()).filter(tc => tc.id && tc.function.name)
@@ -307,7 +302,7 @@ export class OpenAIClient extends AbstractClient {
                     usage: usage || {}
                 }
                 
-                logger.info(`[OpenAI适配器] Stream响应: finish=${finishReason}, tools=${toolCalls.length}, content=${allContent.length}字符`)
+                logger.debug(`[OpenAI适配器] Stream响应: finish=${finishReason}, tools=${toolCalls.length}, content=${allContent.length}字符`)
             } else {
                 chatCompletion = response
                 
@@ -315,7 +310,7 @@ export class OpenAIClient extends AbstractClient {
                 const firstChoice = chatCompletion.choices?.[0]
                 const toolCallCount = firstChoice?.message?.tool_calls?.length || 0
                 const hasContent = !!firstChoice?.message?.content
-                logger.info(`[OpenAI适配器] 响应: finish=${firstChoice?.finish_reason}, tools=${toolCallCount}, hasContent=${hasContent}`)
+                logger.debug(`[OpenAI适配器] 响应: finish=${firstChoice?.finish_reason}, tools=${toolCallCount}, hasContent=${hasContent}`)
                 
                 // debug级别打印完整tool_calls
                 if (toolCallCount > 0) {
@@ -355,7 +350,7 @@ export class OpenAIClient extends AbstractClient {
                     try {
                         const errorMsg = error.message || '未知错误'
                         await options.event.reply(`⚠️ API错误: ${errorMsg}\n已自动结清历史，请重新开始对话。`, true)
-                        logger.info('[OpenAI适配器] 已向用户回复错误信息')
+                        logger.debug('[OpenAI适配器] 已向用户回复错误信息')
                     } catch (replyErr) {
                         logger.error('[OpenAI适配器] 回复用户失败:', replyErr.message)
                     }
@@ -410,7 +405,7 @@ export class OpenAIClient extends AbstractClient {
                 if (parsedToolCalls.length > 0) {
                     textItem.text = cleanText
                     toolCalls = [...toolCalls, ...parsedToolCalls]
-                    logger.info(`[OpenAI适配器] 从文本中解析到 ${parsedToolCalls.length} 个工具调用`)
+                    logger.debug(`[OpenAI适配器] 从文本中解析到 ${parsedToolCalls.length} 个工具调用`)
                 }
             }
         }
@@ -545,10 +540,10 @@ export class OpenAIClient extends AbstractClient {
                 delete requestPayload[key]
             }
         })
-        logger.info('[OpenAI适配器] Streaming请求:', JSON.stringify({
+        logger.debug('[OpenAI适配器] Streaming请求:', JSON.stringify({
             model: requestPayload.model,
-            messages_count: requestPayload.messages?.length,
-            tools_count: requestPayload.tools?.length || 0,
+            messages: requestPayload.messages?.length,
+            tools: requestPayload.tools?.length || 0
         }))
 
         let stream
@@ -651,7 +646,7 @@ export class OpenAIClient extends AbstractClient {
             // 输出 tool_calls
             if (hasToolCalls) {
                 const toolCalls = Array.from(toolCallsMap.values())
-                logger.info(`[OpenAI适配器] 流式检测到 ${toolCalls.length} 个工具调用:`, 
+                logger.debug(`[OpenAI适配器] 流式检测到 ${toolCalls.length} 个工具调用:`, 
                     toolCalls.map(t => t.function.name).join(', '))
                 yield { type: 'tool_calls', toolCalls }
             }
@@ -659,7 +654,7 @@ export class OpenAIClient extends AbstractClient {
             if (hasReasoningField) {
                 // 有 reasoning_content 字段，最后输出思考内容
                 if (allReasoning.trim()) {
-                    logger.info('[OpenAI适配器] 输出reasoning_content，长度:', allReasoning.length)
+                    logger.debug('[OpenAI适配器] 输出reasoning_content，长度:', allReasoning.length)
                     yield { type: 'reasoning', text: allReasoning.trim() }
                 }
             } else if (allContent) {
@@ -674,14 +669,14 @@ export class OpenAIClient extends AbstractClient {
                     const restContent = allContent.substring(fullThinkMatch[0].length).trim()
 
                     if (thinkContent) {
-                        logger.info('[OpenAI适配器] 检测到完整<think>标签，输出思考内容，长度:', thinkContent.length)
+                        logger.debug('[OpenAI适配器] 检测到<think>标签，长度:', thinkContent.length)
                         yield { type: 'reasoning', text: thinkContent }
                     }
                     if (restContent) {
                         // 检查剩余内容是否有 XML 工具调用
                         const { cleanText, toolCalls: xmlToolCalls } = parseXmlToolCalls(restContent)
                         if (xmlToolCalls.length > 0) {
-                            logger.info(`[OpenAI适配器] 流式响应中解析到 ${xmlToolCalls.length} 个XML格式工具调用`)
+                            logger.debug(`[OpenAI适配器] 解析到 ${xmlToolCalls.length} 个XML工具调用`)
                             yield { type: 'tool_calls', toolCalls: xmlToolCalls }
                         }
                         if (cleanText) {
@@ -698,7 +693,7 @@ export class OpenAIClient extends AbstractClient {
                         const restContent = content.substring(endTagIndex + 8).trim()  // 8 = '</think>'.length
                         
                         if (thinkContent) {
-                            logger.info('[OpenAI适配器] 检测到<think>标签（分离模式），输出思考内容，长度:', thinkContent.length)
+                            logger.debug('[OpenAI适配器] <think>标签分离模式，长度:', thinkContent.length)
                             yield { type: 'reasoning', text: thinkContent }
                         }
                         if (restContent) {
@@ -712,14 +707,14 @@ export class OpenAIClient extends AbstractClient {
                         }
                     } else {
                         // 没有结束标签，整个内容作为思考内容
-                        logger.info('[OpenAI适配器] 检测到<think>标签但无结束标签，整体作为思考内容')
+                        logger.debug('[OpenAI适配器] <think>无结束标签')
                         yield { type: 'reasoning', text: content.trim() }
                     }
                 } else {
                     // 没有<think>标签，检查 XML 工具调用后输出
                     const { cleanText, toolCalls: xmlToolCalls } = parseXmlToolCalls(allContent)
                     if (xmlToolCalls.length > 0) {
-                        logger.info(`[OpenAI适配器] 流式响应中解析到 ${xmlToolCalls.length} 个XML格式工具调用`)
+                        logger.debug(`[OpenAI适配器] 解析到 ${xmlToolCalls.length} 个XML工具调用`)
                         yield { type: 'tool_calls', toolCalls: xmlToolCalls }
                     }
                     if (cleanText) {
@@ -798,6 +793,58 @@ export class OpenAIClient extends AbstractClient {
 
         return {
             embeddings: embeddings.data.map(e => e.embedding),
+        }
+    }
+
+    /**
+     * List available models from the API
+     * @returns {Promise<string[]>}
+     */
+    async listModels() {
+        const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
+        const client = new OpenAI({
+            apiKey,
+            baseURL: this.baseUrl,
+            defaultHeaders: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+        })
+
+        try {
+            const modelsList = await client.models.list()
+            return modelsList.data.map(m => m.id).sort()
+        } catch (error) {
+            logger.error('[OpenAI适配器] 获取模型列表失败:', error.message)
+            throw error
+        }
+    }
+
+    /**
+     * Get model information
+     * @param {string} modelId - Model ID
+     * @returns {Promise<Object>}
+     */
+    async getModelInfo(modelId) {
+        const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
+        const client = new OpenAI({
+            apiKey,
+            baseURL: this.baseUrl,
+            defaultHeaders: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+        })
+
+        try {
+            const model = await client.models.retrieve(modelId)
+            return {
+                id: model.id,
+                object: model.object,
+                created: model.created,
+                owned_by: model.owned_by,
+            }
+        } catch (error) {
+            logger.error('[OpenAI适配器] 获取模型信息失败:', error.message)
+            throw error
         }
     }
 }

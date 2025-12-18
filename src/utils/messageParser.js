@@ -56,12 +56,10 @@ function getSegmentData(segment) {
  */
 function getMediaUrl(data, debug = false) {
     if (!data) return null
-    
-    // NC/NapCat 格式: 数据在 data 字段中
     const innerData = data.data || data
     
     if (debug) {
-        logger.info('[getMediaUrl] 输入数据:', JSON.stringify({
+        logger.debug('[getMediaUrl] 输入数据:', JSON.stringify({
             hasData: !!data.data,
             keys: Object.keys(data),
             innerKeys: Object.keys(innerData),
@@ -89,19 +87,19 @@ function getMediaUrl(data, debug = false) {
     for (const candidate of urlCandidates) {
         if (candidate && typeof candidate === 'string') {
             if (candidate.startsWith('http://') || candidate.startsWith('https://')) {
-                if (debug) logger.info(`[getMediaUrl] 找到 HTTP URL: ${candidate.substring(0, 80)}...`)
+                if (debug) logger.debug(`[getMediaUrl] 找到 HTTP URL: ${candidate.substring(0, 80)}...`)
                 return candidate
             }
             if (candidate.startsWith('base64://')) {
-                if (debug) logger.info('[getMediaUrl] 找到 base64 数据')
+                if (debug) logger.debug('[getMediaUrl] 找到 base64 数据')
                 return candidate
             }
             if (candidate.startsWith('file://')) {
-                if (debug) logger.info(`[getMediaUrl] 找到 file:// 路径: ${candidate}`)
+                if (debug) logger.debug(`[getMediaUrl] 找到 file:// 路径: ${candidate}`)
                 return candidate
             }
             if (candidate.startsWith('/') || candidate.match(/^[A-Za-z]:\\/)) {
-                if (debug) logger.info(`[getMediaUrl] 找到本地路径: ${candidate}`)
+                if (debug) logger.debug(`[getMediaUrl] 找到本地路径: ${candidate}`)
                 return `file://${candidate}`
             }
         }
@@ -197,7 +195,7 @@ export async function parseUserMessage(e, options = {}) {
                         const atCard = segData.text || val.text || segData.data?.text || segData.name || ''
                         const uid = segData.uid || val.uid || segData.data?.uid || ''
                         
-                        logger.info(`[MessageParser][AT] 解析@消息: qq=${qq}, atCard=${atCard}, excludeAtBot=${excludeAtBot}, self_id=${e.self_id}`)
+                        logger.debug(`[MessageParser][AT] 解析@消息: qq=${qq}, atCard=${atCard}, excludeAtBot=${excludeAtBot}, self_id=${e.self_id}`)
                         
                         // 如果是@机器人且需要排除，跳过
                         if (excludeAtBot && (qq === e.bot?.uin || String(qq) === String(e.self_id))) {
@@ -209,7 +207,7 @@ export async function parseUserMessage(e, options = {}) {
                         let role = ''
                         let title = ''
                         if (e.group_id && qq && qq !== 'all') {
-                            logger.info(`[MessageParser][AT] 开始获取群成员信息: group_id=${e.group_id}, qq=${qq}`)
+                            logger.debug(`[MessageParser][AT] 开始获取群成员信息: group_id=${e.group_id}, qq=${qq}`)
                             try {
                                 const bot = e.bot || global.Bot
                                 if (bot) {
@@ -217,18 +215,18 @@ export async function parseUserMessage(e, options = {}) {
                                     if (group) {
                                         // 尝试获取成员信息
                                         const member = group.pickMember?.(parseInt(qq))
-                                        logger.info(`[MessageParser][AT] pickMember 结果: hasInfo=${!!member?.info}`)
+                                        logger.debug(`[MessageParser][AT] pickMember 结果: hasInfo=${!!member?.info}`)
                                         if (member?.info) {
                                             memberInfo = member.info
                                             groupCard = memberInfo.card || ''
                                             nickname = memberInfo.nickname || nickname
                                             role = memberInfo.role || ''
                                             title = memberInfo.title || ''
-                                            logger.info(`[MessageParser][AT] 从 pickMember 获取: card=${groupCard}, nickname=${nickname}, role=${role}`)
+                                            logger.debug(`[MessageParser][AT] 从 pickMember 获取: card=${groupCard}, nickname=${nickname}, role=${role}`)
                                         }
                                         if (!memberInfo && group.getMemberMap) {
                                             try {
-                                                logger.info(`[MessageParser][AT] 尝试 getMemberMap`)
+                                                logger.debug(`[MessageParser][AT] 尝试 getMemberMap`)
                                                 const memberMap = await group.getMemberMap()
                                                 const memberData = memberMap?.get?.(parseInt(qq))
                                                 if (memberData) {
@@ -236,7 +234,7 @@ export async function parseUserMessage(e, options = {}) {
                                                     nickname = memberData.nickname || nickname
                                                     role = memberData.role || ''
                                                     title = memberData.title || ''
-                                                    logger.info(`[MessageParser][AT] 从 getMemberMap 获取: card=${groupCard}, nickname=${nickname}, role=${role}`)
+                                                    logger.debug(`[MessageParser][AT] 从 getMemberMap 获取: card=${groupCard}, nickname=${nickname}, role=${role}`)
                                                 }
                                             } catch (err) {
                                                 logger.debug(`[MessageParser][AT] getMemberMap 失败: ${err.message}`)
@@ -262,7 +260,7 @@ export async function parseUserMessage(e, options = {}) {
                         if (title) atText += ` 头衔:"${title}"`
                         atText += ']'
                         
-                        logger.info(`[MessageParser][AT] 最终文本: ${atText}`)
+                        logger.debug(`[MessageParser][AT] 最终文本: ${atText}`)
                         text += ` ${atText} `
                         
                         // 结构化信息：添加到 contents 中供工具使用
@@ -292,7 +290,7 @@ export async function parseUserMessage(e, options = {}) {
                 
                 case 'image': {
                     // 调试日志：记录原始消息段
-                    logger.info('[MessageParser][Image] 原始消息段:', JSON.stringify({
+                    logger.debug('[MessageParser][Image] 原始消息段:', JSON.stringify({
                         type: val.type,
                         hasData: !!val.data,
                         segDataKeys: Object.keys(segData),
@@ -306,11 +304,11 @@ export async function parseUserMessage(e, options = {}) {
                     let imgUrl = getMediaUrl(segData, true) || val.url
                     if (!imgUrl && segData.file_id && e.bot?.sendApi) {
                         try {
-                            logger.info(`[MessageParser][Image] 尝试通过 file_id 获取: ${segData.file_id}`)
+                            logger.debug(`[MessageParser][Image] 尝试通过 file_id 获取: ${segData.file_id}`)
                             const fileInfo = await e.bot.sendApi('get_image', { file_id: segData.file_id })
                             imgUrl = fileInfo?.data?.url || fileInfo?.url
                             if (imgUrl) {
-                                logger.info(`[MessageParser][Image] 通过 get_image 获取成功: ${imgUrl.substring(0, 80)}...`)
+                                logger.debug(`[MessageParser][Image] 通过 get_image 获取成功: ${imgUrl.substring(0, 80)}...`)
                             }
                         } catch (err) {
                             logger.warn(`[MessageParser][Image] get_image API 失败:`, err.message)
@@ -320,18 +318,18 @@ export async function parseUserMessage(e, options = {}) {
                     // 如果还是没有，尝试通过 file 字段获取 (可能是文件名或ID)
                     if (!imgUrl && segData.file && e.bot?.sendApi) {
                         try {
-                            logger.info(`[MessageParser][Image] 尝试通过 file 获取: ${segData.file}`)
+                            logger.debug(`[MessageParser][Image] 尝试通过 file 获取: ${segData.file}`)
                             const fileInfo = await e.bot.sendApi('get_image', { file: segData.file })
                             imgUrl = fileInfo?.data?.url || fileInfo?.url
                             if (imgUrl) {
-                                logger.info(`[MessageParser][Image] 通过 get_image(file) 获取成功: ${imgUrl.substring(0, 80)}...`)
+                                logger.debug(`[MessageParser][Image] 通过 get_image(file) 获取成功: ${imgUrl.substring(0, 80)}...`)
                             }
                         } catch (err) {
                             logger.debug(`[MessageParser][Image] get_image(file) 失败:`, err.message)
                         }
                     }
                     
-                    logger.info(`[MessageParser][Image] 最终 URL: ${imgUrl || '无'}`)
+                    logger.debug(`[MessageParser][Image] 最终 URL: ${imgUrl || '无'}`)
                     
                     if (imgUrl) {
                         try {

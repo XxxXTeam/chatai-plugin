@@ -169,18 +169,75 @@ function isAddReaction(e) {
     return true
 }
 
+/**
+ * 获取被回应的原消息内容
+ */
+async function getOriginalMessageContent(e, bot) {
+    try {
+        const messageId = e.message_id || e.seq || e.msg_id
+        if (!messageId || !e.group_id) return null
+        
+        // 方法1: 使用 MessageApi
+        try {
+            const msgInfo = await MessageApi.getMsg(bot, messageId)
+            if (msgInfo?.message) {
+                // 解析消息内容
+                const content = Array.isArray(msgInfo.message) 
+                    ? msgInfo.message.map(seg => {
+                        if (seg.type === 'text') return seg.text || seg.data?.text || ''
+                        if (seg.type === 'image') return '[图片]'
+                        if (seg.type === 'face') return '[表情]'
+                        if (seg.type === 'at') return `@${seg.data?.name || seg.data?.qq || ''}`
+                        return ''
+                    }).join('').trim()
+                    : (typeof msgInfo.message === 'string' ? msgInfo.message : '')
+                if (content) return content.substring(0, 100) // 限制长度
+            }
+            // 兼容 raw_message
+            if (msgInfo?.raw_message) {
+                return String(msgInfo.raw_message).substring(0, 100)
+            }
+        } catch {}
+        
+        // 方法2: 使用 pickGroup.getChatHistory
+        if (bot.pickGroup) {
+            try {
+                const group = bot.pickGroup(e.group_id)
+                if (group?.getChatHistory) {
+                    const history = await group.getChatHistory(messageId, 1)
+                    if (history?.length > 0) {
+                        const msg = history[0]
+                        const content = msg.raw_message || msg.message
+                        if (typeof content === 'string') {
+                            return content.substring(0, 100)
+                        }
+                        if (Array.isArray(content)) {
+                            return content.map(seg => seg.text || '').join('').substring(0, 100)
+                        }
+                    }
+                }
+            } catch {}
+        }
+        
+        return null
+    } catch (err) {
+        logger.debug('[AI-Reaction] 获取原消息失败:', err.message)
+        return null
+    }
+}
+
+// 默认提示词模板
+const DEFAULT_ADD_PROMPT = `[事件通知] {nickname} 对你之前的消息做出了"{emoji}"的表情回应。{context}这是对你消息的反馈，你可以简短回应表示感谢或互动，也可以选择不回复。`
+const DEFAULT_REMOVE_PROMPT = `[事件通知] {nickname} 取消了对你之前消息的"{emoji}"表情回应。{context}你可以忽略这个事件，也可以简短回应。`
+
 async function handleReactionEvent(e, bot) {
     try {
         if (!config.get('features.reaction.enabled')) {
             return
         }
         
-        // 检查是否为取消回应事件
+        // 检查是否为添加或取消回应事件
         const isAdd = isAddReaction(e)
-        if (!isAdd) {
-            logger.debug(`[AI-Reaction] 忽略取消回应事件: set=${e.set}, sub_type=${e.sub_type}`)
-            return
-        }
         
         const botIds = getBotIds()
         const selfId = e.self_id || bot?.uin || Bot?.uin
@@ -195,7 +252,8 @@ async function handleReactionEvent(e, bot) {
         
         // 防重复响应检查
         const messageId = e.message_id || e.seq || e.msg_id || ''
-        const reactionKey = `${e.group_id}-${userId}-${messageId}`
+        const actionType = isAdd ? 'add' : 'remove'
+        const reactionKey = `${e.group_id}-${userId}-${messageId}-${actionType}`
         const now = Date.now()
         const lastTime = recentReactions.get(reactionKey)
         if (lastTime && now - lastTime < REACTION_COOLDOWN) {
@@ -213,15 +271,36 @@ async function handleReactionEvent(e, bot) {
         const emojiId = e.id || e.emoji_id
         const nickname = await getUserNickname(e, userId)
         const emojiDesc = getEmojiDescription(emojiId)
+        const actionText = isAdd ? '添加' : '取消'
         
-        logger.info(`[AI-Reaction] ${nickname}(${userId}) 对机器人消息做出了 ${emojiDesc} 回应 (添加)`)
+        // 获取被回应的原消息内容
+        const originalMessage = await getOriginalMessageContent(e, bot)
         
-        // 获取自定义提示词模板，支持 {nickname} 和 {emoji} 占位符
-        const defaultPrompt = `[事件通知] {nickname} 对你之前的消息做出了"{emoji}"的表情回应。这是对你消息的反馈，你可以简短回应表示感谢或互动，也可以选择不回复。`
-        const promptTemplate = config.get('features.reaction.prompt') || defaultPrompt
+        logger.info(`[AI-Reaction] ${nickname}(${userId}) 对机器人消息做出了 ${emojiDesc} 回应 (${actionText})${originalMessage ? ` 原消息: ${originalMessage.substring(0, 30)}...` : ''}`)
+        
+        // 获取自定义提示词模板，为空则使用默认值
+        // 支持占位符: {nickname}, {emoji}, {message}, {context}, {action}, {action_text}, {user_id}, {group_id}
+        const configAddPrompt = config.get('features.reaction.prompt')
+        const configRemovePrompt = config.get('features.reaction.removePrompt')
+        
+        const promptTemplate = isAdd 
+            ? (configAddPrompt && configAddPrompt.trim() ? configAddPrompt : DEFAULT_ADD_PROMPT)
+            : (configRemovePrompt && configRemovePrompt.trim() ? configRemovePrompt : DEFAULT_REMOVE_PROMPT)
+        
+        // 构建上下文信息
+        const contextInfo = originalMessage 
+            ? `被回应的消息内容是: "${originalMessage}"。` 
+            : ''
+        
         const eventDesc = promptTemplate
             .replace(/\{nickname\}/g, nickname)
             .replace(/\{emoji\}/g, emojiDesc)
+            .replace(/\{message\}/g, originalMessage || '(无法获取)')
+            .replace(/\{context\}/g, contextInfo)
+            .replace(/\{action\}/g, actionType)
+            .replace(/\{action_text\}/g, actionText)
+            .replace(/\{user_id\}/g, String(userId))
+            .replace(/\{group_id\}/g, String(e.group_id || ''))
         
         const aiReply = await getAIResponse(eventDesc, {
             userId,

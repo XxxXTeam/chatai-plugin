@@ -19,11 +19,9 @@ const DEFAULT_BASE_URLS = {
 function hasCustomPath(url) {
     try {
         const parsed = new URL(url)
-        // 如果路径不为空且不是单独的 /，说明用户指定了自定义路径
         const path = parsed.pathname.replace(/\/+$/, '')
         return path && path !== ''
     } catch (e) {
-        // URL 解析失败时，检查是否包含版本号或 API 路径
         return /\/v\d+/.test(url) || /\/api\//.test(url) || /\/openai\//.test(url)
     }
 }
@@ -74,10 +72,6 @@ export const ChannelStatus = {
     QUOTA_EXCEEDED: 'quota_exceeded'
 }
 
-/**
- * Channel Manager - Manages multiple API channels
- * 支持多APIKey轮询、配额限制、健康检查、故障转移
- */
 export class ChannelManager {
     constructor() {
         this.channels = new Map()
@@ -88,9 +82,6 @@ export class ChannelManager {
         this.healthCheckInterval = null
     }
 
-    /**
-     * Initialize channel manager
-     */
     async init() {
         if (this.initialized) return
 
@@ -107,7 +98,6 @@ export class ChannelManager {
         const channels = config.get('channels') || []
 
         for (const channelConfig of channels) {
-            // 规范化 baseUrl（兼容旧配置）
             const normalizedUrl = normalizeBaseUrl(channelConfig.baseUrl, channelConfig.adapterType)
             
             this.channels.set(channelConfig.id, {
@@ -142,7 +132,6 @@ export class ChannelManager {
     }
 
     /**
-     * 标准化APIKey数组格式
      * @param {Array} keys - 原始key数组
      * @returns {Array} 标准化后的key对象数组
      */
@@ -212,17 +201,11 @@ export class ChannelManager {
             priority: channelData.priority || 100,
             enabled: channelData.enabled !== false,
             advanced: channelData.advanced || {},
-            // 多APIKey支持
             apiKeys: this.normalizeApiKeys(channelData.apiKeys || []),
             strategy: channelData.strategy || KeyStrategy.ROUND_ROBIN,
-            // 自定义请求头配置（支持JSON模板和占位符）
             customHeaders: channelData.customHeaders || {},
-            // 请求头JSON模板（支持占位符如 {{API_KEY}}, {{UA}}, {{XFF}} 等）
             headersTemplate: channelData.headersTemplate || '',
-            // 自定义请求体模板（JSON格式）
             requestBodyTemplate: channelData.requestBodyTemplate || '',
-            // ==================== 拓展覆盖配置 ====================
-            // 模型参数覆盖（优先级高于全局配置）
             overrides: {
                 temperature: channelData.overrides?.temperature,       // 温度 0-2
                 maxTokens: channelData.overrides?.maxTokens,           // 最大输出token
@@ -233,10 +216,9 @@ export class ChannelManager {
                 stopSequences: channelData.overrides?.stopSequences || [],  // 停止序列
                 systemPromptPrefix: channelData.overrides?.systemPromptPrefix || '', // 系统提示前缀
                 systemPromptSuffix: channelData.overrides?.systemPromptSuffix || '', // 系统提示后缀
-                modelMapping: channelData.overrides?.modelMapping || {}, // 模型名映射 { "gpt-4": "gpt-4-turbo" }
+                modelMapping: channelData.overrides?.modelMapping || {}, 
                 ...(channelData.overrides || {})
             },
-            // 请求路径覆盖（用于非标准API路径）
             endpoints: {
                 chat: channelData.endpoints?.chat || '',           // 聊天端点，如 /chat/completions
                 models: channelData.endpoints?.models || '',       // 模型列表端点
@@ -250,6 +232,24 @@ export class ChannelManager {
                 headerName: channelData.auth?.headerName || '',    // 自定义认证头名称
                 prefix: channelData.auth?.prefix || '',            // 认证值前缀
                 ...(channelData.auth || {})
+            },
+            // 图片处理配置
+            imageConfig: {
+                // 图片传递方式: 'base64' | 'url' | 'auto'
+                transferMode: channelData.imageConfig?.transferMode || 'auto',
+                // 是否转换图片格式 (gif/webp -> png/jpg)
+                convertFormat: channelData.imageConfig?.convertFormat !== false,
+                // 目标格式: 'png' | 'jpeg' | 'auto'
+                targetFormat: channelData.imageConfig?.targetFormat || 'auto',
+                // 是否压缩图片
+                compress: channelData.imageConfig?.compress !== false,
+                // 压缩质量 (0-100)
+                quality: channelData.imageConfig?.quality || 85,
+                // 最大尺寸 (像素)
+                maxSize: channelData.imageConfig?.maxSize || 4096,
+                // 是否处理动图 (gif)
+                processAnimated: channelData.imageConfig?.processAnimated !== false,
+                ...(channelData.imageConfig || {})
             },
             // 高级配置
             timeout: channelData.timeout || { connect: 10000, read: 60000 },
@@ -286,7 +286,7 @@ export class ChannelManager {
             'name', 'adapterType', 'baseUrl', 'apiKey', 'apiKeys', 'strategy', 
             'models', 'priority', 'enabled', 'advanced', 'customHeaders', 
             'headersTemplate', 'requestBodyTemplate', 'timeout', 'retry', 'quota', 'weight',
-            'overrides', 'endpoints', 'auth'  // 新增覆盖配置字段
+            'overrides', 'endpoints', 'auth', 'imageConfig'  // 新增图片处理配置字段
         ]
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
@@ -395,7 +395,6 @@ export class ChannelManager {
         const openai = new OpenAI({
             apiKey: channel.apiKey,
             baseURL: channel.baseUrl,
-            // 添加浏览器请求头避免 CF 拦截
             defaultHeaders: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'application/json, text/plain, */*',
@@ -404,7 +403,6 @@ export class ChannelManager {
         })
 
         const modelsList = await openai.models.list()
-        // 不过滤模型，返回所有
         const models = modelsList.data
             .map(m => m.id)
             .sort()
@@ -435,8 +433,6 @@ export class ChannelManager {
      * Fetch Claude models
      */
     async fetchClaudeModels(channel) {
-        // Claude doesn't have a models list API
-        // Return known models
         return [
             'claude-3-5-sonnet-20241022',
             'claude-3-5-haiku-20241022',
@@ -508,7 +504,6 @@ export class ChannelManager {
                 // 按顺序选择第一个可用的
                 for (let i = 0; i < activeKeys.length; i++) {
                     const k = activeKeys[i]
-                    // 如果最近5分钟内没有错误，使用这个key
                     if (!k.lastError || (Date.now() - k.lastError > 5 * 60 * 1000)) {
                         selectedIndex = i
                         break
@@ -670,9 +665,6 @@ export class ChannelManager {
                         ?.filter(c => c.type === 'text')
                         ?.map(c => c.text)
                         ?.join('') || ''
-
-                    // 使用插件计算 Token
-                    // 记录统计（渠道测试）
                     try {
                         await usageStats.record({
                             channelId: id,
@@ -700,10 +692,7 @@ export class ChannelManager {
                         model: testModel
                     }
                 } catch (chatError) {
-                    // 某些中转站可能chat接口报401但实际可用（需要特定模型）
-                    // 尝试获取模型列表来验证API Key是否有效
                     if (chatError.message?.includes('401') || chatError.message?.includes('Unauthorized')) {
-                        logger.warn(`[ChannelManager] 测试聊天失败(401)，尝试获取模型列表验证: ${channel.name}`)
                         
                         try {
                             // 尝试获取模型列表
@@ -724,7 +713,6 @@ export class ChannelManager {
                                 }
                             }
                         } catch (modelError) {
-                            // 模型列表也失败，可能是真正的认证问题
                             logger.warn(`[ChannelManager] 获取模型列表也失败: ${modelError.message}`)
                         }
                     }
@@ -756,7 +744,6 @@ export class ChannelManager {
                 channel.testedAt = Date.now()
                 this.channels.set(id, channel)
                 await this.saveToConfig() // 持久化状态
-                
                 return {
                     success: true,
                     message: replyText ? `连接成功！AI回复：${replyText}` : '连接成功！',
@@ -829,25 +816,18 @@ export class ChannelManager {
             }
             return isEnabled && notError && hasModel
         })
-
-        // Filter out channels that failed health check recently (e.g. last 5 mins)
         const now = Date.now()
-        logger.debug(`[ChannelManager] 第一轮过滤后候选: ${candidates.map(c => c.id).join(', ')}`)
         
         candidates = candidates.filter(ch => {
             if (ch.lastErrorTime && (now - ch.lastErrorTime < 5 * 60 * 1000)) {
-                logger.debug(`[ChannelManager] 渠道 ${ch.id} 因最近错误被过滤: lastErrorTime=${ch.lastErrorTime}`)
                 return false
             }
             return true
         })
 
         logger.debug(`[ChannelManager] 错误时间过滤后候选: ${candidates.map(c => c.id).join(', ')}`)
-        
-        // Filter out channels over quota (quota.daily = 0 means unlimited)
         candidates = candidates.filter(ch => {
             if (ch.quota && ch.usage && ch.quota.daily > 0) {
-                // Check daily quota only if quota.daily > 0
                 const today = new Date().toISOString().split('T')[0]
                 if (ch.usage.date === today && ch.usage.count >= ch.quota.daily) {
                     logger.debug(`[ChannelManager] 渠道 ${ch.id} 因超出每日配额被过滤: ${ch.usage.count}/${ch.quota.daily}`)
@@ -856,8 +836,6 @@ export class ChannelManager {
             }
             return true
         })
-
-        logger.debug(`[ChannelManager] 配额过滤后候选: ${candidates.map(c => c.id).join(', ')}`)
         
         if (candidates.length === 0) return null
 
@@ -877,8 +855,6 @@ export class ChannelManager {
         } else {
             result = candidates[0]
         }
-
-        logger.debug(`[ChannelManager] 最终选择渠道: ${result?.id}`)
         return result
     }
 
@@ -923,7 +899,7 @@ export class ChannelManager {
         channel.usage.tokens += tokens
 
         // Persist changes (mock)
-        // await this.saveChannels()
+       // await this.saveChannels()
     }
 
     /**

@@ -546,9 +546,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== System Routes ====================
-        // GET /api/system/info - System information
         this.app.get('/api/system/info', this.authMiddleware.bind(this), (req, res) => {
             res.json(ChaiteResponse.ok({
                 version: '1.0.0',
@@ -569,9 +566,6 @@ export class WebServer {
                 }
             }))
         })
-
-        // ==================== Stats API ====================
-        // GET /api/stats - 获取统计概览
         this.app.get('/api/stats', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const { statsService } = await import('./stats/StatsService.js')
@@ -1788,7 +1782,7 @@ export class WebServer {
                         }
 
                         if (reasoningText) {
-                            logger.info(`[测试渠道] AI思考过程: ${reasoningText.substring(0, 200)}...`)
+                            logger.debug(`[测试渠道] AI思考过程: ${reasoningText.substring(0, 200)}...`)
                         }
                         logger.info(`[测试渠道] 测试成功，AI回复: ${replyText}`)
                     } else {
@@ -1798,7 +1792,7 @@ export class WebServer {
                             options
                         )
 
-                        logger.info('[测试渠道] 收到响应:', JSON.stringify(response).substring(0, 200))
+                        logger.debug('[测试渠道] 收到响应:', JSON.stringify(response).substring(0, 200))
 
                         // Defensive check for response structure
                         if (!response || !response.contents || !Array.isArray(response.contents)) {
@@ -1940,11 +1934,11 @@ export class WebServer {
                         },
                     })
 
-                    logger.info('[获取模型] 正在请求模型列表...')
+                    logger.debug('[获取模型] 正在请求模型列表...')
                     const modelsList = await openai.models.list()
 
                     // 打印原始响应结构
-                    logger.info('[获取模型] 原始响应:', JSON.stringify(modelsList).substring(0, 500))
+                    logger.debug('[获取模型] 原始响应:', JSON.stringify(modelsList).substring(0, 500))
 
                     if (!modelsList || !modelsList.data || !Array.isArray(modelsList.data)) {
                         logger.error('[获取模型] API返回格式错误，完整响应:', JSON.stringify(modelsList))
@@ -1952,7 +1946,7 @@ export class WebServer {
                         return res.status(500).json(ChaiteResponse.fail(null, 'API返回格式不正确'))
                     }
 
-                    logger.info(`[获取模型] API返回 ${modelsList.data.length} 个模型`)
+                    logger.debug(`[获取模型] API返回 ${modelsList.data.length} 个模型`)
 
                     // Check if this is official OpenAI API
                     const isOfficialOpenAI = !baseUrl ||
@@ -1977,7 +1971,7 @@ export class WebServer {
                         })
                         logger.info(`[获取模型] 官方API过滤: ${beforeFilter} -> ${models.length}`)
                     } else {
-                        logger.info(`[获取模型] 自定义API，不过滤模型`)
+                        logger.debug(`[获取模型] 自定义API，不过滤模型`)
                     }
 
                     models = models.sort()
@@ -3942,7 +3936,7 @@ export default {
             logger.warn('═══════════════════════════════════════════════════════════════')
             logger.warn('[WebServer] ⚠️  前端文件未构建！')
             logger.warn('[WebServer] 请执行以下命令构建前端:')
-            logger.warn('[WebServer]   cd plugins/new-plugin/next-frontend && pnpm install && pnpm run export')
+            logger.warn('[WebServer]   cd plugins/chataiplugin/next-frontend && pnpm install && pnpm run export')
             logger.warn('═══════════════════════════════════════════════════════════════')
             return false
         }

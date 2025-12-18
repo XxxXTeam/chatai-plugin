@@ -1,7 +1,6 @@
 import { ApiResponse, HttpStatus, ErrorCode } from './ApiResponse.js'
 
 /**
- * 异步路由包装器 - 自动捕获错误
  * @param {Function} fn - 异步处理函数
  * @returns {Function} Express中间件
  */
@@ -14,8 +13,8 @@ export function asyncHandler(fn) {
 /**
  * 创建标准CRUD路由
  * @param {Object} options - 配置选项
- * @param {Object} options.service - 服务实例（需实现getAll/get/create/update/delete方法）
- * @param {string} options.resourceName - 资源名称（用于错误提示）
+ * @param {Object} options.service - 服务实例
+ * @param {string} options.resourceName - 资源名称
  * @param {Object} options.validators - 验证器配置
  * @returns {Object} 路由处理函数集合
  */
@@ -165,7 +164,6 @@ export function createCrudRoutes(options) {
 }
 
 /**
- * 创建简单的配置路由（get/set模式）
  * @param {Object} options - 配置选项
  * @param {Function} options.getter - 获取配置函数
  * @param {Function} options.setter - 设置配置函数
@@ -198,7 +196,6 @@ export function createConfigRoutes(options) {
 }
 
 /**
- * 注册CRUD路由到Express Router
  * @param {Object} router - Express Router实例
  * @param {string} basePath - 基础路径
  * @param {Object} routes - createCrudRoutes返回的路由处理函数

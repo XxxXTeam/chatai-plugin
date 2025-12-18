@@ -105,7 +105,7 @@ class TokenManager {
     }
 
     /**
-     * 获取永久Token（仅用于显示）
+     * 获取永久Token
      */
     getPermanent() {
         return config.get('web.permanentAuthToken')
@@ -150,7 +150,7 @@ export const JwtUtils = {
     },
 
     /**
-     * 解码JWT（不验证）
+     * 解码JWT
      * @param {string} token 
      * @returns {object|null}
      */
@@ -163,7 +163,7 @@ export const JwtUtils = {
     },
 
     /**
-     * 重置JWT密钥（使所有已发放的JWT失效）
+     * 重置JWT密钥
      */
     resetSecret() {
         jwtSecret = crypto.randomUUID()
@@ -211,7 +211,7 @@ export function authMiddleware(options = {}) {
             }
         }
 
-        // 3. 检查API Key（用于编程访问）
+        // 3. 检查API Key
         const apiKey = req.headers['x-api-key']
         if (!authenticated && apiKey) {
             const configuredApiKey = config.get('web.apiKey')
@@ -221,7 +221,7 @@ export function authMiddleware(options = {}) {
             }
         }
 
-        // 4. 检查临时Token（用于URL登录）
+        // 4. 检查临时Token
         if (!authenticated && queryToken) {
             const result = tokenManager.validate(queryToken, false)
             if (result.valid) {
@@ -254,7 +254,7 @@ export function authMiddleware(options = {}) {
 }
 
 /**
- * 简化的认证中间件（向后兼容）
+ * 简化的认证中间件
  */
 export function requireAuth(req, res, next) {
     return authMiddleware()(req, res, next)
@@ -268,7 +268,7 @@ export function requireAdmin(req, res, next) {
 }
 
 /**
- * 可选认证（允许未认证访问，但会注入认证信息）
+ * 可选认证
  */
 export function optionalAuth(req, res, next) {
     return authMiddleware({ optional: true })(req, res, next)
@@ -367,7 +367,7 @@ export const rateLimiter = new RateLimiter()
  * @param {object} options
  * @param {number} options.maxRequests - 最大请求数
  * @param {number} options.windowMs - 时间窗口（毫秒）
- * @param {boolean} options.byUser - 是否按用户限流（否则按IP）
+ * @param {boolean} options.byUser - 是否按用户限流
  */
 export function rateLimit(options = {}) {
     const { maxRequests = 100, windowMs = 60000, byUser = false } = options

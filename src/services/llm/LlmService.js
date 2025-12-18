@@ -36,7 +36,6 @@ export class LlmService {
             baseUrl = options.baseUrl
             adapterType = options.adapterType || 'openai'
         } else {
-            // 从渠道管理器获取可用渠道
             const model = options.model || config.get('llm.defaultModel')
             const channel = channelManager.getBestChannel(model) ||
                             channelManager.getAll().find(c => c.enabled && c.apiKey)

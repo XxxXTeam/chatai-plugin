@@ -1,105 +1,107 @@
-# New-Plugin - Yunzai AI 聊天插件
+# ChatAI Plugin - Yunzai AI 聊天插件
 
 <div align="center">
 
+[![GitHub](https://img.shields.io/badge/GitHub-XxxXTeam%2Fchatai--plugin-blue?logo=github)](https://github.com/XxxXTeam/chatai-plugin)
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![Node](https://img.shields.io/badge/node-%3E%3D18-green)
 ![License](https://img.shields.io/badge/license-MIT-yellow)
 
 **一款功能强大的 Yunzai-Bot AI 聊天插件，集成多种 LLM 模型和丰富的工具调用能力**
 
+[安装指南](#-安装) • [快速开始](#-快速开始) • [配置说明](#️-配置说明) • [常见问题](#-常见问题)
+
 </div>
+
+---
 
 ## ✨ 功能特点
 
-### 🤖 多模型支持
-- **OpenAI** - GPT-3.5, GPT-4, O1 等系列模型
-- **Google Gemini** - Gemini Pro, Gemini Flash 等
-- **Anthropic Claude** - Claude 3 系列模型
-- 支持任意 OpenAI 兼容 API（如 DeepSeek, 通义千问等）
+| 功能 | 说明 |
+|------|------|
+| 🤖 **多模型支持** | OpenAI (GPT-4o/O1)、Google Gemini、Anthropic Claude、DeepSeek、通义千问等 |
+| 🔧 **MCP 工具调用** | 内置 50+ 实用工具，支持 MCP 协议标准，可自定义扩展 |
+| 💬 **智能对话管理** | 多轮上下文记忆、用户/群组会话隔离、可配置的清理策略 |
+| 🧠 **长期记忆系统** | 自动提取关键信息、向量相似度搜索、用户画像分析 |
+| 🎭 **人格预设系统** | 角色预设管理、独立人格设置、动态变量替换 |
+| 🌐 **Web 管理面板** | 可视化配置、实时监控、预设和渠道管理 |
+| 🎙️ **AI 语音合成** | 支持 GPT-SoVITS、Fish-Audio 等语音合成服务 |
 
-### 🔧 MCP 工具调用
-- 内置 50+ 实用工具（发消息、获取群信息、图片处理等）
-- 支持 MCP (Model Context Protocol) 标准协议
-- 自定义工具扩展能力
-
-### 💬 智能对话管理
-- 多轮对话上下文记忆
-- 用户/群组独立会话隔离
-- 可配置的上下文长度和清理策略
-
-### 🧠 长期记忆系统
-- 自动提取对话中的关键信息
-- 基于向量数据库的相似度搜索
-- 用户画像分析和群聊总结
-
-### 🎭 人格预设系统
-- 丰富的角色预设管理
-- 用户/群组独立人格设置
-- 动态提示词变量替换
-
-### 🌐 Web 管理面板
-- 可视化配置管理
-- 实时监控和日志查看
-- 预设和渠道管理
+---
 
 ## 📦 安装
 
-### 前置要求
+### 环境要求
 
-- Node.js >= 18
-- [Yunzai-Bot](https://github.com/Le-niao/Yunzai-Bot) 或 [Miao-Yunzai](https://github.com/yoimiya-kokomi/Miao-Yunzai) 或 [TRSS-Yunzai](https://github.com/TimeRainStarSky/Yunzai)
-- Redis（可选，用于缓存和会话存储）
+| 依赖 | 版本要求 | 说明 |
+|------|----------|------|
+| Node.js | >= 18 | 推荐使用 LTS 版本 |
+| pnpm | >= 8.0 | 推荐使用 pnpm 作为包管理器 |
+| Yunzai-Bot | V3 | 支持 [Miao-Yunzai](https://github.com/yoimiya-kokomi/Miao-Yunzai) / [TRSS-Yunzai](https://github.com/TimeRainStarSky/Yunzai) |
+| Redis | 可选 | 用于缓存和会话存储 |
 
 ### 安装步骤
 
-1. **克隆插件到 Yunzai 插件目录**
+#### 1. 克隆插件
 
 ```bash
-git clone --depth=1 https://github.com/XxxXTeam/chatgpt-plugin.git ./plugins/chatgpt-plugin
+# 进入 Yunzai 插件目录
+cd Yunzai-Bot/plugins
+
+# 克隆插件仓库
+git clone --depth=1 https://github.com/XxxXTeam/chatai-plugin.git ./chatai-plugin
 ```
 
-2. **安装依赖**
+#### 2. 安装依赖
 
 ```bash
-cd plugins/chatgpt-plugin
+cd chatai-plugin
 pnpm install
-# 或
-npm install
 ```
 
+#### 3. 构建原生模块（重要）
 
-3. **配置插件**
+> ⚠️ **必须执行此步骤**：插件使用 SQLite 作为本地数据库，需要编译原生模块
 
-编辑 `config/config.yaml`，配置 API 密钥和基础设置：
-
-```yaml
-basic:
-  toggleMode: at        # 触发模式：at/@机器人, prefix/前缀, both/两者皆可
-  togglePrefix: "#chat" # 前缀触发关键词
-  commandPrefix: "#ai"  # 管理命令前缀
-
-channels:
-  - id: my-openai
-    name: OpenAI
-    adapterType: openai
-    baseUrl: https://api.openai.com/v1
-    apiKey: sk-your-api-key
-    models:
-      - gpt-4o
-      - gpt-3.5-turbo
-    enabled: true
+```bash
+# 在插件目录下执行
+pnpm run rebuild
 ```
 
-4. **重启 Yunzai**
+如果 `rebuild` 脚本不存在，请手动执行：
+
+```bash
+# 重新构建 better-sqlite3 原生模块
+pnpm rebuild better-sqlite3
+```
+
+**常见构建问题：**
+
+| 问题 | 解决方案 |
+|------|----------|
+| 缺少编译工具 | Ubuntu/Debian: `sudo apt install build-essential python3`<br>CentOS: `sudo yum groupinstall "Development Tools"` |
+| node-gyp 错误 | `npm install -g node-gyp` |
+| Python 未找到 | 确保 Python 3 已安装并在 PATH 中 |
+
+#### 4. 启动 Yunzai
 
 ```bash
 # 返回 Yunzai 根目录
-cd ../../
+cd ../..
+
+# 启动
 pnpm run start
 # 或
 node app
 ```
+
+#### 5. 配置插件
+
+首次启动后，发送 `#ai管理面板` 获取 Web 管理面板链接，在面板中完成配置：
+
+1. **添加渠道** - 配置 API 密钥和模型
+2. **设置触发方式** - 选择 @触发、前缀触发或两者兼用
+3. **配置预设** - 设置默认人格和系统提示词
 
 ## 🚀 快速开始
 
@@ -277,47 +279,36 @@ bym:
 ## 📁 目录结构
 
 ```
-new-plugin/
+chatai-plugin/
 ├── apps/                   # 应用模块
 │   ├── chat.js            # 主聊天功能
 │   ├── ChatListener.js    # 消息监听器
 │   ├── Management.js      # 管理命令
-│   ├── bym.js             # 伪人模式
-│   └── update.js          # 插件更新
+│   ├── GroupEvents.js     # 群事件处理
+│   └── ...                # 其他功能模块
 ├── config/                 # 配置文件
-│   ├── config.js          # 配置管理器
-│   └── config.yaml        # 配置文件
-├── data/                   # 数据目录
+│   └── config.js          # 配置管理器
+├── data/                   # 数据目录（运行时生成）
+│   ├── *.db               # SQLite 数据库文件
+│   └── mcp-servers.json   # MCP 服务器配置
 ├── resources/              # 资源文件
-│   └── web/               # 前端构建产物
+│   └── web/               # Web 前端构建产物
 ├── src/                    # 源代码
 │   ├── core/              # 核心模块
-│   │   ├── adapters/      # LLM 适配器
-│   │   ├── cache/         # 缓存模块
-│   │   ├── types/         # 类型定义
-│   │   └── utils/         # 工具函数
+│   │   ├── adapters/      # LLM 适配器（OpenAI/Gemini/Claude）
+│   │   └── utils/         # 核心工具函数
 │   ├── mcp/               # MCP 模块
-│   │   ├── BuiltinMcpServer.js  # 内置 MCP 服务器
-│   │   ├── McpClient.js   # MCP 客户端
-│   │   └── McpManager.js  # MCP 管理器
+│   │   ├── tools/         # 内置工具实现
+│   │   ├── BuiltinMcpServer.js
+│   │   ├── McpClient.js
+│   │   └── McpManager.js
 │   ├── services/          # 服务模块
-│   │   ├── ChatService.js      # 聊天服务
-│   │   ├── ContextManager.js   # 上下文管理
-│   │   ├── ChannelManager.js   # 渠道管理
-│   │   ├── DatabaseService.js  # 数据库服务
-│   │   ├── ImageService.js     # 图片服务
-│   │   ├── KeyManager.js       # API Key 管理
-│   │   ├── LlmService.js       # LLM 服务
-│   │   ├── MemoryManager.js    # 记忆管理
-│   │   ├── PresetManager.js    # 预设管理
-│   │   ├── ScopeManager.js     # 作用域管理
-│   │   └── webServer.js        # Web 服务器
+│   │   ├── llm/           # LLM 相关服务
+│   │   ├── media/         # 媒体处理服务
+│   │   ├── storage/       # 存储服务（数据库/记忆/知识库）
+│   │   └── webServer.js   # Web 管理面板服务
 │   └── utils/             # 工具函数
-├── utils/                  # 公共工具
-├── vue-frontend/           # 前端源码
-│   ├── src/               # Vue 源代码
-│   ├── package.json       # 前端依赖
-│   └── vite.config.js     # Vite 配置
+├── frontend/          # Next.js 前端源码（开发用）
 ├── index.js               # 插件入口
 └── package.json           # 项目配置
 ```
@@ -382,6 +373,57 @@ channels:
       - qwen-plus
 ```
 
+## ❓ 常见问题
+
+<details>
+<summary><b>Q: 安装依赖时报错 better-sqlite3 编译失败？</b></summary>
+
+确保已安装编译工具：
+```bash
+# Ubuntu/Debian
+sudo apt install build-essential python3
+
+# CentOS/RHEL
+sudo yum groupinstall "Development Tools"
+
+# 然后重新构建
+pnpm rebuild better-sqlite3
+```
+</details>
+
+<details>
+<summary><b>Q: 启动时提示 "数据库初始化失败"？</b></summary>
+
+1. 确保已执行 `pnpm run rebuild` 或 `pnpm rebuild better-sqlite3`
+2. 检查 `data/` 目录是否有写入权限
+3. 尝试删除 `data/*.db` 文件后重启
+</details>
+
+<details>
+<summary><b>Q: AI 不回复消息？</b></summary>
+
+1. 检查是否配置了有效的 API 渠道（发送 `#ai管理面板` 进入配置）
+2. 检查触发方式是否正确（@机器人 或 前缀触发）
+3. 查看 Yunzai 控制台日志是否有错误信息
+</details>
+
+<details>
+<summary><b>Q: 如何更新插件？</b></summary>
+
+```bash
+# 方式一：使用命令更新
+发送：#ai更新
+
+# 方式二：手动更新
+cd plugins/chatai-plugin
+git pull
+pnpm install
+pnpm run rebuild
+```
+</details>
+
+---
+
 ## 🤝 贡献指南
 
 欢迎提交 Issue 和 Pull Request！
@@ -392,36 +434,75 @@ channels:
 4. 推送到分支 (`git push origin feature/AmazingFeature`)
 5. 创建 Pull Request
 
+---
+
 ## 📝 更新日志
 
-### v1.0.0
+### v1.0.0 (2024-12)
 - 🎉 初始版本发布
-- ✨ 支持 OpenAI, Gemini, Claude 多模型
-- ✨ 内置 50+ 工具调用
-- ✨ Web 管理面板
-- ✨ 长期记忆系统
-- ✨ 人格预设管理
-- ✨ MCP 协议支持
+- ✨ 支持 OpenAI, Gemini, Claude 等多模型
+- ✨ 内置 50+ 实用工具调用
+- ✨ 现代化 Web 管理面板
+- ✨ 长期记忆与向量检索系统
+- ✨ 人格预设与独立人格管理
+- ✨ MCP 协议完整支持
+- ✨ AI 语音合成集成
+
+---
 
 ## 📄 许可证
 
-本项目基于 MIT 许可证开源。
+本项目基于 [MIT 许可证](LICENSE) 开源。
+
+---
 
 ## ⚠️ 免责声明
 
 - 本插件仅供学习交流使用
-- 请遵守相关法律法规和平台规定
+- 请遵守相关法律法规和平台服务条款
 - 使用 AI 服务需遵守对应服务商的使用条款
 - 内置的群管理工具（如踢人、禁言等）属于敏感操作，请谨慎使用
 - AI 生成的内容可能存在错误或偏见，请勿完全依赖
-- 建议在生产环境中禁用危险工具（通过 `builtinTools.allowDangerous: false`）
+- 建议在生产环境中禁用危险工具（`builtinTools.allowDangerous: false`）
 - 开发者不对使用本插件造成的任何后果负责
+
+---
 
 ## 💖 鸣谢
 
-- [Yunzai-Bot](https://gitee.com/Le-niao/Yunzai-Bot)
-- [chatgpt-plugin原库](https://github.com/ikechan8370/chatgpt-plugin/)
-- [OpenAI](https://openai.com/)
-- [Google Gemini](https://ai.google.dev/)
-- [Anthropic Claude](https://www.anthropic.com/)
-- [MCP Protocol](https://modelcontextprotocol.io/)
+### 原项目
+
+本项目基于 [chatgpt-plugin](https://github.com/ikechan8370/chatgpt-plugin) 重构开发，感谢 **ikechan8370** 及原项目所有贡献者的付出！
+
+### 内测用户
+
+感谢以下用户在内测期间提供的宝贵建议、反馈和 Bug 报告：
+
+<table>
+  <tr>
+    <td align="center"><b>haanxuan</b></td>
+    <td align="center"><b>HHXXYY123</b></td>
+    <td align="center"><b>dndss</b></td>
+    <td align="center"><b>ColdMoonBUG</b></td>
+  </tr>
+</table>
+
+### 相关项目
+
+- [Yunzai-Bot](https://gitee.com/Le-niao/Yunzai-Bot) - QQ 机器人框架
+- [Miao-Yunzai](https://github.com/yoimiya-kokomi/Miao-Yunzai) - Yunzai V3 版本
+- [TRSS-Yunzai](https://github.com/TimeRainStarSky/Yunzai) - TRSS 版 Yunzai
+- [OpenAI](https://openai.com/) - GPT 系列模型
+- [Google Gemini](https://ai.google.dev/) - Gemini 系列模型
+- [Anthropic Claude](https://www.anthropic.com/) - Claude 系列模型
+- [MCP Protocol](https://modelcontextprotocol.io/) - Model Context Protocol
+
+---
+
+<div align="center">
+
+**如果觉得本项目对你有帮助，欢迎 Star ⭐**
+
+[![Star History Chart](https://api.star-history.com/svg?repos=XxxXTeam/chatai-plugin&type=Date)](https://star-history.com/#XxxXTeam/chatai-plugin&Date)
+
+</div>

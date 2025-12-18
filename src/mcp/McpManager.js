@@ -11,16 +11,38 @@ const __dirname = path.dirname(__filename)
 // MCP 服务器配置文件路径
 const MCP_SERVERS_FILE = path.join(__dirname, '../../data/mcp-servers.json')
 
+/**
+ * MCP (Model Context Protocol) 管理器
+ * 
+ * @description 管理内置工具、自定义JS工具、外部MCP服务器
+ * 支持工具调用、资源读取、提示词管理等功能
+ * 
+ * @example
+ * ```js
+ * await mcpManager.init()
+ * const tools = mcpManager.getTools()
+ * const result = await mcpManager.callTool('get_time', {})
+ * ```
+ */
 export class McpManager {
     constructor() {
+        /** @type {Map<string, Object>} 工具名称 -> 工具定义 */
         this.tools = new Map()
+        /** @type {Map<string, Object>} 服务器名称 -> 服务器信息 */
         this.servers = new Map()
+        /** @type {Map<string, Object>} 资源URI -> 资源信息 */
         this.resources = new Map()
+        /** @type {Map<string, Object>} 提示词名称 -> 提示词信息 */
         this.prompts = new Map()
+        /** @type {Map<string, Object>} 工具结果缓存 */
         this.toolResultCache = new Map()
-        this.toolLogs = []  // 工具调用日志
-        this.maxLogs = 1000 // 最大日志数量
+        /** @type {Array<Object>} 工具调用日志 */
+        this.toolLogs = []
+        /** @type {number} 最大日志数量 */
+        this.maxLogs = 1000
+        /** @type {boolean} 是否已初始化 */
         this.initialized = false
+        /** @type {Object} 服务器配置 */
         this.serversConfig = { servers: {} }
     }
 

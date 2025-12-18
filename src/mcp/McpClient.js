@@ -3,23 +3,60 @@ import crypto from 'node:crypto'
 import { EventSource } from 'eventsource'
 
 /**
- * MCP Client implementation
- * Supports multiple transport types: stdio, SSE, HTTP
+ * MCP Client - Model Context Protocol 客户端实现
+ * 
+ * @description 支持多种传输类型连接 MCP 服务器
+ * - stdio: 标准输入输出（本地进程）
+ * - npm/npx: npm 包形式的 MCP 服务器
+ * - sse: Server-Sent Events
+ * - http: HTTP 请求
+ * 
+ * @example
+ * ```js
+ * const client = new McpClient({ type: 'stdio', command: 'node', args: ['server.js'] })
+ * await client.connect()
+ * const tools = await client.listTools()
+ * ```
  */
 export class McpClient {
+    /**
+     * @param {Object} config - 客户端配置
+     * @param {string} [config.type='stdio'] - 传输类型: stdio | npm | npx | sse | http
+     * @param {string} [config.command] - stdio 模式的命令
+     * @param {string[]} [config.args] - 命令参数
+     * @param {string} [config.package] - npm/npx 模式的包名
+     * @param {string} [config.url] - SSE/HTTP 模式的 URL
+     * @param {Object} [config.env] - 环境变量
+     * @param {Object} [config.headers] - HTTP 请求头
+     */
     constructor(config) {
+        /** @type {Object} 客户端配置 */
         this.config = config
-        this.type = (config.type || 'stdio').toLowerCase()  // 统一小写
+        /** @type {string} 传输类型 */
+        this.type = (config.type || 'stdio').toLowerCase()
+        /** @type {import('child_process').ChildProcess|null} 子进程 */
         this.process = null
+        /** @type {EventSource|null} SSE 事件源 */
         this.eventSource = null
+        /** @type {Map<string, {resolve: Function, reject: Function}>} 待处理请求 */
         this.pendingRequests = new Map()
+        /** @type {string} 消息缓冲区 */
         this.messageBuffer = ''
+        /** @type {boolean} 是否已初始化 */
         this.initialized = false
+        /** @type {NodeJS.Timeout|null} 心跳定时器 */
         this.heartbeatInterval = null
+        /** @type {number} 重连尝试次数 */
         this.reconnectAttempts = 0
+        /** @type {number} 最大重连次数 */
         this.maxReconnectAttempts = 5
     }
 
+    /**
+     * 连接到 MCP 服务器
+     * @returns {Promise<void>}
+     * @throws {Error} 连接失败时抛出错误
+     */
     async connect() {
         if (this.initialized) return
 
@@ -62,7 +99,7 @@ export class McpClient {
         }
 
         const npxArgs = ['-y', pkg, ...args]
-        logger.info(`[MCP] Spawning npm server: npx ${npxArgs.join(' ')}`)
+        logger.debug(`[MCP] Spawning npm server: npx ${npxArgs.join(' ')}`)
 
         this.process = spawn('npx', npxArgs, {
             env: { ...process.env, ...env },
@@ -76,7 +113,7 @@ export class McpClient {
         })
 
         this.process.on('close', (code) => {
-            logger.info(`[MCP] Server exited with code ${code}`)
+            logger.debug(`[MCP] Server exited with code ${code}`)
             this.handleDisconnect()
         })
 
@@ -91,7 +128,7 @@ export class McpClient {
 
         const { command, args, env } = this.config
 
-        logger.info(`[MCP] Spawning server: ${command} ${args ? args.join(' ') : ''}`)
+        logger.debug(`[MCP] Spawning server: ${command} ${args ? args.join(' ') : ''}`)
 
         this.process = spawn(command, args || [], {
             env: { ...process.env, ...env },
@@ -104,7 +141,7 @@ export class McpClient {
         })
 
         this.process.on('close', (code) => {
-            logger.info(`[MCP] Server exited with code ${code}`)
+            logger.debug(`[MCP] Server exited with code ${code}`)
             this.handleDisconnect()
         })
 
@@ -436,15 +473,25 @@ export class McpClient {
             }) + '\n')
         }
 
-        logger.info('[MCP] Initialized with capabilities:', this.serverCapabilities)
+        logger.debug('[MCP] Initialized with capabilities:', Object.keys(this.serverCapabilities || {}))
         return result
     }
 
+    /**
+     * 获取服务器支持的工具列表
+     * @returns {Promise<Array<Object>>} 工具列表
+     */
     async listTools() {
         const result = await this.request('tools/list', {})
         return result.tools || []
     }
 
+    /**
+     * 调用工具
+     * @param {string} name - 工具名称
+     * @param {Object} args - 工具参数
+     * @returns {Promise<Object>} 工具执行结果
+     */
     async callTool(name, args) {
         const result = await this.request('tools/call', {
             name,
@@ -489,6 +536,10 @@ export class McpClient {
         return result
     }
 
+    /**
+     * 断开与 MCP 服务器的连接
+     * @returns {Promise<void>}
+     */
     async disconnect() {
         this.stopHeartbeat()
 
@@ -505,6 +556,6 @@ export class McpClient {
         this.initialized = false
         this.pendingRequests.clear()
 
-        logger.info('[MCP] Disconnected')
+        logger.debug('[MCP] Disconnected')
     }
 }

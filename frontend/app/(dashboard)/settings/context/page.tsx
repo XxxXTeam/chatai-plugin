@@ -54,7 +54,7 @@ export default function ContextPage() {
     saveTimeoutRef.current = setTimeout(async () => {
       setSaveStatus('saving')
       try {
-        await configApi.update(configToSave)
+        await configApi.updateAdvanced(configToSave)
         setSaveStatus('saved')
         setTimeout(() => setSaveStatus('idle'), 2000)
       } catch (error) {
@@ -74,7 +74,7 @@ export default function ContextPage() {
   useEffect(() => {
     const fetchConfig = async () => {
       try {
-        const res = await configApi.get() as { data: ContextConfig }
+        const res = await configApi.getAdvanced() as { data: ContextConfig }
         setConfig(res.data)
         setTimeout(() => { isInitialLoad.current = false }, 100)
       } catch (error) {
@@ -91,7 +91,7 @@ export default function ContextPage() {
     if (!config) return
     setSaving(true)
     try {
-      await configApi.update(config)
+      await configApi.updateAdvanced(config)
       setSaveStatus('saved')
       toast.success('配置已保存')
       setTimeout(() => setSaveStatus('idle'), 2000)

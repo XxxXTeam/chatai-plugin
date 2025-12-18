@@ -1,0 +1,130 @@
+{
+  "推荐": [
+    {
+      "name": "小新",
+      "id": "lucy-voice-laibixiaoxin"
+    },
+    {
+      "name": "猴哥",
+      "id": "lucy-voice-houge"
+    },
+    {
+      "name": "四郎",
+      "id": "lucy-voice-silang"
+    },
+    {
+      "name": "东北老妹儿",
+      "id": "lucy-voice-guangdong-f1"
+    },
+    {
+      "name": "广西大表哥",
+      "id": "lucy-voice-guangxi-m1"
+    },
+    {
+      "name": "妲己",
+      "id": "lucy-voice-daji"
+    },
+    {
+      "name": "霸道总裁",
+      "id": "lucy-voice-lizeyan"
+    },
+    {
+      "name": "酥心御姐",
+      "id": "lucy-voice-suxinjiejie"
+    }
+  ],
+  "搞怪": [
+    {
+      "name": "小新",
+      "id": "lucy-voice-laibixiaoxin"
+    },
+    {
+      "name": "猴哥",
+      "id": "lucy-voice-houge"
+    },
+    {
+      "name": "东北老妹儿",
+      "id": "lucy-voice-guangdong-f1"
+    },
+    {
+      "name": "广西大表哥",
+      "id": "lucy-voice-guangxi-m1"
+    },
+    {
+      "name": "说书先生",
+      "id": "lucy-voice-m8"
+    },
+    {
+      "name": "憨憨小弟",
+      "id": "lucy-voice-male1"
+    },
+    {
+      "name": "憨厚老哥",
+      "id": "lucy-voice-male3"
+    }
+  ],
+  "古风": [
+    {
+      "name": "妲己",
+      "id": "lucy-voice-daji"
+    },
+    {
+      "name": "四郎",
+      "id": "lucy-voice-silang"
+    },
+    {
+      "name": "吕布",
+      "id": "lucy-voice-lvbu"
+    }
+  ],
+  "现代": [
+    {
+      "name": "霸道总裁",
+      "id": "lucy-voice-lizeyan"
+    },
+    {
+      "name": "酥心御姐",
+      "id": "lucy-voice-suxinjiejie"
+    },
+    {
+      "name": "元气少女",
+      "id": "lucy-voice-xueling"
+    },
+    {
+      "name": "文艺少女",
+      "id": "lucy-voice-f37"
+    },
+    {
+      "name": "磁性大叔",
+      "id": "lucy-voice-male2"
+    },
+    {
+      "name": "邻家小妹",
+      "id": "lucy-voice-female1"
+    },
+    {
+      "name": "低沉男声",
+      "id": "lucy-voice-m14"
+    },
+    {
+      "name": "傲娇少女",
+      "id": "lucy-voice-f38"
+    },
+    {
+      "name": "爹系男友",
+      "id": "lucy-voice-m101"
+    },
+    {
+      "name": "暖心姐姐",
+      "id": "lucy-voice-female2"
+    },
+    {
+      "name": "温柔妹妹",
+      "id": "lucy-voice-f36"
+    },
+    {
+      "name": "书香少女",
+      "id": "lucy-voice-f34"
+    }
+  ]
+}
