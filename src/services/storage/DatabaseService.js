@@ -318,12 +318,12 @@ class DatabaseService {
             `
             const stmt = this.db.prepare(query)
             const rows = stmt.all(conversationId, limit)
-            return rows.map(this.mapRowToMessage)
+            return rows.map(this.mapRowToMessage).filter(Boolean)
         }
 
         const stmt = this.db.prepare(query)
         const rows = stmt.all(conversationId)
-        return rows.map(this.mapRowToMessage)
+        return rows.map(this.mapRowToMessage).filter(Boolean)
     }
 
     mapRowToMessage(row) {

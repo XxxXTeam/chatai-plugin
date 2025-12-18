@@ -71,13 +71,27 @@ interface ChannelPreset {
   authUrl?: string
 }
 
+// 渠道预设分类
+interface ChannelPresetCategory {
+  name: string
+  icon: string
+  presets: string[]
+}
+
+const PRESET_CATEGORIES: ChannelPresetCategory[] = [
+  { name: '内置免费API', icon: '🆓', presets: ['free-glm', 'free-gemini', 'free-grok'] },
+  { name: '国际厂商', icon: '🌍', presets: ['openai', 'gemini', 'claude', 'grok', 'mistral', 'cohere', 'groq'] },
+  { name: '国内厂商', icon: '🇨🇳', presets: ['deepseek', 'zhipu', 'qwen', 'baichuan', 'minimax', 'moonshot', 'yi', 'doubao', 'spark', 'hunyuan', 'baidu'] },
+  { name: '中转服务', icon: '🔄', presets: ['openrouter', 'siliconflow', 'together', 'fireworks', 'novita'] },
+]
+
 const CHANNEL_PRESETS: Record<string, ChannelPreset> = {
   'free-glm': {
     name: '免费GLM',
     adapterType: 'openai',
     baseUrl: 'https://glm.openel.top/',
     apiKey: 'sk-3d2f9b84e7f510b1a08f7b3d6c9a6a7f17fbbad5624ea29f22d9c742bf39c863',
-    models: 'GLM-4.5-Thinking, GLM-4.5, GLM-4-Flash',
+    models: 'GLM-4.5-Thinking, GLM-4.5, GLM-4-Flash, GLM-4.6-Thinking',
     description: '免费智谱GLM API（openel.top）',
   },
   'free-gemini': {
@@ -85,24 +99,84 @@ const CHANNEL_PRESETS: Record<string, ChannelPreset> = {
     adapterType: 'openai',
     baseUrl: 'https://business2api.openel.top/',
     apiKey: '',
-    models: 'gemini-2.5-flash, gemini-2.0-flash',
+    models: 'gemini-2.5-flash, gemini-2.0-flash, gemini-2.5-pro',
     description: '免费Gemini API，需先获取Key',
     authUrl: 'https://business2api.openel.top/auth',
   },
-  'openai': {
-    name: 'OpenAI官方',
+  'free-grok': {
+    name: '免费Grok',
     adapterType: 'openai',
-    baseUrl: 'https://api.openai.com',
+    baseUrl: 'https://api.x.ai/v1',
     apiKey: '',
-    models: 'gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-3.5-turbo',
+    models: 'grok-3-mini, grok-3',
+    description: '免费Grok API（限额）',
+  },
+  
+  // ========== 国际厂商 ==========
+  'openai': {
+    name: 'OpenAI',
+    adapterType: 'openai',
+    baseUrl: 'https://api.openai.com/v1',
+    apiKey: '',
+    models: 'gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-4.1, gpt-4.1-mini, o1, o1-mini, o3-mini',
     description: 'OpenAI官方API',
   },
+  'gemini': {
+    name: 'Google Gemini',
+    adapterType: 'gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    apiKey: '',
+    models: 'gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash, gemini-1.5-pro, gemini-1.5-flash',
+    description: 'Google Gemini官方API',
+  },
+  'claude': {
+    name: 'Anthropic Claude',
+    adapterType: 'claude',
+    baseUrl: 'https://api.anthropic.com',
+    apiKey: '',
+    models: 'claude-sonnet-4-20250514, claude-3-5-sonnet-20241022, claude-3-5-haiku-20241022, claude-3-opus-20240229',
+    description: 'Anthropic Claude官方API',
+  },
+  'grok': {
+    name: 'xAI Grok',
+    adapterType: 'openai',
+    baseUrl: 'https://api.x.ai/v1',
+    apiKey: '',
+    models: 'grok-3, grok-3-mini, grok-2, grok-2-mini',
+    description: 'xAI Grok官方API',
+  },
+  'mistral': {
+    name: 'Mistral AI',
+    adapterType: 'openai',
+    baseUrl: 'https://api.mistral.ai/v1',
+    apiKey: '',
+    models: 'mistral-large-latest, mistral-medium-latest, mistral-small-latest, codestral-latest',
+    description: 'Mistral AI官方API',
+  },
+  'cohere': {
+    name: 'Cohere',
+    adapterType: 'openai',
+    baseUrl: 'https://api.cohere.ai/v1',
+    apiKey: '',
+    models: 'command-r-plus, command-r, command-light',
+    description: 'Cohere官方API',
+  },
+  'groq': {
+    name: 'Groq',
+    adapterType: 'openai',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    apiKey: '',
+    models: 'llama-3.3-70b-versatile, llama-3.1-8b-instant, mixtral-8x7b-32768, gemma2-9b-it',
+    description: 'Groq超快推理API',
+  },
+  
+  // ========== 国内厂商 ==========
   'deepseek': {
     name: 'DeepSeek',
     adapterType: 'openai',
-    baseUrl: 'https://api.deepseek.com',
+    baseUrl: 'https://api.deepseek.com/v1',
     apiKey: '',
-    models: 'deepseek-chat, deepseek-reasoner',
+    models: 'deepseek-chat, deepseek-reasoner, deepseek-coder',
     description: 'DeepSeek官方API',
   },
   'zhipu': {
@@ -110,24 +184,122 @@ const CHANNEL_PRESETS: Record<string, ChannelPreset> = {
     adapterType: 'openai',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     apiKey: '',
-    models: 'glm-4-plus, glm-4-flash, glm-4-long',
+    models: 'glm-4-plus, glm-4-flash, glm-4-long, glm-4-air, glm-4v-plus, cogview-3-plus',
     description: '智谱AI官方API',
   },
-  'gemini': {
-    name: 'Gemini官方',
-    adapterType: 'gemini',
-    baseUrl: 'https://generativelanguage.googleapis.com',
+  'qwen': {
+    name: '阿里通义千问',
+    adapterType: 'openai',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     apiKey: '',
-    models: 'gemini-2.0-flash, gemini-1.5-pro, gemini-1.5-flash',
-    description: 'Google Gemini官方API',
+    models: 'qwen-max, qwen-plus, qwen-turbo, qwen-long, qwen-vl-max, qwen-coder-turbo',
+    description: '阿里云通义千问API',
   },
-  'claude': {
-    name: 'Claude官方',
-    adapterType: 'claude',
-    baseUrl: 'https://api.anthropic.com',
+  'baichuan': {
+    name: '百川智能',
+    adapterType: 'openai',
+    baseUrl: 'https://api.baichuan-ai.com/v1',
     apiKey: '',
-    models: 'claude-sonnet-4-20250514, claude-3-5-sonnet-20241022, claude-3-haiku-20240307',
-    description: 'Anthropic Claude官方API',
+    models: 'Baichuan4, Baichuan3-Turbo, Baichuan3-Turbo-128k',
+    description: '百川智能官方API',
+  },
+  'minimax': {
+    name: 'MiniMax',
+    adapterType: 'openai',
+    baseUrl: 'https://api.minimax.chat/v1',
+    apiKey: '',
+    models: 'abab6.5s-chat, abab6.5g-chat, abab5.5-chat',
+    description: 'MiniMax官方API',
+  },
+  'moonshot': {
+    name: '月之暗面Kimi',
+    adapterType: 'openai',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    apiKey: '',
+    models: 'moonshot-v1-128k, moonshot-v1-32k, moonshot-v1-8k',
+    description: 'Moonshot Kimi官方API',
+  },
+  'yi': {
+    name: '零一万物',
+    adapterType: 'openai',
+    baseUrl: 'https://api.lingyiwanwu.com/v1',
+    apiKey: '',
+    models: 'yi-lightning, yi-large, yi-medium, yi-vision',
+    description: '零一万物官方API',
+  },
+  'doubao': {
+    name: '字节豆包',
+    adapterType: 'openai',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    apiKey: '',
+    models: 'doubao-pro-32k, doubao-lite-32k, doubao-pro-128k',
+    description: '字节跳动豆包API（需配置endpoint）',
+  },
+  'spark': {
+    name: '讯飞星火',
+    adapterType: 'openai',
+    baseUrl: 'https://spark-api-open.xf-yun.com/v1',
+    apiKey: '',
+    models: 'generalv3.5, generalv3, 4.0Ultra',
+    description: '讯飞星火认知大模型API',
+  },
+  'hunyuan': {
+    name: '腾讯混元',
+    adapterType: 'openai',
+    baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1',
+    apiKey: '',
+    models: 'hunyuan-pro, hunyuan-standard, hunyuan-lite',
+    description: '腾讯混元大模型API',
+  },
+  'baidu': {
+    name: '百度文心',
+    adapterType: 'openai',
+    baseUrl: 'https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop',
+    apiKey: '',
+    models: 'ernie-4.0-8k, ernie-3.5-8k, ernie-speed-128k',
+    description: '百度文心一言API（需获取access_token）',
+  },
+  
+  // ========== 中转服务 ==========
+  'openrouter': {
+    name: 'OpenRouter',
+    adapterType: 'openai',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    apiKey: '',
+    models: 'openai/gpt-4o, anthropic/claude-3.5-sonnet, google/gemini-pro, meta-llama/llama-3.1-70b-instruct',
+    description: 'OpenRouter多模型聚合',
+  },
+  'siliconflow': {
+    name: '硅基流动',
+    adapterType: 'openai',
+    baseUrl: 'https://api.siliconflow.cn/v1',
+    apiKey: '',
+    models: 'deepseek-ai/DeepSeek-V3, Qwen/Qwen2.5-72B-Instruct, THUDM/glm-4-9b-chat',
+    description: '硅基流动API（国内中转）',
+  },
+  'together': {
+    name: 'Together AI',
+    adapterType: 'openai',
+    baseUrl: 'https://api.together.xyz/v1',
+    apiKey: '',
+    models: 'meta-llama/Llama-3.3-70B-Instruct-Turbo, Qwen/Qwen2.5-72B-Instruct-Turbo, mistralai/Mixtral-8x22B-Instruct-v0.1',
+    description: 'Together AI开源模型托管',
+  },
+  'fireworks': {
+    name: 'Fireworks AI',
+    adapterType: 'openai',
+    baseUrl: 'https://api.fireworks.ai/inference/v1',
+    apiKey: '',
+    models: 'accounts/fireworks/models/llama-v3p1-70b-instruct, accounts/fireworks/models/mixtral-8x22b-instruct',
+    description: 'Fireworks AI快速推理',
+  },
+  'novita': {
+    name: 'Novita AI',
+    adapterType: 'openai',
+    baseUrl: 'https://api.novita.ai/v3/openai',
+    apiKey: '',
+    models: 'meta-llama/llama-3.1-70b-instruct, mistralai/mistral-nemo-12b-instruct',
+    description: 'Novita AI多模型服务',
   },
 }
 
@@ -530,40 +702,73 @@ export default function ChannelsPage() {
                           })
                           
                           // 根据预设类型显示不同提示
-                          if (key === 'free-glm') {
-                            toast.success('已填充免费GLM配置，API Key已内置，可直接保存使用')
-                          } else if (key === 'free-gemini') {
-                            toast.info(
-                              <div className="space-y-1">
-                                <p><strong>免费Gemini</strong> - 需手动获取API Key</p>
-                                <p className="text-xs">访问 <a href={preset.authUrl} target="_blank" rel="noopener" className="underline text-blue-500">{preset.authUrl}</a> 授权获取Key后填入</p>
-                              </div>,
-                              { duration: 8000 }
-                            )
-                          } else if (key === 'openai') {
-                            toast.info('OpenAI官方 - 请填入您的API Key（sk-xxx）')
-                          } else if (key === 'deepseek') {
-                            toast.info('DeepSeek - 请填入您的API Key，可在 platform.deepseek.com 获取')
-                          } else if (key === 'zhipu') {
-                            toast.info('智谱AI - 请填入您的API Key，可在 open.bigmodel.cn 获取')
-                          } else if (key === 'gemini') {
-                            toast.info('Gemini官方 - 请填入您的API Key，可在 aistudio.google.com 获取')
-                          } else if (key === 'claude') {
-                            toast.info('Claude官方 - 请填入您的API Key，可在 console.anthropic.com 获取')
+                          const presetHints: Record<string, { type: 'success' | 'info', message: string, url?: string }> = {
+                            'free-glm': { type: 'success', message: '免费GLM配置已填充，API Key已内置，可直接保存使用' },
+                            'free-gemini': { type: 'info', message: '免费Gemini - 需手动获取API Key', url: preset.authUrl },
+                            'free-grok': { type: 'info', message: '免费Grok - 需在 x.ai 获取API Key' },
+                            'openai': { type: 'info', message: 'OpenAI - 请填入API Key（sk-xxx），可在 platform.openai.com 获取' },
+                            'gemini': { type: 'info', message: 'Gemini - 请填入API Key，可在 aistudio.google.com 获取' },
+                            'claude': { type: 'info', message: 'Claude - 请填入API Key，可在 console.anthropic.com 获取' },
+                            'grok': { type: 'info', message: 'Grok - 请填入API Key，可在 console.x.ai 获取' },
+                            'mistral': { type: 'info', message: 'Mistral AI - 请填入API Key，可在 console.mistral.ai 获取' },
+                            'groq': { type: 'info', message: 'Groq - 请填入API Key，可在 console.groq.com 免费获取' },
+                            'deepseek': { type: 'info', message: 'DeepSeek - 请填入API Key，可在 platform.deepseek.com 获取' },
+                            'zhipu': { type: 'info', message: '智谱AI - 请填入API Key，可在 open.bigmodel.cn 获取' },
+                            'qwen': { type: 'info', message: '通义千问 - 请填入API Key，可在 dashscope.console.aliyun.com 获取' },
+                            'moonshot': { type: 'info', message: 'Kimi - 请填入API Key，可在 platform.moonshot.cn 获取' },
+                            'minimax': { type: 'info', message: 'MiniMax - 请填入API Key，可在 platform.minimaxi.com 获取' },
+                            'yi': { type: 'info', message: '零一万物 - 请填入API Key，可在 platform.lingyiwanwu.com 获取' },
+                            'baichuan': { type: 'info', message: '百川智能 - 请填入API Key，可在 platform.baichuan-ai.com 获取' },
+                            'doubao': { type: 'info', message: '豆包 - 需配置endpoint_id，可在 console.volcengine.com 获取' },
+                            'spark': { type: 'info', message: '讯飞星火 - 请填入APIKey:APISecret格式，可在 xinghuo.xfyun.cn 获取' },
+                            'openrouter': { type: 'info', message: 'OpenRouter - 请填入API Key，可在 openrouter.ai 获取' },
+                            'siliconflow': { type: 'info', message: '硅基流动 - 请填入API Key，可在 cloud.siliconflow.cn 获取' },
+                            'together': { type: 'info', message: 'Together AI - 请填入API Key，可在 api.together.xyz 获取' },
+                          }
+                          
+                          const hint = presetHints[key]
+                          if (hint) {
+                            if (hint.url) {
+                              toast.info(
+                                <div className="space-y-1">
+                                  <p><strong>{preset.name}</strong></p>
+                                  <p className="text-xs">{hint.message}</p>
+                                  <p className="text-xs">访问 <a href={hint.url} target="_blank" rel="noopener" className="underline text-blue-500">{hint.url}</a></p>
+                                </div>,
+                                { duration: 8000 }
+                              )
+                            } else if (hint.type === 'success') {
+                              toast.success(hint.message)
+                            } else {
+                              toast.info(hint.message, { duration: 5000 })
+                            }
+                          } else {
+                            toast.success(`已填充 ${preset.name} 配置，请填入API Key`)
                           }
                         }}
                       >
                         <SelectTrigger>
                           <SelectValue placeholder="选择预设快速配置..." />
                         </SelectTrigger>
-                        <SelectContent>
-                          {Object.entries(CHANNEL_PRESETS).map(([key, preset]) => (
-                            <SelectItem key={key} value={key}>
-                              <div className="flex items-center gap-2">
-                                <span className="font-medium">{preset.name}</span>
-                                <span className="text-xs text-muted-foreground">- {preset.description}</span>
+                        <SelectContent className="max-h-[400px]">
+                          {PRESET_CATEGORIES.map((category) => (
+                            <div key={category.name}>
+                              <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50 sticky top-0">
+                                {category.icon} {category.name}
                               </div>
-                            </SelectItem>
+                              {category.presets.map((key) => {
+                                const preset = CHANNEL_PRESETS[key]
+                                if (!preset) return null
+                                return (
+                                  <SelectItem key={key} value={key}>
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-medium">{preset.name}</span>
+                                      <span className="text-xs text-muted-foreground truncate max-w-[200px]">- {preset.description}</span>
+                                    </div>
+                                  </SelectItem>
+                                )
+                              })}
+                            </div>
                           ))}
                         </SelectContent>
                       </Select>

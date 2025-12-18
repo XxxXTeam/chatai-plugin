@@ -5,7 +5,7 @@
  * AI声聊是QQ的原生功能，通过 NapCat 的扩展API调用
  * 参考: https://napcat.apifox.cn/
  * 
- * icqq 语音消息类型:
+ * 语音消息类型:
  * - PttElem: { type: 'record', file: string|Buffer, url?, fid?, md5?, size?, seconds? }
  * - segment.record(file, data) 构造语音消息段
  */
@@ -166,7 +166,7 @@ export const voiceTools = [
                             }
                         }
                     } catch (apiErr) {
-                        // API调用失败，继续检查其他方法
+                        // API调用失败
                     }
                 }
                 
@@ -175,15 +175,12 @@ export const voiceTools = [
                     return { success: true, protocol, characters }
                 }
                 
-                // 协议不支持时返回详细信息
                 return { 
                     success: false, 
                     protocol,
-                    error: `AI声聊功能需要 NapCat 协议端支持`,
-                    hint: protocol === 'icqq' 
-                        ? 'icqq 协议不支持AI声聊，可使用 send_tts 或 send_voice 发送普通语音'
-                        : '请确认协议端是否支持 get_ai_characters API',
-                    alternatives: ['send_tts', 'send_voice', 'send_record_icqq']
+                    error: 'AI声聊功能需要 NapCat 协议端支持',
+                    hint: '请确认协议端是否支持 get_ai_characters API',
+                    alternatives: ['send_tts', 'send_voice']
                 }
             } catch (err) {
                 return { success: false, error: `获取AI声聊角色失败: ${err.message}` }
@@ -244,9 +241,7 @@ export const voiceTools = [
                     success: false, 
                     protocol,
                     error: 'AI语音功能需要 NapCat 协议端支持',
-                    hint: protocol === 'icqq' 
-                        ? 'icqq 不支持AI声聊。替代方案：使用 send_tts 发送系统TTS语音，或使用第三方TTS服务生成语音后用 send_voice 发送'
-                        : '请确认协议端是否支持 send_group_ai_record API',
+                    hint: '请确认协议端是否支持 send_group_ai_record API',
                     alternatives: ['send_tts', 'send_voice']
                 }
             } catch (err) {
@@ -510,49 +505,6 @@ export const voiceTools = [
                 }
             } catch (err) {
                 return { success: false, error: `发送私聊AI语音失败: ${err.message}` }
-            }
-        }
-    },
-
-    // ========== icqq 语音增强 ==========
-
-    {
-        name: 'send_record_icqq',
-        description: '使用icqq发送语音消息（支持silk/amr格式）',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                file: { type: 'string', description: '语音文件路径或URL（支持silk/amr格式）' },
-                target_type: { type: 'string', description: '目标类型: group/private', enum: ['group', 'private'] },
-                target_id: { type: 'string', description: '目标群号或用户QQ' }
-            },
-            required: ['file', 'target_type', 'target_id']
-        },
-        handler: async (args, ctx) => {
-            try {
-                const bot = ctx.getBot()
-                const targetId = parseInt(args.target_id)
-                
-                // 构建 icqq 的 PttElem
-                const recordElem = { type: 'record', file: args.file }
-                
-                if (args.target_type === 'group') {
-                    const group = bot.pickGroup?.(targetId)
-                    if (group?.sendMsg) {
-                        const result = await group.sendMsg(recordElem)
-                        return { success: true, target: 'group', target_id: targetId, message_id: result?.message_id }
-                    }
-                } else {
-                    const friend = bot.pickFriend?.(targetId)
-                    if (friend?.sendMsg) {
-                        const result = await friend.sendMsg(recordElem)
-                        return { success: true, target: 'private', target_id: targetId, message_id: result?.message_id }
-                    }
-                }
-                
-                return { success: false, error: '当前协议不支持发送语音' }
-            } catch (err) {
-                return { success: false, error: `发送语音失败: ${err.message}` }
             }
         }
     },
