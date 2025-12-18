@@ -1,7 +1,171 @@
 /**
  * MCP 工具辅助函数
- * 提供群成员获取、消息发送等通用功能
+ * 提供适配器封装、群成员获取、消息发送等通用功能
  */
+
+// ======================= icqq API 封装 =======================
+
+/**
+ * icqq 群操作封装
+ */
+export const icqqGroup = {
+    pick: (bot, groupId) => bot.pickGroup?.(parseInt(groupId)),
+    
+    async sendMsg(bot, groupId, content, source) {
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (!group?.sendMsg) throw new Error('icqq: 无法获取群对象')
+        return await group.sendMsg(content, source)
+    },
+    
+    async getMemberMap(bot, groupId) {
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (!group?.getMemberMap) throw new Error('icqq: 无法获取群成员')
+        return await group.getMemberMap()
+    },
+    
+    getInfo: (bot, groupId) => bot.gl?.get(parseInt(groupId)) || bot.pickGroup?.(parseInt(groupId))?.info,
+    
+    async recallMsg(bot, groupId, messageId) {
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (!group?.recallMsg) throw new Error('icqq: 无法撤回消息')
+        return await group.recallMsg(messageId)
+    },
+    
+    async getChatHistory(bot, groupId, seq, count = 20) {
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (!group?.getChatHistory) throw new Error('icqq: 无法获取聊天记录')
+        return await group.getChatHistory(seq, count)
+    },
+    
+    async setName(bot, groupId, name) {
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (!group?.setName) throw new Error('icqq: 无法设置群名')
+        return await group.setName(name)
+    },
+    
+    async muteAll(bot, groupId, enable = true) {
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (!group?.muteAll) throw new Error('icqq: 无法全员禁言')
+        return await group.muteAll(enable)
+    },
+    
+    async muteMember(bot, groupId, userId, duration = 600) {
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (!group?.muteMember) throw new Error('icqq: 无法禁言成员')
+        return await group.muteMember(parseInt(userId), duration)
+    },
+    
+    async kickMember(bot, groupId, userId, rejectAdd = false) {
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (!group?.kickMember) throw new Error('icqq: 无法踢出成员')
+        return await group.kickMember(parseInt(userId), '', rejectAdd)
+    },
+    
+    async setAdmin(bot, groupId, userId, enable = true) {
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (!group?.setAdmin) throw new Error('icqq: 无法设置管理员')
+        return await group.setAdmin(parseInt(userId), enable)
+    },
+    
+    async setCard(bot, groupId, userId, card) {
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (!group?.setCard) throw new Error('icqq: 无法设置群名片')
+        return await group.setCard(parseInt(userId), card)
+    },
+    
+    async setTitle(bot, groupId, userId, title, duration = -1) {
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (!group?.setTitle) throw new Error('icqq: 无法设置头衔')
+        return await group.setTitle(parseInt(userId), title, duration)
+    },
+    
+    async pokeMember(bot, groupId, userId) {
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (!group?.pokeMember) throw new Error('icqq: 无法戳一戳')
+        return await group.pokeMember(parseInt(userId))
+    },
+    
+    async announce(bot, groupId, content) {
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (!group?.announce) throw new Error('icqq: 无法发送公告')
+        return await group.announce(content)
+    },
+    
+    async sendFile(bot, groupId, file, name) {
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (!group?.sendFile) throw new Error('icqq: 无法发送文件')
+        return await group.sendFile(file, '/', name)
+    },
+    
+    getFs: (bot, groupId) => bot.pickGroup?.(parseInt(groupId))?.fs
+}
+
+/**
+ * icqq 好友/用户操作封装
+ */
+export const icqqFriend = {
+    pick: (bot, userId) => bot.pickFriend?.(parseInt(userId)),
+    pickUser: (bot, userId) => bot.pickUser?.(parseInt(userId)),
+    
+    async sendMsg(bot, userId, content, source) {
+        const friend = bot.pickFriend?.(parseInt(userId))
+        if (!friend?.sendMsg) throw new Error('icqq: 无法获取好友对象')
+        return await friend.sendMsg(content, source)
+    },
+    
+    getInfo: (bot, userId) => bot.fl?.get(parseInt(userId)),
+    
+    async recallMsg(bot, userId, messageId) {
+        const friend = bot.pickFriend?.(parseInt(userId))
+        if (!friend?.recallMsg) throw new Error('icqq: 无法撤回消息')
+        return await friend.recallMsg(messageId)
+    },
+    
+    async getChatHistory(bot, userId, time, count = 20) {
+        const friend = bot.pickFriend?.(parseInt(userId))
+        if (!friend?.getChatHistory) throw new Error('icqq: 无法获取聊天记录')
+        return await friend.getChatHistory(time, count)
+    },
+    
+    async poke(bot, userId) {
+        const friend = bot.pickFriend?.(parseInt(userId))
+        if (!friend?.poke) throw new Error('icqq: 无法戳一戳')
+        return await friend.poke()
+    },
+    
+    async thumbUp(bot, userId, times = 10) {
+        const user = bot.pickUser?.(parseInt(userId))
+        if (!user?.thumbUp) throw new Error('icqq: 无法点赞')
+        return await user.thumbUp(times)
+    },
+    
+    async sendFile(bot, userId, file, name) {
+        const friend = bot.pickFriend?.(parseInt(userId))
+        if (!friend?.sendFile) throw new Error('icqq: 无法发送文件')
+        return await friend.sendFile(file, name)
+    },
+    
+    async getSimpleInfo(bot, userId) {
+        const user = bot.pickUser?.(parseInt(userId))
+        if (!user?.getSimpleInfo) throw new Error('icqq: 无法获取用户信息')
+        return await user.getSimpleInfo()
+    }
+}
+
+/**
+ * 调用 OneBot API (napcat/onebot)
+ */
+export async function callOneBotApi(bot, action, params = {}) {
+    if (bot.sendApi) {
+        return await bot.sendApi(action, params)
+    }
+    if (bot[action]) {
+        return await bot[action](params)
+    }
+    throw new Error(`不支持的API: ${action}`)
+}
+
+// ======================= 群成员操作 =======================
 
 /**
  * 获取群成员列表

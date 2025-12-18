@@ -87,17 +87,9 @@ export class McpManager {
             logger.error('[MCP] Failed to save servers config:', error.message)
         }
     }
-
-    /**
-     * Initialize MCP Manager
-     */
     async init() {
         if (this.initialized) return
-
-        // 初始化内置 MCP 服务器
         await this.initBuiltinServer()
-        
-        // 初始化自定义工具服务器 (data/tools)
         await this.initCustomToolsServer()
 
         const mcpConfig = config.get('mcp')
@@ -109,17 +101,10 @@ export class McpManager {
 
         await this.loadServers()
         this.initialized = true
-        logger.info('[MCP] Manager initialized')
     }
-
-    /**
-     * 初始化内置 MCP 服务器（不包含 JS 工具）
-     */
     async initBuiltinServer() {
         try {
             await builtinMcpServer.init()
-            
-            // 只注册内置工具（排除 JS 工具）
             const allTools = builtinMcpServer.listTools()
             const builtinTools = allTools.filter(t => !t.isJsTool)
             
@@ -131,8 +116,6 @@ export class McpManager {
                     isCustom: tool.isCustom || false
                 })
             }
-
-            // 注册内置服务器
             this.servers.set('builtin', {
                 status: 'connected',
                 config: { type: 'builtin' },
@@ -143,16 +126,10 @@ export class McpManager {
                 connectedAt: Date.now(),
                 isBuiltin: true
             })
-
-            logger.info(`[MCP] Builtin server initialized with ${builtinTools.length} tools`)
         } catch (error) {
             logger.error('[MCP] Failed to initialize builtin server:', error)
         }
     }
-
-    /**
-     * 初始化自定义工具服务器 (data/tools 目录)
-     */
     async initCustomToolsServer() {
         try {
             const allTools = builtinMcpServer.listTools()
@@ -162,8 +139,6 @@ export class McpManager {
                 logger.info('[MCP] No custom JS tools found in data/tools')
                 return
             }
-            
-            // 注册 JS 工具
             for (const tool of jsTools) {
                 this.tools.set(tool.name, {
                     ...tool,
@@ -172,8 +147,6 @@ export class McpManager {
                     isJsTool: true
                 })
             }
-
-            // 注册自定义工具服务器
             this.servers.set('custom-tools', {
                 status: 'connected',
                 config: { type: 'custom', path: 'data/tools' },
@@ -198,10 +171,6 @@ export class McpManager {
     setToolContext(ctx) {
         setBuiltinToolContext(ctx)
     }
-
-    /**
-     * Load servers from configuration (JSON file)
-     */
     async loadServers() {
         // 从 JSON 文件加载配置
         this.loadServersConfig()
@@ -214,8 +183,6 @@ export class McpManager {
         }
 
         logger.info(`[MCP] Loading ${serverNames.length} external server(s): ${serverNames.join(', ')}`)
-
-        // 异步并行加载所有服务器
         const results = await Promise.allSettled(
             serverNames.map(async name => {
                 try {
@@ -234,14 +201,12 @@ export class McpManager {
 
     async connectServer(name, serverConfig) {
         try {
-            // 处理特殊服务器类型
             if (name === 'builtin') {
                 await this.initBuiltinServer()
                 return { success: true, tools: this.servers.get('builtin')?.tools?.length || 0 }
             }
             
             if (name === 'custom-tools' || serverConfig?.type === 'custom') {
-                // 重新加载 data/tools 目录的 JS 工具
                 await builtinMcpServer.loadJsTools()
                 await this.initCustomToolsServer()
                 return { success: true, tools: this.servers.get('custom-tools')?.tools?.length || 0 }
@@ -618,14 +583,10 @@ export class McpManager {
      */
     async callTool(name, args, options = {}) {
         let tool = this.tools.get(name)
-        
-        // 如果在 tools Map 中找不到，尝试初始化后再查找
         if (!tool) {
             await this.init()
             tool = this.tools.get(name)
         }
-        
-        // 仍然找不到，检查是否是内置工具（直接调用内置服务器）
         if (!tool) {
             const builtinTools = builtinMcpServer.listTools()
             const builtinTool = builtinTools.find(t => t.name === name)
@@ -633,13 +594,9 @@ export class McpManager {
                 tool = { ...builtinTool, isBuiltin: true, serverName: 'builtin' }
             }
         }
-        
-        // 检查是否是 JS 工具
         if (!tool && builtinMcpServer.jsTools?.has(name)) {
             tool = { name, isJsTool: true, serverName: 'custom-tools' }
         }
-        
-        // 检查是否是 YAML 配置的自定义工具
         if (!tool) {
             const customTools = builtinMcpServer.getCustomTools()
             const customTool = customTools.find(t => t.name === name)
@@ -651,8 +608,6 @@ export class McpManager {
         if (!tool) {
             throw new Error(`Tool not found: ${name}`)
         }
-
-        // Check cache if enabled
         if (options.useCache) {
             const cacheKey = `${name}:${JSON.stringify(args)}`
             const cached = this.toolResultCache.get(cacheKey)
@@ -675,27 +630,21 @@ export class McpManager {
         }
 
         try {
-            // 简化日志：只显示工具名和关键参数
             const argsPreview = this.truncateArgs(args)
             logger.debug(`[MCP] Calling: ${name} ${argsPreview}`)
             let result
-
-            // 内置工具、JS工具、自定义工具都使用内置服务器处理
             const useBuiltin = tool.isBuiltin || tool.isJsTool || tool.isCustom || 
                                tool.serverName === 'builtin' || tool.serverName === 'custom-tools'
             
             if (useBuiltin) {
                 result = await builtinMcpServer.callTool(name, args, options.context)
             } else {
-                // 外部 MCP 服务器
                 const server = this.servers.get(tool.serverName)
                 if (!server || !server.client) {
                     throw new Error(`Server not available for tool: ${name}`)
                 }
                 result = await server.client.callTool(name, args)
             }
-
-            // Cache result if enabled
             if (options.useCache) {
                 const cacheKey = `${name}:${JSON.stringify(args)}`
                 this.toolResultCache.set(cacheKey, {
@@ -703,8 +652,6 @@ export class McpManager {
                     timestamp: Date.now()
                 })
             }
-
-            // 记录成功日志
             logEntry.success = true
             logEntry.duration = Date.now() - startTime
             logEntry.result = result
@@ -737,8 +684,6 @@ export class McpManager {
         const startTime = Date.now()
         const toolNames = toolCalls.map(t => t.name).join(', ')
         logger.debug(`[MCP] 并行执行: ${toolNames}`)
-
-        // 按服务器分组，同一服务器的调用可能需要串行
         const serverGroups = new Map()
         for (const call of toolCalls) {
             const tool = this.tools.get(call.name)
@@ -786,7 +731,7 @@ export class McpManager {
     }
 
     /**
-     * 批量执行工具调用（智能调度：无依赖的并行，有依赖的串行）
+     * 批量执行工具调用
      * @param {Array<{name: string, args: Object, dependsOn?: string[]}>} toolCalls
      * @param {Object} options
      * @returns {Promise<Map<string, any>>} 工具名 -> 结果 的映射
@@ -804,21 +749,14 @@ export class McpManager {
             })
 
             if (ready.length === 0 && pending.length > 0) {
-                // 存在循环依赖，强制执行剩余的
                 logger.warn('[MCP] 检测到可能的循环依赖，强制执行剩余工具')
                 ready.push(pending[0])
             }
-
-            // 从 pending 中移除 ready 的调用
             for (const call of ready) {
                 const idx = pending.indexOf(call)
                 if (idx !== -1) pending.splice(idx, 1)
             }
-
-            // 并行执行 ready 的调用
             const batchResults = await this.callToolsParallel(ready, options)
-
-            // 收集结果
             for (const result of batchResults) {
                 results.set(result.name, result)
                 completed.add(result.name)
@@ -866,14 +804,12 @@ export class McpManager {
      */
     clearToolLogs() {
         this.toolLogs = []
-        logger.info('[MCP] Tool logs cleared')
     }
 
     /**
      * 刷新内置工具列表
      */
     async refreshBuiltinTools() {
-        // 移除旧的内置工具
         for (const [name, tool] of this.tools) {
             if (tool.isBuiltin) {
                 this.tools.delete(name)
@@ -936,8 +872,6 @@ export class McpManager {
                     inputSchema: t.inputSchema
                 }))
             }
-
-            logger.info(`[MCP] 热重载完成: ${builtinMcpServer.jsTools.size} 个 JS 工具`)
             return builtinMcpServer.jsTools.size
         } catch (error) {
             logger.error('[MCP] JS 工具热重载失败:', error)

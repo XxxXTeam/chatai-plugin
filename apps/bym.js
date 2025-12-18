@@ -97,8 +97,6 @@ export class bym extends plugin {
             markMessageProcessed(e)
             
             logger.info('[BYM] 伪人模式触发')
-
-            // 使用 LlmService 获取聊天客户端（自动处理渠道和模型选择）
             const { LlmService } = await import('../src/services/llm/LlmService.js')
             
             // 获取伪人模型或默认模型（注意：空字符串要视为未配置）

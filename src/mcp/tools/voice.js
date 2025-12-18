@@ -1,42 +1,6 @@
 /**
- * 语音消息类型:
- * - PttElem: { type: 'record', file: string|Buffer, url?, fid?, md5?, size?, seconds? }
- * - segment.record(file, data) 构造语音消息段
+ * 语音消息工具
  */
-function detectProtocol(bot) {
-    if (!bot) return 'unknown'
-    if (bot.sendApi && (bot.adapter?.name?.includes?.('napcat') || bot.config?.protocol === 'napcat')) {
-        return 'napcat'
-    }
-    if (bot.sendApi || bot.config?.baseUrl) {
-        return 'onebot'
-    }
-    if (bot.pickGroup && bot.pickFriend && bot.fl && bot.gl) {
-        return 'icqq'
-    }
-    if (bot.sendApi) {
-        return 'onebot'
-    }
-    return 'unknown'
-}
-async function callOneBotApi(bot, action, params = {}) {
-    if (bot.sendApi) {
-        return await bot.sendApi(action, params)
-    }
-    if (bot[action]) {
-        return await bot[action](params)
-    }
-    if (bot.config?.baseUrl || bot.adapter?.config?.baseUrl) {
-        const baseUrl = bot.config?.baseUrl || bot.adapter?.config?.baseUrl
-        const res = await fetch(`${baseUrl}/${action}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(params)
-        })
-        return await res.json()
-    }
-    throw new Error('不支持的协议类型')
-}
 
 export const voiceTools = [
     {
@@ -206,7 +170,7 @@ export const voiceTools = [
 
     {
         name: 'send_ai_voice',
-        description: '发送AI语音消息（需要NapCat协议端，使用QQ的AI声聊功能合成语音）。使用前先调用 get_ai_voice_characters 获取可用角色列表',
+        description: '发送AI语音消息（使用QQ的AI声聊功能合成语音）使用前先调用 get_ai_voice_characters 获取可用角色列表',
         inputSchema: {
             type: 'object',
             properties: {
@@ -224,23 +188,74 @@ export const voiceTools = [
                     return { success: false, error: '无法获取Bot实例' }
                 }
                 
-                const protocol = detectProtocol(bot)
+                const { adapter, isNT, canAiVoice } = ctx.getAdapter()
                 const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
                 
                 if (!groupId) {
                     return { success: false, error: '需要指定群号或在群聊中使用' }
                 }
-                
                 if (!args.character) {
-                    return { 
-                        success: false, 
-                        error: '需要指定角色ID', 
-                        hint: '请先调用 get_ai_voice_characters 获取可用角色列表' 
+                    return { success: false, error: '需要指定角色ID' }
+                }
+
+                // icqq 适配器: 需要 NT 协议支持
+                if (adapter === 'icqq') {
+                    if (!isNT) {
+                        return {
+                            success: false,
+                            adapter,
+                            error: 'icqq 需要 NT 协议才能发送 AI 声聊',
+                            hint: '请确认 icqq >= 0.6.10 且配置使用 QQNT 协议'
+                        }
+                    }
+                    try {
+                        const rand = Math.floor(Math.random() * 4294967295)
+                        const body = {
+                            1: groupId,
+                            2: args.character,
+                            3: args.text,
+                            4: 1,
+                            5: { 1: rand }
+                        }
+                        const result = await bot.sendOidbSvcTrpcTcp('OidbSvcTrpcTcp.0x929b_0', body)
+                        const data = result?.toJSON?.() || result
+                        if (data?.[1] === 1) {
+                            return {
+                                success: true,
+                                completed: true,
+                                adapter: 'icqq',
+                                message: `AI语音已发送到群 ${groupId}`
+                            }
+                        }
+                        return { success: false, adapter, error: 'AI声聊请求失败', code: data?.[3] }
+                    } catch (err) {
+                        return { success: false, adapter, error: `icqq发送失败: ${err.message}` }
                     }
                 }
-                
-                // NapCat API: send_group_ai_record (与 aivoice.js 一致)
-                // 参数: character(角色ID), group_id(群号), text(文本)
+
+                // NapCat 适配器
+                if (adapter === 'napcat') {
+                    try {
+                        const result = await bot.sendApi('send_group_ai_record', {
+                            character: args.character,
+                            group_id: groupId,
+                            text: args.text
+                        })
+                        if (result?.message_id || result?.data?.message_id || result?.retcode === 0) {
+                            return {
+                                success: true,
+                                completed: true,
+                                adapter: 'napcat',
+                                message: `AI语音已发送到群 ${groupId}`
+                            }
+                        }
+                        return { success: false, adapter, error: 'NapCat API 返回失败' }
+                    } catch (err) {
+                        return { success: false, adapter, error: `NapCat发送失败: ${err.message}` }
+                    }
+                }
+
+                // 其他 OneBot 实现尝试
                 if (bot.sendApi) {
                     try {
                         const result = await bot.sendApi('send_group_ai_record', {
@@ -248,49 +263,25 @@ export const voiceTools = [
                             group_id: groupId,
                             text: args.text
                         })
-                        
-                        // 检查返回结果
                         if (result?.message_id || result?.data?.message_id || result?.retcode === 0) {
-                            return {
-                                success: true,
-                                completed: true,
-                                message: `AI语音消息已成功发送到群 ${groupId}，无需再次调用此工具`,
-                                message_id: result?.message_id || result?.data?.message_id
-                            }
-                        } else {
-                            return {
-                                success: false,
-                                error: 'API调用未返回有效结果',
-                                result: result
-                            }
+                            return { success: true, completed: true, adapter, message: `AI语音已发送到群 ${groupId}` }
                         }
-                    } catch (apiErr) {
-                        return { 
-                            success: false, 
-                            protocol,
-                            error: `send_group_ai_record API 调用失败: ${apiErr.message}`,
-                            hint: '请确认 NapCat 版本是否支持此API'
-                        }
-                    }
+                    } catch (e) {}
                 }
-                
+
                 // 备用方法
                 if (bot.sendGroupAiRecord) {
                     const result = await bot.sendGroupAiRecord(groupId, args.text, args.character)
-                    return { 
-                        success: true, 
-                        completed: true,
-                        message: `AI语音消息已成功发送到群 ${groupId}`,
-                        message_id: result?.message_id 
-                    }
+                    return { success: true, completed: true, message: `AI语音已发送到群 ${groupId}` }
                 }
-                
+
                 return { 
                     success: false, 
-                    protocol,
-                    error: 'AI语音功能需要 NapCat 协议端支持',
-                    hint: '请确认协议端是否支持 send_group_ai_record API',
-                    alternatives: ['send_tts', 'send_voice']
+                    adapter,
+                    error: '当前适配器不支持AI声聊',
+                    hint: adapter === 'onebot' 
+                        ? 'OneBot 实现需要支持 send_group_ai_record API'
+                        : '需要 icqq(NT) 或 NapCat 适配器'
                 }
             } catch (err) {
                 return { success: false, error: `发送AI语音失败: ${err.message}` }
@@ -454,13 +445,13 @@ export const voiceTools = [
 
     {
         name: 'get_ai_record',
-        description: '获取AI语音（文字转语音，不发送，返回语音数据）',
+        description: '获取AI语音数据（不发送）。注意：icqq适配器不支持此功能，请直接使用 send_ai_voice',
         inputSchema: {
             type: 'object',
             properties: {
                 text: { type: 'string', description: '要转换的文字' },
                 character: { type: 'string', description: '角色/音色ID' },
-                group_id: { type: 'string', description: '群号（用于获取可用角色）' }
+                group_id: { type: 'string', description: '群号' }
             },
             required: ['text', 'character']
         },
@@ -472,26 +463,35 @@ export const voiceTools = [
                     return { success: false, error: '无法获取Bot实例' }
                 }
                 
+                const { adapter } = ctx.getAdapter()
                 const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
-                
-                // NapCat API: get_ai_record
-                const result = await callOneBotApi(bot, 'get_ai_record', {
-                    group_id: groupId,
-                    character: args.character,
-                    text: args.text
-                })
-                
-                if (result?.data || result?.file) {
+                if (adapter === 'icqq') {
                     return {
-                        success: true,
-                        text: args.text,
+                        success: false,
+                        adapter,
+                        error: 'icqq适配器不支持获取AI语音数据',
+                        hint: '请直接使用 send_ai_voice 工具发送AI语音到群'
+                    }
+                }
+                if (adapter === 'napcat' || adapter === 'onebot') {
+                    const result = await bot.sendApi('get_ai_record', {
+                        group_id: groupId,
                         character: args.character,
-                        file: result.data?.file || result.file,
-                        url: result.data?.url || result.url
+                        text: args.text
+                    })
+                    if (result?.data || result?.file) {
+                        return {
+                            success: true,
+                            adapter,
+                            text: args.text,
+                            character: args.character,
+                            file: result.data?.file || result.file,
+                            url: result.data?.url || result.url
+                        }
                     }
                 }
                 
-                return { success: false, error: '获取AI语音失败' }
+                return { success: false, adapter, error: '当前适配器不支持获取AI语音数据' }
             } catch (err) {
                 return { success: false, error: `获取AI语音失败: ${err.message}` }
             }
@@ -755,35 +755,72 @@ export const voiceTools = [
                     return { success: false, error: '无法获取Bot实例' }
                 }
                 
+                const { adapter, isNT, canAiVoice } = ctx.getAdapter()
                 const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
+                
                 if (!groupId) {
                     return { success: false, error: '需要指定群号或在群聊中使用' }
                 }
-                
-                // NapCat API: get_group_ai_record_status (如果存在)
-                try {
-                    const result = await callOneBotApi(bot, 'get_group_ai_record_status', { group_id: groupId })
+
+                // icqq 适配器
+                if (adapter === 'icqq') {
                     return {
                         success: true,
                         group_id: groupId,
-                        enabled: result?.data?.enabled ?? result?.enabled,
-                        character: result?.data?.character || result?.character
+                        adapter,
+                        isNT,
+                        canAiVoice,
+                        note: isNT 
+                            ? 'icqq(NT)支持AI声聊，使用 send_ai_voice 发送'
+                            : 'icqq需要NT协议才能使用AI声聊'
                     }
-                } catch (e) {
-                    // 尝试获取角色列表来判断功能是否可用
+                }
+                
+                // NapCat 适配器
+                if (adapter === 'napcat') {
                     try {
-                        const chars = await callOneBotApi(bot, 'get_ai_characters', { group_id: groupId })
+                        const result = await bot.sendApi('get_group_ai_record_status', { group_id: groupId })
                         return {
                             success: true,
                             group_id: groupId,
-                            available: true,
-                            character_count: (chars?.data || chars || []).length,
-                            note: '无法获取具体状态，但AI声聊功能可用'
+                            adapter,
+                            canAiVoice: true,
+                            enabled: result?.data?.enabled ?? result?.enabled,
+                            character: result?.data?.character || result?.character
                         }
-                    } catch (e2) {
-                        return { success: false, error: '当前协议不支持获取AI声聊状态' }
+                    } catch (e) {
+                        return {
+                            success: true,
+                            group_id: groupId,
+                            adapter,
+                            canAiVoice: true,
+                            note: 'NapCat支持AI声聊'
+                        }
                     }
                 }
+
+                // 其他 OneBot
+                if (adapter === 'onebot') {
+                    try {
+                        const chars = await bot.sendApi('get_ai_characters', { group_id: groupId })
+                        return {
+                            success: true,
+                            group_id: groupId,
+                            adapter,
+                            canAiVoice: true,
+                            character_count: (chars?.data || chars || []).length
+                        }
+                    } catch (e) {
+                        return {
+                            success: false,
+                            adapter,
+                            canAiVoice: false,
+                            error: '当前OneBot实现不支持AI声聊'
+                        }
+                    }
+                }
+
+                return { success: false, adapter, canAiVoice: false, error: '未知适配器' }
             } catch (err) {
                 return { success: false, error: `获取AI声聊状态失败: ${err.message}` }
             }

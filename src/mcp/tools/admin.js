@@ -3,6 +3,8 @@
  * 禁言、踢人、设置群名片等管理功能
  */
 
+import { icqqGroup, callOneBotApi } from './helpers.js'
+
 export const adminTools = [
     {
         name: 'mute_member',
@@ -19,15 +21,20 @@ export const adminTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
+                const { adapter } = ctx.getAdapter()
                 const groupId = parseInt(args.group_id)
                 const userId = parseInt(args.user_id)
                 const duration = Math.min(Math.max(args.duration, 0), 30 * 24 * 3600)
                 
-                const group = bot.pickGroup(groupId)
-                await group.muteMember(userId, duration)
+                if (adapter === 'icqq') {
+                    await icqqGroup.muteMember(bot, groupId, userId, duration)
+                } else {
+                    await callOneBotApi(bot, 'set_group_ban', { group_id: groupId, user_id: userId, duration })
+                }
                 
                 return { 
                     success: true, 
+                    adapter,
                     group_id: groupId,
                     user_id: userId,
                     duration,
@@ -54,13 +61,17 @@ export const adminTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
+                const { adapter } = ctx.getAdapter()
                 const groupId = parseInt(args.group_id)
                 const userId = parseInt(args.user_id)
                 
-                const group = bot.pickGroup(groupId)
-                await group.kickMember(userId, args.reject_add || false)
+                if (adapter === 'icqq') {
+                    await icqqGroup.kickMember(bot, groupId, userId, args.reject_add || false)
+                } else {
+                    await callOneBotApi(bot, 'set_group_kick', { group_id: groupId, user_id: userId, reject_add_request: args.reject_add || false })
+                }
                 
-                return { success: true, group_id: groupId, user_id: userId }
+                return { success: true, adapter, group_id: groupId, user_id: userId }
             } catch (err) {
                 return { success: false, error: `踢人失败: ${err.message}` }
             }
@@ -82,14 +93,17 @@ export const adminTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
+                const { adapter } = ctx.getAdapter()
                 const groupId = parseInt(args.group_id)
                 const userId = parseInt(args.user_id)
                 
-                const group = bot.pickGroup(groupId)
-                const member = group.pickMember(userId)
-                await member.setCard(args.card)
+                if (adapter === 'icqq') {
+                    await icqqGroup.setCard(bot, groupId, userId, args.card)
+                } else {
+                    await callOneBotApi(bot, 'set_group_card', { group_id: groupId, user_id: userId, card: args.card })
+                }
                 
-                return { success: true, group_id: groupId, user_id: userId, card: args.card }
+                return { success: true, adapter, group_id: groupId, user_id: userId, card: args.card }
             } catch (err) {
                 return { success: false, error: `设置群名片失败: ${err.message}` }
             }
@@ -110,13 +124,18 @@ export const adminTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
+                const { adapter } = ctx.getAdapter()
                 const groupId = parseInt(args.group_id)
                 
-                const group = bot.pickGroup(groupId)
-                await group.muteAll(args.enable)
+                if (adapter === 'icqq') {
+                    await icqqGroup.muteAll(bot, groupId, args.enable)
+                } else {
+                    await callOneBotApi(bot, 'set_group_whole_ban', { group_id: groupId, enable: args.enable })
+                }
                 
                 return { 
                     success: true, 
+                    adapter,
                     group_id: groupId, 
                     action: args.enable ? '开启全群禁言' : '关闭全群禁言'
                 }
@@ -141,14 +160,19 @@ export const adminTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
+                const { adapter } = ctx.getAdapter()
                 const groupId = parseInt(args.group_id)
                 const userId = parseInt(args.user_id)
                 
-                const group = bot.pickGroup(groupId)
-                await group.setAdmin(userId, args.enable)
+                if (adapter === 'icqq') {
+                    await icqqGroup.setAdmin(bot, groupId, userId, args.enable)
+                } else {
+                    await callOneBotApi(bot, 'set_group_admin', { group_id: groupId, user_id: userId, enable: args.enable })
+                }
                 
                 return { 
                     success: true, 
+                    adapter,
                     group_id: groupId, 
                     user_id: userId,
                     action: args.enable ? '设为管理员' : '取消管理员'
@@ -173,12 +197,16 @@ export const adminTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
+                const { adapter } = ctx.getAdapter()
                 const groupId = parseInt(args.group_id)
                 
-                const group = bot.pickGroup(groupId)
-                await group.setName(args.name)
+                if (adapter === 'icqq') {
+                    await icqqGroup.setName(bot, groupId, args.name)
+                } else {
+                    await callOneBotApi(bot, 'set_group_name', { group_id: groupId, group_name: args.name })
+                }
                 
-                return { success: true, group_id: groupId, name: args.name }
+                return { success: true, adapter, group_id: groupId, name: args.name }
             } catch (err) {
                 return { success: false, error: `修改群名称失败: ${err.message}` }
             }
@@ -201,14 +229,17 @@ export const adminTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
+                const { adapter } = ctx.getAdapter()
                 const groupId = parseInt(args.group_id)
                 const userId = parseInt(args.user_id)
                 
-                const group = bot.pickGroup(groupId)
-                const member = group.pickMember(userId)
-                await member.setTitle(args.title, args.duration || -1)
+                if (adapter === 'icqq') {
+                    await icqqGroup.setTitle(bot, groupId, userId, args.title, args.duration || -1)
+                } else {
+                    await callOneBotApi(bot, 'set_group_special_title', { group_id: groupId, user_id: userId, special_title: args.title, duration: args.duration || -1 })
+                }
                 
-                return { success: true, group_id: groupId, user_id: userId, title: args.title }
+                return { success: true, adapter, group_id: groupId, user_id: userId, title: args.title }
             } catch (err) {
                 return { success: false, error: `设置头衔失败: ${err.message}` }
             }

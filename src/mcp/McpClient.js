@@ -176,8 +176,6 @@ export class McpClient {
                 this.handleDisconnect()
             }
         }
-
-        // Wait for connection
         await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => reject(new Error('SSE connection timeout')), 10000)
             this.eventSource.onopen = () => {
@@ -191,13 +189,10 @@ export class McpClient {
         const { url, headers } = this.config
         this.httpUrl = url
         this.httpHeaders = headers || {}
-        // HTTP 类型不需要预先测试连接，直接在 initialize 时发送请求
     }
 
     handleData(data) {
         this.messageBuffer += data.toString()
-
-        // Process buffer for newline-delimited JSON messages
         let newlineIndex
         while ((newlineIndex = this.messageBuffer.indexOf('\n')) !== -1) {
             const line = this.messageBuffer.slice(0, newlineIndex)
@@ -350,12 +345,9 @@ export class McpClient {
 
             try {
                 const message = JSON.stringify(request) + '\n'
-
-                // stdio 和 npm/npx 类型都通过 process.stdin 发送
                 if ((this.type === 'stdio' || this.type === 'npm' || this.type === 'npx') && this.process) {
                     this.process.stdin.write(message)
                 } else if (this.type === 'sse') {
-                    // SSE 类型通过 HTTP POST 发送请求
                     this.sendSSERequest(request).then(response => {
                         if (response.id === id) {
                             const pending = this.pendingRequests.get(id)
@@ -375,7 +367,7 @@ export class McpClient {
                             pending.reject(err)
                         }
                     })
-                    return // SSE 请求是异步处理的
+                    return 
                 }
             } catch (err) {
                 this.pendingRequests.delete(id)

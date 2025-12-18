@@ -1,32 +1,8 @@
 /**
  * 文件操作工具
- * 支持 NapCat 和 icqq 的群文件相关 API
- * 参考: https://napcat.apifox.cn/54405744f0
  */
 
-/**
- * 调用 OneBot API (支持 NapCat/go-cqhttp)
- */
-async function callOneBotApi(bot, action, params = {}) {
-    // 尝试 NapCat/go-cqhttp 的 API 调用方式
-    if (bot.sendApi) {
-        return await bot.sendApi(action, params)
-    }
-    if (bot.pickGroup && bot[action]) {
-        return await bot[action](params)
-    }
-    // 回退到 HTTP API
-    if (bot.config?.baseUrl || bot.adapter?.config?.baseUrl) {
-        const baseUrl = bot.config?.baseUrl || bot.adapter?.config?.baseUrl
-        const res = await fetch(`${baseUrl}/${action}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(params)
-        })
-        return await res.json()
-    }
-    throw new Error('不支持的协议类型')
-}
+import { icqqGroup, callOneBotApi } from './helpers.js'
 
 export const fileTools = [
     {
@@ -43,15 +19,21 @@ export const fileTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
+                const { adapter } = ctx.getAdapter()
                 const groupId = parseInt(args.group_id)
                 
-                const group = bot.pickGroup(groupId)
                 let files = []
-                
-                if (group.getFileList) {
-                    files = await group.getFileList(args.folder_id || '/')
-                } else if (group.fs?.ls) {
-                    files = await group.fs.ls(args.folder_id || '/')
+                if (adapter === 'icqq') {
+                    const fs = icqqGroup.getFs(bot, groupId)
+                    if (fs?.ls) {
+                        files = await fs.ls(args.folder_id || '/')
+                    }
+                } else {
+                    const result = await callOneBotApi(bot, 'get_group_file_list', { 
+                        group_id: groupId, 
+                        folder_id: args.folder_id || '/' 
+                    })
+                    files = result?.data?.files || result?.files || []
                 }
                 
                 const result = (files || []).map(f => ({
@@ -60,10 +42,10 @@ export const fileTools = [
                     size: f.size || f.file_size,
                     type: f.type || (f.is_dir ? 'folder' : 'file'),
                     upload_time: f.upload_time || f.create_time,
-                    uploader: f.uploader || f.uploader_uin
+                    uploader: f.uploader || f.uploader_uin || f.user_id
                 }))
                 
-                return { success: true, group_id: groupId, count: result.length, files: result }
+                return { success: true, adapter, group_id: groupId, count: result.length, files: result }
             } catch (err) {
                 return { success: false, error: `获取群文件失败: ${err.message}` }
             }
@@ -84,22 +66,29 @@ export const fileTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
+                const { adapter } = ctx.getAdapter()
                 const groupId = parseInt(args.group_id)
                 
-                const group = bot.pickGroup(groupId)
                 let url = ''
-                
-                if (group.getFileUrl) {
-                    url = await group.getFileUrl(args.file_id)
-                } else if (group.fs?.download) {
-                    url = await group.fs.download(args.file_id)
+                if (adapter === 'icqq') {
+                    const fs = icqqGroup.getFs(bot, groupId)
+                    if (fs?.download) {
+                        const result = await fs.download(args.file_id)
+                        url = result?.url || result
+                    }
+                } else {
+                    const result = await callOneBotApi(bot, 'get_group_file_url', { 
+                        group_id: groupId, 
+                        file_id: args.file_id 
+                    })
+                    url = result?.data?.url || result?.url
                 }
                 
                 if (!url) {
                     return { success: false, error: '无法获取文件链接' }
                 }
                 
-                return { success: true, group_id: groupId, file_id: args.file_id, url }
+                return { success: true, adapter, group_id: groupId, file_id: args.file_id, url }
             } catch (err) {
                 return { success: false, error: `获取文件链接失败: ${err.message}` }
             }
@@ -122,19 +111,21 @@ export const fileTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
+                const { adapter } = ctx.getAdapter()
                 const groupId = parseInt(args.group_id)
                 
-                const group = bot.pickGroup(groupId)
-                
-                if (group.sendFile) {
-                    await group.sendFile(args.file_url, args.folder_id, args.name)
-                } else if (group.fs?.upload) {
-                    await group.fs.upload(args.file_url, args.folder_id || '/', args.name)
+                if (adapter === 'icqq') {
+                    await icqqGroup.sendFile(bot, groupId, args.file_url, args.name)
                 } else {
-                    return { success: false, error: '当前协议不支持上传文件' }
+                    await callOneBotApi(bot, 'upload_group_file', {
+                        group_id: groupId,
+                        file: args.file_url,
+                        name: args.name,
+                        folder: args.folder_id || '/'
+                    })
                 }
                 
-                return { success: true, group_id: groupId, name: args.name }
+                return { success: true, adapter, group_id: groupId, name: args.name }
             } catch (err) {
                 return { success: false, error: `上传文件失败: ${err.message}` }
             }

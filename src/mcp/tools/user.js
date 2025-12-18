@@ -3,6 +3,8 @@
  * 获取用户信息、好友列表等
  */
 
+import { icqqFriend, callOneBotApi } from './helpers.js'
+
 export const userTools = [
     {
         name: 'get_user_info',
@@ -16,6 +18,7 @@ export const userTools = [
         },
         handler: async (args, ctx) => {
             const bot = ctx.getBot()
+            const { adapter } = ctx.getAdapter()
             const userId = parseInt(args.user_id)
 
             // 尝试获取好友信息
@@ -23,6 +26,7 @@ export const userTools = [
             if (friend) {
                 return {
                     success: true,
+                    adapter,
                     user_id: userId,
                     nickname: friend.nickname,
                     remark: friend.remark || '',
@@ -34,10 +38,16 @@ export const userTools = [
 
             // 尝试获取陌生人信息
             try {
-                const stranger = await bot.getStrangerInfo(userId)
+                let stranger
+                if (adapter === 'icqq') {
+                    stranger = await icqqFriend.getSimpleInfo(bot, userId)
+                } else {
+                    stranger = await bot.getStrangerInfo?.(userId) || await callOneBotApi(bot, 'get_stranger_info', { user_id: userId })
+                }
                 if (stranger) {
                     return {
                         success: true,
+                        adapter,
                         user_id: userId,
                         nickname: stranger.nickname,
                         sex: stranger.sex,
@@ -52,6 +62,7 @@ export const userTools = [
 
             return { 
                 success: false, 
+                adapter,
                 error: '无法获取用户信息，QQ号可能不存在', 
                 user_id: userId,
                 avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
@@ -103,21 +114,17 @@ export const userTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
+                const { adapter } = ctx.getAdapter()
                 const userId = parseInt(args.user_id)
                 const times = Math.min(Math.max(args.times || 10, 1), 20)
                 
-                if (bot.sendLike) {
-                    await bot.sendLike(userId, times)
-                    return { success: true, user_id: userId, times }
-                } else if (bot.pickFriend) {
-                    const friend = bot.pickFriend(userId)
-                    if (friend.thumbUp) {
-                        await friend.thumbUp(times)
-                        return { success: true, user_id: userId, times }
-                    }
+                if (adapter === 'icqq') {
+                    await icqqFriend.thumbUp(bot, userId, times)
+                    return { success: true, adapter, user_id: userId, times }
+                } else {
+                    await callOneBotApi(bot, 'send_like', { user_id: userId, times })
+                    return { success: true, adapter, user_id: userId, times }
                 }
-                
-                return { success: false, error: '当前协议不支持点赞功能' }
             } catch (err) {
                 return { success: false, error: `点赞失败: ${err.message}` }
             }

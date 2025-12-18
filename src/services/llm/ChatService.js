@@ -363,11 +363,7 @@ export class ChatService {
             promptContext.group_id = event.group_id?.toString() || ''
             promptContext.bot_name = event.bot?.nickname || 'AI助手'
         }
-        
-        // 获取默认预设的Prompt
         const defaultPrompt = preset?.systemPrompt || presetManager.buildSystemPrompt(effectivePresetId, promptContext)
-        
-        // 收集预设调试信息
         if (debugInfo) {
             debugInfo.preset = {
                 id: effectivePresetId,
@@ -426,11 +422,14 @@ export class ChatService {
         if (config.get('memory.enabled') && !isNewSession) {
             try {
                 await memoryManager.init()
-                const memoryContext = await memoryManager.getMemoryContext(userId, message || '')
+                const memoryContext = await memoryManager.getMemoryContext(userId, message || '', {
+                    event,
+                    groupId: groupId ? String(groupId) : null,
+                    includeProfile: true 
+                })
                 if (memoryContext) {
                     systemPrompt += memoryContext
                     logger.debug(`[ChatService] 已添加记忆上下文到系统提示 (${memoryContext.length} 字符)`)
-                    // 收集记忆调试信息
                     if (debugInfo) {
                         debugInfo.memory.userMemory = {
                             hasMemory: true,
@@ -444,8 +443,10 @@ export class ChatService {
                         debugInfo.memory.userMemory = { hasMemory: false }
                     }
                 }
+                // 群聊上下文（话题、关系等群级别信息）
                 if (groupId && config.get('memory.groupContext.enabled')) {
-                    const groupMemory = await memoryManager.getGroupMemoryContext(String(groupId), userId)
+                    const nickname = event?.sender?.card || event?.sender?.nickname
+                    const groupMemory = await memoryManager.getGroupMemoryContext(String(groupId), cleanUserId, { nickname })
                     if (groupMemory) {
                         const parts = []
                         if (groupMemory.userInfo?.length > 0) {

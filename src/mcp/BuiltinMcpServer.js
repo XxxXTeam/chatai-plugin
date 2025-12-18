@@ -11,6 +11,31 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 /**
+ * 检测Bot适配器类型
+ * @param {Object} bot - Bot实例
+ * @returns {{ adapter: 'icqq'|'napcat'|'onebot'|'unknown', isNT: boolean, canAiVoice: boolean }}
+ */
+function detectAdapter(bot) {
+    if (!bot) return { adapter: 'unknown', isNT: false, canAiVoice: false }
+    const isIcqq = !!(bot.pickGroup && bot.pickFriend && bot.fl && bot.gl && !bot.sendApi)
+    if (isIcqq) {
+        const hasNT = !!(bot.sendOidbSvcTrpcTcp && typeof bot.sendOidbSvcTrpcTcp === 'function')
+        return { adapter: 'icqq', isNT: hasNT, canAiVoice: hasNT }
+    }
+    if (bot.sendApi) {
+        const isNapCat = !!(bot.adapter?.name?.includes?.('napcat') || bot.config?.protocol === 'napcat')
+        if (isNapCat) {
+            return { adapter: 'napcat', isNT: true, canAiVoice: true }
+        }
+        return { adapter: 'onebot', isNT: false, canAiVoice: false }
+    }
+    
+    return { adapter: 'unknown', isNT: false, canAiVoice: false }
+}
+
+const adapterCache = new Map()
+
+/**
  * 工具执行上下文
  */
 class ToolContext {
@@ -18,11 +43,14 @@ class ToolContext {
         this.bot = null
         this.event = null
         this.callbacks = new Map()
+        this._adapterInfo = null
     }
 
     setContext(ctx) {
         if (ctx.bot) this.bot = ctx.bot
         if (ctx.event) this.event = ctx.event
+        // 每次设置上下文时更新适配器信息
+        this._adapterInfo = null
     }
 
     getBot(botId) {
@@ -38,6 +66,37 @@ class ToolContext {
 
     getEvent() {
         return this.event
+    }
+
+    /**
+     * 获取当前Bot的适配器信息
+     * @returns {{ adapter: 'icqq'|'napcat'|'onebot'|'unknown', isNT: boolean, canAiVoice: boolean }}
+     */
+    getAdapter() {
+        if (this._adapterInfo) return this._adapterInfo
+        
+        const bot = this.getBot()
+        const botId = bot?.uin || bot?.self_id || 'default'
+        
+        // 检查缓存
+        if (adapterCache.has(botId)) {
+            this._adapterInfo = adapterCache.get(botId)
+            return this._adapterInfo
+        }
+        
+        // 检测并缓存
+        this._adapterInfo = detectAdapter(bot)
+        adapterCache.set(botId, this._adapterInfo)
+        return this._adapterInfo
+    }
+    isIcqq() {
+        return this.getAdapter().adapter === 'icqq'
+    }
+    isNapCat() {
+        return this.getAdapter().adapter === 'napcat'
+    }
+    isNT() {
+        return this.getAdapter().isNT
     }
 
     /**
@@ -58,6 +117,17 @@ class ToolContext {
             return result
         }
         return null
+    }
+}
+
+/**
+ * 清除适配器缓存
+ */
+export function clearAdapterCache(botId) {
+    if (botId) {
+        adapterCache.delete(botId)
+    } else {
+        adapterCache.clear()
     }
 }
 
@@ -83,7 +153,7 @@ export function getBuiltinToolContext() {
 export class BuiltinMcpServer {
     constructor() {
         this.name = 'builtin'
-        this.tools = []  // 已迁移到 tools/ 目录的模块化工具
+        this.tools = [] 
         this.jsTools = new Map()  // 存储 JS 文件加载的工具
         this.modularTools = []     // 分割后的模块化工具
         this.toolCategories = {}   // 工具类别信息
@@ -125,10 +195,6 @@ export class BuiltinMcpServer {
             this.modularTools = []
         }
     }
-
-    /**
-     * 获取工具类别信息（用于管理页面）
-     */
     getToolCategories() {
         const builtinConfig = config.get('builtinTools') || {}
         const enabledCategories = builtinConfig.enabledCategories
@@ -193,16 +259,9 @@ export class BuiltinMcpServer {
         await this.loadModularTools()
         return { success: true, disabledTools }
     }
-
-    /**
-     * 加载 data/tools 目录下的 JS 工具文件
-     * 支持热重载，通过添加时间戳避免模块缓存
-     */
     async loadJsTools() {
         const toolsDir = path.join(__dirname, '../../data/tools')
         logger.debug(`[BuiltinMCP] 加载JS工具: ${toolsDir}`)
-        
-        // 清除旧工具
         this.jsTools.clear()
         
         if (!fs.existsSync(toolsDir)) {
@@ -212,7 +271,6 @@ export class BuiltinMcpServer {
         }
         
         const allFiles = fs.readdirSync(toolsDir)
-        // 排除 CustomTool.js 基类文件
         const files = allFiles.filter(f => f.endsWith('.js') && f !== 'CustomTool.js')
         logger.debug(`[BuiltinMCP] 发现 ${files.length} 个JS工具`)
         
@@ -271,8 +329,6 @@ export class BuiltinMcpServer {
         
         let tools = []
         const disabledTools = builtinConfig.disabledTools || []
-        
-        // 优先使用模块化工具（如果已加载）
         if (builtinConfig.enabled) {
             if (this.modularTools.length > 0) {
                 tools = this.modularTools.map(t => ({
@@ -281,20 +337,13 @@ export class BuiltinMcpServer {
                     inputSchema: t.inputSchema
                 }))
             } else {
-                // 回退到内置定义
                 let builtinTools = [...this.tools]
-
-                // 过滤允许的工具
                 if (builtinConfig.allowedTools?.length > 0) {
                     builtinTools = builtinTools.filter(t => builtinConfig.allowedTools.includes(t.name))
                 }
-
-                // 过滤禁用的工具
                 if (disabledTools.length > 0) {
                     builtinTools = builtinTools.filter(t => !disabledTools.includes(t.name))
                 }
-
-                // 过滤危险工具
                 if (!builtinConfig.allowDangerous) {
                     const dangerous = builtinConfig.dangerousTools || []
                     builtinTools = builtinTools.filter(t => !dangerous.includes(t.name))
@@ -338,10 +387,7 @@ export class BuiltinMcpServer {
         const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor
         
         try {
-            // 构建丰富的执行环境
             const runtime = await this.buildToolRuntime(ctx)
-            
-            // 构建执行函数，提供完整的 API 访问
             const fn = new AsyncFunction(
                 'args', 'ctx', 'fetch', 'runtime',
                 'Redis', 'config', 'logger', 'Bot', 'fs', 'path', 'crypto',
@@ -372,7 +418,6 @@ export class BuiltinMcpServer {
      * 构建工具运行时环境
      */
     async buildToolRuntime(ctx) {
-        // 动态导入服务
         const { redisClient } = await import('../core/cache/RedisClient.js')
         const { chatService } = await import('../services/llm/ChatService.js')
         const { databaseService } = await import('../services/storage/DatabaseService.js')
@@ -573,7 +618,7 @@ export class BuiltinMcpServer {
      * 调用工具
      * @param {string} name - 工具名称
      * @param {Object} args - 工具参数
-     * @param {Object} requestContext - 请求级上下文（用于并发隔离）
+     * @param {Object} requestContext - 请求级上下文
      */
     async callTool(name, args, requestContext = null) {
         // 创建请求级上下文包装器，优先使用传入的上下文
@@ -686,7 +731,6 @@ export class BuiltinMcpServer {
                 executeCallback: (id, data) => toolContext.executeCallback(id, data)
             }
         }
-        // 回退到全局上下文（兼容旧代码）
         return toolContext
     }
 
@@ -735,8 +779,6 @@ export class BuiltinMcpServer {
                 }
             })
         }
-
-        // 普通对象结果
         if (content.length === 0) {
             content.push({
                 type: 'text',
@@ -752,6 +794,4 @@ export class BuiltinMcpServer {
         ]
     }
 }
-
-// 单例
 export const builtinMcpServer = new BuiltinMcpServer()

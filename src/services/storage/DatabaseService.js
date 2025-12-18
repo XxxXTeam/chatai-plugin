@@ -93,7 +93,7 @@ class DatabaseService {
     /**
      * 获取用户的所有记忆
      */
-    getMemories(userId, limit = 50) {
+    getMemories(userId, limit = 100) {
         const stmt = this.db.prepare(`
             SELECT * FROM memories 
             WHERE user_id = ? 
@@ -159,7 +159,7 @@ class DatabaseService {
     /**
      * 按前缀获取记忆
      */
-    getMemoriesByPrefix(prefix, limit = 50) {
+    getMemoriesByPrefix(prefix, limit = 100) {
         const stmt = this.db.prepare(`
             SELECT * FROM memories 
             WHERE user_id LIKE ? 

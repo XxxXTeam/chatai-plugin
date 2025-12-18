@@ -395,73 +395,70 @@ export class AICommands extends plugin {
 
         try {
             await this.reply('正在分析群聊消息...', true)
-            
             const maxMessages = config.get('features.groupSummary.maxMessages') || 100
             const groupId = String(e.group_id)
-            
-            // 1. 优先使用内存缓冲区（实时数据）
             await memoryManager.init()
-            let messages = memoryManager.getGroupMessageBuffer(groupId)
-            let dataSource = '内存缓冲'
-            
-            // 2. 如果内存不足，从数据库读取持久化的群消息
-            if (messages.length < 5) {
+            let messages = []
+            let dataSource = ''
+            try {
+                const history = await getGroupChatHistory(e, maxMessages)
+                if (history && history.length > 0) {
+                    const apiMessages = await Promise.all(history.map(async msg => {
+                        let nickname = msg.sender?.card || msg.sender?.nickname || '用户'
+                        const contentParts = await Promise.all(
+                            (msg.message || []).map(async part => {
+                                if (part.type === 'text') return part.text
+                                if (part.type === 'at') {
+                                    if (part.qq === 'all' || part.qq === 0) return '@全体成员'
+                                    try {
+                                        const info = await getMemberInfo(e, part.qq)
+                                        return `@${info?.card || info?.nickname || part.qq}`
+                                    } catch {
+                                        return `@${part.qq}`
+                                    }
+                                }
+                                return ''
+                            })
+                        )
+                        return {
+                            userId: msg.sender?.user_id,
+                            nickname,
+                            content: contentParts.join(''),
+                            timestamp: msg.time ? msg.time * 1000 : Date.now()
+                        }
+                    }))
+                    messages = apiMessages.filter(m => m.content && m.content.trim())
+                    if (messages.length > 0) dataSource = 'Bot API'
+                }
+            } catch (historyErr) {
+                logger.debug('[AI-Commands] Bot API 获取群聊历史失败:', historyErr.message)
+            }
+            if (messages.length < maxMessages) {
+                const memoryMessages = memoryManager.getGroupMessageBuffer(groupId) || []
+                if (memoryMessages.length > messages.length) {
+                    messages = memoryMessages
+                    dataSource = '内存缓冲'
+                }
+            }
+            if (messages.length < maxMessages) {
                 try {
                     databaseService.init()
                     const conversationId = `group_summary_${groupId}`
-                    const dbMessages = databaseService.getMessages(conversationId, maxMessages)
-                    if (dbMessages && dbMessages.length > 0) {
-                        messages = dbMessages.map(m => ({
+                    const rawDbMessages = databaseService.getMessages(conversationId, maxMessages)
+                    if (rawDbMessages && rawDbMessages.length > messages.length) {
+                        const dbMessages = rawDbMessages.map(m => ({
                             nickname: m.metadata?.nickname || '用户',
                             content: typeof m.content === 'string' ? m.content : 
                                 (Array.isArray(m.content) ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') : String(m.content)),
                             timestamp: m.timestamp
                         })).filter(m => m.content && m.content.trim())
-                        dataSource = '数据库'
+                        if (dbMessages.length > messages.length) {
+                            messages = dbMessages
+                            dataSource = '数据库'
+                        }
                     }
                 } catch (dbErr) {
                     logger.debug('[AI-Commands] 从数据库读取群消息失败:', dbErr.message)
-                }
-            }
-            
-            // 3. 最后尝试 bot API 获取群聊历史（增强版，支持分页获取更多消息）
-            if (messages.length < 5) {
-                try {
-                    const history = await getGroupChatHistory(e, maxMessages)
-                    if (history && history.length > 0) {
-                        messages = await Promise.all(history.map(async msg => {
-                            // 获取发送者昵称
-                            let nickname = msg.sender?.card || msg.sender?.nickname || '用户'
-                            
-                            // 处理消息内容，包括@解析
-                            const contentParts = await Promise.all(
-                                (msg.message || []).map(async part => {
-                                    if (part.type === 'text') return part.text
-                                    if (part.type === 'at') {
-                                        if (part.qq === 'all' || part.qq === 0) return '@全体成员'
-                                        try {
-                                            const info = await getMemberInfo(e, part.qq)
-                                            return `@${info?.card || info?.nickname || part.qq}`
-                                        } catch {
-                                            return `@${part.qq}`
-                                        }
-                                    }
-                                    return ''
-                                })
-                            )
-                            
-                            return {
-                                userId: msg.sender?.user_id,
-                                nickname,
-                                content: contentParts.join(''),
-                                timestamp: msg.time ? msg.time * 1000 : Date.now()
-                            }
-                        }))
-                        messages = messages.filter(m => m.content && m.content.trim())
-                        dataSource = 'Bot API'
-                    }
-                } catch (historyErr) {
-                    logger.debug('[AI-Commands] 获取群聊历史失败:', historyErr.message)
                 }
             }
             
@@ -530,17 +527,23 @@ ${dialogText}
 
             if (summaryText) {
                 try {
+                    // 获取模型信息
+                    const modelName = config.get('llm.defaultModel') || '默认模型'
+                    const shortModel = modelName.split('/').pop()
+                    
                     // 渲染为图片
                     const imageBuffer = await renderService.renderGroupSummary(summaryText, {
                         title: '群聊内容总结',
-                        subtitle: `基于 ${messages.length} 条消息 · 数据源: ${dataSource}`,
+                        subtitle: `基于 ${messages.length} 条消息 · ${shortModel} · ${dataSource}`,
                         messageCount: messages.length
                     })
                     await this.reply(segment.image(imageBuffer))
                 } catch (renderErr) {
                     // 回退到文本
+                    const modelName = config.get('llm.defaultModel') || '默认模型'
+                    const shortModel = modelName.split('/').pop()
                     logger.warn('[AI-Commands] 渲染图片失败:', renderErr.message)
-                    await this.reply(`📊 群聊总结 (${messages.length}条消息)\n\n${summaryText}`, true)
+                    await this.reply(`📊 群聊总结 (${messages.length}条消息 · ${shortModel})\n\n${summaryText}`, true)
                 }
             } else {
                 await this.reply('总结生成失败', true)
@@ -572,19 +575,27 @@ ${dialogText}
             const minMessages = config.get('features.userPortrait.minMessages') || 10
             
             const userKey = groupId ? `${groupId}_${userId}` : String(userId)
-            const messages = databaseService.getMessages(userKey, 200)
+            // 读取配置的消息数量限制 - 优先使用前端配置
+            const maxMessages = config.get('features.groupSummary.maxMessages') || config.get('memory.maxMemories') || 100
+            const analyzeCount = Math.min(maxMessages, 100)
+            
+            const messages = databaseService.getMessages(userKey, maxMessages)
             const userMessages = messages.filter(m => m.role === 'user')
             
             if (userMessages.length < minMessages) {
                 await this.reply(`消息数量不足（需要至少${minMessages}条），无法生成画像`, true)
                 return true
             }
+            
+            // 获取模型信息
+            const modelName = config.get('llm.defaultModel') || '默认模型'
+            const shortModel = modelName.split('/').pop()
 
             const portraitPrompt = `请根据以下用户的发言记录，分析并生成用户画像：
 
 用户昵称：${nickname}
 发言记录：
-${userMessages.slice(-50).map(m => {
+${userMessages.slice(-analyzeCount).map(m => {
     const text = Array.isArray(m.content) 
         ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') 
         : m.content
@@ -616,15 +627,16 @@ ${userMessages.slice(-50).map(m => {
             if (portraitText) {
                 try {
                     // 渲染为图片
+                    const analyzedCount = Math.min(userMessages.length, analyzeCount)
                     const imageBuffer = await renderService.renderUserProfile(portraitText, nickname, {
                         title: '用户画像分析',
-                        subtitle: `基于 ${userMessages.length} 条发言记录`
+                        subtitle: `基于 ${analyzedCount} 条发言记录 · ${shortModel}`
                     })
                     await this.reply(segment.image(imageBuffer))
                 } catch (renderErr) {
                     // 回退到文本
                     logger.warn('[AI-Commands] 渲染图片失败:', renderErr.message)
-                    await this.reply(`🎭 ${nickname} 的个人画像\n\n${portraitText}`, true)
+                    await this.reply(`🎭 ${nickname} 的个人画像\n模型: ${shortModel}\n\n${portraitText}`, true)
                 }
             } else {
                 await this.reply('画像生成失败', true)
@@ -648,7 +660,7 @@ ${userMessages.slice(-50).map(m => {
             const groupId = e.group_id || null
             
             // 获取用户记忆
-            const userMemories = await memoryManager.getMemories(String(userId)) || []
+            let userMemories = await memoryManager.getMemories(String(userId)) || []
             
             // 如果在群里，也获取群内用户记忆
             let groupUserMemories = []
@@ -656,10 +668,10 @@ ${userMessages.slice(-50).map(m => {
                 groupUserMemories = await memoryManager.getMemories(`${groupId}_${userId}`) || []
             }
             
-            const allMemories = [...userMemories, ...groupUserMemories]
+            let allMemories = [...userMemories, ...groupUserMemories]
             
             if (allMemories.length === 0) {
-                await this.reply('📭 暂无记忆记录\n\n💡 与AI聊天时，重要信息会被自动记住', true)
+                await this.reply('📭 暂无记忆记录\n\n💡 与AI聊天时，重要信息会被自动记住\n💡 在群里多聊几句后再试试', true)
                 return true
             }
             
@@ -675,6 +687,26 @@ ${userMessages.slice(-50).map(m => {
                 return `${i + 1}. ${m.content.substring(0, 60)}${m.content.length > 60 ? '...' : ''}\n   📅 ${time} ${importance}`
             }).join('\n\n')
             
+            // 解析元数据的辅助函数
+            const getMetaInfo = (m) => {
+                const meta = m.metadata || {}
+                const parts = []
+                // 来源
+                const sourceMap = {
+                    'poll_summary': '定时总结',
+                    'auto_extract': '自动提取',
+                    'group_context': '群聊分析',
+                    'manual': '手动添加'
+                }
+                if (meta.source) parts.push(sourceMap[meta.source] || meta.source)
+                // 模型（简化显示）
+                if (meta.model) {
+                    const shortModel = meta.model.split('/').pop().split('-')[0]
+                    parts.push(shortModel)
+                }
+                return parts.length > 0 ? parts.join(' · ') : ''
+            }
+            
             // 构建 Markdown
             const markdown = [
                 `## 🧠 我的记忆 (共${allMemories.length}条)`,
@@ -682,7 +714,9 @@ ${userMessages.slice(-50).map(m => {
                 ...displayMemories.map((m, i) => {
                     const time = m.timestamp ? new Date(m.timestamp).toLocaleDateString('zh-CN') : '未知'
                     const importance = m.importance ? ` **[${m.importance}]**` : ''
-                    return `${i + 1}. ${m.content.substring(0, 80)}${m.content.length > 80 ? '...' : ''}\n   - 📅 ${time}${importance}`
+                    const metaInfo = getMetaInfo(m)
+                    const metaLine = metaInfo ? ` · ${metaInfo}` : ''
+                    return `${i + 1}. ${m.content.substring(0, 80)}${m.content.length > 80 ? '...' : ''}\n   - 📅 ${time}${importance}${metaLine}`
                 }),
                 ``,
                 allMemories.length > 15 ? `> 📝 仅显示最近15条` : '',
@@ -869,9 +903,13 @@ ${userMessages.slice(-50).map(m => {
 
             await this.reply(`正在分析 ${targetNickname} 的用户画像...`, true)
 
-            // 获取用户聊天记录
-            const maxMessages = 100
+            // 获取用户聊天记录 - 使用配置项
+            const maxMessages = config.get('features.groupSummary.maxMessages') || config.get('memory.maxMemories') || 100
             const userMessages = await getUserTextHistory(e, targetUserId, maxMessages)
+            
+            // 获取模型信息
+            const modelName = config.get('llm.defaultModel') || '默认模型'
+            const shortModel = modelName.split('/').pop()
 
             if (!userMessages || userMessages.length < 10) {
                 await this.reply(`${targetNickname} 的聊天记录太少（需要至少10条），无法生成画像`, true)
@@ -943,7 +981,7 @@ ${rawChatHistory}`
                 try {
                     const imageBuffer = await renderService.renderUserProfile(profileText, targetNickname, {
                         title: '用户画像分析',
-                        subtitle: `基于 ${userMessages.length} 条发言记录`
+                        subtitle: `基于 ${userMessages.length} 条发言记录 · ${shortModel}`
                     })
                     await this.reply(segment.image(imageBuffer))
                 } catch (renderErr) {
