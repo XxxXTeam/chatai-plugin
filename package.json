@@ -1,8 +1,9 @@
 {
-  "name": "chatgpt-plugin",
+  "name": "chatai-plugin",
   "version": "1.0.0",
   "type": "module",
-  "description": "New Yunzai Plugin with Embedded Chatgpt & MCP",
+  "description": "Yunzai AI 聊天插件",
+  "license": "MIT",
   "main": "index.js",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.37.0",

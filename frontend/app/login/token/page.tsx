@@ -52,7 +52,7 @@ function TokenLoginContent() {
         if (res?.success || res?.data?.token) {
           // 保存 JWT token
           const authToken = res?.data?.token
-          localStorage.setItem('chaite_token', authToken)
+          localStorage.setItem('chatai_token', authToken)
           setStatus('success')
           setMessage('登录成功，正在跳转...')
           toast.success('登录成功')

@@ -285,7 +285,7 @@ export function Sidebar() {
               <Bot className="h-5 w-5 text-primary-foreground" />
             </div>
             <div className="flex flex-col">
-              <span className="font-bold text-lg leading-tight">Chaite</span>
+              <span className="font-bold text-lg leading-tight">ChatAI</span>
               <span className="text-[10px] text-muted-foreground leading-tight">AI Assistant</span>
             </div>
           </Link>
@@ -302,7 +302,7 @@ export function Sidebar() {
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80 shadow-md mr-3">
               <Bot className="h-5 w-5 text-primary-foreground" />
             </div>
-            <SheetTitle className="font-bold text-lg">Chaite</SheetTitle>
+            <SheetTitle className="font-bold text-lg">ChatAI</SheetTitle>
           </SheetHeader>
           <ScrollArea className="h-[calc(100vh-4rem)]">
             <NavContent pathname={pathname} onNavClick={() => setSidebarOpen(false)} />

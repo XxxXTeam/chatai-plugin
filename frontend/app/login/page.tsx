@@ -62,7 +62,7 @@ export default function LoginPage() {
               <Bot className="h-8 w-8 text-primary" />
             </div>
           </div>
-          <CardTitle className="text-2xl">Chaite 管理面板</CardTitle>
+          <CardTitle className="text-2xl">ChatAI 管理面板</CardTitle>
           <CardDescription>请输入登录 Token</CardDescription>
         </CardHeader>
         <CardContent>

@@ -8,7 +8,7 @@ export const api = axios.create({
   },
 })
 api.interceptors.request.use((config) => {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('chaite_token') : null
+  const token = typeof window !== 'undefined' ? localStorage.getItem('chatai_token') : null
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
@@ -19,7 +19,7 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
-        localStorage.removeItem('chaite_token')
+        localStorage.removeItem('chatai_token')
         window.location.href = '/login/'
       }
     }

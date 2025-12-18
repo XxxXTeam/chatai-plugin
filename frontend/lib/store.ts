@@ -15,12 +15,12 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
       setToken: (token) => set({ token, isAuthenticated: !!token }),
       logout: () => {
-        localStorage.removeItem('chaite_token')
+        localStorage.removeItem('chatai_token')
         set({ token: null, isAuthenticated: false })
       },
     }),
     {
-      name: 'chaite-auth',
+      name: 'chatai-auth',
     }
   )
 )

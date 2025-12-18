@@ -44,64 +44,79 @@
 
 #### 1. 克隆插件
 
-```bash
-# 进入 Yunzai 插件目录
-cd Yunzai-Bot/plugins
+在 **Yunzai 根目录** 下执行：
 
-# 克隆插件仓库
-git clone --depth=1 https://github.com/XxxXTeam/chatai-plugin.git ./chatai-plugin
+```bash
+git clone --depth=1 https://github.com/XxxXTeam/chatai-plugin.git ./plugins/chatai-plugin
 ```
 
-#### 2. 安装依赖
+#### 2. 安装依赖并构建原生模块
+
+在 **Yunzai 根目录** 下执行：
 
 ```bash
-cd chatai-plugin
 pnpm install
+pnpm approve-builds
 ```
 
-#### 3. 构建原生模块（重要）
+> ⚠️ **重要**：`pnpm approve-builds` 会编译 SQLite 原生模块，**必须执行**
 
-> ⚠️ **必须执行此步骤**：插件使用 SQLite 作为本地数据库，需要编译原生模块
-
-```bash
-# 在插件目录下执行
-pnpm run rebuild
-```
-
-如果 `rebuild` 脚本不存在，请手动执行：
-
-```bash
-# 重新构建 better-sqlite3 原生模块
-pnpm rebuild better-sqlite3
-```
-
-**常见构建问题：**
+<details>
+<summary><b>常见构建问题</b></summary>
 
 | 问题 | 解决方案 |
 |------|----------|
-| 缺少编译工具 | Ubuntu/Debian: `sudo apt install build-essential python3`<br>CentOS: `sudo yum groupinstall "Development Tools"` |
-| node-gyp 错误 | `npm install -g node-gyp` |
-| Python 未找到 | 确保 Python 3 已安装并在 PATH 中 |
+| **缺少编译工具** | Ubuntu/Debian: `sudo apt install build-essential python3`<br>CentOS/RHEL: `sudo yum groupinstall "Development Tools"`<br>Windows: 安装 [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) |
+| **node-gyp 错误** | `npm install -g node-gyp` |
+| **Python 未找到** | 确保 Python 3 已安装并在 PATH 中 |
+| **权限问题** | Linux/macOS: 不要使用 `sudo`，确保目录权限正确 |
 
-#### 4. 启动 Yunzai
+</details>
+
+#### 3. 启动 Yunzai
+
+返回 **Yunzai 根目录** 启动：
 
 ```bash
-# 返回 Yunzai 根目录
 cd ../..
-
-# 启动
-pnpm run start
+pnpm start
 # 或
 node app
 ```
 
-#### 5. 配置插件
+#### 4. 首次配置
 
-首次启动后，发送 `#ai管理面板` 获取 Web 管理面板链接，在面板中完成配置：
+启动成功后，向机器人发送以下命令获取管理面板：
 
-1. **添加渠道** - 配置 API 密钥和模型
-2. **设置触发方式** - 选择 @触发、前缀触发或两者兼用
-3. **配置预设** - 设置默认人格和系统提示词
+```
+#ai管理面板
+```
+
+机器人会返回一个临时登录链接，点击进入 Web 管理面板完成配置：
+
+| 步骤 | 操作 | 说明 |
+|------|------|------|
+| 1 | **添加渠道** | 配置 API 密钥、Base URL 和可用模型 |
+| 2 | **设置触发** | 选择 @触发、前缀触发或两者兼用 |
+| 3 | **配置预设** | 设置默认人格和系统提示词 |
+| 4 | **测试连接** | 在渠道管理中测试 API 连接是否正常 |
+
+> 💡 **提示**：发送 `#ai管理面板 永久` 可获取永久有效的登录链接
+
+---
+
+### 更新插件
+
+```bash
+# 方式一：使用命令更新（推荐）
+#ai更新
+
+# 方式二：手动更新
+cd plugins/chatai-plugin
+git pull
+cd ../..
+pnpm install
+```
 
 ## 🚀 快速开始
 
@@ -480,10 +495,30 @@ pnpm run rebuild
 
 <table>
   <tr>
-    <td align="center"><b>haanxuan</b></td>
-    <td align="center"><b>HHXXYY123</b></td>
-    <td align="center"><b>dndss</b></td>
-    <td align="center"><b>ColdMoonBUG</b></td>
+    <td align="center">
+      <a href="https://github.com/haanxuan">
+        <img src="https://github.com/haanxuan.png" width="80px;" alt="haanxuan"/><br/>
+        <sub><b>haanxuan</b></sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/HHXXYY123">
+        <img src="https://github.com/HHXXYY123.png" width="80px;" alt="HHXXYY123"/><br/>
+        <sub><b>HHXXYY123</b></sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/dndss">
+        <img src="https://github.com/dndss.png" width="80px;" alt="dndss"/><br/>
+        <sub><b>dndss</b></sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/ColdMoonBUG">
+        <img src="https://github.com/ColdMoonBUG.png" width="80px;" alt="ColdMoonBUG"/><br/>
+        <sub><b>ColdMoonBUG</b></sub>
+      </a>
+    </td>
   </tr>
 </table>
 

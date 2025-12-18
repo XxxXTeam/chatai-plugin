@@ -20,7 +20,7 @@ export default function DashboardLayout({
     const urlParams = new URLSearchParams(window.location.search)
     const authTokenFromUrl = urlParams.get('auth_token')
     if (authTokenFromUrl) {
-      localStorage.setItem('chaite_token', authTokenFromUrl)
+      localStorage.setItem('chatai_token', authTokenFromUrl)
       // 清除 URL 参数
       window.history.replaceState({}, '', window.location.pathname)
     }
@@ -38,7 +38,7 @@ export default function DashboardLayout({
         setLoading(false)
       })
       .catch(() => {
-        localStorage.removeItem('chaite_token')
+        localStorage.removeItem('chatai_token')
         router.push('/login/')
       })
   }, [router])
