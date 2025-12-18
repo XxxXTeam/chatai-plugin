@@ -1,167 +1,78 @@
-name: Build Frontend
+name: Build and Sync
 
 on:
   push:
-    branches: [main, v3]
-    paths:
-      - 'vue-frontend/**'
-      - '.github/workflows/build.yml'
-      - '*'
- 
+    branches: [main, master]
   pull_request:
-    branches: [main, v3]
-    paths:
-      - 'vue-frontend/**'
+    branches: [main, master]
   workflow_dispatch:
-    inputs:
-      force_build:
-        description: '强制构建（跳过缓存）'
-        required: false
-        default: false
-        type: boolean
-
-# 确保同一分支只运行一个工作流
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
-  # 检查是否需要构建
-  check:
+  build:
     runs-on: ubuntu-latest
-    outputs:
-      should_build: ${{ steps.check.outputs.should_build }}
+    
+    strategy:
+      matrix:
+        node-version: [18, 20, 22]
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
         with:
-          fetch-depth: 2
-          
-      - name: Check if frontend changed
-        id: check
+          node-version: ${{ matrix.node-version }}
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+      
+      - name: Get pnpm store directory
+        shell: bash
         run: |
-          # 检查是否有前端文件变化
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ inputs.force_build }}" == "true" ]; then
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "✅ 强制构建模式"
-            exit 0
-          fi
-          
-          # 获取变更的文件
-          CHANGED_FILES=$(git diff --name-only HEAD^ HEAD 2>/dev/null || echo "")
-          
-          # 检查是否包含前端文件
-          if echo "$CHANGED_FILES" | grep -qE '^vue-frontend/'; then
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "✅ 检测到前端文件变化，将执行构建"
-            echo "变更文件:"
-            echo "$CHANGED_FILES" | grep -E '^vue-frontend/'
-          else
-            echo "should_build=false" >> $GITHUB_OUTPUT
-            echo "⏭️ 无前端文件变化，跳过构建"
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+      
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+      
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      
+      - name: Build native modules
+        run: pnpm rebuild better-sqlite3
+      
+      - name: Build frontend (if exists)
+        run: |
+          if [ -d "frontend" ]; then
+            cd frontend
+            pnpm install --frozen-lockfile
+            pnpm build
           fi
 
-  build:
-    needs: check
-    if: needs.check.outputs.should_build == 'true'
+  sync:
     runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-        
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+          fetch-depth: 0
+      
+      - name: Sync to XxxXTeam/chatai-plugin
+        uses: wei/git-sync@v3
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: vue-frontend/package-lock.json
-          
-      - name: Get npm cache directory
-        id: npm-cache-dir
-        shell: bash
-        run: echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT
-
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.npm-cache-dir.outputs.dir }}
-          key: ${{ runner.os }}-npm-${{ hashFiles('vue-frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-npm-
-          
-      - name: Install dependencies
-        working-directory: vue-frontend
-        run: |
-          echo "📦 安装依赖..."
-          npm install --legacy-peer-deps --prefer-offline
-        
-      - name: Build frontend
-        working-directory: vue-frontend
-        run: |
-          echo "🔨 开始构建..."
-          npm run build
-          echo "✅ 构建完成"
+          source_repo: ${{ github.repository }}
+          source_branch: main
+          destination_repo: https://github.com/XxxXTeam/chatai-plugin.git
+          destination_branch: main
         env:
-          NODE_ENV: production
-        
-      - name: Copy dist to resources
-        run: |
-          echo "📂 复制构建产物..."
-          mkdir -p resources/web
-          rm -rf resources/web/*
-          cp -r vue-frontend/dist/* resources/web/
-          echo "✅ 复制完成"
-          ls -la resources/web/
-          
-      - name: Check for changes
-        id: git-check
-        run: |
-          git add resources/web/
-          if git diff --staged --quiet; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "⏭️ 无文件变化，跳过提交"
-          else
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "✅ 检测到变化，准备提交"
-          fi
-          
-      - name: Commit and push if changed
-        if: steps.git-check.outputs.has_changes == 'true'
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git commit -m "chore: auto build frontend
-
-          Triggered by: ${{ github.event_name }}
-          Commit: ${{ github.sha }}
-          
-          [skip ci]"
-          git push
-          echo "✅ 已提交并推送构建产物"
-
-  # 构建结果通知
-  notify:
-    needs: [check, build]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Summary
-        run: |
-          echo "## 构建摘要" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ needs.check.outputs.should_build }}" == "true" ]; then
-            if [ "${{ needs.build.result }}" == "success" ]; then
-              echo "✅ **前端构建成功**" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "❌ **前端构建失败**" >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo "⏭️ **跳过构建** - 无前端文件变化" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- 触发事件: \`${{ github.event_name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- 分支: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- 提交: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          GITHUB_TOKEN: ${{ secrets.SYNC_TOKEN }}

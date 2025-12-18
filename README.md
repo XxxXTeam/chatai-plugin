@@ -390,10 +390,37 @@ channels:
 
 ## ❓ 常见问题
 
-<details>
-<summary><b>Q: 安装依赖时报错 better-sqlite3 编译失败？</b></summary>
+### 安装与构建问题
 
-确保已安装编译工具：
+<details>
+<summary><b>Q: 启动报错 "Could not locate the bindings file" (better-sqlite3)?</b></summary>
+
+这是 SQLite 原生模块未编译或编译版本不匹配的问题。
+
+**方法一：在 Yunzai 根目录重新构建**
+```bash
+cd /path/to/Yunzai
+pnpm rebuild better-sqlite3
+```
+
+**方法二：进入模块目录手动构建**
+```bash
+# 找到 better-sqlite3 目录（路径可能因包管理器不同而异）
+cd node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3
+# 或
+cd node_modules/better-sqlite3
+
+# 运行构建脚本
+npm run build-release
+```
+
+**方法三：使用 node-gyp 直接构建**
+```bash
+cd node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3
+npx node-gyp rebuild
+```
+
+**前提条件**：确保已安装编译工具
 ```bash
 # Ubuntu/Debian
 sudo apt install build-essential python3
@@ -401,53 +428,254 @@ sudo apt install build-essential python3
 # CentOS/RHEL
 sudo yum groupinstall "Development Tools"
 
-# 然后重新构建
+# macOS
+xcode-select --install
+
+# Windows
+# 安装 Visual Studio Build Tools
+# https://visualstudio.microsoft.com/visual-cpp-build-tools/
+```
+
+**验证构建成功**：看到 `gyp info ok` 即表示构建成功。
+</details>
+
+<details>
+<summary><b>Q: Node.js 版本升级后插件加载失败？</b></summary>
+
+原生模块（如 better-sqlite3）需要针对特定 Node.js ABI 版本编译。升级 Node.js 后必须重新构建：
+
+```bash
+cd /path/to/Yunzai
+pnpm rebuild
+```
+
+或仅重建 better-sqlite3：
+```bash
 pnpm rebuild better-sqlite3
 ```
 </details>
 
 <details>
+<summary><b>Q: pnpm install 时报错 node-gyp 失败？</b></summary>
+
+1. **检查 Python 版本**（需要 Python 3.x）：
+   ```bash
+   python3 --version
+   ```
+
+2. **检查编译工具**：
+   ```bash
+   # Linux
+   gcc --version
+   make --version
+   
+   # macOS
+   clang --version
+   ```
+
+3. **安装 node-gyp**：
+   ```bash
+   npm install -g node-gyp
+   ```
+
+4. **清理缓存后重试**：
+   ```bash
+   rm -rf node_modules
+   pnpm store prune
+   pnpm install
+   ```
+</details>
+
+<details>
 <summary><b>Q: 启动时提示 "数据库初始化失败"？</b></summary>
 
-1. 确保已执行 `pnpm run rebuild` 或 `pnpm rebuild better-sqlite3`
-2. 检查 `data/` 目录是否有写入权限
-3. 尝试删除 `data/*.db` 文件后重启
+1. 确保已执行 `pnpm rebuild better-sqlite3`
+2. 检查 `data/` 目录是否有写入权限：
+   ```bash
+   ls -la plugins/chatai-plugin/data/
+   ```
+3. 尝试删除数据库文件后重启：
+   ```bash
+   rm plugins/chatai-plugin/data/*.db
+   ```
 </details>
+
+### 运行时问题
 
 <details>
 <summary><b>Q: AI 不回复消息？</b></summary>
 
-1. 检查是否配置了有效的 API 渠道（发送 `#ai管理面板` 进入配置）
-2. 检查触发方式是否正确（@机器人 或 前缀触发）
-3. 查看 Yunzai 控制台日志是否有错误信息
+**排查步骤**：
+
+1. **检查 API 配置**：发送 `#ai管理面板` 进入配置，确保已添加有效渠道
+2. **测试 API 连接**：在渠道管理中点击「测试连接」
+3. **检查触发方式**：
+   - `at` 模式：需要 @机器人
+   - `prefix` 模式：需要使用前缀（默认 `#chat`）
+   - `both` 模式：两种方式都可以
+4. **查看控制台日志**：观察是否有报错信息
+5. **检查是否被其他插件拦截**：尝试调整插件优先级
 </details>
+
+<details>
+<summary><b>Q: 提示 API 401/403 错误？</b></summary>
+
+- **401 Unauthorized**：API Key 无效或已过期，请检查 API Key 是否正确
+- **403 Forbidden**：API Key 权限不足或已被禁用
+
+**解决方案**：
+1. 在渠道管理中重新配置 API Key
+2. 确认 API Key 有对应模型的访问权限
+3. 检查 API 服务商账户余额是否充足
+</details>
+
+<details>
+<summary><b>Q: 提示 API 429 错误（请求过多）？</b></summary>
+
+这是 API 速率限制错误。
+
+**解决方案**：
+1. 配置多个渠道实现负载均衡
+2. 在渠道高级设置中配置 `fallback` 备选模型
+3. 降低请求频率或升级 API 套餐
+</details>
+
+<details>
+<summary><b>Q: 消息回复重复？</b></summary>
+
+可能原因：
+1. **消息回显**：检查 QQ 协议端是否正确配置
+2. **多适配器冲突**：如果同时使用多个协议适配器，确保消息只被处理一次
+
+插件内置了消息去重机制，如果仍有问题，请提供控制台日志反馈。
+</details>
+
+<details>
+<summary><b>Q: 工具调用失败或不生效？</b></summary>
+
+1. **检查工具是否启用**：在管理面板「工具配置」中确认工具已启用
+2. **检查危险工具权限**：`kick_member`、`mute_member` 等需要开启 `allowDangerous`
+3. **检查机器人权限**：群管理操作需要机器人有管理员权限
+4. **查看工具执行日志**：开启 `debug` 模式查看详细日志
+</details>
+
+<details>
+<summary><b>Q: Web 管理面板无法访问？</b></summary>
+
+1. **检查端口占用**：默认端口 3000，如被占用会自动尝试 3001
+2. **检查防火墙**：确保端口已开放
+   ```bash
+   # 查看端口监听
+   netstat -tlnp | grep 3000
+   
+   # 开放端口（以 ufw 为例）
+   sudo ufw allow 3000
+   ```
+3. **检查启动日志**：查看实际监听的地址和端口
+</details>
+
+<details>
+<summary><b>Q: 内存占用过高？</b></summary>
+
+1. **减少上下文长度**：降低 `context.maxMessages` 和 `context.maxTokens`
+2. **禁用不需要的功能**：如记忆系统、MCP 服务器
+3. **定期清理对话**：使用 `#结束对话` 清理上下文
+4. **检查 EventEmitter 警告**：如出现 `MaxListenersExceededWarning`，可能存在监听器泄漏
+</details>
+
+### 更新与维护
 
 <details>
 <summary><b>Q: 如何更新插件？</b></summary>
 
-```bash
-# 方式一：使用命令更新
+**方式一：使用命令更新（推荐）**
+```
 发送：#ai更新
+```
 
-# 方式二：手动更新
+**方式二：手动更新**
+```bash
 cd plugins/chatai-plugin
 git pull
+cd ../..  # 回到 Yunzai 根目录
 pnpm install
-pnpm run rebuild
+pnpm rebuild better-sqlite3  # 如有原生模块更新
 ```
+
+**强制更新（覆盖本地修改）**
+```
+发送：#ai强制更新
+```
+</details>
+
+<details>
+<summary><b>Q: 如何备份数据？</b></summary>
+
+重要数据位于 `plugins/chatai-plugin/data/` 目录：
+
+| 文件 | 说明 |
+|------|------|
+| `config.yaml` | 主配置文件 |
+| `conversations.db` | 对话历史 |
+| `memory.db` | 用户记忆 |
+| `presets/` | 预设文件 |
+| `mcp-servers.json` | MCP 服务器配置 |
+
+```bash
+# 备份
+cp -r plugins/chatai-plugin/data/ ~/chatai-backup/
+
+# 还原
+cp -r ~/chatai-backup/* plugins/chatai-plugin/data/
+```
+</details>
+
+<details>
+<summary><b>Q: 如何重置插件配置？</b></summary>
+
+```bash
+# 仅重置配置（保留对话和记忆）
+rm plugins/chatai-plugin/data/config.yaml
+
+# 完全重置（删除所有数据）
+rm -rf plugins/chatai-plugin/data/*
+```
+
+重启 Yunzai 后会自动生成默认配置。
 </details>
 
 ---
 
 ## 🤝 贡献指南
 
-欢迎提交 Issue 和 Pull Request！
+欢迎提交 Issue 和 Pull Request！详细规范请参阅 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+### 快速开始
 
 1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
+2. 创建特性分支 (`git checkout -b feat/amazing-feature`)
+3. 提交更改（遵循 [Conventional Commits](https://www.conventionalcommits.org/) 规范）
+4. 推送到分支 (`git push origin feat/amazing-feature`)
 5. 创建 Pull Request
+
+### 提交类型
+
+| Type | 说明 |
+|------|------|
+| `feat` | 新功能 |
+| `fix` | Bug 修复 |
+| `docs` | 文档更新 |
+| `refactor` | 代码重构 |
+| `perf` | 性能优化 |
+| `chore` | 构建/依赖更新 |
+
+### 示例
+
+```bash
+git commit -m "feat(mcp): 添加并行工具调用"
+git commit -m "fix(adapter): 修复流式响应中断"
+git commit -m "docs: 更新安装说明"
+```
 
 ---
 
