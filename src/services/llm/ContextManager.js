@@ -863,46 +863,83 @@ export class ContextManager {
     }
 
     /**
-     * 从消息段数组提取文本内容
      * @private
+     * @param {Array} messageParts - 消息段数组
+     * @param {boolean} deepParse - 是否深度解析
      */
-    _extractMessageText(messageParts) {
-        if (!messageParts || !Array.isArray(messageParts)) return ''
+    _extractMessageText(messageParts, deepParse = false) {
+        if (!messageParts) return ''
+        if (typeof messageParts === 'string') return messageParts
+        if (!Array.isArray(messageParts)) {
+            if (messageParts.raw_message) return messageParts.raw_message
+            if (messageParts.message) return this._extractMessageText(messageParts.message, deepParse)
+            return String(messageParts)
+        }
         
         const contentParts = []
         for (const msgPart of messageParts) {
+            if (!msgPart) continue
+            
             const data = msgPart.data || msgPart
-            switch (msgPart.type) {
+            const type = msgPart.type || data.type
+            
+            switch (type) {
                 case 'text':
                     contentParts.push(data.text || msgPart.text || '')
                     break
                 case 'at':
-                    contentParts.push(`@${data.qq || msgPart.qq}`)
+                    const atName = data.name || msgPart.name || ''
+                    const atQQ = data.qq || msgPart.qq || ''
+                    contentParts.push(atName ? `@${atName}` : `@${atQQ}`)
                     break
                 case 'image': {
                     const isAnimated = data.asface === true || data.sub_type === 1
-                    contentParts.push(isAnimated ? '[动画表情]' : '[图片]')
+                    const summary = data.summary || data.file_unique || ''
+                    if (summary && deepParse) {
+                        contentParts.push(`[图片:${summary}]`)
+                    } else {
+                        contentParts.push(isAnimated ? '[动画表情]' : '[图片]')
+                    }
                     break
                 }
                 case 'video':
                     contentParts.push('[视频]')
                     break
                 case 'bface':
-                    contentParts.push(data.text || msgPart.text || '[表情]')
+                case 'mface':
+                    contentParts.push(data.text || msgPart.text || data.summary || '[表情]')
                     break
                 case 'forward':
                     contentParts.push('[聊天记录]')
                     break
                 case 'json':
                     try {
-                        const jsonData = typeof data.data === 'string' ? JSON.parse(data.data) : data.data
+                        const jsonStr = data.data || msgPart.data
+                        const jsonData = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr
                         if (jsonData?.meta?.detail?.resid) {
                             contentParts.push('[聊天记录]')
+                        } else if (jsonData?.meta?.news?.title) {
+                            contentParts.push(`[分享:${jsonData.meta.news.title}]`)
+                        } else if (jsonData?.prompt) {
+                            contentParts.push(`[卡片:${jsonData.prompt}]`)
                         } else {
                             contentParts.push('[卡片消息]')
                         }
                     } catch {
                         contentParts.push('[卡片消息]')
+                    }
+                    break
+                case 'xml':
+                    try {
+                        const xmlStr = data.data || msgPart.data || ''
+                        const briefMatch = xmlStr.match(/brief="([^"]*)"/)
+                        if (briefMatch) {
+                            contentParts.push(`[XML:${briefMatch[1]}]`)
+                        } else {
+                            contentParts.push('[XML消息]')
+                        }
+                    } catch {
+                        contentParts.push('[XML消息]')
                     }
                     break
                 case 'face':
@@ -911,9 +948,36 @@ export class ContextManager {
                 case 'record':
                     contentParts.push('[语音]')
                     break
+                case 'file':
+                    contentParts.push(`[文件:${data.name || data.file || '未知'}]`)
+                    break
+                case 'share':
+                    contentParts.push(`[分享:${data.title || '链接'}]`)
+                    break
+                case 'location':
+                    contentParts.push(`[位置:${data.title || data.address || '未知'}]`)
+                    break
+                case 'poke':
+                    contentParts.push('[戳一戳]')
+                    break
+                case 'reply':
+                    // 忽略引用标记本身
+                    break
+                case 'markdown':
+                    contentParts.push(data.content || data.text || '[Markdown]')
+                    break
+                default:
+                    // 深度解析：尝试从未知类型提取内容
+                    if (deepParse) {
+                        if (data.text) contentParts.push(data.text)
+                        else if (data.content) contentParts.push(data.content)
+                        else if (data.summary) contentParts.push(`[${type}:${data.summary}]`)
+                        else if (type) contentParts.push(`[${type}]`)
+                    }
+                    break
             }
         }
-        return contentParts.join('').replace(/\n/g, ' ')
+        return contentParts.join('').replace(/\n/g, ' ').trim()
     }
 
     /**
@@ -992,68 +1056,175 @@ export class ContextManager {
     }
 
     /**
-     * 获取引用消息内容
-     * 兼容 miao-adapter 和 OneBot
      * @param {Object} e - 事件对象
-     * @returns {Promise<string>} 引用消息文本
+     * @param {Object} options - 选项
+     * @param {boolean} options.includeChain - 是否获取引用链
+     * @param {number} options.maxDepth - 引用链最大深度
+     * @returns {Promise<{text: string, chain: Array}>} 引用消息文本和引用链
      */
-    async getQuoteContent(e) {
+    async getQuoteContent(e, options = {}) {
+        const { includeChain = true, maxDepth = 3 } = options
         let quoteText = ''
+        const chain = []
 
-        if (!e.group || typeof e.group.getChatHistory !== 'function') {
-            return quoteText
-        }
-
-        let originalMsg = null
-
-        // 尝试获取引用消息
-        // miao-adapter: 使用 e.source.seq
-        if (e.source?.seq) {
-            try {
-                const history = await e.group.getChatHistory(e.source.seq, 1)
-                originalMsg = history?.[0]
-            } catch (err) {
-                logger.debug(`[ContextManager] 获取引用消息失败(seq): ${err.message}`)
+        if (!e.source && !e.reply_id) {
+            const replyPart = e.message?.find(msg => msg.type === 'reply')
+            if (!replyPart) {
+                return { text: quoteText, chain }
             }
         }
-        // OneBot/NapCat: 使用 reply.id
-        else {
-            const replyPart = e.message?.find(msg => msg.type === 'reply')
-            if (replyPart?.id || replyPart?.data?.id) {
-                try {
-                    const messageId = replyPart.id || replyPart.data.id
-                    const originalMsgArray = await e.group.getChatHistory(messageId, 1)
-                    originalMsg = originalMsgArray?.[0]
-                } catch (err) {
-                    logger.debug(`[ContextManager] 获取引用消息失败(id): ${err.message}`)
+
+        const bot = e.bot || global.Bot
+        const getMessage = async (messageId, seq) => {
+            try {
+                if (bot?.getMsg && messageId) {
+                    const msg = await bot.getMsg(messageId)
+                    if (msg) return msg.data || msg
                 }
+                if (bot?.sendApi && messageId) {
+                    const result = await bot.sendApi('get_msg', { message_id: messageId })
+                    if (result) return result.data || result
+                }
+                if (e.group?.getChatHistory && (seq || messageId)) {
+                    const history = await e.group.getChatHistory(seq || messageId, 1)
+                    if (history?.[0]) return history[0]
+                }
+                if (e.getReply && typeof e.getReply === 'function') {
+                    return await e.getReply()
+                }
+                if (bot?.pickGroup && e.group_id && seq) {
+                    const group = bot.pickGroup(e.group_id)
+                    if (group?.getMsg) {
+                        return await group.getMsg(seq)
+                    }
+                }
+            } catch (err) {
+                logger.debug(`[ContextManager] 获取消息失败: ${err.message}`)
+            }
+            return null
+        }
+
+        /**
+         * 检查消息是否包含引用
+         */
+        const getNestedReply = (msg) => {
+            if (!msg) return null
+            // 检查 source
+            if (msg.source) {
+                return { seq: msg.source.seq, message_id: msg.source.message_id }
+            }
+            // 检查消息段中的 reply
+            const message = msg.message || msg
+            if (Array.isArray(message)) {
+                const replySeg = message.find(m => m.type === 'reply')
+                if (replySeg) {
+                    return { message_id: replySeg.id || replySeg.data?.id }
+                }
+            }
+            return null
+        }
+
+        // 获取第一层引用消息
+        const messageId = e.source?.message_id || e.reply_id
+        const seq = e.source?.seq
+        const replyPart = e.message?.find(msg => msg.type === 'reply')
+        const replyMsgId = messageId || replyPart?.id || replyPart?.data?.id
+
+        let originalMsg = await getMessage(replyMsgId, seq)
+        if (!originalMsg && e.source) {
+            if (e.source.message || e.source.raw_message) {
+                originalMsg = e.source
             }
         }
 
         // 格式化引用内容
-        if (originalMsg?.message) {
-            const originalSenderId = originalMsg.sender?.user_id
+        if (originalMsg) {
+            const originalSenderId = originalMsg.user_id || originalMsg.sender?.user_id
             let originalSenderName = originalMsg.sender?.card || originalMsg.sender?.nickname || originalSenderId || '未知用户'
             
             // 尝试获取更准确的昵称
-            try {
-                const member = e.group.pickMember?.(originalSenderId)
-                const memberInfo = member?.info || await member?.getInfo?.(true)
-                if (memberInfo) {
-                    originalSenderName = memberInfo.card || memberInfo.nickname || originalSenderName
-                }
-            } catch {}
+            if (e.group?.pickMember && originalSenderId) {
+                try {
+                    const member = e.group.pickMember(originalSenderId)
+                    const memberInfo = member?.info || await member?.getInfo?.(true)
+                    if (memberInfo) {
+                        originalSenderName = memberInfo.card || memberInfo.nickname || originalSenderName
+                    }
+                } catch {}
+            }
 
-            const originalContent = this._extractMessageText(originalMsg.message)
+            // 深度解析消息内容
+            let originalContent = ''
+            if (originalMsg.raw_message) {
+                originalContent = originalMsg.raw_message
+            } else if (originalMsg.message) {
+                originalContent = this._extractMessageText(originalMsg.message, true)
+            } else {
+                // 尝试深度解析整个消息体
+                originalContent = this._extractMessageText(originalMsg, true)
+            }
+
+            // 截断过长内容
+            if (originalContent.length > 500) {
+                originalContent = originalContent.substring(0, 500) + '...'
+            }
+
             quoteText = ` 引用了${originalSenderName}(QQ:${originalSenderId})的消息"${originalContent}"`
             
-            const originalSeq = originalMsg.seq || originalMsg.message_seq
+            const originalSeq = originalMsg.seq || originalMsg.message_seq || originalMsg.message_id
             if (originalSeq) {
                 quoteText += `(seq:${originalSeq})`
             }
+
+            // 添加到引用链
+            chain.push({
+                depth: 0,
+                user_id: String(originalSenderId || ''),
+                nickname: originalSenderName,
+                content: originalContent,
+                message_id: originalMsg.message_id || replyMsgId
+            })
+
+            // 获取引用链（如果被引用的消息也引用了其他消息）
+            if (includeChain) {
+                let currentMsg = originalMsg
+                let depth = 0
+                
+                while (depth < maxDepth) {
+                    const nestedReply = getNestedReply(currentMsg)
+                    if (!nestedReply) break
+                    
+                    const nestedMsg = await getMessage(nestedReply.message_id, nestedReply.seq)
+                    if (!nestedMsg) break
+                    
+                    const nestedSenderId = nestedMsg.user_id || nestedMsg.sender?.user_id
+                    const nestedSenderName = nestedMsg.sender?.card || nestedMsg.sender?.nickname || nestedSenderId || '未知'
+                    let nestedContent = nestedMsg.raw_message || this._extractMessageText(nestedMsg.message || nestedMsg, true)
+                    
+                    if (nestedContent.length > 300) {
+                        nestedContent = nestedContent.substring(0, 300) + '...'
+                    }
+                    
+                    chain.push({
+                        depth: depth + 1,
+                        user_id: String(nestedSenderId || ''),
+                        nickname: nestedSenderName,
+                        content: nestedContent,
+                        message_id: nestedMsg.message_id
+                    })
+                    
+                    // 在引用文本中添加嵌套引用信息
+                    if (depth === 0) {
+                        quoteText += `\n  └ 该消息引用了${nestedSenderName}的消息"${nestedContent.substring(0, 100)}${nestedContent.length > 100 ? '...' : ''}"`
+                    }
+                    
+                    currentMsg = nestedMsg
+                    depth++
+                }
+            }
         }
 
-        return quoteText
+        return { text: quoteText, chain }
     }
 }
 

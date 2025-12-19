@@ -89,8 +89,8 @@ export class ChatService {
                     
                     logger.debug(`[ChatService] 自动结清完成: pureUserId=${pureUserId}, groupId=${groupId}`)
                     
-                    // 向用户回复结清提示
-                    if (options.event && options.event.reply) {
+                    // 向用户回复结清提示（检查 notifyUser 配置）
+                    if (autoCleanConfig?.notifyUser !== false && options.event && options.event.reply) {
                         try {
                             await options.event.reply(`历史对话已自动清理`, true)
                         } catch (replyErr) {

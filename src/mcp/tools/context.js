@@ -124,10 +124,13 @@ export const contextTools = [
 
     {
         name: 'get_reply_message',
-        description: '获取被引用/回复的消息内容',
+        description: '获取被引用/回复的消息内容。支持获取引用链（如果被引用的消息也引用了其他消息）',
         inputSchema: {
             type: 'object',
-            properties: {}
+            properties: {
+                include_chain: { type: 'boolean', description: '是否获取引用链（被引用消息的引用），默认true' },
+                max_depth: { type: 'number', description: '引用链最大深度，默认3' }
+            }
         },
         handler: async (args, ctx) => {
             try {
@@ -144,37 +147,139 @@ export const contextTools = [
                     }
                 }
                 
-                // 尝试获取引用消息
-                let replyMsg = null
+                const bot = e.bot || global.Bot
+                const includeChain = args.include_chain !== false
+                const maxDepth = args.max_depth || 3
                 
-                if (e.getReply && typeof e.getReply === 'function') {
-                    replyMsg = await e.getReply()
-                } else if (e.source && e.group?.getChatHistory) {
-                    const seq = e.source.seq || e.source.message_id
-                    const history = await e.group.getChatHistory(seq, 1)
-                    replyMsg = history?.[0]
+                /**
+                 * 获取单条消息
+                 */
+                const getMessage = async (messageId, seq) => {
+                    try {
+                        // 方法1: bot.getMsg
+                        if (bot?.getMsg && messageId) {
+                            return await bot.getMsg(messageId)
+                        }
+                        // 方法2: bot.sendApi
+                        if (bot?.sendApi && messageId) {
+                            const result = await bot.sendApi('get_msg', { message_id: messageId })
+                            return result?.data || result
+                        }
+                        // 方法3: group.getChatHistory
+                        if (e.group?.getChatHistory && seq) {
+                            const history = await e.group.getChatHistory(seq, 1)
+                            return history?.[0]
+                        }
+                        // 方法4: e.getReply
+                        if (e.getReply && typeof e.getReply === 'function') {
+                            return await e.getReply()
+                        }
+                    } catch {}
+                    return null
                 }
+                
+                /**
+                 * 提取消息文本内容
+                 */
+                const extractContent = (msg) => {
+                    if (!msg) return ''
+                    const data = msg.data || msg
+                    if (data.raw_message) return data.raw_message
+                    if (Array.isArray(data.message)) {
+                        return data.message.map(m => {
+                            if (m.type === 'text') return m.text || m.data?.text || ''
+                            if (m.type === 'at') return `@${m.data?.name || m.data?.qq || ''}`
+                            if (m.type === 'image') return '[图片]'
+                            if (m.type === 'face') return '[表情]'
+                            if (m.type === 'record') return '[语音]'
+                            if (m.type === 'reply') return '' // 忽略引用标记
+                            return `[${m.type}]`
+                        }).join('').trim()
+                    }
+                    return ''
+                }
+                
+                /**
+                 * 检查消息是否也引用了其他消息
+                 */
+                const getReplyInfo = (msg) => {
+                    if (!msg) return null
+                    const data = msg.data || msg
+                    // 检查 source
+                    if (data.source) {
+                        return { seq: data.source.seq, message_id: data.source.message_id }
+                    }
+                    // 检查消息段中的 reply
+                    if (Array.isArray(data.message)) {
+                        const replySeg = data.message.find(m => m.type === 'reply')
+                        if (replySeg) {
+                            return { message_id: replySeg.id || replySeg.data?.id }
+                        }
+                    }
+                    return null
+                }
+                
+                // 获取直接引用的消息
+                const messageId = e.source?.message_id || e.reply_id
+                const seq = e.source?.seq
+                const replyMsg = await getMessage(messageId, seq)
                 
                 if (!replyMsg) {
                     return { 
                         success: true, 
                         has_reply: true,
-                        error: '无法获取引用消息内容'
+                        error: '无法获取引用消息内容',
+                        source_info: { message_id: messageId, seq }
                     }
                 }
                 
                 const replyInfo = replyMsg.data || replyMsg
-                return {
+                const result = {
                     success: true,
                     has_reply: true,
                     reply: {
-                        user_id: replyInfo.user_id || replyInfo.sender?.user_id,
+                        user_id: String(replyInfo.user_id || replyInfo.sender?.user_id || ''),
                         nickname: replyInfo.sender?.nickname || replyInfo.sender?.card || '',
-                        content: replyInfo.raw_message || replyInfo.message?.map(m => m.text || `[${m.type}]`).join('') || '',
+                        content: extractContent(replyMsg),
                         time: replyInfo.time,
-                        message_id: replyInfo.message_id
+                        message_id: replyInfo.message_id || messageId
                     }
                 }
+                
+                // 获取引用链
+                if (includeChain) {
+                    const chain = []
+                    let currentMsg = replyMsg
+                    let depth = 0
+                    
+                    while (depth < maxDepth) {
+                        const nestedReply = getReplyInfo(currentMsg)
+                        if (!nestedReply) break
+                        
+                        const nestedMsg = await getMessage(nestedReply.message_id, nestedReply.seq)
+                        if (!nestedMsg) break
+                        
+                        const nestedInfo = nestedMsg.data || nestedMsg
+                        chain.push({
+                            depth: depth + 1,
+                            user_id: String(nestedInfo.user_id || nestedInfo.sender?.user_id || ''),
+                            nickname: nestedInfo.sender?.nickname || nestedInfo.sender?.card || '',
+                            content: extractContent(nestedMsg),
+                            time: nestedInfo.time,
+                            message_id: nestedInfo.message_id
+                        })
+                        
+                        currentMsg = nestedMsg
+                        depth++
+                    }
+                    
+                    if (chain.length > 0) {
+                        result.reply_chain = chain
+                        result.chain_depth = chain.length
+                    }
+                }
+                
+                return result
             } catch (err) {
                 return { success: false, error: `获取引用消息失败: ${err.message}` }
             }

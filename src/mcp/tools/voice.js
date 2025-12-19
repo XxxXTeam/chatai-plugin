@@ -2,6 +2,55 @@
  * 语音消息工具
  */
 
+/**
+ * 检测Bot适配器类型
+ * @param {Object} bot - Bot实例
+ * @returns {{ adapter: string, isNT: boolean, canAiVoice: boolean }}
+ */
+function detectAdapter(bot) {
+    if (!bot) return { adapter: 'unknown', isNT: false, canAiVoice: false }
+    
+    const hasIcqqFeatures = !!(bot.pickGroup && bot.pickFriend && bot.fl && bot.gl)
+    const hasNT = typeof bot.sendOidbSvcTrpcTcp === 'function'
+    
+    if (hasIcqqFeatures) {
+        return { adapter: 'icqq', isNT: hasNT, canAiVoice: hasNT }
+    }
+    
+    if (bot.sendApi) {
+        const isNapCat = !!(
+            bot.adapter?.name?.toLowerCase?.()?.includes?.('napcat') || 
+            bot.config?.protocol === 'napcat' ||
+            bot.version?.app_name?.toLowerCase?.()?.includes?.('napcat')
+        )
+        if (isNapCat) {
+            return { adapter: 'napcat', isNT: true, canAiVoice: true }
+        }
+        return { adapter: 'onebot', isNT: false, canAiVoice: false }
+    }
+    
+    return { adapter: 'unknown', isNT: false, canAiVoice: false }
+}
+
+/**
+ * 检测协议类型（兼容旧代码）
+ */
+function detectProtocol(bot) {
+    return detectAdapter(bot).adapter
+}
+
+/**
+ * 获取适配器信息（用于ctx缺少getAdapter时的兼容）
+ */
+function getAdapterInfo(ctx) {
+    if (ctx.getAdapter && typeof ctx.getAdapter === 'function') {
+        return ctx.getAdapter()
+    }
+    const e = ctx.getEvent?.() || ctx.event
+    const bot = e?.bot || ctx.getBot?.() || global.Bot
+    return detectAdapter(bot)
+}
+
 export const voiceTools = [
     {
         name: 'set_ai_voice_chat',
@@ -68,7 +117,7 @@ export const voiceTools = [
 
     {
         name: 'get_ai_voice_characters',
-        description: '获取AI声聊可用的角色/音色列表（需要NapCat协议端）',
+        description: '【查询】获取AI声聊可用的角色/音色列表。仅用于查询可用角色，不发送消息。常见角色包括：嘉然_元气、珈乐_温柔、乃琳_温柔、贝拉_可爱、阿梓_元气',
         inputSchema: {
             type: 'object',
             properties: {
@@ -170,7 +219,7 @@ export const voiceTools = [
 
     {
         name: 'send_ai_voice',
-        description: '发送AI语音消息（使用QQ的AI声聊功能合成语音）使用前先调用 get_ai_voice_characters 获取可用角色列表',
+        description: '【发送】AI语音消息到群聊（使用QQ的AI声聊功能合成语音）。这是发送语音的主要工具，会直接发送语音消息。如果不知道角色ID，可以使用常见角色如：嘉然_元气、珈乐_温柔、乃琳_温柔、贝拉_可爱、阿梓_元气 等',
         inputSchema: {
             type: 'object',
             properties: {
@@ -188,7 +237,7 @@ export const voiceTools = [
                     return { success: false, error: '无法获取Bot实例' }
                 }
                 
-                const { adapter, isNT, canAiVoice } = ctx.getAdapter()
+                const { adapter, isNT, canAiVoice } = getAdapterInfo(ctx)
                 const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
                 
                 if (!groupId) {
@@ -200,12 +249,17 @@ export const voiceTools = [
 
                 // icqq 适配器: 需要 NT 协议支持
                 if (adapter === 'icqq') {
-                    if (!isNT) {
+                    // 检查是否有sendOidbSvcTrpcTcp方法
+                    const hasOidb = typeof bot.sendOidbSvcTrpcTcp === 'function'
+                    logger.debug(`[send_ai_voice] icqq检测: isNT=${isNT}, hasOidb=${hasOidb}`)
+                    
+                    if (!hasOidb) {
                         return {
                             success: false,
                             adapter,
                             error: 'icqq 需要 NT 协议才能发送 AI 声聊',
-                            hint: '请确认 icqq >= 0.6.10 且配置使用 QQNT 协议'
+                            hint: '请确认 icqq >= 0.6.10 且配置使用 QQNT 协议',
+                            debug: { isNT, hasOidb }
                         }
                     }
                     try {
@@ -217,9 +271,13 @@ export const voiceTools = [
                             4: 1,
                             5: { 1: rand }
                         }
+                        logger.debug(`[send_ai_voice] icqq发送: group=${groupId}, char=${args.character}, text=${args.text.substring(0,20)}...`)
                         const result = await bot.sendOidbSvcTrpcTcp('OidbSvcTrpcTcp.0x929b_0', body)
                         const data = result?.toJSON?.() || result
-                        if (data?.[1] === 1) {
+                        logger.debug(`[send_ai_voice] icqq结果:`, JSON.stringify(data))
+                        
+                        // 检查多种成功条件
+                        if (data?.[1] === 1 || data?.result === 0 || data?.retcode === 0) {
                             return {
                                 success: true,
                                 completed: true,
@@ -227,8 +285,16 @@ export const voiceTools = [
                                 message: `AI语音已发送到群 ${groupId}`
                             }
                         }
-                        return { success: false, adapter, error: 'AI声聊请求失败', code: data?.[3] }
+                        // 返回详细错误信息
+                        return { 
+                            success: false, 
+                            adapter, 
+                            error: 'AI声聊请求失败，可能是角色ID不正确或功能受限', 
+                            code: data?.[3] || data?.retcode,
+                            hint: '尝试使用其他角色如：嘉然_元气、珈乐_温柔、乃琳_温柔'
+                        }
                     } catch (err) {
+                        logger.error(`[send_ai_voice] icqq发送异常:`, err)
                         return { success: false, adapter, error: `icqq发送失败: ${err.message}` }
                     }
                 }
@@ -445,7 +511,7 @@ export const voiceTools = [
 
     {
         name: 'get_ai_record',
-        description: '获取AI语音数据（不发送）。注意：icqq适配器不支持此功能，请直接使用 send_ai_voice',
+        description: '【获取数据】仅获取AI语音的文件数据，不会发送消息。如需发送AI语音，请使用 send_ai_voice',
         inputSchema: {
             type: 'object',
             properties: {
@@ -463,7 +529,7 @@ export const voiceTools = [
                     return { success: false, error: '无法获取Bot实例' }
                 }
                 
-                const { adapter } = ctx.getAdapter()
+                const { adapter } = getAdapterInfo(ctx)
                 const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
                 if (adapter === 'icqq') {
                     return {
@@ -740,7 +806,7 @@ export const voiceTools = [
 
     {
         name: 'get_ai_voice_status',
-        description: '获取群AI声聊状态',
+        description: '【查询】群AI声聊功能是否可用（仅查询状态，不发送消息）。如需发送AI语音，请使用 send_ai_voice',
         inputSchema: {
             type: 'object',
             properties: {
@@ -755,7 +821,7 @@ export const voiceTools = [
                     return { success: false, error: '无法获取Bot实例' }
                 }
                 
-                const { adapter, isNT, canAiVoice } = ctx.getAdapter()
+                const { adapter, isNT, canAiVoice } = getAdapterInfo(ctx)
                 const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
                 
                 if (!groupId) {
@@ -862,7 +928,6 @@ export const voiceTools = [
             }
         }
     },
-
     {
         name: 'send_voice_reply',
         description: '回复消息并发送语音',
@@ -881,7 +946,7 @@ export const voiceTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+    
                 let recordData
                 if (args.url) {
                     recordData = args.url

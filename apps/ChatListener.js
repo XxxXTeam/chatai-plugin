@@ -16,7 +16,7 @@ export class ChatListener extends plugin {
             name: 'AI群聊监听',
             dsc: 'AI聊天监听器，支持@触发和前缀触发',
             event: 'message',
-            priority: listenerConfig.priority ?? -Infinity, // 确保最后执行
+            priority: listenerConfig.priority ?? 500, 
             rule: [
                 {
                     reg: '^[\\s\\S]*$',
@@ -32,13 +32,9 @@ export class ChatListener extends plugin {
      */
     async onMessage() {
         const e = this.e
-        
-        // 防护：忽略自身消息
         if (isSelfMessage(e)) {
             return false
         }
-        
-        // === 检查监听器总开关 ===
         const listenerEnabled = config.get('listener.enabled')
         if (listenerEnabled === false) {
             if (e.isGroup && e.group_id && config.get('trigger.collectGroupMsg') !== false) {
@@ -50,19 +46,15 @@ export class ChatListener extends plugin {
                         raw_message: e.raw_message
                     })
                 } catch {
-                    // 静默失败
                 }
             }
             return false
         }
         let triggerCfg = config.get('trigger')
         if (!triggerCfg || !triggerCfg.private) {
-            // 使用旧配置并转换
             const listenerConfig = config.get('listener') || {}
             triggerCfg = this.convertLegacyConfig(listenerConfig)
         }
-        
-        // 群聊消息采集（仅在群聊时）
         if (e.isGroup && e.group_id && triggerCfg.collectGroupMsg !== false) {
             try {
                 memoryManager.collectGroupMessage(String(e.group_id), {
@@ -77,11 +69,7 @@ export class ChatListener extends plugin {
         if (isMessageProcessed(e)) {
             return false
         }
-        
-        // 过滤系统命令和其他插件命令（避免抢占）
         const rawMsg = e.msg || ''
-        
-        // 1. 本插件的系统命令
         const systemCmdPatterns = [
             /^#(结束对话|清除记忆|我的记忆|删除记忆|群聊总结|总结群聊|群消息总结|画像总结)/,
             /^#chatdebug/i,
@@ -93,41 +81,28 @@ export class ChatListener extends plugin {
                 return false
             }
         }
-        
-        // 2. 其他插件命令：以 # 开头的命令交给其他插件处理
-        // 配置 trigger.allowHashCommands=true 可让AI处理 # 命令
         const allowHashCmds = triggerCfg.allowHashCommands === true
         if (!allowHashCmds && /^#\S/.test(rawMsg)) {
-            // 检查是否@了机器人，如果是则清理掉@部分再判断
             const cleanedForCheck = this.cleanAtBot ? this.cleanAtBot(rawMsg, e) : rawMsg
             if (/^#\S/.test(cleanedForCheck.trim())) {
                 logger.debug(`[ChatListener] 跳过#命令(交给其他插件): ${rawMsg.substring(0, 30)}`)
                 return false
             }
         }
-
-        // 检查黑白名单
         if (!this.checkAccess(triggerCfg)) {
             return false
         }
-
-        // 检查触发条件（私聊和群聊独立判断）
         const triggerResult = this.checkTrigger(triggerCfg)
         if (!triggerResult.triggered) {
             return false
         }
-        
-
-        // 标记消息已处理
         markMessageProcessed(e)
-
-        // 处理消息
         try {
             await this.handleChat(triggerCfg, triggerResult.msg, {
                 persona: triggerResult.persona,
                 isPersonaPrefix: triggerResult.isPersonaPrefix
             })
-            return true
+            return listenerConfig.blockOther ?? false
         } catch {
             return false
         }
@@ -208,34 +183,28 @@ export class ChatListener extends plugin {
         if (groupCfg.at && e.atBot) {
             const isReplyToBot = isReplyToBotMessage(e)
             const hasReply = !!e.source
-            
-            // 从消息中去除 @机器人 部分
             const cleanedMsg = this.cleanAtBot(rawMsg, e)
+            if (!cleanedMsg.trim()) {
+                logger.debug(`[ChatListener] 仅@无内容，跳过让其他插件处理`)
+                return { triggered: false, msg: '', reason: '仅@无内容' }
+            }
             
             if (isReplyToBot) {
-                // 引用机器人消息：检查 replyBot 配置
                 if (groupCfg.replyBot) {
                     return { triggered: true, msg: cleanedMsg, reason: '引用机器人消息' }
                 }
-                // 不触发（防止重复响应）
             } else if (hasReply) {
-                // 引用其他消息：@ 仍然有效
                 return { triggered: true, msg: cleanedMsg, reason: '@机器人(含引用)' }
             } else {
-                // 正常 @ 触发
                 return { triggered: true, msg: cleanedMsg, reason: '@机器人' }
             }
         }
-        
-        // 2. 引用机器人消息触发（独立于@，需要 replyBot=true）
         if (groupCfg.replyBot && e.source && !e.atBot) {
             const isReplyToBot = isReplyToBotMessage(e)
             if (isReplyToBot) {
                 return { triggered: true, msg: rawMsg, reason: '引用机器人消息' }
             }
         }
-        
-        // 3. 前缀触发（包括前缀人格）
         if (groupCfg.prefix) {
             const result = this.checkPrefix(rawMsg, triggerCfg.prefixes, triggerCfg.prefixPersonas)
             if (result.matched) {
@@ -248,16 +217,12 @@ export class ChatListener extends plugin {
                 }
             }
         }
-        
-        // 4. 关键词触发
         if (groupCfg.keyword) {
             const result = this.checkKeyword(rawMsg, triggerCfg.keywords)
             if (result.matched) {
                 return { triggered: true, msg: rawMsg, reason: `关键词[${result.keyword}]` }
             }
         }
-        
-        // 5. 随机触发
         if (groupCfg.random) {
             const rate = groupCfg.randomRate || 0.05
             if (Math.random() < rate) {
@@ -269,13 +234,11 @@ export class ChatListener extends plugin {
     }
     
     /**
-     * 检查前缀（前缀视为@，如"残花你好"或"残花 你好"都能触发）
      * @param {string} msg - 消息内容
      * @param {string[]} prefixes - 普通前缀列表
      * @param {Array} prefixPersonas - 前缀人格配置
      */
     checkPrefix(msg, prefixes = [], prefixPersonas = []) {
-        // 1. 检查前缀人格（优先级更高）
         if (Array.isArray(prefixPersonas) && prefixPersonas.length > 0) {
             for (const persona of prefixPersonas) {
                 if (!persona?.prefix) continue
@@ -292,8 +255,6 @@ export class ChatListener extends plugin {
                 }
             }
         }
-        
-        // 2. 检查普通前缀
         if (!Array.isArray(prefixes)) prefixes = [prefixes]
         prefixes = prefixes.filter(p => p && typeof p === 'string' && p.trim()).map(p => p.trim())
         
@@ -347,7 +308,6 @@ export class ChatListener extends plugin {
      * 兼容旧配置
      */
     convertLegacyConfig(oldCfg) {
-        // 如果是旧的listener配置，转换为新格式
         const triggerMode = oldCfg.triggerMode || 'at'
         return {
             private: {
@@ -383,11 +343,7 @@ export class ChatListener extends plugin {
         const userId = e.user_id?.toString()
         const groupId = e.group_id?.toString() || null
         const featuresConfig = config.get('features') || {}
-        
-        // 前缀人格配置
         const { persona, isPersonaPrefix } = personaOptions
-        
-        // 检测 debug 模式
         let debugMode = isDebugEnabled(e)
         let msgForChat = processedMsg
         if (msgForChat && /\s+debug\s*$/i.test(msgForChat)) {
@@ -439,30 +395,35 @@ export class ChatListener extends plugin {
         } catch (e) {
             // 统计失败不影响主流程
         }
-        
-        // 更新 userMessage 中的文本内容（去除触发词后的版本）
         if (processedMsg && userMessage.content) {
             const textItem = userMessage.content.find(c => c.type === 'text')
             if (textItem) {
                 textItem.text = textContent
             }
         }
-
-        // 设置工具上下文
         setToolContext({ event: e, bot: e.bot || Bot })
         mcpManager.setToolContext({ event: e, bot: e.bot || Bot })
-
-        // 调用聊天服务 - 传递完整的用户消息信息
-        // 提取图片：支持 image 和 image_url 两种类型
         const images = userMessage.content?.filter(c => 
             c.type === 'image' || c.type === 'image_url'
         ) || []
-        
+        let finalMessage = textContent
+        if (userMessage.quote) {
+            const quoteSender = userMessage.quote.sender?.card || 
+                               userMessage.quote.sender?.nickname || 
+                               userMessage.quote.sender?.user_id || '某人'
+            const quoteText = typeof userMessage.quote.content === 'string' 
+                ? userMessage.quote.content 
+                : (userMessage.quote.raw_message || '')
+            if (quoteText) {
+                finalMessage = `[引用 ${quoteSender} 的消息: "${quoteText}"]\n${textContent}`
+                logger.debug(`[ChatListener] 添加引用消息到上下文: ${quoteText.substring(0, 50)}...`)
+            }
+        }
         
         // 构建请求选项
         const chatOptions = {
             userId,
-            message: textContent,
+            message: finalMessage,
             images,
             event: e,
             mode: 'chat',
