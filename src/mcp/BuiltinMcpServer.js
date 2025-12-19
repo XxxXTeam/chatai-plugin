@@ -17,16 +17,28 @@ const __dirname = path.dirname(__filename)
  */
 function detectAdapter(bot) {
     if (!bot) return { adapter: 'unknown', isNT: false, canAiVoice: false }
-    const isIcqq = !!(bot.pickGroup && bot.pickFriend && bot.fl && bot.gl && !bot.sendApi)
-    if (isIcqq) {
-        const hasNT = !!(bot.sendOidbSvcTrpcTcp && typeof bot.sendOidbSvcTrpcTcp === 'function')
+    
+    // 优先检测icqq特征（pickGroup + pickFriend + fl + gl 是icqq特有的）
+    const hasIcqqFeatures = !!(bot.pickGroup && bot.pickFriend && bot.fl && bot.gl)
+    // icqq可能同时有sendApi（通过适配器），所以不能用!bot.sendApi来判断
+    const hasNT = typeof bot.sendOidbSvcTrpcTcp === 'function'
+    
+    if (hasIcqqFeatures) {
+        logger.debug(`[detectAdapter] icqq检测: hasIcqqFeatures=${hasIcqqFeatures}, hasNT=${hasNT}`)
         return { adapter: 'icqq', isNT: hasNT, canAiVoice: hasNT }
     }
+    
+    // OneBot/NapCat 检测
     if (bot.sendApi) {
-        const isNapCat = !!(bot.adapter?.name?.includes?.('napcat') || bot.config?.protocol === 'napcat')
+        const isNapCat = !!(
+            bot.adapter?.name?.toLowerCase?.()?.includes?.('napcat') || 
+            bot.config?.protocol === 'napcat' ||
+            bot.version?.app_name?.toLowerCase?.()?.includes?.('napcat')
+        )
         if (isNapCat) {
             return { adapter: 'napcat', isNT: true, canAiVoice: true }
         }
+        // 其他OneBot实现可能也支持AI声聊
         return { adapter: 'onebot', isNT: false, canAiVoice: false }
     }
     

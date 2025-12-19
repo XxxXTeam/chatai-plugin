@@ -443,7 +443,15 @@ ${dialogText}
             const existingText = existingMemories.map(m => m.content).join('\n')
             
             // 使用 LLM 分析并提取新记忆
-            const prompt = `你是一个用户记忆管理专家。请分析对话，提取关于用户的有长期价值的信息。
+            // 获取机器人名字，避免混淆
+            const botName = global.Bot?.nickname || config.get('basic.botName') || '助手'
+            
+            const prompt = `你是一个用户记忆管理专家。请分析对话，提取关于【用户】的有长期价值的信息。
+
+【重要提示】
+- 对话中的"助手"或"${botName}"是机器人/AI，不是用户
+- 只提取【用户】（人类）的个人信息，不要把机器人的信息当作用户的
+- "用户:"后面的内容才是用户说的话
 
 【已有记忆】（避免重复）
 ${existingText || '暂无'}
@@ -452,11 +460,12 @@ ${existingText || '暂无'}
 ${dialogText}
 
 【提取规则】
-1. 提取具体的个人信息：姓名、年龄、职业、所在地等
-2. 提取明确的偏好：喜欢/不喜欢的事物、习惯
-3. 提取重要事件：生日、纪念日、重要计划等
+1. 只提取用户（人类）的个人信息：姓名、年龄、职业、所在地等
+2. 提取用户明确表达的偏好：喜欢/不喜欢的事物、习惯
+3. 提取用户提到的重要事件：生日、纪念日、重要计划等
 4. 避免重复已有记忆，只提取新信息
-5. 每条记忆简洁明了，不超过40字
+5. 不要把助手/机器人的名字或信息当作用户的
+6. 每条记忆简洁明了，不超过40字
 
 【输出格式】每行一条记忆，最多3条，没有新信息则输出"无"：`
 
@@ -537,9 +546,9 @@ ${dialogText}
 
             const shouldExtract = importantPatterns.some(p => p.test(userMessage))
             if (!shouldExtract) return null
-
-            // 构造提取提示
-            const extractPrompt = `分析以下对话，提取用户透露的个人信息或偏好，生成一条简短的记忆（不超过50字）。如果没有值得记忆的信息，返回空。
+            const botName = global.Bot?.nickname || config.get('basic.botName') || '助手'
+            const extractPrompt = `分析以下对话，提取【用户】（人类）透露的个人信息或偏好，生成一条简短的记忆（不超过50字）。
+注意：助手/${botName}是机器人，不要把机器人的信息当作用户的。如果没有值得记忆的信息，返回空。
 
 用户说：${userMessage}
 助手回复：${assistantResponse}
@@ -555,8 +564,6 @@ ${dialogText}
             )
 
             const memoryContent = result.contents?.[0]?.text?.trim()
-            // 使用插件计算 Token
-            // 记录统计（自动记忆提取）
             try {
                 await usageStats.record({
                     channelId: 'memory',
@@ -594,18 +601,10 @@ ${dialogText}
         if (!config.get('memory.enabled')) return ''
         
         await this.init()
-        
-        // 提取纯userId（去除可能的群号前缀）
         const pureUserId = userId?.includes('_') ? userId.split('_').pop() : userId
-        
-        // 获取所有相关记忆
         let allMemories = []
-        
-        // 1. 获取用户个人记忆
         const userMemories = databaseService.getMemories(pureUserId, 10)
         allMemories.push(...userMemories)
-        
-        // 2. 如果有查询词，搜索相关记忆
         if (query && query.trim()) {
             const searchedMemories = databaseService.searchMemories(pureUserId, query, 5)
             // 合并去重
@@ -615,8 +614,6 @@ ${dialogText}
                 }
             }
         }
-        
-        // 3. 如果userId包含群号前缀，也获取组合ID的记忆
         if (userId?.includes('_')) {
             const combinedMemories = databaseService.getMemories(userId, 5)
             for (const cm of combinedMemories) {
@@ -630,10 +627,7 @@ ${dialogText}
             logger.debug(`[MemoryManager] 用户 ${pureUserId} 无记忆数据`)
             return ''
         }
-        
-        // 按重要性和时间排序，取最相关的
         allMemories.sort((a, b) => {
-            // 先按重要性排序，再按时间排序
             const importanceA = a.importance || 5
             const importanceB = b.importance || 5
             if (importanceB !== importanceA) return importanceB - importanceA

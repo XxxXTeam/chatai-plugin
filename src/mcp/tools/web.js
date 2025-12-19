@@ -97,7 +97,7 @@ export const webTools = [
             let browser = null
             try {
                 // 获取代理配置
-                const proxyUrl = proxyService.getProxyUrl('tools')
+                const proxyUrl = proxyService.getBrowserProxyArgs()
                 const launchOptions = {
                     headless: 'new',
                     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
@@ -186,7 +186,7 @@ export const webTools = [
                 }
                 
                 // 获取代理
-                const agent = proxyService.getAgent('tools')
+                const agent = proxyService.getApiProxyAgent(args.url)
                 if (agent) options.agent = agent
                 
                 const response = await fetch(args.url, options)
