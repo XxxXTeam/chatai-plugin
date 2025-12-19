@@ -646,6 +646,10 @@ export class BuiltinMcpServer {
                 const chaiteContext = {
                     getEvent: () => ctx.getEvent?.(),
                     getBot: () => ctx.getBot?.(),
+                    getAdapter: () => ctx.getAdapter?.() || detectAdapter(ctx.getBot?.()),
+                    isIcqq: () => ctx.isIcqq?.() || chaiteContext.getAdapter().adapter === 'icqq',
+                    isNapCat: () => ctx.isNapCat?.() || chaiteContext.getAdapter().adapter === 'napcat',
+                    isNT: () => ctx.isNT?.() || chaiteContext.getAdapter().isNT,
                     event: ctx.getEvent?.(),
                     bot: ctx.getBot?.()
                 }
@@ -728,17 +732,38 @@ export class BuiltinMcpServer {
     createRequestContext(requestContext) {
         // 如果有传入的请求上下文，使用它（用于并发隔离）
         if (requestContext && requestContext.event) {
+            const getBot = (botId) => {
+                if (requestContext.bot) return requestContext.bot
+                if (requestContext.event?.bot) return requestContext.event.bot
+                const framework = getBotFramework()
+                if (framework === 'trss' && botId && Bot.bots?.get) {
+                    return Bot.bots.get(botId) || Bot
+                }
+                return Bot
+            }
+            
+            // 缓存适配器信息
+            let _adapterInfo = null
+            const getAdapter = () => {
+                if (_adapterInfo) return _adapterInfo
+                const bot = getBot()
+                const botId = bot?.uin || bot?.self_id || 'default'
+                if (adapterCache.has(botId)) {
+                    _adapterInfo = adapterCache.get(botId)
+                    return _adapterInfo
+                }
+                _adapterInfo = detectAdapter(bot)
+                adapterCache.set(botId, _adapterInfo)
+                return _adapterInfo
+            }
+            
             return {
-                getBot: (botId) => {
-                    if (requestContext.bot) return requestContext.bot
-                    if (requestContext.event?.bot) return requestContext.event.bot
-                    const framework = getBotFramework()
-                    if (framework === 'trss' && botId && Bot.bots?.get) {
-                        return Bot.bots.get(botId) || Bot
-                    }
-                    return Bot
-                },
+                getBot,
                 getEvent: () => requestContext.event,
+                getAdapter,
+                isIcqq: () => getAdapter().adapter === 'icqq',
+                isNapCat: () => getAdapter().adapter === 'napcat',
+                isNT: () => getAdapter().isNT,
                 registerCallback: (id, cb) => toolContext.registerCallback(id, cb),
                 executeCallback: (id, data) => toolContext.executeCallback(id, data)
             }

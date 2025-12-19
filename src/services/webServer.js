@@ -3554,12 +3554,16 @@ export default {
         })
 
         // GET /api/imagegen/config - 获取绘图配置
-        this.app.get('/api/imagegen/config', this.authMiddleware.bind(this), (req, res) => {
+        this.app.get('/api/imagegen/config', this.authMiddleware.bind(this), async (req, res) => {
             const imageGenConfig = config.get('features.imageGen') || {}
-            res.json(ChaiteResponse.ok(imageGenConfig))
+            const { imageGenPresetManager } = await import('../../apps/ImageGen.js')
+            await imageGenPresetManager.init()
+            const customPresetsWithUid = imageGenPresetManager.customPresets.map(p => {
+                const { source, ...rest } = p
+                return rest
+            })
+            res.json(ChaiteResponse.ok({ ...imageGenConfig, customPresets: customPresetsWithUid }))
         })
-
-        // PUT /api/imagegen/config - 更新绘图配置
         this.app.put('/api/imagegen/config', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const updates = req.body
@@ -3655,6 +3659,209 @@ export default {
                 
                 presets.splice(index, 1)
                 config.set('features.imageGen.customPresets', presets)
+                
+                // 热重载
+                const { imageGenPresetManager } = await import('../../apps/ImageGen.js')
+                await imageGenPresetManager.loadAllPresets()
+                
+                res.json(ChaiteResponse.ok({ message: '预设已删除', presets }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // PUT /api/imagegen/remote-presets/:source/:uid - 编辑云端预设（通过UID）
+        this.app.put('/api/imagegen/remote-presets/:source/:uid', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { source, uid } = req.params
+                const { keywords, prompt, needImage } = req.body
+                
+                if (!keywords || !prompt) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '缺少 keywords 或 prompt'))
+                }
+                
+                const { imageGenPresetManager } = await import('../../apps/ImageGen.js')
+                await imageGenPresetManager.init()
+                
+                // 获取该来源的预设
+                const sourcePresets = imageGenPresetManager.remotePresets[source]
+                if (!sourcePresets) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '来源不存在'))
+                }
+                
+                // 通过UID查找预设
+                const index = sourcePresets.findIndex(p => p.uid === uid)
+                if (index === -1) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '预设不存在'))
+                }
+                
+                // 更新预设
+                const keywordArr = Array.isArray(keywords) ? keywords : keywords.split(/[,，\s]+/).filter(k => k.trim())
+                sourcePresets[index] = {
+                    ...sourcePresets[index],
+                    keywords: keywordArr,
+                    prompt,
+                    needImage: needImage !== false
+                }
+                
+                // 保存到缓存文件
+                const fs = await import('fs')
+                const path = await import('path')
+                const { fileURLToPath } = await import('url')
+                const __dirname = path.dirname(fileURLToPath(import.meta.url))
+                const PRESET_CACHE_DIR = path.join(__dirname, '../../data/presets')
+                if (!fs.existsSync(PRESET_CACHE_DIR)) {
+                    fs.mkdirSync(PRESET_CACHE_DIR, { recursive: true })
+                }
+                const sources = config.get('features.imageGen.presetSources') || []
+                const sourceConfig = sources.find(s => s.name === source)
+                if (sourceConfig) {
+                    const urlToFilename = (url) => url.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50)
+                    const cacheFile = path.join(PRESET_CACHE_DIR, `${urlToFilename(sourceConfig.url)}.json`)
+                    
+                    // 保存更新后的预设（不带source字段）
+                    const rawPresets = sourcePresets.map(p => {
+                        const { source: _, ...rest } = p
+                        return rest
+                    })
+                    fs.writeFileSync(cacheFile, JSON.stringify(rawPresets, null, 2), 'utf-8')
+                }
+                
+                // 热重载
+                await imageGenPresetManager.loadAllPresets()
+                
+                res.json(ChaiteResponse.ok({ 
+                    message: '预设已更新',
+                    preset: sourcePresets[index]
+                }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+        this.app.delete('/api/imagegen/remote-presets/:source/:uid', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { source, uid } = req.params
+                
+                const { imageGenPresetManager } = await import('../../apps/ImageGen.js')
+                await imageGenPresetManager.init()
+                
+                const sourcePresets = imageGenPresetManager.remotePresets[source]
+                if (!sourcePresets) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '来源不存在'))
+                }
+                
+                const index = sourcePresets.findIndex(p => p.uid === uid)
+                if (index === -1) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '预设不存在'))
+                }
+                sourcePresets.splice(index, 1)
+                const fs = await import('fs')
+                const path = await import('path')
+                const { fileURLToPath } = await import('url')
+                const __dirname = path.dirname(fileURLToPath(import.meta.url))
+                const PRESET_CACHE_DIR = path.join(__dirname, '../../data/presets')
+                const sources = config.get('features.imageGen.presetSources') || []
+                const sourceConfig = sources.find(s => s.name === source)
+                if (sourceConfig) {
+                    const urlToFilename = (url) => url.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50)
+                    const cacheFile = path.join(PRESET_CACHE_DIR, `${urlToFilename(sourceConfig.url)}.json`)
+                    const rawPresets = sourcePresets.map(p => {
+                        const { source: _, ...rest } = p
+                        return rest
+                    })
+                    fs.writeFileSync(cacheFile, JSON.stringify(rawPresets, null, 2), 'utf-8')
+                }
+                
+                // 热重载
+                await imageGenPresetManager.loadAllPresets()
+                
+                res.json(ChaiteResponse.ok({ message: '预设已删除' }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // PUT /api/imagegen/custom-presets/:uid - 编辑自定义预设（通过UID）
+        this.app.put('/api/imagegen/custom-presets/:uid', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { uid } = req.params
+                const { keywords, prompt, needImage } = req.body
+                
+                if (!keywords || !prompt) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '缺少 keywords 或 prompt'))
+                }
+                
+                const presets = config.get('features.imageGen.customPresets') || []
+                
+                // 通过UID查找预设
+                const index = presets.findIndex(p => p.uid === uid)
+                if (index === -1) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '预设不存在'))
+                }
+                
+                const keywordArr = Array.isArray(keywords) ? keywords : keywords.split(/[,，\s]+/).filter(k => k.trim())
+                presets[index] = {
+                    ...presets[index],
+                    keywords: keywordArr,
+                    prompt,
+                    needImage: needImage !== false
+                }
+                config.set('features.imageGen.customPresets', presets)
+                
+                // 热重载
+                const { imageGenPresetManager } = await import('../../apps/ImageGen.js')
+                await imageGenPresetManager.loadAllPresets()
+                
+                res.json(ChaiteResponse.ok({ message: '预设已更新', presets }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+        this.app.put('/api/imagegen/builtin-presets/:uid', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { uid } = req.params
+                const { keywords, prompt, needImage } = req.body
+                if (!keywords || !prompt) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '缺少 keywords 或 prompt'))
+                }
+                const presets = config.get('features.imageGen.builtinPresets') || []
+                const index = presets.findIndex(p => p.uid === uid)
+                if (index === -1) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '预设不存在'))
+                }
+                
+                const keywordArr = Array.isArray(keywords) ? keywords : keywords.split(/[,，\s]+/).filter(k => k.trim())
+                presets[index] = {
+                    ...presets[index],
+                    keywords: keywordArr,
+                    prompt,
+                    needImage: needImage !== false
+                }
+                config.set('features.imageGen.builtinPresets', presets)
+                
+                // 热重载
+                const { imageGenPresetManager } = await import('../../apps/ImageGen.js')
+                await imageGenPresetManager.loadAllPresets()
+                
+                res.json(ChaiteResponse.ok({ message: '预设已更新', presets }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/imagegen/builtin-presets/:uid - 删除内置预设（通过UID）
+        this.app.delete('/api/imagegen/builtin-presets/:uid', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { uid } = req.params
+                const presets = config.get('features.imageGen.builtinPresets') || []
+                const index = presets.findIndex(p => p.uid === uid)
+                
+                if (index === -1) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '预设不存在'))
+                }
+                
+                presets.splice(index, 1)
+                config.set('features.imageGen.builtinPresets', presets)
                 
                 // 热重载
                 const { imageGenPresetManager } = await import('../../apps/ImageGen.js')
