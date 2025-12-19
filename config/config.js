@@ -201,6 +201,7 @@ class Config {
                 autoExtract: true,   // 自动从对话提取记忆
                 pollInterval: 5,     // 轮询间隔（分钟）
                 maxMemories: 50,     // 每用户最大记忆数
+                model: '',           // 记忆提取使用的模型（留空使用默认模型）
                 // 群聊上下文采集
                 groupContext: {
                     enabled: true,           // 启用群聊上下文采集
@@ -271,28 +272,46 @@ class Config {
                 recall: {
                     enabled: false,          // 启用撤回响应
                     aiResponse: true,        // 使用AI响应撤回
+                    prompt: '',              // 自定义提示词（留空使用默认）
                 },
                 // 入群欢迎（默认关闭）
                 welcome: {
                     enabled: false,          // 启用入群欢迎
                     message: '',             // 默认欢迎语（空则使用AI生成）
+                    prompt: '',              // 自定义提示词（留空使用默认）
                 },
                 // 退群通知（默认关闭）
                 goodbye: {
                     enabled: false,          // 启用退群通知
                     aiResponse: false,       // 使用AI响应退群
+                    prompt: '',              // 自定义提示词（留空使用默认）
+                },
+                // 禁言事件响应（默认关闭）
+                ban: {
+                    enabled: false,          // 启用禁言响应
+                    aiResponse: true,        // 使用AI响应禁言
+                    prompt: '',              // 自定义提示词（留空使用默认）
+                },
+                // 管理员变更响应（默认关闭）
+                admin: {
+                    enabled: false,          // 启用管理员变更响应
+                    prompt: '',              // 自定义提示词（留空使用默认）
                 },
                 // 运气王响应（默认关闭）
                 luckyKing: {
                     enabled: false,          // 启用运气王响应
+                    congratulate: false,     // 祝贺他人成为运气王
+                    prompt: '',              // 自定义提示词（留空使用默认）
                 },
                 // 荣誉变更响应（默认关闭）
                 honor: {
                     enabled: false,          // 启用荣誉响应（龙王、群聊之火等）
+                    prompt: '',              // 自定义提示词（留空使用默认）
                 },
                 // 精华消息响应（默认关闭）
                 essence: {
                     enabled: false,          // 启用精华消息响应
+                    prompt: '',              // 自定义提示词（留空使用默认）
                 },
                 // AI绘图
                 imageGen: {

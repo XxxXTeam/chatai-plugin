@@ -141,8 +141,9 @@ export class PresetManager {
             console.error('[PresetManager] Failed to load presets:', err)
         }
 
-        // Ensure default preset exists
-        if (!this.presets.has('default')) {
+        // 只有在没有任何用户预设时才创建默认预设
+        // 如果用户已设置其他预设为默认，不再强制创建'default'
+        if (this.presets.size === 0) {
             this.presets.set('default', this.createDefaultPreset())
             await this.savePresets()
         }

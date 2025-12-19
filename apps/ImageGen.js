@@ -1,8 +1,3 @@
-/**
- * AI 图片/视频生成插件
- * 支持文生图、图生图、文生视频、图生视频和预设提示词模式
- * 兼容 icqq / NapCat / OneBot
- */
 import config from '../config/config.js'
 import { segment, MessageApi } from '../src/utils/messageParser.js'
 import { usageStats } from '../src/services/stats/UsageStats.js'
@@ -12,8 +7,6 @@ import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PRESET_CACHE_DIR = path.join(__dirname, '../data/presets')
-
-// ================ 预设管理器 ================
 class PresetManager {
     constructor() {
         this.builtinPresets = []      // 内置预设
@@ -49,16 +42,13 @@ class PresetManager {
         await this.loadAllPresets()
         this.initialized = true
     }
-
-    // 加载所有预设（热重载入口）
     async loadAllPresets() {
-        // 1. 加载自定义预设（从配置）
         this.customPresets = (config.get('features.imageGen.customPresets') || [])
             .map(p => ({ ...p, source: 'custom' }))
         await this.loadRemotePresetsFromCache()
         this.mergeAllPresets()
         
-        logger.info(`[ImageGen] 预设加载完成: 内置${this.builtinPresets.length} + 远程${Object.values(this.remotePresets).flat().length} + 自定义${this.customPresets.length} = ${this.allPresets.length}`)
+    //    logger.info(`[ImageGen] 预设加载完成: 内置${this.builtinPresets.length} + 远程${Object.values(this.remotePresets).flat().length} + 自定义${this.customPresets.length} = ${this.allPresets.length}`)
     }
     async loadRemotePresetsFromCache() {
         const sources = config.get('features.imageGen.presetSources') || []
@@ -114,13 +104,9 @@ class PresetManager {
         this.mergeAllPresets()
         return results
     }
-
-    // 合并所有预设（去重）
     mergeAllPresets() {
         const usedKeywords = new Set()
         const merged = []
-
-        // 优先级：自定义 > 内置 > 远程
         const addPresets = (presets) => {
             for (const p of presets) {
                 const newKeywords = p.keywords.filter(k => !usedKeywords.has(k.toLowerCase()))
@@ -147,20 +133,14 @@ class PresetManager {
             .join('|')
         return keywords ? new RegExp(`^#?(${keywords})$`, 'i') : /^$/
     }
-
-    // URL 转文件名
     urlToFilename(url) {
         return url.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50)
     }
-
-    // 查找预设
     findPreset(msg) {
         if (!msg || typeof msg !== 'string') return null
         const pureMsg = msg.replace(/^#?/, '').toLowerCase()
         return this.allPresets.find(p => p.keywords.some(k => k.toLowerCase() === pureMsg))
     }
-
-    // 获取预设统计
     getStats() {
         const remoteCount = Object.values(this.remotePresets).flat().length
         return {
@@ -174,17 +154,11 @@ class PresetManager {
             }))
         }
     }
-
-    // 获取所有预设（供API使用）
     getAllPresets() {
         return this.allPresets
     }
 }
-
-// 全局预设管理器实例
 const presetMgr = new PresetManager()
-
-// 导出预设管理器供 webServer 使用
 export { presetMgr as imageGenPresetManager }
 
 export class ImageGen extends plugin {
@@ -202,10 +176,10 @@ export class ImageGen extends plugin {
                 { reg: /^#?图生图\s*(.*)$/s, fnc: 'img2img' },
                 { reg: /^#?文生视频\s*(.+)$/s, fnc: 'text2video' },
                 { reg: /^#?图生视频\s*(.*)$/s, fnc: 'img2video' },
-                { reg: /^.+$/, fnc: 'presetHandler', log: false },  // 动态匹配预设
+                { reg: /^.+$/, fnc: 'presetHandler', log: false },  
                 { reg: /^#?(谷歌状态|画图状态|api状态)$/i, fnc: 'apiStatus' },
-                { reg: /^#?(绘图帮助|画图帮助|皮皮绘图帮助)$/i, fnc: 'showHelp' },
-                { reg: /^#?(更新预设|皮皮更新焚决|刷新预设|重载预设)$/i, fnc: 'updatePresets' },
+                { reg: /^#?(绘图帮助|画图帮助|绘图帮助)$/i, fnc: 'showHelp' },
+                { reg: /^#?(更新预设|更新焚决|刷新预设|重载预设)$/i, fnc: 'updatePresets' },
             ]
         })
         
@@ -286,7 +260,7 @@ export class ImageGen extends plugin {
     }
 
     /**
-     * 获取API状态信息
+     * 获取API状态信息 
      */
     async apiStatus() {
         const e = this.e
@@ -296,7 +270,6 @@ export class ImageGen extends plugin {
             return true
         }
         
-        const apiConfig = config.get('features.imageGen') || {}
         const apis = this.getApiList()
         
         if (apis.length === 0) {
@@ -311,7 +284,6 @@ export class ImageGen extends plugin {
         for (let i = 0; i < apis.length; i++) {
             const api = apis[i]
             try {
-                // 请求根路径获取状态
                 const statusUrl = api.baseUrl.replace(/\/v1\/chat\/completions\/?$/, '').replace(/\/v1\/?$/, '').replace(/\/$/, '')
                 
                 const response = await fetch(statusUrl, {
@@ -322,89 +294,99 @@ export class ImageGen extends plugin {
                 
                 if (response.ok) {
                     const data = await response.json()
-                    results.push({
-                        index: i + 1,
-                        baseUrl: api.baseUrl,
-                        success: true,
-                        data
-                    })
+                    results.push({ index: i + 1, baseUrl: api.baseUrl, success: true, data, models: api.models || [] })
                 } else {
-                    results.push({
-                        index: i + 1,
-                        baseUrl: api.baseUrl,
-                        success: false,
-                        error: `HTTP ${response.status}`
-                    })
+                    results.push({ index: i + 1, baseUrl: api.baseUrl, success: false, error: `HTTP ${response.status}` })
                 }
             } catch (err) {
-                results.push({
-                    index: i + 1,
-                    baseUrl: api.baseUrl,
-                    success: false,
-                    error: err.message
-                })
+                results.push({ index: i + 1, baseUrl: api.baseUrl, success: false, error: err.message })
             }
         }
         
-        // 格式化输出
-        const output = results.map(r => {
+        // 生成Markdown格式
+        const mdLines = ['# 📊 画图API状态', '', `> 检测时间: ${new Date().toLocaleString()}`, '']
+        
+        for (const r of results) {
             if (!r.success) {
-                return `【API ${r.index}】❌ 连接失败\n地址: ${r.baseUrl}\n错误: ${r.error}`
+                mdLines.push(`## ❌ API ${r.index} - 连接失败`)
+                mdLines.push(`- **地址**: \`${r.baseUrl}\``)
+                mdLines.push(`- **错误**: ${r.error}`)
+                mdLines.push('')
+                continue
             }
             
             const d = r.data
-            const lines = [
-                `【API ${r.index}】✅ ${d.service || 'Unknown'} v${d.version || '?'}`,
-                `状态: ${d.status || 'unknown'}`,
-                `运行时间: ${d.uptime || '-'}`,
-            ]
+            mdLines.push(`## ✅ API ${r.index} - ${d.service || 'Unknown'} v${d.version || '?'}`)
+            mdLines.push('')
+            mdLines.push('| 项目 | 值 |')
+            mdLines.push('|------|-----|')
+            mdLines.push(`| 状态 | ${d.status || 'unknown'} |`)
+            mdLines.push(`| 运行时间 | ${d.uptime || '-'} |`)
             
-            // 显示已配置的模型数量
-            const apiObj = apis[r.index - 1]
-            if (apiObj?.models?.length > 0) {
-                lines.push(`已配置模型: ${apiObj.models.length} 个`)
+            if (r.models?.length > 0) {
+                mdLines.push(`| 已配置模型 | ${r.models.length} 个 |`)
             }
-            
             if (d.pool) {
-                lines.push(`资源池: ${d.pool.ready}/${d.pool.total} 可用`)
+                mdLines.push(`| 资源池 | ${d.pool.ready}/${d.pool.total} 可用 |`)
             }
             if (d.images_generated !== undefined) {
-                lines.push(`已生成图片: ${d.images_generated}`)
+                mdLines.push(`| 已生成图片 | ${d.images_generated} |`)
             }
             if (d.videos_generated !== undefined) {
-                lines.push(`已生成视频: ${d.videos_generated}`)
+                mdLines.push(`| 已生成视频 | ${d.videos_generated} |`)
             }
             if (d.success_rate) {
-                lines.push(`成功率: ${d.success_rate}`)
+                mdLines.push(`| 成功率 | ${d.success_rate} |`)
             }
             if (d.current_rpm !== undefined) {
-                lines.push(`当前RPM: ${d.current_rpm} (平均: ${d.average_rpm || '-'})`)
+                mdLines.push(`| 当前RPM | ${d.current_rpm} (平均: ${d.average_rpm || '-'}) |`)
             }
             if (d.total_requests !== undefined) {
-                lines.push(`总请求: ${d.total_requests} (成功: ${d.success_requests || 0})`)
+                mdLines.push(`| 总请求 | ${d.total_requests} (成功: ${d.success_requests || 0}) |`)
             }
             if (d.clients?.count !== undefined) {
-                lines.push(`客户端: ${d.clients.count} 个, ${d.clients.total_threads || 0} 线程`)
+                mdLines.push(`| 客户端 | ${d.clients.count} 个, ${d.clients.total_threads || 0} 线程 |`)
             }
             if (d.input_tokens !== undefined || d.output_tokens !== undefined) {
                 const input = d.input_tokens ? (d.input_tokens / 1000000).toFixed(1) + 'M' : '-'
                 const output = d.output_tokens ? (d.output_tokens / 1000000).toFixed(1) + 'M' : '-'
-                lines.push(`Token: 输入${input} / 输出${output}`)
+                mdLines.push(`| Token | 输入${input} / 输出${output} |`)
             }
             if (d.mode) {
-                lines.push(`模式: ${d.mode}${d.flow_enabled ? ' (流式)' : ''}`)
-            }
-            // 显示备注信息
-            if (d.note && Array.isArray(d.note) && d.note.length > 0) {
-                lines.push(`━━━━━━━━━━`)
-                lines.push(`📝 备注:`)
-                d.note.forEach(n => lines.push(`  • ${n}`))
+                mdLines.push(`| 模式 | ${d.mode}${d.flow_enabled ? ' (流式)' : ''} |`)
             }
             
-            return lines.join('\n')
-        }).join('\n\n')
+            mdLines.push('')
+            
+            if (d.note && Array.isArray(d.note) && d.note.length > 0) {
+                mdLines.push('**📝 备注:**')
+                d.note.forEach(n => mdLines.push(`- ${n}`))
+                mdLines.push('')
+            }
+        }
         
-        await e.reply(`📊 画图API状态\n${'━'.repeat(15)}\n${output}`, true)
+        // 尝试渲染为图片
+        try {
+            const { renderService } = await import('../src/services/media/RenderService.js')
+            const imageBuffer = await renderService.renderMarkdownToImage({
+                markdown: mdLines.join('\n'),
+                title: '画图API状态',
+                icon: '📊',
+                theme: 'light',
+                showTimestamp: false
+            })
+            await e.reply(segment.image(imageBuffer))
+        } catch (renderErr) {
+            // 渲染失败，回退到文本
+            logger.warn('[ImageGen] 图片渲染失败，使用文本输出:', renderErr.message)
+            const textOutput = results.map(r => {
+                if (!r.success) return `【API ${r.index}】❌ ${r.error}`
+                const d = r.data
+                return `【API ${r.index}】✅ ${d.service || 'Unknown'} v${d.version || '?'}\n状态: ${d.status || 'unknown'} | 运行: ${d.uptime || '-'}`
+            }).join('\n\n')
+            await e.reply(`📊 画图API状态\n${'━'.repeat(15)}\n${textOutput}`, true)
+        }
+        
         return true
     }
 
