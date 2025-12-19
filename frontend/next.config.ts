@@ -7,6 +7,7 @@ const nextConfig: NextConfig = {
     unoptimized: true,
   },
   trailingSlash: true,
+  productionBrowserSourceMaps: false,
 };
 
 export default nextConfig;

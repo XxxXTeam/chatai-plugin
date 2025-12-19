@@ -257,7 +257,6 @@ export const statsApi = {
   reset: () => api.post('/api/stats/reset'),
 }
 
-// Usage Stats API (调用统计)
 export const usageStatsApi = {
   get: () => api.get('/api/stats/usage'),
   getRecent: (limit = 100, filter?: { source?: string; status?: string }) => {
@@ -282,5 +281,14 @@ export const imageGenApi = {
   addCustomPreset: (data: { keywords: string[]; prompt: string; needImage?: boolean }) => 
     api.post('/api/imagegen/custom-presets', data),
   deleteCustomPreset: (index: number) => api.delete(`/api/imagegen/custom-presets/${index}`),
+  updateCustomPreset: (uid: string, data: { keywords: string[]; prompt: string; needImage?: boolean }) =>
+    api.put(`/api/imagegen/custom-presets/${uid}`, data),
+  updateRemotePreset: (source: string, uid: string, data: { keywords: string[]; prompt: string; needImage?: boolean }) =>
+    api.put(`/api/imagegen/remote-presets/${encodeURIComponent(source)}/${uid}`, data),
+  deleteRemotePreset: (source: string, uid: string) =>
+    api.delete(`/api/imagegen/remote-presets/${encodeURIComponent(source)}/${uid}`),
+  updateBuiltinPreset: (uid: string, data: { keywords: string[]; prompt: string; needImage?: boolean }) =>
+    api.put(`/api/imagegen/builtin-presets/${uid}`, data),
+  deleteBuiltinPreset: (uid: string) => api.delete(`/api/imagegen/builtin-presets/${uid}`),
 }
 

@@ -65,6 +65,7 @@ interface Preset {
   prompt: string
   needImage: boolean
   source: string
+  uid?: string
 }
 
 interface PresetSource {
@@ -109,8 +110,16 @@ export default function ImageGenPage() {
   // 弹窗状态
   const [addSourceOpen, setAddSourceOpen] = useState(false)
   const [addPresetOpen, setAddPresetOpen] = useState(false)
+  const [editPresetOpen, setEditPresetOpen] = useState(false)
   const [newSource, setNewSource] = useState({ name: '', url: '', enabled: true })
   const [newPreset, setNewPreset] = useState({ keywords: '', prompt: '', needImage: true })
+  const [editingPreset, setEditingPreset] = useState<{
+    uid: string
+    source: string
+    keywords: string
+    prompt: string
+    needImage: boolean
+  } | null>(null)
 
   // 加载数据（showLoading 控制是否显示加载状态）
   const loadData = async (showLoading = true) => {
@@ -223,6 +232,74 @@ export default function ImageGenPage() {
       await loadData(false)
     } catch (error: any) {
       toast.error('删除失败', { description: error.message })
+    }
+  }
+
+  // 删除内置预设
+  const handleDeleteBuiltinPreset = async (uid: string) => {
+    try {
+      await imageGenApi.deleteBuiltinPreset(uid)
+      toast.success('预设已删除')
+      await loadData(false)
+    } catch (error: any) {
+      toast.error('删除失败', { description: error.message })
+    }
+  }
+
+  // 删除云端预设
+  const handleDeleteRemotePreset = async (source: string, uid: string) => {
+    try {
+      await imageGenApi.deleteRemotePreset(source, uid)
+      toast.success('预设已删除')
+      await loadData(false)
+    } catch (error: any) {
+      toast.error('删除失败', { description: error.message })
+    }
+  }
+
+  // 打开编辑预设弹窗
+  const openEditPreset = (preset: Preset) => {
+    setEditingPreset({
+      uid: preset.uid || '',
+      source: preset.source,
+      keywords: preset.keywords.join(', '),
+      prompt: preset.prompt,
+      needImage: preset.needImage
+    })
+    setEditPresetOpen(true)
+  }
+
+  // 保存编辑的预设
+  const handleSavePreset = async () => {
+    if (!editingPreset) return
+    
+    if (!editingPreset.keywords || !editingPreset.prompt) {
+      toast.error('请填写完整信息')
+      return
+    }
+    
+    try {
+      const keywords = editingPreset.keywords.split(/[,，\s]+/).filter(k => k.trim())
+      const data = {
+        keywords,
+        prompt: editingPreset.prompt,
+        needImage: editingPreset.needImage
+      }
+      
+      if (editingPreset.source === 'custom') {
+        await imageGenApi.updateCustomPreset(editingPreset.uid, data)
+      } else if (editingPreset.source === 'builtin') {
+        await imageGenApi.updateBuiltinPreset(editingPreset.uid, data)
+      } else {
+        await imageGenApi.updateRemotePreset(editingPreset.source, editingPreset.uid, data)
+      }
+      
+      toast.success('预设已更新')
+      setEditPresetOpen(false)
+      setEditingPreset(null)
+      await loadData(false)
+    } catch (error: any) {
+      toast.error('保存失败', { description: error.message })
     }
   }
 
@@ -341,6 +418,7 @@ export default function ImageGenPage() {
                       <TableHead>提示词</TableHead>
                       <TableHead className="w-24">需要图片</TableHead>
                       <TableHead className="w-32">来源</TableHead>
+                      <TableHead className="w-16">操作</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -367,6 +445,51 @@ export default function ImageGenPage() {
                           )}
                         </TableCell>
                         <TableCell>{getSourceBadge(preset.source)}</TableCell>
+                        <TableCell>
+                          <div className="flex gap-1">
+                            {preset.uid && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => openEditPreset(preset)}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                            )}
+                            {preset.source === 'custom' && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => {
+                                  const customIndex = config?.customPresets?.findIndex(p => p.uid === preset.uid)
+                                  if (customIndex !== undefined && customIndex >= 0) {
+                                    handleDeletePreset(customIndex)
+                                  }
+                                }}
+                              >
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            )}
+                            {preset.source === 'builtin' && preset.uid && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleDeleteBuiltinPreset(preset.uid!)}
+                              >
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            )}
+                            {preset.source !== 'builtin' && preset.source !== 'custom' && preset.uid && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleDeleteRemotePreset(preset.source, preset.uid!)}
+                              >
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -481,13 +604,33 @@ export default function ImageGenPage() {
                         {preset.needImage ? <Badge variant="secondary">需要</Badge> : <Badge variant="outline">不需要</Badge>}
                       </TableCell>
                       <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleDeletePreset(index)}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
+                        <div className="flex gap-1">
+                          {preset.uid && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => {
+                                setEditingPreset({
+                                  uid: preset.uid!,
+                                  source: 'custom',
+                                  keywords: preset.keywords.join(', '),
+                                  prompt: preset.prompt,
+                                  needImage: preset.needImage
+                                })
+                                setEditPresetOpen(true)
+                              }}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDeletePreset(index)}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -793,6 +936,51 @@ export default function ImageGenPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddPresetOpen(false)}>取消</Button>
             <Button onClick={handleAddPreset}>添加</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 编辑预设弹窗 */}
+      <Dialog open={editPresetOpen} onOpenChange={setEditPresetOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>编辑预设</DialogTitle>
+            <DialogDescription>
+              修改{editingPreset?.source === 'custom' ? '自定义' : '云端'}预设的内容
+            </DialogDescription>
+          </DialogHeader>
+          {editingPreset && (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>触发关键词</Label>
+                <Input
+                  value={editingPreset.keywords}
+                  onChange={(e) => setEditingPreset(p => p ? { ...p, keywords: e.target.value } : null)}
+                  placeholder="用逗号或空格分隔，例如：风景化, 风景"
+                />
+                <p className="text-xs text-muted-foreground">用户发送这些关键词会触发此预设</p>
+              </div>
+              <div className="space-y-2">
+                <Label>提示词 (Prompt)</Label>
+                <Textarea
+                  value={editingPreset.prompt}
+                  onChange={(e) => setEditingPreset(p => p ? { ...p, prompt: e.target.value } : null)}
+                  placeholder="请输入发送给 AI 的提示词..."
+                  rows={8}
+                />
+              </div>
+              <div className="flex items-center space-x-2">
+                <Switch
+                  checked={editingPreset.needImage}
+                  onCheckedChange={(checked) => setEditingPreset(p => p ? { ...p, needImage: checked } : null)}
+                />
+                <Label>需要用户提供图片</Label>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setEditPresetOpen(false); setEditingPreset(null) }}>取消</Button>
+            <Button onClick={handleSavePreset}>保存</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

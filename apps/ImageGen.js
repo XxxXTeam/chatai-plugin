@@ -17,22 +17,49 @@ class PresetManager {
         this.initialized = false
     }
 
-    // 内置预设（硬编码）
-    getBuiltinPresets() {
+    // 默认内置预设
+    getDefaultBuiltinPresets() {
         return [
-            { keywords: ['手办', '手办化', '变手办', '转手办'], needImage: true, source: 'builtin',
+            { keywords: ['手办', '手办化', '变手办', '转手办'], needImage: true,
               prompt: 'Please accurately transform the main subject in this photo into a realistic, masterpiece-like 1/7 scale PVC statue. Behind this statue, a packaging box should be placed: the box has a large clear front window on its front side, and is printed with subject artwork, product name, brand logo, barcode, as well as a small specifications or authenticity verification panel. A small price tag sticker must also be attached to one corner of the box. Meanwhile, a computer monitor is placed at the back, and the monitor screen needs to display the ZBrush modeling process of this statue. In front of the packaging box, this statue should be placed on a round plastic base. The statue must have 3D dimensionality and a sense of realism, and the texture of the PVC material needs to be clearly represented. The human figure\'s expression and movements must be exactly consistent with those in the photo.' },
-            { keywords: ['Q版', 'q版', '表情包'], needImage: true, source: 'builtin',
+            { keywords: ['Q版', 'q版', '表情包'], needImage: true,
               prompt: '请以图片中的主要人物生成q版半身像表情符号包中的人物形象给我。丰富多彩的手绘风格，采用4x6的布局，涵盖了各种常见的聊天用语。要求:1.注意正确的头饰。2.不要复制原始图像。3.所有注释都应该是手写的简体中文。4.每个表情符号行动应该是独特的。5.生成的图像需要是4K，分辨率为16:9。' },
-            { keywords: ['动漫化', '二次元化', '卡通化'], needImage: true, source: 'builtin',
+            { keywords: ['动漫化', '二次元化', '卡通化'], needImage: true,
               prompt: '将图片中的人物转换为高质量动漫风格，保持人物的主要特征和表情，使用精美的日系动漫画风，色彩鲜艳，线条流畅。' },
-            { keywords: ['赛博朋克', '赛博'], needImage: true, source: 'builtin',
+            { keywords: ['赛博朋克', '赛博'], needImage: true,
               prompt: '将图片转换为赛博朋克风格，添加霓虹灯效果、科幻元素、未来都市背景，保持主体人物特征，整体色调偏蓝紫色调。' },
-            { keywords: ['油画', '油画风'], needImage: true, source: 'builtin',
+            { keywords: ['油画', '油画风'], needImage: true,
               prompt: '将图片转换为古典油画风格，模仿文艺复兴时期大师的画风，注重光影效果和细节质感，保持人物特征。' },
-            { keywords: ['水彩', '水彩画'], needImage: true, source: 'builtin',
+            { keywords: ['水彩', '水彩画'], needImage: true,
               prompt: '将图片转换为精美的水彩画风格，色彩透明、层次丰富，有水彩特有的晕染效果和纸张质感。' },
         ]
+    }
+    
+    // 获取内置预设（从配置读取，首次使用默认值）
+    getBuiltinPresets() {
+        let builtinPresets = config.get('features.imageGen.builtinPresets')
+        if (!builtinPresets || builtinPresets.length === 0) {
+            // 首次使用，初始化默认预设并保存
+            builtinPresets = this.getDefaultBuiltinPresets().map(p => ({
+                ...p,
+                uid: this.generateUid()
+            }))
+            config.set('features.imageGen.builtinPresets', builtinPresets)
+        } else {
+            // 确保每个预设都有uid
+            let needSave = false
+            builtinPresets = builtinPresets.map(p => {
+                if (!p.uid) {
+                    needSave = true
+                    return { ...p, uid: this.generateUid() }
+                }
+                return p
+            })
+            if (needSave) {
+                config.set('features.imageGen.builtinPresets', builtinPresets)
+            }
+        }
+        return builtinPresets.map(p => ({ ...p, source: 'builtin' }))
     }
 
     // 初始化
@@ -43,8 +70,20 @@ class PresetManager {
         this.initialized = true
     }
     async loadAllPresets() {
-        this.customPresets = (config.get('features.imageGen.customPresets') || [])
-            .map(p => ({ ...p, source: 'custom' }))
+        // 为自定义预设添加uid
+        let customPresets = config.get('features.imageGen.customPresets') || []
+        let needSave = false
+        customPresets = customPresets.map(p => {
+            if (!p.uid) {
+                needSave = true
+                return { ...p, uid: this.generateUid() }
+            }
+            return p
+        })
+        if (needSave) {
+            config.set('features.imageGen.customPresets', customPresets)
+        }
+        this.customPresets = customPresets.map(p => ({ ...p, source: 'custom' }))
         await this.loadRemotePresetsFromCache()
         this.mergeAllPresets()
         
@@ -61,13 +100,30 @@ class PresetManager {
                 if (fs.existsSync(cacheFile)) {
                     const data = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'))
                     if (Array.isArray(data)) {
-                        this.remotePresets[source.name] = data.map(p => ({ ...p, source: source.name }))
+                        // 为没有uid的预设生成uid
+                        let needSave = false
+                        const presetsWithUid = data.map(p => {
+                            if (!p.uid) {
+                                needSave = true
+                                return { ...p, uid: this.generateUid() }
+                            }
+                            return p
+                        })
+                        // 如果有预设缺少uid，保存更新后的数据
+                        if (needSave) {
+                            fs.writeFileSync(cacheFile, JSON.stringify(presetsWithUid, null, 2), 'utf-8')
+                        }
+                        this.remotePresets[source.name] = presetsWithUid.map(p => ({ ...p, source: source.name }))
                     }
                 }
             } catch (err) {
                 logger.debug(`[ImageGen] 加载远程预设缓存失败 [${source.name}]:`, err.message)
             }
         }
+    }
+    
+    generateUid() {
+        return 'preset_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8)
     }
 
     // 从远程更新预设
@@ -90,11 +146,15 @@ class PresetManager {
                 const data = await response.json()
                 if (!Array.isArray(data)) throw new Error('数据格式错误')
 
-                // 保存缓存
+                // 保存缓存（清理可能存在的内部字段）
                 const cacheFile = path.join(PRESET_CACHE_DIR, `${this.urlToFilename(source.url)}.json`)
-                fs.writeFileSync(cacheFile, JSON.stringify(data, null, 2), 'utf-8')
+                const cleanData = data.map(p => {
+                    const { source: _, _originalIndex: __, ...rest } = p
+                    return rest
+                })
+                fs.writeFileSync(cacheFile, JSON.stringify(cleanData, null, 2), 'utf-8')
                 
-                this.remotePresets[source.name] = data.map(p => ({ ...p, source: source.name }))
+                this.remotePresets[source.name] = cleanData.map((p, idx) => ({ ...p, source: source.name, _originalIndex: idx }))
                 results.push({ name: source.name, success: true, count: data.length })
             } catch (err) {
                 results.push({ name: source.name, success: false, error: err.message })
