@@ -43,7 +43,7 @@ jobs:
             ${{ runner.os }}-pnpm-store-
       
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
       
       - name: Build native modules
         run: pnpm rebuild better-sqlite3
@@ -52,7 +52,7 @@ jobs:
         run: |
           if [ -d "frontend" ]; then
             cd frontend
-            pnpm install --frozen-lockfile
+            pnpm install
             pnpm build
           fi
 
