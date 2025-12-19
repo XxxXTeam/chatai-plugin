@@ -266,7 +266,21 @@ export class ChatService {
             ...(groupId && { group_id: groupId })
         }
         let history = await contextManager.getContextHistory(conversationId, 20)
-        let llmModel = model || LlmService.getModel(mode)
+        
+        // 获取默认预设配置
+        await presetManager.init()
+        const effectivePresetIdForModel = presetId || preset?.id || config.get('llm.defaultChatPresetId') || 'default'
+        const currentPreset = preset || presetManager.get(effectivePresetIdForModel)
+        
+        // 模型优先级：传入model > 预设model > 群组model > 默认model
+        let llmModel = model
+        if (!llmModel && currentPreset?.model && currentPreset.model.trim()) {
+            llmModel = currentPreset.model.trim()
+            logger.debug(`[ChatService] 使用预设模型: ${llmModel} (预设: ${currentPreset.name || effectivePresetIdForModel})`)
+        }
+        if (!llmModel) {
+            llmModel = LlmService.getModel(mode)
+        }
         if (groupId && !model) {
             try {
                 const sm = await ensureScopeManager()

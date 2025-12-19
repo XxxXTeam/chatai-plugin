@@ -191,12 +191,19 @@ export class LlmService {
         const keyInfo = channelManager.getChannelKey(channel)
         logger.debug(`[LlmService] getChatClient 选择渠道: ${channel.name}, 模型: ${targetModel}, 适配器: ${adapterType}`)
         
-        return new ClientClass({
+        const client = new ClientClass({
             apiKey: keyInfo.key,
             baseUrl: channel.baseUrl,
             features: ['chat'],
             tools: [] // 无工具
         })
+        client._channelInfo = {
+            id: channel.id,
+            name: channel.name,
+            model: targetModel
+        }
+        
+        return client
     }
 
     /**

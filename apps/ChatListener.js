@@ -7,6 +7,7 @@ import { statsService } from '../src/services/stats/StatsService.js'
 import config from '../config/config.js'
 import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMessage, recordSentMessage } from '../src/utils/messageDedup.js'
 import { isDebugEnabled } from './Commands.js'
+import { cacheGroupMessage } from './GroupEvents.js'
 
 export class ChatListener extends plugin {
     constructor() {
@@ -34,6 +35,13 @@ export class ChatListener extends plugin {
         const e = this.e
         if (isSelfMessage(e)) {
             return false
+        }
+        
+        // 缓存群消息用于撤回检测
+        if (e.isGroup && e.message_id) {
+            try {
+                cacheGroupMessage(e)
+            } catch {}
         }
         const listenerEnabled = config.get('listener.enabled')
         if (listenerEnabled === false) {

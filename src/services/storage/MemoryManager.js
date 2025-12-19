@@ -200,8 +200,10 @@ ${dialogText}
 只输出有价值的信息，宁缺毋滥，没有则输出"无"：`
 
             const startTime = Date.now()
-            const client = await LlmService.getChatClient()
-            const model = config.get('llm.defaultModel')
+            const memoryModel = config.get('memory.model')
+            const client = await LlmService.getChatClient({ model: memoryModel || undefined })
+            const channelInfo = client._channelInfo || {}
+            const model = channelInfo.model || config.get('llm.defaultModel')
             const result = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
                 { 
@@ -216,14 +218,14 @@ ${dialogText}
             // 记录统计（群聊记忆分析）
             try {
                 await usageStats.record({
-                    channelId: 'memory',
-                    channelName: '记忆服务',
+                    channelId: channelInfo.id || 'memory',
+                    channelName: channelInfo.name || '记忆服务',
                     model,
                     inputTokens: usageStats.estimateTokens(prompt),
                     outputTokens: usageStats.estimateTokens(responseText),
                     duration: Date.now() - startTime,
                     success: !!responseText,
-                    source: 'memory_group',
+                    source: '记忆提取',
                     groupId
                 })
             } catch (e) { /* 统计失败不影响主流程 */ }
@@ -416,16 +418,13 @@ ${dialogText}
      */
     async analyzeUserConversations(userId) {
         try {
-            // 获取用户最近的对话
+            const isGroupConversation = userId.includes('group:') || userId.includes(':')
+            
             const conversations = databaseService.listUserConversations(userId)
             if (conversations.length === 0) return
-            
-            // 获取最近的消息
             const recentConv = conversations[0]
             const messages = databaseService.getMessages(recentConv.conversationId, 20)
             if (messages.length < 2) return
-            
-            // 构建对话文本
             const dialogText = messages
                 .filter(m => m.role === 'user' || m.role === 'assistant')
                 .map(m => {
@@ -437,21 +436,22 @@ ${dialogText}
                 .join('\n')
             
             if (dialogText.length < 50) return
-            
-            // 获取已有记忆，避免重复
             const existingMemories = databaseService.getMemories(userId, 20)
             const existingText = existingMemories.map(m => m.content).join('\n')
-            
-            // 使用 LLM 分析并提取新记忆
-            // 获取机器人名字，避免混淆
             const botName = global.Bot?.nickname || config.get('basic.botName') || '助手'
+            const contextHint = isGroupConversation 
+                ? `这是【群聊】对话。"用户:"后面的内容是与机器人直接对话的那个人说的话。
+- 对话中可能出现其他群友的名字或信息（如[某某]:xxx格式），这些是其他人，不是当前用户
+- 只提取与机器人直接对话的"用户"本人的信息，忽略其他群友的信息
+- 不要把群友的名字、昵称当作当前用户的`
+                : `这是【私聊】对话。"用户:"后面是用户本人说的话。`
             
-            const prompt = `你是一个用户记忆管理专家。请分析对话，提取关于【用户】的有长期价值的信息。
+            const prompt = `你是一个用户记忆管理专家。请分析对话，提取关于【当前用户】的有长期价值的信息。
 
 【重要提示】
-- 对话中的"助手"或"${botName}"是机器人/AI，不是用户
-- 只提取【用户】（人类）的个人信息，不要把机器人的信息当作用户的
-- "用户:"后面的内容才是用户说的话
+${contextHint}
+- "助手:"或"${botName}"是机器人/AI的回复，不是用户
+- 只提取当前用户本人明确表达的个人信息
 
 【已有记忆】（避免重复）
 ${existingText || '暂无'}
@@ -460,18 +460,21 @@ ${existingText || '暂无'}
 ${dialogText}
 
 【提取规则】
-1. 只提取用户（人类）的个人信息：姓名、年龄、职业、所在地等
+1. 只提取当前用户本人明确说的个人信息：姓名、年龄、职业、所在地等
 2. 提取用户明确表达的偏好：喜欢/不喜欢的事物、习惯
 3. 提取用户提到的重要事件：生日、纪念日、重要计划等
 4. 避免重复已有记忆，只提取新信息
-5. 不要把助手/机器人的名字或信息当作用户的
-6. 每条记忆简洁明了，不超过40字
+5. 不要把助手/机器人的信息当作用户的
+6. 群聊中不要把其他群友的信息当作当前用户的
+7. 每条记忆简洁明了，不超过40字
 
 【输出格式】每行一条记忆，最多3条，没有新信息则输出"无"：`
 
             const startTime2 = Date.now()
-            const client = await LlmService.getChatClient()
-            const model2 = config.get('llm.defaultModel')
+            const memoryModel2 = config.get('memory.model')
+            const client = await LlmService.getChatClient({ model: memoryModel2 || undefined })
+            const channelInfo2 = client._channelInfo || {}
+            const model2 = channelInfo2.model || config.get('llm.defaultModel')
             const result = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
                 { 
@@ -483,18 +486,17 @@ ${dialogText}
             )
             
             const responseText = result.contents?.[0]?.text?.trim() || ''
-            // 使用插件计算 Token
             // 记录统计（用户记忆提取）
             try {
                 await usageStats.record({
-                    channelId: 'memory',
-                    channelName: '记忆服务',
+                    channelId: channelInfo2.id || 'memory',
+                    channelName: channelInfo2.name || '记忆服务',
                     model: model2,
                     inputTokens: usageStats.estimateTokens(prompt),
                     outputTokens: usageStats.estimateTokens(responseText),
                     duration: Date.now() - startTime2,
                     success: !!responseText && responseText !== '无',
-                    source: 'memory_user',
+                    source: '用户记忆',
                     userId
                 })
             } catch (e) { /* 统计失败不影响主流程 */ }
@@ -556,8 +558,10 @@ ${dialogText}
 记忆内容（直接输出，无需解释）：`
 
             const startTime3 = Date.now()
-            const client = await LlmService.getChatClient()
-            const model3 = config.get('llm.defaultModel')
+            const memoryModel3 = config.get('memory.model')
+            const client = await LlmService.getChatClient({ model: memoryModel3 || undefined })
+            const channelInfo3 = client._channelInfo || {}
+            const model3 = channelInfo3.model || config.get('llm.defaultModel')
             const result = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: extractPrompt }] },
                 { model: model3, maxToken: 100, disableHistorySave: true }
@@ -566,14 +570,14 @@ ${dialogText}
             const memoryContent = result.contents?.[0]?.text?.trim()
             try {
                 await usageStats.record({
-                    channelId: 'memory',
-                    channelName: '记忆服务',
+                    channelId: channelInfo3.id || 'memory',
+                    channelName: channelInfo3.name || '记忆服务',
                     model: model3,
                     inputTokens: usageStats.estimateTokens(extractPrompt),
                     outputTokens: usageStats.estimateTokens(memoryContent || ''),
                     duration: Date.now() - startTime3,
                     success: !!memoryContent,
-                    source: 'memory_extract',
+                    source: '记忆提取',
                     userId
                 })
             } catch (e) { /* 统计失败不影响主流程 */ }

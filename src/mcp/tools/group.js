@@ -673,5 +673,121 @@ export const groupTools = [
                 return { success: false, error: `搜索失败: ${err.message}` }
             }
         }
+    },
+
+    {
+        name: 'get_random_group_member',
+        description: '随机抽取群成员，可用于随机点名、抽奖等场景',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' },
+                count: { type: 'number', description: '抽取数量，默认1，最多50' },
+                exclude_bot: { type: 'boolean', description: '是否排除机器人，默认true' },
+                exclude_admin: { type: 'boolean', description: '是否排除管理员和群主，默认false' },
+                role_filter: { 
+                    type: 'string', 
+                    description: '角色过滤：all(所有)、member(仅普通成员)、admin(仅管理员)、owner(仅群主)',
+                    enum: ['all', 'member', 'admin', 'owner']
+                }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = ctx.getBot()
+                const groupId = parseInt(args.group_id || e?.group_id)
+                const count = Math.min(Math.max(args.count || 1, 1), 50)
+                const excludeBot = args.exclude_bot !== false
+                const excludeAdmin = args.exclude_admin === true
+                const roleFilter = args.role_filter || 'all'
+                
+                if (!groupId) {
+                    return { success: false, error: '需要群号参数或在群聊中使用' }
+                }
+                
+                const groupInfo = bot.gl?.get(groupId)
+                if (!groupInfo) {
+                    return { success: false, error: '机器人不在此群内' }
+                }
+                
+                // 获取成员列表
+                let memberList = []
+                try {
+                    if (bot.getGroupMemberList) {
+                        memberList = await bot.getGroupMemberList(groupId) || []
+                    } else {
+                        const group = bot.pickGroup?.(groupId)
+                        if (group?.getMemberMap) {
+                            const memberMap = await group.getMemberMap()
+                            for (const [uid, member] of memberMap) {
+                                memberList.push({ user_id: uid, ...member })
+                            }
+                        }
+                    }
+                } catch (e) {
+                    return { success: false, error: `获取成员列表失败: ${e.message}` }
+                }
+                
+                if (memberList.length === 0) {
+                    return { success: false, error: '群成员列表为空' }
+                }
+                
+                // 过滤成员
+                let filteredList = memberList.filter(m => {
+                    const userId = m.user_id || m.uid
+                    const role = m.role || 'member'
+                    if (excludeBot && userId === bot.uin) return false
+                    
+                    // 排除管理员
+                    if (excludeAdmin && (role === 'admin' || role === 'owner')) return false
+                    
+                    // 角色过滤
+                    if (roleFilter === 'member' && role !== 'member') return false
+                    if (roleFilter === 'admin' && role !== 'admin') return false
+                    if (roleFilter === 'owner' && role !== 'owner') return false
+                    
+                    return true
+                })
+                
+                if (filteredList.length === 0) {
+                    return { success: false, error: '没有符合条件的群成员' }
+                }
+                
+                // 随机抽取
+                const selected = []
+                const usedIndices = new Set()
+                const actualCount = Math.min(count, filteredList.length)
+                
+                while (selected.length < actualCount) {
+                    const randomIndex = Math.floor(Math.random() * filteredList.length)
+                    if (!usedIndices.has(randomIndex)) {
+                        usedIndices.add(randomIndex)
+                        const m = filteredList[randomIndex]
+                        selected.push({
+                            user_id: m.user_id || m.uid,
+                            nickname: m.nickname || m.nick || '',
+                            card: m.card || '',
+                            role: m.role || 'member',
+                            title: m.title || '',
+                            display_name: m.card || m.nickname || m.nick || `用户${m.user_id || m.uid}`,
+                            avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${m.user_id || m.uid}&s=100`
+                        })
+                    }
+                }
+                
+                return {
+                    success: true,
+                    group_id: groupId,
+                    group_name: groupInfo.group_name,
+                    total_members: memberList.length,
+                    filtered_count: filteredList.length,
+                    selected_count: selected.length,
+                    members: selected
+                }
+            } catch (err) {
+                return { success: false, error: `随机抽取失败: ${err.message}` }
+            }
+        }
     }
 ]

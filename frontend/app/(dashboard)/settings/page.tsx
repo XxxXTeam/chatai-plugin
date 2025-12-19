@@ -118,12 +118,14 @@ interface Config {
     userPortrait: { enabled: boolean; minMessages: number }
     poke: { enabled: boolean; pokeBack: boolean; message: string; prompt?: string }
     reaction: { enabled: boolean; prompt?: string; removePrompt?: string }
-    recall: { enabled: boolean; aiResponse: boolean }
-    welcome: { enabled: boolean; message: string }
-    goodbye: { enabled: boolean; aiResponse: boolean }
-    luckyKing: { enabled: boolean }
-    honor: { enabled: boolean }
-    essence: { enabled: boolean }
+    recall: { enabled: boolean; aiResponse: boolean; prompt?: string }
+    welcome: { enabled: boolean; message: string; prompt?: string }
+    goodbye: { enabled: boolean; aiResponse: boolean; prompt?: string }
+    ban: { enabled: boolean; aiResponse: boolean; prompt?: string }
+    admin: { enabled: boolean; prompt?: string }
+    luckyKing: { enabled: boolean; congratulate?: boolean; prompt?: string }
+    honor: { enabled: boolean; prompt?: string }
+    essence: { enabled: boolean; prompt?: string }
     imageGen: { 
       enabled: boolean
       apis: Array<{
@@ -180,12 +182,14 @@ const defaultConfig: Config = {
     userPortrait: { enabled: true, minMessages: 10 },
     poke: { enabled: false, pokeBack: false, message: '别戳了~', prompt: '' },
     reaction: { enabled: false, prompt: '', removePrompt: '' },
-    recall: { enabled: false, aiResponse: true },
-    welcome: { enabled: false, message: '' },
-    goodbye: { enabled: false, aiResponse: false },
-    luckyKing: { enabled: false },
-    honor: { enabled: false },
-    essence: { enabled: false },
+    recall: { enabled: false, aiResponse: true, prompt: '' },
+    welcome: { enabled: false, message: '', prompt: '' },
+    goodbye: { enabled: false, aiResponse: false, prompt: '' },
+    ban: { enabled: false, aiResponse: true, prompt: '' },
+    admin: { enabled: false, prompt: '' },
+    luckyKing: { enabled: false, congratulate: false, prompt: '' },
+    honor: { enabled: false, prompt: '' },
+    essence: { enabled: false, prompt: '' },
     imageGen: { 
       enabled: true, 
       apis: [],  // [{baseUrl, apiKey, models: []}]
@@ -1114,10 +1118,24 @@ export default function SettingsPage() {
                 <Switch checked={config.features?.recall?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.recall.enabled', v)} />
               </div>
               {config.features?.recall?.enabled && (
-                <div className="flex items-center justify-between">
-                  <div><Label>AI响应</Label><p className="text-sm text-muted-foreground">使用AI人设调侃撤回</p></div>
-                  <Switch checked={config.features?.recall?.aiResponse ?? true} onCheckedChange={(v) => updateConfig('features.recall.aiResponse', v)} />
-                </div>
+                <>
+                  <div className="flex items-center justify-between">
+                    <div><Label>AI响应</Label><p className="text-sm text-muted-foreground">使用AI人设调侃撤回</p></div>
+                    <Switch checked={config.features?.recall?.aiResponse ?? true} onCheckedChange={(v) => updateConfig('features.recall.aiResponse', v)} />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>自定义提示词</Label>
+                    <Textarea 
+                      value={(config.features?.recall as any)?.prompt || ''} 
+                      onChange={(e) => updateConfig('features.recall.prompt', e.target.value)} 
+                      placeholder="[事件通知] {nickname} 刚刚撤回了一条消息{message_hint}。你可以调侃一下，也可以忽略。"
+                      rows={2}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      支持占位符: {'{nickname}'}, {'{message}'} 撤回的消息内容, {'{message_hint}'} 智能消息提示, {'{time}'} 时间, {'{group_name}'}
+                    </p>
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>
@@ -1130,11 +1148,23 @@ export default function SettingsPage() {
                 <Switch checked={config.features?.welcome?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.welcome.enabled', v)} />
               </div>
               {config.features?.welcome?.enabled && (
-                <div className="grid gap-2">
-                  <Label>默认欢迎语</Label>
-                  <Input value={config.features?.welcome?.message || ''} onChange={(e) => updateConfig('features.welcome.message', e.target.value)} placeholder="留空则使用AI生成" />
-                  <p className="text-xs text-muted-foreground">留空时使用AI人设生成欢迎语</p>
-                </div>
+                <>
+                  <div className="grid gap-2">
+                    <Label>默认欢迎语</Label>
+                    <Input value={config.features?.welcome?.message || ''} onChange={(e) => updateConfig('features.welcome.message', e.target.value)} placeholder="留空则使用AI生成" />
+                    <p className="text-xs text-muted-foreground">留空时使用AI人设生成欢迎语</p>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>自定义提示词</Label>
+                    <Textarea 
+                      value={(config.features?.welcome as any)?.prompt || ''} 
+                      onChange={(e) => updateConfig('features.welcome.prompt', e.target.value)} 
+                      placeholder="[事件通知] {nickname} 刚刚加入了群聊。请用你的人设性格给出一个简短友好的欢迎语。"
+                      rows={2}
+                    />
+                    <p className="text-xs text-muted-foreground">支持占位符: {'{nickname}'} 用户昵称, {'{user_id}'} 用户ID, {'{group_name}'} 群名</p>
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>
@@ -1147,41 +1177,145 @@ export default function SettingsPage() {
                 <Switch checked={config.features?.goodbye?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.goodbye.enabled', v)} />
               </div>
               {config.features?.goodbye?.enabled && (
-                <div className="flex items-center justify-between">
-                  <div><Label>AI响应</Label><p className="text-sm text-muted-foreground">使用AI人设表达</p></div>
-                  <Switch checked={config.features?.goodbye?.aiResponse ?? false} onCheckedChange={(v) => updateConfig('features.goodbye.aiResponse', v)} />
-                </div>
+                <>
+                  <div className="flex items-center justify-between">
+                    <div><Label>AI响应</Label><p className="text-sm text-muted-foreground">使用AI人设表达</p></div>
+                    <Switch checked={config.features?.goodbye?.aiResponse ?? false} onCheckedChange={(v) => updateConfig('features.goodbye.aiResponse', v)} />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>自定义提示词</Label>
+                    <Textarea 
+                      value={(config.features?.goodbye as any)?.prompt || ''} 
+                      onChange={(e) => updateConfig('features.goodbye.prompt', e.target.value)} 
+                      placeholder="[事件通知] {nickname} {action}了群聊。你可以简短表达一下，也可以忽略。"
+                      rows={2}
+                    />
+                    <p className="text-xs text-muted-foreground">支持占位符: {'{nickname}'}, {'{action}'} (退出/被踢出), {'{operator}'} 踢人者, {'{leave_reason}'} 智能原因, {'{group_name}'}</p>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>禁言事件响应</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div><Label>启用</Label><p className="text-sm text-muted-foreground">群成员被禁言/解禁时响应</p></div>
+                <Switch checked={(config.features as any)?.ban?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.ban.enabled', v)} />
+              </div>
+              {(config.features as any)?.ban?.enabled && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <div><Label>AI响应</Label><p className="text-sm text-muted-foreground">使用AI人设评论禁言事件</p></div>
+                    <Switch checked={(config.features as any)?.ban?.aiResponse ?? true} onCheckedChange={(v) => updateConfig('features.ban.aiResponse', v)} />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>自定义提示词</Label>
+                    <Textarea 
+                      value={(config.features as any)?.ban?.prompt || ''} 
+                      onChange={(e) => updateConfig('features.ban.prompt', e.target.value)} 
+                      placeholder="[事件通知] {nickname} 被 {operator} {action}。你可以简短评论一下，也可以忽略。"
+                      rows={2}
+                    />
+                    <p className="text-xs text-muted-foreground">支持占位符: {'{nickname}'} 被禁言者, {'{operator}'} 操作者, {'{action}'}, {'{duration_text}'}, {'{sub_type}'} (ban/lift_ban)</p>
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader><CardTitle>运气王响应</CardTitle></CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div><Label>启用</Label><p className="text-sm text-muted-foreground">机器人成为运气王时庆祝</p></div>
                 <Switch checked={config.features?.luckyKing?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.luckyKing.enabled', v)} />
               </div>
+              {config.features?.luckyKing?.enabled && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <div><Label>祝贺他人</Label><p className="text-sm text-muted-foreground">其他人成为运气王时也祝贺</p></div>
+                    <Switch checked={(config.features?.luckyKing as any)?.congratulate ?? false} onCheckedChange={(v) => updateConfig('features.luckyKing.congratulate', v)} />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>自定义提示词</Label>
+                    <Textarea 
+                      value={(config.features?.luckyKing as any)?.prompt || ''} 
+                      onChange={(e) => updateConfig('features.luckyKing.prompt', e.target.value)} 
+                      placeholder="[事件通知] {nickname} 成为了红包运气王！{action}"
+                      rows={2}
+                    />
+                    <p className="text-xs text-muted-foreground">支持占位符: {'{nickname}'}, {'{action}'} (机器人:请表达开心/他人:可以祝贺)</p>
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader><CardTitle>荣誉变更响应</CardTitle></CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div><Label>启用</Label><p className="text-sm text-muted-foreground">机器人获得龙王、群聊之火等荣誉时响应</p></div>
                 <Switch checked={config.features?.honor?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.honor.enabled', v)} />
               </div>
+              {config.features?.honor?.enabled && (
+                <div className="grid gap-2">
+                  <Label>自定义提示词</Label>
+                  <Textarea 
+                    value={(config.features?.honor as any)?.prompt || ''} 
+                    onChange={(e) => updateConfig('features.honor.prompt', e.target.value)} 
+                    placeholder='[事件通知] 你获得了群荣誉"{honor}"！请简短表达一下。'
+                    rows={2}
+                  />
+                  <p className="text-xs text-muted-foreground">支持占位符: {'{honor}'} 荣誉名称(龙王/群聊之火等), {'{group_name}'}</p>
+                </div>
+              )}
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader><CardTitle>精华消息响应</CardTitle></CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div><Label>启用</Label><p className="text-sm text-muted-foreground">机器人的消息被设为精华时响应</p></div>
                 <Switch checked={config.features?.essence?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.essence.enabled', v)} />
               </div>
+              {config.features?.essence?.enabled && (
+                <div className="grid gap-2">
+                  <Label>自定义提示词</Label>
+                  <Textarea 
+                    value={(config.features?.essence as any)?.prompt || ''} 
+                    onChange={(e) => updateConfig('features.essence.prompt', e.target.value)} 
+                    placeholder="[事件通知] {operator} 把你之前发的消息设置成了精华消息！请简短表达一下。"
+                    rows={2}
+                  />
+                  <p className="text-xs text-muted-foreground">支持占位符: {'{operator}'} 操作者昵称, {'{group_name}'}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>管理员变更响应</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div><Label>启用</Label><p className="text-sm text-muted-foreground">机器人成为/取消管理员时响应</p></div>
+                <Switch checked={(config.features as any)?.admin?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.admin.enabled', v)} />
+              </div>
+              {(config.features as any)?.admin?.enabled && (
+                <div className="grid gap-2">
+                  <Label>自定义提示词</Label>
+                  <Textarea 
+                    value={(config.features as any)?.admin?.prompt || ''} 
+                    onChange={(e) => updateConfig('features.admin.prompt', e.target.value)} 
+                    placeholder="[事件通知] 你{action}！请简短表达一下。"
+                    rows={2}
+                  />
+                  <p className="text-xs text-muted-foreground">支持占位符: {'{action}'} (被设置成了群管理员/的管理员身份被取消了)</p>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -1209,10 +1343,21 @@ export default function SettingsPage() {
                 <Switch checked={config.memory?.enabled ?? false} onCheckedChange={(v) => updateConfig('memory.enabled', v)} />
               </div>
               {config.memory?.enabled && (
-                <div className="flex items-center justify-between">
-                  <div><Label>自动提取</Label><p className="text-sm text-muted-foreground">自动从对话中提取值得记忆的信息</p></div>
-                  <Switch checked={config.memory?.autoExtract ?? true} onCheckedChange={(v) => updateConfig('memory.autoExtract', v)} />
-                </div>
+                <>
+                  <div className="flex items-center justify-between">
+                    <div><Label>自动提取</Label><p className="text-sm text-muted-foreground">自动从对话中提取值得记忆的信息</p></div>
+                    <Switch checked={config.memory?.autoExtract ?? true} onCheckedChange={(v) => updateConfig('memory.autoExtract', v)} />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>记忆提取模型</Label>
+                    <Input 
+                      value={(config.memory as any)?.model || ''} 
+                      onChange={(e) => updateConfig('memory.model', e.target.value)} 
+                      placeholder="留空使用默认模型"
+                    />
+                    <p className="text-xs text-muted-foreground">用于记忆提取和总结的模型，留空则使用全局默认模型</p>
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>
