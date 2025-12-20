@@ -576,19 +576,36 @@ export class ChatListener extends plugin {
                 
                 case 'image':
                     if (content.image) {
-                        if (content.image.startsWith('http')) {
-                            messages.push(segment.image(content.image))
-                        } else if (content.image.startsWith('base64://')) {
-                            messages.push(segment.image(content.image))
+                        let imageData = content.image
+                        if (imageData.startsWith('http')) {
+                            // HTTP URL 直接使用
+                            messages.push(segment.image(imageData))
+                        } else if (imageData.startsWith('base64://')) {
+                            // 已有正确前缀
+                            messages.push(segment.image(imageData))
+                        } else if (imageData.startsWith('data:image/')) {
+                            const base64Data = imageData.replace(/^data:image\/[^;]+;base64,/, '')
+                            messages.push(segment.image(`base64://${base64Data}`))
+                        } else if (imageData.startsWith('file://')) {
+                            // 本地文件
+                            messages.push(segment.image(imageData))
                         } else {
-                            messages.push(segment.image(`base64://${content.image}`))
+                            // 纯 base64 数据
+                            messages.push(segment.image(`base64://${imageData}`))
                         }
                     }
                     break
                 
                 case 'audio':
                     if (content.data) {
-                        messages.push(segment.record(content.data))
+                        // 确保 base64 数据有正确的前缀，icqq 需要 base64:// 前缀
+                        let audioData = content.data
+                        if (!audioData.startsWith('base64://') && !audioData.startsWith('http') && !audioData.startsWith('file://')) {
+                            // 移除可能的 data:audio/xxx;base64, 前缀
+                            audioData = audioData.replace(/^data:audio\/[^;]+;base64,/, '')
+                            audioData = `base64://${audioData}`
+                        }
+                        messages.push(segment.record(audioData))
                     }
                     break
             }

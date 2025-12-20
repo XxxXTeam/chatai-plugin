@@ -3294,6 +3294,51 @@ export default {
             }
         })
 
+        // ==================== 私聊作用域 API ====================
+        // GET /api/scope/privates - 列出所有私聊作用域配置
+        this.app.get('/api/scope/privates', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const privates = await sm.listPrivateSettings()
+                res.json(ChaiteResponse.ok(privates))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/scope/private/:userId - 获取私聊作用域配置
+        this.app.get('/api/scope/private/:userId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const settings = await sm.getPrivateSettings(req.params.userId)
+                res.json(ChaiteResponse.ok(settings))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // PUT /api/scope/private/:userId - 设置私聊作用域配置
+        this.app.put('/api/scope/private/:userId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                await sm.setPrivateSettings(req.params.userId, req.body)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/scope/private/:userId - 删除私聊作用域配置
+        this.app.delete('/api/scope/private/:userId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                await sm.deletePrivateSettings(req.params.userId)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
         // GET /api/scope/effective/:userId - 获取有效配置（按优先级）
         this.app.get('/api/scope/effective/:userId', this.authMiddleware.bind(this), async (req, res) => {
             try {

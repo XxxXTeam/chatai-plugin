@@ -65,6 +65,7 @@ interface PriorityConfig {
 const priorityOptions = [
   { value: 'group', label: '群聊人格 (group)', description: '特定群组的人格设定' },
   { value: 'group_user', label: '群内用户人格 (group_user)', description: '特定群内特定用户的人格' },
+  { value: 'private', label: '私聊人格 (private)', description: '用户在私聊场景的人格' },
   { value: 'user', label: '用户全局人格 (user)', description: '用户在所有场景的人格' },
   { value: 'default', label: '默认预设 (default)', description: '系统默认预设' },
 ]
@@ -74,11 +75,12 @@ export default function ScopeManagerPage() {
   const [userScopes, setUserScopes] = useState<ScopeItem[]>([])
   const [groupScopes, setGroupScopes] = useState<ScopeItem[]>([])
   const [groupUserScopes, setGroupUserScopes] = useState<ScopeItem[]>([])
+  const [privateScopes, setPrivateScopes] = useState<ScopeItem[]>([])
   const [presets, setPresets] = useState<{id: string, name: string}[]>([])
 
   // 优先级配置
   const [priorityConfig, setPriorityConfig] = useState<PriorityConfig>({
-    priority: ['group', 'group_user', 'user', 'default'],
+    priority: ['group', 'group_user', 'private', 'user', 'default'],
     useIndependent: true,
   })
   const [savingPriority, setSavingPriority] = useState(false)
@@ -87,21 +89,42 @@ export default function ScopeManagerPage() {
   const [userDialogOpen, setUserDialogOpen] = useState(false)
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [groupUserDialogOpen, setGroupUserDialogOpen] = useState(false)
+  const [privateDialogOpen, setPrivateDialogOpen] = useState(false)
   const [editMode, setEditMode] = useState(false)
 
   // 表单
   const [userForm, setUserForm] = useState({ userId: '', systemPrompt: '', presetId: '' })
   const [groupForm, setGroupForm] = useState({ groupId: '', systemPrompt: '', presetId: '' })
   const [groupUserForm, setGroupUserForm] = useState({ groupId: '', userId: '', systemPrompt: '', presetId: '' })
+  const [privateForm, setPrivateForm] = useState({ userId: '', systemPrompt: '', presetId: '' })
+
+  // 搜索功能
+  const [searchKeyword, setSearchKeyword] = useState('')
+  const [searching, setSearching] = useState(false)
+
+  // 过滤后的数据
+  const filteredUserScopes = searchKeyword 
+    ? userScopes.filter(s => s.userId?.includes(searchKeyword) || s.systemPrompt?.includes(searchKeyword))
+    : userScopes
+  const filteredGroupScopes = searchKeyword
+    ? groupScopes.filter(s => s.groupId?.includes(searchKeyword) || s.systemPrompt?.includes(searchKeyword))
+    : groupScopes
+  const filteredGroupUserScopes = searchKeyword
+    ? groupUserScopes.filter(s => s.groupId?.includes(searchKeyword) || s.userId?.includes(searchKeyword) || s.systemPrompt?.includes(searchKeyword))
+    : groupUserScopes
+  const filteredPrivateScopes = searchKeyword
+    ? privateScopes.filter(s => s.userId?.includes(searchKeyword) || s.systemPrompt?.includes(searchKeyword))
+    : privateScopes
 
   // 加载数据
   const loadData = async () => {
     setLoading(true)
     try {
-      const [usersRes, groupsRes, groupUsersRes, presetsRes, configRes] = await Promise.all([
+      const [usersRes, groupsRes, groupUsersRes, privatesRes, presetsRes, configRes] = await Promise.all([
         scopeApi.getUsers().catch(() => ({ data: [] })),
         scopeApi.getGroups().catch(() => ({ data: [] })),
         scopeApi.getGroupUsers().catch(() => ({ data: [] })),
+        scopeApi.getPrivates().catch(() => ({ data: [] })),
         presetsApi.list().catch(() => ({ data: [] })),
         scopeApi.getPersonalityConfig().catch(() => ({ data: null })),
       ])
@@ -109,6 +132,7 @@ export default function ScopeManagerPage() {
       setUserScopes((usersRes as any)?.data || [])
       setGroupScopes((groupsRes as any)?.data || [])
       setGroupUserScopes((groupUsersRes as any)?.data || [])
+      setPrivateScopes((privatesRes as any)?.data || [])
       setPresets((presetsRes as any)?.data || [])
 
       if ((configRes as any)?.data) {
@@ -282,7 +306,47 @@ export default function ScopeManagerPage() {
     }
   }
 
-  const totalCount = userScopes.length + groupScopes.length + groupUserScopes.length
+  // 私聊操作
+  const openPrivateDialog = (item?: ScopeItem) => {
+    if (item) {
+      setEditMode(true)
+      setPrivateForm({ userId: item.userId || '', systemPrompt: item.systemPrompt || '', presetId: item.presetId || '' })
+    } else {
+      setEditMode(false)
+      setPrivateForm({ userId: '', systemPrompt: '', presetId: '' })
+    }
+    setPrivateDialogOpen(true)
+  }
+
+  const savePrivate = async () => {
+    if (!privateForm.userId) {
+      toast.warning('请输入用户ID')
+      return
+    }
+    try {
+      await scopeApi.updatePrivate(privateForm.userId, {
+        systemPrompt: privateForm.systemPrompt,
+        presetId: privateForm.presetId,
+      })
+      toast.success('保存成功')
+      setPrivateDialogOpen(false)
+      loadData()
+    } catch (error) {
+      toast.error('保存失败')
+    }
+  }
+
+  const deletePrivate = async (userId: string) => {
+    try {
+      await scopeApi.deletePrivate(userId)
+      toast.success('删除成功')
+      loadData()
+    } catch (error) {
+      toast.error('删除失败')
+    }
+  }
+
+  const totalCount = userScopes.length + groupScopes.length + groupUserScopes.length + privateScopes.length
 
   return (
     <div className="space-y-6">
@@ -357,7 +421,13 @@ export default function ScopeManagerPage() {
             <CardDescription>管理用户、群组、群内用户的独立人格</CardDescription>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant="outline">共 {totalCount} 条人格设定</Badge>
+            <Input
+              placeholder="搜索 ID 或 Prompt..."
+              value={searchKeyword}
+              onChange={(e) => setSearchKeyword(e.target.value)}
+              className="w-48"
+            />
+            <Badge variant="outline">共 {totalCount} 条</Badge>
             <Button variant="outline" onClick={loadData} disabled={loading}>
               <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               刷新
@@ -369,15 +439,19 @@ export default function ScopeManagerPage() {
             <TabsList className="mb-4">
               <TabsTrigger value="user" className="gap-2">
                 <User className="h-4 w-4" />
-                用户人格 ({userScopes.length})
+                用户人格 ({filteredUserScopes.length}{searchKeyword && userScopes.length !== filteredUserScopes.length ? `/${userScopes.length}` : ''})
               </TabsTrigger>
               <TabsTrigger value="group" className="gap-2">
                 <UsersRound className="h-4 w-4" />
-                群组人格 ({groupScopes.length})
+                群组人格 ({filteredGroupScopes.length}{searchKeyword && groupScopes.length !== filteredGroupScopes.length ? `/${groupScopes.length}` : ''})
               </TabsTrigger>
               <TabsTrigger value="groupUser" className="gap-2">
                 <Users className="h-4 w-4" />
-                群内用户人格 ({groupUserScopes.length})
+                群内用户人格 ({filteredGroupUserScopes.length}{searchKeyword && groupUserScopes.length !== filteredGroupUserScopes.length ? `/${groupUserScopes.length}` : ''})
+              </TabsTrigger>
+              <TabsTrigger value="private" className="gap-2">
+                <User className="h-4 w-4" />
+                私聊人格 ({filteredPrivateScopes.length}{searchKeyword && privateScopes.length !== filteredPrivateScopes.length ? `/${privateScopes.length}` : ''})
               </TabsTrigger>
             </TabsList>
 
@@ -399,14 +473,14 @@ export default function ScopeManagerPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {userScopes.length === 0 ? (
+                    {filteredUserScopes.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                          暂无用户人格设定
+                          {searchKeyword ? '没有匹配的用户人格设定' : '暂无用户人格设定'}
                         </TableCell>
                       </TableRow>
                     ) : (
-                      userScopes.map((item) => (
+                      filteredUserScopes.map((item) => (
                         <TableRow key={item.userId}>
                           <TableCell className="font-medium">{item.userId}</TableCell>
                           <TableCell className="max-w-[200px] truncate">{item.systemPrompt || '-'}</TableCell>
@@ -448,14 +522,14 @@ export default function ScopeManagerPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {groupScopes.length === 0 ? (
+                    {filteredGroupScopes.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                          暂无群组人格设定
+                          {searchKeyword ? '没有匹配的群组人格设定' : '暂无群组人格设定'}
                         </TableCell>
                       </TableRow>
                     ) : (
-                      groupScopes.map((item) => (
+                      filteredGroupScopes.map((item) => (
                         <TableRow key={item.groupId}>
                           <TableCell className="font-medium">{item.groupId}</TableCell>
                           <TableCell className="max-w-[200px] truncate">{item.systemPrompt || '-'}</TableCell>
@@ -497,14 +571,14 @@ export default function ScopeManagerPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {groupUserScopes.length === 0 ? (
+                    {filteredGroupUserScopes.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                          暂无群内用户人格设定
+                          {searchKeyword ? '没有匹配的群内用户人格设定' : '暂无群内用户人格设定'}
                         </TableCell>
                       </TableRow>
                     ) : (
-                      groupUserScopes.map((item) => (
+                      filteredGroupUserScopes.map((item) => (
                         <TableRow key={`${item.groupId}-${item.userId}`}>
                           <TableCell className="font-medium">{item.groupId}</TableCell>
                           <TableCell>{item.userId}</TableCell>
@@ -516,6 +590,55 @@ export default function ScopeManagerPage() {
                                 <Edit className="h-4 w-4" />
                               </Button>
                               <Button variant="ghost" size="icon" onClick={() => deleteGroupUser(item.groupId!, item.userId!)}>
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </TabsContent>
+
+            {/* 私聊人格 */}
+            <TabsContent value="private">
+              <div className="space-y-4">
+                <Button onClick={() => openPrivateDialog()}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  添加私聊人格
+                </Button>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>用户ID</TableHead>
+                      <TableHead>自定义Prompt</TableHead>
+                      <TableHead>预设</TableHead>
+                      <TableHead>更新时间</TableHead>
+                      <TableHead className="text-right">操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredPrivateScopes.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                          {searchKeyword ? '没有匹配的私聊人格设定' : '暂无私聊人格设定'}
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      filteredPrivateScopes.map((item) => (
+                        <TableRow key={item.userId}>
+                          <TableCell className="font-medium">{item.userId}</TableCell>
+                          <TableCell className="max-w-[200px] truncate">{item.systemPrompt || '-'}</TableCell>
+                          <TableCell>{item.presetId || '-'}</TableCell>
+                          <TableCell>{item.updatedAt ? new Date(item.updatedAt).toLocaleString() : '-'}</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Button variant="ghost" size="icon" onClick={() => openPrivateDialog(item)}>
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button variant="ghost" size="icon" onClick={() => deletePrivate(item.userId!)}>
                                 <Trash2 className="h-4 w-4 text-destructive" />
                               </Button>
                             </div>
@@ -691,6 +814,57 @@ export default function ScopeManagerPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setGroupUserDialogOpen(false)}>取消</Button>
             <Button onClick={saveGroupUser}>保存</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 私聊人格弹窗 */}
+      <Dialog open={privateDialogOpen} onOpenChange={setPrivateDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editMode ? '编辑私聊人格' : '添加私聊人格'}</DialogTitle>
+            <DialogDescription>为特定用户在私聊场景设置独立的人格</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>用户ID *</Label>
+              <Input
+                value={privateForm.userId}
+                onChange={(e) => setPrivateForm({ ...privateForm, userId: e.target.value })}
+                placeholder="QQ号"
+                disabled={editMode}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>自定义Prompt</Label>
+              <Textarea
+                value={privateForm.systemPrompt}
+                onChange={(e) => setPrivateForm({ ...privateForm, systemPrompt: e.target.value })}
+                placeholder="为该用户在私聊场景设置专属的系统提示词..."
+                rows={6}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>使用预设</Label>
+              <Select
+                value={privateForm.presetId || '__none__'}
+                onValueChange={(v) => setPrivateForm({ ...privateForm, presetId: v === '__none__' ? '' : v })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="选择预设（可选）" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">不使用预设</SelectItem>
+                  {presets.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.name || p.id}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPrivateDialogOpen(false)}>取消</Button>
+            <Button onClick={savePrivate}>保存</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

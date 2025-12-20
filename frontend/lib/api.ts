@@ -162,7 +162,7 @@ export const memoryApi = {
 
 // Scope API
 export const scopeApi = {
-  // 用户人格
+  // 用户人格（全局）
   getUsers: () => api.get('/api/scope/users'),
   getUser: (userId: string) => api.get(`/api/scope/user/${userId}`),
   updateUser: (userId: string, data: any) => api.put(`/api/scope/user/${userId}`, data),
@@ -177,6 +177,11 @@ export const scopeApi = {
   getGroupUser: (groupId: string, userId: string) => api.get(`/api/scope/group/${groupId}/user/${userId}`),
   updateGroupUser: (groupId: string, userId: string, data: any) => api.put(`/api/scope/group/${groupId}/user/${userId}`, data),
   deleteGroupUser: (groupId: string, userId: string) => api.delete(`/api/scope/group/${groupId}/user/${userId}`),
+  // 私聊人格
+  getPrivates: () => api.get('/api/scope/privates'),
+  getPrivate: (userId: string) => api.get(`/api/scope/private/${userId}`),
+  updatePrivate: (userId: string, data: any) => api.put(`/api/scope/private/${userId}`, data),
+  deletePrivate: (userId: string) => api.delete(`/api/scope/private/${userId}`),
   // 其他
   getEffective: (userId: string) => api.get(`/api/scope/effective/${userId}`),
   getPersonalityConfig: () => api.get('/api/config/personality'),
