@@ -218,8 +218,6 @@ export class bym extends plugin {
                 .filter(c => c.type === 'text')
                 .map(c => c.text)
                 .join('\n')
-
-            // 记录统计（伪人模式）
             try {
                 await usageStats.record({
                     channelId: 'bym',
@@ -236,12 +234,10 @@ export class bym extends plugin {
             } catch (err) { /* 统计失败不影响主流程 */ }
 
             if (replyText) {
-                // 添加延迟模拟打字
                 await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 500))
-
-                // 是否撤回
-                const recall = config.get('bym.recall')
-                await this.reply(replyText, false, { recallMsg: recall ? 10 : 0 })
+                const autoRecall = config.get('basic.autoRecall')
+                const recallDelay = autoRecall?.enabled === true ? (autoRecall.delay || 60) : 0
+                await this.reply(replyText, false, { recallMsg: recallDelay })
             }
 
             return true
