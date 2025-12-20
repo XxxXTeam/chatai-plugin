@@ -13,7 +13,6 @@ let yunzaiCfg = null
 try {
     yunzaiCfg = (await import('../../../lib/config/config.js')).default
 } catch (e) {
-    // Yunzai 配置不可用
 }
 
 export class AIManagement extends plugin {

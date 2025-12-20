@@ -4,6 +4,7 @@ import { usageStats } from '../src/services/stats/UsageStats.js'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { getBotIds } from '../src/utils/messageDedup.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PRESET_CACHE_DIR = path.join(__dirname, '../data/presets')
@@ -34,19 +35,15 @@ class PresetManager {
               prompt: '将图片转换为精美的水彩画风格，色彩透明、层次丰富，有水彩特有的晕染效果和纸张质感。' },
         ]
     }
-    
-    // 获取内置预设（从配置读取，首次使用默认值）
     getBuiltinPresets() {
         let builtinPresets = config.get('features.imageGen.builtinPresets')
         if (!builtinPresets || builtinPresets.length === 0) {
-            // 首次使用，初始化默认预设并保存
             builtinPresets = this.getDefaultBuiltinPresets().map(p => ({
                 ...p,
                 uid: this.generateUid()
             }))
             config.set('features.imageGen.builtinPresets', builtinPresets)
         } else {
-            // 确保每个预设都有uid
             let needSave = false
             builtinPresets = builtinPresets.map(p => {
                 if (!p.uid) {
@@ -86,9 +83,8 @@ class PresetManager {
         this.customPresets = customPresets.map(p => ({ ...p, source: 'custom' }))
         await this.loadRemotePresetsFromCache()
         this.mergeAllPresets()
-        
-    //    logger.info(`[ImageGen] 预设加载完成: 内置${this.builtinPresets.length} + 远程${Object.values(this.remotePresets).flat().length} + 自定义${this.customPresets.length} = ${this.allPresets.length}`)
     }
+    
     async loadRemotePresetsFromCache() {
         const sources = config.get('features.imageGen.presetSources') || []
         
@@ -362,8 +358,6 @@ export class ImageGen extends plugin {
                 results.push({ index: i + 1, baseUrl: api.baseUrl, success: false, error: err.message })
             }
         }
-        
-        // 生成Markdown格式
         const mdLines = ['# 📊 画图API状态', '', `> 检测时间: ${new Date().toLocaleString()}`, '']
         
         for (const r of results) {
@@ -437,7 +431,6 @@ export class ImageGen extends plugin {
             })
             await e.reply(segment.image(imageBuffer))
         } catch (renderErr) {
-            // 渲染失败，回退到文本
             logger.warn('[ImageGen] 图片渲染失败，使用文本输出:', renderErr.message)
             const textOutput = results.map(r => {
                 if (!r.success) return `【API ${r.index}】❌ ${r.error}`
@@ -586,8 +579,6 @@ export class ImageGen extends plugin {
         if (!config.get('features.imageGen.enabled')) {
             return false
         }
-        
-        // 使用预设管理器查找匹配的预设
         const preset = presetMgr.findPreset(e.msg)
         if (!preset) return false
         
@@ -622,8 +613,6 @@ export class ImageGen extends plugin {
     normalizeApiUrl(baseUrl) {
         if (!baseUrl) return ''
         let url = baseUrl.trim().replace(/\/$/, '')
-        
-        // 如果已经是完整的chat/completions路径
         if (url.endsWith('/chat/completions')) {
             return url
         }
@@ -643,25 +632,21 @@ export class ImageGen extends plugin {
         const apiConfig = config.get('features.imageGen') || {}
         const globalModel = apiConfig.model || 'gemini-3-pro-image'
         const globalVideoModel = apiConfig.videoModel || 'veo-2.0-generate-001'
-        
-        // 新格式：apis 数组 [{baseUrl, apiKey, models: []}]
         if (Array.isArray(apiConfig.apis) && apiConfig.apis.length > 0) {
             return apiConfig.apis
-                .filter(api => api && api.baseUrl)  // 过滤无效配置
+                .filter(api => api && api.baseUrl)  
                 .map(api => ({
                     baseUrl: this.normalizeApiUrl(api.baseUrl),
                     apiKey: api.apiKey || 'X-Free',
                     model: globalModel,
                     videoModel: globalVideoModel,
-                    models: api.models || []  // 保存模型列表用于状态显示
+                    models: api.models || []  
                 }))
         }
-        
-        // 兼容旧格式：单个apiUrl
         if (apiConfig.apiUrl) {
             return [{
                 baseUrl: this.normalizeApiUrl(apiConfig.apiUrl),
-                apiKey: apiConfig.apiKey || 'X-Free',
+                apiKey: apiConfig.apiKey || '',
                 model: globalModel,
                 videoModel: globalVideoModel,
                 models: []
@@ -670,8 +655,8 @@ export class ImageGen extends plugin {
         
         // 默认API
         return [{
-            baseUrl: 'https://business.928100.xyz/v1/chat/completions',
-            apiKey: 'X-Free',
+            baseUrl: 'https://business2api.openel.top/v1/chat/completions',
+            apiKey: '',
             model: globalModel,
             videoModel: globalVideoModel,
             models: []
@@ -702,7 +687,7 @@ export class ImageGen extends plugin {
     }
 
     /**
-     * 通用 API 调用方法（支持多API轮询和自动重试）
+     * 通用 API 调用方法
      * @param {Object} options - 配置选项
      * @param {string} options.prompt - 提示词
      * @param {string[]} options.imageUrls - 图片URL列表
@@ -755,40 +740,29 @@ export class ImageGen extends plugin {
                     
                     const data = await response.json()
                     const result = extractResult(data)
-                    
                     if (result && result.length) {
-                        // 记录统计（绘图API调用）
                         try {
                             const apiUsage = data.usage || {}
                             const apiInputTokens = apiUsage.prompt_tokens || apiUsage.promptTokens || apiUsage.input_tokens || 0
                             const apiOutputTokens = apiUsage.completion_tokens || apiUsage.completionTokens || apiUsage.output_tokens || 0
-                            
-                            // 基于实际数据大小估算tokens（每100字节约1token）
                             const estimateImageTokens = (base64OrUrl) => {
                                 if (!base64OrUrl) return 1000
                                 if (base64OrUrl.startsWith('data:') || base64OrUrl.startsWith('base64:')) {
-                                    // base64数据：每4字符=3字节，每100字节≈1token
                                     const base64Part = base64OrUrl.split(',').pop() || base64OrUrl
                                     return Math.ceil(base64Part.length * 0.75 / 100)
                                 }
-                                return 1000 // URL图片默认估算
+                                return 1000 
                             }
-                            
                             const textTokens = usageStats.estimateTokens(prompt || '')
-                            
-                            // 输入tokens：文本 + 输入图片
                             let inputTokens = apiInputTokens
                             if (imageUrls.length > 0 && apiInputTokens < 1000) {
                                 const imgTokens = imageUrls.reduce((sum, url) => sum + estimateImageTokens(url), 0)
                                 inputTokens = textTokens + imgTokens
                             }
-                            
-                            // 输出tokens：基于生成的图片实际大小
                             let outputTokens = apiOutputTokens
                             if (result.length > 0 && apiOutputTokens < 1000) {
                                 outputTokens = result.reduce((sum, img) => sum + estimateImageTokens(img), 0)
                             }
-                            
                             await usageStats.record({
                                 channelId: `imagegen-api${apiIndex}`,
                                 channelName: `绘图API${apiIndex + 1}`,
@@ -865,10 +839,9 @@ export class ImageGen extends plugin {
     }
 
     /**
-     * 调用视频生成 API（使用通用方法，支持视频/图片回退）
+     * 调用视频生成 API
      */
     async generateVideo({ prompt, imageUrls = [] }) {
-        // 自定义提取器：优先视频，回退图片
         const extractVideoOrImage = (data) => {
             const videos = this.extractVideos(data)
             if (videos.length) return { type: 'video', data: videos }
@@ -906,15 +879,11 @@ export class ImageGen extends plugin {
     extractVideos(data) {
         const videos = []
         const msg = data?.choices?.[0]?.message
-        
-        // 处理数组格式的 content
         if (Array.isArray(msg?.content)) {
             for (const item of msg.content) {
-                // 视频URL格式
                 if (item?.type === 'video_url' && item?.video_url?.url) {
                     videos.push(item.video_url.url)
                 }
-                // 文件格式
                 if (item?.type === 'file' && item?.file?.url) {
                     const url = item.file.url
                     if (url.includes('.mp4') || url.includes('video')) {
@@ -923,17 +892,12 @@ export class ImageGen extends plugin {
                 }
             }
         }
-        
-        // 处理字符串格式的 content（Markdown 视频链接）
         if (!videos.length && typeof msg?.content === 'string') {
-            // 匹配视频URL
             const videoUrlRegex = /(https?:\/\/[^\s]+\.mp4[^\s]*)/gi
             let match
             while ((match = videoUrlRegex.exec(msg.content)) !== null) {
                 videos.push(match[1])
             }
-            
-            // 匹配 Markdown 链接格式的视频
             const mdLinkRegex = /\[.*?视频.*?\]\((.*?)\)/gi
             while ((match = mdLinkRegex.exec(msg.content)) !== null) {
                 if (!videos.includes(match[1])) {
@@ -941,7 +905,6 @@ export class ImageGen extends plugin {
                 }
             }
         }
-        
         return videos
     }
 
@@ -951,21 +914,17 @@ export class ImageGen extends plugin {
     async sendVideoResult(e, result) {
         if (result.success) {
             if (result.isImage) {
-                // 如果返回的是图片而非视频
                 const msgs = [
                     ...result.images.map(url => segment.image(url)),
                     `⚠️ 模型返回了图片而非视频 (${result.duration})`
                 ]
                 await e.reply(msgs, true)
             } else {
-                // 发送视频
                 const msgs = []
                 for (const url of result.videos) {
                     try {
-                        // 尝试发送视频
                         msgs.push(segment.video(url))
                     } catch {
-                        // 如果视频发送失败，发送链接
                         msgs.push(`🎬 视频链接: ${url}`)
                     }
                 }
@@ -983,8 +942,6 @@ export class ImageGen extends plugin {
     extractImages(data) {
         const images = []
         const msg = data?.choices?.[0]?.message
-        
-        // 处理数组格式的 content
         if (Array.isArray(msg?.content)) {
             for (const item of msg.content) {
                 if (item?.type === 'image_url' && item?.image_url?.url) {
@@ -992,14 +949,11 @@ export class ImageGen extends plugin {
                 }
             }
         }
-        
-        // 处理字符串格式的 content（Markdown 图片）
         if (!images.length && typeof msg?.content === 'string') {
             const mdImageRegex = /!\[.*?\]\((.*?)\)/g
             let match
             while ((match = mdImageRegex.exec(msg.content)) !== null) {
                 let imgUrl = match[1]
-                // 转换 base64 格式
                 if (imgUrl.startsWith('data:image')) {
                     imgUrl = imgUrl.replace(/^data:image\/\w+;base64,/, 'base64://')
                 }
@@ -1009,7 +963,6 @@ export class ImageGen extends plugin {
         
         return images
     }
-
     /**
      * 发送结果
      */
@@ -1024,54 +977,73 @@ export class ImageGen extends plugin {
             await e.reply(`❌ ${result.error}`, true)
         }
     }
-
-    /**
-     * 获取所有图片 (兼容 icqq / NapCat / OneBot)
-     */
     async getAllImages(e) {
         const urls = []
         const bot = e.bot || Bot
+        const extractImgUrl = (m) => {
+            if (m.type !== 'image') return null
+            const d = m.data || m
+            return d.url || d.file || d.path || m.url || m.file || null
+        }
         
-        // 从引用消息获取图片
+        logger.debug('[ImageGen] getAllImages 开始, hasGetReply=', !!e.getReply, 'hasSource=', !!e.source, 'reply_id=', e.reply_id)
+        
         if (e.getReply || e.source || e.reply_id) {
             try {
                 let source = null
                 
-                // 方式1: e.getReply() (TRSS/部分平台)
                 if (e.getReply) {
+                    logger.debug('[ImageGen] 尝试 e.getReply()')
                     source = await e.getReply()
+                    logger.debug('[ImageGen] e.getReply() 结果:', source ? 'success' : 'null')
                 }
                 
-                // 方式2: MessageApi.getMsg() (标准化API，兼容多平台)
                 if (!source && e.source?.message_id) {
                     try {
+                        logger.debug('[ImageGen] 尝试 MessageApi.getMsg, message_id=', e.source.message_id)
                         source = await MessageApi.getMsg(e, e.source.message_id)
-                    } catch {}
-                }
-                
-                // 方式2b: bot.getMsg() (直接调用)
-                if (!source && e.source?.message_id) {
-                    try {
-                        if (typeof bot?.getMsg === 'function') {
-                            source = await bot.getMsg(e.source.message_id)
-                        }
-                    } catch {}
-                }
-                
-                // 方式3: group.getChatHistory (icqq)
-                if (!source && e.source) {
-                    if (e.group?.getChatHistory) {
-                        const history = await e.group.getChatHistory(e.source.seq, 1)
-                        source = history?.pop()
-                    } else if (e.friend?.getChatHistory) {
-                        const history = await e.friend.getChatHistory(e.source.time, 1)
-                        source = history?.pop()
+                        logger.debug('[ImageGen] MessageApi.getMsg 结果:', source ? 'success' : 'null')
+                    } catch (err) {
+                        logger.debug('[ImageGen] MessageApi.getMsg 失败:', err.message)
                     }
                 }
-                
-                // 方式4: bot.pickGroup().getMsg (icqq)
+                if (!source && e.source?.message_id) {
+                    try {
+                        logger.debug('[ImageGen] 尝试 bot.getMsg/sendApi, hasGetMsg=', !!bot?.getMsg, 'hasSendApi=', !!bot?.sendApi)
+                        if (bot?.getMsg) {
+                            source = await bot.getMsg(e.source.message_id)
+                        } else if (bot?.sendApi) {
+                            const res = await bot.sendApi('get_msg', { message_id: e.source.message_id })
+                            source = res?.data || res
+                        }
+                        logger.debug('[ImageGen] bot方式结果:', source ? 'success' : 'null')
+                    } catch (err) {
+                        logger.debug('[ImageGen] bot方式失败:', err.message)
+                    }
+                }
+                if (!source && e.source) {
+                    const seq = e.source.seq || e.source.message_id
+                    logger.debug('[ImageGen] 尝试 group/friend 方式, seq=', seq, 'hasGroup=', !!e.group, 'hasFriend=', !!e.friend)
+                    if (e.group?.getMsg && seq) {
+                        try { source = await e.group.getMsg(seq) } catch {}
+                    }
+                    if (!source && e.group?.getChatHistory && seq) {
+                        try {
+                            const history = await e.group.getChatHistory(seq, 1)
+                            source = history?.pop()
+                        } catch {}
+                    }
+                    if (!source && e.friend?.getChatHistory && e.source.time) {
+                        try {
+                            const history = await e.friend.getChatHistory(e.source.time, 1)
+                            source = history?.pop()
+                        } catch {}
+                    }
+                    logger.debug('[ImageGen] group/friend 方式结果:', source ? 'success' : 'null')
+                }
                 if (!source && e.source?.seq && e.group_id && bot?.pickGroup) {
                     try {
+                        logger.debug('[ImageGen] 尝试 bot.pickGroup')
                         const group = bot.pickGroup(e.group_id)
                         if (group?.getMsg) {
                             source = await group.getMsg(e.source.seq)
@@ -1079,47 +1051,74 @@ export class ImageGen extends plugin {
                             const history = await group.getChatHistory(e.source.seq, 1)
                             source = history?.pop()
                         }
-                    } catch {}
+                        logger.debug('[ImageGen] pickGroup 结果:', source ? 'success' : 'null')
+                    } catch (err) {
+                        logger.debug('[ImageGen] pickGroup 失败:', err.message)
+                    }
                 }
                 
-                // 提取图片URL (兼容多种格式)
-                const msgs = source?.message || source?.data?.message || []
-                const msgArray = Array.isArray(msgs) ? msgs : []
+                logger.debug('[ImageGen] 最终 source=', source ? 'found' : 'null')
                 
-                for (const m of msgArray) {
-                    if (m.type === 'image') {
-                        // icqq: m.url, NapCat: m.data?.url 或 m.file
-                        const imgUrl = m.url || m.data?.url || m.file
-                        if (imgUrl) urls.push(imgUrl)
+                const sourceData = source?.data || source
+                const msgs = sourceData?.message || sourceData?.content || source?.message || []
+                const msgArr = Array.isArray(msgs) ? msgs : []
+                
+                logger.debug('[ImageGen] 消息数组长度:', msgArr.length, '类型:', msgArr.map(m => m.type))
+                
+                for (const m of msgArr) {
+                    const imgUrl = extractImgUrl(m)
+                    if (imgUrl && !urls.includes(imgUrl)) {
+                        logger.debug('[ImageGen] 从引用提取到图片:', imgUrl.substring(0, 80))
+                        urls.push(imgUrl)
                     }
+                }
+                if (source && urls.length === 0) {
+                    logger.debug('[ImageGen] 引用消息结构:', JSON.stringify({
+                        keys: Object.keys(source || {}),
+                        dataKeys: Object.keys(sourceData || {}),
+                        msgCount: msgArr.length,
+                        msgTypes: msgArr.map(m => m.type),
+                        rawSource: JSON.stringify(source).substring(0, 500)
+                    }))
                 }
             } catch (err) {
                 logger.debug('[ImageGen] 获取引用图片失败:', err.message)
             }
         }
         
-        // 从当前消息获取图片 (兼容多种格式)
         const msgArray = Array.isArray(e.message) ? e.message : []
+        logger.debug('[ImageGen] 当前消息数组:', msgArray.map(m => m.type))
+        
         for (const m of msgArray) {
-            if (m.type === 'image') {
-                const imgUrl = m.url || m.data?.url || m.file
-                if (imgUrl && !urls.includes(imgUrl)) {
-                    urls.push(imgUrl)
+            const imgUrl = extractImgUrl(m)
+            if (imgUrl && !urls.includes(imgUrl)) {
+                logger.debug('[ImageGen] 从当前消息提取图片:', imgUrl.substring(0, 80))
+                urls.push(imgUrl)
+            }
+        }
+        // 只有在没有其他图片时，才添加@用户头像
+        if (urls.length === 0) {
+            for (const m of msgArray) {
+                if (m.type === 'at') {
+                    const qq = m.qq || m.data?.qq
+                    if (qq && qq !== 'all' && String(qq) !== String(e.self_id)) {
+                        const avatarUrl = `https://q1.qlogo.cn/g?b=qq&nk=${qq}&s=640`
+                        if (!urls.includes(avatarUrl)) {
+                            logger.debug('[ImageGen] 添加@用户头像:', qq)
+                            urls.push(avatarUrl)
+                        }
+                    }
                 }
             }
         }
         
-        // 如果没有图片，尝试获取@用户的头像
-        if (!urls.length) {
-            const atSeg = msgArray.find(m => m.type === 'at')
-            const atQQ = atSeg?.qq || atSeg?.data?.qq
-            if (atQQ) {
-                urls.push(`https://q1.qlogo.cn/g?b=qq&nk=${atQQ}&s=640`)
-            } else if (e.user_id) {
-                urls.push(`https://q1.qlogo.cn/g?b=qq&nk=${e.user_id}&s=640`)
-            }
+        const hasQuote = !!(e.getReply || e.source || e.reply_id)
+        if (urls.length === 0 && !hasQuote && e.user_id) {
+            logger.debug('[ImageGen] 回退到发送者头像:', e.user_id)
+            urls.push(`https://q1.qlogo.cn/g?b=qq&nk=${e.user_id}&s=640`)
         }
         
+        logger.debug('[ImageGen] 最终获取到的图片数:', urls.length)
         return urls
     }
 
