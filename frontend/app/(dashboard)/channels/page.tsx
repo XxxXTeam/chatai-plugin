@@ -79,7 +79,7 @@ interface ChannelPresetCategory {
 }
 
 const PRESET_CATEGORIES: ChannelPresetCategory[] = [
-  { name: '内置免费API', icon: '🆓', presets: ['free-glm', 'free-gemini', 'free-grok'] },
+  { name: '内置免费API', icon: '🆓', presets: ['free-glm', 'free-xiaomi', 'free-gemini', 'free-grok'] },
   { name: '国际厂商', icon: '🌍', presets: ['openai', 'gemini', 'claude', 'grok', 'mistral', 'cohere', 'groq'] },
   { name: '国内厂商', icon: '🇨🇳', presets: ['deepseek', 'zhipu', 'qwen', 'baichuan', 'minimax', 'moonshot', 'yi', 'doubao', 'spark', 'hunyuan', 'baidu'] },
   { name: '中转服务', icon: '🔄', presets: ['openrouter', 'siliconflow', 'together', 'fireworks', 'novita'] },
@@ -91,15 +91,15 @@ const CHANNEL_PRESETS: Record<string, ChannelPreset> = {
     adapterType: 'openai',
     baseUrl: 'https://glm.openel.top/',
     apiKey: 'sk-3d2f9b84e7f510b1a08f7b3d6c9a6a7f17fbbad5624ea29f22d9c742bf39c863',
-    models: 'GLM-4.5-Thinking, GLM-4.5, GLM-4-Flash, GLM-4.6-Thinking',
-    description: '免费智谱GLM API（openel.top）',
+    models: 'GLM-4.6-V-thinking, GLM-4.5, GLM-4.5-Air, GLM-4.5-Air-search, GLM-4.5-Air-thinking, GLM-4.5-Air-thinking-search, GLM-4.5-Search, GLM-4.5-Thinking, GLM-4.5-V, GLM-4.5-V-search, GLM-4.5-V-thinking, GLM-4.5-V-thinking-search, GLM-4.5-search, GLM-4.5-thinking, GLM-4.5-thinking-search, GLM-4.6, GLM-4.6-Search, GLM-4.6-Thinking, GLM-4.6-V, GLM-4.6-V-search, GLM-4.6-V-thinking-search, GLM-4.6-search, GLM-4.6-thinking, GLM-4.6-thinking-search, glm-4-air-250414, glm-4-flash',
+    description: '免费智谱GLM API',
   },
   'free-gemini': {
     name: '免费Gemini',
     adapterType: 'openai',
     baseUrl: 'https://business2api.openel.top/',
     apiKey: '',
-    models: 'gemini-2.5-flash, gemini-2.0-flash, gemini-2.5-pro',
+    models: 'gemini-2.5-flash, gemini-2.5-flash-image, gemini-2.5-flash-search, gemini-2.5-flash-video, gemini-2.5-pro, gemini-2.5-pro-image, gemini-2.5-pro-search, gemini-2.5-pro-video, gemini-3-pro, gemini-3-pro-image, gemini-3-pro-preview, gemini-3-pro-preview-image, gemini-3-pro-preview-search, gemini-3-pro-preview-video, gemini-3-pro-search, gemini-3-pro-video, gemini-2.5-flash-preview-latest, gemini-2.5-flash-preview-latest-image, gemini-2.5-flash-preview-latest-search, gemini-2.5-flash-preview-latest-video, gemini-3-flash-image, gemini-3-flash-preview, gemini-3-flash-preview-image, gemini-3-flash-preview-search, gemini-3-flash-preview-video, gemini-3-flash-search, gemini-3-flash-video',
     description: '免费Gemini API，需先获取Key',
     authUrl: 'https://business2api.openel.top/auth',
   },
@@ -110,6 +110,14 @@ const CHANNEL_PRESETS: Record<string, ChannelPreset> = {
     apiKey: '',
     models: 'grok-3-mini, grok-3',
     description: '免费Grok API（限额）',
+  },
+  'free-xiaomi': {
+    name: '免费小米MiMo',
+    adapterType: 'openai',
+    baseUrl: 'https://xiaomi.openel.top/',
+    apiKey: 'sk-3d2f9b84e7f510b1a08f7b3d6c9a6a7f17fbbad5624ea29f22d9c742bf39c863',
+    models: 'mimo-v2-flash-studio, mimo-v2-flash-studio-thinking, mimo-v2-flash-studio-search, mimo-v2-flash-studio-thinking-search, mimo-v2-flash-studio-search-thinking, mimo-v2-flash, mimo-v2-flash-thinking, mimo-v2-flash-search, mimo-v2-flash-thinking-search, mimo-v2-flash-search-thinking',
+    description: '免费小米MiMo API',
   },
   
   // ========== 国际厂商 ==========
@@ -725,7 +733,8 @@ export default function ChannelsPage() {
                           
                           // 根据预设类型显示不同提示
                           const presetHints: Record<string, { type: 'success' | 'info', message: string, url?: string }> = {
-                            'free-glm': { type: 'success', message: '免费GLM配置已填充，API Key已内置，可直接保存使用' },
+                            'free-glm': { type: 'success', message: '免费GLM配置已填充' },
+                            'free-xiaomi': { type: 'success', message: '免费小米MiMo' },
                             'free-gemini': { type: 'info', message: '免费Gemini - 需手动获取API Key', url: preset.authUrl },
                             'free-grok': { type: 'info', message: '免费Grok - 需在 x.ai 获取API Key' },
                             'openai': { type: 'info', message: 'OpenAI - 请填入API Key（sk-xxx），可在 platform.openai.com 获取' },
