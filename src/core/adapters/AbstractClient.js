@@ -132,11 +132,51 @@ export function parseXmlToolCalls(text) {
     }
     if (toolCalls.length === 0) {
         // 格式C: 裸JSON对象 {"tool_calls": [...]} （不在代码块内）
-        const toolCallsObjRegex = /\{\s*"tool_calls"\s*:\s*\[[\s\S]*?\]\s*\}/g
-        const objMatches = cleanText.match(toolCallsObjRegex)
+        // 使用更可靠的方法：找到 {"tool_calls" 开头，然后尝试解析完整JSON
+        const toolCallsStartRegex = /\{\s*"tool_calls"\s*:/g
+        let startMatch
+        const processedRanges = []
         
-        if (objMatches) {
-            for (const objStr of objMatches) {
+        while ((startMatch = toolCallsStartRegex.exec(cleanText)) !== null) {
+            const startIdx = startMatch.index
+            // 尝试找到匹配的结束括号
+            let braceCount = 0
+            let endIdx = -1
+            let inString = false
+            let escapeNext = false
+            
+            for (let i = startIdx; i < cleanText.length; i++) {
+                const char = cleanText[i]
+                
+                if (escapeNext) {
+                    escapeNext = false
+                    continue
+                }
+                
+                if (char === '\\' && inString) {
+                    escapeNext = true
+                    continue
+                }
+                
+                if (char === '"' && !escapeNext) {
+                    inString = !inString
+                    continue
+                }
+                
+                if (!inString) {
+                    if (char === '{') braceCount++
+                    else if (char === '}') {
+                        braceCount--
+                        if (braceCount === 0) {
+                            endIdx = i + 1
+                            break
+                        }
+                    }
+                }
+            }
+            
+            if (endIdx > startIdx) {
+                const objStr = cleanText.substring(startIdx, endIdx)
                 try {
                     const parsed = JSON.parse(objStr)
                     if (parsed.tool_calls && Array.isArray(parsed.tool_calls)) {
@@ -158,7 +198,7 @@ export function parseXmlToolCalls(text) {
                             }
                         }
                         if (foundTools) {
-                            cleanText = cleanText.replace(objStr, '').trim()
+                            processedRanges.push({ start: startIdx, end: endIdx })
                         }
                     }
                 } catch {
@@ -166,6 +206,13 @@ export function parseXmlToolCalls(text) {
                 }
             }
         }
+        
+        // 从后向前删除已处理的范围，避免索引变化
+        for (let i = processedRanges.length - 1; i >= 0; i--) {
+            const range = processedRanges[i]
+            cleanText = cleanText.substring(0, range.start) + cleanText.substring(range.end)
+        }
+        cleanText = cleanText.trim()
         
         // 格式D: 匹配独立的JSON数组（以[开头，以]结尾）
         const jsonArrayRegex = /\[\s*\{[\s\S]*?"name"\s*:\s*"[^"]+[\s\S]*?\}\s*\]/g
@@ -688,7 +735,13 @@ export class AbstractClient {
                 }
                 
                 const intermediateTextContent = modelResponse.content?.filter(c => c.type === 'text') || []
-                const intermediateText = intermediateTextContent.map(c => c.text).join('').trim()
+                let intermediateText = intermediateTextContent.map(c => c.text).join('').trim()
+                
+                // 过滤掉工具调用JSON，避免将其当作普通消息发送
+                if (intermediateText) {
+                    const { cleanText } = parseXmlToolCalls(intermediateText)
+                    intermediateText = cleanText
+                }
                 
                 // 触发工具调用中间消息回调（如果设置）
                 // 这会在工具调用之前先发送模型的文本回复
@@ -696,7 +749,7 @@ export class AbstractClient {
                     const callback = options.onMessageWithToolCall || this.onMessageWithToolCall
                     try {
                         await callback({
-                            intermediateText,           // 中间文本回复
+                            intermediateText,           // 中间文本回复（已过滤工具调用JSON）
                             contents: modelResponse.content,  // 完整内容
                             toolCalls: deduplicatedToolCalls,  // 去重后的工具调用信息
                             isIntermediate: true       // 标记为中间消息

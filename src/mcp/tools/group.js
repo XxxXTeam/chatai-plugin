@@ -117,7 +117,15 @@ export const groupTools = [
             let memberList = []
             try {
                 if (bot.getGroupMemberList) {
-                    memberList = await bot.getGroupMemberList(groupId) || []
+                    const result = await bot.getGroupMemberList(groupId)
+                    // 处理返回值可能是 Map 的情况
+                    if (result instanceof Map) {
+                        memberList = Array.from(result.values())
+                    } else if (Array.isArray(result)) {
+                        memberList = result
+                    } else {
+                        memberList = []
+                    }
                 } else {
                     const group = bot.pickGroup?.(groupId)
                     if (group?.getMemberMap) {
@@ -273,7 +281,14 @@ export const groupTools = [
                 let memberList = []
                 try {
                     if (bot.getGroupMemberList) {
-                        memberList = await bot.getGroupMemberList(groupId) || []
+                        const result = await bot.getGroupMemberList(groupId)
+                        if (result instanceof Map) {
+                            memberList = Array.from(result.values())
+                        } else if (Array.isArray(result)) {
+                            memberList = result
+                        } else {
+                            memberList = []
+                        }
                     } else {
                         const group = bot.pickGroup?.(groupId)
                         if (group?.getMemberMap) {
@@ -345,7 +360,14 @@ export const groupTools = [
                 let memberList = []
                 try {
                     if (bot.getGroupMemberList) {
-                        memberList = await bot.getGroupMemberList(groupId) || []
+                        const result = await bot.getGroupMemberList(groupId)
+                        if (result instanceof Map) {
+                            memberList = Array.from(result.values())
+                        } else if (Array.isArray(result)) {
+                            memberList = result
+                        } else {
+                            memberList = []
+                        }
                     } else {
                         const group = bot.pickGroup?.(groupId)
                         if (group?.getMemberMap) {
@@ -580,7 +602,14 @@ export const groupTools = [
                 let memberList = []
                 try {
                     if (bot.getGroupMemberList) {
-                        memberList = await bot.getGroupMemberList(groupId) || []
+                        const result = await bot.getGroupMemberList(groupId)
+                        if (result instanceof Map) {
+                            memberList = Array.from(result.values())
+                        } else if (Array.isArray(result)) {
+                            memberList = result
+                        } else {
+                            memberList = []
+                        }
                     } else {
                         const group = bot.pickGroup?.(groupId)
                         if (group?.getMemberMap) {
@@ -715,7 +744,14 @@ export const groupTools = [
                 let memberList = []
                 try {
                     if (bot.getGroupMemberList) {
-                        memberList = await bot.getGroupMemberList(groupId) || []
+                        const result = await bot.getGroupMemberList(groupId)
+                        if (result instanceof Map) {
+                            memberList = Array.from(result.values())
+                        } else if (Array.isArray(result)) {
+                            memberList = result
+                        } else {
+                            memberList = []
+                        }
                     } else {
                         const group = bot.pickGroup?.(groupId)
                         if (group?.getMemberMap) {
