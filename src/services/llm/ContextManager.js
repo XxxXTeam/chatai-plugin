@@ -254,11 +254,44 @@ export class ContextManager {
      * 获取上下文历史 - 限制最多20条
      * @param {string} conversationId
      * @param {number} [limit] - 限制数量，默认20
+     * @param {Object} [options] - 选项
+     * @param {boolean} [options.includeToolCalls] - 是否包含工具调用记录
      * @returns {Promise<Array>} 历史消息
      */
-    async getContextHistory(conversationId, limit = null) {
-        const maxMessages = limit || config.get('context.maxMessages') || this.maxContextMessages
-        const history = await historyManager.getHistory(undefined, conversationId)
+    async getContextHistory(conversationId, limit = null, options = {}) {
+        // 读取 autoContext 配置
+        const autoContextConfig = config.get('context.autoContext') || {}
+        const autoContextEnabled = autoContextConfig.enabled !== false
+        
+        // 如果自动上下文禁用，返回空历史
+        if (!autoContextEnabled) {
+            logger.debug('[ContextManager] 自动上下文已禁用，不携带历史消息')
+            return []
+        }
+        
+        // 优先使用 autoContext 配置的 maxHistoryMessages
+        const maxMessages = limit || autoContextConfig.maxHistoryMessages || config.get('context.maxMessages') || this.maxContextMessages
+        const includeToolCalls = options.includeToolCalls ?? autoContextConfig.includeToolCalls ?? false
+        
+        let history = await historyManager.getHistory(undefined, conversationId)
+        
+        // 如果不包含工具调用，过滤掉 tool 角色的消息和包含 toolCalls 的消息
+        if (!includeToolCalls) {
+            history = history.filter(msg => {
+                // 过滤掉 tool 角色的消息
+                if (msg.role === 'tool') return false
+                // 过滤掉包含 toolCalls 的 assistant 消息（但保留有文本内容的）
+                if (msg.role === 'assistant' && msg.toolCalls?.length > 0) {
+                    // 检查是否有有意义的文本内容
+                    const hasText = Array.isArray(msg.content) 
+                        ? msg.content.some(c => c.type === 'text' && c.text?.trim())
+                        : (typeof msg.content === 'string' && msg.content.trim())
+                    // 如果没有文本内容，过滤掉
+                    if (!hasText) return false
+                }
+                return true
+            })
+        }
         
         // 限制最多返回数量
         if (history.length > maxMessages) {
