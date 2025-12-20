@@ -17,6 +17,7 @@ import { searchTools } from './search.js'
 import { utilsTools } from './utils.js'
 import { botTools } from './bot.js'
 import { voiceTools } from './voice.js'
+import { extraTools } from './extra.js'
 
 /**
  * 工具类别配置
@@ -106,6 +107,12 @@ export const toolCategories = {
         description: 'AI语音对话、TTS语音合成、语音识别等',
         icon: 'Mic',
         tools: voiceTools
+    },
+    extra: {
+        name: '扩展工具',
+        description: '天气查询、一言、骰子、倒计时、提醒、插画等',
+        icon: 'Sparkles',
+        tools: extraTools
     }
 }
 

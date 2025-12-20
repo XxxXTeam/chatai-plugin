@@ -3,13 +3,15 @@
 <div align="center">
 
 [![GitHub](https://img.shields.io/badge/GitHub-XxxXTeam%2Fchatai--plugin-blue?logo=github)](https://github.com/XxxXTeam/chatai-plugin)
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
-![Node](https://img.shields.io/badge/node-%3E%3D18-green)
-![License](https://img.shields.io/badge/license-MIT-yellow)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue?logo=semantic-release)](https://github.com/XxxXTeam/chatai-plugin/releases)
+[![Node](https://img.shields.io/badge/node-%3E%3D18-green?logo=node.js)](https://nodejs.org/)
+[![License](https://img.shields.io/badge/license-MIT-yellow?logo=opensourceinitiative)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?logo=github)](https://github.com/XxxXTeam/chatai-plugin/pulls)
+[![MCP](https://img.shields.io/badge/MCP-Compatible-purple?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iMiI+PHBhdGggZD0iTTEyIDJhMTAgMTAgMCAxIDAgMCAyMCAxMCAxMCAwIDAgMCAwLTIweiIvPjwvc3ZnPg==)](https://modelcontextprotocol.io/)
 
 **一款功能强大的 Yunzai-Bot AI 聊天插件，集成多种 LLM 模型和丰富的工具调用能力**
 
-[安装指南](#-安装) • [快速开始](#-快速开始) • [配置说明](#️-配置说明) • [常见问题](#-常见问题)
+[安装指南](#-安装) • [快速开始](#-快速开始) • [配置说明](#️-配置说明) • [工具开发](docs/TOOLS.md) • [开发文档](docs/DEVELOPMENT.md)
 
 </div>
 
@@ -248,48 +250,51 @@ bym:
 
 ## 🛠️ 内置工具列表
 
-插件内置了丰富的 QQ 机器人操作工具：
+插件内置了丰富的 QQ 机器人操作工具，按类别组织：
 
-### 用户信息
-- `get_user_info` - 获取用户信息
-- `get_friend_list` - 获取好友列表
-- `send_like` - 给好友点赞
+| 类别 | 工具数 | 说明 |
+|------|--------|------|
+| 🕐 **基础工具** | 9 | 时间获取、工具列表、环境信息等 |
+| 👤 **用户信息** | 3 | 获取用户信息、好友列表、点赞等 |
+| 👥 **群组信息** | 4 | 获取群信息、成员列表等 |
+| 💬 **消息操作** | 7 | 发送消息、@用户、聊天记录等 |
+| 🛡️ **群管理** | 6 | 禁言、踢人、设置群名片等 |
+| 📁 **文件操作** | 5 | 群文件上传、下载、管理等 |
+| 🖼️ **媒体处理** | 8 | 图片解析、OCR、二维码生成等 |
+| 🌐 **网页访问** | 2 | 访问网页、获取内容等 |
+| 🔍 **搜索工具** | 4 | 网页搜索、维基百科、翻译等 |
+| 🔧 **实用工具** | 6 | 计算、编码转换、哈希等 |
+| 🧠 **记忆管理** | 4 | 用户记忆的增删改查 |
+| 📜 **上下文管理** | 3 | 对话上下文、群聊上下文等 |
+| 🤖 **Bot信息** | 3 | 获取机器人自身信息、状态等 |
+| 🎙️ **语音工具** | 3 | TTS语音合成、AI语音对话等 |
 
-### 群组操作
-- `get_group_info` - 获取群信息
-- `get_group_list` - 获取群列表
-- `get_group_member_list` - 获取群成员列表
-- `get_group_member_info` - 获取群成员详情
-- `get_group_files` - 获取群文件列表
+> 📖 完整工具列表和开发指南请参阅 [工具开发文档](docs/TOOLS.md)
 
-### 消息发送
-- `send_private_message` - 发送私聊消息
-- `send_group_message` - 发送群消息
-- `reply_current_message` - 回复当前消息
-- `at_user` - @用户
-- `random_at_members` - 随机@群成员
-- `make_forward_message` - 发送合并转发消息
+### 自定义工具
 
-### 图片/视频
-- `parse_image` - 解析图片
-- `send_image` - 发送图片
-- `parse_video` - 解析视频
-- `send_video` - 发送视频
-- `get_avatar` - 获取头像
-- `image_ocr` - 图片文字识别
+支持通过 JS 文件扩展工具，将文件放入 `data/tools/` 目录即可自动加载：
 
-### 群管理（危险操作）
-- `set_group_card` - 设置群名片
-- `mute_member` - 禁言成员
-- `kick_member` - 踢出成员
-- `recall_message` - 撤回消息
-- `set_group_admin` - 设置管理员
-- `set_group_whole_ban` - 全群禁言
-
-### 其他
-- `get_current_context` - 获取当前上下文
-- `get_chat_history` - 获取聊天记录
-- `website` - 访问网页获取内容
+```javascript
+// data/tools/hello.js
+export default {
+    name: 'say_hello',
+    function: {
+        name: 'say_hello',
+        description: '向指定用户说你好',
+        parameters: {
+            type: 'object',
+            properties: {
+                name: { type: 'string', description: '用户名称' }
+            },
+            required: ['name']
+        }
+    },
+    async run(args, context) {
+        return { success: true, message: `你好，${args.name}！` }
+    }
+}
+```
 
 ## 📁 目录结构
 
@@ -305,7 +310,12 @@ chatai-plugin/
 │   └── config.js          # 配置管理器
 ├── data/                   # 数据目录（运行时生成）
 │   ├── *.db               # SQLite 数据库文件
+│   ├── tools/             # 自定义工具目录
+│   ├── presets/           # 预设文件
 │   └── mcp-servers.json   # MCP 服务器配置
+├── docs/                   # 文档
+│   ├── TOOLS.md           # 工具开发文档
+│   └── DEVELOPMENT.md     # 开发者文档
 ├── resources/              # 资源文件
 │   └── web/               # Web 前端构建产物
 ├── src/                    # 源代码
@@ -643,6 +653,17 @@ rm -rf plugins/chatai-plugin/data/*
 
 重启 Yunzai 后会自动生成默认配置。
 </details>
+
+---
+
+## 📚 文档
+
+| 文档 | 说明 |
+|------|------|
+| [README.md](README.md) | 项目介绍和快速开始 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南和代码规范 |
+| [docs/TOOLS.md](docs/TOOLS.md) | 工具开发完整指南 |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发者文档和架构说明 |
 
 ---
 

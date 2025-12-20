@@ -36,17 +36,13 @@ class TokenManager {
         const randomString = crypto.randomBytes(16).toString('hex')
         const token = `${timestamp}-${randomString}`
         const expiry = Date.now() + timeout * 1000
-
         this.tokens.set(token, { expiry, level })
-
-        // 自动清理过期token
         setTimeout(() => {
             this.tokens.delete(token)
         }, timeout * 1000)
 
         return token
     }
-
     /**
      * 生成/获取永久Token
      * @param {boolean} forceNew - 是否强制生成新token
@@ -61,7 +57,6 @@ class TokenManager {
         }
         return permanentToken
     }
-
     /**
      * 验证Token
      * @param {string} token 
