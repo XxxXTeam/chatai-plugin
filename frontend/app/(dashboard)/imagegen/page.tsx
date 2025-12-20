@@ -59,6 +59,8 @@ import {
 } from 'lucide-react'
 import { imageGenApi, channelsApi } from '@/lib/api'
 import { toast } from 'sonner'
+import { ModelSelector } from '@/components/ModelSelector'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 
 interface Preset {
   keywords: string[]
@@ -106,6 +108,8 @@ export default function ImageGenPage() {
   const [config, setConfig] = useState<ImageGenConfig | null>(null)
   const [updating, setUpdating] = useState(false)
   const [activeTab, setActiveTab] = useState('presets')  // 受控 Tab
+  const [imageModelSelectorOpen, setImageModelSelectorOpen] = useState(false)
+  const [videoModelSelectorOpen, setVideoModelSelectorOpen] = useState(false)
 
   // 弹窗状态
   const [addSourceOpen, setAddSourceOpen] = useState(false)
@@ -323,7 +327,7 @@ export default function ImageGenPage() {
 
   if (loading) {
     return (
-      <div className="container mx-auto p-6 space-y-6">
+      <div className="container mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6">
         <Skeleton className="h-8 w-48" />
         <div className="grid gap-4 md:grid-cols-4">
           {[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-24" />)}
@@ -334,30 +338,32 @@ export default function ImageGenPage() {
   }
 
   return (
-    <div className="container mx-auto p-6 space-y-6">
+    <div className="container mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6">
       {/* 标题栏 */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Wand2 className="h-8 w-8" />
+          <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2">
+            <Wand2 className="h-6 w-6 sm:h-8 sm:w-8" />
             绘图预设管理
           </h1>
-          <p className="text-muted-foreground mt-1">管理 AI 绘图的预设模板和来源</p>
+          <p className="text-muted-foreground mt-1 text-sm sm:text-base">管理 AI 绘图的预设模板和来源</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={handleReload} disabled={updating}>
-            {updating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-            重载预设
+          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={handleReload} disabled={updating}>
+            {updating ? <Loader2 className="h-4 w-4 mr-1 sm:mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1 sm:mr-2" />}
+            <span className="hidden sm:inline">重载预设</span>
+            <span className="sm:hidden">重载</span>
           </Button>
-          <Button onClick={handleUpdate} disabled={updating}>
-            {updating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Download className="h-4 w-4 mr-2" />}
-            从云端更新
+          <Button size="sm" className="flex-1 sm:flex-none" onClick={handleUpdate} disabled={updating}>
+            {updating ? <Loader2 className="h-4 w-4 mr-1 sm:mr-2 animate-spin" /> : <Download className="h-4 w-4 mr-1 sm:mr-2" />}
+            <span className="hidden sm:inline">从云端更新</span>
+            <span className="sm:hidden">更新</span>
           </Button>
         </div>
       </div>
 
       {/* 统计卡片 */}
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-3 sm:gap-4 grid-cols-2 md:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">总预设数</CardTitle>
@@ -394,11 +400,11 @@ export default function ImageGenPage() {
 
       {/* 主内容 */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="presets">预设列表</TabsTrigger>
-          <TabsTrigger value="sources">预设来源</TabsTrigger>
-          <TabsTrigger value="custom">自定义预设</TabsTrigger>
-          <TabsTrigger value="settings">基础设置</TabsTrigger>
+        <TabsList className="w-full sm:w-auto flex flex-wrap h-auto gap-1 p-1">
+          <TabsTrigger value="presets" className="flex-1 sm:flex-none text-xs sm:text-sm">预设列表</TabsTrigger>
+          <TabsTrigger value="sources" className="flex-1 sm:flex-none text-xs sm:text-sm">预设来源</TabsTrigger>
+          <TabsTrigger value="custom" className="flex-1 sm:flex-none text-xs sm:text-sm">自定义</TabsTrigger>
+          <TabsTrigger value="settings" className="flex-1 sm:flex-none text-xs sm:text-sm">设置</TabsTrigger>
         </TabsList>
 
         {/* 预设列表 */}
@@ -409,7 +415,8 @@ export default function ImageGenPage() {
               <CardDescription>当前已加载的所有绘图预设模板</CardDescription>
             </CardHeader>
             <CardContent>
-              <ScrollArea className="h-[500px]">
+              <ScrollArea className="h-[400px] sm:h-[500px]">
+                <div className="min-w-[600px]">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -494,6 +501,7 @@ export default function ImageGenPage() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               </ScrollArea>
             </CardContent>
           </Card>
@@ -797,41 +805,53 @@ export default function ImageGenPage() {
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label>图片模型</Label>
-                  <Select 
-                    value={config?.model || ''} 
-                    onValueChange={(v: string) => handleUpdateConfig({ model: v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="选择模型" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Array.from(new Set((config?.apis || []).flatMap(a => a.models || []))).map(m => (
-                        <SelectItem key={m} value={m}>{m}</SelectItem>
-                      ))}
-                      {(config?.apis || []).flatMap(a => a.models || []).length === 0 && (
-                        <SelectItem value="gemini-3-pro-image">gemini-3-pro-image</SelectItem>
-                      )}
-                    </SelectContent>
-                  </Select>
+                  <Collapsible open={imageModelSelectorOpen} onOpenChange={setImageModelSelectorOpen}>
+                    <CollapsibleTrigger asChild>
+                      <Button variant="outline" className="w-full justify-between">
+                        <span className="truncate">{config?.model || '选择模型'}</span>
+                        <Settings className={`h-4 w-4 shrink-0 transition-transform ${imageModelSelectorOpen ? 'rotate-90' : ''}`} />
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="mt-2">
+                      <div className="border rounded-lg p-3">
+                        <ModelSelector
+                          value={config?.model ? [config.model] : []}
+                          allModels={Array.from(new Set((config?.apis || []).flatMap(a => a.models || [])))}
+                          onChange={(models) => {
+                            handleUpdateConfig({ model: models[0] || '' })
+                            if (models.length > 0) setImageModelSelectorOpen(false)
+                          }}
+                          singleSelect={true}
+                          allowCustom={true}
+                        />
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
                 </div>
                 <div className="space-y-2">
                   <Label>视频模型</Label>
-                  <Select 
-                    value={config?.videoModel || ''} 
-                    onValueChange={(v: string) => handleUpdateConfig({ videoModel: v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="选择模型" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Array.from(new Set((config?.apis || []).flatMap(a => a.models || []))).map(m => (
-                        <SelectItem key={m} value={m}>{m}</SelectItem>
-                      ))}
-                      {(config?.apis || []).flatMap(a => a.models || []).length === 0 && (
-                        <SelectItem value="gemini-3-pro-preview-video">gemini-3-pro-preview-video</SelectItem>
-                      )}
-                    </SelectContent>
-                  </Select>
+                  <Collapsible open={videoModelSelectorOpen} onOpenChange={setVideoModelSelectorOpen}>
+                    <CollapsibleTrigger asChild>
+                      <Button variant="outline" className="w-full justify-between">
+                        <span className="truncate">{config?.videoModel || '选择模型'}</span>
+                        <Settings className={`h-4 w-4 shrink-0 transition-transform ${videoModelSelectorOpen ? 'rotate-90' : ''}`} />
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="mt-2">
+                      <div className="border rounded-lg p-3">
+                        <ModelSelector
+                          value={config?.videoModel ? [config.videoModel] : []}
+                          allModels={Array.from(new Set((config?.apis || []).flatMap(a => a.models || [])))}
+                          onChange={(models) => {
+                            handleUpdateConfig({ videoModel: models[0] || '' })
+                            if (models.length > 0) setVideoModelSelectorOpen(false)
+                          }}
+                          singleSelect={true}
+                          allowCustom={true}
+                        />
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
                 </div>
               </div>
               <Separator />
@@ -862,7 +882,7 @@ export default function ImageGenPage() {
 
       {/* 添加来源弹窗 */}
       <Dialog open={addSourceOpen} onOpenChange={setAddSourceOpen}>
-        <DialogContent>
+        <DialogContent className="w-[95vw] max-w-lg">
           <DialogHeader>
             <DialogTitle>添加预设来源</DialogTitle>
             <DialogDescription>添加一个新的远程预设数据源</DialogDescription>
@@ -901,7 +921,7 @@ export default function ImageGenPage() {
 
       {/* 添加预设弹窗 */}
       <Dialog open={addPresetOpen} onOpenChange={setAddPresetOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="w-[95vw] max-w-2xl">
           <DialogHeader>
             <DialogTitle>添加自定义预设</DialogTitle>
             <DialogDescription>创建一个新的绘图预设模板</DialogDescription>
@@ -942,7 +962,7 @@ export default function ImageGenPage() {
 
       {/* 编辑预设弹窗 */}
       <Dialog open={editPresetOpen} onOpenChange={setEditPresetOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="w-[95vw] max-w-2xl">
           <DialogHeader>
             <DialogTitle>编辑预设</DialogTitle>
             <DialogDescription>

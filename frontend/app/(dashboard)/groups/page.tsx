@@ -28,7 +28,9 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { scopeApi, presetsApi, channelsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, Trash2, Loader2, Users, RefreshCw, Settings, FileText, Bot } from 'lucide-react'
+import { Plus, Trash2, Loader2, Users, RefreshCw, Settings, FileText, Bot, ChevronDown } from 'lucide-react'
+import { ModelSelector } from '@/components/ModelSelector'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 
 interface GroupScope {
   groupId: string
@@ -66,6 +68,8 @@ export default function GroupsPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deletingGroup, setDeletingGroup] = useState<GroupScope | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [modelSelectorOpen, setModelSelectorOpen] = useState(false)
+  const [allModels, setAllModels] = useState<string[]>([])
 
   const [form, setForm] = useState({
     groupId: '',
@@ -87,6 +91,14 @@ export default function GroupsPage() {
       setGroups(groupsRes?.data || [])
       setPresets(presetsRes?.data || [])
       setChannels(channelsRes?.data || [])
+      // 提取所有模型
+      const models = new Set<string>()
+      ;(channelsRes?.data || []).forEach((ch: any) => {
+        if (Array.isArray(ch.models)) {
+          ch.models.forEach((m: string) => models.add(m))
+        }
+      })
+      setAllModels(Array.from(models).sort())
     } catch (error) {
       toast.error('加载数据失败')
       console.error(error)
@@ -212,7 +224,7 @@ export default function GroupsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <h2 className="text-2xl font-bold">群组管理</h2>
         <div className="flex gap-2">
           <Button variant="outline" onClick={fetchData}>
@@ -226,7 +238,7 @@ export default function GroupsPage() {
                 添加群
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-2xl max-h-[90vh]">
+            <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh]">
               <DialogHeader>
                 <DialogTitle>{editingGroup ? '编辑群配置' : '添加群'}</DialogTitle>
                 <DialogDescription>配置群聊个性化设置和独立人设</DialogDescription>
@@ -275,24 +287,43 @@ export default function GroupsPage() {
                   <Label htmlFor="modelId">
                     使用模型 <span className="text-xs text-muted-foreground">(设置后群聊将使用指定模型)</span>
                   </Label>
-                  <Select
-                    value={form.modelId}
-                    onValueChange={(value) => setForm({ ...form, modelId: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="使用默认模型" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__default__">使用默认模型</SelectItem>
-                      {channels.map((channel) => (
-                        channel.models?.map((model) => (
-                          <SelectItem key={`${channel.id}:${model}`} value={model}>
-                            [{channel.name}] {model}
-                          </SelectItem>
-                        ))
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Collapsible open={modelSelectorOpen} onOpenChange={setModelSelectorOpen}>
+                    <CollapsibleTrigger asChild>
+                      <Button variant="outline" className="w-full justify-between">
+                        <span className="truncate">
+                          {form.modelId && form.modelId !== '__default__' ? form.modelId : '使用默认模型'}
+                        </span>
+                        <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${modelSelectorOpen ? 'rotate-180' : ''}`} />
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="mt-2">
+                      <div className="border rounded-lg p-3">
+                        <div className="mb-2">
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="w-full justify-start text-muted-foreground"
+                            onClick={() => {
+                              setForm({ ...form, modelId: '__default__' })
+                              setModelSelectorOpen(false)
+                            }}
+                          >
+                            使用默认模型
+                          </Button>
+                        </div>
+                        <ModelSelector
+                          value={form.modelId && form.modelId !== '__default__' ? [form.modelId] : []}
+                          allModels={allModels}
+                          onChange={(models) => {
+                            setForm({ ...form, modelId: models[0] || '__default__' })
+                            if (models.length > 0) setModelSelectorOpen(false)
+                          }}
+                          singleSelect={true}
+                          allowCustom={true}
+                        />
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="triggerMode">触发模式</Label>
@@ -359,7 +390,7 @@ export default function GroupsPage() {
           placeholder="搜索群号或群名称..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="max-w-sm"
+          className="w-full sm:max-w-sm"
         />
       </div>
 
@@ -379,8 +410,8 @@ export default function GroupsPage() {
           </CardContent>
         </Card>
       ) : (
-        <ScrollArea className="h-[calc(100vh-280px)]">
-          <div className="space-y-3">
+        <ScrollArea className="h-[calc(100vh-320px)] sm:h-[calc(100vh-280px)]">
+          <div className="space-y-3 pr-2 sm:pr-4">
             {filteredGroups.map((group) => (
               <Card key={group.groupId}>
                 <CardContent className="p-4">

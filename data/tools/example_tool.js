@@ -1,8 +1,3 @@
-/**
- * 示例工具模板
- * 将此文件放入 data/tools/ 目录，重启后自动加载
- */
-
 export default {
   name: 'example_hello',
   

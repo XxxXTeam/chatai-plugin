@@ -86,12 +86,10 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                // 去重检查
                 const dedupResult = checkSendDuplicate(ctx, args.message)
                 if (dedupResult.isDuplicate) {
                     return { success: false, error: `检测到重复发送(${dedupResult.count}次)，已跳过`, skipped: true }
                 }
-                
                 const bot = ctx.getBot()
                 const userId = parseInt(args.user_id)
                 const friend = bot.pickFriend(userId)
@@ -103,9 +101,7 @@ export const messageTools = [
                 if (msgParts.length === 0) {
                     return { success: false, error: '消息内容不能为空' }
                 }
-
                 const result = await friend.sendMsg(msgParts.length === 1 ? msgParts[0] : msgParts)
-                // 记录发送消息指纹，防止回显被重复处理
                 if (args.message) recordSentMessage(args.message)
                 return { success: true, message_id: result.message_id, user_id: userId }
             } catch (err) {

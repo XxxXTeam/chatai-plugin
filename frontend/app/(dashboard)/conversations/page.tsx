@@ -384,7 +384,7 @@ export default function ConversationsPage() {
 
       {/* Messages Dialog */}
       <Dialog open={!!selectedConversation} onOpenChange={() => setSelectedConversation(null)}>
-        <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col">
+        <DialogContent className="w-[95vw] max-w-3xl max-h-[85vh] flex flex-col">
           <DialogHeader className="flex-shrink-0">
             <div className="flex items-center justify-between">
               <div>

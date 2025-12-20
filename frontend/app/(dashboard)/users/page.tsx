@@ -195,7 +195,7 @@ export default function UsersPage() {
                 添加用户
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-2xl max-h-[90vh]">
+            <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh]">
               <DialogHeader>
                 <DialogTitle>{editingUser ? '编辑用户' : '添加用户'}</DialogTitle>
                 <DialogDescription>配置用户个性化设置和独立人设</DialogDescription>

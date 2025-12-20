@@ -706,12 +706,12 @@ export default function ChannelsPage() {
                   添加渠道
                 </Button>
               </DialogTrigger>
-            <DialogContent className="max-w-lg">
+            <DialogContent className="w-[95vw] max-w-lg">
               <DialogHeader>
                 <DialogTitle>{editingChannel ? '编辑渠道' : '添加渠道'}</DialogTitle>
                 <DialogDescription>配置API渠道信息</DialogDescription>
               </DialogHeader>
-              <ScrollArea className="max-h-[60vh]">
+              <ScrollArea className="max-h-[55vh] sm:max-h-[60vh]">
                 <div className="space-y-4 p-1">
                   {/* 预设选择器 - 仅新建时显示 */}
                   {!editingChannel && (
