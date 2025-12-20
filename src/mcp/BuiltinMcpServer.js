@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { getBotFramework } from '../utils/bot.js'
 import config from '../../config/config.js'
+import { validateParams, paramError } from './tools/helpers.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -640,6 +641,16 @@ export class BuiltinMcpServer {
         const jsTool = this.jsTools.get(name)
         if (jsTool) {
             logger.debug(`[BuiltinMCP] 调用JS工具: ${name}`)
+            
+            // 参数验证
+            if (jsTool.inputSchema) {
+                const validation = validateParams(args, jsTool.inputSchema, ctx)
+                if (!validation.valid) {
+                    logger.debug(`[BuiltinMCP] 参数验证失败: ${name} - ${validation.error}`)
+                    return this.formatResult(paramError(validation))
+                }
+            }
+            
             try {
                 // 设置上下文供工具使用
                 const { asyncLocalStorage } = await import('../core/utils/helpers.js')
@@ -674,6 +685,16 @@ export class BuiltinMcpServer {
         
         if (customTool) {
             logger.debug(`[BuiltinMCP] 调用自定义工具: ${name}`)
+            
+            // 参数验证
+            if (customTool.inputSchema) {
+                const validation = validateParams(args, customTool.inputSchema, ctx)
+                if (!validation.valid) {
+                    logger.debug(`[BuiltinMCP] 参数验证失败: ${name} - ${validation.error}`)
+                    return this.formatResult(paramError(validation))
+                }
+            }
+            
             try {
                 const result = await this.executeCustomHandler(customTool.handler, args, ctx)
                 return this.formatResult(result)
@@ -685,11 +706,20 @@ export class BuiltinMcpServer {
                 }
             }
         }
-
-        // 优先检查模块化工具
         const modularTool = this.modularTools.find(t => t.name === name)
         if (modularTool) {
-            logger.debug(`[BuiltinMCP] 调用模块化工具: ${name}`)
+            logger.debug(`[BuiltinMCP] 调用模块化工具: ${name}, 参数:`, JSON.stringify(args))
+            
+            // 参数验证
+            if (modularTool.inputSchema) {
+                const validation = validateParams(args, modularTool.inputSchema, ctx)
+                logger.debug(`[BuiltinMCP] 参数验证结果: ${name}`, validation)
+                if (!validation.valid) {
+                    logger.info(`[BuiltinMCP] 参数验证失败: ${name} - ${validation.error}`)
+                    return this.formatResult(paramError(validation))
+                }
+            }
+            
             try {
                 const result = await modularTool.handler(args, ctx)
                 return this.formatResult(result)
@@ -701,14 +731,21 @@ export class BuiltinMcpServer {
                 }
             }
         }
-
-        // 回退到内置工具定义
         const tool = this.tools.find(t => t.name === name)
         if (!tool) {
             throw new Error(`Tool not found: ${name}`)
         }
 
         logger.debug(`[BuiltinMCP] 调用内置工具: ${name}`)
+
+        // 参数验证
+        if (tool.inputSchema) {
+            const validation = validateParams(args, tool.inputSchema, ctx)
+            if (!validation.valid) {
+                logger.debug(`[BuiltinMCP] 参数验证失败: ${name} - ${validation.error}`)
+                return this.formatResult(paramError(validation))
+            }
+        }
 
         try {
             const result = await tool.handler(args, ctx)

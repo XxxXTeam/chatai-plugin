@@ -49,25 +49,18 @@ export class bym extends plugin {
         if (!enabled) {
             return false
         }
-        
-        // 检查是否被@（被@时应由其他插件处理，但排除引用机器人消息的误触发）
         if (e.atBot && !isReplyToBotMessage(e)) {
             return false
         }
-        
-        // 跳过含有图片的消息（伪人模式不处理图片消息）
+        const processImage = config.get('bym.processImage') !== false // 默认处理图片
         const hasImage = (e.img && e.img.length > 0) || 
                          (e.message && e.message.some(m => m.type === 'image'))
-        if (hasImage) {
-            logger.debug('[BYM] 跳过: 消息包含图片')
+        if (!processImage && hasImage) {
+            logger.debug('[BYM] 跳过: 消息包含图片且未启用图片处理')
             return false
         }
-
-        // 随机触发概率 - 确保配置值有效
         let probabilityRaw = config.get('bym.probability')
         let probability = probabilityRaw
-        
-        // 调试：打印原始值
         logger.debug(`[BYM] probability原始值: ${probabilityRaw}, 类型: ${typeof probabilityRaw}`)
         
         if (probability === undefined || probability === null || isNaN(Number(probability))) {
@@ -170,9 +163,40 @@ export class bym extends plugin {
                 }
             }
 
+            // 构建消息内容（支持图片）
+            const messageContent = [{ type: 'text', text: messageText || '[图片消息]' }]
+            
+            // 如果启用图片处理且消息包含图片，添加图片到内容中
+            if (processImage && hasImage) {
+                const imageUrls = e.img || []
+                // 也从 message 中提取图片
+                if (e.message) {
+                    for (const m of e.message) {
+                        if (m.type === 'image') {
+                            const url = m.url || m.file || m.data?.url
+                            if (url && !imageUrls.includes(url)) {
+                                imageUrls.push(url)
+                            }
+                        }
+                    }
+                }
+                
+                // 添加图片到消息内容
+                for (const imgUrl of imageUrls.slice(0, 3)) { // 限制最多3张图片
+                    messageContent.push({
+                        type: 'image_url',
+                        image_url: { url: imgUrl }
+                    })
+                }
+                
+                if (imageUrls.length > 0) {
+                    logger.info(`[BYM] 处理图片消息: ${imageUrls.length} 张图片`)
+                }
+            }
+            
             const userMessage = {
                 role: 'user',
-                content: [{ type: 'text', text: messageText }],
+                content: messageContent,
             }
             if (e.sender) {
                 systemPrompt += `\n当前对话者: ${e.sender.card || e.sender.nickname || '未知用户'}`

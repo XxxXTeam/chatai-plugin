@@ -74,7 +74,55 @@ export function parseXmlToolCalls(text) {
             logger.warn(`[Tool Parser] <tool_call>解析失败:`, parseErr.message)
         }
     }
-    cleanText = cleanText.replace(toolCallRegex, '').trim() 
+    cleanText = cleanText.replace(toolCallRegex, '').trim()
+    
+    // 预处理：修复常见的 JSON 格式错误
+    const fixMalformedJson = (jsonStr) => {
+        let fixed = jsonStr
+        
+        // 1. 修复 arguments 字段内的引号未转义
+        // 例如: "arguments":"{"character":"xxx"}" -> "arguments":"{\"character\":\"xxx\"}"
+        const argPattern = /"arguments"\s*:\s*"(\{[^"]*"[^}]*\})"/g
+        let match
+        while ((match = argPattern.exec(jsonStr)) !== null) {
+            const badArgs = match[1]
+            const fixedArgs = badArgs.replace(/"/g, '\\"')
+            fixed = fixed.replace(match[0], `"arguments":"${fixedArgs}"`)
+        }
+        
+        // 2. 尝试将 arguments 从字符串转为对象（如果它本身就是有效JSON对象格式）
+        // 例如: "arguments": "{"text": "xxx"}" 可能是双重编码
+        try {
+            const parsed = JSON.parse(fixed)
+            if (parsed.tool_calls) {
+                for (const tc of parsed.tool_calls) {
+                    if (tc.function?.arguments && typeof tc.function.arguments === 'string') {
+                        try {
+                            // 尝试解析 arguments 字符串
+                            JSON.parse(tc.function.arguments)
+                        } catch {
+                            // 如果解析失败，尝试修复
+                            tc.function.arguments = tc.function.arguments
+                                .replace(/^"/, '').replace(/"$/, '')
+                                .replace(/\\"/g, '"')
+                        }
+                    }
+                }
+                return JSON.stringify(parsed)
+            }
+        } catch {
+            // 忽略解析错误
+        }
+        
+        // 3. 移除可能的 markdown 代码块标记残留
+        fixed = fixed.replace(/^```json\s*/i, '').replace(/\s*```$/i, '')
+        
+        // 4. 修复常见的尾部逗号问题
+        fixed = fixed.replace(/,\s*([\]}])/g, '$1')
+        
+        return fixed
+    }
+    
     const jsonCodeBlockRegex = /```(?:json)?\s*\n?([\s\S]*?)\n?```/gi
     const codeBlockMatches = [...text.matchAll(jsonCodeBlockRegex)]
     
@@ -82,8 +130,22 @@ export function parseXmlToolCalls(text) {
         const blockContent = blockMatch[1].trim()
         // 检查是否是工具调用格式的JSON
         if (blockContent.startsWith('[') || blockContent.startsWith('{')) {
+            let parsed = null
             try {
-                let parsed = JSON.parse(blockContent)
+                parsed = JSON.parse(blockContent)
+            } catch {
+                // 尝试修复格式错误的 JSON
+                try {
+                    const fixedContent = fixMalformedJson(blockContent)
+                    parsed = JSON.parse(fixedContent)
+                    logger.debug('[Tool Parser] 修复格式错误的JSON成功')
+                } catch {
+                    // 仍然失败，跳过
+                    continue
+                }
+            }
+            if (!parsed) continue
+            try {
                 const beforeCount = toolCalls.length
                 if (parsed.tool_calls && Array.isArray(parsed.tool_calls)) {
                     for (const tc of parsed.tool_calls) {
@@ -177,32 +239,40 @@ export function parseXmlToolCalls(text) {
             
             if (endIdx > startIdx) {
                 const objStr = cleanText.substring(startIdx, endIdx)
+                let parsed = null
                 try {
-                    const parsed = JSON.parse(objStr)
-                    if (parsed.tool_calls && Array.isArray(parsed.tool_calls)) {
-                        let foundTools = false
-                        for (const tc of parsed.tool_calls) {
-                            const funcName = tc.function?.name || tc.name
-                            const funcArgs = tc.function?.arguments || tc.arguments
-                            if (funcName) {
-                                toolCalls.push({
-                                    id: tc.id || `json_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                                    type: 'function',
-                                    function: {
-                                        name: funcName,
-                                        arguments: typeof funcArgs === 'string' ? funcArgs : JSON.stringify(funcArgs || {})
-                                    }
-                                })
-                                foundTools = true
-                                logger.debug(`[Tool Parser] 解析到裸JSON tool_calls格式: ${funcName}`)
-                            }
-                        }
-                        if (foundTools) {
-                            processedRanges.push({ start: startIdx, end: endIdx })
+                    parsed = JSON.parse(objStr)
+                } catch {
+                    // 尝试修复格式错误的 JSON
+                    try {
+                        const fixedStr = fixMalformedJson(objStr)
+                        parsed = JSON.parse(fixedStr)
+                        logger.debug('[Tool Parser] 修复裸JSON格式错误成功')
+                    } catch {
+                        // 仍然失败，跳过
+                    }
+                }
+                if (parsed?.tool_calls && Array.isArray(parsed.tool_calls)) {
+                    let foundTools = false
+                    for (const tc of parsed.tool_calls) {
+                        const funcName = tc.function?.name || tc.name
+                        const funcArgs = tc.function?.arguments || tc.arguments
+                        if (funcName) {
+                            toolCalls.push({
+                                id: tc.id || `json_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                type: 'function',
+                                function: {
+                                    name: funcName,
+                                    arguments: typeof funcArgs === 'string' ? funcArgs : JSON.stringify(funcArgs || {})
+                                }
+                            })
+                            foundTools = true
+                            logger.debug(`[Tool Parser] 解析到裸JSON tool_calls格式: ${funcName}`)
                         }
                     }
-                } catch {
-                    // 解析失败，跳过
+                    if (foundTools) {
+                        processedRanges.push({ start: startIdx, end: endIdx })
+                    }
                 }
             }
         }

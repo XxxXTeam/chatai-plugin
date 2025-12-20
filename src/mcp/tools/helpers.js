@@ -405,3 +405,123 @@ export async function batchSendMessages({ event, messages, count = 1, interval =
     
     return results
 }
+
+
+/**
+ * 验证工具参数
+ * @param {Object} args - 传入的参数
+ * @param {Object} schema - inputSchema 定义
+ * @param {Object} ctx - 上下文
+ * @returns {{ valid: boolean, error?: string, missing?: string[] }}
+ */
+export function validateParams(args, schema, ctx = null) {
+    if (!schema || !schema.properties) {
+        return { valid: true }
+    }
+    
+    const required = schema.required || []
+    const missing = []
+    const invalid = []
+    const event = ctx?.getEvent?.() || ctx?.event
+    const currentGroupId = event?.group_id
+    const currentUserId = event?.user_id
+    
+    // 遍历所有必需参数
+    for (const param of required) {
+        const value = args?.[param]
+        const isEmpty = value === undefined || value === null || value === ''
+        
+        if (isEmpty) {
+            const prop = schema.properties[param]
+            const desc = prop?.description || param
+            const canAutoFill = (
+                (param === 'group_id' && currentGroupId) ||
+                (param === 'user_id' && currentUserId)
+            )
+            
+            // 如果不能自动填充，报告缺失
+            if (!canAutoFill) {
+                missing.push(`${param} (${desc})`)
+            }
+        }
+    }
+    
+    // 类型检查
+    for (const [key, value] of Object.entries(args || {})) {
+        if (value === undefined || value === null) continue
+        
+        const prop = schema.properties[key]
+        if (!prop) continue
+        
+        const expectedType = prop.type
+        if (!expectedType) continue
+        
+        const actualType = typeof value
+        
+        // 类型匹配检查
+        if (expectedType === 'string' && actualType !== 'string') {
+            if (actualType !== 'number') {
+                invalid.push(`${key} 应为字符串类型`)
+            }
+        } else if (expectedType === 'number' && actualType !== 'number') {
+            // 尝试解析数字
+            if (actualType === 'string' && isNaN(Number(value))) {
+                invalid.push(`${key} 应为数字类型`)
+            }
+        } else if (expectedType === 'boolean' && actualType !== 'boolean') {
+            // 允许字符串 'true'/'false'
+            if (actualType === 'string' && !['true', 'false'].includes(value.toLowerCase())) {
+                invalid.push(`${key} 应为布尔类型`)
+            }
+        } else if (expectedType === 'array' && !Array.isArray(value)) {
+            invalid.push(`${key} 应为数组类型`)
+        } else if (expectedType === 'object' && (actualType !== 'object' || Array.isArray(value))) {
+            invalid.push(`${key} 应为对象类型`)
+        }
+    }
+    
+    if (missing.length > 0 || invalid.length > 0) {
+        const errors = []
+        if (missing.length > 0) {
+            errors.push(`缺少必需参数: ${missing.join(', ')}`)
+        }
+        if (invalid.length > 0) {
+            errors.push(`参数类型错误: ${invalid.join(', ')}`)
+        }
+        return { 
+            valid: false, 
+            error: errors.join('; '),
+            missing: missing.length > 0 ? missing : undefined,
+            invalid: invalid.length > 0 ? invalid : undefined
+        }
+    }
+    
+    return { valid: true }
+}
+
+/**
+ * 创建参数验证错误响应
+ * @param {Object} validation - validateParams 返回的结果
+ * @returns {Object} 工具返回格式
+ */
+export function paramError(validation) {
+    return {
+        success: false,
+        error: validation.error,
+        missing_params: validation.missing,
+        invalid_params: validation.invalid
+    }
+}
+
+/**
+ * @param {Object} args - 传入的参数
+ * @param {Object} schema - inputSchema 定义
+ * @returns {Object|null} 验证失败返回错误对象，成功返回 null
+ */
+export function checkParams(args, schema) {
+    const validation = validateParams(args, schema)
+    if (!validation.valid) {
+        return paramError(validation)
+    }
+    return null
+}
