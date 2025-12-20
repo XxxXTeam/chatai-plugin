@@ -16,7 +16,20 @@
  */
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'
-import { chatService } from '../src/services/llm/ChatService.js'
+import {
+    parseRecallEvent,
+    parseBanEvent,
+    parseMemberChangeEvent,
+    parseEssenceEvent,
+    parseAdminChangeEvent,
+    parseHonorEvent,
+    getUserNickname as getAdapterUserNickname,
+    getGroupName as getAdapterGroupName,
+    getOriginalMessage,
+    sendGroupMessage,
+    formatDuration,
+    getBot
+} from '../src/utils/eventAdapter.js'
 const messageCache = new Map()
 const MESSAGE_CACHE_TTL = 5 * 60 * 1000
 const MESSAGE_CACHE_MAX = 1000 
@@ -57,38 +70,11 @@ function getCachedMessage(messageId) {
 }
 
 async function getUserNickname(e, userId, bot) {
-    if (!userId) return '未知用户'
-    try {
-        bot = bot || e?.bot || Bot
-        if (e?.sender?.nickname) return e.sender.nickname
-        if (e?.sender?.card) return e.sender.card
-        const groupId = e?.group_id
-        if (groupId && bot?.pickGroup) {
-            try {
-                const group = bot.pickGroup(groupId)
-                if (group?.pickMember) {
-                    const member = group.pickMember(userId)
-                    const info = await member?.getInfo?.() || member?.info || member
-                    if (info?.nickname || info?.card) return info.card || info.nickname
-                }
-            } catch {}
-        }
-        return String(userId)
-    } catch {
-        return String(userId)
-    }
+    return await getAdapterUserNickname(e, userId, bot)
 }
 
 function getGroupName(e, bot) {
-    try {
-        bot = bot || e?.bot || Bot
-        const groupId = e?.group_id
-        if (!groupId) return '未知群'
-        const groupInfo = bot?.gl?.get(groupId)
-        return groupInfo?.group_name || e?.group_name || String(groupId)
-    } catch {
-        return String(e?.group_id || '未知群')
-    }
+    return getAdapterGroupName(e, bot)
 }
 
 async function getAIResponse(prompt, options = {}) {
@@ -116,21 +102,8 @@ async function getAIResponse(prompt, options = {}) {
     }
 }
 
-async function sendGroupMessage(bot, groupId, message) {
-    if (!message || !groupId) return false
-    try {
-        const group = bot?.pickGroup?.(groupId)
-        if (group?.sendMsg) {
-            await group.sendMsg(message)
-            return true
-        } else if (bot?.sendGroupMsg) {
-            await bot.sendGroupMsg(groupId, message)
-            return true
-        }
-    } catch (err) {
-        logger.warn('[GroupEvents] 发送消息失败:', err.message)
-    }
-    return false
+async function sendMessage(bot, groupId, message) {
+    return await sendGroupMessage(bot, groupId, message)
 }
 
 /**
@@ -228,100 +201,39 @@ function parseMessageSegments(message) {
 }
 
 /**
- * 尝试获取被撤回的消息内容
+ * 尝试获取被撤回的消息内容 - 使用统一适配器
  */
 async function getRecalledMessage(e, bot) {
     try {
         const msgId = e.message_id || e.msg_id
-        const seq = e.seq || e.message_seq || e.rand
-        const groupId = e.group_id
         
-        let message = null
-        let rawMessage = null
+        // 1. 优先从本地缓存获取
         const cached = getCachedMessage(msgId)
         if (cached) {
             logger.debug(`[AI-recall] 从本地缓存获取到消息`)
-            message = cached.message
-            rawMessage = cached.raw_message
-        }
-        if (!message && e.recall) {
-            if (e.recall.message) {
-                message = e.recall.message
-                logger.debug(`[AI-recall] 从 e.recall.message 获取到消息`)
-            }
-            if (e.recall.raw_message) {
-                rawMessage = e.recall.raw_message
-                logger.debug(`[AI-recall] 从 e.recall.raw_message 获取到原始消息`)
-            }
-            if (!message && e.recall.content) {
-                message = e.recall.content
-                logger.debug(`[AI-recall] 从 e.recall.content 获取到消息`)
-            }
-            if (!rawMessage && e.recall.text) {
-                rawMessage = e.recall.text
-                logger.debug(`[AI-recall] 从 e.recall.text 获取到原始消息`)
-            }
-        }
-        if (!message && e.sender?.message) {
-            message = e.sender.message
-            logger.debug(`[AI-recall] 从 e.sender.message 获取到消息`)
-        }
-        const possibleMsgFields = ['message', 'content', 'msg', 'text', 'recalled_message']
-        const possibleRawFields = ['raw_message', 'raw_content', 'rawMessage']
-        
-        for (const field of possibleMsgFields) {
-            if (e[field] && !message) {
-                message = e[field]
-                logger.debug(`[AI-recall] 从事件字段 ${field} 获取到消息`)
-            }
-        }
-        for (const field of possibleRawFields) {
-            if (e[field] && !rawMessage) {
-                rawMessage = e[field]
-                logger.debug(`[AI-recall] 从事件字段 ${field} 获取到原始消息`)
-            }
-        }
-        if (!message && msgId && bot?.getMsg) {
-            try {
-                logger.debug(`[AI-recall] 尝试通过 bot.getMsg(${msgId}) 获取`)
-                const msg = await bot.getMsg(msgId)
-                if (msg) {
-                    message = msg.message
-                    rawMessage = msg.raw_message
-                    logger.debug(`[AI-recall] bot.getMsg 成功: ${JSON.stringify(msg).substring(0, 200)}`)
-                }
-            } catch (err) {
-                logger.debug(`[AI-recall] bot.getMsg 失败: ${err.message}`)
-            }
-        }
-        
-        // 通过群消息历史获取
-        if (!message && groupId && seq && bot?.pickGroup) {
-            try {
-                const group = bot.pickGroup(groupId)
-                if (group?.getChatHistory) {
-                    logger.debug(`[AI-recall] 尝试通过 getChatHistory(${seq}) 获取`)
-                    const history = await group.getChatHistory(seq, 1)
-                    if (history?.[0]) {
-                        message = history[0].message
-                        rawMessage = history[0].raw_message
-                        logger.debug(`[AI-recall] getChatHistory 成功: ${JSON.stringify(history[0]).substring(0, 200)}`)
-                    }
-                }
-            } catch (err) {
-                logger.debug(`[AI-recall] getChatHistory 失败: ${err.message}`)
-            }
-        }
-        
-        // 解析消息
-        if (message) {
-            const parsed = parseMessageSegments(message)
+            const parsed = parseMessageSegments(cached.message || cached.raw_message)
             if (parsed.text && !['[已删除]', ''].includes(parsed.text)) {
                 return { content: parsed.text, type: parsed.type }
             }
         }
-        if (rawMessage && rawMessage !== '[已删除]') {
-            return { content: rawMessage, type: 'text' }
+        
+        // 2. 使用统一适配器获取原消息
+        const originalMsg = await getOriginalMessage(e, bot, messageCache)
+        if (originalMsg.content) {
+            return originalMsg
+        }
+        
+        // 3. 从事件字段获取 (撤回事件特有字段)
+        if (e.recall) {
+            const recallData = e.recall
+            const message = recallData.message || recallData.content || recallData.text
+            if (message) {
+                const parsed = parseMessageSegments(message)
+                if (parsed.text) return { content: parsed.text, type: parsed.type }
+            }
+            if (recallData.raw_message) {
+                return { content: recallData.raw_message, type: 'text' }
+            }
         }
         
         return { content: '', type: 'unknown' }
@@ -489,20 +401,21 @@ async function handleGroupEvent(eventType, e, bot) {
             break
             
         case 'ban':
-            // 获取被禁言者和操作者信息
-            const banTargetId = e.user_id
-            const banOperatorId = e.operator_id
-            data.target = await getUserNickname(e, banTargetId, bot)
-            data.target_id = banTargetId
-            data.operator = await getUserNickname(e, banOperatorId, bot)
+            // 使用统一解析
+            const banInfo = parseBanEvent(e)
+            data.target = await getUserNickname(e, banInfo.userId, bot)
+            data.target_id = banInfo.userId
+            data.operator = await getUserNickname(e, banInfo.operatorId, bot)
             data.nickname = data.target
+            data.duration = banInfo.duration
+            data.duration_text = banInfo.durationText
             
-            if (botIds.has(String(banTargetId))) {
-                logger.warn(`[AI-${eventType}] 机器人被 ${data.operator} 禁言 ${e.duration} 秒`)
+            if (botIds.has(String(banInfo.userId))) {
+                logger.warn(`[AI-${eventType}] 机器人被 ${data.operator} 禁言 ${banInfo.duration} 秒`)
                 return
             }
             
-            if (e.duration > 0) {
+            if (!banInfo.isLift) {
                 data.action = `被禁言 ${data.duration_text}`
                 data.sub_type = 'ban'
             } else {
@@ -557,12 +470,10 @@ async function handleGroupEvent(eventType, e, bot) {
             break
             
         case 'honor':
-            if (!botIds.has(String(userId))) return
-            const honorNames = {
-                'talkative': '龙王', 'performer': '群聊之火', 'legend': '群聊炽焰',
-                'strong_newbie': '冒尖小春笋', 'emotion': '快乐源泉'
-            }
-            data.honor = honorNames[e.honor_type] || e.honor_type || '群荣誉'
+            // 使用统一解析
+            const honorInfo = parseHonorEvent(e)
+            if (!botIds.has(String(honorInfo.userId))) return
+            data.honor = honorInfo.honorName
             data.nickname = '你'
             data.action = '请简短表达一下。'
             logger.info(`[AI-${eventType}] 机器人获得荣誉: ${data.honor}`)
@@ -577,13 +488,13 @@ async function handleGroupEvent(eventType, e, bot) {
         })
         
         if (aiReply) {
-            await sendGroupMessage(bot, groupId, aiReply)
+            await sendMessage(bot, groupId, aiReply)
         }
     }
 }
 
 /**
- * 注册所有事件监听器
+ * 支持: icqq / NapCat / go-cqhttp / LLOneBot / Lagrange / TRSS
  */
 function registerEventListeners() {
     if (eventListenersRegistered) return
@@ -598,46 +509,91 @@ function registerEventListeners() {
                 if (!bot || bot._groupEventListenersAdded) continue
                 bot._groupEventListenersAdded = true
                 
-                // 撤回事件
+                // ========== 撤回事件 ==========
+                // icqq: notice.group.recall
                 bot.on?.('notice.group.recall', (e) => handleGroupEvent('recall', e, bot))
+                // OneBot 通用
                 bot.on?.('notice.group', (e) => {
-                    if (e.sub_type === 'recall') handleGroupEvent('recall', e, bot)
+                    if (e.sub_type === 'recall' || e.notice_type === 'group_recall') {
+                        handleGroupEvent('recall', e, bot)
+                    }
+                })
+                // NapCat/部分适配器
+                bot.on?.('notice', (e) => {
+                    if (e.notice_type === 'group_recall' || 
+                        (e.post_type === 'notice' && e.notice_type === 'group_recall')) {
+                        handleGroupEvent('recall', e, bot)
+                    }
                 })
                 
-                // 入群事件
+                // ========== 入群事件 ==========
                 bot.on?.('notice.group.increase', (e) => handleGroupEvent('welcome', e, bot))
                 bot.on?.('notice.group', (e) => {
-                    if (e.sub_type === 'increase') handleGroupEvent('welcome', e, bot)
+                    if (e.sub_type === 'increase' || e.sub_type === 'approve' || e.sub_type === 'invite') {
+                        handleGroupEvent('welcome', e, bot)
+                    }
+                })
+                bot.on?.('notice', (e) => {
+                    if (e.notice_type === 'group_increase') {
+                        handleGroupEvent('welcome', e, bot)
+                    }
                 })
                 
-                // 退群事件
+                // ========== 退群事件 ==========
                 bot.on?.('notice.group.decrease', (e) => handleGroupEvent('goodbye', e, bot))
                 bot.on?.('notice.group', (e) => {
                     if (e.sub_type === 'decrease' || e.sub_type === 'kick' || e.sub_type === 'leave') {
                         handleGroupEvent('goodbye', e, bot)
                     }
                 })
-                
-                // 禁言事件
-                bot.on?.('notice.group.ban', (e) => handleGroupEvent('ban', e, bot))
-                bot.on?.('notice.group', (e) => {
-                    if (e.sub_type === 'ban') handleGroupEvent('ban', e, bot)
+                bot.on?.('notice', (e) => {
+                    if (e.notice_type === 'group_decrease') {
+                        handleGroupEvent('goodbye', e, bot)
+                    }
                 })
                 
-                // 精华消息
+                // ========== 禁言事件 ==========
+                bot.on?.('notice.group.ban', (e) => handleGroupEvent('ban', e, bot))
+                bot.on?.('notice.group', (e) => {
+                    if (e.sub_type === 'ban' || e.sub_type === 'lift_ban') {
+                        handleGroupEvent('ban', e, bot)
+                    }
+                })
+                bot.on?.('notice', (e) => {
+                    if (e.notice_type === 'group_ban') {
+                        handleGroupEvent('ban', e, bot)
+                    }
+                })
+                
+                // ========== 精华消息 ==========
                 bot.on?.('notice.group.essence', (e) => handleGroupEvent('essence', e, bot))
+                bot.on?.('notice', (e) => {
+                    if (e.notice_type === 'essence' || e.notice_type === 'group_essence') {
+                        handleGroupEvent('essence', e, bot)
+                    }
+                })
                 
-                // 管理员变更
+                // ========== 管理员变更 ==========
                 bot.on?.('notice.group.admin', (e) => handleGroupEvent('admin', e, bot))
+                bot.on?.('notice', (e) => {
+                    if (e.notice_type === 'group_admin') {
+                        handleGroupEvent('admin', e, bot)
+                    }
+                })
                 
-                // 运气王/荣誉
+                // ========== 运气王/荣誉 ==========
                 bot.on?.('notice.notify', (e) => {
                     if (e.sub_type === 'lucky_king') handleGroupEvent('luckyKing', e, bot)
                     if (e.sub_type === 'honor') handleGroupEvent('honor', e, bot)
                 })
+                bot.on?.('notice', (e) => {
+                    if (e.notice_type === 'notify') {
+                        if (e.sub_type === 'lucky_king') handleGroupEvent('luckyKing', e, bot)
+                        if (e.sub_type === 'honor') handleGroupEvent('honor', e, bot)
+                    }
+                })
             }
             
-            logger.debug('[GroupEvents] 统一事件监听器已注册')
         } catch (err) {
             logger.error('[GroupEvents] 注册事件监听器失败:', err)
         }

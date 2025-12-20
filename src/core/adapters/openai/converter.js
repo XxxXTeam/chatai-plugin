@@ -6,23 +6,16 @@ import { registerFromChaiteConverter, registerFromChaiteToolConverter, registerI
 registerFromChaiteConverter('openai', (source) => {
     switch (source.role) {
         case 'assistant': {
-            // Handle null/undefined content safely
             const content = source.content || []
             const text = Array.isArray(content) 
                 ? content.filter(t => t && t.type === 'text').map(t => t.text).join('')
                 : ''
 
             const hasToolCalls = source.toolCalls && source.toolCalls.length > 0
-
-            // Build the message object
             const msg = {
                 role: 'assistant',
-                // 重要：有 tool_calls 时，content 应为 null 而不是空字符串
-                // 某些 API（如 Gemini）在 content 为空字符串时可能无法正确处理
                 content: text || (hasToolCalls ? null : ''),
             }
-
-            // Only add tool_calls if present
             if (hasToolCalls) {
                 msg.tool_calls = source.toolCalls.map(t => {
                     const toolCall = {

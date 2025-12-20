@@ -4048,6 +4048,111 @@ export default {
             }
         })
 
+        // ==================== Workflow API ====================
+        // GET /api/workflows - 获取工作流列表
+        this.app.get('/api/workflows', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { workflowService } = await import('./workflow/WorkflowService.js')
+                await workflowService.init()
+                const workflows = workflowService.listWorkflows()
+                res.json(ChaiteResponse.ok(workflows))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/workflows/:id - 获取单个工作流
+        this.app.get('/api/workflows/:id', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { workflowService } = await import('./workflow/WorkflowService.js')
+                await workflowService.init()
+                const workflow = workflowService.getWorkflow(req.params.id)
+                if (!workflow) {
+                    return res.status(404).json(ChaiteResponse.fail(null, '工作流不存在'))
+                }
+                res.json(ChaiteResponse.ok(workflow))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/workflows - 创建工作流
+        this.app.post('/api/workflows', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { workflowService } = await import('./workflow/WorkflowService.js')
+                await workflowService.init()
+                const workflow = req.body
+                if (!workflow.id) {
+                    workflow.id = `wf_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
+                }
+                workflowService.saveWorkflow(workflow)
+                res.json(ChaiteResponse.ok(workflow))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // PUT /api/workflows/:id - 更新工作流
+        this.app.put('/api/workflows/:id', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { workflowService } = await import('./workflow/WorkflowService.js')
+                await workflowService.init()
+                const workflow = { ...req.body, id: req.params.id }
+                workflowService.saveWorkflow(workflow)
+                res.json(ChaiteResponse.ok(workflow))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/workflows/:id - 删除工作流
+        this.app.delete('/api/workflows/:id', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { workflowService } = await import('./workflow/WorkflowService.js')
+                await workflowService.init()
+                workflowService.deleteWorkflow(req.params.id)
+                res.json(ChaiteResponse.ok({ message: '工作流已删除' }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/workflows/:id/execute - 执行工作流
+        this.app.post('/api/workflows/:id/execute', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { workflowService } = await import('./workflow/WorkflowService.js')
+                await workflowService.init()
+                const { inputs = {}, options = {} } = req.body
+                const result = await workflowService.execute(req.params.id, inputs, options)
+                res.json(ChaiteResponse.ok(result))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/workflows/running - 获取运行中的工作流实例
+        this.app.get('/api/workflows/running', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { workflowService } = await import('./workflow/WorkflowService.js')
+                const instances = workflowService.getRunningInstances()
+                res.json(ChaiteResponse.ok(instances))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/workflows/example - 创建示例工作流
+        this.app.post('/api/workflows/example', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { workflowService } = await import('./workflow/WorkflowService.js')
+                await workflowService.init()
+                const example = workflowService.createExampleWorkflow()
+                res.json(ChaiteResponse.ok(example))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
         // ==================== Catch-all Route ====================
         // 支持 Next.js 静态导出的多 HTML 文件结构
         this.app.get('*', (req, res) => {
