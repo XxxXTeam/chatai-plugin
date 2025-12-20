@@ -6,18 +6,25 @@
  * - icqq 1.5.8+: notice.group.reaction (e.id, e.seq, e.user_id)
  * - NapCat: notice_type='group_msg_emoji_like'
  * - LLOneBot/Lagrange: sub_type='emoji_like' 或 'reaction'
+ * - go-cqhttp / TRSS
  * 
- * 事件属性:
- * - e.id / e.emoji_id  表情ID
- * - e.seq / e.message_id  消息标识
- * - e.user_id  操作者
- * - e.target_id / e.sender_id  被回应消息的发送者 (部分适配器)
+ * 事件属性 (已统一适配):
+ * - e.id / e.emoji_id / e.face_id  表情ID
+ * - e.seq / e.message_id / e.msg_id  消息标识
+ * - e.user_id / e.operator_id  操作者
+ * - e.target_id / e.sender_id  被回应消息的发送者
  * 
  * 表情ID参考: https://bot.q.qq.com/wiki/develop/api-v2/openapi/emoji/model.html
  */
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'
-import { MessageApi } from '../src/utils/messageParser.js'
+import {
+    parseReactionEvent,
+    getUserNickname,
+    getOriginalMessage,
+    sendGroupMessage,
+    getBot
+} from '../src/utils/eventAdapter.js'
 
 // 表情ID映射表（QQ官方表情）
 // 参考: https://bot.q.qq.com/wiki/develop/api-v2/openapi/emoji/model.html
@@ -63,27 +70,6 @@ function getEmojiDescription(emojiId) {
     return EMOJI_MAP[String(emojiId)] || `表情[${emojiId}]`
 }
 
-async function getUserNickname(e, userId) {
-    if (!userId) return '未知用户'
-    try {
-        const bot = e.bot || Bot
-        if (e.sender?.nickname) return e.sender.nickname
-        if (e.sender?.card) return e.sender.card
-        if (e.group_id && bot.pickGroup) {
-            try {
-                const group = bot.pickGroup(e.group_id)
-                if (group?.pickMember) {
-                    const member = group.pickMember(userId)
-                    const info = await member?.getInfo?.() || member?.info || member
-                    if (info?.nickname || info?.card) return info.card || info.nickname
-                }
-            } catch {}
-        }
-        return String(userId)
-    } catch {
-        return String(userId)
-    }
-}
 
 async function getAIResponse(eventDesc, options = {}) {
     const { userId, groupId, maxLength = 50 } = options
@@ -149,82 +135,7 @@ function registerReactionListener() {
 const recentReactions = new Map()  // key: `${groupId}-${userId}-${messageId}`, value: timestamp
 const REACTION_COOLDOWN = 10000  // 10秒内同一用户对同一消息的回应不重复处理
 
-/**
- * 检查是否为添加回应事件（而非取消）
- * 兼容多种适配器格式
- */
-function isAddReaction(e) {
-    // NapCat: set 字段
-    if (e.set === false || e.set === 'remove' || e.set === 0) return false
-    // LLOneBot/部分适配器: sub_type 字段
-    if (e.sub_type === 'remove' || e.sub_type === 'cancel' || e.sub_type === 'delete') return false
-    // 某些适配器: is_set 字段
-    if (e.is_set === false || e.is_set === 0) return false
-    // 某些适配器: action/operate 字段
-    if (e.action === 'remove' || e.operate === 'remove') return false
-    if (e.action === 'cancel' || e.operate === 'cancel') return false
-    // 某些适配器: type 字段区分
-    if (e.type === 'remove' || e.type === 'cancel') return false
-    // 默认认为是添加
-    return true
-}
 
-/**
- * 获取被回应的原消息内容
- */
-async function getOriginalMessageContent(e, bot) {
-    try {
-        const messageId = e.message_id || e.seq || e.msg_id
-        if (!messageId || !e.group_id) return null
-        
-        // 方法1: 使用 MessageApi
-        try {
-            const msgInfo = await MessageApi.getMsg(bot, messageId)
-            if (msgInfo?.message) {
-                // 解析消息内容
-                const content = Array.isArray(msgInfo.message) 
-                    ? msgInfo.message.map(seg => {
-                        if (seg.type === 'text') return seg.text || seg.data?.text || ''
-                        if (seg.type === 'image') return '[图片]'
-                        if (seg.type === 'face') return '[表情]'
-                        if (seg.type === 'at') return `@${seg.data?.name || seg.data?.qq || ''}`
-                        return ''
-                    }).join('').trim()
-                    : (typeof msgInfo.message === 'string' ? msgInfo.message : '')
-                if (content) return content.substring(0, 100) // 限制长度
-            }
-            // 兼容 raw_message
-            if (msgInfo?.raw_message) {
-                return String(msgInfo.raw_message).substring(0, 100)
-            }
-        } catch {}
-        
-        // 方法2: 使用 pickGroup.getChatHistory
-        if (bot.pickGroup) {
-            try {
-                const group = bot.pickGroup(e.group_id)
-                if (group?.getChatHistory) {
-                    const history = await group.getChatHistory(messageId, 1)
-                    if (history?.length > 0) {
-                        const msg = history[0]
-                        const content = msg.raw_message || msg.message
-                        if (typeof content === 'string') {
-                            return content.substring(0, 100)
-                        }
-                        if (Array.isArray(content)) {
-                            return content.map(seg => seg.text || '').join('').substring(0, 100)
-                        }
-                    }
-                }
-            } catch {}
-        }
-        
-        return null
-    } catch (err) {
-        logger.debug('[AI-Reaction] 获取原消息失败:', err.message)
-        return null
-    }
-}
 
 // 默认提示词模板
 const DEFAULT_ADD_PROMPT = `[事件通知] {nickname} 对你之前的消息做出了"{emoji}"的表情回应。{context}这是对你消息的反馈，你可以简短回应表示感谢或互动，也可以选择不回复。`
@@ -236,24 +147,27 @@ async function handleReactionEvent(e, bot) {
             return
         }
         
-        // 检查是否为添加或取消回应事件
-        const isAdd = isAddReaction(e)
+        // 使用统一事件解析
+        const reactionInfo = parseReactionEvent(e)
+        const { emojiId, messageId, userId, targetId, isAdd, groupId } = reactionInfo
         
         const botIds = getBotIds()
         const selfId = e.self_id || bot?.uin || Bot?.uin
-        const userId = e.user_id
+        
+        // 机器人自己的回应不处理
         if (userId === selfId || botIds.has(String(userId))) {
             return
         }
-        const isTargetBot = await checkIfTargetBotStatic(e, selfId, botIds, bot)
+        
+        // 检查是否回应的是机器人的消息
+        const isTargetBot = await checkIfTargetBot(e, selfId, botIds, bot, targetId, messageId, groupId)
         if (!isTargetBot) {
             return
         }
         
         // 防重复响应检查
-        const messageId = e.message_id || e.seq || e.msg_id || ''
         const actionType = isAdd ? 'add' : 'remove'
-        const reactionKey = `${e.group_id}-${userId}-${messageId}-${actionType}`
+        const reactionKey = `${groupId}-${userId}-${messageId}-${actionType}`
         const now = Date.now()
         const lastTime = recentReactions.get(reactionKey)
         if (lastTime && now - lastTime < REACTION_COOLDOWN) {
@@ -261,6 +175,7 @@ async function handleReactionEvent(e, bot) {
             return
         }
         recentReactions.set(reactionKey, now)
+        
         // 清理过期记录
         if (recentReactions.size > 100) {
             for (const [key, time] of recentReactions) {
@@ -268,18 +183,17 @@ async function handleReactionEvent(e, bot) {
             }
         }
         
-        const emojiId = e.id || e.emoji_id
-        const nickname = await getUserNickname(e, userId)
+        const nickname = await getUserNickname(e, userId, bot)
         const emojiDesc = getEmojiDescription(emojiId)
         const actionText = isAdd ? '添加' : '取消'
         
         // 获取被回应的原消息内容
-        const originalMessage = await getOriginalMessageContent(e, bot)
+        const originalMsg = await getOriginalMessage(e, bot)
+        const originalMessage = originalMsg.content
         
         logger.info(`[AI-Reaction] ${nickname}(${userId}) 对机器人消息做出了 ${emojiDesc} 回应 (${actionText})${originalMessage ? ` 原消息: ${originalMessage.substring(0, 30)}...` : ''}`)
         
-        // 获取自定义提示词模板，为空则使用默认值
-        // 支持占位符: {nickname}, {emoji}, {message}, {context}, {action}, {action_text}, {user_id}, {group_id}
+        // 获取自定义提示词模板
         const configAddPrompt = config.get('features.reaction.prompt')
         const configRemovePrompt = config.get('features.reaction.removePrompt')
         
@@ -300,57 +214,61 @@ async function handleReactionEvent(e, bot) {
             .replace(/\{action\}/g, actionType)
             .replace(/\{action_text\}/g, actionText)
             .replace(/\{user_id\}/g, String(userId))
-            .replace(/\{group_id\}/g, String(e.group_id || ''))
+            .replace(/\{group_id\}/g, String(groupId || ''))
         
         const aiReply = await getAIResponse(eventDesc, {
             userId,
-            groupId: e.group_id,
+            groupId: groupId,
             maxLength: 50
         })
         
-        if (aiReply && e.group_id) {
-            const group = bot.pickGroup?.(e.group_id)
-            if (group?.sendMsg) {
-                await group.sendMsg(aiReply)
-            }
+        if (aiReply && groupId) {
+            await sendGroupMessage(bot, groupId, aiReply)
         }
     } catch (err) {
         logger.error('[AI-Reaction] 处理reaction事件失败:', err)
     }
 }
-async function checkIfTargetBotStatic(e, selfId, botIds, bot) {
+
+/**
+ * 检查被回应的消息是否是机器人发送的
+ */
+async function checkIfTargetBot(e, selfId, botIds, bot, targetId, messageId, groupId) {
     try {
-        const targetId = e.target_id || e.sender_id || e.target_user_id
+        // 1. 如果事件直接包含目标ID
         if (targetId) {
             return targetId === selfId || botIds.has(String(targetId))
         }
         
-        const messageId = e.message_id || e.seq || e.msg_id
-        if (messageId && e.group_id) {
-            if (bot.pickGroup) {
+        // 2. 通过消息ID获取原消息发送者
+        if (messageId && groupId) {
+            // icqq: getChatHistory
+            if (bot?.pickGroup) {
                 try {
-                    const group = bot.pickGroup(e.group_id)
+                    const group = bot.pickGroup(parseInt(groupId))
                     if (group?.getChatHistory) {
-                        const history = await group.getChatHistory(messageId, 1)
+                        const history = await group.getChatHistory(parseInt(messageId), 1)
                         if (history?.length > 0) {
-                            const msg = history[0]
-                            const senderId = msg.sender?.user_id || msg.user_id
+                            const senderId = history[0].sender?.user_id || history[0].user_id
                             return senderId === selfId || botIds.has(String(senderId))
                         }
                     }
                 } catch {}
             }
             
-            try {
-                const msgInfo = await MessageApi.getMsg(bot, messageId)
-                if (msgInfo?.sender?.user_id) {
-                    const senderId = msgInfo.sender.user_id
-                    return senderId === selfId || botIds.has(String(senderId))
-                }
-            } catch {}
+            // OneBot: getMsg
+            if (bot?.getMsg || bot?.get_msg) {
+                try {
+                    const msg = await (bot.getMsg?.(messageId) || bot.get_msg?.({ message_id: messageId }))
+                    if (msg?.sender?.user_id) {
+                        return msg.sender.user_id === selfId || botIds.has(String(msg.sender.user_id))
+                    }
+                } catch {}
+            }
         }
         
-        if (e.set === true || e.set === 'add') {
+        // 3. 默认情况：如果是添加回应事件，假设是对机器人的
+        if (e.set === true || e.set === 'add' || e.sub_type === 'add') {
             return true
         }
         

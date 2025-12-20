@@ -18,3 +18,9 @@ data/chaite.db-shm
 data/chaite.db-wal
 data/mcp-servers.json
 data/stats.json
+
+
+
+src/services/workflow/
+data/workflows/
+!data/workflows/.gitkeep

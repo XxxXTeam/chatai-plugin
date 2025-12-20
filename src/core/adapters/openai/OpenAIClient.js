@@ -19,6 +19,73 @@ import { requestTemplateService } from '../../../services/proxy/RequestTemplateS
  */
 
 /**
+ * @param {Array} messages - OpenAI 格式的消息数组
+ * @returns {Array} - 清理后的消息数组
+ */
+function validateAndCleanMessages(messages) {
+    if (!messages || !Array.isArray(messages)) return messages
+    
+    const cleaned = []
+    let lastAssistantWithToolCalls = null
+    let pendingToolMessages = []
+    const validToolCallIds = new Set()
+    
+    for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i]
+        
+        if (msg.role === 'assistant') {
+            if (pendingToolMessages.length > 0) {
+                logger.debug(`[消息验证] 丢弃 ${pendingToolMessages.length} 个孤立的 tool 消息`)
+                pendingToolMessages = []
+            }
+            cleaned.push(msg)
+            if (msg.tool_calls && msg.tool_calls.length > 0) {
+                lastAssistantWithToolCalls = msg
+                validToolCallIds.clear()
+                for (const tc of msg.tool_calls) {
+                    if (tc.id) validToolCallIds.add(tc.id)
+                }
+            } else {
+                lastAssistantWithToolCalls = null
+                validToolCallIds.clear()
+            }
+        } else if (msg.role === 'tool') {
+            // 检查是否有对应的 tool_calls
+            if (lastAssistantWithToolCalls && validToolCallIds.has(msg.tool_call_id)) {
+                cleaned.push(msg)
+                validToolCallIds.delete(msg.tool_call_id)
+                // 如果所有 tool_call_id 都已处理完，重置状态
+                if (validToolCallIds.size === 0) {
+                    lastAssistantWithToolCalls = null
+                }
+            } else {
+                // 孤立的 tool 消息，暂存
+                pendingToolMessages.push(msg)
+            }
+        } else {
+            // system/user/developer 消息
+            // 处理之前积累的孤立 tool 消息
+            if (pendingToolMessages.length > 0) {
+                logger.debug(`[消息验证] 丢弃 ${pendingToolMessages.length} 个孤立的 tool 消息`)
+                pendingToolMessages = []
+            }
+            
+            cleaned.push(msg)
+            // 非 assistant 消息打断 tool_calls 的关联
+            lastAssistantWithToolCalls = null
+            validToolCallIds.clear()
+        }
+    }
+    
+    // 处理末尾残留的孤立 tool 消息
+    if (pendingToolMessages.length > 0) {
+        logger.debug(`[消息验证] 丢弃末尾 ${pendingToolMessages.length} 个孤立的 tool 消息`)
+    }
+    
+    return cleaned
+}
+
+/**
  * 递归清理工具定义中的 enum 值，确保都是字符串类型（Gemini API 要求）
  * @param {object} obj - 工具定义对象
  * @returns {object} - 清理后的对象
@@ -152,6 +219,14 @@ export class OpenAIClient extends AbstractClient {
             }
             messages.push(...openaiMsg)
         }
+
+        // 验证消息历史，移除孤立的 tool 消息（修复 400 错误）
+        const validatedMessages = validateAndCleanMessages(messages)
+        if (validatedMessages.length !== messages.length) {
+            logger.debug(`[OpenAI适配器] 消息验证: ${messages.length} -> ${validatedMessages.length}`)
+        }
+        messages.length = 0
+        messages.push(...validatedMessages)
 
         const toolConvert = getFromChaiteToolConverter('openai')
         let toolChoice = 'auto'
@@ -481,6 +556,14 @@ export class OpenAIClient extends AbstractClient {
             }
             messages.push(...openaiMsg)
         }
+
+        // 验证消息历史，移除孤立的 tool 消息（修复 400 错误）
+        const validatedMessages = validateAndCleanMessages(messages)
+        if (validatedMessages.length !== messages.length) {
+            logger.debug(`[OpenAI适配器] 消息验证: ${messages.length} -> ${validatedMessages.length}`)
+        }
+        messages.length = 0
+        messages.push(...validatedMessages)
 
         const toolConvert = getFromChaiteToolConverter('openai')
         let toolChoice = 'auto'

@@ -3,11 +3,6 @@
  * @typedef {import('./common').ChaiteContext} ChaiteContext
  */
 
-// AbstractShareable needs to be imported or mocked if it's from cloud.ts
-// For now, I'll assume it's available or I'll create a simple base class if needed.
-// Checking imports: import { AbstractShareable } from './cloud'
-// I need to port cloud.ts as well or stub it.
-
 /**
  * @typedef {Object} Function
  * @property {string} name
@@ -36,7 +31,6 @@
  * @property {(args: Record<string, ArgumentValue | Record<string, ArgumentValue>>, chaiteContext?: ChaiteContext) => Promise<string>} run
  */
 
-// Placeholder for AbstractShareable until cloud.js is ported
 class AbstractShareable {
     constructor(params) {
         Object.assign(this, params)

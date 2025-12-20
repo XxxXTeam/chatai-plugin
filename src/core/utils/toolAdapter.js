@@ -3,7 +3,6 @@ import config from '../../../config/config.js'
 import { toolFilterService } from '../../services/tools/ToolFilterService.js'
 
 /**
- * Convert MCP tools to Chaite tool format
  * @param {Array} mcpTools - MCP tools from McpManager
  * @param {Object} requestContext - Request-level context for concurrent isolation {event, bot}
  * @returns {Array} - Chaite format tools with run method
@@ -57,8 +56,6 @@ export function convertMcpTools(mcpTools, requestContext = null) {
                         ? result.content
                         : JSON.stringify(result.content)
                 }
-
-                // Fallback: stringify the whole result
                 return JSON.stringify(result)
             } catch (error) {
                 logger.error(`[MCP Tool] Error running ${mcpTool.name}:`, error)
@@ -69,7 +66,6 @@ export function convertMcpTools(mcpTools, requestContext = null) {
 }
 
 /**
- * Get all tools from MCP Manager (including builtin tools)
  * @param {Object} [options] - Options
  * @param {Object} [options.event] - Yunzai event for context
  * @param {Object} [options.toolsConfig] - Preset tools config for filtering
@@ -79,16 +75,10 @@ export function convertMcpTools(mcpTools, requestContext = null) {
  */
 export async function getAllTools(options = {}) {
     const { event, toolsConfig, presetId, userPermission } = options
-
-    // 创建请求级上下文（用于并发隔离）
     const requestContext = event ? { event, bot: event.bot || Bot } : null
-
-    // 仍然设置全局上下文以兼容旧代码
     if (requestContext) {
         mcpManager.setToolContext(requestContext)
     }
-
-    // Initialize and get all tools (builtin + external MCP)
     try {
         await mcpManager.init()
         let mcpTools = mcpManager.getTools()
@@ -103,8 +93,6 @@ export async function getAllTools(options = {}) {
             }
             mcpTools = toolFilterService.filterTools(mcpTools, presetId || 'default', filterOptions)
         }
-        
-        // 传递请求级上下文到工具，通过闭包捕获实现并发隔离
         return convertMcpTools(mcpTools, requestContext)
     } catch (error) {
         logger.error('[ToolAdapter] Failed to load tools:', error)
@@ -113,7 +101,6 @@ export async function getAllTools(options = {}) {
 }
 
 /**
- * Execute a tool by name (directly through MCP Manager)
  * @param {string} toolName - Name of the tool
  * @param {Object} args - Tool arguments
  * @param {Object} context - Execution context

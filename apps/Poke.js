@@ -2,66 +2,26 @@
  * AI 戳一戳事件处理
  * 使用AI人设响应戳一戳
  * 
- * 兼容平台: icqq / NapCat / OneBot v11 / go-cqhttp / TRSS-Yunzai
+ * 兼容平台: icqq / NapCat / OneBot v11 / go-cqhttp / LLOneBot / Lagrange / TRSS-Yunzai
  * 
  * 事件格式:
  * - notice.group.poke  群聊戳一戳
  * - notice.friend.poke 私聊戳一戳
  * - notice.*.poke      通配匹配
  * 
- * 事件属性:
- * - e.target_id    被戳者
- * - e.operator_id  操作者 (或 e.user_id)
+ * 事件属性 (已统一适配):
+ * - e.target_id / e.poke_uid / e.target_uid  被戳者
+ * - e.operator_id / e.user_id / e.sender_id  操作者
  * - e.group_id     群号 (群聊时)
  */
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'
-/**
- * 调用 OneBot API (支持 NapCat/go-cqhttp/LLOneBot)
- */
-async function callOneBotApi(bot, action, params = {}) {
-    if (bot.sendApi) {
-        return await bot.sendApi(action, params)
-    }
-    if (bot[action]) {
-        return await bot[action](params)
-    }
-    if (bot.config?.baseUrl || bot.adapter?.config?.baseUrl) {
-        const baseUrl = bot.config?.baseUrl || bot.adapter?.config?.baseUrl
-        const res = await fetch(`${baseUrl}/${action}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(params)
-        })
-        return await res.json()
-    }
-    throw new Error('不支持的协议类型')
-}
-
-/**
- * 获取用户昵称
- */
-async function getUserNickname(e, userId) {
-    if (!userId) return '未知用户'
-    try {
-        const bot = e.bot || Bot
-        if (e.sender?.nickname) return e.sender.nickname
-        if (e.sender?.card) return e.sender.card
-        if (e.group_id && bot.pickGroup) {
-            try {
-                const group = bot.pickGroup(e.group_id)
-                if (group?.pickMember) {
-                    const member = group.pickMember(userId)
-                    const info = await member?.getInfo?.() || member?.info || member
-                    if (info?.nickname || info?.card) return info.card || info.nickname
-                }
-            } catch {}
-        }
-        return String(userId)
-    } catch {
-        return String(userId)
-    }
-}
+import { 
+    parsePokeEvent, 
+    sendPoke, 
+    getUserNickname,
+    getBot
+} from '../src/utils/eventAdapter.js'
 
 /**
  * 调用AI生成响应
@@ -110,36 +70,36 @@ export class AI_Poke extends plugin {
             return false
         }
         
+        // 使用统一事件解析
+        const pokeInfo = parsePokeEvent(e)
+        const { targetId, operatorId, selfId, isGroup, groupId } = pokeInfo
         const botIds = getBotIds()
-        const selfId = e.self_id || e.bot?.uin || Bot?.uin
-        const targetId = e.target_id || e.poke_uid || e.target_uid
-        const operator = e.operator_id || e.user_id || e.sender_id
         
-        // 检查是否戳的是机器人 (兼容多种适配器属性名)
+        // 检查是否戳的是机器人
         if (targetId !== selfId && !botIds.has(String(targetId))) {
             return false
         }
         
         // 防止机器人自己触发 (回戳导致的循环)
-        if (operator === selfId || botIds.has(String(operator))) {
+        if (operatorId === selfId || botIds.has(String(operatorId))) {
             return false
         }
         
-        // 群聊检查
-        const isGroup = !!e.group_id
+        const nickname = await getUserNickname(e, operatorId)
         
-        const nickname = await getUserNickname(e, operator)
+        logger.info(`[AI-Poke] ${nickname}(${operatorId}) ${isGroup ? '群聊' : '私聊'}戳了机器人`)
         
-        logger.info(`[AI-Poke] ${nickname}(${operator}) ${isGroup ? '群聊' : '私聊'}戳了机器人`)
-        
-        // 获取自定义提示词模板，支持 {nickname} 占位符
+        // 获取自定义提示词模板，支持占位符
         const defaultPrompt = `[事件通知] {nickname} 戳了你一下。请根据你的人设性格，给出一个简短自然的回应。`
         const promptTemplate = config.get('features.poke.prompt') || defaultPrompt
-        const eventDesc = promptTemplate.replace(/\{nickname\}/g, nickname)
+        const eventDesc = promptTemplate
+            .replace(/\{nickname\}/g, nickname)
+            .replace(/\{user_id\}/g, String(operatorId))
+            .replace(/\{group_id\}/g, String(groupId || ''))
         
         const aiReply = await getAIResponse(eventDesc, {
-            userId: operator,
-            groupId: e.group_id,
+            userId: operatorId,
+            groupId: groupId,
             maxLength: 100
         })
         
@@ -147,7 +107,7 @@ export class AI_Poke extends plugin {
             await this.reply(aiReply)
             // 回戳
             if (config.get('features.poke.pokeBack') && isGroup) {
-                await this.pokeBack(e, operator)
+                await this.pokeBack(e, operatorId)
             }
             return true
         }
@@ -159,64 +119,17 @@ export class AI_Poke extends plugin {
     }
     
     /**
-     * 回戳用户 - 全适配器兼容
-     * 支持: icqq / NapCat / go-cqhttp / LLOneBot / Lagrange
+     * 回戳用户 - 使用统一适配器接口
      */
     async pokeBack(e, userId) {
         try {
-            const bot = e.bot || Bot
             const groupId = e.group_id
-            
             if (!groupId) return
             
-            // 方式1: icqq - group.pokeMember
-            if (bot.pickGroup) {
-                const group = bot.pickGroup(groupId)
-                if (typeof group?.pokeMember === 'function') {
-                    await group.pokeMember(userId)
-                    return
-                }
-                // 方式2: icqq - pickMember().poke()
-                if (group?.pickMember) {
-                    const member = group.pickMember(userId)
-                    if (typeof member?.poke === 'function') {
-                        await member.poke()
-                        return
-                    }
-                }
+            const success = await sendPoke(e, userId, groupId)
+            if (!success) {
+                logger.debug('[AI-Poke] 回戳失败: 不支持的适配器或API')
             }
-            
-            // 方式3: NapCat/go-cqhttp - send_group_poke / group_poke API
-            try {
-                // NapCat 扩展 API
-                await callOneBotApi(bot, 'send_group_poke', {
-                    group_id: parseInt(groupId),
-                    user_id: parseInt(userId)
-                })
-                return
-            } catch {}
-            
-            try {
-                // go-cqhttp API
-                await callOneBotApi(bot, 'group_poke', {
-                    group_id: parseInt(groupId),
-                    user_id: parseInt(userId)
-                })
-                return
-            } catch {}
-            
-            // 方式4: bot.sendGroupPoke
-            if (typeof bot?.sendGroupPoke === 'function') {
-                await bot.sendGroupPoke(groupId, userId)
-                return
-            }
-            
-            // 方式5: 发送戳一戳消息段 (部分适配器支持)
-            try {
-                const pokeMsg = { type: 'poke', data: { qq: String(userId) } }
-                await bot.sendGroupMsg?.(groupId, [pokeMsg])
-            } catch {}
-            
         } catch (err) {
             logger.debug('[AI-Poke] 回戳失败:', err.message)
         }
