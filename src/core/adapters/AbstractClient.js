@@ -5,6 +5,85 @@ import { asyncLocalStorage, extractClassName, getKey } from '../utils/index.js'
 import { logService } from '../../services/stats/LogService.js'
 
 /**
+ * 生成工具调用ID
+ */
+function generateToolId(prefix = 'tool') {
+    return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+}
+
+/**
+ * 解析工具参数，支持字符串和对象格式，自动修复常见错误
+ */
+function normalizeToolArguments(args) {
+    if (args === undefined || args === null) {
+        return '{}'
+    }
+    
+    if (typeof args === 'string') {
+        let str = args.trim()
+        
+        // 空字符串返回空对象
+        if (!str) return '{}'
+        
+        // 尝试直接解析
+        try {
+            JSON.parse(str)
+            return str
+        } catch {
+            // 修复常见错误
+            let fixed = str
+            
+            // 1. 移除可能的引号包裹
+            if ((fixed.startsWith('"') && fixed.endsWith('"')) || 
+                (fixed.startsWith("'") && fixed.endsWith("'"))) {
+                fixed = fixed.slice(1, -1)
+            }
+            
+            // 2. 处理转义的引号
+            fixed = fixed.replace(/\\"/g, '"').replace(/\\'/g, "'")
+            
+            // 3. 移除末尾多余的括号
+            for (let i = 0; i < 5; i++) {
+                try {
+                    JSON.parse(fixed)
+                    return fixed
+                } catch {
+                    if (fixed.endsWith('}}')) {
+                        fixed = fixed.slice(0, -1)
+                    } else if (fixed.endsWith(']]')) {
+                        fixed = fixed.slice(0, -1)
+                    } else {
+                        break
+                    }
+                }
+            }
+            
+            // 4. 如果不是JSON格式，尝试包装成对象
+            if (!fixed.startsWith('{') && !fixed.startsWith('[')) {
+                // 可能是简单的key=value格式
+                if (fixed.includes('=')) {
+                    const obj = {}
+                    fixed.split(/[,&]/).forEach(pair => {
+                        const [key, ...valueParts] = pair.split('=')
+                        if (key && valueParts.length > 0) {
+                            obj[key.trim()] = valueParts.join('=').trim()
+                        }
+                    })
+                    return JSON.stringify(obj)
+                }
+                // 单个值，作为text参数
+                return JSON.stringify({ text: fixed })
+            }
+            
+            return fixed
+        }
+    }
+    
+    // 对象类型直接序列化
+    return JSON.stringify(args)
+}
+
+/**
  * @param {string} text - 响应文本
  * @returns {{ cleanText: string, toolCalls: Array }} 清理后的文本和解析出的工具调用
  */
@@ -15,6 +94,8 @@ export function parseXmlToolCalls(text) {
     
     const toolCalls = []
     let cleanText = text
+    
+    // 格式A: <tools>JSON</tools>
     const toolsRegex = /<tools>([\s\S]*?)<\/tools>/gi
     let match
     
@@ -22,29 +103,58 @@ export function parseXmlToolCalls(text) {
         const toolContent = match[1].trim()
         try {
             const toolData = JSON.parse(toolContent)
-            const toolCall = {
-                id: `xml_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                type: 'function',
-                function: {
-                    name: toolData.name,
-                    arguments: typeof toolData.arguments === 'string' 
-                        ? toolData.arguments 
-                        : JSON.stringify(toolData.arguments || {})
+            // 支持单个工具或工具数组
+            const tools = Array.isArray(toolData) ? toolData : [toolData]
+            for (const tool of tools) {
+                const funcName = tool.function?.name || tool.name
+                const funcArgs = tool.function?.arguments || tool.arguments
+                if (funcName) {
+                    toolCalls.push({
+                        id: tool.id || generateToolId('xml'),
+                        type: 'function',
+                        function: {
+                            name: funcName,
+                            arguments: normalizeToolArguments(funcArgs)
+                        }
+                    })
+                    logger.debug(`[Tool Parser] 解析到<tools>格式: ${funcName}`)
                 }
             }
-            toolCalls.push(toolCall)
-            logger.debug(`[Tool Parser] 解析到<tools>格式: ${toolData.name}`)
         } catch (parseErr) {
             logger.warn(`[Tool Parser] <tools>解析失败:`, parseErr.message)
         }
     }
     cleanText = cleanText.replace(toolsRegex, '').trim()
+    
+    // 格式B: <tool_call>name<arg_key>key</arg_key><arg_value>value</arg_value></tool_call>
     const toolCallRegex = /<tool_call>([\s\S]*?)<\/tool_call>/gi
     
     while ((match = toolCallRegex.exec(text)) !== null) {
         const toolContent = match[1].trim()
         try {
-            const nameMatch = toolContent.match(/^([^<\s]+)/)
+            // 首先尝试作JSON解析
+            if (toolContent.startsWith('{') || toolContent.startsWith('[')) {
+                try {
+                    const toolData = JSON.parse(toolContent)
+                    const funcName = toolData.function?.name || toolData.name
+                    const funcArgs = toolData.function?.arguments || toolData.arguments
+                    if (funcName) {
+                        toolCalls.push({
+                            id: toolData.id || generateToolId('xml'),
+                            type: 'function',
+                            function: {
+                                name: funcName,
+                                arguments: normalizeToolArguments(funcArgs)
+                            }
+                        })
+                        logger.debug(`[Tool Parser] 解析到<tool_call>JSON格式: ${funcName}`)
+                        continue
+                    }
+                } catch {}
+            }
+            
+            // 回退到原始格式解析
+            const nameMatch = toolContent.match(/^([^<\s{\[]+)/)
             if (!nameMatch) continue
             const toolName = nameMatch[1].trim()
             
@@ -65,7 +175,7 @@ export function parseXmlToolCalls(text) {
             }
             
             toolCalls.push({
-                id: `xml_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                id: generateToolId('xml'),
                 type: 'function',
                 function: { name: toolName, arguments: JSON.stringify(args) }
             })
@@ -76,9 +186,86 @@ export function parseXmlToolCalls(text) {
     }
     cleanText = cleanText.replace(toolCallRegex, '').trim()
     
+    // 格式C: <function_call>JSON</function_call> (一些模型使用这种格式)
+    const funcCallRegex = /<function_call>([\s\S]*?)<\/function_call>/gi
+    while ((match = funcCallRegex.exec(text)) !== null) {
+        const content = match[1].trim()
+        try {
+            const toolData = JSON.parse(content)
+            const funcName = toolData.function?.name || toolData.name
+            const funcArgs = toolData.function?.arguments || toolData.arguments
+            if (funcName) {
+                toolCalls.push({
+                    id: toolData.id || generateToolId('func'),
+                    type: 'function',
+                    function: {
+                        name: funcName,
+                        arguments: normalizeToolArguments(funcArgs)
+                    }
+                })
+                logger.debug(`[Tool Parser] 解析到<function_call>格式: ${funcName}`)
+            }
+        } catch (parseErr) {
+            logger.warn(`[Tool Parser] <function_call>解析失败:`, parseErr.message)
+        }
+    }
+    cleanText = cleanText.replace(funcCallRegex, '').trim()
+    
+    // 格式D: <invoke name="xxx">JSON</invoke> (Anthropic风格)
+    const invokeRegex = /<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/invoke>/gi
+    while ((match = invokeRegex.exec(text)) !== null) {
+        const funcName = match[1].trim()
+        const argsContent = match[2].trim()
+        try {
+            let args = {}
+            if (argsContent.startsWith('{')) {
+                args = JSON.parse(argsContent)
+            } else {
+                // 解析 <param name="key">value</param> 格式
+                const paramRegex = /<param\s+name=["']([^"']+)["']>([\s\S]*?)<\/param>/gi
+                let paramMatch
+                while ((paramMatch = paramRegex.exec(argsContent)) !== null) {
+                    const key = paramMatch[1].trim()
+                    let value = paramMatch[2].trim()
+                    if (/^-?\d+$/.test(value)) value = parseInt(value, 10)
+                    else if (/^-?\d+\.\d+$/.test(value)) value = parseFloat(value)
+                    else if (value === 'true') value = true
+                    else if (value === 'false') value = false
+                    args[key] = value
+                }
+            }
+            toolCalls.push({
+                id: generateToolId('invoke'),
+                type: 'function',
+                function: { name: funcName, arguments: JSON.stringify(args) }
+            })
+            logger.debug(`[Tool Parser] 解析到<invoke>格式: ${funcName}`)
+        } catch (parseErr) {
+            logger.warn(`[Tool Parser] <invoke>解析失败:`, parseErr.message)
+        }
+    }
+    cleanText = cleanText.replace(invokeRegex, '').trim()
+    
     // 预处理：修复常见的 JSON 格式错误
     const fixMalformedJson = (jsonStr) => {
         let fixed = jsonStr
+        
+        // 0. 修复 arguments 字段值末尾多余的括号
+        // 例如: "arguments":"{\"role\":\"admin\"}}"  -> "arguments":"{\"role\":\"admin\"}"
+        // 这是模型常见的输出错误
+        fixed = fixed.replace(/"arguments"\s*:\s*"(\{(?:[^"\\]|\\.)*\})(\}+)"/g, (match, validJson, extraBraces) => {
+            // 检查 validJson 内部括号是否平衡
+            let braceCount = 0
+            for (const char of validJson) {
+                if (char === '{') braceCount++
+                else if (char === '}') braceCount--
+            }
+            // 如果括号已平衡，移除多余的括号
+            if (braceCount === 0) {
+                return `"arguments":"${validJson}"`
+            }
+            return match
+        })
         
         // 1. 修复 arguments 字段内的引号未转义
         // 例如: "arguments":"{"character":"xxx"}" -> "arguments":"{\"character\":\"xxx\"}"
@@ -101,8 +288,20 @@ export function parseXmlToolCalls(text) {
                             // 尝试解析 arguments 字符串
                             JSON.parse(tc.function.arguments)
                         } catch {
-                            // 如果解析失败，尝试修复
-                            tc.function.arguments = tc.function.arguments
+                            // 如果解析失败，尝试修复末尾多余括号
+                            let args = tc.function.arguments
+                            // 移除末尾多余的 }
+                            while (args.endsWith('}}') || args.endsWith('}}')) {
+                                const testArgs = args.slice(0, -1)
+                                try {
+                                    JSON.parse(testArgs)
+                                    args = testArgs
+                                    break
+                                } catch {
+                                    args = testArgs
+                                }
+                            }
+                            tc.function.arguments = args
                                 .replace(/^"/, '').replace(/"$/, '')
                                 .replace(/\\"/g, '"')
                         }
@@ -113,12 +312,34 @@ export function parseXmlToolCalls(text) {
         } catch {
             // 忽略解析错误
         }
-        
-        // 3. 移除可能的 markdown 代码块标记残留
         fixed = fixed.replace(/^```json\s*/i, '').replace(/\s*```$/i, '')
-        
-        // 4. 修复常见的尾部逗号问题
         fixed = fixed.replace(/,\s*([\]}])/g, '$1')
+        let lastFixed = fixed
+        for (let i = 0; i < 3; i++) {
+            try {
+                JSON.parse(lastFixed)
+                break
+            } catch {
+                if (lastFixed.endsWith(']}')) {
+                    const test1 = lastFixed.slice(0, -1)
+                    try {
+                        JSON.parse(test1)
+                        lastFixed = test1
+                        continue
+                    } catch {}
+                }
+                if (lastFixed.endsWith('}}')) {
+                    const test2 = lastFixed.slice(0, -1)
+                    try {
+                        JSON.parse(test2)
+                        lastFixed = test2
+                        continue
+                    } catch {}
+                }
+                break
+            }
+        }
+        fixed = lastFixed
         
         return fixed
     }
@@ -128,19 +349,16 @@ export function parseXmlToolCalls(text) {
     
     for (const blockMatch of codeBlockMatches) {
         const blockContent = blockMatch[1].trim()
-        // 检查是否是工具调用格式的JSON
         if (blockContent.startsWith('[') || blockContent.startsWith('{')) {
             let parsed = null
             try {
                 parsed = JSON.parse(blockContent)
             } catch {
-                // 尝试修复格式错误的 JSON
                 try {
                     const fixedContent = fixMalformedJson(blockContent)
                     parsed = JSON.parse(fixedContent)
                     logger.debug('[Tool Parser] 修复格式错误的JSON成功')
                 } catch {
-                    // 仍然失败，跳过
                     continue
                 }
             }
@@ -153,55 +371,48 @@ export function parseXmlToolCalls(text) {
                         const funcArgs = tc.function?.arguments || tc.arguments
                         if (funcName) {
                             toolCalls.push({
-                                id: tc.id || `json_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                id: tc.id || generateToolId('block'),
                                 type: 'function',
                                 function: {
                                     name: funcName,
-                                    arguments: typeof funcArgs === 'string' ? funcArgs : JSON.stringify(funcArgs || {})
+                                    arguments: normalizeToolArguments(funcArgs)
                                 }
                             })
                             logger.debug(`[Tool Parser] 解析到tool_calls格式: ${funcName}`)
                         }
                     }
                 } else {
-                    // 格式B: [{"name": "xxx", "arguments": {...}}] 或 {"name": "xxx"}
                     if (!Array.isArray(parsed)) parsed = [parsed]
                     for (const item of parsed) {
-                        // 支持 function.name 或直接 name
                         const funcName = item.function?.name || item.name
                         const funcArgs = item.function?.arguments || item.arguments
                         if (funcName && (funcArgs !== undefined || Object.keys(item).length > 1)) {
                             toolCalls.push({
-                                id: item.id || `json_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                id: item.id || generateToolId('block'),
                                 type: 'function',
                                 function: {
                                     name: funcName,
-                                    arguments: typeof funcArgs === 'string' ? funcArgs : JSON.stringify(funcArgs || {})
+                                    arguments: normalizeToolArguments(funcArgs)
                                 }
                             })
                             logger.debug(`[Tool Parser] 解析到JSON代码块格式: ${funcName}`)
                         }
                     }
                 }
-                // 只有成功解析为工具调用时才移除代码块
                 if (toolCalls.length > beforeCount) {
                     cleanText = cleanText.replace(blockMatch[0], '').trim()
                 }
             } catch {
-                // 不是有效的工具调用JSON，保留原文
             }
         }
     }
     if (toolCalls.length === 0) {
-        // 格式C: 裸JSON对象 {"tool_calls": [...]} （不在代码块内）
-        // 使用更可靠的方法：找到 {"tool_calls" 开头，然后尝试解析完整JSON
         const toolCallsStartRegex = /\{\s*"tool_calls"\s*:/g
         let startMatch
         const processedRanges = []
         
         while ((startMatch = toolCallsStartRegex.exec(cleanText)) !== null) {
             const startIdx = startMatch.index
-            // 尝试找到匹配的结束括号
             let braceCount = 0
             let endIdx = -1
             let inString = false
@@ -243,13 +454,11 @@ export function parseXmlToolCalls(text) {
                 try {
                     parsed = JSON.parse(objStr)
                 } catch {
-                    // 尝试修复格式错误的 JSON
                     try {
                         const fixedStr = fixMalformedJson(objStr)
                         parsed = JSON.parse(fixedStr)
                         logger.debug('[Tool Parser] 修复裸JSON格式错误成功')
                     } catch {
-                        // 仍然失败，跳过
                     }
                 }
                 if (parsed?.tool_calls && Array.isArray(parsed.tool_calls)) {
@@ -259,11 +468,11 @@ export function parseXmlToolCalls(text) {
                         const funcArgs = tc.function?.arguments || tc.arguments
                         if (funcName) {
                             toolCalls.push({
-                                id: tc.id || `json_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                id: tc.id || generateToolId('json'),
                                 type: 'function',
                                 function: {
                                     name: funcName,
-                                    arguments: typeof funcArgs === 'string' ? funcArgs : JSON.stringify(funcArgs || {})
+                                    arguments: normalizeToolArguments(funcArgs)
                                 }
                             })
                             foundTools = true
@@ -276,38 +485,40 @@ export function parseXmlToolCalls(text) {
                 }
             }
         }
-        
-        // 从后向前删除已处理的范围，避免索引变化
         for (let i = processedRanges.length - 1; i >= 0; i--) {
             const range = processedRanges[i]
             cleanText = cleanText.substring(0, range.start) + cleanText.substring(range.end)
         }
         cleanText = cleanText.trim()
-        
-        // 格式D: 匹配独立的JSON数组（以[开头，以]结尾）
         const jsonArrayRegex = /\[\s*\{[\s\S]*?"name"\s*:\s*"[^"]+[\s\S]*?\}\s*\]/g
         const arrayMatches = cleanText.match(jsonArrayRegex)
         
         if (arrayMatches) {
             for (const arrayStr of arrayMatches) {
                 try {
-                    const parsed = JSON.parse(arrayStr)
+                    let parsed
+                    try {
+                        parsed = JSON.parse(arrayStr)
+                    } catch {
+                        const fixed = fixMalformedJson(arrayStr)
+                        parsed = JSON.parse(fixed)
+                    }
                     if (Array.isArray(parsed)) {
                         let foundTools = false
                         for (const item of parsed) {
-                            if (item.name) {
+                            const funcName = item.function?.name || item.name
+                            const funcArgs = item.function?.arguments || item.arguments
+                            if (funcName) {
                                 toolCalls.push({
-                                    id: `json_tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                    id: item.id || generateToolId('array'),
                                     type: 'function',
                                     function: {
-                                        name: item.name,
-                                        arguments: typeof item.arguments === 'string'
-                                            ? item.arguments
-                                            : JSON.stringify(item.arguments || {})
+                                        name: funcName,
+                                        arguments: normalizeToolArguments(funcArgs)
                                     }
                                 })
                                 foundTools = true
-                                logger.debug(`[Tool Parser] 解析到纯JSON数组格式: ${item.name}`)
+                                logger.debug(`[Tool Parser] 解析到纯JSON数组格式: ${funcName}`)
                             }
                         }
                         if (foundTools) {
@@ -315,11 +526,130 @@ export function parseXmlToolCalls(text) {
                         }
                     }
                 } catch {
-                    // 解析失败，跳过
+                }
+            }
+        }
+        const singleToolRegex = /\{\s*"(?:name|function)"\s*:\s*"([^"]+)"[\s\S]*?"arguments"\s*:\s*(\{[\s\S]*?\}|\"[^"]*\")\s*\}/g
+        let singleMatch
+        while ((singleMatch = singleToolRegex.exec(cleanText)) !== null) {
+            try {
+                const objStr = singleMatch[0]
+                let parsed
+                try {
+                    parsed = JSON.parse(objStr)
+                } catch {
+                    const fixed = fixMalformedJson(objStr)
+                    parsed = JSON.parse(fixed)
+                }
+                const funcName = parsed.function?.name || parsed.name
+                const funcArgs = parsed.function?.arguments || parsed.arguments
+                if (funcName && !toolCalls.some(tc => tc.function.name === funcName)) {
+                    toolCalls.push({
+                        id: parsed.id || generateToolId('single'),
+                        type: 'function',
+                        function: {
+                            name: funcName,
+                            arguments: normalizeToolArguments(funcArgs)
+                        }
+                    })
+                    cleanText = cleanText.replace(objStr, '').trim()
+                    logger.debug(`[Tool Parser] 解析到单独工具对象格式: ${funcName}`)
+                }
+            } catch {
+                // 解析失败，跳过
+            }
+        }
+    }
+    if (toolCalls.length === 0) {
+        const fuzzyNamePatterns = [
+            /"name"\s*:\s*"([a-zA-Z_][a-zA-Z0-9_]*)"[\s\S]*?"arguments"\s*:\s*(\{[\s\S]*?\}|"[^"]*")/g,
+            /"function"\s*:\s*\{\s*"name"\s*:\s*"([a-zA-Z_][a-zA-Z0-9_]*)"[\s\S]*?"arguments"\s*:\s*(\{[\s\S]*?\}|"[^"]*")/g,
+            /\bname\s*[:=]\s*["']?([a-zA-Z_][a-zA-Z0-9_]*)["']?[\s\S]*?\barguments\s*[:=]\s*(\{[\s\S]*?\}|["'][^"']*["'])/gi,
+        ]
+        
+        for (const pattern of fuzzyNamePatterns) {
+            let fuzzyMatch
+            while ((fuzzyMatch = pattern.exec(cleanText)) !== null) {
+                const funcName = fuzzyMatch[1]
+                let funcArgs = fuzzyMatch[2]
+                if (funcName && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(funcName) && funcName.length >= 2) {
+                    if (!toolCalls.some(tc => tc.function.name === funcName)) {
+                        toolCalls.push({
+                            id: generateToolId('fuzzy'),
+                            type: 'function',
+                            function: {
+                                name: funcName,
+                                arguments: normalizeToolArguments(funcArgs)
+                            }
+                        })
+                        cleanText = cleanText.replace(fuzzyMatch[0], '').trim()
+                        logger.debug(`[Tool Parser] 模糊匹配解析到工具: ${funcName}`)
+                    }
+                }
+            }
+            if (toolCalls.length > 0) break
+        }
+    }
+    if (toolCalls.length === 0) {
+        const funcCallPattern = /\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\s*(\{[\s\S]*?\})\s*\)/g
+        let funcMatch
+        while ((funcMatch = funcCallPattern.exec(cleanText)) !== null) {
+            const funcName = funcMatch[1]
+            const funcArgs = funcMatch[2]
+            const excludeNames = ['if', 'for', 'while', 'switch', 'function', 'return', 'console', 'log', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Date', 'Math', 'Error']
+            if (!excludeNames.includes(funcName) && funcName.length >= 2) {
+                try {
+                    JSON.parse(funcArgs)
+                    if (!toolCalls.some(tc => tc.function.name === funcName)) {
+                        toolCalls.push({
+                            id: generateToolId('funcall'),
+                            type: 'function',
+                            function: {
+                                name: funcName,
+                                arguments: normalizeToolArguments(funcArgs)
+                            }
+                        })
+                        cleanText = cleanText.replace(funcMatch[0], '').trim()
+                        logger.debug(`[Tool Parser] 函数调用格式解析到工具: ${funcName}`)
+                    }
+                } catch {
                 }
             }
         }
     }
+    if (toolCalls.length === 0) {
+        const toolNameHints = cleanText.match(/"(?:name|function)"\s*:\s*"([a-zA-Z_][a-zA-Z0-9_]*)"/g)
+        if (toolNameHints) {
+            for (const hint of toolNameHints) {
+                const nameMatch = hint.match(/"(?:name|function)"\s*:\s*"([a-zA-Z_][a-zA-Z0-9_]*)"/)
+                if (nameMatch) {
+                    const funcName = nameMatch[1]
+                    const hintIdx = cleanText.indexOf(hint)
+                    const searchArea = cleanText.substring(hintIdx, Math.min(hintIdx + 500, cleanText.length))
+                    const argsMatch = searchArea.match(/"arguments"\s*:\s*(\{[\s\S]*?\}|"[^"]*")/)
+                    let funcArgs = '{}'
+                    if (argsMatch) {
+                        funcArgs = argsMatch[1]
+                    }
+                    if (!toolCalls.some(tc => tc.function.name === funcName)) {
+                        toolCalls.push({
+                            id: generateToolId('recover'),
+                            type: 'function',
+                            function: {
+                                name: funcName,
+                                arguments: normalizeToolArguments(funcArgs)
+                            }
+                        })
+                        logger.debug(`[Tool Parser] 从损坏JSON恢复工具: ${funcName}`)
+                    }
+                }
+            }
+        }
+    }
+    cleanText = cleanText
+        .replace(/```(?:json)?\s*```/gi, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
     
     return { cleanText, toolCalls }
 }
@@ -334,10 +664,9 @@ export function parseXmlToolCalls(text) {
  * URL转Base64配置
  */
 const URL_TO_BASE64_CONFIG = {
-    maxRetries: 1,  // 减少重试次数（4xx错误不重试）
+    maxRetries: 1,  
     retryDelay: 500,
     timeout: 15000,
-    // 浏览器UA避免被拦截
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 }
 
@@ -379,8 +708,6 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
             const mimeType = header.match(/data:([^;]+)/)?.[1] || defaultMimeType
             return { mimeType, data }
         }
-        
-        // HTTP/HTTPS URL - 带重试
         let lastError = null
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
