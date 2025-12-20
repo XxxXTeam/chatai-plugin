@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "export": "next build && rm -rf ../resources/web && cp -r out ../resources/web"
+    "export": "ANALYZE=true next build && rm -rf ../resources/web && cp -r out ../resources/web",
+    "build:analyze": "ANALYZE=true next build"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
