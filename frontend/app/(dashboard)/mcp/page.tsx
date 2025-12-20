@@ -738,7 +738,7 @@ export default {
 
       {/* 添加服务器对话框 */}
       <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-[95vw] max-w-lg">
           <DialogHeader>
             <DialogTitle>添加 MCP 服务器</DialogTitle>
             <DialogDescription>
@@ -860,7 +860,7 @@ export default {
 
       {/* 导入配置对话框 */}
       <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-[95vw] max-w-lg">
           <DialogHeader>
             <DialogTitle>导入 MCP 配置</DialogTitle>
             <DialogDescription>
@@ -889,7 +889,7 @@ export default {
 
       {/* 工具详情弹窗 */}
       <Dialog open={detailDialogOpen} onOpenChange={setDetailDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>工具详情</DialogTitle>
             <DialogDescription>{selectedTool?.name}</DialogDescription>
@@ -926,7 +926,7 @@ export default {
 
       {/* 工具测试弹窗 */}
       <Dialog open={testDialogOpen} onOpenChange={setTestDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>测试工具</DialogTitle>
             <DialogDescription>{selectedTool?.name}</DialogDescription>

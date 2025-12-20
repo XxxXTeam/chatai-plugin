@@ -295,7 +295,7 @@ export default function HistoryPage() {
 
       {/* 详情对话框 */}
       <Dialog open={!!selectedLog} onOpenChange={() => setSelectedLog(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh]">
+        <DialogContent className="w-[95vw] max-w-2xl max-h-[80vh]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {selectedLog?.toolName}

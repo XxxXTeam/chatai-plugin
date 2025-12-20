@@ -12,8 +12,6 @@ const __dirname = path.dirname(__filename)
 const MCP_SERVERS_FILE = path.join(__dirname, '../../data/mcp-servers.json')
 
 /**
- * MCP (Model Context Protocol) 管理器
- * 
  * @description 管理内置工具、自定义JS工具、外部MCP服务器
  * 支持工具调用、资源读取、提示词管理等功能
  * 

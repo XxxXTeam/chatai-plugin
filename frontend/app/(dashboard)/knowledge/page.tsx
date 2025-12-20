@@ -614,7 +614,7 @@ export default function KnowledgePage() {
 
       {/* 导入对话框 */}
       <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-[95vw] max-w-lg">
           <DialogHeader>
             <DialogTitle>导入知识库</DialogTitle>
             <DialogDescription>

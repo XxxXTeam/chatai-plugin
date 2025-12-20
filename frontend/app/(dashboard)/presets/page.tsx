@@ -402,7 +402,7 @@ export default function PresetsPage() {
                 添加预设
               </Button>
             </DialogTrigger>
-          <DialogContent className="max-w-2xl max-h-[90vh]">
+          <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh]">
             <DialogHeader>
               <DialogTitle>{editingPreset ? '编辑预设' : '添加预设'}</DialogTitle>
               <DialogDescription>配置AI对话预设</DialogDescription>

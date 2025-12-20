@@ -452,7 +452,7 @@ export default function UsageStatsPage() {
 
       {/* 详情对话框 */}
       <Dialog open={!!selectedRecord} onOpenChange={() => setSelectedRecord(null)}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-[95vw] max-w-lg">
           <DialogHeader>
             <DialogTitle>调用详情</DialogTitle>
           </DialogHeader>

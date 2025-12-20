@@ -430,7 +430,7 @@ export default function ToolsPage() {
           <CardDescription>配置内置QQ功能工具的行为</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex flex-wrap items-center gap-6">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap items-start sm:items-center gap-4 sm:gap-6">
             <div className="flex items-center gap-2">
               <Switch
                 checked={builtinConfig.enabled}
@@ -552,9 +552,9 @@ export default function ToolsPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {/* 筛选器 */}
-          <div className="flex flex-wrap gap-3 mb-4">
-            <div className="relative flex-1 min-w-[200px] max-w-sm">
+          {/* 筛选器 - 移动端优化 */}
+          <div className="flex flex-col sm:flex-row gap-3 mb-4">
+            <div className="relative flex-1 min-w-0 sm:min-w-[200px] sm:max-w-sm">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 value={searchText}
@@ -564,7 +564,7 @@ export default function ToolsPage() {
               />
             </div>
             <Select value={filterType} onValueChange={setFilterType}>
-              <SelectTrigger className="w-[130px]">
+              <SelectTrigger className="w-full sm:w-[130px]">
                 <SelectValue placeholder="类型" />
               </SelectTrigger>
               <SelectContent>
@@ -574,7 +574,7 @@ export default function ToolsPage() {
               </SelectContent>
             </Select>
             <Select value={filterServer} onValueChange={setFilterServer}>
-              <SelectTrigger className="w-[150px]">
+              <SelectTrigger className="w-full sm:w-[150px]">
                 <SelectValue placeholder="来源" />
               </SelectTrigger>
               <SelectContent>
@@ -586,8 +586,9 @@ export default function ToolsPage() {
             </Select>
           </div>
 
-          {/* 工具表格 */}
-          <ScrollArea className="h-[500px]">
+          {/* 工具表格 - 移动端支持横向滑动 */}
+          <ScrollArea className="h-[400px] sm:h-[500px]">
+            <div className="min-w-[700px]">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -609,8 +610,8 @@ export default function ToolsPage() {
                 ) : (
                   filteredTools.map((tool) => (
                     <TableRow key={tool.name}>
-                      <TableCell className="font-medium">{tool.name}</TableCell>
-                      <TableCell className="max-w-[300px] truncate text-muted-foreground">
+                      <TableCell className="font-medium whitespace-nowrap">{tool.name}</TableCell>
+                      <TableCell className="max-w-[200px] sm:max-w-[300px] truncate text-muted-foreground">
                         {tool.description || '-'}
                       </TableCell>
                       <TableCell>
@@ -641,13 +642,14 @@ export default function ToolsPage() {
                 )}
               </TableBody>
             </Table>
+            </div>
           </ScrollArea>
         </CardContent>
       </Card>
 
       {/* 详情弹窗 */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="w-[95vw] max-w-2xl">
           <DialogHeader>
             <DialogTitle>工具详情</DialogTitle>
             <DialogDescription>{selectedTool?.name}</DialogDescription>
@@ -684,7 +686,7 @@ export default function ToolsPage() {
 
       {/* 测试弹窗 */}
       <Dialog open={testOpen} onOpenChange={setTestOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>测试工具</DialogTitle>
             <DialogDescription>{selectedTool?.name}</DialogDescription>
@@ -738,7 +740,7 @@ export default function ToolsPage() {
 
       {/* 高级配置弹窗 */}
       <Dialog open={configOpen} onOpenChange={setConfigOpen}>
-        <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[95vw] max-w-xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>内置工具高级配置</DialogTitle>
             <DialogDescription>配置工具的访问权限和危险操作</DialogDescription>
@@ -862,13 +864,13 @@ export default function ToolsPage() {
 
       {/* JS 工具编辑弹窗 */}
       <Dialog open={jsEditOpen} onOpenChange={setJsEditOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[95vw] max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{jsEditMode ? '编辑 JS 工具' : '新建 JS 工具'}</DialogTitle>
             <DialogDescription>使用 JavaScript 创建自定义工具</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>工具名称 *</Label>
                 <Input

@@ -18,10 +18,7 @@ const __dirname = path.dirname(__filename)
  */
 function detectAdapter(bot) {
     if (!bot) return { adapter: 'unknown', isNT: false, canAiVoice: false }
-    
-    // 优先检测icqq特征（pickGroup + pickFriend + fl + gl 是icqq特有的）
     const hasIcqqFeatures = !!(bot.pickGroup && bot.pickFriend && bot.fl && bot.gl)
-    // icqq可能同时有sendApi（通过适配器），所以不能用!bot.sendApi来判断
     const hasNT = typeof bot.sendOidbSvcTrpcTcp === 'function'
     
     if (hasIcqqFeatures) {
