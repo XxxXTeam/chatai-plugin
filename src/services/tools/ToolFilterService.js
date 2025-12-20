@@ -92,8 +92,6 @@ class ToolFilterService {
         if (!toolConfig.enableMcpTools) {
             filteredTools = filteredTools.filter(t => t.serverName === 'builtin' || t.isBuiltin)
         }
-
-        // 3. 白名单模式：只允许指定的工具
         if (toolConfig.allowedTools.length > 0) {
             filteredTools = filteredTools.filter(t => 
                 toolConfig.allowedTools.includes(t.name) || 

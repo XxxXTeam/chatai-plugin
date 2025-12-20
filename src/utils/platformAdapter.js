@@ -34,24 +34,17 @@ export function detectAdapter(e) {
         if (appName.includes('go-cqhttp') || appName.includes('gocq')) return 'go-cqhttp'
         if (appName.includes('lagrange')) return 'lagrange'
     }
-    
-    // icqq 特征: 有 pickGroup 且有 gml
     if (typeof bot?.pickGroup === 'function' && bot?.gml) {
         return 'icqq'
     }
-    
-    // 通用 OneBot
     if (typeof bot?.getMsg === 'function') {
         return 'onebot'
-    }
-    
+    }    
     return 'unknown'
 }
-
 export function detectPlatform(e) {
     return detectAdapter(e)
 }
-
 /**
  * 获取Bot信息
  * @param {Object} e - 事件对象
