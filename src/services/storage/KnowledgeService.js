@@ -1,3 +1,5 @@
+import { chatLogger } from '../../core/utils/logger.js'
+const logger = chatLogger
 /**
  * 知识库服务
  * 管理预设关联的知识库文档

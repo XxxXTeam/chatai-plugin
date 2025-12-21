@@ -24,8 +24,20 @@ export default function DashboardLayout({
       // 清除 URL 参数
       window.history.replaceState({}, '', window.location.pathname)
     }
+    let token = localStorage.getItem('chatai_token')
+    if (!token) {
+      const cookies = document.cookie.split(';')
+      for (const cookie of cookies) {
+        const [name, value] = cookie.trim().split('=')
+        if (name === 'auth_token' && value) {
+          token = value
+          // 同步到localStorage
+          localStorage.setItem('chatai_token', value)
+          break
+        }
+      }
+    }
     
-    const token = localStorage.getItem('chaite_token')
     if (!token) {
       router.push('/login/')
       return
@@ -39,6 +51,8 @@ export default function DashboardLayout({
       })
       .catch(() => {
         localStorage.removeItem('chatai_token')
+        // 清除cookie
+        document.cookie = 'auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
         router.push('/login/')
       })
   }, [router])

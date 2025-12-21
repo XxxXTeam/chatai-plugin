@@ -53,7 +53,7 @@ export default function DashboardPage() {
     const authToken = searchParams.get('auth_token')
     if (authToken) {
       // 保存token到localStorage
-      localStorage.setItem('chaite_token', authToken)
+      localStorage.setItem('chatai_token', authToken)
       // 清除URL中的token参数
       router.replace('/')
     }

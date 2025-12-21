@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import crypto from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import config from '../../config/config.js'
+import { chatLogger, c as colors } from '../core/utils/logger.js'
 import { mcpManager } from '../mcp/McpManager.js'
 import { builtinMcpServer } from '../mcp/BuiltinMcpServer.js'
 import { presetManager } from './preset/PresetManager.js'
@@ -57,11 +58,153 @@ class ChaiteResponse {
         return new ChaiteResponse(-1, data, msg)
     }
 }
-
-// JWT signing key
 let authKey = crypto.randomUUID()
 
-// Frontend Authentication Handler for temporary token-based auth
+const SIGNATURE_SECRET = 'chatai-signature-key-2024'
+class RequestSignatureValidator {
+    /**
+     * 生成签名
+     * @param {string} method - 请求方法
+     * @param {string} path - 请求路径
+     * @param {string} timestamp - 时间戳
+     * @param {string} bodyHash - 请求体hash（可选）
+     * @param {string} nonce - 随机数
+     * @returns {string} 签名
+     */
+    static generateSignature(method, path, timestamp, bodyHash = '', nonce = '') {
+        const signatureString = `${SIGNATURE_SECRET}|${method.toUpperCase()}|${path}|${timestamp}|${bodyHash}|${nonce}`
+        const hash = crypto.createHash('sha256')
+        hash.update(signatureString)
+        return hash.digest('hex')
+    }
+
+    /**
+     * 验证签名
+     * @param {object} req - Express请求对象
+     * @returns {{valid: boolean, error?: string}}
+     */
+    static validate(req) {
+        const signature = req.headers['x-signature']
+        const timestamp = req.headers['x-timestamp']
+        const nonce = req.headers['x-nonce']
+        const bodyHash = req.headers['x-body-hash'] || ''
+
+        // 检查必要的头
+        if (!signature || !timestamp || !nonce) {
+            return { valid: false, error: 'Missing signature headers' }
+        }
+
+        // 验证时间戳（5分钟有效期）
+        const now = Date.now()
+        const requestTime = parseInt(timestamp, 10)
+        if (isNaN(requestTime) || Math.abs(now - requestTime) > 5 * 60 * 1000) {
+            return { valid: false, error: 'Request timestamp expired' }
+        }
+
+        // 生成预期签名
+        const expectedSignature = this.generateSignature(
+            req.method,
+            req.path,
+            timestamp,
+            bodyHash,
+            nonce
+        )
+        try {
+            const sigBuffer = Buffer.from(signature, 'hex')
+            const expectedBuffer = Buffer.from(expectedSignature, 'hex')
+            if (sigBuffer.length !== expectedBuffer.length || 
+                !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+                return { valid: false, error: 'Invalid signature' }
+            }
+        } catch {
+            return { valid: false, error: 'Invalid signature format' }
+        }
+
+        return { valid: true }
+    }
+}
+class RequestIdValidator {
+    constructor(maxSize = 10000, expireMs = 5 * 60 * 1000) {
+        this.usedIds = new Map() // requestId -> timestamp
+        this.maxSize = maxSize
+        this.expireMs = expireMs
+        setInterval(() => this.cleanup(), 60 * 1000)
+    }
+
+    /**
+     * @param {string} requestId 
+     * @returns {boolean}
+     */
+    validate(requestId) {
+        if (!requestId) return true 
+        
+        const now = Date.now()
+        // 检查是否已使用
+        if (this.usedIds.has(requestId)) {
+            const usedTime = this.usedIds.get(requestId)
+            if (now - usedTime < this.expireMs) {
+                return false // 重放攻击
+            }
+        }
+        
+        // 记录使用
+        this.usedIds.set(requestId, now)
+        return true
+    }
+
+    cleanup() {
+        const now = Date.now()
+        for (const [id, time] of this.usedIds.entries()) {
+            if (now - time > this.expireMs) {
+                this.usedIds.delete(id)
+            }
+        }
+        // 防止内存溢出
+        if (this.usedIds.size > this.maxSize) {
+            const entries = [...this.usedIds.entries()]
+            entries.sort((a, b) => a[1] - b[1])
+            const toDelete = entries.slice(0, entries.length - this.maxSize / 2)
+            for (const [id] of toDelete) {
+                this.usedIds.delete(id)
+            }
+        }
+    }
+}
+
+const requestIdValidator = new RequestIdValidator()
+class ClientFingerprintValidator {
+    constructor() {
+        this.tokenFingerprints = new Map()
+    }
+
+    /**
+     * 绑定token与指纹
+     */
+    bind(jwtToken, fingerprint) {
+        if (fingerprint) {
+            this.tokenFingerprints.set(jwtToken, fingerprint)
+        }
+    }
+
+    /**
+     * 验证token的指纹是否匹配
+     */
+    validate(jwtToken, fingerprint) {
+        const storedFingerprint = this.tokenFingerprints.get(jwtToken)
+        if (!storedFingerprint) return true
+        if (!fingerprint) return true
+        return storedFingerprint === fingerprint
+    }
+
+    /**
+     * 移除token指纹
+     */
+    remove(jwtToken) {
+        this.tokenFingerprints.delete(jwtToken)
+    }
+}
+
+const fingerprintValidator = new ClientFingerprintValidator()
 class FrontendAuthHandler {
     constructor() {
         this.tokens = new Map() // token -> expiry
@@ -82,7 +225,7 @@ class FrontendAuthHandler {
             if (!permanentToken || forceNew) {
                 permanentToken = crypto.randomUUID()
                 config.set('web.permanentAuthToken', permanentToken)
-                logger.info('[Auth] 已生成新的永久登录Token')
+                chatLogger.info('[Auth] 已生成新的永久登录Token')
             }
             return permanentToken
         }
@@ -114,7 +257,7 @@ class FrontendAuthHandler {
         // 优先检查永久Token（不消耗）
         const permanentToken = config.get('web.permanentAuthToken')
         if (permanentToken && token === permanentToken) {
-            logger.debug('[Auth] 永久Token验证成功')
+            chatLogger.debug('[Auth] 永久Token验证成功')
             return true // 永久token可重复使用
         }
 
@@ -124,12 +267,12 @@ class FrontendAuthHandler {
             // 验证成功后删除（一次性使用）
             if (consumeTemp) {
                 this.tokens.delete(token)
-                logger.debug('[Auth] 临时Token验证成功并已消耗')
+                chatLogger.debug('[Auth] 临时Token验证成功并已消耗')
             }
             return true
         }
 
-        logger.debug('[Auth] Token验证失败:', token?.substring(0, 8) + '...')
+        chatLogger.debug('[Auth] Token验证失败:', token?.substring(0, 8) + '...')
         return false
     }
 
@@ -164,25 +307,34 @@ const authHandler = new FrontendAuthHandler()
 // 获取本地和公网地址
 async function getServerAddresses(port) {
     const addresses = {
-        local: [],
-        public: null
+        local: [],      // IPv4 地址
+        localIPv6: [],  // IPv6 地址
+        public: null,
+        publicIPv6: null
     }
     
-    // 获取本地地址
+    // 获取本地地址（IPv4 和 IPv6）
     try {
         const os = await import('node:os')
         const interfaces = os.networkInterfaces()
         for (const name of Object.keys(interfaces)) {
             for (const iface of interfaces[name]) {
-                if (iface.family === 'IPv4' && !iface.internal) {
+                if (iface.internal) continue 
+                
+                if (iface.family === 'IPv4') {
                     addresses.local.push(`http://${iface.address}:${port}`)
+                } else if (iface.family === 'IPv6') {
+                    if (!iface.address.startsWith('fe80:')) {
+                        addresses.localIPv6.push(`http://[${iface.address}]:${port}`)
+                    }
                 }
             }
         }
-        // 添加 localhost
         addresses.local.unshift(`http://127.0.0.1:${port}`)
+        addresses.localIPv6.unshift(`http://[::1]:${port}`)
     } catch (e) {
         addresses.local = [`http://127.0.0.1:${port}`]
+        addresses.localIPv6 = [`http://[::1]:${port}`]
     }
     
     // 获取公网地址
@@ -203,7 +355,7 @@ async function getServerAddresses(port) {
             const timeout = setTimeout(() => {
                 if (!resolved) {
                     resolved = true
-                    logger.debug('[WebServer] 公网IP获取超时')
+                    chatLogger.debug('[WebServer] 公网IP获取超时')
                     resolve(null)
                 }
             }, 8000) // 增加超时时间
@@ -218,13 +370,13 @@ async function getServerAddresses(port) {
                         if (!resolved && ip && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
                             resolved = true
                             clearTimeout(timeout)
-                            logger.debug(`[WebServer] 公网IP获取成功: ${ip} (from ${service.url})`)
+                            chatLogger.debug(`[WebServer] 公网IP获取成功: ${ip} (from ${service.url})`)
                             resolve(ip)
                         }
                     })
                 })
                 req.on('error', (err) => {
-                    logger.debug(`[WebServer] 公网IP服务 ${service.url} 失败: ${err.message}`)
+                    chatLogger.debug(`[WebServer] 公网IP服务 ${service.url} 失败: ${err.message}`)
                 })
             }
         })
@@ -234,7 +386,7 @@ async function getServerAddresses(port) {
             addresses.public = `http://${publicIP}:${port}`
         }
     } catch (e) {
-        logger.debug('[WebServer] 公网地址获取失败:', e.message)
+        chatLogger.debug('[WebServer] 公网地址获取失败:', e.message)
     }
     
     return addresses
@@ -256,20 +408,13 @@ export class WebServer {
         this.app.use(express.json({ limit: '50mb' }))
         this.app.use(express.urlencoded({ extended: true, limit: '50mb' }))
         this.app.use(cookieParser())
-        
-        // 静态文件服务 - 排除 /login/token 路径，让后端路由处理
         const staticPath = path.join(__dirname, '../../resources/web')
         this.app.use((req, res, next) => {
-            // /login/token 路径由后端路由处理，不使用静态文件
             if (req.path === '/login/token' || req.path === '/login/token/') {
                 return next()
             }
             express.static(staticPath)(req, res, next)
         })
-
-
-
-        // 公开API限流（未认证请求）
         const publicLimiter = rateLimit({
             windowMs: 15 * 60 * 100000, // 15 minutes
             max: 50000, // 未认证请求限制更严格
@@ -290,16 +435,13 @@ export class WebServer {
                 return false
             }
         })
-
-        // 已认证API限流（更宽松）
         const authLimiter = rateLimit({
             windowMs: 1 * 60 * 1000, // 1 minute
-            max: 300000, // 已认证用户每分钟300次请求
+            max: 300000, 
             standardHeaders: true,
             legacyHeaders: false,
             message: ChaiteResponse.fail(null, 'Too many requests, please slow down.'),
             skip: (req) => {
-                // 仅对已认证请求生效
                 const authHeader = req.headers.authorization
                 if (!authHeader?.startsWith('Bearer ')) return true
                 try {
@@ -310,37 +452,10 @@ export class WebServer {
                 }
             }
         })
-
-        // Apply rate limiters
         this.app.use('/api/', publicLimiter)
         this.app.use('/api/', authLimiter)
-
-        // Request logging middleware (audit trail) - DISABLED for less noise
-        // this.app.use('/api/', (req, res, next) => {
-        //     const startTime = Date.now()
-
-        //     // Log request
-        //     logger.info(`[API] ${req.method} ${req.path}`, {
-        //         ip: req.ip,
-        //         userAgent: req.get('user-agent'),
-        //         body: req.method === 'POST' || req.method === 'PUT' ? '[REDACTED]' : undefined
-        //     })
-
-        //     // Log response
-        //     res.on('finish', () => {
-        //         const duration = Date.now() - startTime
-        //         logger.info(`[API] ${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`)
-        //     })
-
-        //     next()
-        // })
-
-
-
-
-        // Global error handler
         this.app.use((err, req, res, next) => {
-            logger.error('[WebServer] Error:', err)
+            chatLogger.error('[WebServer] Error:', err)
 
             if (res.headersSent) {
                 return next(err)
@@ -351,8 +466,6 @@ export class WebServer {
             ))
         })
     }
-
-    // JWT authentication middleware
     authMiddleware(req, res, next) {
         const authHeader = req.headers.authorization
         if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -360,22 +473,53 @@ export class WebServer {
         }
 
         const token = authHeader.substring(7)
+        const clientFingerprint = req.headers['x-client-fingerprint']
+        const nonce = req.headers['x-nonce']
+        const isSensitiveOperation = req.method !== 'GET'
+        if (isSensitiveOperation) {
+            const signatureResult = RequestSignatureValidator.validate(req)
+            if (!signatureResult.valid) {
+                chatLogger.warn(`[Auth] 签名验证失败: ${signatureResult.error} - ${req.method} ${req.path}`)
+                return res.status(401).json(ChaiteResponse.fail(null, signatureResult.error))
+            }
+            if (nonce && !requestIdValidator.validate(nonce)) {
+                return res.status(401).json(ChaiteResponse.fail(null, 'Request replay detected'))
+            }
+        }
+        
         try {
-            const decoded = jwt.verify(token, authKey)
-            req.user = decoded
+            const decoded = jwt.verify(token, authKey, {
+                algorithms: ['HS256'],
+                complete: true
+            })
+            
+            const payload = decoded.payload
+            if (!payload.authenticated || !payload.loginTime) {
+                return res.status(401).json(ChaiteResponse.fail(null, 'Invalid token payload'))
+            }
+            if (!fingerprintValidator.validate(token, clientFingerprint)) {
+                chatLogger.warn(`[Auth] 客户端指纹不匹配: token来自不同设备`)
+                return res.status(401).json(ChaiteResponse.fail(null, 'Client fingerprint mismatch'))
+            }
+            
+            req.user = payload
+            req.authToken = token
             next()
         } catch (error) {
-            return res.status(401).json(ChaiteResponse.fail(null, 'Invalid token'))
+            if (error.name === 'TokenExpiredError') {
+                return res.status(401).json(ChaiteResponse.fail(null, 'Token expired'))
+            }
+            if (error.name === 'JsonWebTokenError') {
+                return res.status(401).json(ChaiteResponse.fail(null, 'Invalid token'))
+            }
+            chatLogger.error('[Auth] Token验证错误:', error)
+            return res.status(401).json(ChaiteResponse.fail(null, 'Authentication failed'))
         }
     }
 
     setupRoutes() {
-        // ==================== Auth Routes ====================
-        // GET /login/token - Token-based login via URL (兼容方式)
         this.app.get('/login/token', async (req, res) => {
             const { token } = req.query
-
-            // 1. 首先检查请求中是否已有有效JWT（用户可能已登录）
             const authHeader = req.headers.authorization
             const cookieToken = req.cookies?.auth_token
             const existingToken = authHeader?.startsWith('Bearer ') 
@@ -385,11 +529,9 @@ export class WebServer {
             if (existingToken) {
                 try {
                     jwt.verify(existingToken, authKey)
-                    // JWT有效，直接重定向到主页
-                    logger.debug('[Auth] User already authenticated, redirecting to home...')
+                    chatLogger.debug('[Auth] User already authenticated, redirecting to home...')
                     return res.redirect('/')
                 } catch {
-                    // JWT无效，继续正常登录流程
                 }
             }
 
@@ -402,50 +544,47 @@ export class WebServer {
                 const success = authHandler.validateToken(token)
                 
                 if (success) {
-                    // 生成新JWT
                     const jwtToken = jwt.sign({
                         authenticated: true,
-                        loginTime: Date.now()
-                    }, authKey, { expiresIn: '30d' })
-                    
-                    logger.debug('[Auth] Login successful via URL token')
-                    
-                    // 设置cookie用于后续检测已登录状态
-                    res.cookie('auth_token', jwtToken, {
-                        maxAge: 30 * 24 * 60 * 60 * 1000, // 30天
-                        httpOnly: false, // 允许前端JS访问
-                        sameSite: 'lax'
+                        loginTime: Date.now(),
+                        jti: crypto.randomUUID(),
+                        iss: 'chatai-panel',
+                        aud: 'chatai-client'
+                    }, authKey, { 
+                        expiresIn: '30d',
+                        algorithm: 'HS256'
                     })
                     
-                    // 重定向到前端，带上 token
+                    chatLogger.debug('[Auth] Login successful via URL token')
+                    res.cookie('auth_token', jwtToken, {
+                        maxAge: 30 * 24 * 60 * 60 * 1000, // 30天
+                        httpOnly: false, 
+                        sameSite: 'lax',
+                        path: '/'  
+                    })
                     res.redirect(`/?auth_token=${jwtToken}`)
                 } else {
                     res.status(401).send('Invalid or expired token. Please request a new login link.')
                 }
             } catch (error) {
-                logger.error('[Auth] URL token login error:', error)
+                chatLogger.error('[Auth] URL token login error:', error)
                 res.status(500).send('Login failed: ' + error.message)
             }
         })
-
-        // POST /api/auth/login - Token authentication (临时token或永久token)
         this.app.post('/api/auth/login', async (req, res) => {
-            const { token, password } = req.body
+            const { token, password, fingerprint } = req.body
+            const clientFingerprint = fingerprint || req.headers['x-client-fingerprint']
 
             try {
                 let success = false
                 let loginType = ''
-                
-                // 优先使用 token 参数，兼容 password 参数作为 token
                 const authToken = token || password
                 
                 if (authToken) {
-                    // 1. 先判断是否为临时 token
                     if (authHandler.validateToken(authToken)) {
                         success = true
                         loginType = 'temp_token'
                     }
-                    // 2. 再判断是否为永久 token
                     else if (authHandler.validatePermanentToken(authToken)) {
                         success = true
                         loginType = 'permanent_token'
@@ -453,13 +592,23 @@ export class WebServer {
                 }
                 
                 if (success) {
-                    // Generate JWT for session
                     const jwtToken = jwt.sign({
                         authenticated: true,
-                        loginTime: Date.now()
-                    }, authKey, { expiresIn: '30d' })
+                        loginTime: Date.now(),
+                        jti: crypto.randomUUID(), // JWT ID 防止token碰撞
+                        iss: 'chatai-panel',      // 签发者
+                        aud: 'chatai-client'      // 受众
+                    }, authKey, { 
+                        expiresIn: '30d',
+                        algorithm: 'HS256'
+                    })
 
-                    logger.debug(`[Auth] Login successful via ${loginType}`)
+                    // 绑定客户端指纹（如果提供）
+                    if (clientFingerprint) {
+                        fingerprintValidator.bind(jwtToken, clientFingerprint)
+                    }
+
+                    chatLogger.debug(`[Auth] Login successful via ${loginType}`)
                     res.json(ChaiteResponse.ok({
                         token: jwtToken,
                         expiresIn: 30 * 24 * 60 * 60
@@ -468,7 +617,7 @@ export class WebServer {
                     res.status(401).json(ChaiteResponse.fail(null, 'Token 无效或已过期'))
                 }
             } catch (error) {
-                logger.error('[Auth] Login error:', error)
+                chatLogger.error('[Auth] Login error:', error)
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
@@ -476,6 +625,7 @@ export class WebServer {
         // GET /api/auth/verify-token - URL token verification
         this.app.get('/api/auth/verify-token', async (req, res) => {
             const { token } = req.query
+            const clientFingerprint = req.headers['x-client-fingerprint']
 
             try {
                 if (!token) {
@@ -484,13 +634,21 @@ export class WebServer {
                 
                 const success = authHandler.validateToken(token)
                 if (success) {
-                    // Generate JWT for session
                     const jwtToken = jwt.sign({
                         authenticated: true,
-                        loginTime: Date.now()
-                    }, authKey, { expiresIn: '30d' })
+                        loginTime: Date.now(),
+                        jti: crypto.randomUUID(),
+                        iss: 'chatai-panel',
+                        aud: 'chatai-client'
+                    }, authKey, { 
+                        expiresIn: '30d',
+                        algorithm: 'HS256'
+                    })
+                    if (clientFingerprint) {
+                        fingerprintValidator.bind(jwtToken, clientFingerprint)
+                    }
 
-                    logger.debug('[Auth] Login successful via URL token')
+                    chatLogger.debug('[Auth] Login successful via URL token')
                     res.json(ChaiteResponse.ok({
                         token: jwtToken,
                         expiresIn: 30 * 24 * 60 * 60
@@ -499,7 +657,7 @@ export class WebServer {
                     res.status(401).json(ChaiteResponse.fail(null, 'Invalid or expired token'))
                 }
             } catch (error) {
-                logger.error('[Auth] Token verification error:', error)
+                chatLogger.error('[Auth] Token verification error:', error)
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
@@ -753,10 +911,10 @@ export class WebServer {
                     })
                 }
 
-                logger.debug('[WebServer] 配置已保存')
+                chatLogger.debug('[WebServer] 配置已保存')
                 res.json(ChaiteResponse.ok({ success: true }))
             } catch (error) {
-                logger.error('[WebServer] 保存配置失败:', error)
+                chatLogger.error('[WebServer] 保存配置失败:', error)
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
@@ -1021,7 +1179,7 @@ export class WebServer {
         this.app.delete('/api/auth/token/permanent', this.authMiddleware.bind(this), (req, res) => {
             try {
                 authHandler.revokePermanentToken()
-                logger.info('[Auth] 永久Token已撤销')
+                chatLogger.info('[Auth] 永久Token已撤销')
                 res.json(ChaiteResponse.ok({ success: true, message: 'Token已撤销' }))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -1686,7 +1844,7 @@ export class WebServer {
                         usedKeyIndex = keyInfo.keyIndex
                         usedKeyName = keyInfo.keyName
                         usedStrategy = keyInfo.strategy
-                        logger.info(`[测试渠道] 使用 ${channelName} 的 ${usedKeyName}, 策略: ${usedStrategy}`)
+                        chatLogger.info(`[测试渠道] 使用 ${channelName} 的 ${usedKeyName}, 策略: ${usedStrategy}`)
                     } else {
                         apiKey = channel.apiKey
                     }
@@ -1702,7 +1860,7 @@ export class WebServer {
                 apiKey = typeof keyObj === 'string' ? keyObj : keyObj.key
                 usedKeyIndex = idx
                 usedKeyName = typeof keyObj === 'object' ? keyObj.name : `Key#${idx + 1}`
-                logger.info(`[测试渠道] 使用临时Key: ${usedKeyName}`)
+                chatLogger.info(`[测试渠道] 使用临时Key: ${usedKeyName}`)
             }
 
             // Auto-append /v1 if missing for OpenAI-compatible APIs
@@ -1712,7 +1870,7 @@ export class WebServer {
                 }
             }
 
-            logger.info(`[测试渠道] 类型: ${adapterType}, BaseURL: ${baseUrl}`)
+            chatLogger.info(`[测试渠道] 类型: ${adapterType}, BaseURL: ${baseUrl}`)
 
             try {
                 // Real connection test with chat completion
@@ -1747,10 +1905,10 @@ export class WebServer {
 
                     // 显示完整配置信息
                     const keyInfo = usedKeyIndex >= 0 ? `, Key: ${usedKeyName}(#${usedKeyIndex + 1})` : ''
-                    logger.info(`[测试渠道] 使用模型: ${testModel}, 流式: ${useStreaming}, 温度: ${temperature}${keyInfo}`)
+                    chatLogger.info(`[测试渠道] 使用模型: ${testModel}, 流式: ${useStreaming}, 温度: ${temperature}${keyInfo}`)
 
                     // Try a real chat completion request
-                    logger.info('[测试渠道] 发送测试消息...')
+                    chatLogger.info('[测试渠道] 发送测试消息...')
 
                     let replyText = ''
                     let apiUsage = null
@@ -1782,9 +1940,9 @@ export class WebServer {
                         }
 
                         if (reasoningText) {
-                            logger.debug(`[测试渠道] AI思考过程: ${reasoningText.substring(0, 200)}...`)
+                            chatLogger.debug(`[测试渠道] AI思考过程: ${reasoningText.substring(0, 200)}...`)
                         }
-                        logger.info(`[测试渠道] 测试成功，AI回复: ${replyText}`)
+                        chatLogger.info(`[测试渠道] 测试成功，AI回复: ${replyText}`)
                     } else {
                         // Test with non-streaming mode
                         const response = await client.sendMessage(
@@ -1792,11 +1950,11 @@ export class WebServer {
                             options
                         )
 
-                        logger.debug('[测试渠道] 收到响应:', JSON.stringify(response).substring(0, 200))
+                        chatLogger.debug('[测试渠道] 收到响应:', JSON.stringify(response).substring(0, 200))
 
                         // Defensive check for response structure
                         if (!response || !response.contents || !Array.isArray(response.contents)) {
-                            logger.error('[测试渠道] 响应格式错误:', response)
+                            chatLogger.error('[测试渠道] 响应格式错误:', response)
                             return res.status(500).json(ChaiteResponse.fail(null,
                                 '连接失败: API响应格式不正确'))
                         }
@@ -1813,7 +1971,7 @@ export class WebServer {
                         // 获取API返回的usage信息
                         apiUsage = response.usage
                         
-                        logger.info(`[测试渠道] 测试成功，AI回复: ${replyText || (hasReasoning ? '(思考内容)' : '(无)')}`)
+                        chatLogger.info(`[测试渠道] 测试成功，AI回复: ${replyText || (hasReasoning ? '(思考内容)' : '(无)')}`)
                     }
 
                     const elapsed = Date.now() - startTime
@@ -1863,8 +2021,8 @@ export class WebServer {
                 }
             } catch (error) {
                 const elapsed = Date.now() - startTime
-                logger.error('[测试渠道] 错误:', error)
-                logger.error('[测试渠道] 错误详情:', {
+                chatLogger.error('[测试渠道] 错误:', error)
+                chatLogger.error('[测试渠道] 错误详情:', {
                     message: error.message,
                     status: error.status,
                     code: error.code,
@@ -1934,19 +2092,19 @@ export class WebServer {
                         },
                     })
 
-                    logger.debug('[获取模型] 正在请求模型列表...')
+                    chatLogger.debug('[获取模型] 正在请求模型列表...')
                     const modelsList = await openai.models.list()
 
                     // 打印原始响应结构
-                    logger.debug('[获取模型] 原始响应:', JSON.stringify(modelsList).substring(0, 500))
+                    chatLogger.debug('[获取模型] 原始响应:', JSON.stringify(modelsList).substring(0, 500))
 
                     if (!modelsList || !modelsList.data || !Array.isArray(modelsList.data)) {
-                        logger.error('[获取模型] API返回格式错误，完整响应:', JSON.stringify(modelsList))
+                        chatLogger.error('[获取模型] API返回格式错误，完整响应:', JSON.stringify(modelsList))
 
                         return res.status(500).json(ChaiteResponse.fail(null, 'API返回格式不正确'))
                     }
 
-                    logger.debug(`[获取模型] API返回 ${modelsList.data.length} 个模型`)
+                    chatLogger.debug(`[获取模型] API返回 ${modelsList.data.length} 个模型`)
 
                     // Check if this is official OpenAI API
                     const isOfficialOpenAI = !baseUrl ||
@@ -1969,14 +2127,14 @@ export class WebServer {
                                 id.includes('babbage') ||
                                 id.includes('curie')
                         })
-                        logger.info(`[获取模型] 官方API过滤: ${beforeFilter} -> ${models.length}`)
+                        chatLogger.info(`[获取模型] 官方API过滤: ${beforeFilter} -> ${models.length}`)
                     } else {
-                        logger.debug(`[获取模型] 自定义API，不过滤模型`)
+                        chatLogger.debug(`[获取模型] 自定义API，不过滤模型`)
                     }
 
                     models = models.sort()
 
-                    logger.info(`[获取模型] 最终返回 ${models.length} 个模型`)
+                    chatLogger.info(`[获取模型] 最终返回 ${models.length} 个模型`)
 
                     res.json(ChaiteResponse.ok({
                         models,
@@ -2550,10 +2708,10 @@ export default {
                             type: serverConfig.type,
                             tools: server?.tools?.length || 0 
                         })
-                        logger.info(`[MCP] Imported server: ${name} (${serverConfig.type})`)
+                        chatLogger.info(`[MCP] Imported server: ${name} (${serverConfig.type})`)
                     } catch (err) {
                         results.push({ name, success: false, error: err.message })
-                        logger.error(`[MCP] Failed to import server ${name}:`, err.message)
+                        chatLogger.error(`[MCP] Failed to import server ${name}:`, err.message)
                     }
                 }
                 
@@ -2714,10 +2872,10 @@ export default {
                 }
                 memoryManager.startPolling()
                 
-                logger.info(`[WebServer] 清空所有记忆完成, 删除: ${deletedCount}条记忆`)
+                chatLogger.info(`[WebServer] 清空所有记忆完成, 删除: ${deletedCount}条记忆`)
                 res.json(ChaiteResponse.ok({ success: true, deletedCount }))
             } catch (error) {
-                logger.error('[WebServer] 清空记忆失败:', error)
+                chatLogger.error('[WebServer] 清空记忆失败:', error)
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
@@ -2998,7 +3156,7 @@ export default {
 
                 // Defensive check
                 if (!allChannels || !Array.isArray(allChannels)) {
-                    logger.warn('[WebServer] channelManager.getAll() returned invalid data')
+                    chatLogger.warn('[WebServer] channelManager.getAll() returned invalid data')
                     return res.json({
                         object: 'list',
                         data: []
@@ -3025,7 +3183,7 @@ export default {
                     data: modelsList
                 })
             } catch (error) {
-                logger.error('[WebServer] Error fetching models:', error)
+                chatLogger.error('[WebServer] Error fetching models:', error)
                 res.status(500).json({
                     object: 'list',
                     data: []
@@ -3120,10 +3278,10 @@ export default {
                 contextManager.groupContextCache?.clear()
                 contextManager.sessionStates?.clear()
                 
-                logger.info(`[WebServer] 清空所有对话完成, 删除: ${deletedCount}条消息`)
+                chatLogger.info(`[WebServer] 清空所有对话完成, 删除: ${deletedCount}条消息`)
                 res.json(ChaiteResponse.ok({ success: true, deletedCount }))
             } catch (error) {
-                logger.error('[WebServer] 清空对话失败:', error)
+                chatLogger.error('[WebServer] 清空对话失败:', error)
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
@@ -3377,10 +3535,10 @@ export default {
         this.app.get('/api/auth/token/generate', async (req, res) => {
             try {
                 const token = authHandler.generateToken(5 * 60) // 5分钟有效，与管理面板命令一致
-                logger.info('========================================')
-                logger.info('[Chaite] 管理面板登录 Token (5分钟有效):')
-                logger.info(token)
-                logger.info('========================================')
+                chatLogger.info('========================================')
+                chatLogger.info('[Chaite] 管理面板登录 Token (5分钟有效):')
+                chatLogger.info(token)
+                chatLogger.info('========================================')
                 res.json(ChaiteResponse.ok({ 
                     success: true, 
                     message: 'Token 已输出到 Yunzai 控制台',
@@ -3538,10 +3696,10 @@ export default {
                 }
                 
                 config.set('trigger', newConfig)
-                logger.info('[WebServer] 触发配置已更新')
+                chatLogger.info('[WebServer] 触发配置已更新')
                 res.json(ChaiteResponse.ok({ success: true, config: newConfig }))
             } catch (error) {
-                logger.error('[WebServer] 保存触发配置失败:', error)
+                chatLogger.error('[WebServer] 保存触发配置失败:', error)
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
@@ -4038,8 +4196,6 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // POST /api/test/poke - 测试戳一戳
         this.app.post('/api/test/poke', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 res.json(ChaiteResponse.ok({ success: true, message: '戳一戳测试发送成功' }))
@@ -4047,9 +4203,6 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== Workflow API ====================
-        // GET /api/workflows - 获取工作流列表
         this.app.get('/api/workflows', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const { workflowService } = await import('./workflow/WorkflowService.js')
@@ -4060,8 +4213,6 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // GET /api/workflows/:id - 获取单个工作流
         this.app.get('/api/workflows/:id', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const { workflowService } = await import('./workflow/WorkflowService.js')
@@ -4075,8 +4226,6 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // POST /api/workflows - 创建工作流
         this.app.post('/api/workflows', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const { workflowService } = await import('./workflow/WorkflowService.js')
@@ -4091,8 +4240,6 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // PUT /api/workflows/:id - 更新工作流
         this.app.put('/api/workflows/:id', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const { workflowService } = await import('./workflow/WorkflowService.js')
@@ -4104,8 +4251,6 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // DELETE /api/workflows/:id - 删除工作流
         this.app.delete('/api/workflows/:id', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const { workflowService } = await import('./workflow/WorkflowService.js')
@@ -4116,8 +4261,6 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // POST /api/workflows/:id/execute - 执行工作流
         this.app.post('/api/workflows/:id/execute', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const { workflowService } = await import('./workflow/WorkflowService.js')
@@ -4129,8 +4272,6 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // GET /api/workflows/running - 获取运行中的工作流实例
         this.app.get('/api/workflows/running', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const { workflowService } = await import('./workflow/WorkflowService.js')
@@ -4140,8 +4281,6 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // POST /api/workflows/example - 创建示例工作流
         this.app.post('/api/workflows/example', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const { workflowService } = await import('./workflow/WorkflowService.js')
@@ -4152,23 +4291,16 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== Catch-all Route ====================
-        // 支持 Next.js 静态导出的多 HTML 文件结构
         this.app.get('*', (req, res) => {
             const webDir = path.join(__dirname, '../../resources/web')
             let reqPath = req.path
-            
-            // 移除尾部斜杠（除了根路径）
             if (reqPath !== '/' && reqPath.endsWith('/')) {
                 reqPath = reqPath.slice(0, -1)
             }
-            
-            // 尝试查找对应的 HTML 文件
             const candidates = [
-                path.join(webDir, reqPath, 'index.html'),  // /channels/ -> /channels/index.html
-                path.join(webDir, reqPath + '.html'),       // /channels -> /channels.html
-                path.join(webDir, reqPath),                 // 直接匹配
+                path.join(webDir, reqPath, 'index.html'),  
+                path.join(webDir, reqPath + '.html'),      
+                path.join(webDir, reqPath),                 
             ]
             
             for (const candidate of candidates) {
@@ -4176,8 +4308,6 @@ export default {
                     return res.sendFile(candidate)
                 }
             }
-            
-            // 回退到 index.html (SPA fallback)
             const indexPath = path.join(webDir, 'index.html')
             if (fs.existsSync(indexPath)) {
                 return res.sendFile(indexPath)
@@ -4222,11 +4352,8 @@ export default {
      */
     generateLoginUrl(usePublic = false, permanent = false, forceNew = false) {
         const token = authHandler.generateToken(permanent ? 0 : 5 * 60, permanent, forceNew)
-        
-        // 获取基础URL
         let baseUrl
         if (usePublic) {
-            // 优先使用配置的公网地址
             const configPublicUrl = config.get('web.publicUrl')
             if (configPublicUrl) {
                 baseUrl = configPublicUrl.replace(/\/$/, '') // 移除末尾斜杠
@@ -4234,8 +4361,6 @@ export default {
                 baseUrl = this.addresses.public
             }
         }
-        
-        // 回退到本地地址
         if (!baseUrl) {
             baseUrl = this.addresses?.local?.[0] || `http://127.0.0.1:${this.port}`
         }
@@ -4244,67 +4369,60 @@ export default {
     }
 
     /**
-     * 获取登录信息（用于发送给用户）
      * @param {boolean} permanent - 是否永久token
      * @param {boolean} forceNew - 是否强制生成新token
      * @returns {Object}
      */
     getLoginInfo(permanent = false, forceNew = false) {
         const token = authHandler.generateToken(permanent ? 0 : 5 * 60, permanent, forceNew)
-        const localUrl = this.generateLoginUrl(false, permanent, false) // 不重复生成
-        
-        // 从配置中获取自定义登录地址
+        const localUrls = (this.addresses?.local || [`http://127.0.0.1:${this.port}`]).map(addr => 
+            `${addr}/login/token?token=${token}`
+        )
+        const localIPv6Urls = (this.addresses?.localIPv6 || []).map(addr => 
+            `${addr}/login/token?token=${token}`
+        )
         const loginLinks = config.get('web.loginLinks') || []
-        logger.debug(`[WebServer] getLoginInfo: loginLinks =`, JSON.stringify(loginLinks))
+        chatLogger.debug(`[WebServer] getLoginInfo: loginLinks =`, JSON.stringify(loginLinks))
         const customUrls = loginLinks.map(link => ({
             label: link.label,
             url: `${link.baseUrl.replace(/\/$/, '')}/login/token?token=${token}`
         }))
-        
-        // 使用配置的公网地址或自动检测的公网地址
         let publicUrl = null
         const configPublicUrl = config.get('web.publicUrl')
-        logger.debug(`[WebServer] getLoginInfo: configPublicUrl=${configPublicUrl}, addresses.public=${this.addresses?.public}`)
+        chatLogger.debug(`[WebServer] getLoginInfo: configPublicUrl=${configPublicUrl}, addresses.public=${this.addresses?.public}`)
         if (configPublicUrl) {
             publicUrl = `${configPublicUrl.replace(/\/$/, '')}/login/token?token=${token}`
         } else if (this.addresses?.public) {
-            // 只要检测到公网地址就显示
             publicUrl = `${this.addresses.public}/login/token?token=${token}`
         }
         
         return {
-            localUrl,
+            localUrl: localUrls[0], 
+            localUrls,             
+            localIPv6Urls,         
             publicUrl,
             customUrls: customUrls.length > 0 ? customUrls : null,
             validity: permanent ? '永久有效' : '5分钟内有效',
             isPermanent: permanent,
-            token // 也返回token方便前端使用
+            token
         }
     }
-
-    /**
-     * 检查前端是否已构建
-     */
     checkFrontendBuild() {
         const webDir = path.join(__dirname, '../../resources/web')
         const indexFile = path.join(webDir, 'index.html')
         
         if (!fs.existsSync(webDir) || !fs.existsSync(indexFile)) {
-            logger.warn('═══════════════════════════════════════════════════════════════')
-            logger.warn('[WebServer] ⚠️  前端文件未构建！')
-            logger.warn('[WebServer] 请执行以下命令构建前端:')
-            logger.warn('[WebServer]   cd plugins/chataiplugin/next-frontend && pnpm install && pnpm run export')
-            logger.warn('═══════════════════════════════════════════════════════════════')
+            chatLogger.warn('═══════════════════════════════════════════════════════════════')
+            chatLogger.warn('[WebServer] ⚠️  前端文件未构建！')
+            chatLogger.warn('[WebServer] 请执行以下命令构建前端:')
+            chatLogger.warn('[WebServer]   cd plugins/chatai-plugin/next-frontend && pnpm install && pnpm run export')
+            chatLogger.warn('═══════════════════════════════════════════════════════════════')
             return false
         }
         return true
     }
-
-    /**
-     * Start web server
-     */
     async start() {
-        // 检查前端是否已构建
+        this.startTime = Date.now()
         this.checkFrontendBuild()
         
         const tryListen = (port) => {
@@ -4317,10 +4435,10 @@ export default {
 
                 server.on('error', (error) => {
                     if (error.code === 'EADDRINUSE') {
-                        logger.warn(`[WebServer] 端口 ${port} 已被占用，尝试端口 ${port + 1}...`)
+                        chatLogger.warn(`[WebServer] 端口 ${port} 已被占用，尝试端口 ${port + 1}...`)
                         resolve(tryListen(port + 1))
                     } else {
-                        logger.error('[WebServer] 启动失败:', error)
+                        chatLogger.error('[WebServer] 启动失败:', error)
                         reject(error)
                     }
                 })
@@ -4328,29 +4446,45 @@ export default {
         }
 
         await tryListen(this.port)
-        
-        // 获取服务器地址
         this.addresses = await getServerAddresses(this.port)
-        
-        logger.info('[WebServer] 管理面板已启动')
-        logger.info(`[WebServer] 本地地址: ${this.addresses.local.join(', ')}`)
-        if (this.addresses.public) {
-            logger.info(`[WebServer] 公网地址: ${this.addresses.public}`)
-        }
+        this.printStartupBanner()
     }
-
-    /**
-     * Stop web server
-     */
+    printStartupBanner() {
+        const startTime = Date.now() - (this.startTime || Date.now())
+        const version = '1.0.0'
+        const c = colors
+        
+        // 构建地址列表
+        const items = []
+        
+        if (this.addresses.local?.length > 0) {
+            items.push({ label: '本地地址', value: '', color: c.yellow })
+            for (const addr of this.addresses.local) {
+                items.push({ label: '  ➜', value: addr, color: c.cyan })
+            }
+        }
+        
+        if (this.addresses.localIPv6?.length > 0) {
+            items.push({ label: 'IPv6地址', value: '', color: c.magenta })
+            for (const addr of this.addresses.localIPv6) {
+                items.push({ label: '  ➜', value: addr, color: c.magenta })
+            }
+        }
+        
+        if (this.addresses.public) {
+            items.push({ label: '公网地址', value: '', color: c.green })
+            items.push({ label: '  ➜', value: this.addresses.public, color: c.green })
+        }
+        
+        chatLogger.successBanner(`ChatAI Panel v${version} 启动成功 ${startTime}ms`, items)
+    }
     stop() {
         if (this.server) {
             this.server.close()
-            logger.info('[WebServer] 管理面板已停止')
+            chatLogger.info('[WebServer] 管理面板已停止')
         }
     }
 }
-
-// Export singleton instance
 let webServerInstance = null
 
 export function getWebServer() {

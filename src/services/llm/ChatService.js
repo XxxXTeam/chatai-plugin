@@ -1,3 +1,5 @@
+import { chatLogger } from '../../core/utils/logger.js'
+const logger = chatLogger
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'

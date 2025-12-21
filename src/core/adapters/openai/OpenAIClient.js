@@ -1,3 +1,5 @@
+import { chatLogger } from '../../utils/logger.js'
+const logger = chatLogger
 import OpenAI from 'openai'
 import crypto from 'node:crypto'
 import { AbstractClient, preprocessImageUrls, needsImageBase64Preprocess, parseXmlToolCalls } from '../AbstractClient.js'

@@ -1,3 +1,5 @@
+import { chatLogger } from '../../core/utils/logger.js'
+const logger = chatLogger
 import config from '../../../config/config.js'
 import crypto from 'node:crypto'
 import { redisClient } from '../../core/cache/RedisClient.js'
