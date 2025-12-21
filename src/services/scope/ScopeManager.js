@@ -579,7 +579,7 @@ export class ScopeManager {
       return []
     }
   }
-
+ 
   /**
    * 获取私聊配置
    * @param {string} userId 用户ID
