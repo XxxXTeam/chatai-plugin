@@ -1,5 +1,130 @@
 import axios from 'axios'
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || ''
+const SIGNATURE_SECRET = 'chatai-signature-key-2024'
+function generateFingerprint(): string {
+  if (typeof window === 'undefined') return ''
+  
+  const components = [
+    navigator.userAgent,
+    navigator.language,
+    screen.colorDepth,
+    screen.width + 'x' + screen.height,
+    new Date().getTimezoneOffset(),
+    navigator.hardwareConcurrency || 'unknown',
+    (() => {
+      try {
+        const canvas = document.createElement('canvas')
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+          ctx.textBaseline = 'top'
+          ctx.font = '14px Arial'
+          ctx.fillText('fingerprint', 2, 2)
+          return canvas.toDataURL().slice(-50)
+        }
+      } catch { /* ignore */ }
+      return 'no-canvas'
+    })()
+  ]
+  
+  const str = components.join('|')
+  let hash = 0
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i)
+    hash = ((hash << 5) - hash) + char
+    hash = hash & hash
+  }
+  return Math.abs(hash).toString(36)
+}
+function generateNonce(): string {
+  return `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`
+}
+let cachedFingerprint: string | null = null
+function getFingerprint(): string {
+  if (!cachedFingerprint && typeof window !== 'undefined') {
+    cachedFingerprint = generateFingerprint()
+  }
+  return cachedFingerprint || ''
+}
+function sha256(message: string): string {
+  const K = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+  ]
+  
+  const rotr = (n: number, x: number) => (x >>> n) | (x << (32 - n))
+  const ch = (x: number, y: number, z: number) => (x & y) ^ (~x & z)
+  const maj = (x: number, y: number, z: number) => (x & y) ^ (x & z) ^ (y & z)
+  const sigma0 = (x: number) => rotr(2, x) ^ rotr(13, x) ^ rotr(22, x)
+  const sigma1 = (x: number) => rotr(6, x) ^ rotr(11, x) ^ rotr(25, x)
+  const gamma0 = (x: number) => rotr(7, x) ^ rotr(18, x) ^ (x >>> 3)
+  const gamma1 = (x: number) => rotr(17, x) ^ rotr(19, x) ^ (x >>> 10)
+  
+  const bytes: number[] = []
+  for (let i = 0; i < message.length; i++) {
+    const c = message.charCodeAt(i)
+    if (c < 128) bytes.push(c)
+    else if (c < 2048) bytes.push((c >> 6) | 192, (c & 63) | 128)
+    else bytes.push((c >> 12) | 224, ((c >> 6) & 63) | 128, (c & 63) | 128)
+  }
+  
+  const bitLen = bytes.length * 8
+  bytes.push(0x80)
+  while ((bytes.length % 64) !== 56) bytes.push(0)
+  for (let i = 7; i >= 0; i--) bytes.push((bitLen / Math.pow(2, i * 8)) & 0xff)
+  
+  let [h0, h1, h2, h3, h4, h5, h6, h7] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+  ]
+  
+  for (let i = 0; i < bytes.length; i += 64) {
+    const w: number[] = []
+    for (let j = 0; j < 16; j++) {
+      w[j] = (bytes[i + j * 4] << 24) | (bytes[i + j * 4 + 1] << 16) |
+             (bytes[i + j * 4 + 2] << 8) | bytes[i + j * 4 + 3]
+    }
+    for (let j = 16; j < 64; j++) {
+      w[j] = (gamma1(w[j - 2]) + w[j - 7] + gamma0(w[j - 15]) + w[j - 16]) >>> 0
+    }
+    
+    let [a, b, c, d, e, f, g, h] = [h0, h1, h2, h3, h4, h5, h6, h7]
+    for (let j = 0; j < 64; j++) {
+      const t1 = (h + sigma1(e) + ch(e, f, g) + K[j] + w[j]) >>> 0
+      const t2 = (sigma0(a) + maj(a, b, c)) >>> 0
+      h = g; g = f; f = e; e = (d + t1) >>> 0
+      d = c; c = b; b = a; a = (t1 + t2) >>> 0
+    }
+    h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0
+    h4 = (h4 + e) >>> 0; h5 = (h5 + f) >>> 0; h6 = (h6 + g) >>> 0; h7 = (h7 + h) >>> 0
+  }
+  
+  return [h0, h1, h2, h3, h4, h5, h6, h7]
+    .map(h => h.toString(16).padStart(8, '0')).join('')
+}
+
+function generateSignature(
+  method: string,
+  path: string,
+  timestamp: string,
+  bodyHash: string,
+  nonce: string
+): string {
+  const signatureString = `${SIGNATURE_SECRET}|${method.toUpperCase()}|${path}|${timestamp}|${bodyHash}|${nonce}`
+  return sha256(signatureString)
+}
+
+function calculateBodyHash(body: unknown): string {
+  if (!body) return ''
+  const bodyString = typeof body === 'string' ? body : JSON.stringify(body)
+  return sha256(bodyString)
+}
+
 export const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
@@ -7,11 +132,34 @@ export const api = axios.create({
     'Content-Type': 'application/json',
   },
 })
+
 api.interceptors.request.use((config) => {
   const token = typeof window !== 'undefined' ? localStorage.getItem('chatai_token') : null
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
+  if (typeof window !== 'undefined') {
+    config.headers['X-Client-Fingerprint'] = getFingerprint()
+    if (config.method !== 'get') {
+      const timestamp = Date.now().toString()
+      const nonce = generateNonce()
+      const path = config.url?.startsWith('/') ? config.url : `/${config.url || ''}`
+      const bodyHash = config.data ? calculateBodyHash(config.data) : ''
+      const signature = generateSignature(
+        config.method?.toUpperCase() || 'GET',
+        path,
+        timestamp,
+        bodyHash,
+        nonce
+      )
+      
+      config.headers['X-Timestamp'] = timestamp
+      config.headers['X-Nonce'] = nonce
+      config.headers['X-Body-Hash'] = bodyHash
+      config.headers['X-Signature'] = signature
+    }
+  }
+  
   return config
 })
 api.interceptors.response.use(
@@ -43,8 +191,14 @@ export const channelsApi = {
   getStats: () => api.get('/api/channels/stats'),
 }
 export const authApi = {
-  login: (password: string) => api.post('/api/auth/login', { password }),
-  loginWithToken: (token: string) => api.post('/api/auth/login', { token }),
+  login: (password: string) => api.post('/api/auth/login', { 
+    password, 
+    fingerprint: typeof window !== 'undefined' ? getFingerprint() : undefined 
+  }),
+  loginWithToken: (token: string) => api.post('/api/auth/login', { 
+    token, 
+    fingerprint: typeof window !== 'undefined' ? getFingerprint() : undefined 
+  }),
   verifyToken: (token: string) => api.get(`/api/auth/verify-token?token=${token}`),
   generateToken: () => api.get('/api/auth/token/generate'),
 }
@@ -242,14 +396,10 @@ export const proxyApi = {
   test: (data: { profileId?: string; type?: string; host?: string; port?: number; username?: string; password?: string; testUrl?: string }) => 
     api.post('/api/proxy/test', data),
 }
-
-// Logs API
 export const logsApi = {
   list: () => api.get('/api/logs'),
   getRecent: (lines = 100) => api.get(`/api/logs/recent?lines=${lines}`),
 }
-
-// Placeholders API (模板占位符)
 export const placeholdersApi = {
   list: () => api.get('/api/placeholders'),
   preview: (template: string, context?: Record<string, string>) => 

@@ -39,9 +39,7 @@ export class GeminiClient extends AbstractClient {
         // 支持自定义 baseUrl（用于代理服务）
         const requestOptions = this.baseUrl ? { baseUrl: this.baseUrl } : undefined
         const genAI = new GoogleGenerativeAI(apiKey, requestOptions)
-        const model = options.model || 'gemini-1.5-flash'
-
-        // 预处理图片URL为base64（Gemini不支持直接使用URL）
+        const model = options.model || 'gemini-2.5-flash'
         const preprocessedHistories = await preprocessImageUrls(histories)
 
         // Separate system prompt from history

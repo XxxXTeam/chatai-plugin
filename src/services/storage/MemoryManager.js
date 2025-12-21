@@ -1,3 +1,5 @@
+import { chatLogger } from '../../core/utils/logger.js'
+const logger = chatLogger
 import config from '../../../config/config.js'
 import { databaseService } from './DatabaseService.js'
 import { LlmService } from '../llm/LlmService.js'

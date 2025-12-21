@@ -1,3 +1,5 @@
+import { chatLogger } from '../../core/utils/logger.js'
+const logger = chatLogger
 /**
  * API使用统计模块
  * 记录每次API请求的详细信息

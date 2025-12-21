@@ -41,7 +41,7 @@ export default function LoginPage() {
     try {
       const res = await authApi.login(password) as { data: { token: string } }
       if (res.data?.token) {
-        localStorage.setItem('chaite_token', res.data.token)
+        localStorage.setItem('chatai_token', res.data.token)
         toast.success('登录成功')
         router.push('/')
       }

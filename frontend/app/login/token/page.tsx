@@ -17,7 +17,7 @@ function TokenLoginContent() {
     const token = searchParams.get('token')
     
     // 1. 先检查是否已有有效的JWT token
-    const existingToken = localStorage.getItem('chaite_token')
+    const existingToken = localStorage.getItem('chatai_token')
     if (existingToken) {
       // 尝试验证现有token是否有效（简单检查JWT格式和过期）
       try {
@@ -35,7 +35,7 @@ function TokenLoginContent() {
         }
       } catch {
         // Token解析失败，继续正常登录流程
-        localStorage.removeItem('chaite_token')
+        localStorage.removeItem('chatai_token')
       }
     }
     

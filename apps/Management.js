@@ -148,7 +148,7 @@ export class AIManagement extends plugin {
         
         // 使用新的getLoginInfo方法获取完整登录信息
         const loginInfo = webServer.getLoginInfo(permanent, forceNew)
-        const { localUrl, publicUrl, customUrls, validity } = loginInfo
+        const { localUrl, localUrls, localIPv6Urls, publicUrl, customUrls, validity } = loginInfo
         
         const validityText = validity
         const warningText = permanent ? '\n\n⚠️ 请妥善保管此链接，不要泄露给他人！' : ''
@@ -164,12 +164,23 @@ export class AIManagement extends plugin {
             user_id: this.e.self_id
         })
         
-        // 本地地址
-        messages.push({
-            message: `📍 本地地址：\n${localUrl}`,
-            nickname: 'AI管理面板',
-            user_id: this.e.self_id
-        })
+        // 所有本地IPv4地址
+        if (localUrls && localUrls.length > 0) {
+            messages.push({
+                message: `📍 本地地址（IPv4）：\n${localUrls.join('\n')}`,
+                nickname: 'AI管理面板',
+                user_id: this.e.self_id
+            })
+        }
+        
+        // 所有本地IPv6地址
+        if (localIPv6Urls && localIPv6Urls.length > 0) {
+            messages.push({
+                message: `📍 本地地址（IPv6）：\n${localIPv6Urls.join('\n')}`,
+                nickname: 'AI管理面板',
+                user_id: this.e.self_id
+            })
+        }
         
         // 公网地址
         if (publicUrl) {
@@ -193,7 +204,7 @@ export class AIManagement extends plugin {
         
         // 使用说明
         messages.push({
-            message: `📌 使用说明：\n1. 点击链接在浏览器中打开\n2. 如本地访问失败，请尝试公网地址\n3. 链接包含登录凭证，请勿分享${warningText}`,
+            message: `📌 使用说明：\n1. 点击链接在浏览器中打开\n2. 优先使用与设备同网段的地址\n3. 如本地访问失败，请尝试公网地址\n4. 链接包含登录凭证，请勿分享${warningText}`,
             nickname: 'AI管理面板',
             user_id: this.e.self_id
         })
@@ -222,23 +233,35 @@ export class AIManagement extends plugin {
             // 备用：直接私聊发送文本
             const textParts = [
                 `🔐 AI插件管理面板（${validityText}）`,
-                '',
-                `📍 本地地址：`,
-                localUrl
+                ''
             ]
             
+            // 添加所有IPv4地址
+            if (localUrls && localUrls.length > 0) {
+                textParts.push(`📍 本地地址（IPv4）：`)
+                textParts.push(...localUrls)
+                textParts.push('')
+            }
+            
+            // 添加所有IPv6地址
+            if (localIPv6Urls && localIPv6Urls.length > 0) {
+                textParts.push(`📍 本地地址（IPv6）：`)
+                textParts.push(...localIPv6Urls)
+                textParts.push('')
+            }
+            
             if (publicUrl) {
-                textParts.push('', `🌐 公网地址：`, publicUrl)
+                textParts.push(`🌐 公网地址：`, publicUrl, '')
             }
             
             // 添加自定义地址
             if (customUrls && customUrls.length > 0) {
                 for (const custom of customUrls) {
-                    textParts.push('', `🔗 ${custom.label}：`, custom.url)
+                    textParts.push(`🔗 ${custom.label}：`, custom.url, '')
                 }
             }
             
-            textParts.push('', `📌 链接包含登录凭证，请勿分享${warningText}`)
+            textParts.push(`📌 链接包含登录凭证，请勿分享${warningText}`)
             
             const textMsg = textParts.filter(Boolean).join('\n')
             
@@ -257,7 +280,7 @@ export class AIManagement extends plugin {
             }
         } catch (err) {
             logger.error('[Management] 私聊发送失败:', err)
-            // 私聊失败时在群里回复（仅本地地址）
+            // 私聊失败时在群里回复（仅本地第一个地址）
             await this.reply(`管理面板（${validityText}）：\n${localUrl}${warningText}`, true)
         }
     }

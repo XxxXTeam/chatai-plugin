@@ -1,3 +1,5 @@
+import { chatLogger } from '../core/utils/logger.js'
+const logger = chatLogger
 /**
  * 内置 MCP 服务器
  */

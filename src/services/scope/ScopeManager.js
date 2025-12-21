@@ -1,3 +1,5 @@
+import { chatLogger } from '../../core/utils/logger.js'
+const logger = chatLogger
 /**
  * 作用域管理器 - 管理用户和群组的独立配置
  * 支持为不同用户和群组设置独立的Prompt和Preset

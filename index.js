@@ -3,36 +3,14 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import config from './config/config.js'
 import { getWebServer } from './src/services/webServer.js'
+import { chatLogger, c } from './src/core/utils/logger.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-// 颜色日志
-const colors = {
-  reset: '\x1b[0m',
-  bright: '\x1b[1m',
-  dim: '\x1b[2m',
-  red: '\x1b[31m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  blue: '\x1b[34m',
-  magenta: '\x1b[35m',
-  cyan: '\x1b[36m',
-  white: '\x1b[37m'
-}
-
-const pluginName = 'Chaite-AI'
+const pluginName = 'ChatAI'
 const pluginVersion = '1.0.0'
-
-// 居中显示的启动横幅
-const bannerWidth = 36
-const title = `${pluginName} v${pluginVersion}`
-const padding = Math.max(0, Math.floor((bannerWidth - title.length) / 2))
-const paddedTitle = ' '.repeat(padding) + title + ' '.repeat(bannerWidth - title.length - padding)
-
-logger.info(`${colors.cyan}╔${'═'.repeat(bannerWidth)}╗${colors.reset}`)
-logger.info(`${colors.cyan}║${colors.reset}${colors.bright}${colors.magenta}${paddedTitle}${colors.reset}${colors.cyan}║${colors.reset}`)
-logger.info(`${colors.cyan}╚${'═'.repeat(bannerWidth)}╝${colors.reset}`)
+chatLogger.banner(`${pluginName} v${pluginVersion}`, '正在加载...')
 
 // Initialize global object if needed
 if (!global.segment) {
@@ -49,12 +27,8 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true })
 }
 config.startSync(dataDir)
-
-// Start web server
 const webServer = getWebServer()
 webServer.start()
-
-// 异步初始化 MCP（不阻塞插件加载）
 let mcpToolCount = 0
 let mcpCustomToolCount = 0
 ;(async () => {
@@ -64,7 +38,7 @@ let mcpCustomToolCount = 0
     mcpToolCount = mcpManager.builtinServer?.tools?.length || 0
     mcpCustomToolCount = mcpManager.customToolsServer?.tools?.length || 0
   } catch (err) {
-    logger.error(`${colors.red}[MCP] 初始化失败:${colors.reset}`, err.message)
+    chatLogger.error('MCP', '初始化失败:', err.message)
   }
 })()
 
@@ -88,16 +62,18 @@ if (fs.existsSync(appsDir)) {
       loadStats.plugins.push(name)
     } else {
       loadStats.failed++
-      logger.error(`${colors.red}[Plugin] 加载失败 ${name}:${colors.reset}`, result.reason?.message || result.reason)
+      chatLogger.error('Plugin', `加载失败 ${name}:`, result.reason?.message || result.reason)
     }
   })
 }
 
-// 输出加载统计
-logger.info(`${colors.green}[Plugin]${colors.reset} 加载完成: ${colors.bright}${loadStats.success}${colors.reset} 个插件`)
+const statsItems = [
+  { label: '已加载', value: `${loadStats.success} 个模块`, color: c.green },
+  { label: '模块列表', value: loadStats.plugins.join(', '), color: c.cyan }
+]
 if (loadStats.failed > 0) {
-  logger.warn(`${colors.yellow}[Plugin]${colors.reset} 加载失败: ${colors.red}${loadStats.failed}${colors.reset} 个`)
+  statsItems.push({ label: '加载失败', value: `${loadStats.failed} 个`, color: c.red })
 }
-logger.info(`${colors.cyan}════════════════════════════════════${colors.reset}`)
+chatLogger.successBanner(`${pluginName} 加载完成`, statsItems)
 
 export { apps }
