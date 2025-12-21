@@ -648,6 +648,29 @@ export function parseXmlToolCalls(text) {
         .replace(/\n{3,}/g, '\n\n')
         .trim()
     
+    // 清理残留的工具参数JSON片段（如转发消息的messages数组）
+    // 这些片段可能是工具调用被截断或格式错误导致的
+    const toolArgFragmentPatterns = [
+        // 转发消息参数片段: ,{"user_id":"...","nickname":"...","message":"..."}...
+        /^\s*,?\s*\[?\s*\{[^{}]*"user_id"[^{}]*"nickname"[^{}]*"message"[^{}]*\}[\s\S]*$/,
+        // 被截断的JSON数组尾部: ]}"}]}]}
+        /^[\s\[\]\{\}"',:\\]+$/,
+        // 纯转义JSON片段
+        /^[\s,\[\]\{\}"\\:a-zA-Z0-9_-]+$/,
+    ]
+    
+    for (const pattern of toolArgFragmentPatterns) {
+        if (pattern.test(cleanText)) {
+            // 检查是否只有JSON字符，没有自然语言
+            const stripped = cleanText.replace(/"[^"]*"/g, '""').replace(/\\"/g, '')
+            if (/^[\s\[\]\{\},:"'\\a-zA-Z0-9_-]*$/.test(stripped) && cleanText.length < 500) {
+                logger.debug(`[Tool Parser] 清理残留的工具参数片段: ${cleanText.substring(0, 100)}...`)
+                cleanText = ''
+                break
+            }
+        }
+    }
+    
     // 工具调用数量限制和去重
     const MAX_TOOL_CALLS = 10
     if (toolCalls.length > 0) {

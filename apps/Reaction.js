@@ -1,18 +1,14 @@
 /**
  * AI 表情回应事件处理
- * 使用AI人设响应表情回应
- * 
- * 兼容平台:
- * - icqq 1.5.8+: notice.group.reaction (e.id, e.seq, e.user_id)
- * - NapCat: notice_type='group_msg_emoji_like'
- * - LLOneBot/Lagrange: sub_type='emoji_like' 或 'reaction'
- * - go-cqhttp / TRSS
- * 
- * 事件属性 (已统一适配):
- * - e.id / e.emoji_id / e.face_id  表情ID
- * - e.seq / e.message_id / e.msg_id  消息标识
- * - e.user_id / e.operator_id  操作者
- * - e.target_id / e.sender_id  被回应消息的发送者
+ * NapCat 表情回应事件格式:
+ * {
+ *   post_type: 'notice',
+ *   notice_type: 'group_msg_emoji_like',
+ *   group_id: number,
+ *   user_id: number,      // 操作者
+ *   message_id: number,   // 被回应的消息ID
+ *   likes: [{ emoji_id: string, count: number }]  // 表情列表
+ * }
  * 
  * 表情ID参考: https://bot.q.qq.com/wiki/develop/api-v2/openapi/emoji/model.html
  */
@@ -26,8 +22,6 @@ import {
     getBot
 } from '../src/utils/eventAdapter.js'
 
-// 表情ID映射表（QQ官方表情）
-// 参考: https://bot.q.qq.com/wiki/develop/api-v2/openapi/emoji/model.html
 const EMOJI_MAP = {
     // 经典QQ表情 (0-200)
     '0': '惊讶', '1': '撇嘴', '2': '色', '3': '发呆', '4': '得意', '5': '流泪',
@@ -118,17 +112,94 @@ function registerReactionListener() {
             for (const bot of bots) {
                 if (!bot || bot._reactionListenerAdded) continue
                 bot._reactionListenerAdded = true
+                
+                // icqq 事件
                 bot.on?.('notice.group.reaction', async (e) => {
                     await handleReactionEvent(e, bot)
                 })
+                
+                // NapCat 事件: group_msg_emoji_like
+                bot.on?.('notice.group_msg_emoji_like', async (e) => {
+                    await handleNapCatReactionEvent(e, bot)
+                })
+                
+                // 其他兼容事件名
                 bot.on?.('notice.group.emoji_like', async (e) => {
                     await handleReactionEvent(e, bot)
                 })
+                
+                // LLOneBot/Lagrange 可能使用的事件名
+                bot.on?.('notice.group.msg_emoji_like', async (e) => {
+                    await handleNapCatReactionEvent(e, bot)
+                })
+                
+                logger.debug(`[AI-Reaction] 已为 Bot ${bot.uin || bot.self_id} 注册表情回应事件监听`)
             }
         } catch (err) {
             logger.error('[AI-Reaction] 注册事件监听器失败:', err)
         }
     }, 3000)
+}
+
+/**
+ * 处理 NapCat 特有的表情回应事件格式
+ * NapCat 事件格式:
+ * {
+ *   post_type: 'notice',
+ *   notice_type: 'group_msg_emoji_like',
+ *   group_id: number,
+ *   user_id: number,
+ *   message_id: number,
+ *   likes: [{ emoji_id: string, count: number }]
+ * }
+ */
+async function handleNapCatReactionEvent(e, bot) {
+    try {
+        if (!config.get('features.reaction.enabled')) {
+            return
+        }
+        
+        const groupId = e.group_id
+        const userId = e.user_id || e.operator_id
+        const messageId = e.message_id || e.msg_id
+        const likes = e.likes || []
+        
+        if (!groupId || !userId || !messageId) {
+            logger.debug('[AI-Reaction] NapCat事件缺少必要字段:', JSON.stringify(e).substring(0, 200))
+            return
+        }
+        
+        const botIds = getBotIds()
+        const selfId = e.self_id || bot?.uin || Bot?.uin
+        
+        // 机器人自己的回应不处理
+        if (userId === selfId || botIds.has(String(userId))) {
+            return
+        }
+        
+        // 处理每个表情回应
+        for (const like of likes) {
+            const emojiId = like.emoji_id || like.face_id
+            if (!emojiId) continue
+            
+            // 构造统一格式的事件对象
+            const unifiedEvent = {
+                ...e,
+                id: emojiId,
+                emoji_id: emojiId,
+                seq: messageId,
+                message_id: messageId,
+                user_id: userId,
+                group_id: groupId,
+                set: true,  // NapCat 的 likes 事件通常是添加回应
+                sub_type: 'add'
+            }
+            
+            await handleReactionEvent(unifiedEvent, bot)
+        }
+    } catch (err) {
+        logger.error('[AI-Reaction] 处理NapCat表情事件失败:', err)
+    }
 }
 
 // 防重复响应：记录最近处理的事件
@@ -149,7 +220,12 @@ async function handleReactionEvent(e, bot) {
         
         // 使用统一事件解析
         const reactionInfo = parseReactionEvent(e)
-        const { emojiId, messageId, userId, targetId, isAdd, groupId } = reactionInfo
+        let { emojiId, messageId, userId, targetId, isAdd, groupId } = reactionInfo
+        
+        // NapCat 可能在 likes 数组中传递表情ID
+        if (!emojiId && e.likes?.length > 0) {
+            emojiId = e.likes[0].emoji_id || e.likes[0].face_id
+        }
         
         const botIds = getBotIds()
         const selfId = e.self_id || bot?.uin || Bot?.uin

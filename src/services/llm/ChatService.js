@@ -995,20 +995,34 @@ export class ChatService {
                 }
             }
         }
+        const toolArgsPatterns = [
+            /^\s*,?\s*\[\s*\{.*"user_id".*"nickname".*"message".*\}\s*\]/s,  
+            /^\s*,?\s*\{.*"user_id".*"nickname".*"message".*\}/s,            
+            /^\s*\{.*"function".*"name".*"arguments".*\}/s,                  
+            /^\s*\{.*"name".*"arguments".*\}/s,                            
+            /\]\s*\}"\s*\}\s*\]\s*\}$/,                                      
+        ]
+        for (const pattern of toolArgsPatterns) {
+            if (pattern.test(trimmed)) {
+                const stripped = trimmed.replace(/"[^"]*"/g, '""')
+                const isOnlyJson = /^[\s\[\]\{\},:"'\d\w_-]*$/.test(stripped)
+                if (isOnlyJson) {
+                    return true
+                }
+            }
+        }
         
         if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
             try {
                 const parsed = JSON.parse(trimmed)
                 const keys = Object.keys(parsed)
                 if (keys.length === 1 && keys[0] === 'tool_calls' && Array.isArray(parsed.tool_calls)) {
-                    // 空数组或有效的工具调用数组都视为纯工具调用JSON
                     return parsed.tool_calls.length === 0 || parsed.tool_calls.every(tc => 
                         tc && typeof tc === 'object' && 
                         (tc.function?.name || tc.name) 
                     )
                 }
             } catch {
-                // JSON解析失败，但可能是被截断的工具调用JSON
             }
         }
         const codeBlockMatch = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i)
