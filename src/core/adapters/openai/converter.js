@@ -182,19 +182,38 @@ registerIntoChaiteConverter('openai', (msg) => {
                 }
                 return { type: 'text', text }
             }))
-
-            // 安全解析 tool_calls
             let toolCalls = undefined
             if (msg.tool_calls && msg.tool_calls.length > 0) {
                 toolCalls = msg.tool_calls.map(t => {
                     let args = t.function?.arguments
-                    // 安全解析 arguments
                     if (typeof args === 'string') {
                         try {
                             args = JSON.parse(args)
                         } catch (e) {
-                            console.warn('[OpenAI Converter] 解析 arguments 失败:', args, e.message)
-                            args = {}
+                            let fixed = args.trim()
+                            const openBraces = (fixed.match(/\{/g) || []).length
+                            const closeBraces = (fixed.match(/\}/g) || []).length
+                            const openBrackets = (fixed.match(/\[/g) || []).length
+                            const closeBrackets = (fixed.match(/\]/g) || []).length
+                            if (/:\s*\d+$/.test(fixed) || /:\s*"[^"]*$/.test(fixed)) {
+                                if (/:\s*"[^"]*$/.test(fixed)) {
+                                    fixed += '"'
+                                }
+                            }
+                            for (let i = 0; i < openBrackets - closeBrackets; i++) {
+                                fixed += ']'
+                            }
+                            for (let i = 0; i < openBraces - closeBraces; i++) {
+                                fixed += '}'
+                            }
+                            
+                            try {
+                                args = JSON.parse(fixed)
+                                console.debug('[OpenAI Converter] 修复截断的arguments成功:', fixed)
+                            } catch {
+                                console.warn('[OpenAI Converter] 解析 arguments 失败:', args, e.message)
+                                args = {}
+                            }
                         }
                     } else if (!args) {
                         args = {}
@@ -207,8 +226,6 @@ registerIntoChaiteConverter('openai', (msg) => {
                             arguments: args,
                         },
                     }
-                    // 保留 Gemini thought_signature（OpenAI 兼容模式）
-                    // 这对于 Gemini 3 Pro 模型是必须的
                     if (t.extra_content?.google?.thought_signature) {
                         toolCall.thought_signature = t.extra_content.google.thought_signature
                         toolCall.extra_content = t.extra_content
