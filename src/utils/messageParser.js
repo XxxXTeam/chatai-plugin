@@ -422,6 +422,12 @@ export async function parseUserMessage(e, options = {}) {
                     } catch {
                         text += '[卡片消息]'
                     }
+                    // 存储原始JSON数据到contents中，供工具使用
+                    contents.push({
+                        type: 'json_card',
+                        data: segData.data || segData,
+                        prompt: '如需转发此卡片，请使用resend_quoted_card工具'
+                    })
                     break
                 
                 case 'xml':
@@ -1096,9 +1102,11 @@ async function parseReplyMessage(e, options) {
                                 }
                             } else {
                                 replyTextContent += `[卡片消息:${jsonData.prompt || jsonData.desc || ''}]`
+                                // 添加提示，告诉AI使用正确的工具
+                                replyTextContent += '(要转发此卡片请使用resend_quoted_card工具,如需伪造消息则设置as_forward=true)'
                             }
                         } catch {
-                            replyTextContent += '[卡片消息]'
+                            replyTextContent += '[卡片消息](要转发请用resend_quoted_card,伪造消息设置as_forward=true)'
                         }
                     }
                     break
@@ -1805,7 +1813,171 @@ export const segment = {
     /** 长消息 (NapCat) */
     long_msg: (id) => ({ type: 'long_msg', data: { id } }),
     /** 天气分享 (NapCat) */
-    weather: (city, code) => ({ type: 'weather', data: { city, code } })
+    weather: (city, code) => ({ type: 'weather', data: { city, code } }),
+    
+    /** 
+     * 多图消息 - 发送多张图片
+     * @param {Array<string>} urls - 图片URL数组
+     */
+    images: (urls) => urls.map(url => ({ type: 'image', file: url, data: { file: url } })),
+    
+    /**
+     * 引用+文本组合
+     * @param {string} replyId - 引用的消息ID
+     * @param {string} text - 文本内容
+     */
+    replyText: (replyId, text) => [
+        { type: 'reply', data: { id: String(replyId) } },
+        { type: 'text', data: { text } }
+    ],
+    
+    /**
+     * @+文本组合
+     * @param {string|number} qq - 要@的QQ号
+     * @param {string} text - 文本内容
+     */
+    atText: (qq, text) => [
+        { type: 'at', data: { qq: String(qq) } },
+        { type: 'text', data: { text: ' ' + text } }
+    ],
+    
+    /**
+     * 图文混合消息
+     * @param {string} text - 文本内容
+     * @param {string|Array} images - 图片URL或URL数组
+     */
+    textImage: (text, images) => {
+        const segs = [{ type: 'text', data: { text } }]
+        const imgList = Array.isArray(images) ? images : [images]
+        imgList.forEach(url => segs.push({ type: 'image', file: url, data: { file: url } }))
+        return segs
+    },
+    
+    /**
+     * 闪照 (NapCat/icqq)
+     * @param {string} file - 图片文件/URL
+     */
+    flash: (file) => ({ 
+        type: 'image', 
+        file, 
+        flash: true,
+        data: { file, type: 'flash' }
+    }),
+    
+    /**
+     * 秀图 (icqq)
+     * @param {string} file - 图片文件/URL
+     * @param {number} id - 秀图类型 (40000普通/40001幻影/40002抖动/40003生日/40004爱你/40005征友)
+     */
+    show: (file, id = 40000) => ({
+        type: 'image',
+        file,
+        data: { file, type: 'show', id }
+    }),
+    
+    /**
+     * 语音消息 - 支持更多参数 (NapCat)
+     * @param {string} file - 语音文件/URL
+     * @param {boolean} magic - 是否变声
+     */
+    voice: (file, magic = false) => ({
+        type: 'record',
+        file,
+        magic: magic ? 1 : 0,
+        data: { file, magic: magic ? 1 : 0 }
+    }),
+    
+    /**
+     * 合并转发节点 - 使用现有消息ID
+     * @param {string} id - 消息ID
+     */
+    nodeId: (id) => ({
+        type: 'node',
+        data: { id: String(id) }
+    }),
+    
+    /**
+     * 合并转发节点 - 自定义内容（支持富文本）
+     * @param {string|number} userId - 发送者QQ
+     * @param {string} nickname - 发送者昵称
+     * @param {Array|string} content - 消息内容
+     * @param {number} time - 时间戳（可选）
+     */
+    nodeCustom: (userId, nickname, content, time) => ({
+        type: 'node',
+        data: {
+            user_id: String(userId),
+            nickname,
+            content: Array.isArray(content) ? content : [{ type: 'text', data: { text: content } }],
+            ...(time ? { time } : {})
+        }
+    }),
+    
+    /**
+     * 链接卡片 (JSON)
+     * @param {string} title - 标题
+     * @param {string} desc - 描述
+     * @param {string} url - 链接
+     * @param {string} image - 图片URL（可选）
+     */
+    linkCard: (title, desc, url, image) => ({
+        type: 'json',
+        data: {
+            data: JSON.stringify({
+                app: 'com.tencent.structmsg',
+                desc: '',
+                view: 'news',
+                ver: '0.0.0.1',
+                prompt: title,
+                meta: {
+                    news: { title, desc, jumpUrl: url, preview: image || '', tag: '', tagIcon: '' }
+                }
+            })
+        }
+    }),
+    
+    /**
+     * 音乐卡片 - 自定义
+     * @param {Object} data - 音乐数据 { url, audio, title, singer, image }
+     */
+    musicCustom: (data) => ({
+        type: 'music',
+        data: {
+            type: 'custom',
+            url: data.url || '',
+            audio: data.audio || '',
+            title: data.title || '',
+            content: data.singer || data.content || '',
+            image: data.image || ''
+        }
+    }),
+    
+    /**
+     * 表情回应消息段 (NapCat扩展)
+     * @param {string} messageId - 目标消息ID
+     * @param {string|number} emojiId - 表情ID
+     */
+    reaction: (messageId, emojiId) => ({
+        type: 'reaction',
+        data: { message_id: messageId, emoji_id: String(emojiId) }
+    }),
+    
+    /**
+     * 长文本消息 (会自动转为合并转发)
+     * @param {string} text - 长文本内容
+     * @param {number} chunkSize - 每段最大字符数（默认500）
+     */
+    longText: (text, chunkSize = 500) => {
+        if (text.length <= chunkSize) {
+            return [{ type: 'text', data: { text } }]
+        }
+        // 分割为多个文本段
+        const chunks = []
+        for (let i = 0; i < text.length; i += chunkSize) {
+            chunks.push(text.substring(i, i + chunkSize))
+        }
+        return chunks.map(chunk => ({ type: 'text', data: { text: chunk } }))
+    }
 }
 
 /**
@@ -1931,10 +2103,381 @@ export const CardBuilder = {
      */
     json(data) {
         return segment.json(data)
+    },
+
+    /**
+     * 创建大图卡片
+     * @param {string} image - 图片URL
+     * @param {string} title - 标题
+     * @param {string} content - 内容描述
+     */
+    bigImage(image, title = '', content = '') {
+        return segment.json({
+            app: 'com.tencent.structmsg',
+            desc: '',
+            view: 'news',
+            ver: '0.0.0.1',
+            prompt: title || '[图片]',
+            meta: {
+                news: {
+                    title: title || '',
+                    desc: content || '',
+                    preview: image,
+                    tag: '',
+                    jumpUrl: image
+                }
+            }
+        })
+    },
+
+    /**
+     * 创建文本卡片 (带图标)
+     * @param {string} title - 标题
+     * @param {string} content - 内容
+     * @param {string} icon - 图标URL
+     */
+    textCard(title, content, icon = '') {
+        return segment.json({
+            app: 'com.tencent.structmsg',
+            desc: '',
+            view: 'news',
+            ver: '0.0.0.1',
+            prompt: title,
+            meta: {
+                news: {
+                    title,
+                    desc: content,
+                    preview: icon,
+                    tag: '',
+                    jumpUrl: ''
+                }
+            }
+        })
+    },
+
+    /**
+     * 创建小程序卡片
+     * @param {Object} data - 小程序数据
+     */
+    miniApp(data) {
+        return segment.json({
+            app: CardType.MINIAPP,
+            desc: '',
+            view: 'all',
+            ver: '1.0.0.89',
+            prompt: data.title || '[小程序]',
+            meta: {
+                detail_1: {
+                    appid: data.appid || '',
+                    title: data.title || '',
+                    desc: data.desc || '',
+                    preview: data.image || '',
+                    qqdocurl: data.url || '',
+                    host: { uin: 0, nick: '' },
+                    shareTemplateId: '',
+                    shareTemplateData: {}
+                }
+            }
+        })
+    },
+
+    /**
+     * 创建Ark消息（通用模板）
+     * @param {string} templateId - 模板ID
+     * @param {Object} kv - 键值对参数
+     */
+    ark(templateId, kv = {}) {
+        const kvList = Object.entries(kv).map(([key, value]) => ({ key, value: String(value) }))
+        return {
+            type: 'ark',
+            data: {
+                template_id: templateId,
+                kv: kvList
+            }
+        }
     }
 }
 
-// ==================== 标准化消息API ====================
+/**
+ * 消息构建器 - 链式构建消息
+ */
+export class MessageBuilder {
+    constructor() {
+        this.segments = []
+    }
+
+    /**
+     * 添加文本
+     */
+    text(content) {
+        if (content) {
+            this.segments.push(segment.text(content))
+        }
+        return this
+    }
+
+    /**
+     * 添加图片
+     */
+    image(file, opts = {}) {
+        this.segments.push(segment.image(file, opts))
+        return this
+    }
+
+    /**
+     * 添加@
+     */
+    at(qq, name) {
+        this.segments.push(segment.at(qq, name))
+        return this
+    }
+
+    /**
+     * 添加表情
+     */
+    face(id) {
+        this.segments.push(segment.face(id))
+        return this
+    }
+
+    /**
+     * 添加引用
+     */
+    reply(id) {
+        this.segments.push(segment.reply(id))
+        return this
+    }
+
+    /**
+     * 添加语音
+     */
+    record(file) {
+        this.segments.push(segment.record(file))
+        return this
+    }
+
+    /**
+     * 添加视频
+     */
+    video(file, thumb) {
+        this.segments.push(segment.video(file, thumb))
+        return this
+    }
+
+    /**
+     * 添加JSON卡片
+     */
+    json(data) {
+        this.segments.push(segment.json(data))
+        return this
+    }
+
+    /**
+     * 添加Markdown
+     */
+    markdown(content) {
+        this.segments.push(segment.markdown(content))
+        return this
+    }
+
+    /**
+     * 添加商城表情
+     */
+    mface(packageId, emojiId, key, summary) {
+        this.segments.push(segment.mface(packageId, emojiId, key, summary))
+        return this
+    }
+
+    /**
+     * 添加任意消息段
+     */
+    add(seg) {
+        if (Array.isArray(seg)) {
+            this.segments.push(...seg)
+        } else {
+            this.segments.push(seg)
+        }
+        return this
+    }
+
+    /**
+     * 构建消息数组
+     */
+    build() {
+        return this.segments
+    }
+
+    /**
+     * 静态创建方法
+     */
+    static create() {
+        return new MessageBuilder()
+    }
+}
+
+/**
+ * Raw消息工具 - 用于发送原始协议消息
+ */
+export const RawMessage = {
+    /**
+     * 创建raw消息段 (TRSS/Chronocat)
+     * @param {Object} data - raw数据
+     */
+    raw(data) {
+        return { type: 'raw', data }
+    },
+
+    /**
+     * 构建OneBot消息段数组
+     * @param {Array} segments - 简化格式的消息段 [{type, ...data}]
+     * @returns {Array} OneBot格式消息段
+     */
+    toOneBot(segments) {
+        return segments.map(seg => {
+            if (seg.type && seg.data) return seg
+            const { type, ...data } = seg
+            return { type, data }
+        })
+    },
+
+    /**
+     * 构建icqq消息段数组
+     * @param {Array} segments - OneBot格式消息段
+     * @returns {Array} icqq格式消息段
+     */
+    toIcqq(segments) {
+        return segments.map(seg => {
+            const data = seg.data || {}
+            return { type: seg.type, ...data }
+        })
+    },
+
+    /**
+     * 解析CQ码字符串为消息段数组
+     * @param {string} cqString - CQ码字符串
+     * @returns {Array} 消息段数组
+     */
+    parseCQCode(cqString) {
+        if (!cqString) return []
+        
+        const segments = []
+        const regex = /\[CQ:([^,\]]+)(?:,([^\]]*))?\]|([^\[\]]+)/g
+        let match
+        
+        while ((match = regex.exec(cqString)) !== null) {
+            if (match[3]) {
+                // 普通文本
+                segments.push({ type: 'text', data: { text: match[3] } })
+            } else {
+                // CQ码
+                const type = match[1]
+                const paramsStr = match[2] || ''
+                const data = {}
+                
+                if (paramsStr) {
+                    paramsStr.split(',').forEach(param => {
+                        const [key, ...valueParts] = param.split('=')
+                        const value = valueParts.join('=')
+                            .replace(/&#91;/g, '[')
+                            .replace(/&#93;/g, ']')
+                            .replace(/&#44;/g, ',')
+                            .replace(/&amp;/g, '&')
+                        if (key) data[key] = value
+                    })
+                }
+                
+                segments.push({ type, data })
+            }
+        }
+        
+        return segments
+    },
+
+    /**
+     * 将消息段数组转换为CQ码字符串
+     * @param {Array} segments - 消息段数组
+     * @returns {string} CQ码字符串
+     */
+    toCQCode(segments) {
+        return MessageUtils.toCQCode(segments)
+    }
+}
+
+/**
+ * 转发消息构建器
+ */
+export class ForwardBuilder {
+    constructor() {
+        this.nodes = []
+        this.options = {}
+    }
+
+    /**
+     * 添加自定义节点
+     * @param {string|number} userId - 发送者QQ
+     * @param {string} nickname - 发送者昵称
+     * @param {Array|string} content - 消息内容
+     * @param {number} time - 时间戳（可选）
+     */
+    addNode(userId, nickname, content, time) {
+        this.nodes.push(segment.nodeCustom(userId, nickname, content, time))
+        return this
+    }
+
+    /**
+     * 添加消息ID节点（引用现有消息）
+     * @param {string} messageId - 消息ID
+     */
+    addMessageId(messageId) {
+        this.nodes.push(segment.nodeId(messageId))
+        return this
+    }
+
+    /**
+     * 批量添加文本消息节点
+     * @param {Array<{user_id, nickname, text}>} messages - 消息列表
+     */
+    addTexts(messages) {
+        messages.forEach(msg => {
+            this.addNode(msg.user_id || '10000', msg.nickname || '用户', msg.text || msg.content || '')
+        })
+        return this
+    }
+
+    /**
+     * 设置外显选项
+     * @param {Object} opts - { prompt, summary, source }
+     */
+    setOptions(opts) {
+        this.options = { ...this.options, ...opts }
+        return this
+    }
+
+    /**
+     * 构建节点数组
+     */
+    build() {
+        return this.nodes
+    }
+
+    /**
+     * 获取完整配置
+     */
+    getConfig() {
+        return {
+            nodes: this.nodes,
+            ...this.options
+        }
+    }
+
+    /**
+     * 静态创建方法
+     */
+    static create() {
+        return new ForwardBuilder()
+    }
+}
+
 
 /**
  * 标准化消息API - 兼容多平台
@@ -2191,7 +2734,6 @@ export const MessageApi = {
     }
 }
 
-// ==================== 消息工具函数 ====================
 
 /**
  * 消息数组工具

@@ -207,8 +207,6 @@ export const fileTools = [
             }
         }
     },
-
-    // ========== NapCat 增强 API ==========
     
     {
         name: 'get_group_file_system_info',
@@ -590,8 +588,6 @@ export const fileTools = [
             }
         }
     },
-
-    // ========== 消息文件发送 ==========
     
     {
         name: 'send_file_message',

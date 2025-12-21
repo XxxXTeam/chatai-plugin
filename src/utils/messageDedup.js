@@ -2,20 +2,14 @@
  * 消息去重与自身消息防护模块
  * @module utils/messageDedup
  */
-
-// ======================= 常量配置 =======================
 const MESSAGE_DEDUP_EXPIRE = 10000   // 消息去重过期时间(ms)
 const SENT_MSG_EXPIRE = 30000        // 发送消息指纹过期时间(ms)
 const MSG_ID_EXPIRE = 60000          // 消息ID过期时间(ms)
-
-// ======================= 存储结构 =======================
 const processedMessages = new WeakMap()      // 事件对象 -> boolean
 const recentMessageHashes = new Map()        // hash -> timestamp
 const processedMessageIds = new Map()        // message_id -> timestamp
 const sentMessageFingerprints = new Map()    // fingerprint -> timestamp (机器人发送的消息)
 const processingMessages = new Set()         // 正在处理中的消息ID
-
-// ======================= 内部工具函数 =======================
 
 /**
  * 转义正则特殊字符
@@ -105,8 +99,6 @@ function isSentMessageEcho(e) {
     }
     return false
 }
-
-// ======================= 导出函数 =======================
 
 /**
  * 记录机器人发送的消息指纹

@@ -831,7 +831,6 @@ export async function getGroupList(e) {
     return []
 }
 
-// ======================= Bot 实例管理（从 bot.js 合并） =======================
 
 /**
  * 获取当前 Bot 实例
@@ -957,7 +956,6 @@ export async function safeReply(e, msg, quote = false) {
     }
 }
 
-// ======================= 兼容旧版API =======================
 
 /**
  * @deprecated 使用 detectFramework 代替

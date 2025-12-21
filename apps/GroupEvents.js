@@ -508,8 +508,6 @@ function registerEventListeners() {
             for (const bot of bots) {
                 if (!bot || bot._groupEventListenersAdded) continue
                 bot._groupEventListenersAdded = true
-                
-                // ========== 撤回事件 ==========
                 // icqq: notice.group.recall
                 bot.on?.('notice.group.recall', (e) => handleGroupEvent('recall', e, bot))
                 // OneBot 通用
@@ -525,8 +523,6 @@ function registerEventListeners() {
                         handleGroupEvent('recall', e, bot)
                     }
                 })
-                
-                // ========== 入群事件 ==========
                 bot.on?.('notice.group.increase', (e) => handleGroupEvent('welcome', e, bot))
                 bot.on?.('notice.group', (e) => {
                     if (e.sub_type === 'increase' || e.sub_type === 'approve' || e.sub_type === 'invite') {
@@ -538,8 +534,6 @@ function registerEventListeners() {
                         handleGroupEvent('welcome', e, bot)
                     }
                 })
-                
-                // ========== 退群事件 ==========
                 bot.on?.('notice.group.decrease', (e) => handleGroupEvent('goodbye', e, bot))
                 bot.on?.('notice.group', (e) => {
                     if (e.sub_type === 'decrease' || e.sub_type === 'kick' || e.sub_type === 'leave') {
@@ -551,8 +545,6 @@ function registerEventListeners() {
                         handleGroupEvent('goodbye', e, bot)
                     }
                 })
-                
-                // ========== 禁言事件 ==========
                 bot.on?.('notice.group.ban', (e) => handleGroupEvent('ban', e, bot))
                 bot.on?.('notice.group', (e) => {
                     if (e.sub_type === 'ban' || e.sub_type === 'lift_ban') {
@@ -564,24 +556,18 @@ function registerEventListeners() {
                         handleGroupEvent('ban', e, bot)
                     }
                 })
-                
-                // ========== 精华消息 ==========
                 bot.on?.('notice.group.essence', (e) => handleGroupEvent('essence', e, bot))
                 bot.on?.('notice', (e) => {
                     if (e.notice_type === 'essence' || e.notice_type === 'group_essence') {
                         handleGroupEvent('essence', e, bot)
                     }
                 })
-                
-                // ========== 管理员变更 ==========
                 bot.on?.('notice.group.admin', (e) => handleGroupEvent('admin', e, bot))
                 bot.on?.('notice', (e) => {
                     if (e.notice_type === 'group_admin') {
                         handleGroupEvent('admin', e, bot)
                     }
                 })
-                
-                // ========== 运气王/荣誉 ==========
                 bot.on?.('notice.notify', (e) => {
                     if (e.sub_type === 'lucky_king') handleGroupEvent('luckyKing', e, bot)
                     if (e.sub_type === 'honor') handleGroupEvent('honor', e, bot)

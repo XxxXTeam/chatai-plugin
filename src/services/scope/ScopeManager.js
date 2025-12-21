@@ -580,8 +580,6 @@ export class ScopeManager {
     }
   }
 
-  // ==================== 私聊作用域方法 ====================
-
   /**
    * 获取私聊配置
    * @param {string} userId 用户ID
