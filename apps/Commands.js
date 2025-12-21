@@ -513,6 +513,7 @@ ${dialogText}
 
             const result = await chatService.sendMessage({
                 userId: `summary_${e.group_id}`,
+                groupId: e.group_id ? String(e.group_id) : null,
                 message: summaryPrompt,
                 mode: 'chat'
             })
@@ -612,6 +613,7 @@ ${userMessages.slice(-analyzeCount).map(m => {
 
             const result = await chatService.sendMessage({
                 userId: `portrait_${userId}`,
+                groupId: e.group_id ? String(e.group_id) : null,
                 message: portraitPrompt,
                 mode: 'chat'
             })
@@ -965,6 +967,7 @@ ${rawChatHistory}`
 
             const result = await chatService.sendMessage({
                 userId: `profile_${targetUserId}`,
+                groupId: e.group_id ? String(e.group_id) : null,
                 message: aiPrompt,
                 mode: 'chat'
             })

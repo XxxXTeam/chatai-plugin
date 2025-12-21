@@ -149,8 +149,8 @@ export class ChatService {
         await contextManager.init()
         await mcpManager.init()
 
-        // Get group ID from event for proper isolation
-        const groupId = event?.group_id || event?.data?.group_id || null
+        // Get group ID from options or event for proper isolation
+        const groupId = options.groupId || event?.group_id || event?.data?.group_id || null
         
         // 提取纯userId（不带群号前缀）
         const pureUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
@@ -406,7 +406,7 @@ export class ChatService {
         let systemPrompt = defaultPrompt
         
         try {
-            const scopeGroupId = event?.group_id?.toString() || null
+            const scopeGroupId = groupId?.toString() || null
             const scopeUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
             const pureUserId = scopeUserId.includes('_') ? scopeUserId.split('_').pop() : scopeUserId
             const independentResult = await sm.getIndependentPrompt(scopeGroupId, pureUserId, defaultPrompt)
@@ -457,7 +457,6 @@ export class ChatService {
                         debugInfo.memory.userMemory = { hasMemory: false }
                     }
                 }
-                // 群聊上下文（话题、关系等群级别信息）
                 if (groupId && config.get('memory.groupContext.enabled')) {
                     const nickname = event?.sender?.card || event?.sender?.nickname
                     const groupMemory = await memoryManager.getGroupMemoryContext(String(groupId), cleanUserId, { nickname })
@@ -772,6 +771,16 @@ export class ChatService {
                 finalUsage = response?.usage || {}
                 allToolLogs = response?.toolCallLogs || []
                 
+                // 过滤掉纯工具调用JSON格式的文本（如 {"tool_calls": []}）
+                if (finalResponse.length > 0) {
+                    finalResponse = finalResponse.filter(c => {
+                        if (c.type === 'text' && c.text) {
+                            return !this.isPureToolCallJson(c.text)
+                        }
+                        return true
+                    })
+                }
+                
                 // 记录实际使用的模型
                 if (debugInfo) {
                     debugInfo.usedModel = usedModel
@@ -969,18 +978,35 @@ export class ChatService {
         if (!text || typeof text !== 'string') return false
         
         const trimmed = text.trim()
+        
+        // 检测被截断或不完整的工具调用JSON（如 {"tool_calls": [{"id":... ）
+        // 这种情况下JSON.parse会失败，但仍然应该被过滤
+        if (trimmed.startsWith('{"tool_calls"') || trimmed.startsWith('{ "tool_calls"')) {
+            // 检查是否只包含工具调用相关内容，没有其他有意义的文本
+            const toolCallPattern = /^\{\s*"tool_calls"\s*:\s*\[/
+            if (toolCallPattern.test(trimmed)) {
+                // 检查是否有非JSON的正常文本内容
+                // 如果整个文本都是JSON格式（即使不完整），则过滤
+                const hasNormalText = /[^\s\{\}\[\]"':,\d\w_-]/.test(trimmed.replace(/"[^"]*"/g, ''))
+                if (!hasNormalText) {
+                    return true
+                }
+            }
+        }
+        
         if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
             try {
                 const parsed = JSON.parse(trimmed)
                 const keys = Object.keys(parsed)
                 if (keys.length === 1 && keys[0] === 'tool_calls' && Array.isArray(parsed.tool_calls)) {
-                    return parsed.tool_calls.every(tc => 
+                    // 空数组或有效的工具调用数组都视为纯工具调用JSON
+                    return parsed.tool_calls.length === 0 || parsed.tool_calls.every(tc => 
                         tc && typeof tc === 'object' && 
                         (tc.function?.name || tc.name) 
                     )
                 }
             } catch {
-                return false
+                // JSON解析失败，但可能是被截断的工具调用JSON
             }
         }
         const codeBlockMatch = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i)
@@ -991,14 +1017,19 @@ export class ChatService {
                     const parsed = JSON.parse(inner)
                     const keys = Object.keys(parsed)
                     if (keys.length === 1 && keys[0] === 'tool_calls' && Array.isArray(parsed.tool_calls)) {
-                        return parsed.tool_calls.every(tc => 
+                        // 空数组或有效的工具调用数组都视为纯工具调用JSON
+                        return parsed.tool_calls.length === 0 || parsed.tool_calls.every(tc => 
                             tc && typeof tc === 'object' && 
                             (tc.function?.name || tc.name)
                         )
                     }
                 } catch {
-                    return false
+                    // JSON解析失败
                 }
+            }
+            // 检测代码块中被截断的工具调用JSON
+            if (inner.startsWith('{"tool_calls"') || inner.startsWith('{ "tool_calls"')) {
+                return true
             }
         }
         return false

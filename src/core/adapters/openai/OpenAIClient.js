@@ -474,7 +474,8 @@ export class OpenAIClient extends AbstractClient {
                 textItem.text.includes('<tools>') || 
                 textItem.text.includes('<tool_call>') ||
                 textItem.text.includes('```') ||
-                textItem.text.includes('"name"')
+                textItem.text.includes('"name"') ||
+                textItem.text.includes('"tool_calls"')
             )) {
                 const { cleanText, toolCalls: parsedToolCalls } = parseXmlToolCalls(textItem.text)
                 if (parsedToolCalls.length > 0) {

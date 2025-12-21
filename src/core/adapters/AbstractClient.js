@@ -452,7 +452,6 @@ export function parseXmlToolCalls(text) {
                     }
                 }
                 if (parsed?.tool_calls && Array.isArray(parsed.tool_calls)) {
-                    let foundTools = false
                     for (const tc of parsed.tool_calls) {
                         const funcName = tc.function?.name || tc.name
                         const funcArgs = tc.function?.arguments || tc.arguments
@@ -465,13 +464,11 @@ export function parseXmlToolCalls(text) {
                                     arguments: normalizeToolArguments(funcArgs)
                                 }
                             })
-                            foundTools = true
                             logger.debug(`[Tool Parser] 解析到裸JSON tool_calls格式: ${funcName}`)
                         }
                     }
-                    if (foundTools) {
-                        processedRanges.push({ start: startIdx, end: endIdx })
-                    }
+                    // 成功解析到tool_calls结构，清理JSON
+                    processedRanges.push({ start: startIdx, end: endIdx })
                 }
             }
         }
@@ -562,12 +559,8 @@ export function parseXmlToolCalls(text) {
                 const funcName = fuzzyMatch[1]
                 let funcArgs = fuzzyMatch[2]
                 if (funcName && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(funcName) && funcName.length >= 2) {
-                    // 使用严格模式验证参数，无效参数则跳过此工具调用
-                    const normalizedArgs = normalizeToolArguments(funcArgs, true)
-                    if (normalizedArgs === null) {
-                        logger.debug(`[Tool Parser] 跳过无效参数的工具调用: ${funcName}`)
-                        continue
-                    }
+                    // 尝试规范化参数，无效参数也保留工具调用（让执行时报错）
+                    const normalizedArgs = normalizeToolArguments(funcArgs, false)
                     if (!toolCalls.some(tc => tc.function.name === funcName)) {
                         toolCalls.push({
                             id: generateToolId('fuzzy'),
@@ -582,7 +575,14 @@ export function parseXmlToolCalls(text) {
                     }
                 }
             }
-            if (toolCalls.length > 0) break
+            if (toolCalls.length > 0) {
+                // 清理外层 {"tool_calls": [...]} 结构残留
+                cleanText = cleanText
+                    .replace(/\{\s*"tool_calls"\s*:\s*\[\s*\{[^}]*\}?\s*\]?\s*\}?/g, '')
+                    .replace(/\{\s*"tool_calls"\s*:\s*\[[\s\S]*$/g, '')  // 被截断的情况
+                    .trim()
+                break
+            }
         }
     }
     if (toolCalls.length === 0) {
@@ -626,12 +626,8 @@ export function parseXmlToolCalls(text) {
                         logger.debug(`[Tool Parser] 跳过无参数的工具调用: ${funcName}`)
                         continue
                     }
-                    // 使用严格模式验证参数
-                    const normalizedArgs = normalizeToolArguments(argsMatch[1], true)
-                    if (normalizedArgs === null) {
-                        logger.debug(`[Tool Parser] 跳过无效参数的工具调用: ${funcName}`)
-                        continue
-                    }
+                    // 尝试规范化参数，无效参数也保留工具调用（让执行时报错）
+                    const normalizedArgs = normalizeToolArguments(argsMatch[1], false)
                     if (!toolCalls.some(tc => tc.function.name === funcName)) {
                         toolCalls.push({
                             id: generateToolId('recover'),
@@ -675,6 +671,13 @@ export function parseXmlToolCalls(text) {
         if (deduped.length !== toolCalls.length) {
             logger.debug(`[Tool Parser] 去重: ${toolCalls.length} -> ${deduped.length}`)
         }
+        
+        // 最终清理：确保所有 tool_calls JSON 残留都被清理
+        cleanText = cleanText
+            .replace(/\{\s*"tool_calls"\s*:\s*\[[\s\S]*?\]\s*\}/g, '')
+            .replace(/\{\s*"tool_calls"\s*:\s*\[[\s\S]*$/g, '')  // 被截断的情况
+            .replace(/^\s*\[\s*\{[\s\S]*?"function"[\s\S]*?\}\s*\]\s*$/g, '')  // 纯工具调用数组
+            .trim()
         
         return { cleanText, toolCalls: deduped }
     }
