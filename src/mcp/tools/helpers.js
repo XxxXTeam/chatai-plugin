@@ -1,9 +1,6 @@
 /**
  * MCP 工具辅助函数
- * 提供适配器封装、群成员获取、消息发送等通用功能
  */
-
-// ======================= icqq API 封装 =======================
 
 /**
  * icqq 群操作封装
@@ -151,10 +148,6 @@ export const icqqFriend = {
         return await user.getSimpleInfo()
     }
 }
-
-/**
- * 调用 OneBot API (napcat/onebot)
- */
 export async function callOneBotApi(bot, action, params = {}) {
     if (bot.sendApi) {
         return await bot.sendApi(action, params)
@@ -165,11 +158,9 @@ export async function callOneBotApi(bot, action, params = {}) {
     throw new Error(`不支持的API: ${action}`)
 }
 
-// ======================= 群成员操作 =======================
 
 /**
  * 获取群成员列表
- * 兼容 icqq/miao-adapter 和 OneBot/NapCat
  * @param {Object} options
  * @param {Object} options.bot - Bot 实例
  * @param {Object} options.event - 事件对象
@@ -438,27 +429,18 @@ export function validateParams(args, schema, ctx = null) {
                 (param === 'group_id' && currentGroupId) ||
                 (param === 'user_id' && currentUserId)
             )
-            
-            // 如果不能自动填充，报告缺失
             if (!canAutoFill) {
                 missing.push(`${param} (${desc})`)
             }
         }
     }
-    
-    // 类型检查
     for (const [key, value] of Object.entries(args || {})) {
         if (value === undefined || value === null) continue
-        
         const prop = schema.properties[key]
         if (!prop) continue
-        
         const expectedType = prop.type
         if (!expectedType) continue
-        
         const actualType = typeof value
-        
-        // 类型匹配检查
         if (expectedType === 'string' && actualType !== 'string') {
             if (actualType !== 'number') {
                 invalid.push(`${key} 应为字符串类型`)
@@ -524,4 +506,58 @@ export function checkParams(args, schema) {
         return paramError(validation)
     }
     return null
+}
+
+let yunzaiCfg = null
+
+/**
+ * @returns {Promise<Object|null>}  cfg 对象
+ */
+export async function loadYunzaiConfig() {
+    if (yunzaiCfg) return yunzaiCfg
+    try {
+        yunzaiCfg = (await import('../../../../../lib/config/config.js')).default
+    } catch (e) {}
+    return yunzaiCfg
+}
+
+/**
+ * 获取主人QQ列表
+ * @param {string|number} botId - Bot的QQ号（可选）
+ * @returns {Promise<Array<number>>} 主人QQ列表
+ */
+export async function getMasterList(botId) {
+    const masters = new Set()
+    
+    try {
+        const yzCfg = await loadYunzaiConfig()
+        
+        // 方式1: Yunzai cfg.masterQQ
+        if (yzCfg?.masterQQ?.length > 0) {
+            yzCfg.masterQQ.forEach(m => {
+                const num = Number(m)
+                if (num) masters.add(num)
+            })
+        }
+        if (yzCfg?.master && botId) {
+            const botMasters = yzCfg.master[botId] || yzCfg.master[String(botId)] || []
+            if (Array.isArray(botMasters)) {
+                botMasters.forEach(m => {
+                    const num = Number(m)
+                    if (num) masters.add(num)
+                })
+            }
+        }
+        if (global.Bot?.config?.master) {
+            const m = global.Bot.config.master
+            if (Array.isArray(m)) {
+                m.forEach(x => {
+                    const num = Number(x)
+                    if (num) masters.add(num)
+                })
+            }
+        }
+    } catch (err) {}
+    
+    return Array.from(masters)
 }
