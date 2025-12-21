@@ -9,14 +9,13 @@ import {
     randomSelectMembers, 
     findMemberByName,
     formatMemberInfo,
-    batchSendMessages 
+    batchSendMessages,
+    getMasterList
 } from './helpers.js'
 import { recordSentMessage } from '../../utils/messageDedup.js'
 
-// ======================= 消息发送去重机制 =======================
-const SEND_DEDUP_EXPIRE = 5000  // 发送去重过期时间(ms)
-const recentSentMessages = new Map()  // key -> { content, timestamp, count }
-
+const SEND_DEDUP_EXPIRE = 5000 
+const recentSentMessages = new Map()  
 /**
  * 生成消息发送的去重键
  * @param {Object} ctx - 上下文
@@ -72,6 +71,172 @@ function markMessageSent(ctx, content) {
 }
 
 export const messageTools = [
+    {
+        name: 'send_to_master',
+        description: '发送私聊消息给主人。可以主动向主人报告信息、发送通知等。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                message: { type: 'string', description: '文本消息内容' },
+                image_url: { type: 'string', description: '图片URL（可选）' },
+                master_index: { type: 'number', description: '主人索引（0=第一个主人，默认0）' },
+                all_masters: { type: 'boolean', description: '是否发送给所有主人（默认false）' }
+            },
+            required: ['message']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot?.() || global.Bot
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                const botId = bot.uin || bot.self_id
+                const masters = await getMasterList(botId)
+                if (masters.length === 0) {
+                    return { success: false, error: '未配置主人QQ，请在Yunzai配置中设置masterQQ' }
+                }
+                const msgParts = []
+                if (args.message) msgParts.push(args.message)
+                if (args.image_url) msgParts.push(segment.image(args.image_url))
+                
+                if (msgParts.length === 0) {
+                    return { success: false, error: '消息内容不能为空' }
+                }
+                
+                const results = []
+                
+                if (args.all_masters) {
+                    for (let i = 0; i < masters.length; i++) {
+                        const masterId = parseInt(masters[i])
+                        try {
+                            const friend = bot.pickFriend(masterId)
+                            const result = await friend.sendMsg(msgParts.length === 1 ? msgParts[0] : msgParts)
+                            const msgId = result?.message_id
+                            const sendFailed = !msgId || (Array.isArray(msgId) && msgId.length === 0)
+                            if (sendFailed) {
+                                results.push({ master_id: masterId, success: false, error: '发送失败，可能需要添加好友或被风控' })
+                            } else {
+                                results.push({ master_id: masterId, success: true, message_id: msgId })
+                            }
+                        } catch (err) {
+                            results.push({ master_id: masterId, success: false, error: err.message })
+                        }
+                    }
+                    const successCount = results.filter(r => r.success).length
+                    return {
+                        success: successCount > 0,
+                        total: masters.length,
+                        success_count: successCount,
+                        results
+                    }
+                } else {
+                    // 发送给指定主人
+                    const idx = args.master_index || 0
+                    if (idx >= masters.length) {
+                        return { success: false, error: `主人索引超出范围，当前共有 ${masters.length} 个主人` }
+                    }
+                    const masterId = parseInt(masters[idx])
+                    const friend = bot.pickFriend(masterId)
+                    const result = await friend.sendMsg(msgParts.length === 1 ? msgParts[0] : msgParts)
+                    
+                    // 检查发送结果
+                    const msgId = result?.message_id
+                    const sendFailed = !msgId || (Array.isArray(msgId) && msgId.length === 0)
+                    
+                    if (sendFailed) {
+                        return { 
+                            success: false, 
+                            master_id: masterId, 
+                            error: '消息发送失败，可能需要先添加主人为好友，或账号被风控'
+                        }
+                    }
+                    
+                    if (args.message) recordSentMessage(args.message)
+                    return { success: true, master_id: masterId, message_id: msgId }
+                }
+            } catch (err) {
+                return { success: false, error: `发送给主人失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_master_info',
+        description: '获取主人信息列表',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                debug: { type: 'boolean', description: '是否返回调试信息' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot?.() || global.Bot
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                const botId = bot.uin || bot.self_id
+                
+                // 调试模式：返回所有可能的配置源
+                if (args.debug) {
+                    const debugInfo = {
+                        botId,
+                        'global.cfg exists': !!global.cfg,
+                        'global.cfg.master': global.cfg?.master,
+                        'global.cfg.masterQQ': global.cfg?.masterQQ,
+                        'global.Bot.config': global.Bot?.config,
+                        'global.Bot.master': global.Bot?.master,
+                    }
+                    return { success: true, debug: debugInfo }
+                }
+                
+                const masters = await getMasterList(botId)
+                if (masters.length === 0) {
+                    return { success: true, count: 0, masters: [], note: '未配置主人QQ' }
+                }
+                
+                // 获取主人详细信息
+                const masterInfos = []
+                for (let i = 0; i < masters.length; i++) {
+                    const masterId = parseInt(masters[i])
+                    let info = { index: i, user_id: masterId }
+                    
+                    try {
+                        // 尝试获取好友信息
+                        if (bot.fl?.get) {
+                            const friendInfo = bot.fl.get(masterId)
+                            if (friendInfo) {
+                                info.nickname = friendInfo.nickname || friendInfo.nick
+                                info.remark = friendInfo.remark
+                                info.is_friend = true
+                            }
+                        }
+                        // 尝试通过 pickFriend 获取
+                        if (!info.nickname && bot.pickFriend) {
+                            const friend = bot.pickFriend(masterId)
+                            if (friend?.info) {
+                                const fInfo = await friend.getInfo?.() || friend.info
+                                info.nickname = fInfo?.nickname || fInfo?.nick
+                                info.is_friend = true
+                            }
+                        }
+                    } catch {}
+                    
+                    masterInfos.push(info)
+                }
+                
+                return {
+                    success: true,
+                    count: masters.length,
+                    masters: masterInfos
+                }
+            } catch (err) {
+                return { success: false, error: `获取主人信息失败: ${err.message}` }
+            }
+        }
+    },
+
     {
         name: 'send_private_message',
         description: '发送私聊消息给指定用户',
@@ -713,6 +878,200 @@ export const messageTools = [
                 }
             } catch (err) {
                 return { success: false, error: `发送合并转发失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'send_fake_forward',
+        description: '发送伪造合并转发消息，支持伪造多人对话。可以指定任意QQ号和昵称来创建虚假的对话记录。支持发送到指定群/私聊或主人。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                messages: {
+                    type: 'array',
+                    description: '消息列表，每条消息包含发送者信息和内容',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            uin: { type: 'string', description: '发送者QQ号（可以是任意数字）' },
+                            name: { type: 'string', description: '发送者显示名称（可选，默认使用QQ号）' },
+                            content: { type: 'string', description: '消息内容' },
+                            time: { type: 'number', description: '消息时间戳（可选，默认按顺序递增）' }
+                        },
+                        required: ['uin', 'content']
+                    }
+                },
+                group_id: { type: 'string', description: '目标群号（发送到指定群，优先级最高）' },
+                user_id: { type: 'string', description: '目标用户QQ号（发送私聊，优先级次于group_id）' },
+                to_master: { type: 'boolean', description: '是否发送给主人（私聊第一个主人，优先级最低）' },
+                prompt: { type: 'string', description: '转发卡片外显标题（可选，如"群聊的聊天记录"）' },
+                summary: { type: 'string', description: '底部摘要文本（可选，如"查看3条转发消息"）' },
+                source: { type: 'string', description: '来源显示（可选，如"聊天记录"）' }
+            },
+            required: ['messages']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || ctx.getBot?.() || global.Bot
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                if (!args.messages || args.messages.length === 0) {
+                    return { success: false, error: '消息列表不能为空' }
+                }
+                
+                // 确定发送目标
+                let targetId = null
+                let isGroup = false
+                
+                if (args.group_id) {
+                    // 明确指定群号
+                    targetId = parseInt(args.group_id)
+                    isGroup = true
+                } else if (args.user_id) {
+                    // 明确指定用户私聊
+                    targetId = parseInt(args.user_id)
+                    isGroup = false
+                } else if (args.to_master) {
+                    // 发送给主人
+                    const botId = bot.uin || bot.self_id
+                    const masters = await getMasterList(botId)
+                    if (masters.length === 0) {
+                        return { success: false, error: '未配置主人QQ，无法发送给主人' }
+                    }
+                    targetId = parseInt(masters[0])
+                    isGroup = false
+                } else if (e) {
+                    // 默认回复当前会话
+                    isGroup = !!e.group_id
+                    targetId = isGroup ? e.group_id : (e.user_id || e.sender?.user_id)
+                } else {
+                    return { success: false, error: '没有指定发送目标，请提供 group_id、user_id 或设置 to_master' }
+                }
+                
+                if (!targetId) {
+                    return { success: false, error: '无法确定发送目标' }
+                }
+                
+                // 构建伪造的转发节点
+                const baseTime = Math.floor(Date.now() / 1000)
+                const forwardNodes = args.messages.map((msg, idx) => {
+                    const uin = String(msg.uin || '10000')
+                    const name = msg.name || uin
+                    const content = msg.content || ''
+                    const time = msg.time || (baseTime - (args.messages.length - idx) * 60)
+                    
+                    return {
+                        type: 'node',
+                        data: {
+                            name: name,
+                            uin: uin,
+                            content: content,
+                            time: time
+                        }
+                    }
+                })
+                
+                // 尝试多种方式发送
+                let result = null
+                
+                // 方式1: icqq makeForwardMsg
+                if (bot.pickGroup || bot.pickFriend) {
+                    try {
+                        const target = isGroup ? bot.pickGroup(targetId) : bot.pickFriend(targetId)
+                        if (target?.makeForwardMsg && target?.sendMsg) {
+                            const forwardData = forwardNodes.map(n => ({
+                                user_id: parseInt(n.data.uin) || 10000,
+                                nickname: n.data.name,
+                                message: n.data.content,
+                                time: n.data.time
+                            }))
+                            
+                            const forwardMsg = await target.makeForwardMsg(forwardData)
+                            
+                            // 自定义外显信息
+                            if (forwardMsg) {
+                                if (args.prompt && forwardMsg.data) {
+                                    forwardMsg.data.prompt = args.prompt
+                                }
+                                if (args.summary && forwardMsg.data) {
+                                    forwardMsg.data.summary = args.summary
+                                }
+                                if (args.source && forwardMsg.data) {
+                                    forwardMsg.data.source = args.source
+                                }
+                            }
+                            
+                            result = await target.sendMsg(forwardMsg)
+                            if (result) {
+                                return {
+                                    success: true,
+                                    message_id: result.message_id,
+                                    res_id: result.res_id,
+                                    node_count: forwardNodes.length,
+                                    method: 'icqq'
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        // 继续尝试其他方式
+                    }
+                }
+                
+                // 方式2: NapCat/OneBot send_group_forward_msg / send_private_forward_msg
+                if (bot.sendApi) {
+                    try {
+                        const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
+                        const params = isGroup 
+                            ? { group_id: targetId, messages: forwardNodes }
+                            : { user_id: targetId, messages: forwardNodes }
+                        
+                        result = await bot.sendApi(apiName, params)
+                        if (result?.status === 'ok' || result?.retcode === 0 || result?.message_id) {
+                            return {
+                                success: true,
+                                message_id: result.message_id || result.data?.message_id,
+                                res_id: result.res_id || result.data?.res_id,
+                                node_count: forwardNodes.length,
+                                method: 'onebot'
+                            }
+                        }
+                    } catch (err) {
+                        // 继续尝试其他方式
+                    }
+                }
+                
+                // 方式3: 直接调用 Bot 方法
+                if (isGroup) {
+                    if (typeof bot.sendGroupForwardMsg === 'function') {
+                        result = await bot.sendGroupForwardMsg(targetId, forwardNodes)
+                    } else if (typeof bot.send_group_forward_msg === 'function') {
+                        result = await bot.send_group_forward_msg(targetId, forwardNodes)
+                    }
+                } else {
+                    if (typeof bot.sendPrivateForwardMsg === 'function') {
+                        result = await bot.sendPrivateForwardMsg(targetId, forwardNodes)
+                    } else if (typeof bot.send_private_forward_msg === 'function') {
+                        result = await bot.send_private_forward_msg(targetId, forwardNodes)
+                    }
+                }
+                
+                if (result) {
+                    return {
+                        success: true,
+                        message_id: result.message_id,
+                        res_id: result.res_id,
+                        node_count: forwardNodes.length,
+                        method: 'direct'
+                    }
+                }
+                
+                return { success: false, error: '当前环境不支持发送合并转发消息' }
+            } catch (err) {
+                return { success: false, error: `发送伪造转发失败: ${err.message}` }
             }
         }
     },
