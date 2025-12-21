@@ -17,7 +17,7 @@ interface HeaderProps {
   title?: string
 }
 
-export function Header({ title = 'Chaite 管理面板' }: HeaderProps) {
+export function Header({ title = 'ChatAi 管理面板' }: HeaderProps) {
   const { toggleSidebar } = useUiStore()
   const { logout } = useAuthStore()
   const router = useRouter()

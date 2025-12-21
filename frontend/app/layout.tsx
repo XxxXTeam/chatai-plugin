@@ -4,7 +4,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
 
 export const metadata: Metadata = {
-  title: "Chaite - AI管理面板",
+  title: "ChatAi- AI管理面板",
   description: "Yunzai-Bot AI插件管理面板",
 };
 

@@ -65,8 +65,6 @@ function validateAndCleanMessages(messages) {
                 pendingToolMessages.push(msg)
             }
         } else {
-            // system/user/developer 消息
-            // 处理之前积累的孤立 tool 消息
             if (pendingToolMessages.length > 0) {
                 logger.debug(`[消息验证] 丢弃 ${pendingToolMessages.length} 个孤立的 tool 消息`)
                 pendingToolMessages = []

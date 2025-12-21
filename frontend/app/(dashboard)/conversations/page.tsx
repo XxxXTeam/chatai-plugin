@@ -1,18 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { 
-  Dialog, 
-  DialogContent, 
-  DialogDescription, 
-  DialogHeader, 
-  DialogTitle,
-} from '@/components/ui/dialog'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,25 +17,10 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { conversationsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Trash2, MessageSquare, Eye, RefreshCw, Loader2, User, Bot, FileDown, Search, Filter } from 'lucide-react'
+import { Trash2, MessageSquare, Eye, RefreshCw, Loader2, Search, Filter } from 'lucide-react'
 import { Input } from '@/components/ui/input'
-
-interface Message {
-  id?: string
-  role: string | Record<string, unknown>
-  content: unknown
-  timestamp?: number
-  toolCalls?: Array<{ id: string; function: { name: string; arguments: string } }>
-}
 
 interface Conversation {
   id: string
@@ -55,15 +33,12 @@ interface Conversation {
 const INTERNAL_PREFIXES = ['group_summary_', 'user_profile_', 'memory_', 'system_']
 
 export default function ConversationsPage() {
+  const router = useRouter()
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [loading, setLoading] = useState(true)
-  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null)
-  const [messages, setMessages] = useState<Message[]>([])
-  const [loadingMessages, setLoadingMessages] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [showInternal, setShowInternal] = useState(false)
-  const [messageLimit, setMessageLimit] = useState(100)
 
   const fetchConversations = async () => {
     try {
@@ -76,6 +51,7 @@ export default function ConversationsPage() {
       setLoading(false)
     }
   }
+
   const isInternalConversation = (id: string) => {
     return INTERNAL_PREFIXES.some(prefix => id.startsWith(prefix))
   }
@@ -84,27 +60,8 @@ export default function ConversationsPage() {
     fetchConversations()
   }, [])
 
-  const handleViewMessages = async (conversation: Conversation, limit = messageLimit) => {
-    setSelectedConversation(conversation)
-    setLoadingMessages(true)
-    try {
-      const res = await conversationsApi.getMessages(conversation.id, limit) as { data: Message[] }
-      const messageList = res.data || res || []
-      setMessages(Array.isArray(messageList) ? messageList : [])
-    } catch (error) {
-      toast.error('加载消息失败')
-      console.error(error)
-    } finally {
-      setLoadingMessages(false)
-    }
-  }
-  
-  const loadMoreMessages = () => {
-    if (selectedConversation) {
-      const newLimit = messageLimit + 100
-      setMessageLimit(newLimit)
-      handleViewMessages(selectedConversation, newLimit)
-    }
+  const handleViewMessages = (conversation: Conversation) => {
+    router.push(`/conversations/detail?id=${encodeURIComponent(conversation.id)}`)
   }
 
   const handleDelete = async (id: string) => {
@@ -132,88 +89,12 @@ export default function ConversationsPage() {
     }
   }
 
-  const getMessageText = (content: unknown): string => {
-    if (!content) return ''
-    if (typeof content === 'string') return content
-    
-    // 处理数组类型 - 标准消息格式 [{type: 'text', text: '...'}, ...]
-    if (Array.isArray(content)) {
-      const texts: string[] = []
-      for (const item of content) {
-        if (typeof item === 'string') {
-          texts.push(item)
-        } else if (item && typeof item === 'object') {
-          const obj = item as Record<string, unknown>
-          // 标准格式: { type: 'text', text: '...' }
-          if (obj.type === 'text' && typeof obj.text === 'string') {
-            texts.push(obj.text)
-          }
-          // 推理格式: { type: 'reasoning', text: '...' }
-          else if (obj.type === 'reasoning' && typeof obj.text === 'string') {
-            texts.push(`[思考] ${obj.text}`)
-          }
-          // 工具结果格式: { type: 'tool', content: '...' }
-          else if (obj.type === 'tool' && obj.content) {
-            texts.push(`[工具结果] ${String(obj.content).slice(0, 200)}...`)
-          }
-          // 直接 text 字段
-          else if ('text' in obj && obj.text) {
-            texts.push(String(obj.text))
-          }
-          // 直接 content 字段
-          else if ('content' in obj && typeof obj.content === 'string') {
-            texts.push(obj.content)
-          }
-          // 嵌套 content
-          else if ('content' in obj && obj.content) {
-            const nested = getMessageText(obj.content)
-            if (nested) texts.push(nested)
-          }
-          // {[userId]: text} 格式 - 取第一个值
-          else {
-            const values = Object.values(obj)
-            if (values.length > 0 && typeof values[0] === 'string') {
-              texts.push(values[0])
-            }
-          }
-        }
-      }
-      return texts.filter(Boolean).join('\n')
-    }
-    
-    // 处理对象类型
-    if (typeof content === 'object' && content !== null) {
-      const obj = content as Record<string, unknown>
-      // 标准字段
-      if ('text' in obj && typeof obj.text === 'string') return obj.text
-      if ('content' in obj) return getMessageText(obj.content)
-      
-      // {[userId]: text} 格式 - 取第一个字符串值
-      const values = Object.values(obj)
-      for (const val of values) {
-        if (typeof val === 'string') return val
-      }
-      // 递归处理嵌套对象
-      for (const val of values) {
-        if (val && typeof val === 'object') {
-          const nested = getMessageText(val)
-          if (nested) return nested
-        }
-      }
-    }
-    
-    return ''
-  }
-
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleString('zh-CN')
   }
 
-  // 过滤对话列表
   const filteredConversations = conversations.filter(c => {
-    // 过滤内部记录
     if (!showInternal && isInternalConversation(c.id)) return false
-    // 搜索过滤
     if (searchTerm) {
       const term = searchTerm.toLowerCase()
       return c.id.toLowerCase().includes(term) ||
@@ -224,31 +105,9 @@ export default function ConversationsPage() {
     return true
   })
   
-  // 统计
   const totalCount = conversations.length
   const internalCount = conversations.filter(c => isInternalConversation(c.id)).length
   const chatCount = totalCount - internalCount
-
-  const exportConversation = () => {
-    if (!selectedConversation || !messages.length) return
-    const exportData = {
-      conversation: selectedConversation,
-      messages: messages.map(m => ({
-        role: m.role,
-        content: getMessageText(m.content),
-        timestamp: m.timestamp ? formatTime(m.timestamp) : undefined
-      }))
-    }
-    const data = JSON.stringify(exportData, null, 2)
-    const blob = new Blob([data], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `conversation_${selectedConversation.id}_${new Date().toISOString().slice(0, 10)}.json`
-    a.click()
-    URL.revokeObjectURL(url)
-    toast.success('导出成功')
-  }
 
   if (loading) {
     return (
@@ -304,7 +163,6 @@ export default function ConversationsPage() {
         </div>
       </div>
 
-      {/* 统计和筛选 */}
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Badge variant="outline">{chatCount} 对话</Badge>
@@ -381,91 +239,6 @@ export default function ConversationsPage() {
           ))}
         </div>
       )}
-
-      {/* Messages Dialog */}
-      <Dialog open={!!selectedConversation} onOpenChange={() => setSelectedConversation(null)}>
-        <DialogContent className="w-[95vw] max-w-3xl max-h-[85vh] flex flex-col">
-          <DialogHeader className="flex-shrink-0">
-            <div className="flex items-center justify-between">
-              <div>
-                <DialogTitle className="flex items-center gap-2">
-                  对话详情
-                  {isInternalConversation(selectedConversation?.id || '') && (
-                    <Badge variant="secondary">内部记录</Badge>
-                  )}
-                </DialogTitle>
-                <DialogDescription className="truncate max-w-md">
-                  {selectedConversation?.id}
-                </DialogDescription>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={exportConversation} disabled={loadingMessages || messages.length === 0}>
-                  <FileDown className="mr-2 h-4 w-4" />
-                  导出
-                </Button>
-              </div>
-            </div>
-          </DialogHeader>
-          
-          {loadingMessages ? (
-            <div className="flex-1 flex justify-center items-center py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
-          ) : messages.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center py-12 text-muted-foreground">
-              <MessageSquare className="h-12 w-12 mb-4" />
-              <p>暂无消息记录</p>
-            </div>
-          ) : (
-            <>
-              <ScrollArea className="flex-1 min-h-0">
-                <div className="space-y-2 p-4">
-                  {messages.map((message, index) => {
-                    let role = typeof message.role === 'string' ? message.role : 'user'
-                    const isAssistant = role === 'assistant'
-                    
-                    let text = getMessageText(message.content)
-                    if (!text && message.content) {
-                      text = typeof message.content === 'string' 
-                        ? message.content 
-                        : JSON.stringify(message.content, null, 2)
-                    }
-                    if (!text) return null
-                    
-                    return (
-                      <div key={index} className={`flex gap-3 ${isAssistant ? '' : 'flex-row-reverse'}`}>
-                        <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs
-                          ${isAssistant ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
-                          {isAssistant ? <Bot className="h-3.5 w-3.5" /> : <User className="h-3.5 w-3.5" />}
-                        </div>
-                        <div className={`rounded-lg px-3 py-2 max-w-[85%] min-w-0
-                          ${isAssistant ? 'bg-muted' : 'bg-primary/10 border'}`}>
-                          <p className="text-sm whitespace-pre-wrap break-words">{text}</p>
-                          {message.timestamp && (
-                            <p className="text-[10px] text-muted-foreground mt-1">
-                              {formatTime(message.timestamp)}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  }).filter(Boolean)}
-                </div>
-              </ScrollArea>
-              
-              {/* 加载更多 */}
-              {messages.length >= messageLimit && (
-                <div className="flex-shrink-0 border-t pt-3 flex justify-center">
-                  <Button variant="outline" size="sm" onClick={loadMoreMessages} disabled={loadingMessages}>
-                    {loadingMessages ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                    加载更多 (当前 {messages.length} 条)
-                  </Button>
-                </div>
-              )}
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }
