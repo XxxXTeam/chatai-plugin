@@ -894,12 +894,11 @@ export const messageTools = [
                     items: {
                         type: 'object',
                         properties: {
-                            uin: { type: 'string', description: '发送者QQ号（可以是任意数字）' },
-                            name: { type: 'string', description: '发送者显示名称（可选，默认使用QQ号）' },
-                            content: { type: 'string', description: '消息内容' },
-                            time: { type: 'number', description: '消息时间戳（可选，默认按顺序递增）' }
+                            user_id: { type: 'string', description: '发送者QQ号（可以是任意数字）' },
+                            nickname: { type: 'string', description: '发送者显示名称（可选，默认使用QQ号）' },
+                            message: { type: 'string', description: '消息内容' }
                         },
-                        required: ['uin', 'content']
+                        required: ['user_id', 'message']
                     }
                 },
                 group_id: { type: 'string', description: '目标群号（发送到指定群，优先级最高）' },
@@ -928,15 +927,12 @@ export const messageTools = [
                 let isGroup = false
                 
                 if (args.group_id) {
-                    // 明确指定群号
                     targetId = parseInt(args.group_id)
                     isGroup = true
                 } else if (args.user_id) {
-                    // 明确指定用户私聊
                     targetId = parseInt(args.user_id)
                     isGroup = false
                 } else if (args.to_master) {
-                    // 发送给主人
                     const botId = bot.uin || bot.self_id
                     const masters = await getMasterList(botId)
                     if (masters.length === 0) {
@@ -945,7 +941,6 @@ export const messageTools = [
                     targetId = parseInt(masters[0])
                     isGroup = false
                 } else if (e) {
-                    // 默认回复当前会话
                     isGroup = !!e.group_id
                     targetId = isGroup ? e.group_id : (e.user_id || e.sender?.user_id)
                 } else {
@@ -956,106 +951,122 @@ export const messageTools = [
                     return { success: false, error: '无法确定发送目标' }
                 }
                 
-                // 构建伪造的转发节点
-                const baseTime = Math.floor(Date.now() / 1000)
-                const forwardNodes = args.messages.map((msg, idx) => {
-                    const uin = String(msg.uin || '10000')
-                    const name = msg.name || uin
-                    const content = msg.content || ''
-                    const time = msg.time || (baseTime - (args.messages.length - idx) * 60)
-                    
-                    return {
-                        type: 'node',
-                        data: {
-                            name: name,
-                            uin: uin,
-                            content: content,
-                            time: time
-                        }
+                // 构建消息内容的辅助函数
+                const buildMessageContent = (content) => {
+                    if (!content) return [{ type: 'text', data: { text: '' } }]
+                    if (typeof content === 'string') {
+                        return [{ type: 'text', data: { text: content } }]
                     }
-                })
+                    if (Array.isArray(content)) return content
+                    return [{ type: 'text', data: { text: String(content) } }]
+                }
                 
-                // 尝试多种方式发送
-                let result = null
+                // 方式1: NapCat/OneBot send_group_forward_msg / send_private_forward_msg (优先)
+                if (bot.sendApi) {
+                    try {
+                        // NapCat 格式: messages 数组包含 node 类型的消息段
+                        const napcatNodes = args.messages.map((msg) => {
+                            const userId = String(msg.user_id || msg.uin || '10000')
+                            const nickname = msg.nickname || msg.name || userId
+                            const content = msg.message || msg.content || ''
+                            
+                            return {
+                                type: 'node',
+                                data: {
+                                    user_id: userId,
+                                    nickname: nickname,
+                                    content: buildMessageContent(content)
+                                }
+                            }
+                        })
+                        
+                        const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
+                        const params = isGroup 
+                            ? { group_id: targetId, messages: napcatNodes }
+                            : { user_id: targetId, messages: napcatNodes }
+                        
+                        // 添加可选参数
+                        if (args.prompt) params.prompt = args.prompt
+                        if (args.summary) params.summary = args.summary
+                        if (args.source) params.source = args.source
+                        
+                        const result = await bot.sendApi(apiName, params)
+                        if (result?.status === 'ok' || result?.retcode === 0 || result?.message_id || result?.data?.message_id) {
+                            return {
+                                success: true,
+                                message_id: result.message_id || result.data?.message_id,
+                                res_id: result.res_id || result.data?.res_id,
+                                node_count: napcatNodes.length,
+                                method: 'napcat'
+                            }
+                        }
+                        // 如果返回失败，记录错误但继续尝试其他方式
+                        if (result?.message || result?.wording) {
+                            logger.debug(`[send_fake_forward] NapCat API 返回: ${result.message || result.wording}`)
+                        }
+                    } catch (err) {
+                        logger.debug(`[send_fake_forward] NapCat API 失败: ${err.message}`)
+                    }
+                }
                 
-                // 方式1: icqq makeForwardMsg
+                // 方式2: icqq makeForwardMsg
                 if (bot.pickGroup || bot.pickFriend) {
                     try {
                         const target = isGroup ? bot.pickGroup(targetId) : bot.pickFriend(targetId)
                         if (target?.makeForwardMsg && target?.sendMsg) {
-                            const forwardData = forwardNodes.map(n => ({
-                                user_id: parseInt(n.data.uin) || 10000,
-                                nickname: n.data.name,
-                                message: n.data.content,
-                                time: n.data.time
+                            const forwardData = args.messages.map((msg) => ({
+                                user_id: parseInt(msg.user_id || msg.uin) || 10000,
+                                nickname: msg.nickname || msg.name || String(msg.user_id || msg.uin || '10000'),
+                                message: msg.message || msg.content || ''
                             }))
                             
                             const forwardMsg = await target.makeForwardMsg(forwardData)
                             
                             // 自定义外显信息
-                            if (forwardMsg) {
-                                if (args.prompt && forwardMsg.data) {
-                                    forwardMsg.data.prompt = args.prompt
-                                }
-                                if (args.summary && forwardMsg.data) {
-                                    forwardMsg.data.summary = args.summary
-                                }
-                                if (args.source && forwardMsg.data) {
-                                    forwardMsg.data.source = args.source
-                                }
+                            if (forwardMsg?.data) {
+                                if (args.prompt) forwardMsg.data.prompt = args.prompt
+                                if (args.summary) forwardMsg.data.summary = args.summary
+                                if (args.source) forwardMsg.data.source = args.source
                             }
                             
-                            result = await target.sendMsg(forwardMsg)
+                            const result = await target.sendMsg(forwardMsg)
                             if (result) {
                                 return {
                                     success: true,
                                     message_id: result.message_id,
                                     res_id: result.res_id,
-                                    node_count: forwardNodes.length,
+                                    node_count: forwardData.length,
                                     method: 'icqq'
                                 }
                             }
                         }
                     } catch (err) {
-                        // 继续尝试其他方式
+                        logger.debug(`[send_fake_forward] icqq 方式失败: ${err.message}`)
                     }
                 }
                 
-                // 方式2: NapCat/OneBot send_group_forward_msg / send_private_forward_msg
-                if (bot.sendApi) {
-                    try {
-                        const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
-                        const params = isGroup 
-                            ? { group_id: targetId, messages: forwardNodes }
-                            : { user_id: targetId, messages: forwardNodes }
-                        
-                        result = await bot.sendApi(apiName, params)
-                        if (result?.status === 'ok' || result?.retcode === 0 || result?.message_id) {
-                            return {
-                                success: true,
-                                message_id: result.message_id || result.data?.message_id,
-                                res_id: result.res_id || result.data?.res_id,
-                                node_count: forwardNodes.length,
-                                method: 'onebot'
-                            }
-                        }
-                    } catch (err) {
-                        // 继续尝试其他方式
+                // 方式3: 直接调用 Bot 方法 (兼容旧版)
+                const legacyNodes = args.messages.map((msg) => ({
+                    type: 'node',
+                    data: {
+                        name: msg.nickname || msg.name || String(msg.user_id || msg.uin || '10000'),
+                        uin: String(msg.user_id || msg.uin || '10000'),
+                        content: msg.message || msg.content || ''
                     }
-                }
+                }))
                 
-                // 方式3: 直接调用 Bot 方法
+                let result = null
                 if (isGroup) {
                     if (typeof bot.sendGroupForwardMsg === 'function') {
-                        result = await bot.sendGroupForwardMsg(targetId, forwardNodes)
+                        result = await bot.sendGroupForwardMsg(targetId, legacyNodes)
                     } else if (typeof bot.send_group_forward_msg === 'function') {
-                        result = await bot.send_group_forward_msg(targetId, forwardNodes)
+                        result = await bot.send_group_forward_msg(targetId, legacyNodes)
                     }
                 } else {
                     if (typeof bot.sendPrivateForwardMsg === 'function') {
-                        result = await bot.sendPrivateForwardMsg(targetId, forwardNodes)
+                        result = await bot.sendPrivateForwardMsg(targetId, legacyNodes)
                     } else if (typeof bot.send_private_forward_msg === 'function') {
-                        result = await bot.send_private_forward_msg(targetId, forwardNodes)
+                        result = await bot.send_private_forward_msg(targetId, legacyNodes)
                     }
                 }
                 
@@ -1064,12 +1075,12 @@ export const messageTools = [
                         success: true,
                         message_id: result.message_id,
                         res_id: result.res_id,
-                        node_count: forwardNodes.length,
+                        node_count: legacyNodes.length,
                         method: 'direct'
                     }
                 }
                 
-                return { success: false, error: '当前环境不支持发送合并转发消息' }
+                return { success: false, error: '当前环境不支持发送合并转发消息，请检查协议端版本' }
             } catch (err) {
                 return { success: false, error: `发送伪造转发失败: ${err.message}` }
             }

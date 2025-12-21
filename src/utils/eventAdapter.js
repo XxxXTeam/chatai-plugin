@@ -262,24 +262,18 @@ export function parsePokeEvent(e) {
 }
 
 /**
- * 解析表情回应事件 - 全适配器兼容
+ * 解析表情回应事件
  * @param {Object} e - 事件对象
  * @returns {Object}
  */
 export function parseReactionEvent(e) {
-    // 表情ID - 兼容多种属性名
-    const emojiId = e.id || e.emoji_id || e.face_id || e.code
-    
-    // 消息ID - 兼容多种属性名
+    let emojiId = e.id || e.emoji_id || e.face_id || e.code
+    if (!emojiId && Array.isArray(e.likes) && e.likes.length > 0) {
+        emojiId = e.likes[0].emoji_id || e.likes[0].face_id || e.likes[0].id
+    }
     const messageId = e.message_id || e.seq || e.msg_id || e.message_seq
-    
-    // 操作者
     const userId = e.user_id || e.operator_id || e.sender_id
-    
-    // 被回应消息的发送者
     const targetId = e.target_id || e.sender_id || e.target_user_id
-    
-    // 是否为添加操作
     const isAdd = !(
         e.set === false || 
         e.set === 'remove' || 
@@ -303,12 +297,13 @@ export function parseReactionEvent(e) {
         userId,
         targetId,
         isAdd,
-        groupId: e.group_id
+        groupId: e.group_id,
+        likes: e.likes || []
     }
 }
 
 /**
- * 解析撤回事件 - 全适配器兼容
+ * 解析撤回事件
  * @param {Object} e - 事件对象
  * @returns {Object}
  */
