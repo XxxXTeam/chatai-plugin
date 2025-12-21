@@ -10,7 +10,16 @@ import {
     findMemberByName,
     formatMemberInfo,
     batchSendMessages,
-    getMasterList
+    getMasterList,
+    detectProtocol,
+    normalizeSegment,
+    normalizeSegments,
+    compatSegment,
+    sendForwardMsgEnhanced,
+    sendCardMessage,
+    parseCardData,
+    buildLinkCard,
+    buildBigImageCard
 } from './helpers.js'
 import { recordSentMessage } from '../../utils/messageDedup.js'
 
@@ -774,117 +783,10 @@ export const messageTools = [
             }
         }
     },
-
+    
     {
         name: 'send_forward_msg',
-        description: '发送合并转发消息',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                nodes: {
-                    type: 'array',
-                    description: '转发节点列表',
-                    items: {
-                        type: 'object',
-                        properties: {
-                            name: { type: 'string', description: '发送者名称' },
-                            uin: { type: 'string', description: '发送者QQ号' },
-                            content: { type: 'string', description: '消息内容' },
-                            time: { type: 'number', description: '时间戳（可选）' }
-                        },
-                        required: ['name', 'uin', 'content']
-                    }
-                },
-                news: { 
-                    type: 'array', 
-                    description: '外显文本列表（可选，默认自动生成）',
-                    items: { type: 'string' }
-                },
-                prompt: { type: 'string', description: '外显标题（可选）' },
-                summary: { type: 'string', description: '底部摘要（可选）' }
-            },
-            required: ['nodes']
-        },
-        handler: async (args, ctx) => {
-            try {
-                const e = ctx.getEvent()
-                if (!e) {
-                    return { success: false, error: '没有可用的会话上下文' }
-                }
-                
-                const bot = e.bot || global.Bot
-                if (!bot) {
-                    return { success: false, error: '无法获取Bot实例' }
-                }
-                
-                // 构建转发节点
-                const forwardNodes = args.nodes.map(node => ({
-                    type: 'node',
-                    data: {
-                        name: node.name,
-                        uin: node.uin,
-                        content: node.content,
-                        time: node.time || Math.floor(Date.now() / 1000)
-                    }
-                }))
-                
-                // 尝试发送
-                let result
-                if (e.group_id) {
-                    // 群聊转发
-                    if (bot.sendGroupForwardMsg) {
-                        result = await bot.sendGroupForwardMsg(e.group_id, forwardNodes)
-                    } else if (bot.send_group_forward_msg) {
-                        result = await bot.send_group_forward_msg(e.group_id, forwardNodes)
-                    } else if (bot.pickGroup) {
-                        const group = bot.pickGroup(e.group_id)
-                        if (group?.makeForwardMsg && group?.sendMsg) {
-                            const forwardMsg = await group.makeForwardMsg(forwardNodes.map(n => ({
-                                user_id: parseInt(n.data.uin),
-                                nickname: n.data.name,
-                                message: n.data.content
-                            })))
-                            result = await group.sendMsg(forwardMsg)
-                        }
-                    }
-                } else {
-                    // 私聊转发
-                    const userId = e.user_id || e.sender?.user_id
-                    if (bot.sendPrivateForwardMsg) {
-                        result = await bot.sendPrivateForwardMsg(userId, forwardNodes)
-                    } else if (bot.send_private_forward_msg) {
-                        result = await bot.send_private_forward_msg(userId, forwardNodes)
-                    } else if (bot.pickFriend) {
-                        const friend = bot.pickFriend(userId)
-                        if (friend?.makeForwardMsg && friend?.sendMsg) {
-                            const forwardMsg = await friend.makeForwardMsg(forwardNodes.map(n => ({
-                                user_id: parseInt(n.data.uin),
-                                nickname: n.data.name,
-                                message: n.data.content
-                            })))
-                            result = await friend.sendMsg(forwardMsg)
-                        }
-                    }
-                }
-                
-                if (!result) {
-                    return { success: false, error: '当前环境不支持发送合并转发' }
-                }
-                
-                return {
-                    success: true,
-                    message_id: result?.message_id,
-                    res_id: result?.res_id
-                }
-            } catch (err) {
-                return { success: false, error: `发送合并转发失败: ${err.message}` }
-            }
-        }
-    },
-
-    {
-        name: 'send_fake_forward',
-        description: '发送伪造合并转发消息，支持伪造多人对话。可以指定任意QQ号和昵称来创建虚假的对话记录。支持发送到指定群/私聊或主人。',
+        description: '【统一】发送合并转发消息。支持伪造多人对话、富文本内容（图片、@、表情等）。消息内容支持特殊标记：[图片:url]、[@qq]、[表情:id]等。可自定义外显标题、摘要。',
         inputSchema: {
             type: 'object',
             properties: {
@@ -896,7 +798,8 @@ export const messageTools = [
                         properties: {
                             user_id: { type: 'string', description: '发送者QQ号（可以是任意数字）' },
                             nickname: { type: 'string', description: '发送者显示名称（可选，默认使用QQ号）' },
-                            message: { type: 'string', description: '消息内容' }
+                            message: { type: 'string', description: '消息内容（支持文本、[图片:url]、[@qq]等标记）' },
+                            time: { type: 'number', description: '时间戳（可选）' }
                         },
                         required: ['user_id', 'message']
                     }
@@ -923,164 +826,54 @@ export const messageTools = [
                 }
                 
                 // 确定发送目标
-                let targetId = null
-                let isGroup = false
+                let targetGroupId = null
+                let targetUserId = null
                 
                 if (args.group_id) {
-                    targetId = parseInt(args.group_id)
-                    isGroup = true
+                    targetGroupId = parseInt(args.group_id)
                 } else if (args.user_id) {
-                    targetId = parseInt(args.user_id)
-                    isGroup = false
+                    targetUserId = parseInt(args.user_id)
                 } else if (args.to_master) {
                     const botId = bot.uin || bot.self_id
                     const masters = await getMasterList(botId)
                     if (masters.length === 0) {
                         return { success: false, error: '未配置主人QQ，无法发送给主人' }
                     }
-                    targetId = parseInt(masters[0])
-                    isGroup = false
+                    targetUserId = parseInt(masters[0])
                 } else if (e) {
-                    isGroup = !!e.group_id
-                    targetId = isGroup ? e.group_id : (e.user_id || e.sender?.user_id)
+                    if (e.group_id) {
+                        targetGroupId = e.group_id
+                    } else {
+                        targetUserId = e.user_id || e.sender?.user_id
+                    }
                 } else {
                     return { success: false, error: '没有指定发送目标，请提供 group_id、user_id 或设置 to_master' }
                 }
                 
-                if (!targetId) {
+                if (!targetGroupId && !targetUserId) {
                     return { success: false, error: '无法确定发送目标' }
                 }
                 
-                // 构建消息内容的辅助函数
-                const buildMessageContent = (content) => {
-                    if (!content) return [{ type: 'text', data: { text: '' } }]
-                    if (typeof content === 'string') {
-                        return [{ type: 'text', data: { text: content } }]
+                // 使用增强版发送函数
+                const result = await sendForwardMsgEnhanced({
+                    bot,
+                    event: e,
+                    groupId: targetGroupId,
+                    userId: targetUserId,
+                    messages: args.messages.map(msg => ({
+                        user_id: msg.user_id || msg.uin,
+                        nickname: msg.nickname || msg.name,
+                        content: msg.message || msg.content,
+                        time: msg.time
+                    })),
+                    display: {
+                        prompt: args.prompt,
+                        summary: args.summary,
+                        source: args.source
                     }
-                    if (Array.isArray(content)) return content
-                    return [{ type: 'text', data: { text: String(content) } }]
-                }
+                })
                 
-                // 方式1: NapCat/OneBot send_group_forward_msg / send_private_forward_msg (优先)
-                if (bot.sendApi) {
-                    try {
-                        // NapCat 格式: messages 数组包含 node 类型的消息段
-                        const napcatNodes = args.messages.map((msg) => {
-                            const userId = String(msg.user_id || msg.uin || '10000')
-                            const nickname = msg.nickname || msg.name || userId
-                            const content = msg.message || msg.content || ''
-                            
-                            return {
-                                type: 'node',
-                                data: {
-                                    user_id: userId,
-                                    nickname: nickname,
-                                    content: buildMessageContent(content)
-                                }
-                            }
-                        })
-                        
-                        const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
-                        const params = isGroup 
-                            ? { group_id: targetId, messages: napcatNodes }
-                            : { user_id: targetId, messages: napcatNodes }
-                        
-                        // 添加可选参数
-                        if (args.prompt) params.prompt = args.prompt
-                        if (args.summary) params.summary = args.summary
-                        if (args.source) params.source = args.source
-                        
-                        const result = await bot.sendApi(apiName, params)
-                        if (result?.status === 'ok' || result?.retcode === 0 || result?.message_id || result?.data?.message_id) {
-                            return {
-                                success: true,
-                                message_id: result.message_id || result.data?.message_id,
-                                res_id: result.res_id || result.data?.res_id,
-                                node_count: napcatNodes.length,
-                                method: 'napcat'
-                            }
-                        }
-                        // 如果返回失败，记录错误但继续尝试其他方式
-                        if (result?.message || result?.wording) {
-                            logger.debug(`[send_fake_forward] NapCat API 返回: ${result.message || result.wording}`)
-                        }
-                    } catch (err) {
-                        logger.debug(`[send_fake_forward] NapCat API 失败: ${err.message}`)
-                    }
-                }
-                
-                // 方式2: icqq makeForwardMsg
-                if (bot.pickGroup || bot.pickFriend) {
-                    try {
-                        const target = isGroup ? bot.pickGroup(targetId) : bot.pickFriend(targetId)
-                        if (target?.makeForwardMsg && target?.sendMsg) {
-                            const forwardData = args.messages.map((msg) => ({
-                                user_id: parseInt(msg.user_id || msg.uin) || 10000,
-                                nickname: msg.nickname || msg.name || String(msg.user_id || msg.uin || '10000'),
-                                message: msg.message || msg.content || ''
-                            }))
-                            
-                            const forwardMsg = await target.makeForwardMsg(forwardData)
-                            
-                            // 自定义外显信息
-                            if (forwardMsg?.data) {
-                                if (args.prompt) forwardMsg.data.prompt = args.prompt
-                                if (args.summary) forwardMsg.data.summary = args.summary
-                                if (args.source) forwardMsg.data.source = args.source
-                            }
-                            
-                            const result = await target.sendMsg(forwardMsg)
-                            if (result) {
-                                return {
-                                    success: true,
-                                    message_id: result.message_id,
-                                    res_id: result.res_id,
-                                    node_count: forwardData.length,
-                                    method: 'icqq'
-                                }
-                            }
-                        }
-                    } catch (err) {
-                        logger.debug(`[send_fake_forward] icqq 方式失败: ${err.message}`)
-                    }
-                }
-                
-                // 方式3: 直接调用 Bot 方法 (兼容旧版)
-                const legacyNodes = args.messages.map((msg) => ({
-                    type: 'node',
-                    data: {
-                        name: msg.nickname || msg.name || String(msg.user_id || msg.uin || '10000'),
-                        uin: String(msg.user_id || msg.uin || '10000'),
-                        content: msg.message || msg.content || ''
-                    }
-                }))
-                
-                let result = null
-                if (isGroup) {
-                    if (typeof bot.sendGroupForwardMsg === 'function') {
-                        result = await bot.sendGroupForwardMsg(targetId, legacyNodes)
-                    } else if (typeof bot.send_group_forward_msg === 'function') {
-                        result = await bot.send_group_forward_msg(targetId, legacyNodes)
-                    }
-                } else {
-                    if (typeof bot.sendPrivateForwardMsg === 'function') {
-                        result = await bot.sendPrivateForwardMsg(targetId, legacyNodes)
-                    } else if (typeof bot.send_private_forward_msg === 'function') {
-                        result = await bot.send_private_forward_msg(targetId, legacyNodes)
-                    }
-                }
-                
-                if (result) {
-                    return {
-                        success: true,
-                        message_id: result.message_id,
-                        res_id: result.res_id,
-                        node_count: legacyNodes.length,
-                        method: 'direct'
-                    }
-                }
-                
-                return { success: false, error: '当前环境不支持发送合并转发消息，请检查协议端版本' }
+                return result
             } catch (err) {
                 return { success: false, error: `发送伪造转发失败: ${err.message}` }
             }
@@ -1088,76 +881,238 @@ export const messageTools = [
     },
 
     {
-        name: 'send_json_card',
-        description: '发送JSON卡片消息',
+        name: 'resend_quoted_card',
+        description: '【推荐】重新发送引用消息中的卡片。当用户回复/引用了一条卡片消息（如哔哩哔哩分享、小程序、链接卡片等）并要求"发一个一样的"、"转发"、"复制"时，必须使用此工具。此工具会自动提取原始卡片数据并重新发送，无需任何参数。【重要】如果用户说"伪造消息"、"假转发"、"合并转发"，则设置 as_forward=true。',
         inputSchema: {
             type: 'object',
             properties: {
-                data: { type: 'string', description: 'JSON字符串或对象' }
-            },
-            required: ['data']
+                group_id: { type: 'string', description: '目标群号（可选，不填则发送到当前会话）' },
+                user_id: { type: 'string', description: '目标用户QQ号（可选，私聊）' },
+                as_forward: { type: 'boolean', description: '是否作为合并转发消息发送。用户说"伪造消息"、"假转发"、"合并转发"时设置为true' },
+                forward_nickname: { type: 'string', description: '转发时显示的昵称（可选）' }
+            }
         },
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                if (!e) {
-                    return { success: false, error: '没有可用的会话上下文' }
+                const bot = e?.bot || ctx.getBot?.() || global.Bot
+                
+                if (!bot && !e) {
+                    return { success: false, error: '没有可用的会话上下文或Bot实例' }
                 }
                 
-                let jsonData = args.data
-                if (typeof jsonData === 'object') {
+                // 从引用消息中提取卡片数据
+                let jsonData = null
+                let cardSource = null
+                
+                // 尝试从 e.source 或 e.reply 获取引用消息
+                let replyMsg = null
+                if (e?.getReply) {
+                    try {
+                        replyMsg = await e.getReply()
+                    } catch {}
+                }
+                if (!replyMsg && e?.source) {
+                    replyMsg = e.source
+                }
+                
+                if (!replyMsg) {
+                    return { success: false, error: '没有找到引用消息，请确保回复了一条包含卡片的消息' }
+                }
+                
+                // 从引用消息中查找 json 类型的消息段
+                const message = replyMsg.message || replyMsg.content || []
+                const msgArray = Array.isArray(message) ? message : [message]
+                
+                for (const seg of msgArray) {
+                    const segType = seg.type || ''
+                    const segData = seg.data || seg
+                    
+                    if (segType === 'json') {
+                        jsonData = typeof segData === 'string' ? segData : (segData.data || segData)
+                        
+                        // 如果还是对象，序列化它
+                        if (typeof jsonData === 'object') {
+                            jsonData = JSON.stringify(jsonData)
+                        }
+                        
+                        if (typeof jsonData === 'string') {
+                            try {
+                                const parsed = JSON.parse(jsonData)
+                                if (parsed.app) {
+                                    cardSource = 'json_segment'
+                                    break
+                                }
+                            } catch {}
+                        }
+                    }
+                }
+                
+                // 方式2: 尝试从 seg 本身获取（icqq 可能直接在 seg 上存储）
+                if (!jsonData) {
+                    for (const seg of msgArray) {
+                        if (seg.type === 'json' && seg.data) {
+                            // icqq 有时候 data 就是完整的 JSON 字符串
+                            const d = seg.data
+                            if (typeof d === 'string' && d.includes('"app"')) {
+                                jsonData = d
+                                cardSource = 'icqq_direct'
+                                break
+                            }
+                        }
+                    }
+                }
+                
+                // 方式3: 尝试从 raw_message 解析 CQ 码
+                if (!jsonData && replyMsg.raw_message) {
+                    const rawMsg = replyMsg.raw_message
+                    const jsonMatch = rawMsg.match(/\[CQ:json,data=([^\]]+)\]/)
+                    if (jsonMatch) {
+                        try {
+                            let data = jsonMatch[1]
+                                .replace(/&#91;/g, '[')
+                                .replace(/&#93;/g, ']')
+                                .replace(/&#44;/g, ',')
+                                .replace(/&amp;/g, '&')
+                            jsonData = data
+                            cardSource = 'cq_code'
+                        } catch {}
+                    }
+                }
+                
+                // 方式4: 尝试从 replyMsg 的其他字段获取
+                if (!jsonData) {
+                    // 有些框架可能在 json_card 或 card 字段
+                    const candidates = [replyMsg.json_card, replyMsg.card, replyMsg.json]
+                    for (const c of candidates) {
+                        if (c) {
+                            jsonData = typeof c === 'string' ? c : JSON.stringify(c)
+                            cardSource = 'reply_field'
+                            break
+                        }
+                    }
+                }
+                
+                if (!jsonData) {
+                    // 返回调试信息帮助诊断
+                    return { 
+                        success: false, 
+                        error: '引用消息中没有找到卡片内容',
+                        note: '请确保回复的是一条包含JSON卡片的消息（如分享链接、小程序等）',
+                        debug: {
+                            hasReplyMsg: !!replyMsg,
+                            segmentCount: msgArray.length,
+                            segmentTypes: msgArray.map(s => s.type || 'unknown'),
+                            hasRawMessage: !!replyMsg.raw_message
+                        }
+                    }
+                }
+                
+                // 确保是字符串
+                if (typeof jsonData !== 'string') {
                     jsonData = JSON.stringify(jsonData)
                 }
+                const isIcqq = !!(bot?.pickGroup || bot?.pickFriend || bot?.gl || bot?.fl)
+                const isNapCat = bot?.version?.app_name?.toLowerCase?.()?.includes?.('napcat')
+                const jsonSeg = isIcqq && !isNapCat
+                    ? { type: 'json', data: jsonData }
+                    : { type: 'json', data: { data: jsonData } }
                 
-                const jsonSeg = {
-                    type: 'json',
-                    data: jsonData
+                let result = null
+                let lastError = null
+                
+                const targetGroupId = args.group_id ? parseInt(args.group_id) : e?.group_id
+                const targetUserId = args.user_id ? parseInt(args.user_id) : (!targetGroupId ? e?.user_id : null)
+                
+                // 如果需要作为转发消息发送
+                if (args.as_forward) {
+                    const senderInfo = replyMsg.sender || {}
+                    const nickname = args.forward_nickname || senderInfo.nickname || senderInfo.card || String(senderInfo.user_id || '10000')
+                    const userId = String(senderInfo.user_id || '10000')
+                    
+                    const node = {
+                        type: 'node',
+                        data: {
+                            user_id: userId,
+                            nickname: nickname,
+                            content: [jsonSeg]
+                        }
+                    }
+                    
+                    if (bot.sendApi) {
+                        try {
+                            const apiName = targetGroupId ? 'send_group_forward_msg' : 'send_private_forward_msg'
+                            const params = targetGroupId 
+                                ? { group_id: targetGroupId, messages: [node] }
+                                : { user_id: targetUserId, messages: [node] }
+                            result = await bot.sendApi(apiName, params)
+                        } catch (err) {
+                            lastError = err.message
+                        }
+                    }
+                } else {
+                    // 直接发送卡片
+                    if (bot?.sendApi) {
+                        try {
+                            if (targetGroupId) {
+                                result = await bot.sendApi('send_group_msg', { 
+                                    group_id: targetGroupId, 
+                                    message: [jsonSeg] 
+                                })
+                            } else if (targetUserId) {
+                                result = await bot.sendApi('send_private_msg', { 
+                                    user_id: targetUserId, 
+                                    message: [jsonSeg] 
+                                })
+                            }
+                        } catch (err) {
+                            lastError = err.message
+                        }
+                    }
+                    
+                    // icqq 方式
+                    if (!result && (bot?.pickGroup || bot?.pickFriend)) {
+                        try {
+                            if (targetGroupId && bot.pickGroup) {
+                                result = await bot.pickGroup(targetGroupId)?.sendMsg(jsonSeg)
+                            } else if (targetUserId && bot.pickFriend) {
+                                result = await bot.pickFriend(targetUserId)?.sendMsg(jsonSeg)
+                            }
+                        } catch (err) {
+                            lastError = err.message
+                        }
+                    }
+                    
+                    // e.reply
+                    if (!result && e?.reply) {
+                        try {
+                            result = await e.reply(jsonSeg)
+                        } catch (err) {
+                            lastError = err.message
+                        }
+                    }
                 }
                 
-                const result = await e.reply(jsonSeg)
-                return {
-                    success: true,
-                    message_id: result?.message_id
+                if (result) {
+                    return {
+                        success: true,
+                        message_id: result?.message_id || result?.data?.message_id,
+                        card_source: cardSource,
+                        as_forward: !!args.as_forward
+                    }
+                }
+                
+                return { 
+                    success: false, 
+                    error: `发送卡片失败: ${lastError || '未知错误'}`,
+                    note: '可能是协议端不支持发送此类型的卡片'
                 }
             } catch (err) {
-                return { success: false, error: `发送JSON卡片失败: ${err.message}` }
+                return { success: false, error: `重发引用卡片失败: ${err.message}` }
             }
         }
     },
-
-    {
-        name: 'send_xml_card',
-        description: '发送XML卡片消息',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                data: { type: 'string', description: 'XML字符串' }
-            },
-            required: ['data']
-        },
-        handler: async (args, ctx) => {
-            try {
-                const e = ctx.getEvent()
-                if (!e) {
-                    return { success: false, error: '没有可用的会话上下文' }
-                }
-                
-                const xmlSeg = {
-                    type: 'xml',
-                    data: args.data
-                }
-                
-                const result = await e.reply(xmlSeg)
-                return {
-                    success: true,
-                    message_id: result?.message_id
-                }
-            } catch (err) {
-                return { success: false, error: `发送XML卡片失败: ${err.message}` }
-            }
-        }
-    },
-
+    
     {
         name: 'mark_msg_as_read',
         description: '标记消息为已读（NapCat扩展）',
@@ -1187,93 +1142,18 @@ export const messageTools = [
                     return { success: true }
                 }
                 
+                if (bot.sendApi) {
+                    await bot.sendApi('mark_msg_as_read', { message_id: args.message_id })
+                    return { success: true }
+                }
+                
                 return { success: false, error: '当前环境不支持标记已读' }
             } catch (err) {
                 return { success: false, error: `标记已读失败: ${err.message}` }
             }
         }
     },
-
-    {
-        name: 'get_history_msg',
-        description: '获取历史消息（群聊或私聊）',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                target_type: { type: 'string', description: '目标类型: group/private', enum: ['group', 'private'] },
-                target_id: { type: 'string', description: '群号或用户QQ' },
-                count: { type: 'number', description: '获取数量（默认20）' },
-                message_seq: { type: 'number', description: '起始消息序号（可选，从此消息往前获取）' }
-            },
-            required: ['target_type', 'target_id']
-        },
-        handler: async (args, ctx) => {
-            try {
-                const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
-                const targetId = parseInt(args.target_id)
-                const count = args.count || 20
-                
-                if (!bot) {
-                    return { success: false, error: '无法获取Bot实例' }
-                }
-                
-                let messages = []
-                
-                if (args.target_type === 'group') {
-                    // icqq 方式
-                    const group = bot.pickGroup?.(targetId)
-                    if (group?.getChatHistory) {
-                        messages = await group.getChatHistory(args.message_seq || 0, count)
-                    }
-                    // NapCat 方式
-                    else if (bot.sendApi) {
-                        const result = await bot.sendApi('get_group_msg_history', {
-                            group_id: targetId,
-                            count,
-                            message_seq: args.message_seq
-                        })
-                        messages = result?.data?.messages || result?.messages || []
-                    }
-                } else {
-                    // 私聊历史
-                    const friend = bot.pickFriend?.(targetId)
-                    if (friend?.getChatHistory) {
-                        messages = await friend.getChatHistory(args.message_seq || 0, count)
-                    }
-                    // NapCat 方式
-                    else if (bot.sendApi) {
-                        const result = await bot.sendApi('get_friend_msg_history', {
-                            user_id: targetId,
-                            count,
-                            message_seq: args.message_seq
-                        })
-                        messages = result?.data?.messages || result?.messages || []
-                    }
-                }
-                
-                // 格式化消息
-                const formatted = (messages || []).slice(0, count).map(msg => ({
-                    message_id: msg.message_id || msg.id,
-                    sender_id: msg.user_id || msg.sender?.user_id,
-                    sender_name: msg.sender?.nickname || msg.sender?.card || '',
-                    time: msg.time,
-                    content: parseForwardContent(msg.message || msg.content || [])
-                }))
-                
-                return { 
-                    success: true, 
-                    target_type: args.target_type,
-                    target_id: targetId,
-                    count: formatted.length,
-                    messages: formatted 
-                }
-            } catch (err) {
-                return { success: false, error: `获取历史消息失败: ${err.message}` }
-            }
-        }
-    },
-
+    
     {
         name: 'get_essence_msg_list',
         description: '获取群精华消息列表',
@@ -1406,7 +1286,7 @@ export const messageTools = [
             }
         }
     },
-
+    
     {
         name: 'poke_user',
         description: '戳一戳用户',
@@ -1726,7 +1606,7 @@ export const messageTools = [
             }
         }
     },
-
+    
     {
         name: 'get_msg',
         description: '获取消息详情（通过消息ID）',
@@ -1778,6 +1658,483 @@ export const messageTools = [
                 return { success: false, error: `获取消息失败: ${err.message}` }
             }
         }
+    },
+
+    {
+        name: 'send_raw_message',
+        description: '发送原始消息段数组。支持直接构造消息段发送，适合发送复杂的混合消息（文本+图片+@等）。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                segments: {
+                    type: 'array',
+                    description: '消息段数组，每个元素为 {type, data} 格式。支持的类型: text, image, at, face, record, video, json, xml, markdown, mface, poke, reply 等',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            type: { type: 'string', description: '消息类型' },
+                            data: { type: 'object', description: '消息数据' }
+                        },
+                        required: ['type']
+                    }
+                },
+                group_id: { type: 'string', description: '群号（发送到指定群）' },
+                user_id: { type: 'string', description: '用户QQ号（发送私聊）' }
+            },
+            required: ['segments']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || ctx.getBot?.() || global.Bot
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                if (!args.segments || args.segments.length === 0) {
+                    return { success: false, error: '消息段数组不能为空' }
+                }
+                
+                // 规范化消息段格式
+                const segments = args.segments.map(seg => {
+                    if (!seg.data) {
+                        const { type, ...rest } = seg
+                        return { type, data: rest }
+                    }
+                    return seg
+                })
+                
+                let result
+                if (args.group_id) {
+                    // 发送到指定群
+                    const groupId = parseInt(args.group_id)
+                    if (bot.sendApi) {
+                        result = await bot.sendApi('send_group_msg', { group_id: groupId, message: segments })
+                    } else if (bot.pickGroup) {
+                        const group = bot.pickGroup(groupId)
+                        result = await group?.sendMsg(segments)
+                    }
+                } else if (args.user_id) {
+                    // 发送私聊
+                    const userId = parseInt(args.user_id)
+                    if (bot.sendApi) {
+                        result = await bot.sendApi('send_private_msg', { user_id: userId, message: segments })
+                    } else if (bot.pickFriend) {
+                        const friend = bot.pickFriend(userId)
+                        result = await friend?.sendMsg(segments)
+                    }
+                } else if (e) {
+                    // 发送到当前会话
+                    result = await e.reply(segments)
+                } else {
+                    return { success: false, error: '需要指定 group_id 或 user_id，或在会话上下文中使用' }
+                }
+                
+                return {
+                    success: true,
+                    message_id: result?.message_id || result?.data?.message_id,
+                    segment_count: segments.length
+                }
+            } catch (err) {
+                return { success: false, error: `发送原始消息失败: ${err.message}` }
+            }
+        }
+    },
+    
+    {
+        name: 'send_card',
+        description: '【统一】发送卡片消息。支持链接卡片、大图卡片、新闻卡片、自定义JSON/XML卡片。合并了 send_json_card/send_xml_card/send_link_card/send_ark_card 功能。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                template: {
+                    type: 'string',
+                    description: '模板类型: link(链接卡片), image(大图卡片), news(新闻卡片), json(自定义JSON), xml(XML卡片)',
+                    enum: ['link', 'image', 'news', 'json', 'xml']
+                },
+                title: { type: 'string', description: '标题（link/image/news模板）' },
+                desc: { type: 'string', description: '描述（link/news模板）' },
+                url: { type: 'string', description: '跳转链接（link/news模板）' },
+                image: { type: 'string', description: '图片URL（link/image/news模板）' },
+                source: { type: 'string', description: '来源名称（link/news模板）' },
+                data: { type: 'string', description: '自定义数据（json/xml模板时使用）' },
+                group_id: { type: 'string', description: '目标群号' },
+                user_id: { type: 'string', description: '目标用户QQ号' }
+            },
+            required: ['template']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || ctx.getBot?.() || global.Bot
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                let cardData = null
+                let cardType = 'json'
+                
+                switch (args.template) {
+                    case 'link':
+                        cardData = buildLinkCard(args.title || '', args.desc || '', args.url || '', args.image || '', args.source || '')
+                        break
+                    case 'image':
+                        cardData = buildBigImageCard(args.image || '', args.title || '', args.desc || '')
+                        break
+                    case 'news':
+                        cardData = {
+                            app: 'com.tencent.structmsg',
+                            desc: args.source || '',
+                            view: 'news',
+                            ver: '0.0.0.1',
+                            prompt: `[${args.source || '资讯'}] ${args.title || ''}`,
+                            meta: {
+                                news: {
+                                    action: '',
+                                    app_type: 1,
+                                    appid: 100951776,
+                                    desc: args.desc || '',
+                                    jumpUrl: args.url || '',
+                                    preview: args.image || '',
+                                    tag: args.source || '',
+                                    title: args.title || ''
+                                }
+                            }
+                        }
+                        break
+                    case 'json':
+                        if (!args.data) {
+                            return { success: false, error: 'json模板需要提供data参数' }
+                        }
+                        try {
+                            cardData = typeof args.data === 'string' ? JSON.parse(args.data) : args.data
+                        } catch {
+                            return { success: false, error: 'data格式错误，需要有效的JSON' }
+                        }
+                        break
+                    case 'xml':
+                        if (!args.data) {
+                            return { success: false, error: 'xml模板需要提供data参数' }
+                        }
+                        cardType = 'xml'
+                        cardData = args.data
+                        break
+                    default:
+                        return { success: false, error: '不支持的模板类型' }
+                }
+                
+                // 使用统一的卡片发送函数
+                const result = await sendCardMessage({
+                    bot,
+                    event: e,
+                    groupId: args.group_id ? parseInt(args.group_id) : null,
+                    userId: args.user_id ? parseInt(args.user_id) : null,
+                    type: cardType,
+                    data: cardData
+                })
+                
+                // 解析卡片信息
+                const cardInfo = cardType === 'json' ? parseCardData(cardData) : { type: 'xml' }
+                
+                return {
+                    ...result,
+                    template: args.template,
+                    card_type: cardInfo.type
+                }
+            } catch (err) {
+                return { success: false, error: `发送Ark卡片失败: ${err.message}` }
+            }
+        }
+    },
+    
+    {
+        name: 'send_markdown',
+        description: '发送Markdown消息（NapCat/TRSS支持）',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                content: { type: 'string', description: 'Markdown内容' },
+                group_id: { type: 'string', description: '目标群号' },
+                user_id: { type: 'string', description: '目标用户QQ号' }
+            },
+            required: ['content']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || ctx.getBot?.() || global.Bot
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                const mdSeg = { type: 'markdown', data: { content: args.content } }
+                
+                let result
+                if (args.group_id) {
+                    const groupId = parseInt(args.group_id)
+                    if (bot.sendApi) {
+                        result = await bot.sendApi('send_group_msg', { group_id: groupId, message: [mdSeg] })
+                    } else if (bot.pickGroup) {
+                        result = await bot.pickGroup(groupId)?.sendMsg(mdSeg)
+                    }
+                } else if (args.user_id) {
+                    const userId = parseInt(args.user_id)
+                    if (bot.sendApi) {
+                        result = await bot.sendApi('send_private_msg', { user_id: userId, message: [mdSeg] })
+                    } else if (bot.pickFriend) {
+                        result = await bot.pickFriend(userId)?.sendMsg(mdSeg)
+                    }
+                } else if (e) {
+                    result = await e.reply(mdSeg)
+                } else {
+                    return { success: false, error: '需要指定 group_id 或 user_id' }
+                }
+                
+                return {
+                    success: true,
+                    message_id: result?.message_id || result?.data?.message_id
+                }
+            } catch (err) {
+                return { success: false, error: `发送Markdown失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'send_button',
+        description: '发送按钮消息（NapCat扩展）',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                content: { type: 'string', description: '消息文本内容' },
+                buttons: {
+                    type: 'array',
+                    description: '按钮列表',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            text: { type: 'string', description: '按钮文字' },
+                            data: { type: 'string', description: '按钮数据/回调' },
+                            type: { type: 'string', description: '按钮类型: input(输入回调), link(链接), callback(回调)' }
+                        },
+                        required: ['text']
+                    }
+                },
+                group_id: { type: 'string', description: '目标群号' },
+                user_id: { type: 'string', description: '目标用户QQ号' }
+            },
+            required: ['buttons']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || ctx.getBot?.() || global.Bot
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                const message = []
+                if (args.content) {
+                    message.push({ type: 'text', data: { text: args.content } })
+                }
+                message.push({ 
+                    type: 'keyboard', 
+                    data: { 
+                        content: { 
+                            rows: [{ buttons: args.buttons.map((btn, i) => ({
+                                id: String(i),
+                                render_data: { label: btn.text, visited_label: btn.text },
+                                action: {
+                                    type: btn.type === 'link' ? 0 : (btn.type === 'callback' ? 1 : 2),
+                                    data: btn.data || btn.text,
+                                    permission: { type: 2 }
+                                }
+                            }))}]
+                        }
+                    }
+                })
+                
+                let result
+                if (args.group_id) {
+                    if (bot.sendApi) {
+                        result = await bot.sendApi('send_group_msg', { group_id: parseInt(args.group_id), message })
+                    }
+                } else if (args.user_id) {
+                    if (bot.sendApi) {
+                        result = await bot.sendApi('send_private_msg', { user_id: parseInt(args.user_id), message })
+                    }
+                } else if (e) {
+                    result = await e.reply(message)
+                } else {
+                    return { success: false, error: '需要指定 group_id 或 user_id' }
+                }
+                
+                return {
+                    success: true,
+                    message_id: result?.message_id || result?.data?.message_id,
+                    button_count: args.buttons.length
+                }
+            } catch (err) {
+                return { success: false, error: `发送按钮消息失败: ${err.message}` }
+            }
+        }
+    },
+    
+    {
+        name: 'call_api',
+        description: '直接调用Bot API（NapCat/OneBot扩展）。可以调用任意API，适合使用未封装的高级功能。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                action: { type: 'string', description: 'API名称，如 send_group_msg, get_group_info, set_group_card 等' },
+                params: { type: 'object', description: 'API参数对象' }
+            },
+            required: ['action']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || ctx.getBot?.() || global.Bot
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                if (!bot.sendApi) {
+                    return { success: false, error: '当前协议不支持 sendApi，此功能需要 NapCat/OneBot 协议端' }
+                }
+                
+                const result = await bot.sendApi(args.action, args.params || {})
+                
+                return {
+                    success: true,
+                    action: args.action,
+                    result: result?.data || result
+                }
+            } catch (err) {
+                return { success: false, error: `调用API失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'send_long_msg',
+        description: '发送长消息（NapCat扩展）。将多条消息合并为长消息发送。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                messages: {
+                    type: 'array',
+                    description: '消息列表，每条消息为字符串或消息段数组',
+                    items: {
+                        oneOf: [
+                            { type: 'string' },
+                            { type: 'array' }
+                        ]
+                    }
+                },
+                group_id: { type: 'string', description: '目标群号' },
+                user_id: { type: 'string', description: '目标用户QQ号' }
+            },
+            required: ['messages']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || ctx.getBot?.() || global.Bot
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                if (!bot.sendApi) {
+                    return { success: false, error: '当前协议不支持长消息发送' }
+                }
+                
+                // 构建消息节点
+                const botInfo = bot.info || {}
+                const botId = bot.uin || bot.self_id || '10000'
+                const botName = botInfo.nickname || 'Bot'
+                
+                const nodes = args.messages.map(msg => ({
+                    type: 'node',
+                    data: {
+                        user_id: String(botId),
+                        nickname: botName,
+                        content: typeof msg === 'string' 
+                            ? [{ type: 'text', data: { text: msg } }]
+                            : msg
+                    }
+                }))
+                
+                let result
+                if (args.group_id) {
+                    result = await bot.sendApi('send_group_forward_msg', {
+                        group_id: parseInt(args.group_id),
+                        messages: nodes
+                    })
+                } else if (args.user_id) {
+                    result = await bot.sendApi('send_private_forward_msg', {
+                        user_id: parseInt(args.user_id),
+                        messages: nodes
+                    })
+                } else if (e) {
+                    const isGroup = !!e.group_id
+                    const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
+                    const targetId = isGroup ? e.group_id : e.user_id
+                    result = await bot.sendApi(apiName, {
+                        [isGroup ? 'group_id' : 'user_id']: targetId,
+                        messages: nodes
+                    })
+                } else {
+                    return { success: false, error: '需要指定 group_id 或 user_id' }
+                }
+                
+                return {
+                    success: true,
+                    message_id: result?.message_id || result?.data?.message_id,
+                    res_id: result?.res_id || result?.data?.res_id,
+                    message_count: args.messages.length
+                }
+            } catch (err) {
+                return { success: false, error: `发送长消息失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_msg_reactions',
+        description: '获取消息的表情回应列表（NapCat扩展）',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                message_id: { type: 'string', description: '消息ID' },
+                group_id: { type: 'string', description: '群号' }
+            },
+            required: ['message_id']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || global.Bot
+                const groupId = args.group_id || e?.group_id
+                
+                if (!bot || !bot.sendApi) {
+                    return { success: false, error: '当前协议不支持获取表情回应' }
+                }
+                
+                const result = await bot.sendApi('get_group_msg_history', {
+                    group_id: parseInt(groupId),
+                    message_id: args.message_id
+                })
+                
+                return {
+                    success: true,
+                    message_id: args.message_id,
+                    reactions: result?.data?.reactions || result?.reactions || []
+                }
+            } catch (err) {
+                return { success: false, error: `获取表情回应失败: ${err.message}` }
+            }
+        }
     }
 ]
 
@@ -1813,8 +2170,148 @@ function parseForwardContent(content) {
                 return `[文件:${data.name || ''}]`
             case 'forward':
                 return '[转发消息]'
+            case 'markdown':
+                return data.content || '[Markdown]'
+            case 'mface':
+                return `[商城表情:${data.summary || ''}]`
+            case 'json':
+                return '[卡片消息]'
+            case 'xml':
+                return '[XML消息]'
+            case 'poke':
+                return '[戳一戳]'
             default:
                 return `[${type}]`
         }
     }).join('')
+}
+
+/**
+ * 解析富文本消息内容为消息段数组
+ * 支持混合格式：文本、[图片:url]、[表情:id]、[@qq]、[语音:url]等
+ * @param {string|Array|Object} content - 消息内容
+ * @returns {Array} 消息段数组
+ */
+function parseRichContent(content) {
+    // 如果已经是数组，直接返回
+    if (Array.isArray(content)) {
+        return content.map(seg => {
+            // 确保格式正确
+            if (typeof seg === 'string') {
+                return { type: 'text', data: { text: seg } }
+            }
+            // 统一为 NC/OneBot 格式
+            if (seg.type && !seg.data) {
+                const { type, ...rest } = seg
+                return { type, data: rest }
+            }
+            return seg
+        })
+    }
+    
+    // 如果是对象（单个消息段）
+    if (typeof content === 'object' && content !== null) {
+        if (content.type) {
+            if (!content.data) {
+                const { type, ...rest } = content
+                return [{ type, data: rest }]
+            }
+            return [content]
+        }
+        return [{ type: 'text', data: { text: JSON.stringify(content) } }]
+    }
+    
+    // 字符串：解析特殊标记
+    if (typeof content !== 'string') {
+        return [{ type: 'text', data: { text: String(content || '') } }]
+    }
+    
+    const segments = []
+    let remaining = content
+    
+    // 解析 [类型:参数] 格式的标记
+    const patterns = [
+        // [图片:url] 或 [image:url]
+        { regex: /\[(?:图片|image):([^\]]+)\]/gi, handler: (m) => ({ type: 'image', data: { file: m[1], url: m[1] } }) },
+        // [表情:id] 或 [face:id]
+        { regex: /\[(?:表情|face):(\d+)\]/gi, handler: (m) => ({ type: 'face', data: { id: parseInt(m[1]) } }) },
+        // [@qq] 或 [at:qq]
+        { regex: /\[@(\d+|all)\]/gi, handler: (m) => ({ type: 'at', data: { qq: m[1] } }) },
+        { regex: /\[at:(\d+|all)\]/gi, handler: (m) => ({ type: 'at', data: { qq: m[1] } }) },
+        // [语音:url] 或 [record:url]
+        { regex: /\[(?:语音|record):([^\]]+)\]/gi, handler: (m) => ({ type: 'record', data: { file: m[1] } }) },
+        // [视频:url] 或 [video:url]
+        { regex: /\[(?:视频|video):([^\]]+)\]/gi, handler: (m) => ({ type: 'video', data: { file: m[1] } }) },
+        // [商城表情:id,key] 或 [mface:pkg_id,emoji_id]
+        { regex: /\[(?:商城表情|mface):([^,\]]+),([^\]]+)\]/gi, handler: (m) => ({ type: 'mface', data: { emoji_package_id: m[1], emoji_id: m[2] } }) },
+        // [markdown:content]
+        { regex: /\[markdown:([^\]]+)\]/gi, handler: (m) => ({ type: 'markdown', data: { content: m[1] } }) },
+    ]
+    
+    // 收集所有匹配
+    const matches = []
+    for (const { regex, handler } of patterns) {
+        let match
+        const re = new RegExp(regex.source, regex.flags)
+        while ((match = re.exec(content)) !== null) {
+            matches.push({
+                start: match.index,
+                end: match.index + match[0].length,
+                segment: handler(match)
+            })
+        }
+    }
+    
+    // 按位置排序
+    matches.sort((a, b) => a.start - b.start)
+    
+    // 如果没有匹配，返回纯文本
+    if (matches.length === 0) {
+        return [{ type: 'text', data: { text: content } }]
+    }
+    
+    // 构建消息段数组
+    let lastEnd = 0
+    for (const m of matches) {
+        // 添加之前的文本
+        if (m.start > lastEnd) {
+            const text = content.substring(lastEnd, m.start)
+            if (text) segments.push({ type: 'text', data: { text } })
+        }
+        // 添加特殊消息段
+        segments.push(m.segment)
+        lastEnd = m.end
+    }
+    // 添加剩余文本
+    if (lastEnd < content.length) {
+        const text = content.substring(lastEnd)
+        if (text) segments.push({ type: 'text', data: { text } })
+    }
+    
+    return segments
+}
+
+/**
+ * 构建合并转发节点（支持富文本）
+ * @param {Array} messages - 消息列表
+ * @returns {Array} 节点数组
+ */
+function buildForwardNodes(messages) {
+    return messages.map(msg => {
+        const userId = String(msg.user_id || msg.uin || '10000')
+        const nickname = msg.nickname || msg.name || userId
+        const content = msg.message || msg.content || ''
+        
+        // 解析富文本内容
+        const parsedContent = parseRichContent(content)
+        
+        return {
+            type: 'node',
+            data: {
+                user_id: userId,
+                nickname: nickname,
+                content: parsedContent
+            }
+        }
+    })
 }

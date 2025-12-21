@@ -7,7 +7,6 @@
 const activeReminders = new Map()
 
 export const extraTools = [
-    // ==================== 天气查询 ====================
     {
         name: 'get_weather',
         description: '查询指定城市的天气信息',
@@ -76,8 +75,6 @@ export const extraTools = [
             }
         }
     },
-
-    // ==================== 一言 ====================
     {
         name: 'hitokoto',
         description: '获取一条随机的一言（名言、语录、台词等）',
@@ -124,8 +121,6 @@ export const extraTools = [
             }
         }
     },
-
-    // ==================== 骰子 ====================
     {
         name: 'roll_dice',
         description: '掷骰子，支持多种格式如 2d6（投2个6面骰子）、1d20+5（投1个20面骰子加5）',
@@ -180,8 +175,6 @@ export const extraTools = [
             return { success: true, expression, rolls, subtotal, modifier: modifier || undefined, total, text }
         }
     },
-
-    // ==================== 随机选择 ====================
     {
         name: 'random_choose',
         description: '从给定的选项中随机选择一个或多个',
@@ -232,8 +225,6 @@ export const extraTools = [
             }
         }
     },
-
-    // ==================== 倒计时 ====================
     {
         name: 'countdown',
         description: '计算距离指定日期还有多少时间',
@@ -287,8 +278,6 @@ export const extraTools = [
             }
         }
     },
-
-    // ==================== 短链接 ====================
     {
         name: 'create_short_url',
         description: '将长链接转换为短链接',
@@ -330,8 +319,6 @@ export const extraTools = [
             }
         }
     },
-
-    // ==================== IP查询 ====================
     {
         name: 'query_ip_info',
         description: '查询IP地址的地理位置和相关信息',
@@ -377,8 +364,6 @@ export const extraTools = [
             }
         }
     },
-
-    // ==================== 提醒 ====================
     {
         name: 'set_reminder',
         description: '设置定时提醒，在指定时间或一段时间后提醒某人',
@@ -482,8 +467,6 @@ export const extraTools = [
             }
         }
     },
-
-    // ==================== 插画获取 ====================
     {
         name: 'get_illustration',
         description: '获取动漫插画图片',

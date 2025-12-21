@@ -693,8 +693,6 @@ export const voiceTools = [
         }
     },
 
-    // ========== NapCat AI声聊增强API ==========
-
     {
         name: 'get_ai_record',
         description: '【获取数据】仅获取AI语音的文件数据，不会发送消息。如需发送AI语音，请使用 send_ai_voice',

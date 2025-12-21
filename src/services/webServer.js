@@ -661,8 +661,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== Health & Monitoring ====================
         // GET /api/health - Health check endpoint (public)
         this.app.get('/api/health', (req, res) => {
             const health = {
@@ -755,8 +753,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== Usage Stats API ====================
         // GET /api/stats/usage - 获取API使用统计
         this.app.get('/api/stats/usage', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -805,8 +801,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== Config Routes ====================
         // GET /api/config - Get configuration
         this.app.get('/api/config', this.authMiddleware.bind(this), (req, res) => {
             // Return full config for settings page (protected)
@@ -1158,8 +1152,6 @@ export class WebServer {
                 res.status(404).json(ChaiteResponse.fail(null, `Config section not found: ${section}`))
             }
         })
-
-        // ==================== Token Management API ====================
         // POST /api/auth/token/permanent - Generate permanent token
         // 支持 forceNew 参数强制生成新token
         this.app.post('/api/auth/token/permanent', this.authMiddleware.bind(this), (req, res) => {
@@ -1199,8 +1191,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== Proxy Management API ====================
         // GET /api/proxy - 获取代理配置
         this.app.get('/api/proxy', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -1340,8 +1330,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== Template Placeholders API ====================
         // GET /api/placeholders - 获取可用占位符列表
         this.app.get('/api/placeholders', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -1364,8 +1352,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== Log Management API ====================
         // GET /api/logs - 获取日志文件列表
         this.app.get('/api/logs', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -1388,8 +1374,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== Preset Routes ====================
         // GET /api/preset/list - List all presets (protected)
         this.app.get('/api/preset/list', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -1536,8 +1520,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== 内置预设库 API ====================
         // GET /api/presets/builtin - 获取所有内置预设
         this.app.get('/api/presets/builtin', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -1570,8 +1552,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, err.message))
             }
         })
-
-        // ==================== 知识库 API ====================
         // GET /api/knowledge - 获取所有知识库文档（列表模式返回摘要）
         this.app.get('/api/knowledge', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -1731,8 +1711,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, err.message))
             }
         })
-
-        // ==================== Channels API (Enhanced) ====================
         // GET /api/channels/list - List all channels
         this.app.get('/api/channels/list', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -2177,8 +2155,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, `获取模型列表失败: ${error.message} `))
             }
         })
-
-        // ==================== Tools Routes ====================
         // GET /api/tools/list - List all tools (protected)
         this.app.get('/api/tools/list', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -2901,20 +2877,15 @@ export default {
         this.app.get('/api/processors/list', this.authMiddleware.bind(this), (req, res) => {
             res.json(ChaiteResponse.ok([]))
         })
-
-        // ==================== Triggers Routes ====================
         // GET /api/triggers/list - List all triggers (protected)
         this.app.get('/api/triggers/list', this.authMiddleware.bind(this), (req, res) => {
             res.json(ChaiteResponse.ok([]))
         })
-
-        // ==================== Tool Groups Routes ====================
         // GET /api/toolGroups/list - List all tool groups (protected)
         this.app.get('/api/toolGroups/list', this.authMiddleware.bind(this), (req, res) => {
             res.json(ChaiteResponse.ok([]))
         })
 
-        // ==================== Image API ====================
         // Configure multer for memory storage
         const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
 
@@ -3031,8 +3002,6 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== Context Management API ====================
         // GET /api/context/list - List active contexts
         this.app.get('/api/context/list', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -3063,8 +3032,6 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== Memory Management API ====================
         // GET /api/memory/:userId - Get memories for user
         this.app.get('/api/memory/:userId', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -3124,8 +3091,6 @@ export default {
             }
         })
 
-
-        // ==================== Load Balancing Stats API ====================
         // GET /api/stats/load-balancing - Get load balancing stats
         this.app.get('/api/stats/load-balancing', this.authMiddleware.bind(this), async (req, res) => {
             try {
