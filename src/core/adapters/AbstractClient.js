@@ -1079,16 +1079,11 @@ export async function preprocessMediaToBase64(histories, options = {}) {
     }
     return processed
 }
-
-/**
- * 兼容旧函数名
- */
 export async function preprocessImageUrls(histories) {
     return preprocessMediaToBase64(histories, { processVideo: true, processAudio: true })
 }
 
 /**
- * 检查模型是否需要base64预处理（如Gemini系列）
  * @param {string} model - 模型名称
  * @returns {boolean}
  */
@@ -1124,10 +1119,9 @@ export function needsImageBase64Preprocess(model) {
 
 /** 默认工具调用限制 */
 const DEFAULT_TOOL_CALL_LIMIT = {
-    maxConsecutiveCalls: 5,           // 最大连续调用次数（降低）
-    maxConsecutiveIdenticalCalls: 3,  // 最大连续相同调用次数（降为1，不允许重复）
-    maxTotalToolCalls: 12,            // 单次对话最大工具调用总数
-    maxSimilarCalls: 2                // 最大相似调用次数（用于检测功能相同但参数略不同的调用）
+    maxConsecutiveCalls: 10,          // 最大连续调用次数（提高以支持复杂任务）
+    maxConsecutiveIdenticalCalls: 4,  // 最大连续完全相同调用次数（工具名+参数都相同）
+    maxTotalToolCalls: 25             // 单次对话最大工具调用总数
 }
 
 /**
@@ -1265,15 +1259,10 @@ export class AbstractClient {
                 
                 const intermediateTextContent = modelResponse.content?.filter(c => c.type === 'text') || []
                 let intermediateText = intermediateTextContent.map(c => c.text).join('').trim()
-                
-                // 过滤掉工具调用JSON，避免将其当作普通消息发送
                 if (intermediateText) {
                     const { cleanText } = parseXmlToolCalls(intermediateText)
                     intermediateText = cleanText
                 }
-                
-                // 触发工具调用中间消息回调（如果设置）
-                // 这会在工具调用之前先发送模型的文本回复
                 if (this.onMessageWithToolCall || options.onMessageWithToolCall) {
                     const callback = options.onMessageWithToolCall || this.onMessageWithToolCall
                     try {
@@ -1316,11 +1305,13 @@ export class AbstractClient {
                 // 检测模型类型，Gemini 模型更容易陷入循环
                 const modelStr = typeof options.model === 'string' ? options.model : ''
                 const isGeminiModel = modelStr.toLowerCase().includes('gemini')
-                const maxBeforeDisable = isGeminiModel ? 2 : 3
+                // 提高多轮工具调用限制，允许更复杂的工具调用链
+                const maxBeforeDisable = isGeminiModel ? 6 : 10
                 
-                // 连续调用超过阈值时禁用工具
+                // 连续调用超过阈值时禁用工具，防止无限循环
                 if (options._toolCallCount >= maxBeforeDisable) {
                     options.toolChoice = { type: 'none' }
+                    this.logger.info(`[Tool] 工具调用轮次达到上限 ${maxBeforeDisable}，禁用工具以完成响应`)
                 } else {
                     options.toolChoice = { type: 'auto' }
                 }
@@ -1621,45 +1612,17 @@ export class AbstractClient {
             options._lastToolCallSignature = signature
             options._consecutiveIdenticalToolCallCount = 1
         }
-
-        // 检查最大连续相同调用次数
         if (limitConfig.maxConsecutiveIdenticalCalls && 
             options._consecutiveIdenticalToolCallCount > limitConfig.maxConsecutiveIdenticalCalls) {
             return `检测到连续${options._consecutiveIdenticalToolCallCount}次完全相同的工具调用，已自动停止`
-        }
-        const simplifiedSig = this.buildSimplifiedSignature(toolCalls)
-        if (options._lastSimplifiedSignature === simplifiedSig) {
-            options._consecutiveSimilarToolCallCount = (options._consecutiveSimilarToolCallCount || 0) + 1
-            this.logger.warn(`[Tool] 检测到功能相似的重复调用 #${options._consecutiveSimilarToolCallCount}: ${simplifiedSig.substring(0, 80)}`)
-        } else {
-            options._lastSimplifiedSignature = simplifiedSig
-            options._consecutiveSimilarToolCallCount = 1
-        }
-        
-        // 检查最大连续相似调用次数
-        if (limitConfig.maxSimilarCalls && 
-            options._consecutiveSimilarToolCallCount > limitConfig.maxSimilarCalls) {
-            return `检测到连续${options._consecutiveSimilarToolCallCount}次功能相似的工具调用`
         }
         if (!options._toolCallSignatureHistory) {
             options._toolCallSignatureHistory = new Map()
         }
         const prevCount = options._toolCallSignatureHistory.get(signature) || 0
         options._toolCallSignatureHistory.set(signature, prevCount + 1)
-        
-        // 如果同一个调用出现超过2次，认为是循环
-        if (prevCount >= 2) {
-            return `工具调用"${toolCalls[0]?.function?.name}"已重复${prevCount + 1}次，检测到循环调用`
-        }
-        if (!options._simplifiedSignatureHistory) {
-            options._simplifiedSignatureHistory = new Map()
-        }
-        const prevSimCount = options._simplifiedSignatureHistory.get(simplifiedSig) || 0
-        options._simplifiedSignatureHistory.set(simplifiedSig, prevSimCount + 1)
-        
-        // 如果功能相似的调用出现超过3次，认为是循环
-        if (prevSimCount >= 3) {
-            return `功能相似的工具调用已重复${prevSimCount + 1}次，检测到循环调用`
+        if (prevCount >= 5) {
+            return `工具调用"${toolCalls[0]?.function?.name}"已重复${prevCount + 1}次（完全相同的参数），检测到循环调用`
         }
         if (toolCalls.length > 1) {
             const callSignatures = toolCalls.map(tc => `${tc.function?.name}:${tc.function?.arguments}`)
