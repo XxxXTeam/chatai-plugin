@@ -144,10 +144,10 @@ export class ScopeManager {
         (userId, systemPrompt, presetId, settings, createdAt, updatedAt)
         VALUES (?, ?, ?, ?, COALESCE((SELECT createdAt FROM user_scopes WHERE userId = ?), ?), ?)
       `)
-      
+      const finalPrompt = systemPrompt === undefined ? null : systemPrompt
       stmt.run(
         userId,
-        systemPrompt || null,
+        finalPrompt,
         presetId || null,
         JSON.stringify(otherSettings),
         userId,
@@ -155,7 +155,7 @@ export class ScopeManager {
         now
       )
       
-      logger.debug(`[ScopeManager] 用户配置已更新: ${userId}`)
+      logger.debug(`[ScopeManager] 用户配置已更新: ${userId}${systemPrompt === '' ? ' (空人设)' : ''}`)
       return true
     } catch (error) {
       logger.error(`[ScopeManager] 设置用户配置失败 (${userId}):`, error)
@@ -210,9 +210,11 @@ export class ScopeManager {
         VALUES (?, ?, ?, ?, COALESCE((SELECT createdAt FROM group_scopes WHERE groupId = ?), ?), ?)
       `)
       
+      // 支持空人设：区分 undefined 和 空字符串
+      const finalPrompt = systemPrompt === undefined ? null : systemPrompt
       stmt.run(
         groupId,
-        systemPrompt || null,
+        finalPrompt,
         presetId || null,
         JSON.stringify(otherSettings),
         groupId,
@@ -220,7 +222,7 @@ export class ScopeManager {
         now
       )
       
-      logger.debug(`[ScopeManager] 群组配置已更新: ${groupId}`)
+      logger.debug(`[ScopeManager] 群组配置已更新: ${groupId}${systemPrompt === '' ? ' (空人设)' : ''}`)
       return true
     } catch (error) {
       logger.error(`[ScopeManager] 设置群组配置失败 (${groupId}):`, error)
@@ -455,10 +457,12 @@ export class ScopeManager {
           ?)
       `)
       
+      // 支持空人设：区分 undefined 和 空字符串
+      const finalPrompt = systemPrompt === undefined ? null : systemPrompt
       stmt.run(
         groupId,
         userId,
-        systemPrompt || null,
+        finalPrompt,
         presetId || null,
         JSON.stringify(otherSettings),
         groupId,
@@ -467,7 +471,7 @@ export class ScopeManager {
         now
       )
       
-      logger.debug(`[ScopeManager] 群用户配置已更新: ${groupId}:${userId}`)
+      logger.debug(`[ScopeManager] 群用户配置已更新: ${groupId}:${userId}${systemPrompt === '' ? ' (空人设)' : ''}`)
       return true
     } catch (error) {
       logger.error(`[ScopeManager] 设置群用户配置失败 (${groupId}:${userId}):`, error)
@@ -627,9 +631,11 @@ export class ScopeManager {
         VALUES (?, ?, ?, ?, COALESCE((SELECT createdAt FROM private_scopes WHERE userId = ?), ?), ?)
       `)
       
+      // 支持空人设：区分 undefined 和 空字符串
+      const finalPrompt = systemPrompt === undefined ? null : systemPrompt
       stmt.run(
         userId,
-        systemPrompt || null,
+        finalPrompt,
         presetId || null,
         JSON.stringify(otherSettings),
         userId,
@@ -637,7 +643,7 @@ export class ScopeManager {
         now
       )
       
-      logger.debug(`[ScopeManager] 私聊配置已更新: ${userId}`)
+      logger.debug(`[ScopeManager] 私聊配置已更新: ${userId}${systemPrompt === '' ? ' (空人设)' : ''}`)
       return true
     } catch (error) {
       logger.error(`[ScopeManager] 设置私聊配置失败 (${userId}):`, error)
@@ -777,10 +783,12 @@ export class ScopeManager {
       }
       
       if (settings) {
-        if (!effectivePrompt && settings.systemPrompt) {
-          effectivePrompt = settings.systemPrompt
+        // 支持空人设：区分"未设置"(null/undefined)和"设置为空"("")
+        // 当 systemPrompt 是空字符串时，表示用户明确设置了空人设
+        if (effectivePrompt === null && settings.systemPrompt !== undefined && settings.systemPrompt !== null) {
+          effectivePrompt = settings.systemPrompt  // 可以是空字符串
           source = level
-          logger.debug(`[ScopeManager] 使用 ${level} 的 systemPrompt`)
+          logger.debug(`[ScopeManager] 使用 ${level} 的 systemPrompt${settings.systemPrompt === '' ? ' (空人设)' : ''}`)
         }
         if (!effectivePresetId && settings.presetId) {
           effectivePresetId = settings.presetId
@@ -789,14 +797,16 @@ export class ScopeManager {
       }
     }
 
-    logger.debug(`[ScopeManager] 最终生效来源: ${source}, hasPrompt=${!!effectivePrompt}`)
+    // 空字符串也算有独立人设（用户明确设置为空）
+    const hasIndependentPrompt = effectivePrompt !== null && effectivePrompt !== undefined
+    logger.debug(`[ScopeManager] 最终生效来源: ${source}, hasPrompt=${hasIndependentPrompt}, isEmpty=${effectivePrompt === ''}`)
 
     return {
       systemPrompt: effectivePrompt,
       presetId: effectivePresetId,
       source,
-      // 标记是否有独立人设（设置了systemPrompt）
-      hasIndependentPrompt: !!effectivePrompt,
+      // 标记是否有独立人设（包括空字符串）
+      hasIndependentPrompt,
       // 返回优先级信息
       priorityOrder
     }

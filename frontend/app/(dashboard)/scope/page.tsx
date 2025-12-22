@@ -676,9 +676,10 @@ export default function ScopeManagerPage() {
               <Textarea
                 value={userForm.systemPrompt}
                 onChange={(e) => setUserForm({ ...userForm, systemPrompt: e.target.value })}
-                placeholder="为该用户设置专属的系统提示词..."
+                placeholder="为该用户设置专属的系统提示词...留空表示使用空人设（无系统提示词）"
                 rows={6}
               />
+              <p className="text-xs text-muted-foreground">提示：留空表示使用空人设（AI将不带任何系统提示词的回复）</p>
             </div>
             <div className="space-y-2">
               <Label>使用预设</Label>
@@ -727,9 +728,10 @@ export default function ScopeManagerPage() {
               <Textarea
                 value={groupForm.systemPrompt}
                 onChange={(e) => setGroupForm({ ...groupForm, systemPrompt: e.target.value })}
-                placeholder="为该群组设置专属的系统提示词..."
+                placeholder="为该群组设置专属的系统提示词...留空表示使用空人设"
                 rows={6}
               />
+              <p className="text-xs text-muted-foreground">提示：留空表示使用空人设（AI将不带任何系统提示词的回复）</p>
             </div>
             <div className="space-y-2">
               <Label>使用预设</Label>
@@ -789,9 +791,10 @@ export default function ScopeManagerPage() {
               <Textarea
                 value={groupUserForm.systemPrompt}
                 onChange={(e) => setGroupUserForm({ ...groupUserForm, systemPrompt: e.target.value })}
-                placeholder="为该群内的特定用户设置专属的系统提示词..."
+                placeholder="为该群内的特定用户设置专属的系统提示词...留空表示使用空人设"
                 rows={6}
               />
+              <p className="text-xs text-muted-foreground">提示：留空表示使用空人设（AI将不带任何系统提示词的回复）</p>
             </div>
             <div className="space-y-2">
               <Label>使用预设</Label>
@@ -840,9 +843,10 @@ export default function ScopeManagerPage() {
               <Textarea
                 value={privateForm.systemPrompt}
                 onChange={(e) => setPrivateForm({ ...privateForm, systemPrompt: e.target.value })}
-                placeholder="为该用户在私聊场景设置专属的系统提示词..."
+                placeholder="为该用户在私聊场景设置专属的系统提示词...留空表示使用空人设"
                 rows={6}
               />
+              <p className="text-xs text-muted-foreground">提示：留空表示使用空人设（AI将不带任何系统提示词的回复）</p>
             </div>
             <div className="space-y-2">
               <Label>使用预设</Label>

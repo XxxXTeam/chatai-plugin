@@ -413,13 +413,24 @@ export default function ContextPage() {
               id="globalSystemPrompt"
               value={config.context?.globalSystemPrompt || ''}
               onChange={(e) => updateConfig('context.globalSystemPrompt', e.target.value)}
-              placeholder="输入全局系统提示词，例如：你是一个友善的助手..."
-              rows={6}
+              placeholder="输入全局系统提示词，支持占位符如 {{user_name}}、{{group_name}} 等..."
+              rows={8}
               className="font-mono text-sm"
             />
-            <p className="text-xs text-muted-foreground">
-              留空则不添加。
-            </p>
+            <div className="text-xs text-muted-foreground space-y-2">
+              <p>留空则不添加。支持以下占位符（会自动替换为实际值）：</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 bg-muted/50 p-2 rounded text-xs">
+                <code>{'{{user_name}}'}</code><span>用户昵称/群名片</span>
+                <code>{'{{user_id}}'}</code><span>用户QQ号</span>
+                <code>{'{{group_name}}'}</code><span>群名称</span>
+                <code>{'{{group_id}}'}</code><span>群号</span>
+                <code>{'{{bot_name}}'}</code><span>机器人昵称</span>
+                <code>{'{{date}}'}</code><span>当前日期</span>
+                <code>{'{{time}}'}</code><span>当前时间</span>
+                <code>{'{{datetime}}'}</code><span>日期时间</span>
+                <code>{'{{weekday}}'}</code><span>星期几</span>
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>

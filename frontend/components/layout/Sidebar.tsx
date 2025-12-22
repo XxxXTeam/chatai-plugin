@@ -27,6 +27,7 @@ import {
   Globe,
   Activity,
   FileText,
+  Server,
   type LucideIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -78,7 +79,8 @@ const navGroups: NavGroup[] = [
     label: '配置中心',
     icon: Settings,
     items: [
-      { href: '/settings', label: '系统设置', icon: Settings },
+      { href: '/settings', label: '基础设置', icon: Settings },
+      { href: '/settings/system', label: '系统配置', icon: Server },
       { href: '/settings/context', label: '上下文配置', icon: FileText },
       { href: '/channels', label: '渠道管理', icon: Plug },
       { href: '/presets', label: '预设管理', icon: Palette },
