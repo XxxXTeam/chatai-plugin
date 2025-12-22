@@ -159,6 +159,8 @@ export class PresetManager {
             description: '通用助手预设',
             systemPrompt: '你是一个有帮助的AI助手。',
             model: '',
+            disableSystemPrompt: false,  // 是否禁用系统提示词
+            enableReasoning: false,       // 是否启用深度思考
             modelParams: {
                 temperature: 0.7,
                 top_p: 0.9,
@@ -589,6 +591,23 @@ export class PresetManager {
         }
         const preset = this.presets.get(id)
         
+        // 智能合并 persona：允许用空字符串清除旧值
+        const mergePersona = (oldPersona, newPersona) => {
+            if (!newPersona) return oldPersona || {}
+            const merged = { ...(oldPersona || {}) }
+            // 遍历新值，明确设置（包括空字符串）会覆盖旧值
+            for (const key of Object.keys(newPersona)) {
+                const newVal = newPersona[key]
+                // 如果新值是空字符串，清除该字段；否则使用新值
+                if (newVal === '' || newVal === null) {
+                    merged[key] = ''
+                } else if (newVal !== undefined) {
+                    merged[key] = newVal
+                }
+            }
+            return merged
+        }
+        
         // 深度合并嵌套对象
         const updated = {
             ...preset,
@@ -596,7 +615,7 @@ export class PresetManager {
             id, // Ensure ID doesn't change
             // 深度合并嵌套字段
             modelParams: { ...(preset.modelParams || {}), ...(data.modelParams || {}) },
-            persona: { ...(preset.persona || {}), ...(data.persona || {}) },
+            persona: mergePersona(preset.persona, data.persona),
             context: { ...(preset.context || {}), ...(data.context || {}) },
             tools: { ...(preset.tools || {}), ...(data.tools || {}) },
         }
