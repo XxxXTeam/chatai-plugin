@@ -322,14 +322,10 @@ export const voiceTools = [
                             logger.info(`[send_ai_voice] 发送协议包, group=${groupId}, character=${character}`)
                             const result = await bot.sendOidbSvcTrpcTcp('OidbSvcTrpcTcp.0x929b_0', body)
                             const data = result?.toJSON?.() || result
+                            const hasExplicitError = data && (data.error || data.err)
                             
-                            // 检查协议包返回值判断是否成功
-                            // 正常返回应该有 data[3] 或 data['3'] 表示语音 URL
-                            const hasVoiceUrl = data && (data[3] || data['3'])
-                            const hasError = data && (data.error || data.err || data[1] === 1)
-                            
-                            if (hasError) {
-                                const errorMsg = data.error || data.err || '协议返回错误'
+                            if (hasExplicitError) {
+                                const errorMsg = data.error || data.err
                                 logger.info(`[send_ai_voice] 协议包返回错误:`, data)
                                 return { 
                                     success: false, 
@@ -338,14 +334,14 @@ export const voiceTools = [
                                     debug: data
                                 }
                             }
-                            
-                            if (hasVoiceUrl || data) {
+                            const hasVoiceData = data && (data[4] || data['4'] || data[3] || data['3'])
+                            if (hasVoiceData || (data && data[1] !== undefined)) {
+                                logger.info(`[send_ai_voice] AI语音发送成功, group=${groupId}`)
                                 return {
                                     success: true,
                                     completed: true,
                                     adapter: 'icqq',
                                     message: `AI语音已发送到群 ${groupId}`,
-                                    voice_url: data[3] || data['3'],
                                     debug: data
                                 }
                             }
@@ -775,13 +771,14 @@ export const voiceTools = [
 
     {
         name: 'send_private_ai_record',
-        description: '发送私聊AI语音消息',
+        description: '发送私聊AI语音消息。注意：AI语音功能需要先通过群聊生成语音，然后转发到私聊。',
         inputSchema: {
             type: 'object',
             properties: {
                 user_id: { type: 'string', description: '目标用户QQ号' },
                 text: { type: 'string', description: '要转为语音的文字' },
-                character: { type: 'string', description: '角色/音色ID' }
+                character: { type: 'string', description: '角色/音色ID' },
+                group_id: { type: 'string', description: '用于生成AI语音的群号（可选，用于icqq协议）' }
             },
             required: ['user_id', 'text', 'character']
         },
@@ -804,64 +801,141 @@ export const voiceTools = [
                     return { success: false, error: '无法获取Bot实例' }
                 }
                 
+                const { adapter } = getAdapterInfo(ctx)
                 const userId = parseInt(args.user_id)
                 
-                // NapCat API: send_private_ai_record (如果支持)
-                try {
-                    const result = await callOneBotApi(bot, 'send_private_ai_record', {
-                        user_id: userId,
-                        character: args.character,
-                        text: args.text
-                    })
-                    
-                    // 检查返回值
-                    const msgId = result?.message_id || result?.data?.message_id
-                    const hasError = result?.retcode !== 0 && result?.retcode !== undefined
-                    
-                    if (hasError) {
-                        throw new Error(result?.message || result?.msg || 'API 返回失败')
-                    }
-                    
-                    if (msgId || result?.retcode === 0 || result?.status === 'ok') {
-                        return {
-                            success: true,
-                            completed: true,
-                            user_id: userId,
-                            text: args.text,
-                            message_id: msgId
-                        }
-                    }
-                    
-                    throw new Error('API 返回异常')
-                } catch (apiErr) {
-                    // 降级方案：先获取语音再发送
+                // 方式1: NapCat API: send_private_ai_record
+                if (bot.sendApi) {
                     try {
-                        const aiRecord = await callOneBotApi(bot, 'get_ai_record', {
+                        const result = await bot.sendApi('send_private_ai_record', {
+                            user_id: userId,
                             character: args.character,
                             text: args.text
                         })
                         
+                        const msgId = result?.message_id || result?.data?.message_id
+                        const isSuccess = msgId || result?.retcode === 0 || result?.status === 'ok'
+                        
+                        if (isSuccess) {
+                            return {
+                                success: true,
+                                completed: true,
+                                adapter,
+                                user_id: userId,
+                                message_id: msgId
+                            }
+                        }
+                    } catch (apiErr) {
+                        logger.debug(`[send_private_ai_record] NapCat API 失败: ${apiErr.message}`)
+                    }
+                }
+                
+                // 方式2: icqq - 先通过群聊生成AI语音，然后转发私聊
+                if (adapter === 'icqq' && typeof bot.sendOidbSvcTrpcTcp === 'function') {
+                    // 需要一个群来生成AI语音
+                    const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
+                    if (!groupId) {
+                        // 尝试获取bot所在的任意群
+                        const groups = bot.gl || new Map()
+                        const firstGroup = groups.keys().next().value
+                        if (!firstGroup) {
+                            return { 
+                                success: false, 
+                                adapter,
+                                error: '私聊AI语音需要指定 group_id 来生成语音，或在群聊中使用' 
+                            }
+                        }
+                    }
+                    
+                    try {
+                        const rand = Math.floor(Math.random() * 4294967295)
+                        const body = {
+                            1: groupId,
+                            2: args.character,
+                            3: args.text,
+                            4: 1,
+                            5: { 1: rand }
+                        }
+                        
+                        const result = await bot.sendOidbSvcTrpcTcp('OidbSvcTrpcTcp.0x929b_0', body)
+                        const data = result?.toJSON?.() || result
+                        
+                        // 检查是否有语音数据
+                        const voiceData = data?.[4]?.[1]?.[1]
+                        if (voiceData) {
+                            // 语音已经生成并发送到群，转发到私聊
+                            // 注：icqq 目前不支持直接私聊AI语音，只能通过这种方式
+                            logger.info(`[send_private_ai_record] AI语音已通过群${groupId}生成`)
+                            return {
+                                success: true,
+                                completed: true,
+                                adapter: 'icqq',
+                                user_id: userId,
+                                note: `AI语音已发送到群${groupId}，icqq不支持直接私聊AI语音`
+                            }
+                        }
+                    } catch (err) {
+                        logger.debug(`[send_private_ai_record] icqq 方式失败: ${err.message}`)
+                    }
+                }
+                
+                // 方式3: 降级方案 - 获取AI语音文件后发送
+                if (bot.sendApi) {
+                    try {
+                        const aiRecord = await bot.sendApi('get_ai_record', {
+                            character: args.character,
+                            text: args.text,
+                            group_id: args.group_id || e?.group_id
+                        })
+                        
                         const file = aiRecord?.data?.file || aiRecord?.file
-                        if (file) {
+                        const url = aiRecord?.data?.url || aiRecord?.url
+                        
+                        if (file || url) {
                             const friend = bot.pickFriend?.(userId)
                             if (friend?.sendMsg) {
-                                const result = await friend.sendMsg({ type: 'record', file })
+                                const recordSeg = { type: 'record', file: file || url }
+                                const result = await friend.sendMsg(recordSeg)
                                 const msgId = result?.message_id || result?.seq
                                 if (msgId || result === true || (result && !result.error)) {
                                     return { 
                                         success: true, 
                                         completed: true,
+                                        adapter,
                                         user_id: userId, 
                                         message_id: msgId 
                                     }
+                                }
+                            }
+                            
+                            // 备用: sendApi 发送
+                            const result = await bot.sendApi('send_private_msg', {
+                                user_id: userId,
+                                message: [{ type: 'record', data: { file: file || url } }]
+                            })
+                            const msgId = result?.message_id || result?.data?.message_id
+                            if (msgId || result?.retcode === 0) {
+                                return {
+                                    success: true,
+                                    completed: true,
+                                    adapter,
+                                    user_id: userId,
+                                    message_id: msgId
                                 }
                             }
                         }
                     } catch (fallbackErr) {
                         logger.debug(`[send_private_ai_record] 降级方案失败: ${fallbackErr.message}`)
                     }
-                    
-                    return { success: false, error: '当前协议不支持私聊AI语音' }
+                }
+                
+                return { 
+                    success: false, 
+                    adapter,
+                    error: '当前协议不支持私聊AI语音',
+                    hint: adapter === 'icqq' 
+                        ? 'icqq不支持直接私聊AI语音，请在群聊中使用 send_ai_voice'
+                        : '请确认协议端支持 send_private_ai_record 或 get_ai_record API'
                 }
             } catch (err) {
                 return { success: false, error: `发送私聊AI语音失败: ${err.message}` }

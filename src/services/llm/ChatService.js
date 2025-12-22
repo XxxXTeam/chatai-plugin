@@ -414,7 +414,12 @@ export class ChatService {
             const independentResult = await sm.getIndependentPrompt(scopeGroupId, pureUserId, defaultPrompt)
             systemPrompt = independentResult.prompt
             if (independentResult.isIndependent) {
-                logger.debug(`[ChatService] 使用独立人设 (来源: ${independentResult.source})`)
+                // 支持空人设：当用户设置为空字符串时，使用空系统提示词
+                if (systemPrompt === '') {
+                    logger.debug(`[ChatService] 使用空人设 (来源: ${independentResult.source})`)
+                } else {
+                    logger.debug(`[ChatService] 使用独立人设 (来源: ${independentResult.source})`)
+                }
             }
             // 收集 scope 调试信息
             if (debugInfo) {
@@ -581,11 +586,16 @@ export class ChatService {
             }
         }
         
-        let messages = [
-            { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
-            ...validHistory,
-            userMessage
-        ]
+        // 支持禁用系统提示词：当预设设置 disableSystemPrompt 为 true 时，完全不发送 system 消息
+        // 支持空人设：当 systemPrompt 为空时，也不添加系统消息
+        let messages = []
+        const shouldDisableSystemPrompt = currentPreset?.disableSystemPrompt === true
+        if (!shouldDisableSystemPrompt && systemPrompt && systemPrompt.trim()) {
+            messages.push({ role: 'system', content: [{ type: 'text', text: systemPrompt }] })
+        } else if (shouldDisableSystemPrompt) {
+            logger.debug(`[ChatService] 预设已禁用系统提示词，不发送 system 消息`)
+        }
+        messages.push(...validHistory, userMessage)
 
         const hasTools = client.tools && client.tools.length > 0
         const useStreaming = stream || channelStreaming.enabled === true
@@ -611,15 +621,18 @@ export class ChatService {
                     }
                 })
             }
+            // 参数优先级：预设 > 渠道 > 默认值
+            const presetParams = currentPreset?.modelParams || {}
             const requestOptions = {
                 model: llmModel,
-                maxToken: channelLlm.maxTokens || 4000,
-                temperature: channelLlm.temperature ?? 0.7,
-                topP: channelLlm.topP,
+                maxToken: presetParams.max_tokens || presetParams.maxTokens || channelLlm.maxTokens || 4000,
+                temperature: presetParams.temperature ?? channelLlm.temperature ?? 0.7,
+                topP: presetParams.top_p ?? presetParams.topP ?? channelLlm.topP,
                 conversationId,
                 systemOverride: systemPrompt,
                 stream: useStreaming,  // 传递流式选项
             }
+            logger.debug(`[ChatService] 请求参数: temperature=${requestOptions.temperature}, maxToken=${requestOptions.maxToken}, 来源: ${presetParams.temperature !== undefined ? '预设' : (channelLlm.temperature !== undefined ? '渠道' : '默认')}`)
 
             // 收集调试信息
             if (debugInfo) {

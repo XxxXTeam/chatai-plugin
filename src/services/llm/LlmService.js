@@ -82,7 +82,9 @@ export class LlmService {
             // Get all tools (MCP + builtin)
             tools = await getAllTools({
                 toolsConfig,
-                event: options.event
+                event: options.event,
+                presetId: options.presetId,
+                userPermission: options.event?.sender?.role || 'member'
             })
         }
 

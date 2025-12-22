@@ -43,6 +43,7 @@ interface Preset {
   systemPrompt: string
   isDefault: boolean
   enableReasoning: boolean
+  disableSystemPrompt?: boolean  // 禁用系统提示词，不发送system消息
   isBuiltin?: boolean
   isReadonly?: boolean
   category?: string
@@ -83,6 +84,7 @@ export default function PresetsPage() {
     systemPrompt: '',
     isDefault: false,
     enableReasoning: false,
+    disableSystemPrompt: false,  // 禁用系统提示词
     temperature: 0.7,
     maxTokens: 4096,
     // 人设字段
@@ -167,6 +169,7 @@ export default function PresetsPage() {
       systemPrompt: '',
       isDefault: false,
       enableReasoning: false,
+      disableSystemPrompt: false,
       temperature: 0.7,
       maxTokens: 4096,
       personaName: '',
@@ -190,6 +193,7 @@ export default function PresetsPage() {
         systemPrompt: preset.systemPrompt || '',
         isDefault: preset.isDefault || false,
         enableReasoning: preset.enableReasoning || false,
+        disableSystemPrompt: preset.disableSystemPrompt || false,
         temperature: preset.modelParams?.temperature ?? preset.temperature ?? 0.7,
         maxTokens: preset.modelParams?.max_tokens ?? preset.maxTokens ?? 4096,
         personaName: persona.name || '',
@@ -216,6 +220,7 @@ export default function PresetsPage() {
       systemPrompt: form.systemPrompt,
       isDefault: form.isDefault,
       enableReasoning: form.enableReasoning,
+      disableSystemPrompt: form.disableSystemPrompt,
       modelParams: {
         temperature: form.temperature,
         max_tokens: form.maxTokens,
@@ -283,6 +288,7 @@ export default function PresetsPage() {
       systemPrompt: preset.systemPrompt || '',
       isDefault: false,
       enableReasoning: preset.enableReasoning || false,
+      disableSystemPrompt: preset.disableSystemPrompt || false,
       temperature: preset.modelParams?.temperature ?? preset.temperature ?? 0.7,
       maxTokens: preset.modelParams?.max_tokens ?? preset.maxTokens ?? 4096,
       personaName: persona.name || '',
@@ -428,14 +434,35 @@ export default function PresetsPage() {
                   />
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="systemPrompt">系统提示词</Label>
-                  <Textarea
-                    id="systemPrompt"
-                    value={form.systemPrompt}
-                    onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
-                    placeholder="你是一个有帮助的AI助手..."
-                    rows={8}
-                  />
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="systemPrompt">系统提示词</Label>
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="disableSystemPrompt" className="text-xs text-muted-foreground">禁用系统提示词</Label>
+                      <Switch
+                        id="disableSystemPrompt"
+                        checked={form.disableSystemPrompt}
+                        onCheckedChange={(checked) => setForm({ ...form, disableSystemPrompt: checked })}
+                      />
+                    </div>
+                  </div>
+                  {form.disableSystemPrompt ? (
+                    <div className="p-4 bg-muted/50 rounded-md text-sm text-muted-foreground">
+                      已禁用系统提示词，AI 将不会收到任何系统消息（包括预设、人设、全局提示词等）
+                    </div>
+                  ) : (
+                    <>
+                      <Textarea
+                        id="systemPrompt"
+                        value={form.systemPrompt}
+                        onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
+                        placeholder="你是一个有帮助的AI助手..."
+                        rows={8}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        支持占位符：{'{{user_name}}'} {'{{group_name}}'} {'{{date}}'} 等
+                      </p>
+                    </>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="grid gap-2">

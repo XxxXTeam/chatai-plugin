@@ -704,15 +704,15 @@ export async function sendForwardMessage({ bot, event, groupId, userId, nodes, o
  */
 export function parseRichContent(content) {
     if (Array.isArray(content)) {
-        return content.map(seg => {
+        return content.flatMap(seg => {
             if (typeof seg === 'string') {
-                return { type: 'text', data: { text: seg } }
+                return parseRichContent(seg)
             }
             if (seg.type && !seg.data) {
                 const { type, ...rest } = seg
-                return { type, data: rest }
+                return [{ type, data: rest }]
             }
-            return seg
+            return [seg]
         })
     }
     
@@ -720,15 +720,36 @@ export function parseRichContent(content) {
         return [{ type: 'text', data: { text: String(content || '') } }]
     }
     
-    // 解析特殊标记
+    // 解析特殊标记 - 支持中英文标记
     const segments = []
     const patterns = [
-        { regex: /\[(?:图片|image):([^\]]+)\]/gi, handler: (m) => ({ type: 'image', data: { file: m[1] } }) },
-        { regex: /\[(?:表情|face):(\d+)\]/gi, handler: (m) => ({ type: 'face', data: { id: parseInt(m[1]) } }) },
+        // 图片: [图片:url] 或 [image:url] 或 [img:url]
+        { regex: /\[(?:图片|image|img):([^\]]+)\]/gi, handler: (m) => ({ type: 'image', data: { file: m[1].trim() } }) },
+        // 表情: [表情:id] 或 [face:id] 或 [emoji:id]
+        { regex: /\[(?:表情|face|emoji):(\d+)\]/gi, handler: (m) => ({ type: 'face', data: { id: parseInt(m[1]) } }) },
+        // @用户: [@qq] 或 [at:qq] 或 [@all]
         { regex: /\[@(\d+|all)\]/gi, handler: (m) => ({ type: 'at', data: { qq: m[1] } }) },
         { regex: /\[at:(\d+|all)\]/gi, handler: (m) => ({ type: 'at', data: { qq: m[1] } }) },
-        { regex: /\[(?:语音|record):([^\]]+)\]/gi, handler: (m) => ({ type: 'record', data: { file: m[1] } }) },
-        { regex: /\[(?:视频|video):([^\]]+)\]/gi, handler: (m) => ({ type: 'video', data: { file: m[1] } }) },
+        // 语音: [语音:url] 或 [record:url]
+        { regex: /\[(?:语音|record|audio):([^\]]+)\]/gi, handler: (m) => ({ type: 'record', data: { file: m[1].trim() } }) },
+        // 视频: [视频:url] 或 [video:url]
+        { regex: /\[(?:视频|video):([^\]]+)\]/gi, handler: (m) => ({ type: 'video', data: { file: m[1].trim() } }) },
+        // 回复: [reply:id] 或 [回复:id]
+        { regex: /\[(?:回复|reply):(\d+)\]/gi, handler: (m) => ({ type: 'reply', data: { id: m[1] } }) },
+        // 戳一戳: [poke:type,id]
+        { regex: /\[poke:(\d+),(\d+)\]/gi, handler: (m) => ({ type: 'poke', data: { type: parseInt(m[1]), id: parseInt(m[2]) } }) },
+        // 分享链接: [share:url,title] 或 [share:url,title,content,image]
+        { regex: /\[share:([^,\]]+),([^,\]]+)(?:,([^,\]]+))?(?:,([^\]]+))?\]/gi, handler: (m) => ({ 
+            type: 'share', 
+            data: { url: m[1].trim(), title: m[2].trim(), content: m[3]?.trim() || '', image: m[4]?.trim() || '' } 
+        }) },
+        // 音乐: [music:type,id] 如 [music:qq,123456]
+        { regex: /\[music:(\w+),(\d+)\]/gi, handler: (m) => ({ type: 'music', data: { type: m[1], id: m[2] } }) },
+        // 位置: [location:lat,lon,title]
+        { regex: /\[location:([\d.]+),([\d.]+)(?:,([^\]]+))?\]/gi, handler: (m) => ({ 
+            type: 'location', 
+            data: { lat: parseFloat(m[1]), lon: parseFloat(m[2]), title: m[3]?.trim() || '' } 
+        }) },
     ]
     
     const matches = []
@@ -740,22 +761,33 @@ export function parseRichContent(content) {
         }
     }
     
+    // 按位置排序，去除重叠
     matches.sort((a, b) => a.start - b.start)
+    const filteredMatches = []
+    let lastEnd = -1
+    for (const m of matches) {
+        if (m.start >= lastEnd) {
+            filteredMatches.push(m)
+            lastEnd = m.end
+        }
+    }
     
-    if (matches.length === 0) {
+    if (filteredMatches.length === 0) {
         return [{ type: 'text', data: { text: content } }]
     }
     
-    let lastEnd = 0
-    for (const m of matches) {
+    lastEnd = 0
+    for (const m of filteredMatches) {
         if (m.start > lastEnd) {
-            segments.push({ type: 'text', data: { text: content.substring(lastEnd, m.start) } })
+            const text = content.substring(lastEnd, m.start)
+            if (text) segments.push({ type: 'text', data: { text } })
         }
         segments.push(m.segment)
         lastEnd = m.end
     }
     if (lastEnd < content.length) {
-        segments.push({ type: 'text', data: { text: content.substring(lastEnd) } })
+        const text = content.substring(lastEnd)
+        if (text) segments.push({ type: 'text', data: { text } })
     }
     
     return segments
@@ -1035,32 +1067,96 @@ export async function sendForwardMsgEnhanced({ bot, event, groupId, userId, mess
     const targetUserId = userId || event?.user_id
     const isGroup = !!targetGroupId
     const protocol = detectProtocol(_bot)
+    const isIcqq = protocol === 'icqq'
     
-    // 构建节点
-    const nodes = messages.map(msg => {
-        const uid = String(msg.user_id || msg.uin || '10000')
-        const nick = msg.nickname || msg.name || uid
-        let content = msg.message || msg.content || ''
+    /**
+     * 解析消息内容为消息段数组
+     * 支持字符串、数组、富文本标记
+     */
+    const parseContent = (content) => {
+        if (!content) return [{ type: 'text', data: { text: '' } }]
         
-        // 确保content是消息段数组
-        if (typeof content === 'string') {
-            content = [{ type: 'text', data: { text: content } }]
-        } else if (!Array.isArray(content)) {
-            content = [content]
+        // 已经是数组
+        if (Array.isArray(content)) {
+            return content.flatMap(item => {
+                if (typeof item === 'string') {
+                    return parseRichContent(item)
+                }
+                // 已经是消息段对象
+                if (item.type) {
+                    return [normalizeSegment(item, isIcqq ? 'icqq' : 'onebot', _bot)]
+                }
+                return [{ type: 'text', data: { text: String(item) } }]
+            })
         }
         
-        // 格式化消息段
-        content = normalizeSegments(content, protocol === 'icqq' ? 'icqq' : 'onebot', _bot)
+        // 字符串：解析富文本标记
+        if (typeof content === 'string') {
+            return parseRichContent(content)
+        }
+        
+        // 对象：单个消息段
+        if (content.type) {
+            return [normalizeSegment(content, isIcqq ? 'icqq' : 'onebot', _bot)]
+        }
+        
+        return [{ type: 'text', data: { text: String(content) } }]
+    }
+    
+    // 构建节点 - OneBot 格式
+    const buildOneBotNodes = () => messages.map(msg => {
+        const uid = String(msg.user_id || msg.uin || '10000')
+        const nick = msg.nickname || msg.name || uid
+        const content = parseContent(msg.message || msg.content)
+        const normalizedContent = normalizeSegments(content, 'onebot', _bot)
         
         return {
             type: 'node',
             data: {
                 user_id: uid,
                 nickname: nick,
-                content,
+                content: normalizedContent,
                 ...(msg.time ? { time: msg.time } : {})
             }
         }
+    })
+    
+    // 构建节点 - icqq 格式
+    const buildIcqqNodes = () => messages.map(msg => {
+        const uid = parseInt(msg.user_id || msg.uin) || 10000
+        const nick = msg.nickname || msg.name || String(uid)
+        const content = parseContent(msg.message || msg.content)
+        const normalizedContent = normalizeSegments(content, 'icqq', _bot)
+        
+        return {
+            user_id: uid,
+            nickname: nick,
+            message: normalizedContent,
+            ...(msg.time ? { time: msg.time } : {})
+        }
+    })
+    
+    const nodes = buildOneBotNodes()
+    
+    // 检测消息中是否包含 ark/json 类型（需要特殊处理）
+    const hasComplexContent = messages.some(msg => {
+        const content = msg.message || msg.content
+        if (!content) return false
+        
+        // 检查数组中的消息段
+        if (Array.isArray(content)) {
+            return content.some(seg => 
+                seg.type === 'json' || seg.type === 'xml' || 
+                seg.type === 'ark' || seg.type === 'markdown'
+            )
+        }
+        
+        // 检查单个对象
+        if (typeof content === 'object' && content.type) {
+            return ['json', 'xml', 'ark', 'markdown'].includes(content.type)
+        }
+        
+        return false
     })
     
     let result = null
@@ -1070,6 +1166,75 @@ export async function sendForwardMsgEnhanced({ bot, event, groupId, userId, mess
     // 方式1: NapCat/OneBot sendApi
     if (_bot.sendApi) {
         try {
+            // 如果包含ark/json等复杂内容，尝试使用不同的发送方式
+            if (hasComplexContent) {
+                // 方式A: 尝试 send_forward_msg (NapCat 统一接口)
+                try {
+                    const forwardParams = {
+                        messages: nodes,
+                        ...(isGroup ? { group_id: parseInt(targetGroupId) } : { user_id: parseInt(targetUserId) })
+                    }
+                    if (display.prompt) forwardParams.prompt = display.prompt
+                    if (display.summary) forwardParams.summary = display.summary
+                    if (display.source) forwardParams.source = display.source
+                    
+                    result = await _bot.sendApi('send_forward_msg', forwardParams)
+                    method = 'sendApi_unified'
+                    
+                    if (result?.status === 'ok' || result?.retcode === 0 || result?.message_id || result?.data?.message_id) {
+                        return {
+                            success: true,
+                            message_id: result.message_id || result.data?.message_id,
+                            res_id: result.res_id || result.data?.res_id,
+                            method,
+                            node_count: nodes.length,
+                            has_complex_content: true,
+                            target: isGroup ? { type: 'group', id: targetGroupId } : { type: 'private', id: targetUserId }
+                        }
+                    }
+                } catch (unifiedErr) {
+                    // 继续尝试其他方式
+                }
+                
+                // 方式B: 尝试分步发送 - 先上传节点再发送
+                try {
+                    // 使用 upload_forward_msg 上传节点
+                    const uploadResult = await _bot.sendApi('upload_forward_msg', {
+                        messages: nodes
+                    })
+                    
+                    const resId = uploadResult?.res_id || uploadResult?.data?.res_id
+                    if (resId) {
+                        // 使用 res_id 发送
+                        const sendParams = isGroup 
+                            ? { group_id: parseInt(targetGroupId), res_id: resId }
+                            : { user_id: parseInt(targetUserId), res_id: resId }
+                        
+                        const apiName = isGroup ? 'send_group_msg' : 'send_private_msg'
+                        result = await _bot.sendApi(apiName, {
+                            ...sendParams,
+                            message: [{ type: 'forward', data: { id: resId } }]
+                        })
+                        method = 'upload_forward'
+                        
+                        if (result?.status === 'ok' || result?.retcode === 0 || result?.message_id || result?.data?.message_id) {
+                            return {
+                                success: true,
+                                message_id: result.message_id || result.data?.message_id,
+                                res_id: resId,
+                                method,
+                                node_count: nodes.length,
+                                has_complex_content: true,
+                                target: isGroup ? { type: 'group', id: targetGroupId } : { type: 'private', id: targetUserId }
+                            }
+                        }
+                    }
+                } catch (uploadErr) {
+                    // 继续尝试标准方式
+                }
+            }
+            
+            // 标准方式: send_group_forward_msg / send_private_forward_msg
             const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
             const params = isGroup 
                 ? { group_id: parseInt(targetGroupId), messages: nodes }
@@ -1089,7 +1254,8 @@ export async function sendForwardMsgEnhanced({ bot, event, groupId, userId, mess
                     message_id: result.message_id || result.data?.message_id,
                     res_id: result.res_id || result.data?.res_id,
                     method,
-                    node_count: nodes.length
+                    node_count: nodes.length,
+                    target: isGroup ? { type: 'group', id: targetGroupId } : { type: 'private', id: targetUserId }
                 }
             }
         } catch (err) {
@@ -1100,27 +1266,66 @@ export async function sendForwardMsgEnhanced({ bot, event, groupId, userId, mess
     // 方式2: icqq makeForwardMsg
     if (_bot.pickGroup || _bot.pickFriend) {
         try {
-            const target = isGroup 
-                ? _bot.pickGroup(parseInt(targetGroupId))
-                : _bot.pickFriend(parseInt(targetUserId))
+            let target = null
+            const icqqNodes = buildIcqqNodes()
             
-            if (target?.makeForwardMsg && target?.sendMsg) {
-                // icqq 格式
-                const forwardData = messages.map(msg => ({
-                    user_id: parseInt(msg.user_id || msg.uin) || 10000,
-                    nickname: msg.nickname || msg.name || String(msg.user_id || '用户'),
-                    message: normalizeSegments(msg.message || msg.content || '', 'icqq', _bot)
-                }))
-                
-                const forwardMsg = await target.makeForwardMsg(forwardData)
-                
-                // 自定义外显
+            // 自定义外显的辅助函数
+            const applyDisplay = (forwardMsg) => {
                 if (forwardMsg?.data) {
                     if (display.prompt) forwardMsg.data.prompt = display.prompt
                     if (display.summary) forwardMsg.data.summary = display.summary
                     if (display.source) forwardMsg.data.source = display.source
                 }
+                // 如果 forwardMsg 是数组（某些 icqq 版本）
+                if (Array.isArray(forwardMsg)) {
+                    for (const item of forwardMsg) {
+                        if (item?.data) {
+                            if (display.prompt) item.data.prompt = display.prompt
+                            if (display.summary) item.data.summary = display.summary
+                            if (display.source) item.data.source = display.source
+                        }
+                    }
+                }
+                return forwardMsg
+            }
+            
+            if (isGroup) {
+                target = _bot.pickGroup(parseInt(targetGroupId))
+            } else {
+                // 私聊发送合并转发
+                target = _bot.pickFriend(parseInt(targetUserId))
                 
+                // icqq 私聊可能没有 makeForwardMsg，尝试借用群来生成
+                if (!target?.makeForwardMsg && _bot.pickGroup) {
+                    const groups = _bot.gl || new Map()
+                    const firstGroupId = groups.keys().next().value
+                    if (firstGroupId) {
+                        const tempGroup = _bot.pickGroup(firstGroupId)
+                        if (tempGroup?.makeForwardMsg) {
+                            const forwardMsg = applyDisplay(await tempGroup.makeForwardMsg(icqqNodes))
+                            
+                            if (target?.sendMsg) {
+                                result = await target.sendMsg(forwardMsg)
+                                method = 'icqq_private_via_group'
+                                
+                                if (result) {
+                                    return {
+                                        success: true,
+                                        message_id: result.message_id,
+                                        res_id: result.res_id,
+                                        method,
+                                        node_count: messages.length,
+                                        target: { type: 'private', id: targetUserId }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (target?.makeForwardMsg && target?.sendMsg) {
+                const forwardMsg = applyDisplay(await target.makeForwardMsg(icqqNodes))
                 result = await target.sendMsg(forwardMsg)
                 method = 'icqq'
                 
@@ -1130,7 +1335,8 @@ export async function sendForwardMsgEnhanced({ bot, event, groupId, userId, mess
                         message_id: result.message_id,
                         res_id: result.res_id,
                         method,
-                        node_count: messages.length
+                        node_count: messages.length,
+                        target: isGroup ? { type: 'group', id: targetGroupId } : { type: 'private', id: targetUserId }
                     }
                 }
             }
@@ -1156,7 +1362,8 @@ export async function sendForwardMsgEnhanced({ bot, event, groupId, userId, mess
                     message_id: result.message_id,
                     res_id: result.res_id,
                     method,
-                    node_count: nodes.length
+                    node_count: nodes.length,
+                    target: isGroup ? { type: 'group', id: targetGroupId } : { type: 'private', id: targetUserId }
                 }
             }
         } catch (err) {
@@ -1167,7 +1374,8 @@ export async function sendForwardMsgEnhanced({ bot, event, groupId, userId, mess
     return {
         success: false,
         error: lastError || '当前环境不支持发送合并转发消息',
-        tried_methods: ['sendApi', 'icqq', 'legacy']
+        tried_methods: ['sendApi', 'icqq', 'legacy'],
+        target: isGroup ? { type: 'group', id: targetGroupId } : { type: 'private', id: targetUserId }
     }
 }
 
