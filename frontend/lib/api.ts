@@ -410,6 +410,21 @@ export const statsApi = {
   getOverview: () => api.get('/api/stats'),
   getFull: () => api.get('/api/stats/full'),
   reset: () => api.post('/api/stats/reset'),
+  getUnified: () => api.get('/api/stats/unified'),
+  // 工具调用统计
+  getToolCalls: () => api.get('/api/stats/tool-calls'),
+  getToolCallRecords: (filter?: { limit?: number; toolName?: string; success?: boolean; userId?: string; groupId?: string }) => {
+    const params = new URLSearchParams()
+    if (filter?.limit) params.set('limit', String(filter.limit))
+    if (filter?.toolName) params.set('toolName', filter.toolName)
+    if (filter?.success !== undefined) params.set('success', String(filter.success))
+    if (filter?.userId) params.set('userId', filter.userId)
+    if (filter?.groupId) params.set('groupId', filter.groupId)
+    return api.get(`/api/stats/tool-calls/records?${params.toString()}`)
+  },
+  getToolCallRecord: (id: string) => api.get(`/api/stats/tool-calls/record/${id}`),
+  getToolCallErrors: (limit = 50) => api.get(`/api/stats/tool-calls/errors?limit=${limit}`),
+  clearToolCalls: () => api.post('/api/stats/tool-calls/clear'),
 }
 
 export const usageStatsApi = {

@@ -109,6 +109,16 @@ class RedisClient {
         return await this.client.incr(key)
     }
 
+    async llen(key) {
+        if (!this.isConnected) return 0
+        return await this.client.llen(key)
+    }
+
+    async exists(key) {
+        if (!this.isConnected) return 0
+        return await this.client.exists(key)
+    }
+
     async quit() {
         if (this.client) {
             await this.client.quit()

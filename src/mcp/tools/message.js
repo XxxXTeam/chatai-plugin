@@ -2135,6 +2135,437 @@ export const messageTools = [
                 return { success: false, error: `获取表情回应失败: ${err.message}` }
             }
         }
+    },
+
+    {
+        name: 'send_long_message',
+        description: '直接发送长消息。支持多种模式：forward、direct、auto',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                content: { type: 'string', description: '长消息内容（可超过单条消息长度限制）' },
+                mode: { 
+                    type: 'string', 
+                    description: '发送模式: forward, direct, auto',
+                    enum: ['forward', 'direct', 'auto']
+                },
+                chunk_size: { type: 'number', description: '分段大小(字符数)，默认2000' },
+                sender_name: { type: 'string', description: '转发消息中显示的发送者名称' },
+                prompt: { type: 'string', description: '转发卡片标题（forward模式）' },
+                summary: { type: 'string', description: '转发卡片摘要（forward模式）' },
+                group_id: { type: 'string', description: '目标群号' },
+                user_id: { type: 'string', description: '目标用户QQ号' }
+            },
+            required: ['content']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || ctx.getBot?.() || global.Bot
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                const content = args.content || ''
+                const mode = args.mode || 'forward'
+                const chunkSize = args.chunk_size || 2000
+                const botInfo = bot.info || {}
+                const botId = bot.uin || bot.self_id || '10000'
+                const senderName = args.sender_name || botInfo.nickname || 'Bot'
+                
+                // 分割长消息
+                const chunks = []
+                for (let i = 0; i < content.length; i += chunkSize) {
+                    chunks.push(content.slice(i, i + chunkSize))
+                }
+                
+                const targetGroupId = args.group_id ? parseInt(args.group_id) : e?.group_id
+                const targetUserId = args.user_id ? parseInt(args.user_id) : (!targetGroupId ? e?.user_id : null)
+                const isGroup = !!targetGroupId
+                
+                // 根据模式选择发送方式
+                const actualMode = mode === 'auto' 
+                    ? (content.length > 3000 ? 'forward' : 'direct')
+                    : mode
+                
+                if (actualMode === 'direct') {
+                    // 直接分段发送
+                    const results = []
+                    for (let i = 0; i < chunks.length; i++) {
+                        try {
+                            let result
+                            if (isGroup) {
+                                if (bot.sendApi) {
+                                    result = await bot.sendApi('send_group_msg', { 
+                                        group_id: targetGroupId, 
+                                        message: [{ type: 'text', data: { text: `[${i+1}/${chunks.length}]\n${chunks[i]}` } }]
+                                    })
+                                } else if (bot.pickGroup) {
+                                    result = await bot.pickGroup(targetGroupId)?.sendMsg(`[${i+1}/${chunks.length}]\n${chunks[i]}`)
+                                }
+                            } else if (targetUserId) {
+                                if (bot.sendApi) {
+                                    result = await bot.sendApi('send_private_msg', { 
+                                        user_id: targetUserId, 
+                                        message: [{ type: 'text', data: { text: `[${i+1}/${chunks.length}]\n${chunks[i]}` } }]
+                                    })
+                                } else if (bot.pickFriend) {
+                                    result = await bot.pickFriend(targetUserId)?.sendMsg(`[${i+1}/${chunks.length}]\n${chunks[i]}`)
+                                }
+                            } else if (e?.reply) {
+                                result = await e.reply(`[${i+1}/${chunks.length}]\n${chunks[i]}`)
+                            }
+                            results.push({ index: i + 1, success: true, message_id: result?.message_id || result?.data?.message_id })
+                            
+                            // 分段发送间隔
+                            if (i < chunks.length - 1) {
+                                await new Promise(r => setTimeout(r, 500))
+                            }
+                        } catch (err) {
+                            results.push({ index: i + 1, success: false, error: err.message })
+                        }
+                    }
+                    
+                    return {
+                        success: results.some(r => r.success),
+                        mode: 'direct',
+                        chunk_count: chunks.length,
+                        results
+                    }
+                } else {
+                    // 合并转发模式
+                    const nodes = chunks.map((chunk, i) => ({
+                        type: 'node',
+                        data: {
+                            user_id: String(botId),
+                            nickname: senderName,
+                            content: [{ type: 'text', data: { text: chunks.length > 1 ? `[${i+1}/${chunks.length}]\n${chunk}` : chunk } }]
+                        }
+                    }))
+                    
+                    let result
+                    if (bot.sendApi) {
+                        const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
+                        const params = {
+                            [isGroup ? 'group_id' : 'user_id']: isGroup ? targetGroupId : targetUserId,
+                            messages: nodes
+                        }
+                        if (args.prompt) params.prompt = args.prompt
+                        if (args.summary) params.summary = args.summary
+                        
+                        result = await bot.sendApi(apiName, params)
+                    } else if (bot.pickGroup || bot.pickFriend) {
+                        // icqq fallback
+                        const target = isGroup ? bot.pickGroup(targetGroupId) : bot.pickFriend(targetUserId)
+                        if (target?.makeForwardMsg && target?.sendMsg) {
+                            const icqqNodes = chunks.map((chunk, i) => ({
+                                user_id: parseInt(botId) || 10000,
+                                nickname: senderName,
+                                message: chunks.length > 1 ? `[${i+1}/${chunks.length}]\n${chunk}` : chunk
+                            }))
+                            const forwardMsg = await target.makeForwardMsg(icqqNodes)
+                            result = await target.sendMsg(forwardMsg)
+                        }
+                    }
+                    
+                    return {
+                        success: !!result,
+                        mode: 'forward',
+                        chunk_count: chunks.length,
+                        total_length: content.length,
+                        message_id: result?.message_id || result?.data?.message_id,
+                        res_id: result?.res_id || result?.data?.res_id
+                    }
+                }
+            } catch (err) {
+                return { success: false, error: `发送长消息失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'send_pb_message',
+        description: '发送 Protobuf 格式消息。用于发送特殊格式的消息，如富文本、长图文等。需要协议端支持。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                pb_data: { type: 'string', description: 'Protobuf 数据（Base64编码）或 JSON 格式的 pb 结构' },
+                pb_type: { 
+                    type: 'string', 
+                    description: 'PB消息类型: rich(富文本), long_msg(长消息), ark(卡片), custom(自定义)',
+                    enum: ['rich', 'long_msg', 'ark', 'custom']
+                },
+                group_id: { type: 'string', description: '目标群号' },
+                user_id: { type: 'string', description: '目标用户QQ号' }
+            },
+            required: ['pb_data']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || ctx.getBot?.() || global.Bot
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                const targetGroupId = args.group_id ? parseInt(args.group_id) : e?.group_id
+                const targetUserId = args.user_id ? parseInt(args.user_id) : (!targetGroupId ? e?.user_id : null)
+                const isGroup = !!targetGroupId
+                
+                let pbData = args.pb_data
+                let result = null
+                let method = ''
+                try {
+                    if (typeof pbData === 'string' && pbData.startsWith('{')) {
+                        pbData = JSON.parse(pbData)
+                    }
+                } catch {}
+                if (bot.sendApi) {
+                    try {
+                        const apiParams = {
+                            [isGroup ? 'group_id' : 'user_id']: isGroup ? targetGroupId : targetUserId,
+                            pb_data: typeof pbData === 'string' ? pbData : JSON.stringify(pbData),
+                            pb_type: args.pb_type || 'custom'
+                        }
+                        
+                        result = await bot.sendApi('send_pb_msg', apiParams)
+                        method = 'send_pb_msg'
+                        
+                        if (result?.status === 'ok' || result?.retcode === 0 || result?.message_id) {
+                            return {
+                                success: true,
+                                method,
+                                message_id: result.message_id || result.data?.message_id,
+                                pb_type: args.pb_type || 'custom'
+                            }
+                        }
+                    } catch {}
+                    try {
+                        const rawSeg = { type: 'raw', data: { data: pbData } }
+                        const apiName = isGroup ? 'send_group_msg' : 'send_private_msg'
+                        result = await bot.sendApi(apiName, {
+                            [isGroup ? 'group_id' : 'user_id']: isGroup ? targetGroupId : targetUserId,
+                            message: [rawSeg]
+                        })
+                        method = 'raw_segment'
+                        
+                        if (result?.status === 'ok' || result?.retcode === 0 || result?.message_id) {
+                            return {
+                                success: true,
+                                method,
+                                message_id: result.message_id || result.data?.message_id
+                            }
+                        }
+                    } catch {}
+                }
+                if (bot.sendPb || bot.sendPbMsg) {
+                    try {
+                        const sendFn = bot.sendPb || bot.sendPbMsg
+                        result = await sendFn.call(bot, isGroup ? targetGroupId : targetUserId, pbData, isGroup)
+                        method = 'icqq_pb'
+                        
+                        if (result) {
+                            return {
+                                success: true,
+                                method,
+                                message_id: result.message_id
+                            }
+                        }
+                    } catch {}
+                }
+                
+                return { 
+                    success: false, 
+                    error: '当前协议端不支持 PB 消息发送',
+                    note: 'PB 消息需要特定协议端支持，如 NapCat 扩展版、TRSS 等'
+                }
+            } catch (err) {
+                return { success: false, error: `发送PB消息失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'send_forward_direct',
+        description: '直接发送转发消息',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                messages: {
+                    type: 'array',
+                    description: '消息列表',
+                    items: {
+                        oneOf: [
+                            { type: 'string' },
+                            { type: 'object' }
+                        ]
+                    }
+                },
+                interval: { type: 'number', description: '消息间隔(ms)，默认300' },
+                group_id: { type: 'string', description: '目标群号' },
+                user_id: { type: 'string', description: '目标用户QQ号' }
+            },
+            required: ['messages']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || ctx.getBot?.() || global.Bot
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                const targetGroupId = args.group_id ? parseInt(args.group_id) : e?.group_id
+                const targetUserId = args.user_id ? parseInt(args.user_id) : (!targetGroupId ? e?.user_id : null)
+                const isGroup = !!targetGroupId
+                const interval = args.interval || 300
+                
+                // 获取发送函数
+                let sendFn = null
+                if (isGroup) {
+                    if (bot.sendApi) {
+                        sendFn = async (msg) => bot.sendApi('send_group_msg', { group_id: targetGroupId, message: msg })
+                    } else if (bot.pickGroup) {
+                        const group = bot.pickGroup(targetGroupId)
+                        sendFn = async (msg) => group?.sendMsg(msg)
+                    }
+                } else if (targetUserId) {
+                    if (bot.sendApi) {
+                        sendFn = async (msg) => bot.sendApi('send_private_msg', { user_id: targetUserId, message: msg })
+                    } else if (bot.pickFriend) {
+                        const friend = bot.pickFriend(targetUserId)
+                        sendFn = async (msg) => friend?.sendMsg(msg)
+                    }
+                } else if (e?.reply) {
+                    sendFn = async (msg) => e.reply(msg)
+                }
+                
+                if (!sendFn) {
+                    return { success: false, error: '无法确定发送目标' }
+                }
+                const results = []
+                for (let i = 0; i < args.messages.length; i++) {
+                    const msg = args.messages[i]
+                    try {
+                        // 处理消息格式
+                        let message = msg
+                        if (typeof msg === 'string') {
+                            message = [{ type: 'text', data: { text: msg } }]
+                        } else if (msg.message) {
+                            message = typeof msg.message === 'string' 
+                                ? [{ type: 'text', data: { text: msg.message } }]
+                                : msg.message
+                        } else if (!Array.isArray(msg)) {
+                            message = [msg]
+                        }
+                        
+                        const result = await sendFn(message)
+                        results.push({
+                            index: i,
+                            success: true,
+                            message_id: result?.message_id || result?.data?.message_id
+                        })
+                        
+                        // 发送间隔
+                        if (i < args.messages.length - 1 && interval > 0) {
+                            await new Promise(r => setTimeout(r, interval))
+                        }
+                    } catch (err) {
+                        results.push({
+                            index: i,
+                            success: false,
+                            error: err.message
+                        })
+                    }
+                }
+                
+                const successCount = results.filter(r => r.success).length
+                return {
+                    success: successCount > 0,
+                    total: args.messages.length,
+                    success_count: successCount,
+                    results
+                }
+            } catch (err) {
+                return { success: false, error: `直接发送转发失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'make_forward_msg',
+        description: '构造转发消息节点。返回构造好的节点数据，可用于后续发送或嵌套。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                messages: {
+                    type: 'array',
+                    description: '消息列表 [{user_id, nickname, message}]',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            user_id: { type: 'string', description: '发送者QQ号' },
+                            nickname: { type: 'string', description: '发送者昵称' },
+                            message: { type: 'string', description: '消息内容' },
+                            time: { type: 'number', description: '时间戳（可选）' }
+                        }
+                    }
+                },
+                format: {
+                    type: 'string',
+                    description: '输出格式: onebot(OneBot/NapCat格式), icqq(icqq格式)',
+                    enum: ['onebot', 'icqq']
+                }
+            },
+            required: ['messages']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const format = args.format || 'onebot'
+                const botInfo = ctx.getBot?.()?.info || {}
+                const defaultUserId = ctx.getBot?.()?.uin || '10000'
+                const defaultNickname = botInfo.nickname || 'Bot'
+                
+                if (format === 'icqq') {
+                    // icqq 格式
+                    const nodes = args.messages.map(msg => ({
+                        user_id: parseInt(msg.user_id) || parseInt(defaultUserId) || 10000,
+                        nickname: msg.nickname || defaultNickname,
+                        message: msg.message || '',
+                        ...(msg.time ? { time: msg.time } : {})
+                    }))
+                    
+                    return {
+                        success: true,
+                        format: 'icqq',
+                        nodes,
+                        forward_msg: { type: 'node', data: nodes }
+                    }
+                } else {
+                    // OneBot/NapCat 格式
+                    const nodes = args.messages.map(msg => ({
+                        type: 'node',
+                        data: {
+                            user_id: String(msg.user_id || defaultUserId),
+                            nickname: msg.nickname || defaultNickname,
+                            content: typeof msg.message === 'string'
+                                ? [{ type: 'text', data: { text: msg.message } }]
+                                : (msg.message || []),
+                            ...(msg.time ? { time: msg.time } : {})
+                        }
+                    }))
+                    
+                    return {
+                        success: true,
+                        format: 'onebot',
+                        nodes,
+                        node_count: nodes.length
+                    }
+                }
+            } catch (err) {
+                return { success: false, error: `构造转发节点失败: ${err.message}` }
+            }
+        }
     }
 ]
 

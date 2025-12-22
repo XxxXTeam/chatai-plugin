@@ -29,6 +29,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { usageStatsApi } from '@/lib/api'
+import { JsonView } from '@/components/ui/code-block'
 import { toast } from 'sonner'
 import { 
   RefreshCw, 
@@ -62,11 +63,14 @@ interface UsageRecord {
   error?: string
   source: string
   stream?: boolean
+  retryCount?: number
   channelSwitched?: boolean
   previousChannelId?: string
   switchChain?: string[]
   userId?: string
   groupId?: string
+  request?: Record<string, unknown>
+  response?: Record<string, unknown>
 }
 
 interface UsageStats {
@@ -452,66 +456,84 @@ export default function UsageStatsPage() {
 
       {/* 详情对话框 */}
       <Dialog open={!!selectedRecord} onOpenChange={() => setSelectedRecord(null)}>
-        <DialogContent className="w-[95vw] max-w-lg">
+        <DialogContent className="w-[95vw] max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>调用详情</DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              调用详情
+              {selectedRecord && (
+                <Badge variant={selectedRecord.success ? 'default' : 'destructive'}>
+                  {selectedRecord.success ? '成功' : '失败'}
+                </Badge>
+              )}
+            </DialogTitle>
           </DialogHeader>
           {selectedRecord && (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4 text-sm">
+              {/* 基本信息 - 网格布局 */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm bg-muted/30 rounded-lg p-3">
                 <div>
-                  <span className="text-muted-foreground">时间</span>
+                  <span className="text-muted-foreground text-xs block">时间</span>
                   <p className="font-medium">{formatTime(selectedRecord.timestamp)}</p>
                 </div>
                 <div>
-                  <span className="text-muted-foreground">状态</span>
-                  <p className="font-medium flex items-center gap-1">
-                    {selectedRecord.success ? (
-                      <><CheckCircle className="h-4 w-4 text-green-500" /> 成功</>
-                    ) : (
-                      <><XCircle className="h-4 w-4 text-red-500" /> 失败</>
-                    )}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">渠道</span>
-                  <p className="font-medium">{selectedRecord.channelName || selectedRecord.channelId}</p>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">模型</span>
-                  <p className="font-medium">{selectedRecord.model}</p>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">API Key</span>
-                  <p className="font-medium">{selectedRecord.keyName || `Key ${selectedRecord.keyIndex + 1}`}</p>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">轮询策略</span>
-                  <p className="font-medium">{selectedRecord.strategy || '-'}</p>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">耗时</span>
+                  <span className="text-muted-foreground text-xs block">耗时</span>
                   <p className="font-medium">{formatDuration(selectedRecord.duration)}</p>
                 </div>
                 <div>
-                  <span className="text-muted-foreground">来源</span>
+                  <span className="text-muted-foreground text-xs block">渠道</span>
+                  <p className="font-medium truncate">{selectedRecord.channelName || selectedRecord.channelId}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs block">模型</span>
+                  <p className="font-medium truncate">{selectedRecord.model}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs block">API Key</span>
+                  <p className="font-medium">{selectedRecord.keyName || `Key ${selectedRecord.keyIndex + 1}`}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground text-xs block">来源</span>
                   <p className="font-medium">{selectedRecord.source || '-'}</p>
                 </div>
                 <div>
-                  <span className="text-muted-foreground">输入Token</span>
-                  <p className="font-medium">{formatNumber(selectedRecord.inputTokens)}</p>
+                  <span className="text-muted-foreground text-xs block">输入/输出</span>
+                  <p className="font-medium">{formatNumber(selectedRecord.inputTokens)} / {formatNumber(selectedRecord.outputTokens)}</p>
                 </div>
-                <div>
-                  <span className="text-muted-foreground">输出Token</span>
-                  <p className="font-medium">{formatNumber(selectedRecord.outputTokens)}</p>
-                </div>
+                {(selectedRecord.retryCount !== undefined && selectedRecord.retryCount > 0) && (
+                  <div>
+                    <span className="text-muted-foreground text-xs block">重试次数</span>
+                    <p className="font-medium text-orange-500">{selectedRecord.retryCount}</p>
+                  </div>
+                )}
+                {(selectedRecord.userId || selectedRecord.groupId) && (
+                  <div>
+                    <span className="text-muted-foreground text-xs block">用户/群组</span>
+                    <p className="font-medium truncate">{selectedRecord.userId || '-'} / {selectedRecord.groupId || '-'}</p>
+                  </div>
+                )}
               </div>
+
+              {/* 错误信息 - 失败时显示在顶部 */}
               {selectedRecord.error && (
+                <div className="bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 rounded-lg p-3">
+                  <span className="text-xs font-medium text-red-500 block mb-1">错误信息</span>
+                  <p className="text-sm text-red-600 dark:text-red-400">{selectedRecord.error}</p>
+                </div>
+              )}
+
+              {/* 请求数据 */}
+              {selectedRecord.request && (
                 <div>
-                  <span className="text-muted-foreground text-sm">错误信息</span>
-                  <p className="text-sm text-red-500 bg-red-50 dark:bg-red-950/20 p-2 rounded mt-1">
-                    {selectedRecord.error}
-                  </p>
+                  <span className="text-muted-foreground text-sm font-medium mb-2 block">请求数据</span>
+                  <JsonView data={selectedRecord.request} maxHeight="300px" />
+                </div>
+              )}
+
+              {/* 失败响应详情 */}
+              {!selectedRecord.success && selectedRecord.response && (
+                <div>
+                  <span className="text-sm font-medium text-red-500 mb-2 block">响应详情</span>
+                  <JsonView data={selectedRecord.response} maxHeight="200px" />
                 </div>
               )}
             </div>

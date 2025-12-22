@@ -14,7 +14,7 @@ import {
   DialogTitle,
   DialogFooter
 } from '@/components/ui/dialog'
-import { statsApi } from '@/lib/api'
+import { statsApi, usageStatsApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { 
   RefreshCw, 
@@ -22,13 +22,47 @@ import {
   Bot, 
   Wrench, 
   Clock, 
-  Users, 
   TrendingUp,
   Trash2,
-  BarChart3,
   Loader2,
-  PieChart as PieChartIcon
+  PieChart as PieChartIcon,
+  Activity,
+  CheckCircle2,
+  XCircle,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react'
+
+interface UsageRecord {
+  id: string
+  timestamp: number
+  channelId: string
+  channelName: string
+  model: string
+  inputTokens: number
+  outputTokens: number
+  duration: number
+  success: boolean
+  error?: string
+  source: string
+  userId?: string
+  groupId?: string
+  request?: {
+    messageCount?: number
+    systemPromptLength?: number
+    lastUserMessage?: string
+    hasImages?: boolean
+    hasTools?: boolean
+    toolCount?: number
+    model?: string
+  }
+  response?: {
+    error?: string
+    status?: number
+    code?: string
+    data?: unknown
+  }
+}
 
 interface StatsData {
   messages: {
@@ -158,15 +192,21 @@ export default function StatsPage() {
   const [loading, setLoading] = useState(true)
   const [resetDialogOpen, setResetDialogOpen] = useState(false)
   const [resetting, setResetting] = useState(false)
+  const [usageRecords, setUsageRecords] = useState<UsageRecord[]>([])
+  const [expandedRecord, setExpandedRecord] = useState<string | null>(null)
 
   const fetchStats = async () => {
     try {
       setLoading(true)
-      const res: any = await statsApi.getOverview()
-      setStats(res?.data || null)
-    } catch (error) {
+      const [statsRes, usageRes] = await Promise.all([
+        statsApi.getOverview(),
+        usageStatsApi.getRecent(50)
+      ])
+      setStats((statsRes as { data: StatsData })?.data || null)
+      setUsageRecords((usageRes as { data: UsageRecord[] })?.data || [])
+    } catch (err) {
       toast.error('加载统计数据失败')
-      console.error(error)
+      console.error(err)
     } finally {
       setLoading(false)
     }
@@ -483,6 +523,100 @@ export default function StatsPage() {
             ) : (
               <p className="text-center text-muted-foreground py-4">暂无数据</p>
             )}
+          </CardContent>
+        </Card>
+
+        {/* 模型请求日志 */}
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Activity className="h-5 w-5" />
+              模型请求日志
+            </CardTitle>
+            <CardDescription>最近的模型调用记录（成功仅记录请求，失败记录请求和响应）</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ScrollArea className="h-[400px]">
+              {usageRecords.length > 0 ? (
+                <div className="space-y-2">
+                  {usageRecords.map((record) => (
+                    <div 
+                      key={record.id} 
+                      className={`p-3 rounded-lg border ${record.success ? 'bg-muted/30' : 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-900'}`}
+                    >
+                      <div 
+                        className="flex items-center justify-between cursor-pointer"
+                        onClick={() => setExpandedRecord(expandedRecord === record.id ? null : record.id)}
+                      >
+                        <div className="flex items-center gap-2">
+                          {record.success ? (
+                            <CheckCircle2 className="h-4 w-4 text-green-500" />
+                          ) : (
+                            <XCircle className="h-4 w-4 text-red-500" />
+                          )}
+                          <span className="font-medium text-sm">{record.model?.split('/').pop() || record.model}</span>
+                          <Badge variant="outline" className="text-xs">{record.channelName}</Badge>
+                          <Badge variant="secondary" className="text-xs">{record.source}</Badge>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <span>{record.duration}ms</span>
+                          <span>{formatNumber(record.inputTokens + record.outputTokens)} tokens</span>
+                          <span>{new Date(record.timestamp).toLocaleTimeString()}</span>
+                          {expandedRecord === record.id ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                        </div>
+                      </div>
+                      
+                      {expandedRecord === record.id && (
+                        <div className="mt-3 pt-3 border-t space-y-2 text-sm">
+                          {record.request && (
+                            <div>
+                              <p className="font-medium text-xs text-muted-foreground mb-1">请求摘要</p>
+                              <div className="bg-muted/50 p-2 rounded text-xs space-y-1">
+                                {record.request.messageCount && <p>消息数: {record.request.messageCount}</p>}
+                                {record.request.systemPromptLength && <p>系统提示长度: {record.request.systemPromptLength}</p>}
+                                {record.request.lastUserMessage && (
+                                  <p className="truncate">最后用户消息: {record.request.lastUserMessage}</p>
+                                )}
+                                {record.request.hasImages && <Badge variant="outline" className="text-xs">包含图片</Badge>}
+                                {record.request.hasTools && <Badge variant="outline" className="text-xs">使用工具 ({record.request.toolCount})</Badge>}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {!record.success && record.error && (
+                            <div>
+                              <p className="font-medium text-xs text-red-500 mb-1">错误信息</p>
+                              <div className="bg-red-100 dark:bg-red-950/50 p-2 rounded text-xs text-red-700 dark:text-red-300">
+                                {record.error}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {!record.success && record.response && (
+                            <div>
+                              <p className="font-medium text-xs text-red-500 mb-1">响应详情</p>
+                              <div className="bg-red-100 dark:bg-red-950/50 p-2 rounded text-xs text-red-700 dark:text-red-300">
+                                <pre className="whitespace-pre-wrap overflow-auto max-h-32">
+                                  {JSON.stringify(record.response, null, 2)}
+                                </pre>
+                              </div>
+                            </div>
+                          )}
+                          
+                          <div className="flex gap-4 text-xs text-muted-foreground pt-1">
+                            {record.userId && <span>用户: {record.userId}</span>}
+                            {record.groupId && <span>群组: {record.groupId}</span>}
+                            <span>渠道: {record.channelId}</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-center text-muted-foreground py-8">暂无请求记录</p>
+              )}
+            </ScrollArea>
           </CardContent>
         </Card>
       </div>

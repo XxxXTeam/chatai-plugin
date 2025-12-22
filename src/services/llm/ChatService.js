@@ -603,7 +603,22 @@ export class ChatService {
         let finalResponse = null
         let finalUsage = null
         let allToolLogs = []
+        let lastError = null
         const requestStartTime = Date.now()
+        
+        // 参数优先级：预设 > 渠道 > 默认值（移到外层，确保 finally 可访问）
+        const presetParams = currentPreset?.modelParams || {}
+        const requestOptions = {
+            model: llmModel,
+            maxToken: presetParams.max_tokens || presetParams.maxTokens || channelLlm.maxTokens || 4000,
+            temperature: presetParams.temperature ?? channelLlm.temperature ?? 0.7,
+            topP: presetParams.top_p ?? presetParams.topP ?? channelLlm.topP,
+            conversationId,
+            systemOverride: systemPrompt,
+            stream: useStreaming,
+        }
+        logger.debug(`[ChatService] 请求参数: temperature=${requestOptions.temperature}, maxToken=${requestOptions.maxToken}, 来源: ${presetParams.temperature !== undefined ? '预设' : (channelLlm.temperature !== undefined ? '渠道' : '默认')}`)
+        
         try {
             if (event && event.reply) {
                 client.setOnMessageWithToolCall(async (data) => {
@@ -621,18 +636,6 @@ export class ChatService {
                     }
                 })
             }
-            // 参数优先级：预设 > 渠道 > 默认值
-            const presetParams = currentPreset?.modelParams || {}
-            const requestOptions = {
-                model: llmModel,
-                maxToken: presetParams.max_tokens || presetParams.maxTokens || channelLlm.maxTokens || 4000,
-                temperature: presetParams.temperature ?? channelLlm.temperature ?? 0.7,
-                topP: presetParams.top_p ?? presetParams.topP ?? channelLlm.topP,
-                conversationId,
-                systemOverride: systemPrompt,
-                stream: useStreaming,  // 传递流式选项
-            }
-            logger.debug(`[ChatService] 请求参数: temperature=${requestOptions.temperature}, maxToken=${requestOptions.maxToken}, 来源: ${presetParams.temperature !== undefined ? '预设' : (channelLlm.temperature !== undefined ? '渠道' : '默认')}`)
 
             // 收集调试信息
             if (debugInfo) {
@@ -703,9 +706,9 @@ export class ChatService {
                 const notifyOnFallback = fallbackConfig.notifyOnFallback
                 const modelsToTry = [llmModel, ...fallbackModels.filter(m => m && m !== llmModel)]
                 let response = null
-                let lastError = null
                 let usedModel = llmModel
                 let fallbackUsed = false
+                let totalRetryCount = 0  // 总重试次数
                 for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
                     const currentModel = modelsToTry[modelIndex]
                     const isMainModel = modelIndex === 0
@@ -756,6 +759,7 @@ export class ChatService {
                             logger.error(`[ChatService] 模型${currentModel}请求失败: ${modelError.message}`)
                             
                             retryCount++
+                            totalRetryCount++
                             if (retryCount <= (isMainModel ? maxRetries : 1)) {
                                 await new Promise(r => setTimeout(r, retryDelay * retryCount))
                             }
@@ -853,9 +857,10 @@ export class ChatService {
                 const inputTokens = usageStats.estimateMessagesTokens(messages)
                 const responseText = finalResponse?.filter(c => c.type === 'text').map(c => c.text).join('') || ''
                 const outputTokens = usageStats.estimateTokens(responseText)
+                const requestSuccess = !!finalResponse?.length
                 await usageStats.record({
-                    channelId: channel?.id || 'unknown',
-                    channelName: channel?.name || 'Unknown',
+                    channelId: channel?.id || `no-channel-${llmModel}`,
+                    channelName: channel?.name || `无渠道(${llmModel})`,
                     model: debugInfo?.usedModel || llmModel,
                     keyIndex: keyInfo.keyIndex ?? -1,
                     keyName: keyInfo.keyName || '',
@@ -864,13 +869,27 @@ export class ChatService {
                     outputTokens,
                     totalTokens: inputTokens + outputTokens,
                     duration: requestDuration,
-                    success: !!finalResponse?.length,
+                    success: requestSuccess,
+                    retryCount: totalRetryCount || 0,
                     channelSwitched: debugInfo?.fallbackUsed || false,
                     previousChannelId: debugInfo?.fallbackFrom || null,
                     source: 'chat',
                     userId,
                     groupId: groupId || null,
                     stream: useStreaming,
+                    // 记录完整请求
+                    request: { 
+                        messages, 
+                        model: debugInfo?.usedModel || llmModel,
+                        tools: hasTools ? client.tools.map(t => ({ name: t.name, description: t.description?.substring(0, 100) })) : null,
+                        temperature: requestOptions.temperature,
+                        maxToken: requestOptions.maxToken,
+                        topP: requestOptions.topP,
+                        systemPrompt: systemPrompt?.substring(0, 500) + (systemPrompt?.length > 500 ? '...' : ''),
+                    },
+                    // 仅失败时记录响应
+                    response: !requestSuccess ? { error: lastError?.message, contents: finalResponse } : null,
+                    error: !requestSuccess ? lastError?.message : null,
                 })
                 
                 // 记录工具调用
@@ -880,6 +899,7 @@ export class ChatService {
                     }
                 }
             } catch (e) {
+                logger.warn(`[ChatService] 记录统计失败:`, e.message)
             }
         }
 

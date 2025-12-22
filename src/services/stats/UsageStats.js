@@ -36,6 +36,8 @@ const MAX_RECORDS = 10000  // 最多保留记录数
  * @property {string} [userId] - 用户ID
  * @property {string} [groupId] - 群组ID
  * @property {boolean} stream - 是否流式请求
+ * @property {Object} [request] - 请求信息（消息摘要）
+ * @property {Object} [response] - 响应信息（仅失败时记录）
  */
 
 class UsageStats {
@@ -67,6 +69,95 @@ class UsageStats {
             const englishWords = (text.match(/[a-zA-Z]+/g) || []).length
             const otherChars = text.length - chineseChars - (text.match(/[a-zA-Z]+/g) || []).join('').length
             return Math.ceil(chineseChars / 1.5 + englishWords * 1.3 + otherChars / 4)
+        }
+    }
+
+    /**
+     * 截断请求数据（保留原始JSON，限制大小）
+     * @param {Object} request - 原始请求
+     * @returns {Object} 截断后的请求
+     */
+    truncateRequest(request) {
+        if (!request) return null
+        
+        try {
+            const truncated = { ...request }
+            
+            // 处理 messages 数组
+            if (truncated.messages && Array.isArray(truncated.messages)) {
+                truncated.messages = truncated.messages.map(msg => {
+                    const newMsg = { ...msg }
+                    // 截断过长的 content
+                    if (typeof newMsg.content === 'string' && newMsg.content.length > 500) {
+                        newMsg.content = newMsg.content.substring(0, 500) + '...(截断)'
+                    } else if (Array.isArray(newMsg.content)) {
+                        newMsg.content = newMsg.content.map(c => {
+                            if (c.type === 'text' && c.text?.length > 500) {
+                                return { ...c, text: c.text.substring(0, 500) + '...(截断)' }
+                            }
+                            if (c.type === 'image_url' || c.type === 'image') {
+                                return { type: c.type, url: '[图片数据已省略]' }
+                            }
+                            return c
+                        })
+                    }
+                    return newMsg
+                })
+            }
+            
+            // 保留工具列表（只保留名称和简短描述）
+            if (truncated.tools && Array.isArray(truncated.tools)) {
+                truncated.toolsCount = truncated.tools.length
+                truncated.tools = truncated.tools.slice(0, 20).map(t => 
+                    typeof t === 'object' ? { name: t.name, description: t.description?.substring(0, 50) } : t
+                )
+                if (truncated.toolsCount > 20) {
+                    truncated.tools.push({ name: `...还有 ${truncated.toolsCount - 20} 个工具` })
+                }
+            }
+            
+            // systemPrompt 已在调用处截断，这里不再处理
+            
+            return truncated
+        } catch (e) {
+            return { error: '解析请求失败', raw: String(request).substring(0, 500) }
+        }
+    }
+
+    /**
+     * 截断响应数据（仅用于失败记录）
+     * @param {Object} response - 原始响应或错误
+     * @returns {Object} 截断后的响应
+     */
+    truncateResponse(response) {
+        if (!response) return null
+        
+        try {
+            // 如果是错误对象
+            if (response instanceof Error) {
+                return {
+                    error: response.message,
+                    stack: response.stack?.substring(0, 500),
+                }
+            }
+            
+            // 如果是响应对象，直接返回（限制大小）
+            if (typeof response === 'object') {
+                const jsonStr = JSON.stringify(response)
+                if (jsonStr.length > 2000) {
+                    return JSON.parse(jsonStr.substring(0, 2000) + '"}')
+                }
+                return response
+            }
+            
+            // 字符串响应
+            if (typeof response === 'string') {
+                return response.length > 2000 ? response.substring(0, 2000) + '...' : response
+            }
+            
+            return response
+        } catch (e) {
+            return { parseError: e.message }
         }
     }
 
@@ -104,6 +195,8 @@ class UsageStats {
      */
     async record(record) {
         const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+        const isSuccess = record.success !== false
+        
         const fullRecord = {
             id,
             timestamp: Date.now(),
@@ -117,7 +210,7 @@ class UsageStats {
             outputTokens: record.outputTokens || 0,
             totalTokens: record.totalTokens || (record.inputTokens || 0) + (record.outputTokens || 0),
             duration: record.duration || 0,
-            success: record.success !== false,
+            success: isSuccess,
             error: record.error || null,
             channelSwitched: record.channelSwitched || false,
             previousChannelId: record.previousChannelId || null,
@@ -127,6 +220,10 @@ class UsageStats {
             groupId: record.groupId || null,
             stream: record.stream || false,
             isEstimated: record.isEstimated || false,  // 标记是否为估算值
+            // 记录原始请求（限制大小）
+            request: record.request ? this.truncateRequest(record.request) : null,
+            // 仅失败时记录响应
+            response: !isSuccess && record.response ? this.truncateResponse(record.response) : null,
         }
 
         // 记录日志
@@ -431,16 +528,46 @@ class UsageStats {
      */
     async clear() {
         this.recentStats = []
+        let deletedCount = 0
+        let listLen = 0
         try {
-            const keys = await redisClient.keys(`${STATS_KEY}*`)
-            if (keys.length > 0) {
-                await redisClient.del(...keys)
+            // 清除所有相关的 Redis 键
+            const patterns = [
+                `${STATS_KEY}*`,           // chaite:usage_stats*
+                STATS_LIST_KEY,            // chaite:usage_list
+            ]
+            
+            for (const pattern of patterns) {
+                if (pattern.includes('*')) {
+                    const keys = await redisClient.keys(pattern)
+                    if (keys.length > 0) {
+                        for (const key of keys) {
+                            await redisClient.del(key)
+                            deletedCount++
+                        }
+                    }
+                } else {
+                    const exists = await redisClient.exists(pattern)
+                    if (exists) {
+                        listLen = await redisClient.llen(pattern)
+                        await redisClient.del(pattern)
+                        deletedCount++
+                    }
+                }
             }
-            await redisClient.del(STATS_LIST_KEY)
+            
+            logger.info(`[UsageStats] 统计数据已清除, 删除 ${deletedCount} 个键, ${listLen} 条记录`)
         } catch (error) {
-            logger.debug('[UsageStats] 清除Redis数据失败:', error.message)
+            logger.warn('[UsageStats] 清除Redis数据失败:', error.message)
+            // 尝试单独删除关键键
+            try {
+                const today = new Date().toISOString().split('T')[0]
+                await redisClient.del(`${STATS_KEY}:${today}`)
+                await redisClient.del(STATS_LIST_KEY)
+            } catch (e) {
+                logger.warn('[UsageStats] 备用清除也失败:', e.message)
+            }
         }
-        logger.info('[UsageStats] 统计数据已清除')
     }
 }
 
