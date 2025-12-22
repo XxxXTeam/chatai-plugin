@@ -1,7 +1,10 @@
 /**
  * 统计服务 - 消息、模型、tokens 统计
+ * 统一管理所有统计数据来源
  */
 import { databaseService } from '../storage/DatabaseService.js'
+import { toolCallStats } from './ToolCallStats.js'
+import { usageStats } from './UsageStats.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -141,7 +144,7 @@ class StatsService {
     }
 
     /**
-     * 记录工具调用
+     * 记录工具调用（简化版，用于快速计数）
      */
     recordToolCall(toolName, success = true) {
         this.init()
@@ -157,6 +160,35 @@ class StatsService {
         
         // 保存统计数据
         this.save()
+    }
+
+    /**
+     * 记录完整工具调用（包含请求和响应详情）
+     * @param {Object} options - 调用详情
+     */
+    async recordToolCallFull(options) {
+        const { toolName, request, response, success = true, error, duration = 0, userId, groupId, source = 'mcp' } = options
+        
+        // 更新简化统计
+        this.recordToolCall(toolName, success)
+        
+        // 记录到详细统计
+        try {
+            await toolCallStats.record({
+                toolName,
+                request,
+                response,
+                success,
+                error: error?.message || error,
+                errorStack: error?.stack,
+                duration,
+                userId,
+                groupId,
+                source
+            })
+        } catch (err) {
+            console.error('[StatsService] 记录工具调用详情失败:', err.message)
+        }
     }
 
     /**
@@ -243,7 +275,7 @@ class StatsService {
     /**
      * 重置统计
      */
-    reset() {
+    async reset() {
         this.stats = {
             messages: { total: 0, byType: {}, byGroup: {}, byUser: {}, byHour: {} },
             models: { total: 0, byModel: {}, byChannel: {} },
@@ -253,6 +285,20 @@ class StatsService {
             lastUpdate: Date.now()
         }
         this.save()
+        
+        // 同时清空工具调用详细统计
+        try {
+            await toolCallStats.clear()
+        } catch (err) {
+            console.error('[StatsService] 清空工具调用统计失败:', err.message)
+        }
+        
+        // 同时清空使用统计
+        try {
+            await usageStats.clear()
+        } catch (err) {
+            console.error('[StatsService] 清空使用统计失败:', err.message)
+        }
     }
 
     /**
@@ -262,6 +308,76 @@ class StatsService {
         // 简化版：返回当前内存中的统计
         // 后续可以添加按日期分割的统计
         return this.getOverview()
+    }
+
+    /**
+     * 获取工具调用详细记录
+     * @param {Object} filter - 过滤条件
+     * @param {number} limit - 返回数量
+     */
+    async getToolCallRecords(filter = {}, limit = 100) {
+        return await toolCallStats.getRecords(filter, limit)
+    }
+
+    /**
+     * 获取工具调用统计汇总
+     */
+    async getToolCallSummary() {
+        return await toolCallStats.getSummary()
+    }
+
+    /**
+     * 获取单条工具调用记录详情
+     */
+    async getToolCallRecord(id) {
+        return await toolCallStats.getRecord(id)
+    }
+
+    /**
+     * 获取工具错误记录
+     */
+    async getToolErrors(limit = 50) {
+        return await toolCallStats.getErrors(limit)
+    }
+
+    /**
+     * 获取统一的完整统计（合并所有来源）
+     */
+    async getUnifiedStats() {
+        this.init()
+        
+        const overview = this.getOverview()
+        const toolCallSummary = await toolCallStats.getSummary()
+        let usageToday = {}
+        
+        try {
+            usageToday = await usageStats.getTodayStats()
+        } catch {}
+        
+        return {
+            ...overview,
+            // 工具调用详细统计
+            toolCalls: {
+                summary: toolCallSummary,
+                recentErrors: toolCallSummary.recentErrors
+            },
+            // API 使用统计
+            apiUsage: usageToday
+        }
+    }
+
+    /**
+     * 导出所有统计数据
+     */
+    async exportAll() {
+        const stats = this.getStats()
+        const toolCallData = await toolCallStats.export()
+        
+        return {
+            general: stats,
+            toolCalls: toolCallData,
+            exportTime: Date.now()
+        }
     }
 }
 

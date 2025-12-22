@@ -10,6 +10,20 @@ import { getBotFramework } from '../utils/bot.js'
 import config from '../../config/config.js'
 import { validateParams, paramError } from './tools/helpers.js'
 
+// 懒加载统计服务
+let _statsService = null
+async function getStatsService() {
+    if (!_statsService) {
+        try {
+            const mod = await import('../services/stats/StatsService.js')
+            _statsService = mod.statsService
+        } catch (e) {
+            logger.debug('[BuiltinMCP] 统计服务加载失败:', e.message)
+        }
+    }
+    return _statsService
+}
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
@@ -636,6 +650,36 @@ export class BuiltinMcpServer {
         // 创建请求级上下文包装器，优先使用传入的上下文
         const ctx = this.createRequestContext(requestContext)
         
+        // 记录开始时间用于统计
+        const startTime = Date.now()
+        
+        // 获取用户信息用于统计
+        const event = ctx.getEvent?.()
+        const userId = event?.user_id?.toString()
+        const groupId = event?.group_id?.toString()
+        
+        // 统计记录辅助函数
+        const recordStats = async (result, error = null) => {
+            try {
+                const statsService = await getStatsService()
+                if (statsService) {
+                    await statsService.recordToolCallFull({
+                        toolName: name,
+                        request: args,
+                        response: error ? { error: error.message } : result,
+                        success: !error && !result?.isError,
+                        error: error,
+                        duration: Date.now() - startTime,
+                        userId,
+                        groupId,
+                        source: 'builtin_mcp'
+                    })
+                }
+            } catch (e) {
+                logger.debug('[BuiltinMCP] 记录统计失败:', e.message)
+            }
+        }
+        
         // 先检查是否是 JS 文件工具
         const jsTool = this.jsTools.get(name)
         if (jsTool) {
@@ -646,7 +690,9 @@ export class BuiltinMcpServer {
                 const validation = validateParams(args, jsTool.inputSchema, ctx)
                 if (!validation.valid) {
                     logger.debug(`[BuiltinMCP] 参数验证失败: ${name} - ${validation.error}`)
-                    return this.formatResult(paramError(validation))
+                    const errorResult = paramError(validation)
+                    await recordStats(errorResult, new Error(validation.error))
+                    return this.formatResult(errorResult)
                 }
             }
             
@@ -668,9 +714,11 @@ export class BuiltinMcpServer {
                 const result = await asyncLocalStorage.run(chaiteContext, async () => {
                     return await jsTool.run(args, chaiteContext)
                 })
+                await recordStats(result)
                 return this.formatResult(result)
             } catch (error) {
                 logger.error(`[BuiltinMCP] JS tool error: ${name}`, error)
+                await recordStats(null, error)
                 return {
                     content: [{ type: 'text', text: `Error: ${error.message}` }],
                     isError: true
@@ -690,15 +738,19 @@ export class BuiltinMcpServer {
                 const validation = validateParams(args, customTool.inputSchema, ctx)
                 if (!validation.valid) {
                     logger.debug(`[BuiltinMCP] 参数验证失败: ${name} - ${validation.error}`)
-                    return this.formatResult(paramError(validation))
+                    const errorResult = paramError(validation)
+                    await recordStats(errorResult, new Error(validation.error))
+                    return this.formatResult(errorResult)
                 }
             }
             
             try {
                 const result = await this.executeCustomHandler(customTool.handler, args, ctx)
+                await recordStats(result)
                 return this.formatResult(result)
             } catch (error) {
                 logger.error(`[BuiltinMCP] Custom tool error: ${name}`, error)
+                await recordStats(null, error)
                 return {
                     content: [{ type: 'text', text: `Error: ${error.message}` }],
                     isError: true
@@ -715,15 +767,19 @@ export class BuiltinMcpServer {
                 logger.debug(`[BuiltinMCP] 参数验证结果: ${name}`, validation)
                 if (!validation.valid) {
                     logger.info(`[BuiltinMCP] 参数验证失败: ${name} - ${validation.error}`)
-                    return this.formatResult(paramError(validation))
+                    const errorResult = paramError(validation)
+                    await recordStats(errorResult, new Error(validation.error))
+                    return this.formatResult(errorResult)
                 }
             }
             
             try {
                 const result = await modularTool.handler(args, ctx)
+                await recordStats(result)
                 return this.formatResult(result)
             } catch (error) {
                 logger.error(`[BuiltinMCP] Modular tool error: ${name}`, error)
+                await recordStats(null, error)
                 return {
                     content: [{ type: 'text', text: `Error: ${error.message}` }],
                     isError: true
@@ -732,6 +788,7 @@ export class BuiltinMcpServer {
         }
         const tool = this.tools.find(t => t.name === name)
         if (!tool) {
+            await recordStats(null, new Error(`Tool not found: ${name}`))
             throw new Error(`Tool not found: ${name}`)
         }
 
@@ -742,17 +799,20 @@ export class BuiltinMcpServer {
             const validation = validateParams(args, tool.inputSchema, ctx)
             if (!validation.valid) {
                 logger.debug(`[BuiltinMCP] 参数验证失败: ${name} - ${validation.error}`)
-                return this.formatResult(paramError(validation))
+                const errorResult = paramError(validation)
+                await recordStats(errorResult, new Error(validation.error))
+                return this.formatResult(errorResult)
             }
         }
 
         try {
             const result = await tool.handler(args, ctx)
-            
+            await recordStats(result)
             // 格式化为 MCP 标准响应
             return this.formatResult(result)
         } catch (error) {
             logger.error(`[BuiltinMCP] Tool error: ${name}`, error)
+            await recordStats(null, error)
             return {
                 content: [{ type: 'text', text: `Error: ${error.message}` }],
                 isError: true

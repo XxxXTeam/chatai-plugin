@@ -676,7 +676,8 @@ export class ChannelManager {
                             outputTokens: usageStats.estimateTokens(replyText),
                             duration: Date.now() - testStartTime,
                             success: true,
-                            source: 'health_check'
+                            source: 'health_check',
+                            request: { messages: [{ role: 'user', content: '说一声你好' }], model: testModel },
                         })
                     } catch (e) { /* 统计失败不影响主流程 */ }
 

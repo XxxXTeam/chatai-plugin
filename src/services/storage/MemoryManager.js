@@ -219,6 +219,7 @@ ${dialogText}
             const responseText = result.contents?.[0]?.text?.trim() || ''
             // 记录统计（群聊记忆分析）
             try {
+                const recordSuccess = !!responseText
                 await usageStats.record({
                     channelId: channelInfo.id || 'memory',
                     channelName: channelInfo.name || '记忆服务',
@@ -226,9 +227,11 @@ ${dialogText}
                     inputTokens: usageStats.estimateTokens(prompt),
                     outputTokens: usageStats.estimateTokens(responseText),
                     duration: Date.now() - startTime,
-                    success: !!responseText,
+                    success: recordSuccess,
                     source: '记忆提取',
-                    groupId
+                    groupId,
+                    request: { messages: [{ role: 'user', content: prompt }], model },
+                    response: !recordSuccess ? { error: '响应为空' } : null,
                 })
             } catch (e) { /* 统计失败不影响主流程 */ }
             if (!responseText || responseText.length < 10) return
@@ -490,6 +493,7 @@ ${dialogText}
             const responseText = result.contents?.[0]?.text?.trim() || ''
             // 记录统计（用户记忆提取）
             try {
+                const recordSuccess = !!responseText && responseText !== '无'
                 await usageStats.record({
                     channelId: channelInfo2.id || 'memory',
                     channelName: channelInfo2.name || '记忆服务',
@@ -497,9 +501,11 @@ ${dialogText}
                     inputTokens: usageStats.estimateTokens(prompt),
                     outputTokens: usageStats.estimateTokens(responseText),
                     duration: Date.now() - startTime2,
-                    success: !!responseText && responseText !== '无',
+                    success: recordSuccess,
                     source: '用户记忆',
-                    userId
+                    userId,
+                    request: { messages: [{ role: 'user', content: prompt }], model: model2 },
+                    response: !recordSuccess ? { error: '响应为空或无效' } : null,
                 })
             } catch (e) { /* 统计失败不影响主流程 */ }
             if (!responseText || responseText === '无' || responseText.length < 5) return
@@ -571,6 +577,7 @@ ${dialogText}
 
             const memoryContent = result.contents?.[0]?.text?.trim()
             try {
+                const recordSuccess = !!memoryContent
                 await usageStats.record({
                     channelId: channelInfo3.id || 'memory',
                     channelName: channelInfo3.name || '记忆服务',
@@ -578,9 +585,11 @@ ${dialogText}
                     inputTokens: usageStats.estimateTokens(extractPrompt),
                     outputTokens: usageStats.estimateTokens(memoryContent || ''),
                     duration: Date.now() - startTime3,
-                    success: !!memoryContent,
+                    success: recordSuccess,
                     source: '记忆提取',
-                    userId
+                    userId,
+                    request: { messages: [{ role: 'user', content: extractPrompt }], model: model3 },
+                    response: !recordSuccess ? { error: '响应为空' } : null,
                 })
             } catch (e) { /* 统计失败不影响主流程 */ }
             if (memoryContent && memoryContent.length > 5 && memoryContent.length < 200) {

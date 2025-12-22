@@ -415,6 +415,7 @@ export class WebServer {
             }
             express.static(staticPath)(req, res, next)
         })
+        
         const publicLimiter = rateLimit({
             windowMs: 15 * 60 * 100000, // 15 minutes
             max: 50000, // 未认证请求限制更严格
@@ -801,6 +802,88 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
+
+        // ==================== Tool Call Statistics API ====================
+        // GET /api/stats/tool-calls - 获取工具调用统计汇总
+        this.app.get('/api/stats/tool-calls', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { statsService } = await import('./stats/StatsService.js')
+                const summary = await statsService.getToolCallSummary()
+                res.json(ChaiteResponse.ok(summary))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/stats/tool-calls/records - 获取工具调用详细记录
+        this.app.get('/api/stats/tool-calls/records', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { statsService } = await import('./stats/StatsService.js')
+                const { limit = 100, toolName, success, userId, groupId, keyword, startTime, endTime } = req.query
+                const filter = {}
+                if (toolName) filter.toolName = toolName
+                if (success !== undefined) filter.success = success === 'true'
+                if (userId) filter.userId = userId
+                if (groupId) filter.groupId = groupId
+                if (keyword) filter.keyword = keyword
+                if (startTime) filter.startTime = parseInt(startTime)
+                if (endTime) filter.endTime = parseInt(endTime)
+                
+                const records = await statsService.getToolCallRecords(filter, parseInt(limit))
+                res.json(ChaiteResponse.ok(records))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/stats/tool-calls/record/:id - 获取单条工具调用记录详情
+        this.app.get('/api/stats/tool-calls/record/:id', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { statsService } = await import('./stats/StatsService.js')
+                const record = await statsService.getToolCallRecord(req.params.id)
+                if (!record) {
+                    return res.status(404).json(ChaiteResponse.fail(null, '记录不存在'))
+                }
+                res.json(ChaiteResponse.ok(record))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/stats/tool-calls/errors - 获取工具调用错误记录
+        this.app.get('/api/stats/tool-calls/errors', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { statsService } = await import('./stats/StatsService.js')
+                const { limit = 50 } = req.query
+                const errors = await statsService.getToolErrors(parseInt(limit))
+                res.json(ChaiteResponse.ok(errors))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/stats/unified - 获取统一的完整统计（合并所有来源）
+        this.app.get('/api/stats/unified', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { statsService } = await import('./stats/StatsService.js')
+                const stats = await statsService.getUnifiedStats()
+                res.json(ChaiteResponse.ok(stats))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/stats/tool-calls/clear - 清除工具调用统计
+        this.app.post('/api/stats/tool-calls/clear', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { toolCallStats } = await import('./stats/ToolCallStats.js')
+                await toolCallStats.clear()
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
         // GET /api/config - Get configuration
         this.app.get('/api/config', this.authMiddleware.bind(this), (req, res) => {
             // Return full config for settings page (protected)
@@ -1850,6 +1933,8 @@ export class WebServer {
 
             chatLogger.info(`[测试渠道] 类型: ${adapterType}, BaseURL: ${baseUrl}`)
 
+            const testMessage = '说一声你好'
+            
             try {
                 // Real connection test with chat completion
                 if (adapterType === 'openai') {
@@ -1890,7 +1975,6 @@ export class WebServer {
 
                     let replyText = ''
                     let apiUsage = null
-                    const testMessage = '说一声你好'
 
                     if (useStreaming) {
                         // Test with streaming mode
@@ -1974,6 +2058,7 @@ export class WebServer {
                         duration: elapsed,
                         success: true,
                         source: 'test',
+                        request: { messages: [{ role: 'user', content: testMessage }], model: testModel },
                     })
 
                     // 如果有渠道 ID，更新渠道状态
@@ -2020,6 +2105,8 @@ export class WebServer {
                     success: false,
                     error: error.message,
                     source: 'test',
+                    request: { messages: [{ role: 'user', content: testMessage }], model: models?.[0] },
+                    response: { error: error.message, status: error.status, code: error.code, type: error.type },
                 })
 
                 // 如果有渠道 ID，更新渠道状态为错误
@@ -3242,6 +3329,15 @@ export default {
                 contextManager.requestCounters?.clear()
                 contextManager.groupContextCache?.clear()
                 contextManager.sessionStates?.clear()
+                
+                // 同时清空统计数据
+                try {
+                    const { statsService } = await import('./stats/StatsService.js')
+                    await statsService.reset()
+                    chatLogger.info('[WebServer] 统计数据已同步清空')
+                } catch (e) {
+                    chatLogger.warn('[WebServer] 清空统计数据失败:', e.message)
+                }
                 
                 chatLogger.info(`[WebServer] 清空所有对话完成, 删除: ${deletedCount}条消息`)
                 res.json(ChaiteResponse.ok({ success: true, deletedCount }))
