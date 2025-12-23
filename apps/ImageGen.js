@@ -1,13 +1,45 @@
 import config from '../config/config.js'
-import { segment, MessageApi } from '../src/utils/messageParser.js'
-import { statsService } from '../src/services/stats/StatsService.js'
-import { imageService } from '../src/services/media/ImageService.js'
-import { getScopeManager } from '../src/services/scope/ScopeManager.js'
-import { databaseService } from '../src/services/storage/DatabaseService.js'
+import { segment } from '../src/utils/messageParser.js'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { getBotIds } from '../src/utils/messageDedup.js'
+
+// 懒加载服务
+let _statsService = null
+let _imageService = null
+let _scopeManager = null
+let _databaseService = null
+
+async function getStatsService() {
+    if (!_statsService) {
+        const { statsService } = await import('../src/services/stats/StatsService.js')
+        _statsService = statsService
+    }
+    return _statsService
+}
+
+async function getImageService() {
+    if (!_imageService) {
+        const { imageService } = await import('../src/services/media/ImageService.js')
+        _imageService = imageService
+    }
+    return _imageService
+}
+
+async function getScopeManagerLazy() {
+    if (!_scopeManager) {
+        const { getScopeManager } = await import('../src/services/scope/ScopeManager.js')
+        const { databaseService } = await import('../src/services/storage/DatabaseService.js')
+        _databaseService = databaseService
+        if (!_databaseService.initialized) {
+            await _databaseService.init()
+        }
+        _scopeManager = getScopeManager(_databaseService)
+        await _scopeManager.init()
+    }
+    return _scopeManager
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PRESET_CACHE_DIR = path.join(__dirname, '../data/presets')
@@ -821,13 +853,14 @@ export class ImageGen extends plugin {
                                 return 1000 
                             }
                             // 估算输入tokens（文本 + 图片）
-                            const textTokens = statsService.estimateTokens(prompt || '')
+                            const stats = await getStatsService()
+                            const textTokens = stats.estimateTokens(prompt || '')
                             const inputImgTokens = imageUrls.reduce((sum, url) => sum + estimateImageTokens(url), 0)
                             const inputTokens = textTokens + inputImgTokens
                             // 估算输出tokens（生成的图片）
                             const outputTokens = result.reduce((sum, img) => sum + estimateImageTokens(img), 0)
                             
-                            await statsService.recordApiCall({
+                            await stats.recordApiCall({
                                 channelId: `imagegen-api${apiIndex}`,
                                 channelName: `绘图API${apiIndex + 1}`,
                                 model: apiConf.model,
@@ -1075,7 +1108,8 @@ export class ImageGen extends plugin {
             
             for (const imageUrl of result.images) {
                 try {
-                    const splitImages = await imageService.splitEmojiGrid(imageUrl, { cols, rows })
+                    const imgSvc = await getImageService()
+                    const splitImages = await imgSvc.splitEmojiGrid(imageUrl, { cols, rows })
                     
                     if (splitImages.length === 0) {
                         await e.reply('切割失败：未能生成切割图片', true)

@@ -1,15 +1,40 @@
-/**
- * ChatAI 美化日志工具
- * 统一插件的日志输出风格
- */
+const icons = {
+    success: '✓',
+    error: '✗',
+    warn: '⚠',
+    info: '●',
+    debug: '○',
+    arrow: '→',
+    dot: '•',
+    star: '★',
+    check: '✔',
+    cross: '✘',
+    loading: '◐',
+    plugin: '◆',
+    module: '▸',
+    time: '⏱',
+    memory: '🧠',
+    api: '🔌',
+    web: '🌐',
+    tool: '🛠',
+    chat: '💬',
+    image: '🖼',
+    audio: '🔊',
+    file: '📄',
+    folder: '📁',
+    database: '💾',
+    cache: '📦',
+    config: '⚙',
+    user: '👤',
+    group: '👥',
+    bot: '🤖',
+    sparkle: '✨'
+}
 
-// ANSI 颜色码
 const colors = {
     reset: '\x1b[0m',
     bright: '\x1b[1m',
     dim: '\x1b[2m',
-    
-    // 前景色
     black: '\x1b[30m',
     red: '\x1b[31m',
     green: '\x1b[32m',
@@ -19,16 +44,12 @@ const colors = {
     cyan: '\x1b[36m',
     white: '\x1b[37m',
     gray: '\x1b[90m',
-    
-    // 亮色
     brightRed: '\x1b[91m',
     brightGreen: '\x1b[92m',
     brightYellow: '\x1b[93m',
     brightBlue: '\x1b[94m',
     brightMagenta: '\x1b[95m',
     brightCyan: '\x1b[96m',
-    
-    // 背景色
     bgRed: '\x1b[41m',
     bgGreen: '\x1b[42m',
     bgYellow: '\x1b[43m',
@@ -38,15 +59,13 @@ const colors = {
 }
 
 const c = colors
-
-// 日志级别配置
 const LOG_LEVELS = {
-    debug: { color: c.gray, label: `${c.gray}DEBUG${c.reset}` },
-    info: { color: c.cyan, label: `${c.cyan}INFO ${c.reset}` },
-    warn: { color: c.yellow, label: `${c.yellow}WARN ${c.reset}` },
-    error: { color: c.red, label: `${c.red}ERROR${c.reset}` },
-    success: { color: c.green, label: `${c.green}OK   ${c.reset}` },
-    mark: { color: c.magenta, label: `${c.magenta}MARK ${c.reset}` }
+    debug: { color: c.gray, label: `${c.gray}${icons.debug} DBG${c.reset}`, icon: icons.debug },
+    info: { color: c.cyan, label: `${c.cyan}${icons.info} INF${c.reset}`, icon: icons.info },
+    warn: { color: c.yellow, label: `${c.yellow}${icons.warn} WRN${c.reset}`, icon: icons.warn },
+    error: { color: c.red, label: `${c.red}${icons.error} ERR${c.reset}`, icon: icons.error },
+    success: { color: c.green, label: `${c.green}${icons.success} OK ${c.reset}`, icon: icons.success },
+    mark: { color: c.magenta, label: `${c.magenta}${icons.star} MRK${c.reset}`, icon: icons.star }
 }
 
 // 插件名称
@@ -182,23 +201,89 @@ class ChatAILogger {
         const line = `${c.gray}${'─'.repeat(50)}${c.reset}`
         console.log('')
         console.log(line)
-        console.log(`${c.bright}${c.green}  ✓ ${title}${c.reset}`)
+        console.log(`${c.bright}${c.green}  ${icons.success} ${title}${c.reset}`)
         if (items.length > 0) {
             console.log(line)
             for (const item of items) {
                 if (typeof item === 'string') {
-                    console.log(`${c.gray}    ➜${c.reset}  ${item}`)
+                    console.log(`${c.gray}    ${icons.arrow}${c.reset}  ${item}`)
                 } else if (item.value === '') {
-                    // 标题项（无值）
                     console.log(`  ${c.bright}${item.color || c.white}${item.label}${c.reset}`)
                 } else {
-                    // 带值的项
                     console.log(`  ${c.gray}${item.label}${c.reset}  ${item.color || c.cyan}${item.value}${c.reset}`)
                 }
             }
         }
         console.log(line)
         console.log('')
+    }
+
+    /**
+     * 打印模块加载信息（紧凑格式）
+     */
+    moduleLoad(moduleName, status = 'ok', detail = '') {
+        const icon = status === 'ok' ? `${c.green}${icons.check}${c.reset}` : 
+                     status === 'skip' ? `${c.gray}${icons.dot}${c.reset}` :
+                     `${c.red}${icons.cross}${c.reset}`
+        const detailStr = detail ? ` ${c.gray}${detail}${c.reset}` : ''
+        console.log(`  ${icon} ${c.cyan}${moduleName}${c.reset}${detailStr}`)
+    }
+
+    /**
+     * 打印加载进度
+     */
+    loadProgress(current, total, name) {
+        const percent = Math.round((current / total) * 100)
+        const bar = this.progressBar(percent, 20)
+        console.log(`  ${c.gray}[${bar}]${c.reset} ${c.cyan}${name}${c.reset}`)
+    }
+
+    /**
+     * 生成进度条
+     */
+    progressBar(percent, width = 20) {
+        const filled = Math.round(width * percent / 100)
+        const empty = width - filled
+        return `${c.green}${'█'.repeat(filled)}${c.reset}${c.gray}${'░'.repeat(empty)}${c.reset}`
+    }
+
+    /**
+     * 打印统计卡片
+     */
+    statsCard(title, stats = {}) {
+        const line = `${c.gray}${'─'.repeat(40)}${c.reset}`
+        console.log('')
+        console.log(`  ${c.bright}${c.cyan}${icons.sparkle} ${title}${c.reset}`)
+        console.log(`  ${line}`)
+        for (const [key, value] of Object.entries(stats)) {
+            const icon = this.getStatIcon(key)
+            console.log(`  ${icon} ${c.gray}${key}:${c.reset} ${c.white}${value}${c.reset}`)
+        }
+        console.log('')
+    }
+
+    /**
+     * 获取统计项图标
+     */
+    getStatIcon(key) {
+        const lower = key.toLowerCase()
+        if (lower.includes('模块') || lower.includes('module')) return icons.module
+        if (lower.includes('工具') || lower.includes('tool')) return icons.tool
+        if (lower.includes('渠道') || lower.includes('channel')) return icons.api
+        if (lower.includes('预设') || lower.includes('preset')) return icons.config
+        if (lower.includes('耗时') || lower.includes('time')) return icons.time
+        if (lower.includes('缓存') || lower.includes('cache')) return icons.cache
+        if (lower.includes('数据') || lower.includes('data')) return icons.database
+        return icons.dot
+    }
+
+    /**
+     * 打印服务启动信息
+     */
+    serviceStart(name, port = null, extra = '') {
+        const portStr = port ? ` ${c.yellow}:${port}${c.reset}` : ''
+        const extraStr = extra ? ` ${c.gray}${extra}${c.reset}` : ''
+        console.log(`  ${c.green}${icons.success}${c.reset} ${c.bright}${name}${c.reset}${portStr}${extraStr}`)
     }
 
     /**
@@ -236,6 +321,6 @@ class ChatAILogger {
 
 // 导出单例和颜色常量
 export const chatLogger = new ChatAILogger()
-export { colors, c }
+export { colors, c, icons }
 export default chatLogger
 
