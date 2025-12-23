@@ -1,6 +1,6 @@
 import config from '../config/config.js'
 import { segment, MessageApi } from '../src/utils/messageParser.js'
-import { usageStats } from '../src/services/stats/UsageStats.js'
+import { statsService } from '../src/services/stats/StatsService.js'
 import { imageService } from '../src/services/media/ImageService.js'
 import fs from 'fs'
 import path from 'path'
@@ -776,10 +776,8 @@ export class ImageGen extends plugin {
                     const data = await response.json()
                     const result = extractResult(data)
                     if (result && result.length) {
+                        // 记录绘图统计（使用统一入口）
                         try {
-                            const apiUsage = data.usage || {}
-                            const apiInputTokens = apiUsage.prompt_tokens || apiUsage.promptTokens || apiUsage.input_tokens || 0
-                            const apiOutputTokens = apiUsage.completion_tokens || apiUsage.completionTokens || apiUsage.output_tokens || 0
                             const estimateImageTokens = (base64OrUrl) => {
                                 if (!base64OrUrl) return 1000
                                 if (base64OrUrl.startsWith('data:') || base64OrUrl.startsWith('base64:')) {
@@ -788,17 +786,14 @@ export class ImageGen extends plugin {
                                 }
                                 return 1000 
                             }
-                            const textTokens = usageStats.estimateTokens(prompt || '')
-                            let inputTokens = apiInputTokens
-                            if (imageUrls.length > 0 && apiInputTokens < 1000) {
-                                const imgTokens = imageUrls.reduce((sum, url) => sum + estimateImageTokens(url), 0)
-                                inputTokens = textTokens + imgTokens
-                            }
-                            let outputTokens = apiOutputTokens
-                            if (result.length > 0 && apiOutputTokens < 1000) {
-                                outputTokens = result.reduce((sum, img) => sum + estimateImageTokens(img), 0)
-                            }
-                            await usageStats.record({
+                            // 估算输入tokens（文本 + 图片）
+                            const textTokens = statsService.estimateTokens(prompt || '')
+                            const inputImgTokens = imageUrls.reduce((sum, url) => sum + estimateImageTokens(url), 0)
+                            const inputTokens = textTokens + inputImgTokens
+                            // 估算输出tokens（生成的图片）
+                            const outputTokens = result.reduce((sum, img) => sum + estimateImageTokens(img), 0)
+                            
+                            await statsService.recordApiCall({
                                 channelId: `imagegen-api${apiIndex}`,
                                 channelName: `绘图API${apiIndex + 1}`,
                                 model: apiConf.model,
@@ -806,7 +801,13 @@ export class ImageGen extends plugin {
                                 outputTokens,
                                 duration: Date.now() - startTime,
                                 success: true,
-                                source: 'imagegen'
+                                source: 'imagegen',
+                                apiUsage: data.usage,
+                                request: {
+                                    prompt: prompt?.substring(0, 200),
+                                    imageCount: imageUrls.length,
+                                    model: apiConf.model
+                                }
                             })
                         } catch (e) { /* 统计失败不影响主流程 */ }
                         return {

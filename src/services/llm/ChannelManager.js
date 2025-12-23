@@ -3,7 +3,7 @@ const logger = chatLogger
 import config from '../../../config/config.js'
 import crypto from 'node:crypto'
 import { redisClient } from '../../core/cache/RedisClient.js'
-import { usageStats } from '../stats/UsageStats.js'
+import { statsService } from '../stats/StatsService.js'
 
 /**
  * 默认 API 地址
@@ -668,15 +668,14 @@ export class ChannelManager {
                         ?.map(c => c.text)
                         ?.join('') || ''
                     try {
-                        await usageStats.record({
+                        await statsService.recordApiCall({
                             channelId: id,
                             channelName: channel.name,
                             model: testModel,
-                            inputTokens: usageStats.estimateTokens('说一声你好'),
-                            outputTokens: usageStats.estimateTokens(replyText),
                             duration: Date.now() - testStartTime,
                             success: true,
                             source: 'health_check',
+                            responseText: replyText,
                             request: { messages: [{ role: 'user', content: '说一声你好' }], model: testModel },
                         })
                     } catch (e) { /* 统计失败不影响主流程 */ }
@@ -732,6 +731,7 @@ export class ChannelManager {
                 })
                 
                 const testModel = model || channel.models?.[0] || 'gemini-pro'
+                const geminiStartTime = Date.now()
                 const response = await client.sendMessage(
                     { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
                     { model: testModel, maxToken: 20 }
@@ -741,6 +741,20 @@ export class ChannelManager {
                     ?.filter(c => c.type === 'text')
                     ?.map(c => c.text)
                     ?.join('') || ''
+                
+                // 记录统计
+                try {
+                    await statsService.recordApiCall({
+                        channelId: id,
+                        channelName: channel.name,
+                        model: testModel,
+                        duration: Date.now() - geminiStartTime,
+                        success: true,
+                        source: 'health_check',
+                        responseText: replyText,
+                        request: { messages: [{ role: 'user', content: '说一声你好' }], model: testModel },
+                    })
+                } catch (e) { /* 统计失败不影响主流程 */ }
                 
                 channel.status = 'active'
                 channel.lastHealthCheck = Date.now()
@@ -763,6 +777,7 @@ export class ChannelManager {
                 })
                 
                 const testModel = model || channel.models?.[0] || 'claude-3-haiku-20240307'
+                const claudeStartTime = Date.now()
                 const response = await client.sendMessage(
                     { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
                     { model: testModel, maxToken: 20 }
@@ -772,6 +787,20 @@ export class ChannelManager {
                     ?.filter(c => c.type === 'text')
                     ?.map(c => c.text)
                     ?.join('') || ''
+                
+                // 记录统计
+                try {
+                    await statsService.recordApiCall({
+                        channelId: id,
+                        channelName: channel.name,
+                        model: testModel,
+                        duration: Date.now() - claudeStartTime,
+                        success: true,
+                        source: 'health_check',
+                        responseText: replyText,
+                        request: { messages: [{ role: 'user', content: '说一声你好' }], model: testModel },
+                    })
+                } catch (e) { /* 统计失败不影响主流程 */ }
                 
                 channel.status = 'active'
                 channel.lastHealthCheck = Date.now()

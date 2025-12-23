@@ -16,7 +16,6 @@ import { mcpManager } from '../../mcp/McpManager.js'
 import { getScopeManager } from '../scope/ScopeManager.js'
 import { databaseService } from '../storage/DatabaseService.js'
 import { statsService } from '../stats/StatsService.js'
-import { usageStats } from '../stats/UsageStats.js'
 
 let scopeManager = null
 const ensureScopeManager = async () => {
@@ -839,45 +838,34 @@ export class ChatService {
                 if (finalUsage) channelManager.reportUsage(channel.id, finalUsage?.totalTokens || 0)
             }
             
-            // 记录统计
+            // 记录统计（使用统一入口）
             try {
-                statsService.recordModelCall({
-                    model: debugInfo?.usedModel || llmModel,
-                    channelId: channel?.id,
-                    userId,
-                    inputTokens: finalUsage?.promptTokens || 0,
-                    outputTokens: finalUsage?.completionTokens || 0,
-                    success: !!finalResponse?.length
-                })
-                
-                // 记录详细使用统计（使用插件计算 Token，不依赖 API 返回）
                 const keyInfo = channel?.lastUsedKey || {}
                 const requestDuration = Date.now() - requestStartTime
-                // 使用插件计算 tokens
-                const inputTokens = usageStats.estimateMessagesTokens(messages)
                 const responseText = finalResponse?.filter(c => c.type === 'text').map(c => c.text).join('') || ''
-                const outputTokens = usageStats.estimateTokens(responseText)
                 const requestSuccess = !!finalResponse?.length
-                await usageStats.record({
+                
+                await statsService.recordApiCall({
                     channelId: channel?.id || `no-channel-${llmModel}`,
                     channelName: channel?.name || `无渠道(${llmModel})`,
                     model: debugInfo?.usedModel || llmModel,
                     keyIndex: keyInfo.keyIndex ?? -1,
                     keyName: keyInfo.keyName || '',
                     strategy: keyInfo.strategy || '',
-                    inputTokens,
-                    outputTokens,
-                    totalTokens: inputTokens + outputTokens,
                     duration: requestDuration,
                     success: requestSuccess,
-                    retryCount: totalRetryCount || 0,
-                    channelSwitched: debugInfo?.fallbackUsed || false,
-                    previousChannelId: debugInfo?.fallbackFrom || null,
+                    error: !requestSuccess ? lastError?.message : null,
                     source: 'chat',
                     userId,
                     groupId: groupId || null,
                     stream: useStreaming,
-                    // 记录完整请求
+                    channelSwitched: debugInfo?.fallbackUsed || false,
+                    previousChannelId: debugInfo?.fallbackFrom || null,
+                    // Token计算：优先使用API返回值
+                    apiUsage: finalUsage,
+                    messages,
+                    responseText,
+                    // 请求详情
                     request: { 
                         messages, 
                         model: debugInfo?.usedModel || llmModel,
@@ -887,9 +875,7 @@ export class ChatService {
                         topP: requestOptions.topP,
                         systemPrompt: systemPrompt?.substring(0, 500) + (systemPrompt?.length > 500 ? '...' : ''),
                     },
-                    // 仅失败时记录响应
                     response: !requestSuccess ? { error: lastError?.message, contents: finalResponse } : null,
-                    error: !requestSuccess ? lastError?.message : null,
                 })
                 
                 // 记录工具调用

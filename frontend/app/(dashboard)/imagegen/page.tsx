@@ -121,7 +121,7 @@ export default function ImageGenPage() {
   const [addPresetOpen, setAddPresetOpen] = useState(false)
   const [editPresetOpen, setEditPresetOpen] = useState(false)
   const [newSource, setNewSource] = useState({ name: '', url: '', enabled: true })
-  const [newPreset, setNewPreset] = useState({ keywords: '', prompt: '', needImage: true, enableSplit: false, splitCols: 6, splitRows: 4 })
+  const [newPreset, setNewPreset] = useState({ keywords: '', prompt: '', needImage: true, enableSplit: false, splitCols: 6, splitRows: 4, splitPadding: 0 })
   const [editingPreset, setEditingPreset] = useState<{
     uid: string
     source: string
@@ -131,6 +131,9 @@ export default function ImageGenPage() {
     enableSplit: boolean
     splitCols: number
     splitRows: number
+    splitPadding: number
+    outputWidth: number
+    outputHeight: number
   } | null>(null)
 
   // 加载数据（showLoading 控制是否显示加载状态）
@@ -228,12 +231,12 @@ export default function ImageGenPage() {
         needImage: newPreset.needImage,
       }
       if (newPreset.enableSplit) {
-        data.splitGrid = { cols: newPreset.splitCols, rows: newPreset.splitRows }
+        data.splitGrid = { cols: newPreset.splitCols, rows: newPreset.splitRows, padding: newPreset.splitPadding }
       }
       await imageGenApi.addCustomPreset(data)
       toast.success('预设添加成功')
       setAddPresetOpen(false)
-      setNewPreset({ keywords: '', prompt: '', needImage: true, enableSplit: false, splitCols: 6, splitRows: 4 })
+      setNewPreset({ keywords: '', prompt: '', needImage: true, enableSplit: false, splitCols: 6, splitRows: 4, splitPadding: 0 })
       await loadData(false)
     } catch (error: any) {
       toast.error('添加失败', { description: error.message })
@@ -283,7 +286,10 @@ export default function ImageGenPage() {
       needImage: preset.needImage,
       enableSplit: !!(preset.splitGrid?.cols && preset.splitGrid?.rows),
       splitCols: preset.splitGrid?.cols || 6,
-      splitRows: preset.splitGrid?.rows || 4
+      splitRows: preset.splitGrid?.rows || 4,
+      splitPadding: (preset.splitGrid as any)?.padding || 0,
+      outputWidth: (preset as any).outputWidth || 0,
+      outputHeight: (preset as any).outputHeight || 0
     })
     setEditPresetOpen(true)
   }
@@ -305,7 +311,7 @@ export default function ImageGenPage() {
         needImage: editingPreset.needImage
       }
       if (editingPreset.enableSplit) {
-        data.splitGrid = { cols: editingPreset.splitCols, rows: editingPreset.splitRows }
+        data.splitGrid = { cols: editingPreset.splitCols, rows: editingPreset.splitRows, padding: editingPreset.splitPadding || 0 }
       } else {
         data.splitGrid = null
       }
@@ -654,7 +660,10 @@ export default function ImageGenPage() {
                                   needImage: preset.needImage,
                                   enableSplit: !!(preset.splitGrid?.cols && preset.splitGrid?.rows),
                                   splitCols: preset.splitGrid?.cols || 6,
-                                  splitRows: preset.splitGrid?.rows || 4
+                                  splitRows: preset.splitGrid?.rows || 4,
+                                  splitPadding: (preset.splitGrid as any)?.padding || 0,
+                                  outputWidth: 0,
+                                  outputHeight: 0
                                 })
                                 setEditPresetOpen(true)
                               }}
@@ -984,39 +993,76 @@ export default function ImageGenPage() {
               <Label>需要用户提供图片</Label>
             </div>
             <Separator />
+            {/* 表情切割配置 */}
             <div className="space-y-3">
-              <div className="flex items-center space-x-2">
-                <Switch
-                  checked={newPreset.enableSplit}
-                  onCheckedChange={(checked) => setNewPreset(p => ({ ...p, enableSplit: checked }))}
-                />
-                <Label>启用图片切割</Label>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    checked={newPreset.enableSplit}
+                    onCheckedChange={(checked) => setNewPreset(p => ({ ...p, enableSplit: checked }))}
+                  />
+                  <Label>启用图片切割（表情包模式）</Label>
+                </div>
+                {newPreset.enableSplit && (
+                  <Badge variant="secondary">
+                    <Grid3X3 className="w-3 h-3 mr-1" />
+                    {newPreset.splitCols}×{newPreset.splitRows} = {newPreset.splitCols * newPreset.splitRows}个
+                  </Badge>
+                )}
               </div>
               {newPreset.enableSplit && (
-                <div className="grid grid-cols-2 gap-4 pl-6">
-                  <div className="space-y-2">
-                    <Label className="text-sm">列数 (cols)</Label>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={10}
-                      value={newPreset.splitCols}
-                      onChange={(e) => setNewPreset(p => ({ ...p, splitCols: parseInt(e.target.value) || 6 }))}
-                    />
+                <div className="p-4 border rounded-lg bg-muted/30 space-y-4">
+                  <div className="flex items-start gap-2 p-2 bg-blue-50 dark:bg-blue-950/30 rounded text-xs text-blue-700 dark:text-blue-300">
+                    <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-medium">表情切割说明</p>
+                      <p>生成的图片将按网格切割成多个小图，通常用于Q版表情包生成。建议在提示词中指定生成 4K/16:9 图片以获得最佳效果。</p>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label className="text-sm">行数 (rows)</Label>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={10}
-                      value={newPreset.splitRows}
-                      onChange={(e) => setNewPreset(p => ({ ...p, splitRows: parseInt(e.target.value) || 4 }))}
-                    />
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-sm">列数 (cols)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={newPreset.splitCols}
+                        onChange={(e) => setNewPreset(p => ({ ...p, splitCols: parseInt(e.target.value) || 6 }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-sm">行数 (rows)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={newPreset.splitRows}
+                        onChange={(e) => setNewPreset(p => ({ ...p, splitRows: parseInt(e.target.value) || 4 }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-sm">边距 (px)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={50}
+                        value={newPreset.splitPadding}
+                        onChange={(e) => setNewPreset(p => ({ ...p, splitPadding: parseInt(e.target.value) || 0 }))}
+                      />
+                    </div>
                   </div>
-                  <p className="col-span-2 text-xs text-muted-foreground">
-                    将生成的图片切割为 {newPreset.splitCols} × {newPreset.splitRows} = {newPreset.splitCols * newPreset.splitRows} 个小图
-                  </p>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div className="p-2 bg-muted rounded">
+                      <span className="text-muted-foreground">总表情数：</span>
+                      <span className="font-medium ml-1">{newPreset.splitCols * newPreset.splitRows} 个</span>
+                    </div>
+                    <div className="p-2 bg-muted rounded">
+                      <span className="text-muted-foreground">单个尺寸(4K)：</span>
+                      <span className="font-medium ml-1">
+                        约 {Math.floor(3840 / newPreset.splitCols)}×{Math.floor(2160 / newPreset.splitRows)} px
+                      </span>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -1065,39 +1111,76 @@ export default function ImageGenPage() {
                 <Label>需要用户提供图片</Label>
               </div>
               <Separator />
+              {/* 表情切割配置 */}
               <div className="space-y-3">
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    checked={editingPreset.enableSplit}
-                    onCheckedChange={(checked) => setEditingPreset(p => p ? { ...p, enableSplit: checked } : null)}
-                  />
-                  <Label>启用图片切割</Label>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Switch
+                      checked={editingPreset.enableSplit}
+                      onCheckedChange={(checked) => setEditingPreset(p => p ? { ...p, enableSplit: checked } : null)}
+                    />
+                    <Label>启用图片切割（表情包模式）</Label>
+                  </div>
+                  {editingPreset.enableSplit && (
+                    <Badge variant="secondary">
+                      <Grid3X3 className="w-3 h-3 mr-1" />
+                      {editingPreset.splitCols}×{editingPreset.splitRows} = {editingPreset.splitCols * editingPreset.splitRows}个
+                    </Badge>
+                  )}
                 </div>
                 {editingPreset.enableSplit && (
-                  <div className="grid grid-cols-2 gap-4 pl-6">
-                    <div className="space-y-2">
-                      <Label className="text-sm">列数 (cols)</Label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={10}
-                        value={editingPreset.splitCols}
-                        onChange={(e) => setEditingPreset(p => p ? { ...p, splitCols: parseInt(e.target.value) || 6 } : null)}
-                      />
+                  <div className="p-4 border rounded-lg bg-muted/30 space-y-4">
+                    <div className="flex items-start gap-2 p-2 bg-blue-50 dark:bg-blue-950/30 rounded text-xs text-blue-700 dark:text-blue-300">
+                      <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-medium">表情切割说明</p>
+                        <p>生成的图片将按网格切割成多个小图，通常用于Q版表情包生成。建议在提示词中指定生成 4K/16:9 图片以获得最佳效果。</p>
+                      </div>
                     </div>
-                    <div className="space-y-2">
-                      <Label className="text-sm">行数 (rows)</Label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={10}
-                        value={editingPreset.splitRows}
-                        onChange={(e) => setEditingPreset(p => p ? { ...p, splitRows: parseInt(e.target.value) || 4 } : null)}
-                      />
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label className="text-sm">列数 (cols)</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={10}
+                          value={editingPreset.splitCols}
+                          onChange={(e) => setEditingPreset(p => p ? { ...p, splitCols: parseInt(e.target.value) || 6 } : null)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-sm">行数 (rows)</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={10}
+                          value={editingPreset.splitRows}
+                          onChange={(e) => setEditingPreset(p => p ? { ...p, splitRows: parseInt(e.target.value) || 4 } : null)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-sm">边距 (px)</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={50}
+                          value={editingPreset.splitPadding}
+                          onChange={(e) => setEditingPreset(p => p ? { ...p, splitPadding: parseInt(e.target.value) || 0 } : null)}
+                        />
+                      </div>
                     </div>
-                    <p className="col-span-2 text-xs text-muted-foreground">
-                      将生成的图片切割为 {editingPreset.splitCols} × {editingPreset.splitRows} = {editingPreset.splitCols * editingPreset.splitRows} 个小图
-                    </p>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div className="p-2 bg-muted rounded">
+                        <span className="text-muted-foreground">总表情数：</span>
+                        <span className="font-medium ml-1">{editingPreset.splitCols * editingPreset.splitRows} 个</span>
+                      </div>
+                      <div className="p-2 bg-muted rounded">
+                        <span className="text-muted-foreground">单个尺寸(4K)：</span>
+                        <span className="font-medium ml-1">
+                          约 {Math.floor(3840 / editingPreset.splitCols)}×{Math.floor(2160 / editingPreset.splitRows)} px
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

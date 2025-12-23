@@ -5,9 +5,12 @@
 import { databaseService } from '../storage/DatabaseService.js'
 import { toolCallStats } from './ToolCallStats.js'
 import { usageStats } from './UsageStats.js'
+import { chatLogger } from '../../core/utils/logger.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+const logger = chatLogger
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -91,10 +94,19 @@ class StatsService {
     }
 
     /**
-     * 记录模型调用
+     * 记录模型调用（内部方法，仅更新内存统计）
+     * @deprecated 请使用 recordApiCall() 代替
      * @param {Object} options
      */
     recordModelCall({ model, channelId, userId, inputTokens = 0, outputTokens = 0, success = true }) {
+        this._updateModelStats({ model, channelId, userId, inputTokens, outputTokens, success })
+    }
+
+    /**
+     * 更新内存中的模型统计（内部方法）
+     * @private
+     */
+    _updateModelStats({ model, channelId, userId, inputTokens = 0, outputTokens = 0, success = true }) {
         this.init()
         
         this.stats.models.total++
@@ -141,6 +153,153 @@ class StatsService {
         this.stats.tokens.byModel[model].output += outputTokens
         
         this.save()
+    }
+
+    /**
+     * 统一的API调用记录入口（推荐使用）
+     * 同时更新内存统计和Redis详细记录，确保数据一致性
+     * 
+     * @param {Object} options - 调用信息
+     * @param {string} options.channelId - 渠道ID
+     * @param {string} options.channelName - 渠道名称
+     * @param {string} options.model - 模型名称
+     * @param {number} [options.keyIndex] - Key索引
+     * @param {string} [options.keyName] - Key名称
+     * @param {string} [options.strategy] - 轮询策略
+     * @param {number} [options.inputTokens] - 输入tokens（优先使用API返回值，否则估算）
+     * @param {number} [options.outputTokens] - 输出tokens（优先使用API返回值，否则估算）
+     * @param {number} [options.duration] - 耗时(ms)
+     * @param {boolean} [options.success=true] - 是否成功
+     * @param {string} [options.error] - 错误信息
+     * @param {string} [options.source='chat'] - 请求来源
+     * @param {string} [options.userId] - 用户ID
+     * @param {string} [options.groupId] - 群组ID
+     * @param {boolean} [options.stream] - 是否流式
+     * @param {Object} [options.request] - 请求信息
+     * @param {Object} [options.response] - 响应信息（仅失败时）
+     * @param {boolean} [options.channelSwitched] - 是否切换了渠道
+     * @param {string} [options.previousChannelId] - 切换前的渠道ID
+     * @param {Array} [options.messages] - 消息数组（用于估算tokens）
+     * @param {string} [options.responseText] - 响应文本（用于估算tokens）
+     * @param {Object} [options.apiUsage] - API返回的usage对象
+     * @returns {Promise<string>} 记录ID
+     */
+    async recordApiCall(options) {
+        const {
+            channelId,
+            channelName,
+            model,
+            keyIndex = -1,
+            keyName = '',
+            strategy = '',
+            inputTokens: providedInputTokens,
+            outputTokens: providedOutputTokens,
+            duration = 0,
+            success = true,
+            error = null,
+            source = 'chat',
+            userId = null,
+            groupId = null,
+            stream = false,
+            request = null,
+            response = null,
+            channelSwitched = false,
+            previousChannelId = null,
+            messages = null,
+            responseText = null,
+            apiUsage = null
+        } = options
+
+        // 统一的Token计算逻辑：优先使用API返回值，否则使用估算
+        let inputTokens = providedInputTokens
+        let outputTokens = providedOutputTokens
+        let isEstimated = false
+
+        // 如果有API返回的usage，优先使用
+        if (apiUsage) {
+            if (apiUsage.prompt_tokens !== undefined) {
+                inputTokens = apiUsage.prompt_tokens
+            } else if (apiUsage.promptTokens !== undefined) {
+                inputTokens = apiUsage.promptTokens
+            } else if (apiUsage.input_tokens !== undefined) {
+                inputTokens = apiUsage.input_tokens
+            }
+            
+            if (apiUsage.completion_tokens !== undefined) {
+                outputTokens = apiUsage.completion_tokens
+            } else if (apiUsage.completionTokens !== undefined) {
+                outputTokens = apiUsage.completionTokens
+            } else if (apiUsage.output_tokens !== undefined) {
+                outputTokens = apiUsage.output_tokens
+            }
+        }
+
+        // 如果仍然没有token数据，使用估算
+        if (inputTokens === undefined || inputTokens === null) {
+            if (messages) {
+                inputTokens = usageStats.estimateMessagesTokens(messages)
+            } else {
+                inputTokens = 0
+            }
+            isEstimated = true
+        }
+
+        if (outputTokens === undefined || outputTokens === null) {
+            if (responseText) {
+                outputTokens = usageStats.estimateTokens(responseText)
+            } else {
+                outputTokens = 0
+            }
+            isEstimated = true
+        }
+
+        const totalTokens = inputTokens + outputTokens
+
+        // 1. 更新内存统计（同步）
+        try {
+            this._updateModelStats({
+                model,
+                channelId,
+                userId,
+                inputTokens,
+                outputTokens,
+                success
+            })
+        } catch (err) {
+            logger.warn('[StatsService] 更新内存统计失败:', err.message)
+        }
+
+        // 2. 记录到Redis详细统计（异步）
+        let recordId = null
+        try {
+            recordId = await usageStats.record({
+                channelId: channelId || 'unknown',
+                channelName: channelName || 'Unknown',
+                model: model || 'unknown',
+                keyIndex,
+                keyName,
+                strategy,
+                inputTokens,
+                outputTokens,
+                totalTokens,
+                duration,
+                success,
+                error,
+                channelSwitched,
+                previousChannelId,
+                source,
+                userId,
+                groupId,
+                stream,
+                isEstimated,
+                request,
+                response: !success ? response : null
+            })
+        } catch (err) {
+            logger.warn('[StatsService] 记录详细统计失败:', err.message)
+        }
+
+        return recordId
     }
 
     /**
@@ -378,6 +537,77 @@ class StatsService {
             toolCalls: toolCallData,
             exportTime: Date.now()
         }
+    }
+
+    /**
+     * 获取今日API使用统计
+     */
+    async getUsageTodayStats() {
+        return await usageStats.getTodayStats()
+    }
+
+    /**
+     * 获取最近的使用记录
+     * @param {number} limit - 数量限制
+     * @param {Object} filter - 过滤条件
+     */
+    async getUsageRecent(limit = 50, filter = {}) {
+        return await usageStats.getRecent(limit, filter)
+    }
+
+    /**
+     * 获取模型使用排行
+     * @param {number} limit - 数量限制
+     */
+    async getModelRanking(limit = 10) {
+        return await usageStats.getModelRanking(limit)
+    }
+
+    /**
+     * 获取渠道使用排行
+     * @param {number} limit - 数量限制
+     */
+    async getChannelRanking(limit = 10) {
+        return await usageStats.getChannelRanking(limit)
+    }
+
+    /**
+     * 获取渠道统计
+     * @param {string} channelId - 渠道ID
+     */
+    async getChannelUsageStats(channelId) {
+        return await usageStats.getChannelStats(channelId)
+    }
+
+    /**
+     * 获取用户统计
+     * @param {string} userId - 用户ID
+     */
+    async getUserUsageStats(userId) {
+        return await usageStats.getUserStats(userId)
+    }
+
+    /**
+     * 清除使用统计
+     */
+    async clearUsageStats() {
+        return await usageStats.clear()
+    }
+
+    /**
+     * Token估算辅助方法
+     * @param {string} text - 文本
+     */
+    estimateTokens(text) {
+        return usageStats.estimateTokens(text)
+    }
+
+    /**
+     * 消息数组Token估算
+     * @param {Array} messages - 消息数组
+     */
+    estimateMessagesTokens(messages) {
+        return usageStats.estimateMessagesTokens(messages)
     }
 }
 
