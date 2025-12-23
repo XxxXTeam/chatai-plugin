@@ -419,6 +419,84 @@ export class ImageService {
     }
 
     /**
+     * 切割网格图片（用于表情包等）
+     * @param {Buffer|string} input - 图片Buffer或URL
+     * @param {Object} options - 切割选项
+     * @param {number} [options.cols=6] - 列数
+     * @param {number} [options.rows=4] - 行数
+     * @param {number} [options.padding=0] - 内边距（像素）
+     * @returns {Promise<Buffer[]>} 切割后的图片Buffer数组
+     */
+    async splitGridImage(input, options = {}) {
+        const { cols = 6, rows = 4, padding = 0 } = options
+        
+        let buffer
+        if (Buffer.isBuffer(input)) {
+            buffer = input
+        } else if (typeof input === 'string') {
+            if (input.startsWith('http://') || input.startsWith('https://')) {
+                const response = await fetch(input)
+                if (!response.ok) throw new Error(`下载图片失败: ${response.status}`)
+                buffer = Buffer.from(await response.arrayBuffer())
+            } else if (input.startsWith('base64://')) {
+                buffer = Buffer.from(input.replace('base64://', ''), 'base64')
+            } else if (input.startsWith('data:image')) {
+                const base64Data = input.split(',')[1]
+                buffer = Buffer.from(base64Data, 'base64')
+            } else {
+                throw new Error('不支持的图片格式')
+            }
+        } else {
+            throw new Error('输入必须是Buffer或URL字符串')
+        }
+
+        const image = sharp(buffer)
+        const metadata = await image.metadata()
+        const { width, height } = metadata
+
+        const cellWidth = Math.floor((width - padding * 2) / cols)
+        const cellHeight = Math.floor((height - padding * 2) / rows)
+
+        const results = []
+        
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < cols; col++) {
+                const left = padding + col * cellWidth
+                const top = padding + row * cellHeight
+                
+                try {
+                    const cellBuffer = await sharp(buffer)
+                        .extract({
+                            left,
+                            top,
+                            width: cellWidth,
+                            height: cellHeight
+                        })
+                        .png()
+                        .toBuffer()
+                    
+                    results.push(cellBuffer)
+                } catch (err) {
+                    logger.warn(`[ImageService] 切割单元格失败 [${row},${col}]:`, err.message)
+                }
+            }
+        }
+
+        return results
+    }
+
+    /**
+     * 切割表情包图片并返回base64数组
+     * @param {Buffer|string} input - 图片Buffer或URL
+     * @param {Object} options - 切割选项
+     * @returns {Promise<string[]>} base64图片数组
+     */
+    async splitEmojiGrid(input, options = {}) {
+        const buffers = await this.splitGridImage(input, options)
+        return buffers.map(buf => `base64://${buf.toString('base64')}`)
+    }
+
+    /**
      * Extract text from image (OCR)
      * @param {string} id Image ID
      * @param {string} [lang='eng'] Language code

@@ -1,6 +1,7 @@
 import config from '../config/config.js'
 import { segment, MessageApi } from '../src/utils/messageParser.js'
 import { usageStats } from '../src/services/stats/UsageStats.js'
+import { imageService } from '../src/services/media/ImageService.js'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -23,8 +24,9 @@ class PresetManager {
         return [
             { keywords: ['手办', '手办化', '变手办', '转手办'], needImage: true,
               prompt: 'Please accurately transform the main subject in this photo into a realistic, masterpiece-like 1/7 scale PVC statue. Behind this statue, a packaging box should be placed: the box has a large clear front window on its front side, and is printed with subject artwork, product name, brand logo, barcode, as well as a small specifications or authenticity verification panel. A small price tag sticker must also be attached to one corner of the box. Meanwhile, a computer monitor is placed at the back, and the monitor screen needs to display the ZBrush modeling process of this statue. In front of the packaging box, this statue should be placed on a round plastic base. The statue must have 3D dimensionality and a sense of realism, and the texture of the PVC material needs to be clearly represented. The human figure\'s expression and movements must be exactly consistent with those in the photo.' },
-            { keywords: ['Q版', 'q版', '表情包'], needImage: true,
-              prompt: '请以图片中的主要人物生成q版半身像表情符号包中的人物形象给我。丰富多彩的手绘风格，采用4x6的布局，涵盖了各种常见的聊天用语。要求:1.注意正确的头饰。2.不要复制原始图像。3.所有注释都应该是手写的简体中文。4.每个表情符号行动应该是独特的。5.生成的图像需要是4K，分辨率为16:9。' },
+            { keywords: ['Q版', 'q版', '表情包', '表情', 'p表情', 'P表情', '表情切割'], needImage: true,
+              prompt: '请以图片中的主要人物生成q版半身像表情符号包中的人物形象给我。丰富多彩的手绘风格，采用4x6的布局，涵盖了各种常见的聊天用语。要求:1.注意正确的头饰。2.不要复制原始图像。3.所有注释都应该是手写的简体中文。4.每个表情符号行动应该是独特的。5.生成的图像需要是4K，分辨率为16:9。',
+              splitGrid: { cols: 6, rows: 4 } },
             { keywords: ['动漫化', '二次元化', '卡通化'], needImage: true,
               prompt: '将图片中的人物转换为高质量动漫风格，保持人物的主要特征和表情，使用精美的日系动漫画风，色彩鲜艳，线条流畅。' },
             { keywords: ['赛博朋克', '赛博'], needImage: true,
@@ -45,12 +47,22 @@ class PresetManager {
             config.set('features.imageGen.builtinPresets', builtinPresets)
         } else {
             let needSave = false
+            const defaultPresets = this.getDefaultBuiltinPresets()
             builtinPresets = builtinPresets.map(p => {
+                let updated = { ...p }
                 if (!p.uid) {
                     needSave = true
-                    return { ...p, uid: this.generateUid() }
+                    updated.uid = this.generateUid()
                 }
-                return p
+                // 从默认预设中合并splitGrid配置
+                const matchDefault = defaultPresets.find(dp => 
+                    dp.keywords.some(k => p.keywords?.includes(k))
+                )
+                if (matchDefault?.splitGrid && !p.splitGrid) {
+                    updated.splitGrid = matchDefault.splitGrid
+                    needSave = true
+                }
+                return updated
             })
             if (needSave) {
                 config.set('features.imageGen.builtinPresets', builtinPresets)
@@ -163,11 +175,25 @@ class PresetManager {
     mergeAllPresets() {
         const usedKeywords = new Set()
         const merged = []
+        // 表情相关关键词，匹配时自动添加splitGrid
+        const emojiKeywords = ['q版', '表情包', '表情', 'p表情', '表情切割']
+        const defaultSplitGrid = { cols: 6, rows: 4 }
+        
         const addPresets = (presets) => {
             for (const p of presets) {
                 const newKeywords = p.keywords.filter(k => !usedKeywords.has(k.toLowerCase()))
                 if (newKeywords.length > 0) {
-                    merged.push({ ...p, keywords: newKeywords })
+                    let preset = { ...p, keywords: newKeywords }
+                    // 如果预设没有splitGrid但关键词匹配表情类，自动添加
+                    if (!preset.splitGrid) {
+                        const hasEmojiKeyword = p.keywords.some(k => 
+                            emojiKeywords.includes(k.toLowerCase())
+                        )
+                        if (hasEmojiKeyword) {
+                            preset.splitGrid = defaultSplitGrid
+                        }
+                    }
+                    merged.push(preset)
                     newKeywords.forEach(k => usedKeywords.add(k.toLowerCase()))
                 }
             }
@@ -582,6 +608,8 @@ export class ImageGen extends plugin {
         const preset = presetMgr.findPreset(e.msg)
         if (!preset) return false
         
+        logger.debug('[ImageGen] 匹配预设:', preset.keywords, 'splitGrid:', preset.splitGrid)
+        
         const urls = preset.needImage ? await this.getAllImages(e) : []
         if (preset.needImage && !urls.length) {
             await e.reply('请发送或引用至少1张图片', true)
@@ -589,14 +617,21 @@ export class ImageGen extends plugin {
         }
         
         const pureMsg = e.msg.replace(/^#?/, '')
-        await e.reply(`正在生成${pureMsg}效果，请稍候...`, true, { recallMsg: 60 })
+        const hasSplit = !!(preset.splitGrid && preset.splitGrid.cols && preset.splitGrid.rows)
+        logger.debug('[ImageGen] hasSplit:', hasSplit)
+        await e.reply(`正在生成${pureMsg}效果，请稍候...${hasSplit ? '（完成后将自动切割）' : ''}`, true, { recallMsg: 60 })
         
         try {
             const result = await this.generateImage({
                 prompt: preset.prompt,
                 imageUrls: urls.slice(0, this.maxImages)
             })
-            await this.sendResult(e, result)
+            
+            if (hasSplit && result.success && result.images?.length > 0) {
+                await this.sendSplitResult(e, result, preset.splitGrid)
+            } else {
+                await this.sendResult(e, result)
+            }
         } catch (err) {
             logger.error('[ImageGen] 预设处理失败:', err)
             await e.reply(`处理失败: ${err.message}`, true)
@@ -975,6 +1010,109 @@ export class ImageGen extends plugin {
             await e.reply(msgs, true)
         } else {
             await e.reply(`❌ ${result.error}`, true)
+        }
+    }
+
+    /**
+     * 发送切割后的表情包结果（使用合并转发）
+     * @param {Object} e - 消息事件
+     * @param {Object} result - 生成结果
+     * @param {Object} splitGrid - 切割配置 { cols, rows }
+     */
+    async sendSplitResult(e, result, splitGrid) {
+        if (!result.success) {
+            await e.reply(`❌ ${result.error}`, true)
+            return
+        }
+
+        try {
+            await e.reply([
+                ...result.images.map(url => segment.image(url)),
+                `✅ 表情生成完成，正在切割...请稍等`
+            ], true)
+
+            const { cols = 6, rows = 4 } = splitGrid
+            const bot = e.bot || Bot
+            const botInfo = {
+                user_id: bot.uin || bot.self_id || e.self_id,
+                nickname: bot.nickname || 'Bot'
+            }
+            
+            for (const imageUrl of result.images) {
+                try {
+                    const splitImages = await imageService.splitEmojiGrid(imageUrl, { cols, rows })
+                    
+                    if (splitImages.length === 0) {
+                        await e.reply('切割失败：未能生成切割图片', true)
+                        continue
+                    }
+
+                    // 构建合并转发消息节点
+                    const forwardNodes = splitImages.map((img, idx) => ({
+                        user_id: botInfo.user_id,
+                        nickname: botInfo.nickname,
+                        message: [segment.image(img)]
+                    }))
+                    
+                    // 添加完成提示节点
+                    forwardNodes.push({
+                        user_id: botInfo.user_id,
+                        nickname: botInfo.nickname,
+                        message: [`✅ 表情切割完成！共 ${splitImages.length} 个表情 (${result.duration})`]
+                    })
+
+                    // 发送合并转发
+                    let sent = false
+                    if (e.isGroup && e.group?.makeForwardMsg) {
+                        const forwardMsg = await e.group.makeForwardMsg(forwardNodes)
+                        if (forwardMsg) {
+                            await e.group.sendMsg(forwardMsg)
+                            sent = true
+                        }
+                    } else if (!e.isGroup && e.friend?.makeForwardMsg) {
+                        const forwardMsg = await e.friend.makeForwardMsg(forwardNodes)
+                        if (forwardMsg) {
+                            await e.friend.sendMsg(forwardMsg)
+                            sent = true
+                        }
+                    }
+                    
+                    // 回退：使用 Bot.makeForwardMsg
+                    if (!sent && typeof bot?.makeForwardMsg === 'function') {
+                        const forwardMsg = await bot.makeForwardMsg(forwardNodes)
+                        if (e.group?.sendMsg) {
+                            await e.group.sendMsg(forwardMsg)
+                            sent = true
+                        } else if (e.friend?.sendMsg) {
+                            await e.friend.sendMsg(forwardMsg)
+                            sent = true
+                        }
+                    }
+                    
+                    // 最后回退：分批发送
+                    if (!sent) {
+                        logger.warn('[ImageGen] 合并转发不可用，回退到分批发送')
+                        const batchSize = 10
+                        for (let i = 0; i < splitImages.length; i += batchSize) {
+                            const batch = splitImages.slice(i, Math.min(i + batchSize, splitImages.length))
+                            const batchMsgs = batch.map(img => segment.image(img))
+                            batchMsgs.push(`表情 ${i + 1}-${Math.min(i + batchSize, splitImages.length)} / ${splitImages.length}`)
+                            await e.reply(batchMsgs, true)
+                            if (i + batchSize < splitImages.length) {
+                                await new Promise(r => setTimeout(r, 500))
+                            }
+                        }
+                        await e.reply(`✅ 表情切割完成！共 ${splitImages.length} 个表情 (${result.duration})`, true)
+                    }
+                    
+                } catch (splitErr) {
+                    logger.error('[ImageGen] 表情切割失败:', splitErr)
+                    await e.reply(`切割失败: ${splitErr.message}，已发送原图`, true)
+                }
+            }
+        } catch (err) {
+            logger.error('[ImageGen] sendSplitResult 失败:', err)
+            await this.sendResult(e, result)
         }
     }
     async getAllImages(e) {

@@ -3891,14 +3891,18 @@ export default {
         // POST /api/imagegen/custom-presets - 添加自定义预设
         this.app.post('/api/imagegen/custom-presets', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { keywords, prompt, needImage = true } = req.body
+                const { keywords, prompt, needImage = true, splitGrid } = req.body
                 if (!keywords || !prompt) {
                     return res.status(400).json(ChaiteResponse.fail(null, '缺少 keywords 或 prompt'))
                 }
                 
                 const keywordArr = Array.isArray(keywords) ? keywords : [keywords]
                 const presets = config.get('features.imageGen.customPresets') || []
-                presets.push({ keywords: keywordArr, prompt, needImage })
+                const newPreset = { keywords: keywordArr, prompt, needImage }
+                if (splitGrid && splitGrid.cols && splitGrid.rows) {
+                    newPreset.splitGrid = { cols: splitGrid.cols, rows: splitGrid.rows }
+                }
+                presets.push(newPreset)
                 config.set('features.imageGen.customPresets', presets)
                 
                 // 热重载
@@ -3938,7 +3942,7 @@ export default {
         this.app.put('/api/imagegen/remote-presets/:source/:uid', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const { source, uid } = req.params
-                const { keywords, prompt, needImage } = req.body
+                const { keywords, prompt, needImage, splitGrid } = req.body
                 
                 if (!keywords || !prompt) {
                     return res.status(400).json(ChaiteResponse.fail(null, '缺少 keywords 或 prompt'))
@@ -3961,12 +3965,19 @@ export default {
                 
                 // 更新预设
                 const keywordArr = Array.isArray(keywords) ? keywords : keywords.split(/[,，\s]+/).filter(k => k.trim())
-                sourcePresets[index] = {
+                const updatedPreset = {
                     ...sourcePresets[index],
                     keywords: keywordArr,
                     prompt,
                     needImage: needImage !== false
                 }
+                // 处理splitGrid配置
+                if (splitGrid && splitGrid.cols && splitGrid.rows) {
+                    updatedPreset.splitGrid = { cols: splitGrid.cols, rows: splitGrid.rows }
+                } else {
+                    delete updatedPreset.splitGrid
+                }
+                sourcePresets[index] = updatedPreset
                 
                 // 保存到缓存文件
                 const fs = await import('fs')
@@ -4049,7 +4060,7 @@ export default {
         this.app.put('/api/imagegen/custom-presets/:uid', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const { uid } = req.params
-                const { keywords, prompt, needImage } = req.body
+                const { keywords, prompt, needImage, splitGrid } = req.body
                 
                 if (!keywords || !prompt) {
                     return res.status(400).json(ChaiteResponse.fail(null, '缺少 keywords 或 prompt'))
@@ -4064,12 +4075,19 @@ export default {
                 }
                 
                 const keywordArr = Array.isArray(keywords) ? keywords : keywords.split(/[,，\s]+/).filter(k => k.trim())
-                presets[index] = {
+                const updatedPreset = {
                     ...presets[index],
                     keywords: keywordArr,
                     prompt,
                     needImage: needImage !== false
                 }
+                // 处理splitGrid配置
+                if (splitGrid && splitGrid.cols && splitGrid.rows) {
+                    updatedPreset.splitGrid = { cols: splitGrid.cols, rows: splitGrid.rows }
+                } else {
+                    delete updatedPreset.splitGrid
+                }
+                presets[index] = updatedPreset
                 config.set('features.imageGen.customPresets', presets)
                 
                 // 热重载
@@ -4084,7 +4102,7 @@ export default {
         this.app.put('/api/imagegen/builtin-presets/:uid', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const { uid } = req.params
-                const { keywords, prompt, needImage } = req.body
+                const { keywords, prompt, needImage, splitGrid } = req.body
                 if (!keywords || !prompt) {
                     return res.status(400).json(ChaiteResponse.fail(null, '缺少 keywords 或 prompt'))
                 }
@@ -4095,12 +4113,19 @@ export default {
                 }
                 
                 const keywordArr = Array.isArray(keywords) ? keywords : keywords.split(/[,，\s]+/).filter(k => k.trim())
-                presets[index] = {
+                const updatedPreset = {
                     ...presets[index],
                     keywords: keywordArr,
                     prompt,
                     needImage: needImage !== false
                 }
+                // 处理splitGrid配置
+                if (splitGrid && splitGrid.cols && splitGrid.rows) {
+                    updatedPreset.splitGrid = { cols: splitGrid.cols, rows: splitGrid.rows }
+                } else {
+                    delete updatedPreset.splitGrid
+                }
+                presets[index] = updatedPreset
                 config.set('features.imageGen.builtinPresets', presets)
                 
                 // 热重载
