@@ -56,6 +56,7 @@ import {
   Box,
   X,
   Server,
+  Grid3X3,
 } from 'lucide-react'
 import { imageGenApi, channelsApi } from '@/lib/api'
 import { toast } from 'sonner'
@@ -68,6 +69,10 @@ interface Preset {
   needImage: boolean
   source: string
   uid?: string
+  splitGrid?: {
+    cols: number
+    rows: number
+  }
 }
 
 interface PresetSource {
@@ -116,13 +121,16 @@ export default function ImageGenPage() {
   const [addPresetOpen, setAddPresetOpen] = useState(false)
   const [editPresetOpen, setEditPresetOpen] = useState(false)
   const [newSource, setNewSource] = useState({ name: '', url: '', enabled: true })
-  const [newPreset, setNewPreset] = useState({ keywords: '', prompt: '', needImage: true })
+  const [newPreset, setNewPreset] = useState({ keywords: '', prompt: '', needImage: true, enableSplit: false, splitCols: 6, splitRows: 4 })
   const [editingPreset, setEditingPreset] = useState<{
     uid: string
     source: string
     keywords: string
     prompt: string
     needImage: boolean
+    enableSplit: boolean
+    splitCols: number
+    splitRows: number
   } | null>(null)
 
   // 加载数据（showLoading 控制是否显示加载状态）
@@ -214,14 +222,18 @@ export default function ImageGenPage() {
     }
     try {
       const keywords = newPreset.keywords.split(/[,，\s]+/).filter(k => k.trim())
-      await imageGenApi.addCustomPreset({
+      const data: any = {
         keywords,
         prompt: newPreset.prompt,
         needImage: newPreset.needImage,
-      })
+      }
+      if (newPreset.enableSplit) {
+        data.splitGrid = { cols: newPreset.splitCols, rows: newPreset.splitRows }
+      }
+      await imageGenApi.addCustomPreset(data)
       toast.success('预设添加成功')
       setAddPresetOpen(false)
-      setNewPreset({ keywords: '', prompt: '', needImage: true })
+      setNewPreset({ keywords: '', prompt: '', needImage: true, enableSplit: false, splitCols: 6, splitRows: 4 })
       await loadData(false)
     } catch (error: any) {
       toast.error('添加失败', { description: error.message })
@@ -268,7 +280,10 @@ export default function ImageGenPage() {
       source: preset.source,
       keywords: preset.keywords.join(', '),
       prompt: preset.prompt,
-      needImage: preset.needImage
+      needImage: preset.needImage,
+      enableSplit: !!(preset.splitGrid?.cols && preset.splitGrid?.rows),
+      splitCols: preset.splitGrid?.cols || 6,
+      splitRows: preset.splitGrid?.rows || 4
     })
     setEditPresetOpen(true)
   }
@@ -284,10 +299,15 @@ export default function ImageGenPage() {
     
     try {
       const keywords = editingPreset.keywords.split(/[,，\s]+/).filter(k => k.trim())
-      const data = {
+      const data: any = {
         keywords,
         prompt: editingPreset.prompt,
         needImage: editingPreset.needImage
+      }
+      if (editingPreset.enableSplit) {
+        data.splitGrid = { cols: editingPreset.splitCols, rows: editingPreset.splitRows }
+      } else {
+        data.splitGrid = null
       }
       
       if (editingPreset.source === 'custom') {
@@ -424,6 +444,7 @@ export default function ImageGenPage() {
                       <TableHead className="w-48">关键词</TableHead>
                       <TableHead>提示词</TableHead>
                       <TableHead className="w-24">需要图片</TableHead>
+                      <TableHead className="w-24">切割</TableHead>
                       <TableHead className="w-32">来源</TableHead>
                       <TableHead className="w-16">操作</TableHead>
                     </TableRow>
@@ -449,6 +470,13 @@ export default function ImageGenPage() {
                             <Badge variant="secondary"><Image className="w-3 h-3 mr-1" />需要</Badge>
                           ) : (
                             <Badge variant="outline">不需要</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {preset.splitGrid ? (
+                            <Badge variant="secondary"><Grid3X3 className="w-3 h-3 mr-1" />{preset.splitGrid.cols}×{preset.splitGrid.rows}</Badge>
+                          ) : (
+                            <Badge variant="outline">-</Badge>
                           )}
                         </TableCell>
                         <TableCell>{getSourceBadge(preset.source)}</TableCell>
@@ -623,7 +651,10 @@ export default function ImageGenPage() {
                                   source: 'custom',
                                   keywords: preset.keywords.join(', '),
                                   prompt: preset.prompt,
-                                  needImage: preset.needImage
+                                  needImage: preset.needImage,
+                                  enableSplit: !!(preset.splitGrid?.cols && preset.splitGrid?.rows),
+                                  splitCols: preset.splitGrid?.cols || 6,
+                                  splitRows: preset.splitGrid?.rows || 4
                                 })
                                 setEditPresetOpen(true)
                               }}
@@ -952,6 +983,43 @@ export default function ImageGenPage() {
               />
               <Label>需要用户提供图片</Label>
             </div>
+            <Separator />
+            <div className="space-y-3">
+              <div className="flex items-center space-x-2">
+                <Switch
+                  checked={newPreset.enableSplit}
+                  onCheckedChange={(checked) => setNewPreset(p => ({ ...p, enableSplit: checked }))}
+                />
+                <Label>启用图片切割</Label>
+              </div>
+              {newPreset.enableSplit && (
+                <div className="grid grid-cols-2 gap-4 pl-6">
+                  <div className="space-y-2">
+                    <Label className="text-sm">列数 (cols)</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={newPreset.splitCols}
+                      onChange={(e) => setNewPreset(p => ({ ...p, splitCols: parseInt(e.target.value) || 6 }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm">行数 (rows)</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={newPreset.splitRows}
+                      onChange={(e) => setNewPreset(p => ({ ...p, splitRows: parseInt(e.target.value) || 4 }))}
+                    />
+                  </div>
+                  <p className="col-span-2 text-xs text-muted-foreground">
+                    将生成的图片切割为 {newPreset.splitCols} × {newPreset.splitRows} = {newPreset.splitCols * newPreset.splitRows} 个小图
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddPresetOpen(false)}>取消</Button>
@@ -995,6 +1063,43 @@ export default function ImageGenPage() {
                   onCheckedChange={(checked) => setEditingPreset(p => p ? { ...p, needImage: checked } : null)}
                 />
                 <Label>需要用户提供图片</Label>
+              </div>
+              <Separator />
+              <div className="space-y-3">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    checked={editingPreset.enableSplit}
+                    onCheckedChange={(checked) => setEditingPreset(p => p ? { ...p, enableSplit: checked } : null)}
+                  />
+                  <Label>启用图片切割</Label>
+                </div>
+                {editingPreset.enableSplit && (
+                  <div className="grid grid-cols-2 gap-4 pl-6">
+                    <div className="space-y-2">
+                      <Label className="text-sm">列数 (cols)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={editingPreset.splitCols}
+                        onChange={(e) => setEditingPreset(p => p ? { ...p, splitCols: parseInt(e.target.value) || 6 } : null)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-sm">行数 (rows)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={editingPreset.splitRows}
+                        onChange={(e) => setEditingPreset(p => p ? { ...p, splitRows: parseInt(e.target.value) || 4 } : null)}
+                      />
+                    </div>
+                    <p className="col-span-2 text-xs text-muted-foreground">
+                      将生成的图片切割为 {editingPreset.splitCols} × {editingPreset.splitRows} = {editingPreset.splitCols * editingPreset.splitRows} 个小图
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           )}
