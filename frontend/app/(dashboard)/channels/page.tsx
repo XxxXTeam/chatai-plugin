@@ -535,14 +535,8 @@ export default function ChannelsPage() {
     }
   }
 
-  // 获取默认 baseUrl
   const getDefaultBaseUrl = (adapterType: string) => {
-    const defaults: Record<string, string> = {
-      openai: 'https://api.openai.com',
-      claude: 'https://api.anthropic.com',
-      gemini: 'https://generativelanguage.googleapis.com'
-    }
-    return defaults[adapterType] || ''
+    return ''
   }
 
   // 检测 URL 是否已包含自定义路径
@@ -555,32 +549,18 @@ export default function ChannelsPage() {
       return /\/v\d+/.test(url) || /\/api\//.test(url) || /\/openai\//.test(url)
     }
   }
-
-  // 获取完整的 API 路径预览
-  // 默认添加 /v1，除非用户已指定自定义路径
   const getApiPathPreview = (baseUrl: string, adapterType: string) => {
-    const url = baseUrl || getDefaultBaseUrl(adapterType)
-    if (!url) return ''
+    if (!baseUrl) return '（留空使用SDK默认地址）'
     
     // 移除尾部斜杠
-    const cleanUrl = url.replace(/\/+$/, '')
-    
-    // 检测是否有自定义路径
-    const hasPath = hasCustomPath(cleanUrl)
+    const cleanUrl = baseUrl.replace(/\/+$/, '')
     
     // 根据适配器类型显示完整路径
     switch (adapterType) {
       case 'openai':
-        // 没有自定义路径时默认添加 /v1
-        if (hasPath) {
-          return `${cleanUrl}/chat/completions`
-        }
-        return `${cleanUrl}/v1/chat/completions`
+        return `${cleanUrl}/chat/completions`
       case 'claude':
-        if (hasPath) {
-          return `${cleanUrl}/messages`
-        }
-        return `${cleanUrl}/v1/messages`
+        return `${cleanUrl}/messages`
       case 'gemini':
         return `${cleanUrl}/v1beta/models/{model}:generateContent`
       default:
@@ -597,7 +577,7 @@ export default function ChannelsPage() {
     try {
       const res = await channelsApi.fetchModels({
         adapterType: form.adapterType,
-        baseUrl: form.baseUrl || getDefaultBaseUrl(form.adapterType),
+        baseUrl: form.baseUrl || '',  // 留空让后端使用SDK默认地址
         apiKey: form.apiKey,
       }) as any
       const models = res?.data?.models || res?.models || []
@@ -865,13 +845,13 @@ export default function ChannelsPage() {
                       id="baseUrl"
                       value={form.baseUrl}
                       onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
-                      placeholder={getDefaultBaseUrl(form.adapterType)}
+                      placeholder="留空使用SDK默认地址"
                     />
                     <div className="space-y-1">
                       <p className="text-xs text-muted-foreground">
-                        留空使用官方地址。支持自定义路径，如 <code className="bg-muted px-1 rounded">openai.com/api/paas/v4</code>
+                        留空使用官方地址。自定义时需填写完整路径，如 <code className="bg-muted px-1 rounded">https://api.example.com/v1</code>
                       </p>
-                      {(form.baseUrl || getDefaultBaseUrl(form.adapterType)) && (
+                      {form.baseUrl && (
                         <p className="text-xs text-blue-500 dark:text-blue-400 font-mono truncate">
                           → {getApiPathPreview(form.baseUrl, form.adapterType)}
                         </p>

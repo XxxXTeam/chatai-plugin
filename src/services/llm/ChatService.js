@@ -270,8 +270,43 @@ export class ChatService {
         
         // 获取默认预设配置
         await presetManager.init()
-        const effectivePresetIdForModel = presetId || preset?.id || config.get('llm.defaultChatPresetId') || 'default'
+        
+        // 从ScopeManager获取群组/用户的预设配置（支持群聊和私聊）
+        let scopePresetId = null
+        let groupModelId = null
+        try {
+            const sm = await ensureScopeManager()
+            const pureUserId = cleanUserId
+            const isPrivate = !groupId
+            const effectiveSettings = await sm.getEffectiveSettings(
+                groupId ? String(groupId) : null, 
+                pureUserId,
+                { isPrivate }
+            )
+            
+            // 获取作用域配置的预设ID
+            if (effectiveSettings?.presetId) {
+                scopePresetId = effectiveSettings.presetId
+                logger.debug(`[ChatService] 使用作用域预设: ${scopePresetId} (来源: ${effectiveSettings.source}, 场景: ${isPrivate ? '私聊' : '群聊'})`)
+            }
+            
+            // 获取群组模型配置（仅群聊）
+            if (groupId) {
+                const groupSettings = await sm.getGroupSettings(String(groupId))
+                logger.debug(`[ChatService] 群组配置: groupId=${groupId}, settings=${JSON.stringify(groupSettings)}`)
+                groupModelId = groupSettings?.settings?.modelId
+            }
+        } catch (e) {
+            logger.debug('[ChatService] 获取作用域配置失败:', e.message)
+        }
+        
+        // 预设优先级：传入presetId > 传入preset > 作用域配置 > 全局默认
+        const effectivePresetIdForModel = presetId || preset?.id || scopePresetId || config.get('llm.defaultChatPresetId') || 'default'
         const currentPreset = preset || presetManager.get(effectivePresetIdForModel)
+        
+        if (scopePresetId && !presetId && !preset) {
+            logger.debug(`[ChatService] 使用群组/用户配置的预设: ${effectivePresetIdForModel}`)
+        }
         
         // 模型优先级：传入model > 预设model > 群组model > 默认model
         let llmModel = model
@@ -282,19 +317,9 @@ export class ChatService {
         if (!llmModel) {
             llmModel = LlmService.getModel(mode)
         }
-        if (groupId && !model) {
-            try {
-                const sm = await ensureScopeManager()
-                const groupSettings = await sm.getGroupSettings(String(groupId))
-                logger.debug(`[ChatService] 群组配置: groupId=${groupId}, settings=${JSON.stringify(groupSettings)}`)
-                const groupModelId = groupSettings?.settings?.modelId
-                if (groupModelId && groupModelId.trim()) {
-                    llmModel = groupModelId
-                    logger.debug(`[ChatService] 使用群组独立模型: ${llmModel}`)
-                }
-            } catch (e) {
-                logger.debug('[ChatService] 获取群组模型配置失败:', e.message)
-            }
+        if (groupId && !model && groupModelId && groupModelId.trim()) {
+            llmModel = groupModelId
+            logger.debug(`[ChatService] 使用群组独立模型: ${llmModel}`)
         }
         if (!llmModel || typeof llmModel !== 'string') {
             throw new Error('未配置模型，请先在管理面板「设置 → 模型配置」中配置默认模型')
@@ -327,7 +352,8 @@ export class ChatService {
                 hasTemplates: !!(channel.headersTemplate || channel.requestBodyTemplate)
             }
         }
-        const effectivePresetId = presetId || preset?.id || config.get('llm.defaultChatPresetId') || 'default'
+        // 使用已解析的预设ID（包含作用域配置）
+        const effectivePresetId = effectivePresetIdForModel
         const isNewSession = presetManager.isContextCleared(conversationId)
 
         // Channel advanced config
