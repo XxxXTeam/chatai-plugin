@@ -115,11 +115,12 @@ export class bym extends plugin {
                 return false
             }
 
-            // === 构建系统提示词（支持继承人格配置） ===
+            // === 构建系统提示词（支持继承人格配置和知识库） ===
             let systemPrompt = ''
+            let scopePresetId = null
             const inheritPersonality = config.get('bym.inheritPersonality') !== false // 默认启用继承
             
-            // 1. 尝试获取独立人格配置
+            // 1. 尝试获取独立人格配置和预设
             if (inheritPersonality) {
                 try {
                     if (!databaseService.initialized) {
@@ -133,17 +134,54 @@ export class bym extends plugin {
                     const defaultBymPrompt = config.get('bym.systemPrompt') || 
                         '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。'
                     
-                    const independentResult = await scopeManager.getIndependentPrompt(groupId, userId, defaultBymPrompt)
+                    // 获取完整的作用域配置（包含presetId）
+                    const effectiveSettings = await scopeManager.getEffectiveSettings(groupId, userId, { isPrivate: !groupId })
                     
-                    if (independentResult.isIndependent) {
-                        systemPrompt = independentResult.prompt
-                        systemPrompt += '\n\n【伪人模式行为指导】\n请用简短、自然、口语化的方式回复，就像真人聊天一样。回复要简洁（通常1-2句话），可以使用语气词和网络用语。'
-                        logger.info(`[BYM] 使用独立人格 (来源: ${independentResult.source})`)
-                    } else {
-                        systemPrompt = defaultBymPrompt
+                    // 优先使用预设
+                    if (effectiveSettings?.presetId) {
+                        scopePresetId = effectiveSettings.presetId
+                        const { presetManager } = await import('../src/services/preset/PresetManager.js')
+                        await presetManager.init()
+                        const preset = presetManager.get(scopePresetId)
+                        if (preset?.systemPrompt) {
+                            systemPrompt = preset.systemPrompt
+                            logger.info(`[BYM] 使用作用域预设: ${scopePresetId} (${preset.name || scopePresetId})`)
+                        }
+                    }
+                    
+                    // 如果没有预设systemPrompt，使用独立人格
+                    if (!systemPrompt) {
+                        const independentResult = await scopeManager.getIndependentPrompt(groupId, userId, defaultBymPrompt)
+                        if (independentResult.isIndependent) {
+                            systemPrompt = independentResult.prompt
+                            logger.info(`[BYM] 使用独立人格 (来源: ${independentResult.source})`)
+                        } else {
+                            systemPrompt = defaultBymPrompt
+                        }
+                    }
+                    
+                    // 添加伪人模式行为指导
+                    systemPrompt += '\n\n【伪人模式行为指导】\n请用简短、自然、口语化的方式回复，就像真人聊天一样。回复要简洁（通常1-2句话），可以使用语气词和网络用语。'
+                    
+                    // 加载知识库
+                    if (scopePresetId) {
+                        try {
+                            const { knowledgeService } = await import('../src/services/storage/KnowledgeService.js')
+                            await knowledgeService.init()
+                            const knowledgePrompt = knowledgeService.buildKnowledgePrompt(scopePresetId, {
+                                maxLength: config.get('knowledge.maxLength') || 8000,
+                                includeTriples: config.get('knowledge.includeTriples') !== false
+                            })
+                            if (knowledgePrompt) {
+                                systemPrompt += '\n\n' + knowledgePrompt
+                                logger.info(`[BYM] 已添加知识库 (${knowledgePrompt.length} 字符)`)
+                            }
+                        } catch (err) {
+                            logger.debug('[BYM] 加载知识库失败:', err.message)
+                        }
                     }
                 } catch (err) {
-                    logger.debug('[BYM] 获取独立人格失败，使用默认:', err.message)
+                    logger.debug('[BYM] 获取人格配置失败，使用默认:', err.message)
                     systemPrompt = config.get('bym.systemPrompt') ||
                         '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。'
                 }
