@@ -44,8 +44,32 @@ export class bym extends plugin {
             return false
         }
         
-        // 检查是否启用
-        const enabled = config.get('bym.enable')
+        // 检查是否启用（支持群组独立配置）
+        const globalEnabled = config.get('bym.enable')
+        let enabled = globalEnabled
+        
+        // 检查群组独立设置
+        if (e.isGroup && e.group_id) {
+            try {
+                const groupId = String(e.group_id)
+                if (!databaseService.initialized) {
+                    await databaseService.init()
+                }
+                const scopeManager = getScopeManager(databaseService)
+                await scopeManager.init()
+                const groupSettings = await scopeManager.getGroupSettings(groupId)
+                const groupFeatures = groupSettings?.settings || {}
+                
+                // 如果群组有独立设置，使用群组设置
+                if (groupFeatures.bymEnabled !== undefined) {
+                    enabled = groupFeatures.bymEnabled
+                    logger.debug(`[BYM] 使用群组独立设置: ${enabled}`)
+                }
+            } catch (err) {
+                logger.debug('[BYM] 获取群组设置失败:', err.message)
+            }
+        }
+        
         if (!enabled) {
             return false
         }

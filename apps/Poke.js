@@ -1,18 +1,6 @@
 /**
  * AI 戳一戳事件处理
  * 使用AI人设响应戳一戳
- * 
- * 兼容平台: icqq / NapCat / OneBot v11 / go-cqhttp / LLOneBot / Lagrange / TRSS-Yunzai
- * 
- * 事件格式:
- * - notice.group.poke  群聊戳一戳
- * - notice.friend.poke 私聊戳一戳
- * - notice.*.poke      通配匹配
- * 
- * 事件属性 (已统一适配):
- * - e.target_id / e.poke_uid / e.target_uid  被戳者
- * - e.operator_id / e.user_id / e.sender_id  操作者
- * - e.group_id     群号 (群聊时)
  */
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'

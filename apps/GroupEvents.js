@@ -16,6 +16,36 @@
  */
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'
+import { getScopeManager } from '../src/services/scope/ScopeManager.js'
+import { databaseService } from '../src/services/storage/DatabaseService.js'
+
+/**
+ * 检查群组事件处理是否启用
+ * @param {string} groupId
+ * @param {boolean} globalDefault
+ * @returns {Promise<boolean>}
+ */
+async function isGroupEventEnabled(groupId, globalDefault) {
+    if (!groupId) return globalDefault
+    
+    try {
+        if (!databaseService.initialized) {
+            await databaseService.init()
+        }
+        const scopeManager = getScopeManager(databaseService)
+        await scopeManager.init()
+        const groupSettings = await scopeManager.getGroupSettings(String(groupId))
+        const settings = groupSettings?.settings || {}
+        
+        if (settings.eventEnabled !== undefined) {
+            return settings.eventEnabled
+        }
+    } catch (err) {
+        logger.debug('[GroupEvents] 获取群组eventEnabled设置失败:', err.message)
+    }
+    
+    return globalDefault
+}
 import {
     parseRecallEvent,
     parseBanEvent,
@@ -333,7 +363,11 @@ async function handleGroupEvent(eventType, e, bot) {
     if (!shouldProcessEvent(e)) return
     
     const configKey = `features.${eventType}.enabled`
-    if (!config.get(configKey)) return
+    const globalEnabled = config.get(configKey)
+    
+    // 检查群组级别的事件处理开关
+    const isEnabled = await isGroupEventEnabled(e.group_id, globalEnabled)
+    if (!isEnabled) return
     
     const botIds = getBotIds()
     const userId = e.user_id || e.operator_id

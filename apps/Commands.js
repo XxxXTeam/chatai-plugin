@@ -17,6 +17,35 @@ import { getScopeManager } from '../src/services/scope/ScopeManager.js'
 const debugSessions = new Map()  // key: groupId或`private_${userId}`, value: boolean
 
 /**
+ * 检查群组功能是否启用
+ * @param {string} groupId - 群组ID
+ * @param {string} feature - 功能名称 (bymEnabled, imageGenEnabled, summaryEnabled, eventEnabled)
+ * @param {boolean} globalDefault - 全局默认值
+ * @returns {Promise<boolean>}
+ */
+async function isGroupFeatureEnabled(groupId, feature, globalDefault) {
+    if (!groupId) return globalDefault
+    
+    try {
+        if (!databaseService.initialized) {
+            await databaseService.init()
+        }
+        const scopeManager = getScopeManager(databaseService)
+        await scopeManager.init()
+        const groupSettings = await scopeManager.getGroupSettings(String(groupId))
+        const settings = groupSettings?.settings || {}
+        
+        if (settings[feature] !== undefined) {
+            return settings[feature]
+        }
+    } catch (err) {
+        logger.debug(`[Commands] 获取群组${feature}设置失败:`, err.message)
+    }
+    
+    return globalDefault
+}
+
+/**
  * 检查是否启用debug模式
  * @param {Object} e - 事件对象
  * @returns {boolean}
@@ -101,13 +130,17 @@ export class AICommands extends plugin {
                 {
                     reg: '^#(总结记忆|记忆总结|整理记忆)$',
                     fnc: 'summarizeMemory'
+                },
+                {
+                    reg: '^#(今日词云|词云|群词云)$',
+                    fnc: 'todayWordCloud'
                 }
             ]
         })
     }
     
     /**
-     * 手动触发记忆总结（覆盖式）
+     * 手动触发记忆总结
      * #总结记忆 / #记忆总结 / #整理记忆
      */
     async summarizeMemory() {
@@ -442,15 +475,16 @@ export class AICommands extends plugin {
             await this.reply('此功能仅支持群聊', true)
             return true
         }
-
-        if (!config.get('features.groupSummary.enabled')) {
+        const globalEnabled = config.get('features.groupSummary.enabled')
+        const isEnabled = await isGroupFeatureEnabled(e.group_id, 'summaryEnabled', globalEnabled)
+        if (!isEnabled) {
             await this.reply('群聊总结功能未启用', true)
             return true
         }
 
         try {
             await this.reply('正在分析群聊消息...', true)
-            const maxMessages = config.get('features.groupSummary.maxMessages') || 100
+            const maxMessages = config.get('features.groupSummary.maxMessages') || 300
             const groupId = String(e.group_id)
             await memoryManager.init()
             let messages = []
@@ -525,7 +559,6 @@ export class AICommands extends plugin {
             // 构建总结提示
             const recentMessages = messages.slice(-maxMessages)
             const dialogText = recentMessages.map(m => {
-                // 处理已格式化的消息（来自数据库）和原始消息
                 if (typeof m.content === 'string' && m.content.startsWith('[')) {
                     return m.content  // 已格式化
                 }
@@ -1055,6 +1088,193 @@ ${rawChatHistory}`
         }
         return true
     }
+
+    /**
+     * 今日词云分析
+     * #今日词云 / #词云 / #群词云
+     */
+    async todayWordCloud() {
+        const e = this.e
+        if (!e.group_id) {
+            await this.reply('此功能仅支持群聊', true)
+            return true
+        }
+
+        try {
+            await this.reply('正在生成今日词云...', true)
+            
+            const groupId = String(e.group_id)
+            const maxMessages = config.get('features.wordCloud.maxMessages') || 5000
+            await memoryManager.init()
+            let messages = []
+            let dataSource = ''
+            try {
+                const history = await getGroupChatHistory(e, maxMessages)
+                if (history && history.length > 0) {
+                    const today = new Date()
+                    today.setHours(0, 0, 0, 0)
+                    const todayTs = today.getTime() / 1000
+                    
+                    const todayMessages = history.filter(msg => {
+                        const msgTime = msg.time || 0
+                        return msgTime >= todayTs
+                    })
+                    
+                    messages = todayMessages.map(msg => {
+                        const contentParts = (msg.message || [])
+                            .filter(part => part.type === 'text')
+                            .map(part => part.text)
+                        return {
+                            content: contentParts.join(''),
+                            timestamp: msg.time ? msg.time * 1000 : Date.now()
+                        }
+                    }).filter(m => m.content && m.content.trim())
+                    
+                    if (messages.length > 0) dataSource = 'Bot API'
+                }
+            } catch (historyErr) {
+                logger.debug('[AI-Commands] Bot API 获取群聊历史失败:', historyErr.message)
+            }
+            if (messages.length < 10) {
+                const memoryMessages = memoryManager.getGroupMessageBuffer?.(groupId) || []
+                if (memoryMessages.length > 0) {
+                    const today = new Date()
+                    today.setHours(0, 0, 0, 0)
+                    const todayTs = today.getTime()
+                    
+                    const todayMemMessages = memoryMessages
+                        .filter(m => m.timestamp >= todayTs)
+                        .map(m => ({
+                            content: m.content || '',
+                            timestamp: m.timestamp
+                        }))
+                    
+                    if (todayMemMessages.length > messages.length) {
+                        messages = todayMemMessages
+                        dataSource = '内存缓冲'
+                    }
+                }
+            }
+            if (messages.length < 10) {
+                try {
+                    databaseService.init()
+                    const conversationId = `group_summary_${groupId}`
+                    const rawDbMessages = databaseService.getMessages(conversationId, maxMessages)
+                    if (rawDbMessages && rawDbMessages.length > 0) {
+                        const today = new Date()
+                        today.setHours(0, 0, 0, 0)
+                        const todayTs = today.getTime()
+                        
+                        const todayDbMessages = rawDbMessages
+                            .filter(m => m.timestamp >= todayTs)
+                            .map(m => ({
+                                content: typeof m.content === 'string' ? m.content : 
+                                    (Array.isArray(m.content) ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') : ''),
+                                timestamp: m.timestamp
+                            }))
+                            .filter(m => m.content && m.content.trim())
+                        
+                        if (todayDbMessages.length > messages.length) {
+                            messages = todayDbMessages
+                            dataSource = '数据库'
+                        }
+                    }
+                } catch (dbErr) {
+                    logger.debug('[AI-Commands] 从数据库读取群消息失败:', dbErr.message)
+                }
+            }
+            
+            if (messages.length < 5) {
+                await this.reply('今日群聊消息太少，无法生成词云\n\n💡 提示：需要今天有足够的聊天记录（至少5条）', true)
+                return true
+            }
+            const wordFreq = this.analyzeWordFrequency(messages.map(m => m.content))
+            
+            if (wordFreq.length < 5) {
+                await this.reply('有效词汇太少，无法生成词云', true)
+                return true
+            }
+            try {
+                const imageBuffer = await renderService.renderWordCloud(wordFreq, {
+                    title: '今日词云',
+                    subtitle: `基于 ${messages.length} 条消息 · ${dataSource}`,
+                    width: 800,
+                    height: 600
+                })
+                await this.reply(segment.image(imageBuffer))
+            } catch (renderErr) {
+                logger.warn('[AI-Commands] 渲染词云失败:', renderErr.message)
+                // 回退到文本
+                const topWords = wordFreq.slice(0, 20).map((w, i) => `${i + 1}. ${w.word} (${w.weight}次)`).join('\n')
+                await this.reply(`☁️ 今日词云 (${messages.length}条消息)\n━━━━━━━━━━━━\n${topWords}`, true)
+            }
+        } catch (error) {
+            logger.error('[AI-Commands] Word cloud error:', error)
+            await this.reply('词云生成失败: ' + error.message, true)
+        }
+        return true
+    }
+
+    /**
+     * 分析词频
+     * @param {string[]} texts - 文本数组
+     * @returns {Array<{word: string, weight: number}>}
+     */
+    analyzeWordFrequency(texts) {
+        const wordMap = new Map()
+        
+        // 停用词列表
+        const stopWords = new Set([
+            '的', '了', '是', '在', '我', '有', '和', '就', '不', '人', '都', '一', '一个',
+            '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好',
+            '自己', '这', '那', '他', '她', '它', '们', '什么', '吗', '啊', '呢', '吧', '嗯',
+            '哦', '哈', '呀', '诶', '嘿', '哎', '唉', '噢', '额', '昂', '啦', '咯', '喔',
+            '这个', '那个', '怎么', '为什么', '可以', '能', '想', '知道', '觉得', '还是',
+            '但是', '因为', '所以', '如果', '虽然', '而且', '或者', '还', '又', '再', '才',
+            '只', '从', '被', '把', '给', '让', '比', '等', '对', '跟', '向', '于', '并',
+            '与', '及', '以', '用', '为', '由', '以及', '而', '且', '之', '其', '如', '则',
+            '么', '来', '去', '过', '得', '地', '里', '后', '前', '中', '下', '多', '少',
+            '大', '小', '好', '坏', '真', '假', '新', '旧', '高', '低', '长', '短', '快', '慢',
+            '图片', '表情', '动画表情', '图片评论'
+        ])
+        
+        for (const text of texts) {
+            if (!text) continue
+            
+            // 清理文本：移除特殊格式
+            let cleanText = text
+                .replace(/\[.+?\]/g, '')  // 移除 [图片] [表情] 等
+                .replace(/@\S+/g, '')      // 移除 @提及
+                .replace(/https?:\/\/\S+/g, '')  // 移除链接
+                .replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, ' ')  // 只保留中文、英文、数字
+            
+            // 简单分词：中文按字符组合，英文按单词
+            // 提取2-4字的中文词组
+            const chinesePattern = /[\u4e00-\u9fa5]{2,6}/g
+            const chineseWords = cleanText.match(chinesePattern) || []
+            
+            // 提取英文单词
+            const englishPattern = /[a-zA-Z]{2,}/g
+            const englishWords = cleanText.match(englishPattern) || []
+            
+            // 统计词频
+            const allWords = [...chineseWords, ...englishWords.map(w => w.toLowerCase())]
+            
+            for (const word of allWords) {
+                if (stopWords.has(word) || word.length < 2) continue
+                wordMap.set(word, (wordMap.get(word) || 0) + 1)
+            }
+        }
+        
+        // 转换为数组并排序
+        const wordList = Array.from(wordMap.entries())
+            .map(([word, weight]) => ({ word, weight }))
+            .filter(w => w.weight >= 2)  // 至少出现2次
+            .sort((a, b) => b.weight - a.weight)
+            .slice(0, 80)  // 最多80个词
+        
+        return wordList
+    }
 }
 
 
@@ -1110,7 +1330,7 @@ async function getGroupChatHistory(e, num) {
         let allChats = []
         let seq = e.seq || e.message_id || 0
         let totalScanned = 0
-        const maxScanLimit = Math.min(num * 10, 2000)  // 最多扫描2000条
+        const maxScanLimit = Math.min(num * 10, 5000)  // 最多扫描5000条
 
         while (allChats.length < num && totalScanned < maxScanLimit) {
             const chatHistory = await group.getChatHistory(seq, 20)
@@ -1190,5 +1410,6 @@ async function getUserTextHistory(e, userId, num) {
         return []
     }
 }
+
 
 export { isDebugEnabled, setDebugMode, getDebugSessions }

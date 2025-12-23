@@ -389,6 +389,163 @@ class RenderService {
             ...options
         })
     }
+
+    /**
+     * 渲染词云图片
+     * @param {Array<{word: string, weight: number}>} words - 词频数组
+     * @param {Object} options - 选项
+     * @param {string} options.title - 标题
+     * @param {string} options.subtitle - 副标题
+     * @param {number} options.width - 宽度
+     * @param {number} options.height - 高度
+     * @returns {Promise<Buffer>}
+     */
+    async renderWordCloud(words, options = {}) {
+        const {
+            title = '今日词云',
+            subtitle = '',
+            width = 800,
+            height = 600
+        } = options
+
+        if (!words || words.length === 0) {
+            throw new Error('没有足够的词汇生成词云')
+        }
+
+        // 归一化权重
+        const maxWeight = Math.max(...words.map(w => w.weight))
+        const minWeight = Math.min(...words.map(w => w.weight))
+        const normalizedWords = words.map(w => ({
+            ...w,
+            size: minWeight === maxWeight 
+                ? 40 
+                : 16 + ((w.weight - minWeight) / (maxWeight - minWeight)) * 60
+        }))
+
+        // 生成随机颜色（柔和的彩色）
+        const colors = [
+            '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+            '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9',
+            '#F8B500', '#FF69B4', '#00CED1', '#FF7F50', '#9370DB',
+            '#20B2AA', '#FFB6C1', '#87CEEB', '#FFA07A', '#8FBC8F'
+        ]
+
+        const timestamp = new Date().toLocaleString('zh-CN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        })
+
+        const wordCloudHtml = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    body {
+                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        min-height: 100vh;
+                        padding: 20px;
+                    }
+                    .container {
+                        background: rgba(255, 255, 255, 0.95);
+                        border-radius: 16px;
+                        padding: 24px;
+                        box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+                    }
+                    .header {
+                        text-align: center;
+                        margin-bottom: 20px;
+                        padding-bottom: 16px;
+                        border-bottom: 2px solid #eee;
+                    }
+                    .header h1 {
+                        font-size: 28px;
+                        color: #333;
+                        margin-bottom: 8px;
+                    }
+                    .header .subtitle {
+                        font-size: 14px;
+                        color: #666;
+                    }
+                    .word-cloud {
+                        width: 100%;
+                        height: ${height - 180}px;
+                        display: flex;
+                        flex-wrap: wrap;
+                        justify-content: center;
+                        align-items: center;
+                        align-content: center;
+                        gap: 8px 16px;
+                        padding: 20px;
+                    }
+                    .word {
+                        display: inline-block;
+                        padding: 4px 8px;
+                        transition: transform 0.2s;
+                        cursor: default;
+                        white-space: nowrap;
+                    }
+                    .word:hover {
+                        transform: scale(1.1);
+                    }
+                    .footer {
+                        text-align: center;
+                        padding-top: 16px;
+                        border-top: 1px solid #eee;
+                        margin-top: 16px;
+                    }
+                    .footer .credit {
+                        font-size: 12px;
+                        color: #999;
+                    }
+                    .footer .timestamp {
+                        font-size: 11px;
+                        color: #bbb;
+                        margin-top: 4px;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="header">
+                        <h1>☁️ ${title}</h1>
+                        ${subtitle ? `<div class="subtitle">${subtitle}</div>` : ''}
+                    </div>
+                    <div class="word-cloud">
+                        ${normalizedWords.map((w, i) => {
+                            const color = colors[i % colors.length]
+                            const rotation = (Math.random() - 0.5) * 20
+                            return `<span class="word" style="font-size: ${w.size}px; color: ${color}; transform: rotate(${rotation}deg); font-weight: ${w.size > 40 ? 'bold' : 'normal'};">${w.word}</span>`
+                        }).join('')}
+                    </div>
+                    <div class="footer">
+                        <div class="credit">Created By Yunzai-Bot and ChatAI-Plugin</div>
+                        <div class="timestamp">生成时间：${timestamp}</div>
+                    </div>
+                </div>
+            </body>
+            </html>
+        `
+
+        let browser = null
+        try {
+            browser = await this.getBrowser()
+            const page = await browser.newPage()
+            await page.setViewport({ width, height })
+            await page.setContent(wordCloudHtml, { waitUntil: 'networkidle0', timeout: 30000 })
+            const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
+            await page.close()
+            return imageBuffer
+        } catch (error) {
+            logService.error('[RenderService] 渲染词云失败', error)
+            throw error
+        }
+    }
 }
 
 export const renderService = new RenderService()
