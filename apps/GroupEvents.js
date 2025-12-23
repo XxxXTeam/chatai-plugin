@@ -16,8 +16,24 @@
  */
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'
-import { getScopeManager } from '../src/services/scope/ScopeManager.js'
-import { databaseService } from '../src/services/storage/DatabaseService.js'
+
+// 懒加载服务
+let _scopeManager = null
+let _databaseService = null
+
+async function getScopeManagerLazy() {
+    if (!_scopeManager) {
+        const { getScopeManager } = await import('../src/services/scope/ScopeManager.js')
+        const { databaseService } = await import('../src/services/storage/DatabaseService.js')
+        _databaseService = databaseService
+        if (!_databaseService.initialized) {
+            await _databaseService.init()
+        }
+        _scopeManager = getScopeManager(_databaseService)
+        await _scopeManager.init()
+    }
+    return _scopeManager
+}
 
 /**
  * 检查群组事件处理是否启用
@@ -29,11 +45,7 @@ async function isGroupEventEnabled(groupId, globalDefault) {
     if (!groupId) return globalDefault
     
     try {
-        if (!databaseService.initialized) {
-            await databaseService.init()
-        }
-        const scopeManager = getScopeManager(databaseService)
-        await scopeManager.init()
+        const scopeManager = await getScopeManagerLazy()
         const groupSettings = await scopeManager.getGroupSettings(String(groupId))
         const settings = groupSettings?.settings || {}
         

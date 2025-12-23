@@ -2,54 +2,65 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import config from './config/config.js'
-import { getWebServer } from './src/services/webServer.js'
-import { chatLogger, c } from './src/core/utils/logger.js'
+import { chatLogger, c, icons } from './src/core/utils/logger.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const pluginName = 'ChatAI'
 const pluginVersion = '1.0.0'
+const startTime = Date.now()
+
 chatLogger.banner(`${pluginName} v${pluginVersion}`, '正在加载...')
 
-// Initialize global object if needed
-if (!global.segment) {
-  try {
-    global.segment = (await import('icqq')).segment
-  } catch (err) {
-    global.segment = (await import('oicq')).segment
-  }
-}
+// 并行初始化基础组件
+const initTasks = []
 
-// Initialize configuration
+// 1. 初始化 segment
+initTasks.push((async () => {
+  if (!global.segment) {
+    try {
+      global.segment = (await import('icqq')).segment
+    } catch {
+      global.segment = (await import('oicq')).segment
+    }
+  }
+  return { name: 'Segment', status: 'ok' }
+})())
+
+// 2. 初始化配置
 const dataDir = path.join(__dirname, 'data')
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true })
 }
 config.startSync(dataDir)
-const webServer = getWebServer()
-webServer.start()
-let mcpToolCount = 0
-let mcpCustomToolCount = 0
-;(async () => {
+let webServerPort = null
+initTasks.push((async () => {
+  const { getWebServer } = await import('./src/services/webServer.js')
+  const webServer = getWebServer()
+  const result = await webServer.start()
+  webServerPort = result?.port || config.get('webServer.port') || 3000
+  return { name: 'WebServer', status: 'ok', port: webServerPort }
+})())
+// MCP工具异步初始化
+initTasks.push((async () => {
   try {
     const { mcpManager } = await import('./src/mcp/McpManager.js')
     await mcpManager.init()
-    mcpToolCount = mcpManager.builtinServer?.tools?.length || 0
-    mcpCustomToolCount = mcpManager.customToolsServer?.tools?.length || 0
+    // 使用 tools Map 的 size 获取总工具数
+    const toolCount = mcpManager.tools?.size || mcpManager.getTools({ applyConfig: false }).length || 0
+    return { name: 'MCP', status: 'ok', toolCount }
   } catch (err) {
     chatLogger.error('MCP', '初始化失败:', err.message)
+    return { name: 'MCP', status: 'fail', toolCount: 0, error: err.message }
   }
-})()
+})())
 
 const apps = {}
-const loadStats = { success: 0, failed: 0, plugins: [] }
-
-// Load apps
+const loadStats = { success: 0, failed: 0, plugins: [], failedPlugins: [] }
 const appsDir = path.join(__dirname, 'apps')
 if (fs.existsSync(appsDir)) {
   const files = fs.readdirSync(appsDir).filter(file => file.endsWith('.js'))
-
   const loadedApps = await Promise.allSettled(files.map(file => import(`./apps/${file}`)))
 
   files.forEach((file, index) => {
@@ -62,17 +73,32 @@ if (fs.existsSync(appsDir)) {
       loadStats.plugins.push(name)
     } else {
       loadStats.failed++
-      chatLogger.error('Plugin', `加载失败 ${name}:`, result.reason?.message || result.reason)
+      loadStats.failedPlugins.push({ name, error: result.reason?.message || result.reason })
     }
   })
 }
+const initResults = await Promise.allSettled(initTasks)
+const loadTime = Date.now() - startTime
+
+// 从结果中提取MCP工具数量
+const mcpResult = initResults.find(r => r.status === 'fulfilled' && r.value?.name === 'MCP')
+const mcpToolCount = mcpResult?.value?.toolCount || 0
+
+// 从结果中提取Web服务端口
+const webResult = initResults.find(r => r.status === 'fulfilled' && r.value?.name === 'WebServer')
+const finalWebPort = webResult?.value?.port || webServerPort || config.get('webServer.port') || 3000
 
 const statsItems = [
-  { label: '已加载', value: `${loadStats.success} 个模块`, color: c.green },
-  { label: '模块列表', value: loadStats.plugins.join(', '), color: c.cyan }
+  { label: `${icons.module} 模块`, value: `${loadStats.success} 个`, color: c.green },
+  { label: `${icons.tool} MCP工具`, value: `${mcpToolCount} 个`, color: c.cyan },
+  { label: `${icons.web} Web服务`, value: `端口 ${finalWebPort}`, color: c.yellow },
+  { label: `${icons.time} 耗时`, value: `${loadTime}ms`, color: c.gray }
 ]
 if (loadStats.failed > 0) {
-  statsItems.push({ label: '加载失败', value: `${loadStats.failed} 个`, color: c.red })
+  statsItems.push({ label: `${icons.error} 失败`, value: `${loadStats.failed} 个`, color: c.red })
+  loadStats.failedPlugins.forEach(p => {
+    chatLogger.error('Plugin', `${p.name}: ${p.error}`)
+  })
 }
 chatLogger.successBanner(`${pluginName} 加载完成`, statsItems)
 

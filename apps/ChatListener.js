@@ -1,15 +1,71 @@
-import { chatService } from '../src/services/llm/ChatService.js'
-import { parseUserMessage, segment, CardParser, MessageApi, MessageUtils } from '../src/utils/messageParser.js'
-import { setToolContext } from '../src/core/utils/toolAdapter.js'
-import { mcpManager } from '../src/mcp/McpManager.js'
-import { memoryManager } from '../src/services/storage/MemoryManager.js'
-import { statsService } from '../src/services/stats/StatsService.js'
-import { getScopeManager } from '../src/services/scope/ScopeManager.js'
-import { databaseService } from '../src/services/storage/DatabaseService.js'
+import { parseUserMessage, segment } from '../src/utils/messageParser.js'
 import config from '../config/config.js'
 import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMessage, recordSentMessage } from '../src/utils/messageDedup.js'
 import { isDebugEnabled } from './Commands.js'
 import { cacheGroupMessage } from './GroupEvents.js'
+
+// 懒加载服务缓存
+let _chatService = null
+let _memoryManager = null
+let _statsService = null
+let _scopeManager = null
+let _databaseService = null
+let _mcpManager = null
+let _toolAdapter = null
+
+async function getChatService() {
+    if (!_chatService) {
+        const { chatService } = await import('../src/services/llm/ChatService.js')
+        _chatService = chatService
+    }
+    return _chatService
+}
+
+async function getMemoryManager() {
+    if (!_memoryManager) {
+        const { memoryManager } = await import('../src/services/storage/MemoryManager.js')
+        _memoryManager = memoryManager
+    }
+    return _memoryManager
+}
+
+async function getStatsService() {
+    if (!_statsService) {
+        const { statsService } = await import('../src/services/stats/StatsService.js')
+        _statsService = statsService
+    }
+    return _statsService
+}
+
+async function getScopeManagerLazy() {
+    if (!_scopeManager) {
+        const { getScopeManager } = await import('../src/services/scope/ScopeManager.js')
+        const { databaseService } = await import('../src/services/storage/DatabaseService.js')
+        _databaseService = databaseService
+        if (!_databaseService.initialized) {
+            await _databaseService.init()
+        }
+        _scopeManager = getScopeManager(_databaseService)
+        await _scopeManager.init()
+    }
+    return _scopeManager
+}
+
+async function getMcpManager() {
+    if (!_mcpManager) {
+        const { mcpManager } = await import('../src/mcp/McpManager.js')
+        _mcpManager = mcpManager
+    }
+    return _mcpManager
+}
+
+async function getToolAdapter() {
+    if (!_toolAdapter) {
+        const { setToolContext } = await import('../src/core/utils/toolAdapter.js')
+        _toolAdapter = { setToolContext }
+    }
+    return _toolAdapter
+}
 
 // 群组触发配置缓存
 const groupTriggerCache = new Map()
@@ -30,21 +86,17 @@ async function getGroupTriggerConfig(groupId) {
     }
     
     try {
-        if (!databaseService.initialized) {
-            await databaseService.init()
-        }
-        const scopeManager = getScopeManager(databaseService)
-        await scopeManager.init()
+        const scopeManager = await getScopeManagerLazy()
         const groupSettings = await scopeManager.getGroupSettings(cacheKey)
         const settings = groupSettings?.settings || {}
         
-        const config = {
+        const cfg = {
             triggerMode: settings.triggerMode,
             customPrefix: settings.customPrefix
         }
         
-        groupTriggerCache.set(cacheKey, { config, time: Date.now() })
-        return config
+        groupTriggerCache.set(cacheKey, { config: cfg, time: Date.now() })
+        return cfg
     } catch (err) {
         logger.debug('[ChatListener] 获取群组触发配置失败:', err.message)
     }
@@ -90,7 +142,8 @@ export class ChatListener extends plugin {
         if (listenerEnabled === false) {
             if (e.isGroup && e.group_id && config.get('trigger.collectGroupMsg') !== false) {
                 try {
-                    memoryManager.collectGroupMessage(String(e.group_id), {
+                    const mm = await getMemoryManager()
+                    mm.collectGroupMessage(String(e.group_id), {
                         user_id: e.user_id,
                         sender: e.sender,
                         msg: e.msg,
@@ -108,7 +161,8 @@ export class ChatListener extends plugin {
         }
         if (e.isGroup && e.group_id && triggerCfg.collectGroupMsg !== false) {
             try {
-                memoryManager.collectGroupMessage(String(e.group_id), {
+                const mm = await getMemoryManager()
+                mm.collectGroupMessage(String(e.group_id), {
                     user_id: e.user_id,
                     sender: e.sender,
                     msg: e.msg,
@@ -458,16 +512,17 @@ export class ChatListener extends plugin {
         
         // 记录消息统计
         try {
+            const stats = await getStatsService()
             const msgTypes = userMessage.content?.map(c => c.type) || ['text']
             for (const type of msgTypes) {
-                statsService.recordMessage({
+                stats.recordMessage({
                     type,
                     groupId,
                     userId,
                     source: e.adapter || 'unknown'
                 })
             }
-        } catch (e) {
+        } catch {
             // 统计失败不影响主流程
         }
         if (processedMsg && userMessage.content) {
@@ -476,8 +531,10 @@ export class ChatListener extends plugin {
                 textItem.text = textContent
             }
         }
-        setToolContext({ event: e, bot: e.bot || Bot })
-        mcpManager.setToolContext({ event: e, bot: e.bot || Bot })
+        const toolAdapter = await getToolAdapter()
+        toolAdapter.setToolContext({ event: e, bot: e.bot || Bot })
+        const mcp = await getMcpManager()
+        mcp.setToolContext({ event: e, bot: e.bot || Bot })
         const images = userMessage.content?.filter(c => 
             c.type === 'image' || c.type === 'image_url'
         ) || []
@@ -512,7 +569,8 @@ export class ChatListener extends plugin {
         }
         
         try {
-            const result = await chatService.sendMessage(chatOptions)
+            const chat = await getChatService()
+            const result = await chat.sendMessage(chatOptions)
 
             // 发送回复
             if (result.response && result.response.length > 0) {
