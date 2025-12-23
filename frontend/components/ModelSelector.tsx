@@ -64,7 +64,7 @@ export function ModelSelector({ value, allModels, onChange, allowCustom = true, 
     
     // 按模型数量排序
     return Object.entries(groups)
-      .filter(([_, models]) => models.length > 0)
+      .filter(([, models]) => models.length > 0)
       .sort((a, b) => b[1].length - a[1].length)
       .map(([name, models]) => ({ name, models }))
   }, [allModels, searchQuery])

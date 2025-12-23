@@ -31,12 +31,12 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
-  AlertTriangle,
   Brain,
   Loader2,
   Plus,
   RefreshCw,
   Search,
+  Sparkles,
   Trash2,
   Users,
 } from 'lucide-react'
@@ -49,7 +49,22 @@ interface Memory {
   timestamp?: number
   importance?: number
   score?: number
+  source?: string
   metadata?: Record<string, unknown>
+}
+
+interface ApiResponse<T = unknown> {
+  data?: T
+  message?: string
+}
+
+// 记忆来源映射
+const sourceLabels: Record<string, { label: string; color: string }> = {
+  poll_summary: { label: '定时总结', color: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300' },
+  auto_extract: { label: '自动提取', color: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300' },
+  group_context: { label: '群聊分析', color: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300' },
+  manual: { label: '手动添加', color: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300' },
+  ai_tool: { label: 'AI工具', color: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300' },
 }
 
 export default function MemoryPage() {
@@ -68,16 +83,19 @@ export default function MemoryPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<Memory[]>([])
   const [searching, setSearching] = useState(false)
+  
+  // 总结
+  const [summarizing, setSummarizing] = useState(false)
 
   // 获取用户列表
   const fetchUserList = async () => {
     try {
-      const res = await memoryApi.getUsers() as any
+      const res = await memoryApi.getUsers() as ApiResponse<string[]>
       const users = res?.data || []
       setUserList(users)
       setStats(prev => ({ ...prev, totalUsers: users.length }))
-    } catch (error) {
-      console.error('获取用户列表失败:', error)
+    } catch {
+      console.error('获取用户列表失败')
     }
   }
 
@@ -90,11 +108,11 @@ export default function MemoryPage() {
 
     setLoading(true)
     try {
-      const res = await memoryApi.get(userId) as any
+      const res = await memoryApi.get(userId) as ApiResponse<Memory[]>
       const data = res?.data || []
       setMemories(data)
       setStats(prev => ({ ...prev, totalMemories: data.length }))
-    } catch (error) {
+    } catch {
       toast.error('获取记忆失败')
       setMemories([])
     } finally {
@@ -127,7 +145,7 @@ export default function MemoryPage() {
       setAddDialogOpen(false)
       setNewMemory({ content: '', metadata: '{}' })
       fetchMemories()
-    } catch (error) {
+    } catch {
       toast.error('添加失败')
     } finally {
       setSaving(false)
@@ -140,7 +158,7 @@ export default function MemoryPage() {
       await memoryApi.delete(userId, String(memoryId))
       toast.success('删除成功')
       fetchMemories()
-    } catch (error) {
+    } catch {
       toast.error('删除失败')
     }
   }
@@ -154,7 +172,7 @@ export default function MemoryPage() {
       await memoryApi.clearUser(userId)
       toast.success('清空成功')
       setMemories([])
-    } catch (error) {
+    } catch {
       toast.error('清空失败')
     }
   }
@@ -165,12 +183,12 @@ export default function MemoryPage() {
 
     setLoading(true)
     try {
-      const res = await memoryApi.clearAll() as any
+      const res = await memoryApi.clearAll() as ApiResponse<{ deletedCount: number }>
       const count = res?.data?.deletedCount || 0
       toast.success(`清空成功，共清空 ${count} 个用户的记忆`)
       setMemories([])
       await fetchUserList()
-    } catch (error) {
+    } catch {
       toast.error('清空失败')
     } finally {
       setLoading(false)
@@ -186,13 +204,41 @@ export default function MemoryPage() {
 
     setSearching(true)
     try {
-      const res = await memoryApi.search({ userId, query: searchQuery }) as any
+      const res = await memoryApi.search({ userId, query: searchQuery }) as ApiResponse<Memory[]>
       setSearchResults(res?.data || [])
-    } catch (error) {
+    } catch {
       toast.error('搜索失败')
       setSearchResults([])
     } finally {
       setSearching(false)
+    }
+  }
+  
+  // 手动触发记忆总结（覆盖式）
+  const handleSummarize = async () => {
+    if (!userId) {
+      toast.warning('请先选择用户')
+      return
+    }
+    
+    if (!confirm(`确定要总结整理 ${userId} 的记忆？\n\n这将合并重复记忆并覆盖旧数据。`)) {
+      return
+    }
+
+    setSummarizing(true)
+    try {
+      const res = await memoryApi.summarize(userId) as ApiResponse<{ success: boolean; beforeCount: number; afterCount: number; error?: string }>
+      const data = res?.data
+      if (data?.success) {
+        toast.success(`记忆整理完成\n整理前: ${data.beforeCount} 条\n整理后: ${data.afterCount} 条`)
+        fetchMemories()
+      } else {
+        toast.error(data?.error || '总结失败')
+      }
+    } catch {
+      toast.error('总结失败')
+    } finally {
+      setSummarizing(false)
     }
   }
 
@@ -291,10 +337,25 @@ export default function MemoryPage() {
               添加记忆
             </Button>
             {memories.length > 0 && (
-              <Button variant="destructive" onClick={handleClearMemories}>
-                <Trash2 className="mr-2 h-4 w-4" />
-                清空记忆
-              </Button>
+              <>
+                <Button 
+                  variant="secondary" 
+                  onClick={handleSummarize} 
+                  disabled={summarizing}
+                  title="合并重复记忆，覆盖旧数据"
+                >
+                  {summarizing ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="mr-2 h-4 w-4" />
+                  )}
+                  总结整理
+                </Button>
+                <Button variant="destructive" onClick={handleClearMemories}>
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  清空记忆
+                </Button>
+              </>
             )}
           </div>
 
@@ -335,46 +396,58 @@ export default function MemoryPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[80px]">ID</TableHead>
+                  <TableHead className="w-[60px]">ID</TableHead>
                   <TableHead>内容</TableHead>
-                  <TableHead className="w-[80px]">相似度</TableHead>
-                  <TableHead className="w-[160px]">时间</TableHead>
-                  <TableHead className="w-[80px]">操作</TableHead>
+                  <TableHead className="w-[90px]">来源</TableHead>
+                  <TableHead className="w-[70px]">相似度</TableHead>
+                  <TableHead className="w-[140px]">时间</TableHead>
+                  <TableHead className="w-[60px]">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {displayMemories.map((memory) => (
-                  <TableRow key={memory.id}>
-                    <TableCell className="font-mono text-xs">{memory.id}</TableCell>
-                    <TableCell className="max-w-[400px] truncate">
-                      {typeof memory.content === 'string' 
-                        ? memory.content 
-                        : JSON.stringify(memory.content)}
-                    </TableCell>
-                    <TableCell>
-                      {memory.score ? (
-                        <Badge variant="secondary">
-                          {(memory.score * 100).toFixed(1)}%
-                        </Badge>
-                      ) : '-'}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {memory.timestamp 
-                        ? new Date(memory.timestamp).toLocaleString('zh-CN')
-                        : '-'}
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-destructive"
-                        onClick={() => handleDeleteMemory(memory.id)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {displayMemories.map((memory) => {
+                  const source = (memory.source || (memory.metadata as Record<string, unknown>)?.source || 'manual') as string
+                  const sourceInfo = sourceLabels[source] || { label: source, color: 'bg-gray-100 text-gray-800' }
+                  return (
+                    <TableRow key={memory.id}>
+                      <TableCell className="font-mono text-xs">{memory.id}</TableCell>
+                      <TableCell className="max-w-[400px]">
+                        <div className="truncate" title={typeof memory.content === 'string' ? memory.content : JSON.stringify(memory.content)}>
+                          {typeof memory.content === 'string' 
+                            ? memory.content 
+                            : JSON.stringify(memory.content)}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${sourceInfo.color}`}>
+                          {sourceInfo.label}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        {memory.score ? (
+                          <Badge variant="secondary">
+                            {(memory.score * 100).toFixed(1)}%
+                          </Badge>
+                        ) : '-'}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {memory.timestamp 
+                          ? new Date(memory.timestamp).toLocaleString('zh-CN')
+                          : '-'}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive"
+                          onClick={() => handleDeleteMemory(memory.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           )}

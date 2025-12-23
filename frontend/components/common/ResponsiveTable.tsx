@@ -76,9 +76,9 @@ export function ResponsiveTable<T extends Record<string, unknown>>({
   loading = false,
   emptyText = '暂无数据',
   onRowClick,
-  selectable = false,
-  selectedKeys = [],
-  onSelectionChange,
+  selectable: _selectable = false,
+  selectedKeys: _selectedKeys = [],
+  onSelectionChange: _onSelectionChange,
   cardTitleKey,
   cardDescKey,
 }: ResponsiveTableProps<T>) {

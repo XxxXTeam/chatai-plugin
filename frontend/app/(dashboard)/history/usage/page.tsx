@@ -40,10 +40,10 @@ import {
   Trash2,
   Activity,
   Zap,
-  TrendingUp,
   Key,
   Server,
-  BarChart3
+  BarChart3,
+  TrendingUp
 } from 'lucide-react'
 
 interface UsageRecord {
@@ -80,10 +80,16 @@ interface UsageStats {
     failed: number
     totalTokens: number
     avgDuration: number
+    totalCalls?: number
+    successCalls?: number
+    totalInputTokens?: number
+    totalOutputTokens?: number
   }
   byChannel: Record<string, { calls: number; tokens: number }>
   byModel: Record<string, { calls: number; tokens: number }>
   records: UsageRecord[]
+  modelRanking?: Array<{ model: string; calls: number; tokens: number }>
+  channelRanking?: Array<{ channelId: string; channelName?: string; calls: number; tokens: number }>
 }
 
 function formatDuration(ms: number): string {
@@ -127,8 +133,8 @@ export default function UsageStatsPage() {
           status: filter.status !== 'all' ? filter.status : undefined
         })
       ])
-      setStats((statsRes as any)?.data || null)
-      setRecords((recordsRes as any)?.data || [])
+      setStats((statsRes as { data?: UsageStats })?.data || null)
+      setRecords((recordsRes as { data?: UsageRecord[] })?.data || [])
     } catch (error) {
       console.error('Failed to fetch usage stats:', error)
     } finally {
@@ -153,7 +159,7 @@ export default function UsageStatsPage() {
       toast.success('调用记录已清除')
       setClearDialogOpen(false)
       fetchData()
-    } catch (error) {
+    } catch {
       toast.error('清除失败')
     } finally {
       setClearing(false)
@@ -161,7 +167,7 @@ export default function UsageStatsPage() {
   }
 
   // 统计卡片数据 (后端字段: totalCalls, successCalls, totalInputTokens, totalOutputTokens, avgDuration)
-  const todayStats = stats?.today as any
+  const todayStats = stats?.today
   const statCards = stats ? [
     {
       title: '今日调用',
@@ -190,13 +196,13 @@ export default function UsageStatsPage() {
   ] : []
 
   // 模型排行 (后端返回数组: [{ model, calls, tokens, duration }, ...])
-  const modelRanking = (stats as any)?.modelRanking 
-    ? ((stats as any).modelRanking as any[]).map(item => ({ name: item.model, calls: item.calls, tokens: item.tokens })).slice(0, 5)
+  const modelRanking = stats?.modelRanking 
+    ? stats.modelRanking.map(item => ({ name: item.model, calls: item.calls, tokens: item.tokens })).slice(0, 5)
     : []
 
   // 渠道排行 (后端返回数组: [{ channelId, channelName, calls, tokens, ... }, ...])
-  const channelRanking = (stats as any)?.channelRanking
-    ? ((stats as any).channelRanking as any[]).map(item => ({ name: item.channelName || item.channelId, calls: item.calls, tokens: item.tokens })).slice(0, 5)
+  const channelRanking = stats?.channelRanking
+    ? stats.channelRanking.map(item => ({ name: item.channelName || item.channelId, calls: item.calls, tokens: item.tokens })).slice(0, 5)
     : []
 
   if (loading) {

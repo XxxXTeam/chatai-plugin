@@ -215,7 +215,7 @@ export function TouchFriendlyItem({
   )
 }
 
-export default {
+const MobileOptimized = {
   MobileButtonGroup,
   MobileButton,
   MobileDialogContent,
@@ -224,3 +224,5 @@ export default {
   SafeAreaContainer,
   TouchFriendlyItem
 }
+
+export default MobileOptimized

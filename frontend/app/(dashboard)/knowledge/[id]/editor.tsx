@@ -63,7 +63,7 @@ export function KnowledgeEditor({ id: propsId }: Props) {
   const fetchDocument = async () => {
     try {
       setLoading(true)
-      const res = await knowledgeApi.get(id) as any
+      const res = await knowledgeApi.get(id) as { data?: KnowledgeDocument }
       if (res?.data) {
         setDoc(res.data)
         setForm({

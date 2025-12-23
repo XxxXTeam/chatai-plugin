@@ -20,7 +20,7 @@ import {
   SelectValue 
 } from '@/components/ui/select'
 import { DynamicTags } from '@/components/ui/dynamic-tags'
-import { DynamicInput } from '@/components/ui/dynamic-input'
+// import { DynamicInput } from '@/components/ui/dynamic-input'
 import { ModelSelector } from '@/components/ModelSelector'
 import { 
   Dialog, 
@@ -35,7 +35,7 @@ import { PageHeader, PageContainer } from '@/components/layout/PageHeader'
 import { configApi, channelsApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { 
-  Save, Loader2, Info, X, RefreshCw, Settings2, Plus, Check,
+  Save, Loader2, Info, X, RefreshCw, Settings2, Check,
   Settings, Zap, Bot, Wrench, Brain, Sparkles, MessageSquare, Shield
 } from 'lucide-react'
 
@@ -240,7 +240,7 @@ export default function SettingsPage() {
     saveTimeoutRef.current = setTimeout(async () => {
       setSaveStatus('saving')
       try {
-        await configApi.update(configToSave)
+        await configApi.update(configToSave as unknown as Record<string, unknown>)
         setSaveStatus('saved')
         setTimeout(() => setSaveStatus('idle'), 2000)
       } catch (error) {
@@ -266,11 +266,12 @@ export default function SettingsPage() {
         ])
         
         // 深度合并配置
-        const data = (configRes as any).data || {}
+        const data = (configRes as { data?: Record<string, unknown> }).data || {}
         const merged = JSON.parse(JSON.stringify(defaultConfig))
         
         // 递归深度合并函数
-        const deepMerge = (target: any, source: any) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const deepMerge = (target: Record<string, any>, source: Record<string, any>) => {
           Object.keys(source).forEach(key => {
             if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
               if (!target[key]) target[key] = {}
@@ -302,9 +303,9 @@ export default function SettingsPage() {
         setTimeout(() => { isInitialLoad.current = false }, 100)
 
         // 获取所有模型
-        const channels = (channelsRes as any)?.data || []
+        const channels = (channelsRes as { data?: Array<{ models?: string[] }> })?.data || []
         const models = new Set<string>()
-        channels.forEach((ch: any) => {
+        channels.forEach((ch: { models?: string[] }) => {
           if (Array.isArray(ch.models)) {
             ch.models.forEach((m: string) => models.add(m))
           }
@@ -327,9 +328,9 @@ export default function SettingsPage() {
     setFetchingModels(true)
     try {
       const res = await channelsApi.list()
-      const channels = (res as any)?.data || []
+      const channels = (res as { data?: Array<{ models?: string[] }> })?.data || []
       const models = new Set<string>()
-      channels.forEach((ch: any) => {
+      channels.forEach((ch: { models?: string[] }) => {
         if (Array.isArray(ch.models)) {
           ch.models.forEach((m: string) => models.add(m))
         }
@@ -401,7 +402,7 @@ export default function SettingsPage() {
     if (!config) return
     setSaving(true)
     try {
-      await configApi.update(config)
+      await configApi.update(config as unknown as Record<string, unknown>)
       setSaveStatus('saved')
       toast.success('配置已保存')
       setTimeout(() => setSaveStatus('idle'), 2000)
@@ -690,7 +691,7 @@ export default function SettingsPage() {
                 <p className="text-xs text-muted-foreground">管理命令的前缀，如 #ai帮助、#ai状态 等</p>
               </div>
               <div className="flex items-center justify-between">
-                <div><Label>思考提示</Label><p className="text-sm text-muted-foreground">AI处理时发送"思考中..."提示</p></div>
+                <div><Label>思考提示</Label><p className="text-sm text-muted-foreground">AI处理时发送&quot;思考中...&quot;提示</p></div>
                 <Switch checked={config.basic?.showThinkingMessage ?? true} onCheckedChange={(v) => updateConfig('basic.showThinkingMessage', v)} />
               </div>
               <div className="flex items-center justify-between">
@@ -1001,7 +1002,7 @@ export default function SettingsPage() {
                 <Alert>
                   <Info className="h-4 w-4" />
                   <AlertDescription>
-                    思考适配已关闭，上方的显示和转发设置将不会生效。如需显示思考内容，请先开启"启用思考适配"。
+                    思考适配已关闭，上方的显示和转发设置将不会生效。如需显示思考内容，请先开启&quot;启用思考适配&quot;。
                   </AlertDescription>
                 </Alert>
               )}
@@ -1061,7 +1062,7 @@ export default function SettingsPage() {
                   <div className="grid gap-2">
                     <Label>自定义提示词</Label>
                     <Textarea 
-                      value={(config.features?.poke as any)?.prompt || ''} 
+                      value={(config.features?.poke as { prompt?: string })?.prompt || ''} 
                       onChange={(e) => updateConfig('features.poke.prompt', e.target.value)} 
                       placeholder="[事件通知] {nickname} 戳了你一下。请根据你的人设性格，给出一个简短自然的回应。"
                       rows={2}
@@ -1085,7 +1086,7 @@ export default function SettingsPage() {
                   <div className="grid gap-2">
                     <Label>添加回应提示词</Label>
                     <Textarea 
-                      value={(config.features?.reaction as any)?.prompt || ''} 
+                      value={(config.features?.reaction as { prompt?: string })?.prompt || ''} 
                       onChange={(e) => updateConfig('features.reaction.prompt', e.target.value)} 
                       placeholder='[事件通知] {nickname} 对你之前的消息做出了"{emoji}"的表情回应。{context}这是对你消息的反馈，你可以简短回应表示感谢或互动，也可以选择不回复。'
                       rows={2}
@@ -1095,7 +1096,7 @@ export default function SettingsPage() {
                   <div className="grid gap-2">
                     <Label>取消回应提示词</Label>
                     <Textarea 
-                      value={(config.features?.reaction as any)?.removePrompt || ''} 
+                      value={(config.features?.reaction as { removePrompt?: string })?.removePrompt || ''} 
                       onChange={(e) => updateConfig('features.reaction.removePrompt', e.target.value)} 
                       placeholder='[事件通知] {nickname} 取消了对你之前消息的"{emoji}"表情回应。{context}你可以忽略这个事件，也可以简短回应。'
                       rows={2}
@@ -1126,7 +1127,7 @@ export default function SettingsPage() {
                   <div className="grid gap-2">
                     <Label>自定义提示词</Label>
                     <Textarea 
-                      value={(config.features?.recall as any)?.prompt || ''} 
+                      value={(config.features?.recall as { prompt?: string })?.prompt || ''} 
                       onChange={(e) => updateConfig('features.recall.prompt', e.target.value)} 
                       placeholder="[事件通知] {nickname} 刚刚撤回了一条消息{message_hint}。你可以调侃一下，也可以忽略。"
                       rows={2}
@@ -1157,7 +1158,7 @@ export default function SettingsPage() {
                   <div className="grid gap-2">
                     <Label>自定义提示词</Label>
                     <Textarea 
-                      value={(config.features?.welcome as any)?.prompt || ''} 
+                      value={(config.features?.welcome as { prompt?: string })?.prompt || ''} 
                       onChange={(e) => updateConfig('features.welcome.prompt', e.target.value)} 
                       placeholder="[事件通知] {nickname} 刚刚加入了群聊。请用你的人设性格给出一个简短友好的欢迎语。"
                       rows={2}
@@ -1185,7 +1186,7 @@ export default function SettingsPage() {
                   <div className="grid gap-2">
                     <Label>自定义提示词</Label>
                     <Textarea 
-                      value={(config.features?.goodbye as any)?.prompt || ''} 
+                      value={(config.features?.goodbye as { prompt?: string })?.prompt || ''} 
                       onChange={(e) => updateConfig('features.goodbye.prompt', e.target.value)} 
                       placeholder="[事件通知] {nickname} {action}了群聊。你可以简短表达一下，也可以忽略。"
                       rows={2}
@@ -1202,18 +1203,18 @@ export default function SettingsPage() {
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div><Label>启用</Label><p className="text-sm text-muted-foreground">群成员被禁言/解禁时响应</p></div>
-                <Switch checked={(config.features as any)?.ban?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.ban.enabled', v)} />
+                <Switch checked={(config.features as { ban?: { enabled?: boolean } })?.ban?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.ban.enabled', v)} />
               </div>
-              {(config.features as any)?.ban?.enabled && (
+              {(config.features as { ban?: { enabled?: boolean } })?.ban?.enabled && (
                 <>
                   <div className="flex items-center justify-between">
                     <div><Label>AI响应</Label><p className="text-sm text-muted-foreground">使用AI人设评论禁言事件</p></div>
-                    <Switch checked={(config.features as any)?.ban?.aiResponse ?? true} onCheckedChange={(v) => updateConfig('features.ban.aiResponse', v)} />
+                    <Switch checked={(config.features as { ban?: { aiResponse?: boolean } })?.ban?.aiResponse ?? true} onCheckedChange={(v) => updateConfig('features.ban.aiResponse', v)} />
                   </div>
                   <div className="grid gap-2">
                     <Label>自定义提示词</Label>
                     <Textarea 
-                      value={(config.features as any)?.ban?.prompt || ''} 
+                      value={(config.features as { ban?: { prompt?: string } })?.ban?.prompt || ''} 
                       onChange={(e) => updateConfig('features.ban.prompt', e.target.value)} 
                       placeholder="[事件通知] {nickname} 被 {operator} {action}。你可以简短评论一下，也可以忽略。"
                       rows={2}
@@ -1236,12 +1237,12 @@ export default function SettingsPage() {
                 <>
                   <div className="flex items-center justify-between">
                     <div><Label>祝贺他人</Label><p className="text-sm text-muted-foreground">其他人成为运气王时也祝贺</p></div>
-                    <Switch checked={(config.features?.luckyKing as any)?.congratulate ?? false} onCheckedChange={(v) => updateConfig('features.luckyKing.congratulate', v)} />
+                    <Switch checked={(config.features?.luckyKing as { congratulate?: boolean })?.congratulate ?? false} onCheckedChange={(v) => updateConfig('features.luckyKing.congratulate', v)} />
                   </div>
                   <div className="grid gap-2">
                     <Label>自定义提示词</Label>
                     <Textarea 
-                      value={(config.features?.luckyKing as any)?.prompt || ''} 
+                      value={(config.features?.luckyKing as { prompt?: string })?.prompt || ''} 
                       onChange={(e) => updateConfig('features.luckyKing.prompt', e.target.value)} 
                       placeholder="[事件通知] {nickname} 成为了红包运气王！{action}"
                       rows={2}
@@ -1264,7 +1265,7 @@ export default function SettingsPage() {
                 <div className="grid gap-2">
                   <Label>自定义提示词</Label>
                   <Textarea 
-                    value={(config.features?.honor as any)?.prompt || ''} 
+                    value={(config.features?.honor as { prompt?: string })?.prompt || ''} 
                     onChange={(e) => updateConfig('features.honor.prompt', e.target.value)} 
                     placeholder='[事件通知] 你获得了群荣誉"{honor}"！请简短表达一下。'
                     rows={2}
@@ -1286,7 +1287,7 @@ export default function SettingsPage() {
                 <div className="grid gap-2">
                   <Label>自定义提示词</Label>
                   <Textarea 
-                    value={(config.features?.essence as any)?.prompt || ''} 
+                    value={(config.features?.essence as { prompt?: string })?.prompt || ''} 
                     onChange={(e) => updateConfig('features.essence.prompt', e.target.value)} 
                     placeholder="[事件通知] {operator} 把你之前发的消息设置成了精华消息！请简短表达一下。"
                     rows={2}
@@ -1302,13 +1303,13 @@ export default function SettingsPage() {
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div><Label>启用</Label><p className="text-sm text-muted-foreground">机器人成为/取消管理员时响应</p></div>
-                <Switch checked={(config.features as any)?.admin?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.admin.enabled', v)} />
+                <Switch checked={(config.features as { admin?: { enabled?: boolean } })?.admin?.enabled ?? false} onCheckedChange={(v) => updateConfig('features.admin.enabled', v)} />
               </div>
-              {(config.features as any)?.admin?.enabled && (
+              {(config.features as { admin?: { enabled?: boolean } })?.admin?.enabled && (
                 <div className="grid gap-2">
                   <Label>自定义提示词</Label>
                   <Textarea 
-                    value={(config.features as any)?.admin?.prompt || ''} 
+                    value={(config.features as { admin?: { prompt?: string } })?.admin?.prompt || ''} 
                     onChange={(e) => updateConfig('features.admin.prompt', e.target.value)} 
                     placeholder="[事件通知] 你{action}！请简短表达一下。"
                     rows={2}
@@ -1351,7 +1352,7 @@ export default function SettingsPage() {
                   <div className="grid gap-2">
                     <Label>记忆提取模型</Label>
                     <Input 
-                      value={(config.memory as any)?.model || ''} 
+                      value={(config.memory as { model?: string })?.model || ''} 
                       onChange={(e) => updateConfig('memory.model', e.target.value)} 
                       placeholder="留空使用默认模型"
                     />

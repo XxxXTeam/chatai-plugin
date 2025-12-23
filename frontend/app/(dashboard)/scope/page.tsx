@@ -100,7 +100,7 @@ export default function ScopeManagerPage() {
 
   // 搜索功能
   const [searchKeyword, setSearchKeyword] = useState('')
-  const [searching, setSearching] = useState(false)
+  const [, setSearching] = useState(false)
 
   // 过滤后的数据
   const filteredUserScopes = searchKeyword 
@@ -129,16 +129,17 @@ export default function ScopeManagerPage() {
         scopeApi.getPersonalityConfig().catch(() => ({ data: null })),
       ])
 
-      setUserScopes((usersRes as any)?.data || [])
-      setGroupScopes((groupsRes as any)?.data || [])
-      setGroupUserScopes((groupUsersRes as any)?.data || [])
-      setPrivateScopes((privatesRes as any)?.data || [])
-      setPresets((presetsRes as any)?.data || [])
+      setUserScopes((usersRes as { data?: ScopeItem[] })?.data || [])
+      setGroupScopes((groupsRes as { data?: ScopeItem[] })?.data || [])
+      setGroupUserScopes((groupUsersRes as { data?: ScopeItem[] })?.data || [])
+      setPrivateScopes((privatesRes as { data?: ScopeItem[] })?.data || [])
+      setPresets((presetsRes as { data?: { id: string; name: string }[] })?.data || [])
 
-      if ((configRes as any)?.data) {
+      const configData = (configRes as { data?: { priority?: string[]; useIndependent?: boolean } })?.data
+      if (configData) {
         setPriorityConfig({
-          priority: (configRes as any).data.priority || ['group', 'group_user', 'user', 'default'],
-          useIndependent: (configRes as any).data.useIndependent !== false,
+          priority: configData.priority || ['group', 'group_user', 'user', 'default'],
+          useIndependent: configData.useIndependent !== false,
         })
       }
     } catch (error) {
@@ -157,7 +158,7 @@ export default function ScopeManagerPage() {
   const savePriorityConfig = async () => {
     setSavingPriority(true)
     try {
-      await scopeApi.updatePersonalityConfig(priorityConfig)
+      await scopeApi.updatePersonalityConfig(priorityConfig as unknown as Record<string, unknown>)
       toast.success('优先级配置已保存')
     } catch (error) {
       toast.error('保存失败')

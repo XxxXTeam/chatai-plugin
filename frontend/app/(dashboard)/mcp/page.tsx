@@ -129,9 +129,9 @@ export default function McpPage() {
         toolsApi.list(),
         toolsApi.getCategories().catch(() => ({ data: [] }))
       ])
-      const serversData = (serversRes as any)?.data || serversRes || []
-      const toolsData = (toolsRes as any)?.data || toolsRes || []
-      const categoriesData = (categoriesRes as any)?.data || categoriesRes || []
+      const serversData = (serversRes as { data?: McpServer[] })?.data || []
+      const toolsData = (toolsRes as { data?: McpTool[] })?.data || []
+      const categoriesData = (categoriesRes as { data?: ToolCategory[] })?.data || []
       setServers(Array.isArray(serversData) ? serversData : [])
       setTools(Array.isArray(toolsData) ? toolsData : [])
       setCategories(Array.isArray(categoriesData) ? categoriesData : [])
@@ -271,8 +271,8 @@ export default function McpPage() {
 
     try {
       const config = JSON.parse(importJson)
-      const res = await mcpApi.importConfig(config) as any
-      const result = res?.data || res || {}
+      const res = await mcpApi.importConfig(config) as { data?: { success?: number; total?: number } }
+      const result = res?.data || {}
       toast.success(`导入完成: 成功 ${result.success || 0}/${result.total || 0}`)
       setImportDialogOpen(false)
       setImportJson('')
@@ -318,15 +318,16 @@ export default function McpPage() {
     setTestResult('')
     try {
       const args = JSON.parse(testArgs)
-      const res = await toolsApi.test({ toolName: selectedTool.name, arguments: args }) as any
+      const res = await toolsApi.test({ toolName: selectedTool.name, arguments: args }) as { data?: unknown }
       if (res?.data !== undefined) {
         setTestResult(JSON.stringify(res.data, null, 2))
         toast.success('测试成功')
       } else {
         setTestResult(JSON.stringify(res, null, 2))
       }
-    } catch (error: any) {
-      const msg = error?.response?.data?.message || error?.message || '测试失败'
+    } catch (error) {
+      const err = error as { response?: { data?: { message?: string } }; message?: string }
+      const msg = err?.response?.data?.message || err?.message || '测试失败'
       setTestResult(`Error: ${msg}`)
       toast.error('测试失败: ' + msg)
     } finally {
@@ -368,8 +369,9 @@ export default {
     try {
       await toolsApi.createJs({ name: toolName, source })
       toast.success(`已复制为 JS 工具: ${toolName}`)
-    } catch (error: any) {
-      toast.error('复制失败: ' + (error?.response?.data?.message || error?.message || '未知错误'))
+    } catch (error) {
+      const err = error as { response?: { data?: { message?: string } }; message?: string }
+      toast.error('复制失败: ' + (err?.response?.data?.message || err?.message || '未知错误'))
     }
   }
 
@@ -384,10 +386,11 @@ export default {
       toast.success(`${enabled ? '启用' : '禁用'}成功`)
       // 刷新工具列表
       const toolsRes = await toolsApi.list()
-      const toolsData = (toolsRes as any)?.data || toolsRes || []
+      const toolsData = (toolsRes as { data?: McpTool[] })?.data || []
       setTools(Array.isArray(toolsData) ? toolsData : [])
-    } catch (error: any) {
-      toast.error('操作失败: ' + (error?.response?.data?.message || error?.message || '未知错误'))
+    } catch (error) {
+      const err = error as { response?: { data?: { message?: string } }; message?: string }
+      toast.error('操作失败: ' + (err?.response?.data?.message || err?.message || '未知错误'))
     } finally {
       setTogglingCategory(null)
     }

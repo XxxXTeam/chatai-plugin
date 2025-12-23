@@ -21,11 +21,8 @@ import {
   Server,
   ArrowRight,
   History,
-  UsersRound,
   LayoutDashboard,
-  Zap,
   BookOpen,
-  Brain,
 } from 'lucide-react'
 
 interface Channel {
@@ -69,10 +66,10 @@ export default function DashboardPage() {
           mcpApi.listServers().catch(() => ({ data: [] })),
         ])
         setData({
-          channels: (channelsRes as any)?.data || [],
-          config: (configRes as any)?.data || {},
-          toolsCount: Array.isArray((toolsRes as any)?.data) ? (toolsRes as any).data.length : 0,
-          serversCount: Array.isArray((serversRes as any)?.data) ? (serversRes as any).data.length : 0,
+          channels: (channelsRes as { data?: Channel[] })?.data || [],
+          config: (configRes as { data?: Record<string, unknown> })?.data || {},
+          toolsCount: Array.isArray((toolsRes as { data?: unknown[] })?.data) ? (toolsRes as { data: unknown[] }).data.length : 0,
+          serversCount: Array.isArray((serversRes as { data?: unknown[] })?.data) ? (serversRes as { data: unknown[] }).data.length : 0,
         })
       } catch (error) {
         console.error('Failed to fetch dashboard data:', error)
@@ -105,7 +102,7 @@ export default function DashboardPage() {
 
   const activeChannels = data?.channels.filter(c => c.enabled && c.status === 'active').length || 0
   const totalChannels = data?.channels.length || 0
-  const totalModels = data?.channels.reduce((acc: number, c: any) => acc + (Array.isArray(c.models) ? c.models.length : 0), 0) || 0
+  const totalModels = data?.channels.reduce((acc: number, c: Channel & { models?: string[] }) => acc + (Array.isArray(c.models) ? c.models.length : 0), 0) || 0
 
   const stats = [
     {
@@ -290,14 +287,14 @@ export default function DashboardPage() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm">MCP服务</span>
-                <Badge variant={(data?.config as any)?.mcp?.enabled ? 'default' : 'secondary'}>
-                  {(data?.config as any)?.mcp?.enabled ? '已启用' : '已禁用'}
+                <Badge variant={(data?.config as { mcp?: { enabled?: boolean } })?.mcp?.enabled ? 'default' : 'secondary'}>
+                  {(data?.config as { mcp?: { enabled?: boolean } })?.mcp?.enabled ? '已启用' : '已禁用'}
                 </Badge>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm">伪人模式</span>
-                <Badge variant={(data?.config as any)?.bym?.enable ? 'default' : 'secondary'}>
-                  {(data?.config as any)?.bym?.enable ? '已启用' : '已禁用'}
+                <Badge variant={(data?.config as { bym?: { enable?: boolean } })?.bym?.enable ? 'default' : 'secondary'}>
+                  {(data?.config as { bym?: { enable?: boolean } })?.bym?.enable ? '已启用' : '已禁用'}
                 </Badge>
               </div>
               <div className="flex items-center justify-between">

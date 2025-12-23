@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -40,6 +40,7 @@ interface GroupScope {
   modelId?: string
   enabled: boolean
   triggerMode?: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   settings?: any
   createdAt?: number
   updatedAt?: number
@@ -59,7 +60,7 @@ interface Preset {
 export default function GroupsPage() {
   const [groups, setGroups] = useState<GroupScope[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
-  const [channels, setChannels] = useState<Channel[]>([])
+  const [, setChannels] = useState<Channel[]>([])
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingGroup, setEditingGroup] = useState<GroupScope | null>(null)
@@ -83,7 +84,7 @@ export default function GroupsPage() {
 
   const fetchData = async () => {
     try {
-      const [groupsRes, presetsRes, channelsRes]: any[] = await Promise.all([
+      const [groupsRes, presetsRes, channelsRes] = await Promise.all([
         scopeApi.getGroups(),
         presetsApi.list(),
         channelsApi.list()
@@ -93,7 +94,7 @@ export default function GroupsPage() {
       setChannels(channelsRes?.data || [])
       // 提取所有模型
       const models = new Set<string>()
-      ;(channelsRes?.data || []).forEach((ch: any) => {
+      ;((channelsRes as { data?: Channel[] })?.data || []).forEach((ch: Channel) => {
         if (Array.isArray(ch.models)) {
           ch.models.forEach((m: string) => models.add(m))
         }

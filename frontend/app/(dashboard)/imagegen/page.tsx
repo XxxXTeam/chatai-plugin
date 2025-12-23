@@ -32,13 +32,6 @@ import {
   TabsList,
   TabsTrigger,
 } from '@/components/ui/tabs'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import {
   AlertCircle,
@@ -52,7 +45,6 @@ import {
   Settings,
   Trash2,
   Wand2,
-  Globe,
   Box,
   X,
   Server,
@@ -147,8 +139,8 @@ export default function ImageGenPage() {
       setPresets(presetsRes.data?.presets || [])
       setStats(presetsRes.data?.stats || null)
       setConfig(configRes.data || null)
-    } catch (error: any) {
-      toast.error('加载失败', { description: error.message })
+    } catch (error) {
+      toast.error('加载失败', { description: (error as Error).message })
     } finally {
       if (showLoading) setLoading(false)
     }
@@ -166,8 +158,8 @@ export default function ImageGenPage() {
       setStats(res.data?.stats || null)
       toast.success('预设重载成功')
       await loadData(false)
-    } catch (error: any) {
-      toast.error('重载失败', { description: error.message })
+    } catch (error) {
+      toast.error('重载失败', { description: (error as Error).message })
     } finally {
       setUpdating(false)
     }
@@ -179,11 +171,11 @@ export default function ImageGenPage() {
     try {
       const res = await imageGenApi.updatePresets()
       const results = res.data?.results || []
-      const successCount = results.filter((r: any) => r.success).length
+      const successCount = results.filter((r: { success?: boolean }) => r.success).length
       toast.success(`更新完成`, { description: `成功 ${successCount}/${results.length} 个来源` })
       await loadData(false)
-    } catch (error: any) {
-      toast.error('更新失败', { description: error.message })
+    } catch (error) {
+      toast.error('更新失败', { description: (error as Error).message })
     } finally {
       setUpdating(false)
     }
@@ -201,8 +193,8 @@ export default function ImageGenPage() {
       setAddSourceOpen(false)
       setNewSource({ name: '', url: '', enabled: true })
       await loadData(false)
-    } catch (error: any) {
-      toast.error('添加失败', { description: error.message })
+    } catch (error) {
+      toast.error('添加失败', { description: (error as Error).message })
     }
   }
 
@@ -212,8 +204,8 @@ export default function ImageGenPage() {
       await imageGenApi.deleteSource(index)
       toast.success('来源已删除')
       await loadData(false)
-    } catch (error: any) {
-      toast.error('删除失败', { description: error.message })
+    } catch (error) {
+      toast.error('删除失败', { description: (error as Error).message })
     }
   }
 
@@ -225,7 +217,7 @@ export default function ImageGenPage() {
     }
     try {
       const keywords = newPreset.keywords.split(/[,，\s]+/).filter(k => k.trim())
-      const data: any = {
+      const data: { keywords: string[]; prompt: string; needImage: boolean; splitGrid?: { cols: number; rows: number; padding: number } } = {
         keywords,
         prompt: newPreset.prompt,
         needImage: newPreset.needImage,
@@ -238,8 +230,8 @@ export default function ImageGenPage() {
       setAddPresetOpen(false)
       setNewPreset({ keywords: '', prompt: '', needImage: true, enableSplit: false, splitCols: 6, splitRows: 4, splitPadding: 0 })
       await loadData(false)
-    } catch (error: any) {
-      toast.error('添加失败', { description: error.message })
+    } catch (error) {
+      toast.error('添加失败', { description: (error as Error).message })
     }
   }
 
@@ -249,8 +241,8 @@ export default function ImageGenPage() {
       await imageGenApi.deleteCustomPreset(index)
       toast.success('预设已删除')
       await loadData(false)
-    } catch (error: any) {
-      toast.error('删除失败', { description: error.message })
+    } catch (error) {
+      toast.error('删除失败', { description: (error as Error).message })
     }
   }
 
@@ -260,8 +252,8 @@ export default function ImageGenPage() {
       await imageGenApi.deleteBuiltinPreset(uid)
       toast.success('预设已删除')
       await loadData(false)
-    } catch (error: any) {
-      toast.error('删除失败', { description: error.message })
+    } catch (error) {
+      toast.error('删除失败', { description: (error as Error).message })
     }
   }
 
@@ -271,8 +263,8 @@ export default function ImageGenPage() {
       await imageGenApi.deleteRemotePreset(source, uid)
       toast.success('预设已删除')
       await loadData(false)
-    } catch (error: any) {
-      toast.error('删除失败', { description: error.message })
+    } catch (error) {
+      toast.error('删除失败', { description: (error as Error).message })
     }
   }
 
@@ -287,9 +279,9 @@ export default function ImageGenPage() {
       enableSplit: !!(preset.splitGrid?.cols && preset.splitGrid?.rows),
       splitCols: preset.splitGrid?.cols || 6,
       splitRows: preset.splitGrid?.rows || 4,
-      splitPadding: (preset.splitGrid as any)?.padding || 0,
-      outputWidth: (preset as any).outputWidth || 0,
-      outputHeight: (preset as any).outputHeight || 0
+      splitPadding: (preset.splitGrid as { padding?: number } | undefined)?.padding || 0,
+      outputWidth: (preset as { outputWidth?: number }).outputWidth || 0,
+      outputHeight: (preset as { outputHeight?: number }).outputHeight || 0
     })
     setEditPresetOpen(true)
   }
@@ -305,7 +297,7 @@ export default function ImageGenPage() {
     
     try {
       const keywords = editingPreset.keywords.split(/[,，\s]+/).filter(k => k.trim())
-      const data: any = {
+      const data: { keywords: string[]; prompt: string; needImage: boolean; splitGrid?: { cols: number; rows: number; padding: number } | null } = {
         keywords,
         prompt: editingPreset.prompt,
         needImage: editingPreset.needImage
@@ -328,8 +320,8 @@ export default function ImageGenPage() {
       setEditPresetOpen(false)
       setEditingPreset(null)
       await loadData(false)
-    } catch (error: any) {
-      toast.error('保存失败', { description: error.message })
+    } catch (error) {
+      toast.error('保存失败', { description: (error as Error).message })
     }
   }
 
@@ -339,8 +331,8 @@ export default function ImageGenPage() {
       await imageGenApi.updateConfig(updates)
       setConfig(c => c ? { ...c, ...updates } : c)
       toast.success('配置已保存')
-    } catch (error: any) {
-      toast.error('保存失败', { description: error.message })
+    } catch (error) {
+      toast.error('保存失败', { description: (error as Error).message })
     }
   }
 
@@ -661,7 +653,7 @@ export default function ImageGenPage() {
                                   enableSplit: !!(preset.splitGrid?.cols && preset.splitGrid?.rows),
                                   splitCols: preset.splitGrid?.cols || 6,
                                   splitRows: preset.splitGrid?.rows || 4,
-                                  splitPadding: (preset.splitGrid as any)?.padding || 0,
+                                  splitPadding: (preset.splitGrid as { padding?: number } | undefined)?.padding || 0,
                                   outputWidth: 0,
                                   outputHeight: 0
                                 })
@@ -800,7 +792,7 @@ export default function ImageGenPage() {
                               baseUrl: api.baseUrl,
                               apiKey: api.apiKey
                             })
-                            const models = (res as any)?.data?.models || []
+                            const models = (res as { data?: { models?: string[] } })?.data?.models || []
                             const apis = [...(config?.apis || [])]
                             apis[index] = { ...apis[index], models }
                             setConfig(c => c ? { ...c, apis } : c)

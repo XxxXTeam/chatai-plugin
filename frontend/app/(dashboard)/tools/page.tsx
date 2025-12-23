@@ -134,8 +134,8 @@ export default function ToolsPage() {
   const fetchTools = async () => {
     setLoading(true)
     try {
-      const res = await toolsApi.list() as any
-      const data = res?.data || res || []
+      const res = await toolsApi.list() as { data?: Tool[] }
+      const data = res?.data || []
       setTools(Array.isArray(data) ? data : [])
       toast.success(`成功加载 ${Array.isArray(data) ? data.length : 0} 个工具`)
     } catch (error) {
@@ -149,7 +149,7 @@ export default function ToolsPage() {
   // 获取内置工具配置
   const fetchBuiltinConfig = async () => {
     try {
-      const res = await toolsApi.getBuiltinConfig() as any
+      const res = await toolsApi.getBuiltinConfig() as { data?: BuiltinConfig }
       if (res?.data) {
         setBuiltinConfig(res.data)
       }
@@ -161,7 +161,7 @@ export default function ToolsPage() {
   // 获取 JS 工具列表
   const fetchJsTools = async () => {
     try {
-      const res = await toolsApi.getJs() as any
+      const res = await toolsApi.getJs() as { data?: JsTool[] }
       setJsTools(res?.data || [])
     } catch (error) {
       console.error('Failed to fetch JS tools', error)
@@ -181,8 +181,8 @@ export default function ToolsPage() {
       // 使用 filename 获取工具源码（去掉.js后缀）
       const fileKey = tool.filename?.replace(/\.js$/, '') || tool.name
       try {
-        const res = await toolsApi.getJsDetail(fileKey) as any
-        const data = res?.data || res || {}
+        const res = await toolsApi.getJsDetail(fileKey) as { data?: { description?: string; parameters?: unknown; source?: string; code?: string } }
+        const data = res?.data || {}
         setJsForm({
           name: tool.name,
           filename: tool.filename || `${tool.name}.js`,
@@ -239,8 +239,8 @@ export default function ToolsPage() {
       setJsEditOpen(false)
       fetchTools()
       fetchJsTools()
-    } catch (error: any) {
-      toast.error('保存失败: ' + (error?.message || '未知错误'))
+    } catch (error) {
+      toast.error('保存失败: ' + ((error as Error)?.message || '未知错误'))
     } finally {
       setJsSaving(false)
     }
@@ -354,7 +354,7 @@ export default function ToolsPage() {
 
     try {
       const args = JSON.parse(testArgs)
-      const res = await toolsApi.test({ toolName: selectedTool.name, arguments: args }) as any
+      const res = await toolsApi.test({ toolName: selectedTool.name, arguments: args }) as { data?: unknown }
 
       if (res?.data !== undefined) {
         setTestResult(JSON.stringify(res.data, null, 2))
@@ -362,8 +362,9 @@ export default function ToolsPage() {
       } else {
         setTestResult(JSON.stringify(res, null, 2))
       }
-    } catch (error: any) {
-      const msg = error?.response?.data?.message || error?.message || '测试失败'
+    } catch (error) {
+      const err = error as { response?: { data?: { message?: string } }; message?: string }
+      const msg = err?.response?.data?.message || err?.message || '测试失败'
       setTestResult(`Error: ${msg}`)
       toast.error('工具测试失败: ' + msg)
     } finally {
@@ -378,8 +379,8 @@ export default function ToolsPage() {
       await toolsApi.updateBuiltinConfig(builtinConfig)
       toast.success('配置已保存')
       fetchTools()
-    } catch (error: any) {
-      toast.error('保存失败: ' + (error?.message || '未知错误'))
+    } catch (error) {
+      toast.error('保存失败: ' + ((error as Error)?.message || '未知错误'))
     } finally {
       setConfigSaving(false)
     }
@@ -388,7 +389,7 @@ export default function ToolsPage() {
   // 刷新内置工具
   const refreshBuiltinTools = async () => {
     try {
-      const res = await toolsApi.refreshBuiltin() as any
+      const res = await toolsApi.refreshBuiltin() as { data?: { count?: number } }
       toast.success(`已刷新 ${res?.data?.count || 0} 个内置工具`)
       fetchTools()
     } catch (error) {

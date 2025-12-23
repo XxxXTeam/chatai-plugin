@@ -1063,6 +1063,16 @@ export class WebServer {
                     allowedTools: [],
                     disabledTools: [],
                     allowDangerous: false
+                },
+                web: {
+                    port: config.get('web.port') || 3000
+                },
+                redis: {
+                    enabled: config.get('redis.enabled') !== false,
+                    host: config.get('redis.host') || '127.0.0.1',
+                    port: config.get('redis.port') || 6379,
+                    password: config.get('redis.password') || '',
+                    db: config.get('redis.db') || 0
                 }
             }
             res.json(ChaiteResponse.ok(advancedConfig))
@@ -1070,7 +1080,7 @@ export class WebServer {
 
         // PUT /api/config/advanced - Update advanced configuration (protected)
         this.app.put('/api/config/advanced', this.authMiddleware.bind(this), (req, res) => {
-            const { thinking, streaming, llm, context, memory, tools, builtinTools } = req.body
+            const { thinking, streaming, llm, context, memory, tools, builtinTools, web, redis } = req.body
 
             if (thinking) {
                 if (thinking.enabled !== undefined) {
@@ -1193,6 +1203,32 @@ export class WebServer {
             // 内置工具配置
             if (builtinTools) {
                 config.set('builtinTools', { ...config.get('builtinTools'), ...builtinTools })
+            }
+
+            // Web服务配置
+            if (web) {
+                if (web.port !== undefined) {
+                    config.set('web.port', web.port)
+                }
+            }
+
+            // Redis配置
+            if (redis) {
+                if (redis.enabled !== undefined) {
+                    config.set('redis.enabled', redis.enabled)
+                }
+                if (redis.host !== undefined) {
+                    config.set('redis.host', redis.host)
+                }
+                if (redis.port !== undefined) {
+                    config.set('redis.port', redis.port)
+                }
+                if (redis.password !== undefined) {
+                    config.set('redis.password', redis.password)
+                }
+                if (redis.db !== undefined) {
+                    config.set('redis.db', redis.db)
+                }
             }
 
             res.json(ChaiteResponse.ok({ success: true }))
@@ -2948,6 +2984,37 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
+
+        // POST /api/memory/:userId/summarize - 手动触发用户记忆总结（覆盖式）
+        this.app.post('/api/memory/:userId/summarize', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { memoryManager } = await import('./storage/MemoryManager.js')
+                const result = await memoryManager.summarizeUserMemory(req.params.userId)
+                if (result.success) {
+                    res.json(ChaiteResponse.ok(result))
+                } else {
+                    res.status(400).json(ChaiteResponse.fail(null, result.error))
+                }
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/memory/group/:groupId/summarize - 手动触发群记忆总结（覆盖式）
+        this.app.post('/api/memory/group/:groupId/summarize', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const { memoryManager } = await import('./storage/MemoryManager.js')
+                const result = await memoryManager.summarizeGroupMemory(req.params.groupId)
+                if (result.success) {
+                    res.json(ChaiteResponse.ok(result))
+                } else {
+                    res.status(400).json(ChaiteResponse.fail(null, result.error))
+                }
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
         // GET /api/state - Get state information (protected)
         this.app.get('/api/state', this.authMiddleware.bind(this), (req, res) => {
             res.json(ChaiteResponse.ok({

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, ReactNode } from 'react'
+import { useState, useEffect, ReactNode } from 'react'
 
 /**
  * 响应式断点定义
@@ -47,12 +47,15 @@ export function useResponsive() {
  * 媒体查询Hook
  */
 export function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(false)
+  const getMatches = (q: string): boolean => {
+    if (typeof window === 'undefined') return false
+    return window.matchMedia(q).matches
+  }
+
+  const [matches, setMatches] = useState(() => getMatches(query))
 
   useEffect(() => {
     const media = window.matchMedia(query)
-    setMatches(media.matches)
-
     const listener = (e: MediaQueryListEvent) => setMatches(e.matches)
     media.addEventListener('change', listener)
     return () => media.removeEventListener('change', listener)
@@ -74,10 +77,10 @@ export function useIsDesktop() {
 }
 
 export function useIsTouchDevice() {
-  const [isTouch, setIsTouch] = useState(false)
-  useEffect(() => {
-    setIsTouch('ontouchstart' in window || navigator.maxTouchPoints > 0)
-  }, [])
+  const [isTouch] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return 'ontouchstart' in window || navigator.maxTouchPoints > 0
+  })
   return isTouch
 }
 
@@ -95,17 +98,16 @@ export function useResponsiveValue<T>(values: { mobile?: T; tablet?: T; desktop:
  * 安全区域Hook
  */
 export function useSafeArea() {
-  const [safeArea, setSafeArea] = useState({ top: 0, bottom: 0, left: 0, right: 0 })
-
-  useEffect(() => {
+  const [safeArea] = useState(() => {
+    if (typeof window === 'undefined') return { top: 0, bottom: 0, left: 0, right: 0 }
     const computeStyle = getComputedStyle(document.documentElement)
-    setSafeArea({
+    return {
       top: parseInt(computeStyle.getPropertyValue('--sat') || '0'),
       bottom: parseInt(computeStyle.getPropertyValue('--sab') || '0'),
       left: parseInt(computeStyle.getPropertyValue('--sal') || '0'),
       right: parseInt(computeStyle.getPropertyValue('--sar') || '0'),
-    })
-  }, [])
+    }
+  })
 
   return safeArea
 }

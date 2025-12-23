@@ -111,8 +111,17 @@ export function parseXmlToolCalls(text) {
     
     const toolCalls = []
     let cleanText = text
+    cleanText = cleanText
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')  
+        .replace(/<glm_block[\s\S]*?<\/glm_block>/gi, '')  
+        .replace(/<glm_block[^>]*>[\s\S]*$/gi, '') 
+        .replace(/[^\u4e00-\u9fa5\n]*?"type"\s*:\s*"mcp"\s*\}\s*<\/glm_block>/gi, '')  
+        .replace(/[^\u4e00-\u9fa5\n]*?\}\s*<\/glm_block>/gi, '') 
+        .replace(/<\/?glm_block[^>]*>/gi, '')
+        .replace(/<\/?think>/gi, '') 
+        .trim()
     
-    // 格式A: <tools>JSON</tools>
+    // 格式A:  JSON
     const toolsRegex = /<tools>([\s\S]*?)<\/tools>/gi
     let match
     

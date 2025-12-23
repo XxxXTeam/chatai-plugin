@@ -176,18 +176,18 @@ api.interceptors.response.use(
 )
 export const configApi = {
   get: () => api.get('/api/config'),
-  update: (data: any) => api.post('/api/config', data),
+  update: <T extends object>(data: T) => api.post('/api/config', data as Record<string, unknown>),
   getAdvanced: () => api.get('/api/config/advanced'),
-  updateAdvanced: (data: any) => api.put('/api/config/advanced', data),
+  updateAdvanced: <T extends object>(data: T) => api.put('/api/config/advanced', data as Record<string, unknown>),
 }
 export const channelsApi = {
   list: (withStats = false) => api.get(`/api/channels/list?withStats=${withStats}`),
   get: (id: string) => api.get(`/api/channels/${id}`),
-  create: (data: any) => api.post('/api/channels', data),
-  update: (id: string, data: any) => api.put(`/api/channels/${id}`, data),
+  create: (data: Record<string, unknown>) => api.post('/api/channels', data),
+  update: (id: string, data: Record<string, unknown>) => api.put(`/api/channels/${id}`, data),
   delete: (id: string) => api.delete(`/api/channels/${id}`),
-  test: (data: any) => api.post('/api/channels/test', data),
-  fetchModels: (data: any) => api.post('/api/channels/fetch-models', data),
+  test: (data: Record<string, unknown>) => api.post('/api/channels/test', data),
+  fetchModels: (data: Record<string, unknown>) => api.post('/api/channels/fetch-models', data),
   getStats: () => api.get('/api/channels/stats'),
 }
 export const authApi = {
@@ -213,17 +213,17 @@ export const conversationsApi = {
 export const presetsApi = {
   list: () => api.get('/api/preset/list'),
   get: (id: string) => api.get(`/api/preset/${id}`),
-  create: (data: any) => api.post('/api/preset/', data),
-  update: (id: string, data: any) => api.put(`/api/preset/${id}`, data),
+  create: (data: Record<string, unknown>) => api.post('/api/preset/', data),
+  update: (id: string, data: Record<string, unknown>) => api.put(`/api/preset/${id}`, data),
   delete: (id: string) => api.delete(`/api/preset/${id}`),
   setDefault: (id: string) => api.post(`/api/preset/${id}/default`),
   getPrompt: (id: string) => api.get(`/api/preset/${id}/prompt`),
   getConfig: () => api.get('/api/presets/config'),
-  updateConfig: (data: any) => api.put('/api/presets/config', data),
+  updateConfig: (data: Record<string, unknown>) => api.put('/api/presets/config', data),
   // 内置预设库 API
   listBuiltin: () => api.get('/api/presets/builtin'),
   getCategories: () => api.get('/api/presets/categories'),
-  createFromBuiltin: (builtinId: string, overrides?: any) => 
+  createFromBuiltin: (builtinId: string, overrides?: Record<string, unknown>) => 
     api.post(`/api/preset/from-builtin/${builtinId}`, overrides || {}),
   // 知识库关联
   getKnowledge: (id: string) => api.get(`/api/preset/${id}/knowledge`),
@@ -233,8 +233,8 @@ export const presetsApi = {
 export const knowledgeApi = {
   list: () => api.get('/api/knowledge'),
   get: (id: string) => api.get(`/api/knowledge/${id}`),
-  create: (data: any) => api.post('/api/knowledge', data),
-  update: (id: string, data: any) => api.put(`/api/knowledge/${id}`, data),
+  create: (data: Record<string, unknown>) => api.post('/api/knowledge', data),
+  update: (id: string, data: Record<string, unknown>) => api.put(`/api/knowledge/${id}`, data),
   delete: (id: string) => api.delete(`/api/knowledge/${id}`),
   search: (query: string, options?: { presetId?: string; limit?: number }) => 
     api.get('/api/knowledge/search', { params: { q: query, ...options } }),
@@ -244,7 +244,7 @@ export const knowledgeApi = {
     api.delete(`/api/knowledge/${docId}/link/${presetId}`),
   // 导入知识库（支持 OpenIE 等格式）
   import: (data: { 
-    data: any; 
+    data: unknown; 
     format?: 'openie' | 'raw'; 
     name?: string; 
     tags?: string[];
@@ -257,7 +257,7 @@ export const knowledgeApi = {
 export const toolsApi = {
   list: () => api.get('/api/tools/list'),
   getBuiltinConfig: () => api.get('/api/tools/builtin/config'),
-  updateBuiltinConfig: (data: any) => api.put('/api/tools/builtin/config', data),
+  updateBuiltinConfig: <T extends object>(data: T) => api.put('/api/tools/builtin/config', data as Record<string, unknown>),
   getBuiltinList: () => api.get('/api/tools/builtin/list'),
   refreshBuiltin: () => api.post('/api/tools/builtin/refresh'),
   // 工具类别和开关
@@ -268,16 +268,16 @@ export const toolsApi = {
     api.post('/api/tools/builtin/tool/toggle', { toolName, enabled }),
   // 自定义工具
   getCustom: () => api.get('/api/tools/custom'),
-  createCustom: (data: any) => api.post('/api/tools/custom', data),
-  updateCustom: (name: string, data: any) => api.put(`/api/tools/custom/${name}`, data),
+  createCustom: (data: Record<string, unknown>) => api.post('/api/tools/custom', data),
+  updateCustom: (name: string, data: Record<string, unknown>) => api.put(`/api/tools/custom/${name}`, data),
   deleteCustom: (name: string) => api.delete(`/api/tools/custom/${name}`),
   getJs: () => api.get('/api/tools/js'),
   getJsDetail: (name: string) => api.get(`/api/tools/js/${name}`),
-  updateJs: (name: string, data: any) => api.put(`/api/tools/js/${name}`, data),
-  createJs: (data: any) => api.post('/api/tools/js', data),
+  updateJs: (name: string, data: Record<string, unknown>) => api.put(`/api/tools/js/${name}`, data),
+  createJs: (data: Record<string, unknown>) => api.post('/api/tools/js', data),
   deleteJs: (name: string) => api.delete(`/api/tools/js/${name}`),
   reloadJs: () => api.post('/api/tools/js/reload'),
-  test: (data: any) => api.post('/api/tools/test', data),
+  test: (data: Record<string, unknown>) => api.post('/api/tools/test', data),
   getLogs: () => api.get('/api/tools/logs'),
   clearLogs: () => api.delete('/api/tools/logs'),
 }
@@ -286,32 +286,35 @@ export const toolsApi = {
 export const mcpApi = {
   listServers: () => api.get('/api/mcp/servers'),
   getServer: (name: string) => api.get(`/api/mcp/servers/${name}`),
-  createServer: (data: any) => api.post('/api/mcp/servers', data),
-  updateServer: (name: string, data: any) => api.put(`/api/mcp/servers/${name}`, data),
+  createServer: (data: Record<string, unknown>) => api.post('/api/mcp/servers', data),
+  updateServer: (name: string, data: Record<string, unknown>) => api.put(`/api/mcp/servers/${name}`, data),
   deleteServer: (name: string) => api.delete(`/api/mcp/servers/${name}`),
   reconnectServer: (name: string) => api.post(`/api/mcp/servers/${name}/reconnect`),
-  importConfig: (data: any) => api.post('/api/mcp/import', data),
+  importConfig: (data: Record<string, unknown>) => api.post('/api/mcp/import', data),
   getResources: () => api.get('/api/mcp/resources'),
-  readResource: (data: any) => api.post('/api/mcp/resources/read', data),
+  readResource: (data: Record<string, unknown>) => api.post('/api/mcp/resources/read', data),
   getPrompts: () => api.get('/api/mcp/prompts'),
-  getPrompt: (data: any) => api.post('/api/mcp/prompts/get', data),
+  getPrompt: (data: Record<string, unknown>) => api.post('/api/mcp/prompts/get', data),
 }
 
 // Context API
 export const contextApi = {
   list: () => api.get('/api/context/list'),
-  clear: (data: any) => api.post('/api/context/clear', data),
+  clear: (data: Record<string, unknown>) => api.post('/api/context/clear', data),
 }
 
 // Memory API
 export const memoryApi = {
   getUsers: () => api.get('/api/memory/users'),
   get: (userId: string) => api.get(`/api/memory/${userId}`),
-  create: (data: any) => api.post('/api/memory', data),
+  create: (data: Record<string, unknown>) => api.post('/api/memory', data),
   delete: (userId: string, memoryId: string) => api.delete(`/api/memory/${userId}/${memoryId}`),
   clearAll: () => api.delete('/api/memory/clear-all'),
   clearUser: (userId: string) => api.delete(`/api/memory/${userId}`),
-  search: (data: any) => api.post('/api/memory/search', data),
+  search: (data: Record<string, unknown>) => api.post('/api/memory/search', data),
+  // 手动触发记忆总结（覆盖式）
+  summarize: (userId: string) => api.post(`/api/memory/${userId}/summarize`),
+  summarizeGroup: (groupId: string) => api.post(`/api/memory/group/${groupId}/summarize`),
 }
 
 // Scope API
@@ -319,27 +322,27 @@ export const scopeApi = {
   // 用户人格（全局）
   getUsers: () => api.get('/api/scope/users'),
   getUser: (userId: string) => api.get(`/api/scope/user/${userId}`),
-  updateUser: (userId: string, data: any) => api.put(`/api/scope/user/${userId}`, data),
+  updateUser: <T extends object>(userId: string, data: T) => api.put(`/api/scope/user/${userId}`, data as Record<string, unknown>),
   deleteUser: (userId: string) => api.delete(`/api/scope/user/${userId}`),
   // 群组人格
   getGroups: () => api.get('/api/scope/groups'),
   getGroup: (groupId: string) => api.get(`/api/scope/group/${groupId}`),
-  updateGroup: (groupId: string, data: any) => api.put(`/api/scope/group/${groupId}`, data),
+  updateGroup: <T extends object>(groupId: string, data: T) => api.put(`/api/scope/group/${groupId}`, data as Record<string, unknown>),
   deleteGroup: (groupId: string) => api.delete(`/api/scope/group/${groupId}`),
   // 群内用户人格
   getGroupUsers: () => api.get('/api/scope/group-users'),
   getGroupUser: (groupId: string, userId: string) => api.get(`/api/scope/group/${groupId}/user/${userId}`),
-  updateGroupUser: (groupId: string, userId: string, data: any) => api.put(`/api/scope/group/${groupId}/user/${userId}`, data),
+  updateGroupUser: <T extends object>(groupId: string, userId: string, data: T) => api.put(`/api/scope/group/${groupId}/user/${userId}`, data as Record<string, unknown>),
   deleteGroupUser: (groupId: string, userId: string) => api.delete(`/api/scope/group/${groupId}/user/${userId}`),
   // 私聊人格
   getPrivates: () => api.get('/api/scope/privates'),
   getPrivate: (userId: string) => api.get(`/api/scope/private/${userId}`),
-  updatePrivate: (userId: string, data: any) => api.put(`/api/scope/private/${userId}`, data),
+  updatePrivate: <T extends object>(userId: string, data: T) => api.put(`/api/scope/private/${userId}`, data as Record<string, unknown>),
   deletePrivate: (userId: string) => api.delete(`/api/scope/private/${userId}`),
   // 其他
   getEffective: (userId: string) => api.get(`/api/scope/effective/${userId}`),
   getPersonalityConfig: () => api.get('/api/config/personality'),
-  updatePersonalityConfig: (data: any) => api.patch('/api/config/personality', data),
+  updatePersonalityConfig: <T extends object>(data: T) => api.patch('/api/config/personality', data as Record<string, unknown>),
 }
 
 // System API
@@ -445,7 +448,7 @@ export const imageGenApi = {
   reloadPresets: () => api.post('/api/imagegen/presets/reload'),
   updatePresets: (sourceName?: string) => api.post('/api/imagegen/presets/update', { sourceName }),
   getConfig: () => api.get('/api/imagegen/config'),
-  updateConfig: (data: any) => api.put('/api/imagegen/config', data),
+  updateConfig: (data: Record<string, unknown>) => api.put('/api/imagegen/config', data),
   addSource: (data: { name: string; url: string; enabled?: boolean }) => api.post('/api/imagegen/sources', data),
   deleteSource: (index: number) => api.delete(`/api/imagegen/sources/${index}`),
   addCustomPreset: (data: { keywords: string[]; prompt: string; needImage?: boolean }) => 

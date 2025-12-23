@@ -61,17 +61,19 @@ export function useResponsive() {
  * 媒体查询hook
  */
 export function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(false)
+  const getMatches = (q: string): boolean => {
+    if (typeof window === 'undefined') return false
+    return window.matchMedia(q).matches
+  }
+
+  const [matches, setMatches] = useState(() => getMatches(query))
 
   useEffect(() => {
     const media = window.matchMedia(query)
-    if (media.matches !== matches) {
-      setMatches(media.matches)
-    }
     const listener = () => setMatches(media.matches)
     media.addEventListener('change', listener)
     return () => media.removeEventListener('change', listener)
-  }, [matches, query])
+  }, [query])
 
   return matches
 }
@@ -80,11 +82,10 @@ export function useMediaQuery(query: string): boolean {
  * 触摸设备检测
  */
 export function useIsTouchDevice(): boolean {
-  const [isTouch, setIsTouch] = useState(false)
-
-  useEffect(() => {
-    setIsTouch('ontouchstart' in window || navigator.maxTouchPoints > 0)
-  }, [])
+  const [isTouch] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return 'ontouchstart' in window || navigator.maxTouchPoints > 0
+  })
 
   return isTouch
 }
@@ -93,22 +94,16 @@ export function useIsTouchDevice(): boolean {
  * 安全区域padding（用于移动端）
  */
 export function useSafeArea() {
-  const [safeArea, setSafeArea] = useState({
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-  })
-
-  useEffect(() => {
+  const [safeArea] = useState(() => {
+    if (typeof window === 'undefined') return { top: 0, right: 0, bottom: 0, left: 0 }
     const style = getComputedStyle(document.documentElement)
-    setSafeArea({
+    return {
       top: parseInt(style.getPropertyValue('--sat') || '0'),
       right: parseInt(style.getPropertyValue('--sar') || '0'),
       bottom: parseInt(style.getPropertyValue('--sab') || '0'),
       left: parseInt(style.getPropertyValue('--sal') || '0'),
-    })
-  }, [])
+    }
+  })
 
   return safeArea
 }

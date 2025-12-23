@@ -250,7 +250,7 @@ export function ApiKeyManager({
 
         {apiKeys.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground border rounded-lg border-dashed">
-            暂无API Key，点击"添加"按钮添加
+            暂无API Key，点击&quot;添加&quot;按钮添加
           </div>
         ) : (
           <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
@@ -419,7 +419,7 @@ export function ApiKeyManager({
                 onValueChange={(v: number[]) => setEditForm({ ...editForm, weight: v[0] })}
               />
               <p className="text-xs text-muted-foreground">
-                权重越高，在"权重"策略下被选中的概率越大
+                权重越高，在&quot;权重&quot;策略下被选中的概率越大
               </p>
             </div>
 

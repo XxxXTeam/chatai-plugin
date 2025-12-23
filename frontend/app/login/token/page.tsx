@@ -48,7 +48,7 @@ function TokenLoginContent() {
     // 2. 验证 URL token
     const verifyToken = async () => {
       try {
-        const res: any = await authApi.verifyToken(token)
+        const res = await authApi.verifyToken(token) as { success?: boolean; data?: { token?: string }; message?: string }
         if (res?.success || res?.data?.token) {
           // 保存 JWT token
           const authToken = res?.data?.token
@@ -64,10 +64,11 @@ function TokenLoginContent() {
         } else {
           throw new Error(res?.message || '验证失败')
         }
-      } catch (error: any) {
+      } catch (error) {
+        const err = error as { response?: { data?: { message?: string } }; message?: string }
         console.error('Token验证失败:', error)
         setStatus('error')
-        setMessage(error?.response?.data?.message || error?.message || '登录凭证无效或已过期')
+        setMessage(err?.response?.data?.message || err?.message || '登录凭证无效或已过期')
         toast.error('登录失败')
       }
     }

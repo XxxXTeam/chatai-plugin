@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -47,8 +47,8 @@ export default function HistoryPage() {
 
   const fetchLogs = async () => {
     try {
-      const res = await toolsApi.getLogs() as { data: ToolLog[] }
-      const data = (res as any)?.data || res || []
+      const res = await toolsApi.getLogs() as { data?: ToolLog[] }
+      const data = res?.data || []
       setLogs(Array.isArray(data) ? data : [])
     } catch (error) {
       toast.error('加载日志失败')

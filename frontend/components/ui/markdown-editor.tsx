@@ -6,8 +6,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 import { Textarea } from './textarea'
 import { Button } from './button'
-import { ScrollArea } from './scroll-area'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from './tabs'
+import { Tabs, TabsList, TabsTrigger } from './tabs'
 import { 
   Eye, Edit, Columns, Maximize2, Minimize2,
   Bold, Italic, Code, Link, List, ListOrdered, Quote, Table, Heading1, Heading2, Heading3
@@ -84,7 +83,7 @@ export function MarkdownEditor({
         blockquote: (props) => (
           <blockquote className="border-l-4 border-primary/50 pl-4 my-3 italic text-muted-foreground" {...props} />
         ),
-        code: ({ className, children, ...props }: any) => {
+        code: ({ className, children, ...props }: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode }) => {
           const isInline = !className
           if (isInline) {
             return <code className="bg-muted px-1.5 py-0.5 rounded text-sm font-mono">{children}</code>
@@ -103,7 +102,7 @@ export function MarkdownEditor({
         thead: (props) => <thead className="bg-muted" {...props} />,
         th: (props) => <th className="border border-border px-4 py-2 text-left font-semibold" {...props} />,
         td: (props) => <td className="border border-border px-4 py-2" {...props} />,
-        a: ({ href, ...props }: any) => (
+        a: ({ href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
           <a href={href} className="text-primary hover:underline" target="_blank" rel="noopener noreferrer" {...props} />
         ),
         hr: () => <hr className="my-6 border-border" />,
@@ -142,7 +141,7 @@ export function MarkdownEditor({
         </div>
         
         <div className="flex items-center gap-1">
-          <Tabs value={mode} onValueChange={(v) => setMode(v as any)}>
+          <Tabs value={mode} onValueChange={(v) => setMode(v as 'split' | 'edit' | 'preview')}>
             <TabsList className="h-7">
               <TabsTrigger value="edit" className="h-6 px-2 text-xs">
                 <Edit className="h-3 w-3 mr-1" />

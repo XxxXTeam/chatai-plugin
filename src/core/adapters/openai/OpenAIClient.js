@@ -29,54 +29,76 @@ function validateAndCleanMessages(messages) {
     if (!messages || !Array.isArray(messages)) return messages
     
     const cleaned = []
-    let lastAssistantWithToolCalls = null
+    let lastAssistantIndex = -1 
     let pendingToolMessages = []
     const validToolCallIds = new Set()
+    const matchedToolCallIds = new Set()  
+    const fixIncompleteToolCalls = () => {
+        if (lastAssistantIndex >= 0 && validToolCallIds.size > 0) {
+            const assistantMsg = cleaned[lastAssistantIndex]
+            if (assistantMsg && assistantMsg.tool_calls) {
+                const originalCount = assistantMsg.tool_calls.length
+                assistantMsg.tool_calls = assistantMsg.tool_calls.filter(tc => 
+                    tc.id && matchedToolCallIds.has(tc.id)
+                )
+                if (assistantMsg.tool_calls.length === 0) {
+                    delete assistantMsg.tool_calls
+                }
+                if (originalCount !== (assistantMsg.tool_calls?.length || 0)) {
+                    logger.debug(`[消息验证] 修复不完整的 tool_calls: ${originalCount} -> ${assistantMsg.tool_calls?.length || 0}`)
+                }
+            }
+        }
+        lastAssistantIndex = -1
+        validToolCallIds.clear()
+        matchedToolCallIds.clear()
+    }
     
     for (let i = 0; i < messages.length; i++) {
         const msg = messages[i]
         
         if (msg.role === 'assistant') {
-            if (pendingToolMessages.length > 0) {
-                logger.debug(`[消息验证] 丢弃 ${pendingToolMessages.length} 个孤立的 tool 消息`)
-                pendingToolMessages = []
-            }
-            cleaned.push(msg)
-            if (msg.tool_calls && msg.tool_calls.length > 0) {
-                lastAssistantWithToolCalls = msg
-                validToolCallIds.clear()
-                for (const tc of msg.tool_calls) {
-                    if (tc.id) validToolCallIds.add(tc.id)
-                }
-            } else {
-                lastAssistantWithToolCalls = null
-                validToolCallIds.clear()
-            }
-        } else if (msg.role === 'tool') {
-            // 检查是否有对应的 tool_calls
-            if (lastAssistantWithToolCalls && validToolCallIds.has(msg.tool_call_id)) {
-                cleaned.push(msg)
-                validToolCallIds.delete(msg.tool_call_id)
-                // 如果所有 tool_call_id 都已处理完，重置状态
-                if (validToolCallIds.size === 0) {
-                    lastAssistantWithToolCalls = null
-                }
-            } else {
-                // 孤立的 tool 消息，暂存
-                pendingToolMessages.push(msg)
-            }
-        } else {
+            fixIncompleteToolCalls()
+            
             if (pendingToolMessages.length > 0) {
                 logger.debug(`[消息验证] 丢弃 ${pendingToolMessages.length} 个孤立的 tool 消息`)
                 pendingToolMessages = []
             }
             
             cleaned.push(msg)
-            // 非 assistant 消息打断 tool_calls 的关联
-            lastAssistantWithToolCalls = null
-            validToolCallIds.clear()
+            
+            if (msg.tool_calls && msg.tool_calls.length > 0) {
+                lastAssistantIndex = cleaned.length - 1
+                for (const tc of msg.tool_calls) {
+                    if (tc.id) validToolCallIds.add(tc.id)
+                }
+            }
+        } else if (msg.role === 'tool') {
+            if (lastAssistantIndex >= 0 && validToolCallIds.has(msg.tool_call_id)) {
+                cleaned.push(msg)
+                matchedToolCallIds.add(msg.tool_call_id)
+                validToolCallIds.delete(msg.tool_call_id)
+                if (validToolCallIds.size === 0) {
+                    lastAssistantIndex = -1
+                    matchedToolCallIds.clear()
+                }
+            } else {
+                pendingToolMessages.push(msg)
+            }
+        } else {
+            fixIncompleteToolCalls()
+            
+            if (pendingToolMessages.length > 0) {
+                logger.debug(`[消息验证] 丢弃 ${pendingToolMessages.length} 个孤立的 tool 消息`)
+                pendingToolMessages = []
+            }
+            
+            cleaned.push(msg)
         }
     }
+    
+    // 处理末尾未完成的 tool_calls
+    fixIncompleteToolCalls()
     
     // 处理末尾残留的孤立 tool 消息
     if (pendingToolMessages.length > 0) {
