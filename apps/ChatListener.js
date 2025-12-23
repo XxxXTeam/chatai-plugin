@@ -4,10 +4,53 @@ import { setToolContext } from '../src/core/utils/toolAdapter.js'
 import { mcpManager } from '../src/mcp/McpManager.js'
 import { memoryManager } from '../src/services/storage/MemoryManager.js'
 import { statsService } from '../src/services/stats/StatsService.js'
+import { getScopeManager } from '../src/services/scope/ScopeManager.js'
+import { databaseService } from '../src/services/storage/DatabaseService.js'
 import config from '../config/config.js'
 import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMessage, recordSentMessage } from '../src/utils/messageDedup.js'
 import { isDebugEnabled } from './Commands.js'
 import { cacheGroupMessage } from './GroupEvents.js'
+
+// 群组触发配置缓存
+const groupTriggerCache = new Map()
+const CACHE_TTL = 60000 // 1分钟缓存
+
+/**
+ * 获取群组独立的触发配置
+ * @param {string} groupId
+ * @returns {Promise<{triggerMode?: string, customPrefix?: string}>}
+ */
+async function getGroupTriggerConfig(groupId) {
+    if (!groupId) return {}
+    
+    const cacheKey = String(groupId)
+    const cached = groupTriggerCache.get(cacheKey)
+    if (cached && Date.now() - cached.time < CACHE_TTL) {
+        return cached.config
+    }
+    
+    try {
+        if (!databaseService.initialized) {
+            await databaseService.init()
+        }
+        const scopeManager = getScopeManager(databaseService)
+        await scopeManager.init()
+        const groupSettings = await scopeManager.getGroupSettings(cacheKey)
+        const settings = groupSettings?.settings || {}
+        
+        const config = {
+            triggerMode: settings.triggerMode,
+            customPrefix: settings.customPrefix
+        }
+        
+        groupTriggerCache.set(cacheKey, { config, time: Date.now() })
+        return config
+    } catch (err) {
+        logger.debug('[ChatListener] 获取群组触发配置失败:', err.message)
+    }
+    
+    return {}
+}
 
 export class ChatListener extends plugin {
     constructor() {
@@ -100,6 +143,30 @@ export class ChatListener extends plugin {
         if (!this.checkAccess(triggerCfg)) {
             return false
         }
+        
+        // 获取群组独立的触发配置
+        if (e.isGroup && e.group_id) {
+            const groupConfig = await getGroupTriggerConfig(e.group_id)
+            if (groupConfig.triggerMode && groupConfig.triggerMode !== 'default') {
+                // 根据群组triggerMode覆盖触发设置
+                const mode = groupConfig.triggerMode
+                if (!triggerCfg.group) triggerCfg.group = {}
+                triggerCfg.group.at = mode === 'at' || mode === 'all'
+                triggerCfg.group.prefix = mode === 'prefix' || mode === 'all'
+                triggerCfg.group.keyword = mode === 'all'
+                triggerCfg.group.random = false
+                logger.debug(`[ChatListener] 使用群组独立触发模式: ${mode}`)
+            }
+            if (groupConfig.customPrefix) {
+                // 添加群组自定义前缀到前缀列表最前面
+                if (!triggerCfg.prefixes) triggerCfg.prefixes = []
+                if (!triggerCfg.prefixes.includes(groupConfig.customPrefix)) {
+                    triggerCfg.prefixes = [groupConfig.customPrefix, ...triggerCfg.prefixes]
+                }
+                logger.debug(`[ChatListener] 使用群组自定义前缀: ${groupConfig.customPrefix}`)
+            }
+        }
+        
         const triggerResult = this.checkTrigger(triggerCfg)
         if (!triggerResult.triggered) {
             return false

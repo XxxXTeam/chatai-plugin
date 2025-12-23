@@ -26,6 +26,18 @@ export class AIManagement extends plugin {
             priority: 20,
             rule: [
                 {
+                    reg: `^${cmdPrefix}群伪人(开启|关闭)$`,
+                    fnc: 'toggleGroupBym'
+                },
+                {
+                    reg: `^${cmdPrefix}群绘图(开启|关闭)$`,
+                    fnc: 'toggleGroupImageGen'
+                },
+                {
+                    reg: `^${cmdPrefix}群设置$`,
+                    fnc: 'viewGroupSettings'
+                },
+                {
                     reg: `^${cmdPrefix}管理面板$`,
                     fnc: 'managementPanel',
                     permission: 'master'
@@ -114,6 +126,95 @@ export class AIManagement extends plugin {
             return yunzaiCfg.masterQQ
         }
         return global.Bot?.config?.master || []
+    }
+
+    /**
+     * 检查是否是群管理员或群主（非主人）
+     * @returns {Promise<boolean>}
+     */
+    async isGroupAdmin() {
+        const e = this.e
+        if (!e.isGroup) return false
+        
+        // 主人始终有权限
+        if (this.isMasterUser(e.user_id)) return true
+        
+        // 检查群管理员/群主
+        try {
+            const role = e.sender?.role
+            if (role === 'owner' || role === 'admin') {
+                return true
+            }
+            
+            // 尝试获取群成员信息
+            const group = e.group || e.bot?.pickGroup?.(e.group_id)
+            if (group?.pickMember) {
+                const member = group.pickMember(e.user_id)
+                const info = await member?.getInfo?.()
+                if (info?.role === 'owner' || info?.role === 'admin') {
+                    return true
+                }
+            }
+        } catch (err) {
+            logger.debug('[Management] 获取群成员信息失败:', err.message)
+        }
+        
+        return false
+    }
+
+    /**
+     * 获取群组功能设置
+     * @param {string} groupId
+     * @returns {Promise<Object>}
+     */
+    async getGroupFeatureSettings(groupId) {
+        try {
+            if (!databaseService.initialized) {
+                await databaseService.init()
+            }
+            const scopeManager = getScopeManager(databaseService)
+            await scopeManager.init()
+            
+            const groupSettings = await scopeManager.getGroupSettings(groupId)
+            return groupSettings?.settings || {}
+        } catch (err) {
+            logger.debug('[Management] 获取群组设置失败:', err.message)
+            return {}
+        }
+    }
+
+    /**
+     * 设置群组功能
+     * @param {string} groupId
+     * @param {string} feature
+     * @param {boolean} enabled
+     * @returns {Promise<boolean>}
+     */
+    async setGroupFeature(groupId, feature, enabled) {
+        try {
+            if (!databaseService.initialized) {
+                await databaseService.init()
+            }
+            const scopeManager = getScopeManager(databaseService)
+            await scopeManager.init()
+            
+            const existingSettings = await scopeManager.getGroupSettings(groupId) || {}
+            const currentFeatures = existingSettings.settings || {}
+            
+            // 更新功能设置
+            currentFeatures[feature] = enabled
+            
+            await scopeManager.setGroupSettings(groupId, {
+                ...existingSettings,
+                ...currentFeatures,
+                [feature]: enabled
+            })
+            
+            return true
+        } catch (err) {
+            logger.error('[Management] 设置群组功能失败:', err.message)
+            return false
+        }
     }
 
     /**
@@ -499,22 +600,28 @@ export class AIManagement extends plugin {
         
         const msg = `AI插件命令帮助：
 
-${cmdPrefix}管理面板 - 获取管理面板链接（5分钟有效）
-${cmdPrefix}管理面板 永久 - 获取永久管理面板链接（复用现有）
-${cmdPrefix}管理面板 永久 新 - 获取永久管理面板链接（重新生成）
+【基础命令】
 ${cmdPrefix}结束对话 - 结束当前对话
 ${cmdPrefix}设置人格 <内容> - 设置个人专属人格
-${cmdPrefix}设置群人格 <内容> - 设置群组人格（管理员）
 ${cmdPrefix}查看人格 - 查看当前生效的人格设定
 ${cmdPrefix}清除人格 - 清除个人人格设定
-${cmdPrefix}清除群人格 - 清除群组人格设定（管理员）
-${cmdPrefix}状态 - 查看插件状态
-${cmdPrefix}调试开启/关闭 - 开关调试模式
-${cmdPrefix}伪人开启/关闭 - 开关伪人模式
-${cmdPrefix}设置模型 <名称> - 设置默认模型
 ${cmdPrefix}帮助 - 显示此帮助信息
 
-人格优先级：群内用户设定 > 群组设定 > 用户全局设定 > 默认预设`
+【群管理员命令】
+${cmdPrefix}群设置 - 查看本群功能设置
+${cmdPrefix}群伪人开启/关闭 - 开关本群伪人模式
+${cmdPrefix}群绘图开启/关闭 - 开关本群绘图功能
+${cmdPrefix}设置群人格 <内容> - 设置群组人格
+${cmdPrefix}清除群人格 - 清除群组人格设定
+
+【主人命令】
+${cmdPrefix}管理面板 - 获取管理面板链接
+${cmdPrefix}状态 - 查看插件状态
+${cmdPrefix}调试开启/关闭 - 开关调试模式
+${cmdPrefix}伪人开启/关闭 - 开关伪人模式（全局）
+${cmdPrefix}设置模型 <名称> - 设置默认模型
+
+人格优先级：群内用户 > 群组 > 用户全局 > 默认预设`
 
         await this.reply(msg, true)
     }
@@ -530,12 +637,102 @@ ${cmdPrefix}帮助 - 显示此帮助信息
     }
 
     /**
-     * 切换伪人模式
+     * 切换伪人模式（全局，仅主人）
      */
     async toggleBym() {
         const action = this.e.msg.includes('开启')
         config.set('bym.enable', action)
-        await this.reply(`伪人模式已${action ? '开启' : '关闭'}`, true)
+        await this.reply(`伪人模式已${action ? '开启' : '关闭'}（全局）`, true)
+        return true
+    }
+
+    /**
+     * 切换群组伪人模式（群管理员可用）
+     */
+    async toggleGroupBym() {
+        if (!this.e.isGroup) {
+            await this.reply('此命令仅可在群聊中使用', true)
+            return true
+        }
+
+        // 检查权限：主人或群管理员
+        const isAdmin = await this.isGroupAdmin()
+        if (!isAdmin) {
+            await this.reply('此命令需要群管理员或群主权限', true)
+            return true
+        }
+
+        const action = this.e.msg.includes('开启')
+        const groupId = String(this.e.group_id)
+        
+        const success = await this.setGroupFeature(groupId, 'bymEnabled', action)
+        if (success) {
+            await this.reply(`本群伪人模式已${action ? '开启' : '关闭'}`, true)
+        } else {
+            await this.reply('设置失败，请稍后重试', true)
+        }
+        return true
+    }
+
+    /**
+     * 切换群组绘图功能（群管理员可用）
+     */
+    async toggleGroupImageGen() {
+        if (!this.e.isGroup) {
+            await this.reply('此命令仅可在群聊中使用', true)
+            return true
+        }
+
+        // 检查权限：主人或群管理员
+        const isAdmin = await this.isGroupAdmin()
+        if (!isAdmin) {
+            await this.reply('此命令需要群管理员或群主权限', true)
+            return true
+        }
+
+        const action = this.e.msg.includes('开启')
+        const groupId = String(this.e.group_id)
+        
+        const success = await this.setGroupFeature(groupId, 'imageGenEnabled', action)
+        if (success) {
+            await this.reply(`本群绘图功能已${action ? '开启' : '关闭'}`, true)
+        } else {
+            await this.reply('设置失败，请稍后重试', true)
+        }
+        return true
+    }
+
+    /**
+     * 查看群组设置
+     */
+    async viewGroupSettings() {
+        if (!this.e.isGroup) {
+            await this.reply('此命令仅可在群聊中使用', true)
+            return true
+        }
+
+        // 检查权限：主人或群管理员
+        const isAdmin = await this.isGroupAdmin()
+        if (!isAdmin) {
+            await this.reply('此命令需要群管理员或群主权限', true)
+            return true
+        }
+
+        const groupId = String(this.e.group_id)
+        const settings = await this.getGroupFeatureSettings(groupId)
+        
+        // 获取全局设置作为默认值
+        const globalBym = config.get('bym.enable') || false
+        const globalImageGen = config.get('features.imageGen.enabled') !== false
+        
+        const bymStatus = settings.bymEnabled !== undefined ? settings.bymEnabled : globalBym
+        const imageGenStatus = settings.imageGenEnabled !== undefined ? settings.imageGenEnabled : globalImageGen
+        
+        const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
+        
+        const msg = `📋 本群AI功能设置\n━━━━━━━━━━━━\n🎭 伪人模式: ${bymStatus ? '✅ 开启' : '❌ 关闭'}${settings.bymEnabled === undefined ? ' (继承全局)' : ''}\n🎨 绘图功能: ${imageGenStatus ? '✅ 开启' : '❌ 关闭'}${settings.imageGenEnabled === undefined ? ' (继承全局)' : ''}\n━━━━━━━━━━━━\n💡 管理命令:\n${cmdPrefix}群伪人开启/关闭\n${cmdPrefix}群绘图开启/关闭`
+        
+        await this.reply(msg, true)
         return true
     }
 

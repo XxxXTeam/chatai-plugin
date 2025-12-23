@@ -94,7 +94,17 @@ export default function ScopeManagerPage() {
 
   // 表单
   const [userForm, setUserForm] = useState({ userId: '', systemPrompt: '', presetId: '' })
-  const [groupForm, setGroupForm] = useState({ groupId: '', systemPrompt: '', presetId: '' })
+  const [groupForm, setGroupForm] = useState({ 
+    groupId: '', 
+    systemPrompt: '', 
+    presetId: '', 
+    bymEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    imageGenEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    summaryEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    eventEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    customPrefix: '',
+    triggerMode: 'default',
+  })
   const [groupUserForm, setGroupUserForm] = useState({ groupId: '', userId: '', systemPrompt: '', presetId: '' })
   const [privateForm, setPrivateForm] = useState({ userId: '', systemPrompt: '', presetId: '' })
 
@@ -223,13 +233,25 @@ export default function ScopeManagerPage() {
   }
 
   // 群组操作
-  const openGroupDialog = (item?: ScopeItem) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const openGroupDialog = (item?: ScopeItem & { settings?: any }) => {
     if (item) {
       setEditMode(true)
-      setGroupForm({ groupId: item.groupId || '', systemPrompt: item.systemPrompt || '', presetId: item.presetId || '' })
+      const settings = item.settings || {}
+      setGroupForm({ 
+        groupId: item.groupId || '', 
+        systemPrompt: item.systemPrompt || '', 
+        presetId: item.presetId || '',
+        bymEnabled: settings.bymEnabled === undefined ? 'inherit' : settings.bymEnabled ? 'on' : 'off',
+        imageGenEnabled: settings.imageGenEnabled === undefined ? 'inherit' : settings.imageGenEnabled ? 'on' : 'off',
+        summaryEnabled: settings.summaryEnabled === undefined ? 'inherit' : settings.summaryEnabled ? 'on' : 'off',
+        eventEnabled: settings.eventEnabled === undefined ? 'inherit' : settings.eventEnabled ? 'on' : 'off',
+        customPrefix: settings.customPrefix || '',
+        triggerMode: settings.triggerMode || 'default',
+      })
     } else {
       setEditMode(false)
-      setGroupForm({ groupId: '', systemPrompt: '', presetId: '' })
+      setGroupForm({ groupId: '', systemPrompt: '', presetId: '', bymEnabled: 'inherit', imageGenEnabled: 'inherit', summaryEnabled: 'inherit', eventEnabled: 'inherit', customPrefix: '', triggerMode: 'default' })
     }
     setGroupDialogOpen(true)
   }
@@ -243,6 +265,12 @@ export default function ScopeManagerPage() {
       await scopeApi.updateGroup(groupForm.groupId, {
         systemPrompt: groupForm.systemPrompt,
         presetId: groupForm.presetId,
+        bymEnabled: groupForm.bymEnabled === 'inherit' ? undefined : groupForm.bymEnabled === 'on',
+        imageGenEnabled: groupForm.imageGenEnabled === 'inherit' ? undefined : groupForm.imageGenEnabled === 'on',
+        summaryEnabled: groupForm.summaryEnabled === 'inherit' ? undefined : groupForm.summaryEnabled === 'on',
+        eventEnabled: groupForm.eventEnabled === 'inherit' ? undefined : groupForm.eventEnabled === 'on',
+        customPrefix: groupForm.customPrefix || undefined,
+        triggerMode: groupForm.triggerMode,
       })
       toast.success('保存成功')
       setGroupDialogOpen(false)
@@ -750,6 +778,117 @@ export default function ScopeManagerPage() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="border-t pt-4 mt-4">
+              <Label className="text-base font-medium">群组功能开关</Label>
+              <p className="text-xs text-muted-foreground mb-3">群管理员可通过命令或此处控制本群功能</p>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-sm">🎭 伪人模式</span>
+                    <p className="text-xs text-muted-foreground">随机回复消息，模拟真人聊天</p>
+                  </div>
+                  <Select
+                    value={groupForm.bymEnabled}
+                    onValueChange={(v: 'inherit' | 'on' | 'off') => setGroupForm({ ...groupForm, bymEnabled: v })}
+                  >
+                    <SelectTrigger className="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">继承全局</SelectItem>
+                      <SelectItem value="on">开启</SelectItem>
+                      <SelectItem value="off">关闭</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-sm">🎨 绘图功能</span>
+                    <p className="text-xs text-muted-foreground">文生图、图生图、视频生成等</p>
+                  </div>
+                  <Select
+                    value={groupForm.imageGenEnabled}
+                    onValueChange={(v: 'inherit' | 'on' | 'off') => setGroupForm({ ...groupForm, imageGenEnabled: v })}
+                  >
+                    <SelectTrigger className="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">继承全局</SelectItem>
+                      <SelectItem value="on">开启</SelectItem>
+                      <SelectItem value="off">关闭</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-sm">📊 群聊总结</span>
+                    <p className="text-xs text-muted-foreground">允许使用群聊总结功能</p>
+                  </div>
+                  <Select
+                    value={groupForm.summaryEnabled}
+                    onValueChange={(v: 'inherit' | 'on' | 'off') => setGroupForm({ ...groupForm, summaryEnabled: v })}
+                  >
+                    <SelectTrigger className="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">继承全局</SelectItem>
+                      <SelectItem value="on">开启</SelectItem>
+                      <SelectItem value="off">关闭</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-sm">📢 事件处理</span>
+                    <p className="text-xs text-muted-foreground">入群欢迎、退群提醒等</p>
+                  </div>
+                  <Select
+                    value={groupForm.eventEnabled}
+                    onValueChange={(v: 'inherit' | 'on' | 'off') => setGroupForm({ ...groupForm, eventEnabled: v })}
+                  >
+                    <SelectTrigger className="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">继承全局</SelectItem>
+                      <SelectItem value="on">开启</SelectItem>
+                      <SelectItem value="off">关闭</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+            
+            {/* 触发模式和自定义前缀 */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>触发模式</Label>
+                <Select
+                  value={groupForm.triggerMode}
+                  onValueChange={(v) => setGroupForm({ ...groupForm, triggerMode: v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">默认</SelectItem>
+                    <SelectItem value="at">仅@触发</SelectItem>
+                    <SelectItem value="prefix">仅前缀触发</SelectItem>
+                    <SelectItem value="all">全部消息</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>自定义前缀</Label>
+                <Input
+                  value={groupForm.customPrefix}
+                  onChange={(e) => setGroupForm({ ...groupForm, customPrefix: e.target.value })}
+                  placeholder="留空使用全局"
+                />
+              </div>
             </div>
           </div>
           <DialogFooter>

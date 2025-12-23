@@ -1,14 +1,5 @@
 /**
  * AI 表情回应事件处理
- * NapCat 表情回应事件格式:
- * {
- *   post_type: 'notice',
- *   notice_type: 'group_msg_emoji_like',
- *   group_id: number,
- *   user_id: number,      // 操作者
- *   message_id: number,   // 被回应的消息ID
- *   likes: [{ emoji_id: string, count: number }]  // 表情列表
- * }
  * 
  * 表情ID参考: https://bot.q.qq.com/wiki/develop/api-v2/openapi/emoji/model.html
  */

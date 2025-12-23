@@ -80,6 +80,11 @@ export default function GroupsPage() {
     modelId: '__default__',
     enabled: true,
     triggerMode: 'default',
+    bymEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    imageGenEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    summaryEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    eventEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    customPrefix: '',
   })
 
   const fetchData = async () => {
@@ -121,6 +126,11 @@ export default function GroupsPage() {
       modelId: '__default__',
       enabled: true,
       triggerMode: 'default',
+      bymEnabled: 'inherit',
+      imageGenEnabled: 'inherit',
+      summaryEnabled: 'inherit',
+      eventEnabled: 'inherit',
+      customPrefix: '',
     })
     setEditingGroup(null)
   }
@@ -140,6 +150,11 @@ export default function GroupsPage() {
         modelId: savedModelId || '__default__',
         enabled: group.enabled ?? settings.enabled ?? true,
         triggerMode: settings.triggerMode || group.triggerMode || 'default',
+        bymEnabled: settings.bymEnabled === undefined ? 'inherit' : settings.bymEnabled ? 'on' : 'off',
+        imageGenEnabled: settings.imageGenEnabled === undefined ? 'inherit' : settings.imageGenEnabled ? 'on' : 'off',
+        summaryEnabled: settings.summaryEnabled === undefined ? 'inherit' : settings.summaryEnabled ? 'on' : 'off',
+        eventEnabled: settings.eventEnabled === undefined ? 'inherit' : settings.eventEnabled ? 'on' : 'off',
+        customPrefix: settings.customPrefix || '',
       })
     } else {
       resetForm()
@@ -162,6 +177,11 @@ export default function GroupsPage() {
         modelId: form.modelId === '__default__' ? '' : form.modelId,
         enabled: form.enabled,
         triggerMode: form.triggerMode,
+        bymEnabled: form.bymEnabled === 'inherit' ? undefined : form.bymEnabled === 'on',
+        imageGenEnabled: form.imageGenEnabled === 'inherit' ? undefined : form.imageGenEnabled === 'on',
+        summaryEnabled: form.summaryEnabled === 'inherit' ? undefined : form.summaryEnabled === 'on',
+        eventEnabled: form.eventEnabled === 'inherit' ? undefined : form.eventEnabled === 'on',
+        customPrefix: form.customPrefix || undefined,
       })
       toast.success('群配置已保存')
       setDialogOpen(false)
@@ -367,6 +387,100 @@ export default function GroupsPage() {
                   <Switch
                     checked={form.enabled}
                     onCheckedChange={(checked) => setForm({ ...form, enabled: checked })}
+                  />
+                </div>
+                
+                {/* 群组功能开关 */}
+                <div className="border-t pt-4 mt-4">
+                  <Label className="text-base font-medium">群组功能开关</Label>
+                  <p className="text-xs text-muted-foreground mb-3">群管理员也可通过命令控制这些功能</p>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-sm">🎭 伪人模式</span>
+                        <p className="text-xs text-muted-foreground">随机回复消息，模拟真人聊天</p>
+                      </div>
+                      <Select
+                        value={form.bymEnabled}
+                        onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, bymEnabled: v })}
+                      >
+                        <SelectTrigger className="w-32">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="inherit">继承全局</SelectItem>
+                          <SelectItem value="on">开启</SelectItem>
+                          <SelectItem value="off">关闭</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-sm">🎨 绘图功能</span>
+                        <p className="text-xs text-muted-foreground">文生图、图生图、视频生成等</p>
+                      </div>
+                      <Select
+                        value={form.imageGenEnabled}
+                        onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, imageGenEnabled: v })}
+                      >
+                        <SelectTrigger className="w-32">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="inherit">继承全局</SelectItem>
+                          <SelectItem value="on">开启</SelectItem>
+                          <SelectItem value="off">关闭</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-sm">📊 群聊总结</span>
+                        <p className="text-xs text-muted-foreground">允许使用群聊总结功能</p>
+                      </div>
+                      <Select
+                        value={form.summaryEnabled}
+                        onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, summaryEnabled: v })}
+                      >
+                        <SelectTrigger className="w-32">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="inherit">继承全局</SelectItem>
+                          <SelectItem value="on">开启</SelectItem>
+                          <SelectItem value="off">关闭</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-sm">📢 事件处理</span>
+                        <p className="text-xs text-muted-foreground">入群欢迎、退群提醒等</p>
+                      </div>
+                      <Select
+                        value={form.eventEnabled}
+                        onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, eventEnabled: v })}
+                      >
+                        <SelectTrigger className="w-32">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="inherit">继承全局</SelectItem>
+                          <SelectItem value="on">开启</SelectItem>
+                          <SelectItem value="off">关闭</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* 自定义前缀 */}
+                <div className="grid gap-2">
+                  <Label>自定义前缀 <span className="text-xs text-muted-foreground">(留空使用全局前缀)</span></Label>
+                  <Input
+                    value={form.customPrefix}
+                    onChange={(e) => setForm({ ...form, customPrefix: e.target.value })}
+                    placeholder="例如: #ai 或 /chat"
                   />
                 </div>
               </div>

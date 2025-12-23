@@ -2,6 +2,8 @@ import config from '../config/config.js'
 import { segment, MessageApi } from '../src/utils/messageParser.js'
 import { statsService } from '../src/services/stats/StatsService.js'
 import { imageService } from '../src/services/media/ImageService.js'
+import { getScopeManager } from '../src/services/scope/ScopeManager.js'
+import { databaseService } from '../src/services/storage/DatabaseService.js'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -270,6 +272,38 @@ export class ImageGen extends plugin {
     }
 
     /**
+     * 检查绘图功能是否启用（支持群组独立配置）
+     * @returns {Promise<boolean>}
+     */
+    async isImageGenEnabled() {
+        const e = this.e
+        const globalEnabled = config.get('features.imageGen.enabled') !== false
+        
+        // 检查群组独立设置
+        if (e.isGroup && e.group_id) {
+            try {
+                const groupId = String(e.group_id)
+                if (!databaseService.initialized) {
+                    await databaseService.init()
+                }
+                const scopeManager = getScopeManager(databaseService)
+                await scopeManager.init()
+                const groupSettings = await scopeManager.getGroupSettings(groupId)
+                const groupFeatures = groupSettings?.settings || {}
+                
+                // 如果群组有独立设置，使用群组设置
+                if (groupFeatures.imageGenEnabled !== undefined) {
+                    return groupFeatures.imageGenEnabled
+                }
+            } catch (err) {
+                logger.debug('[ImageGen] 获取群组设置失败:', err.message)
+            }
+        }
+        
+        return globalEnabled
+    }
+
+    /**
      * 显示绘图帮助
      */
     async showHelp() {
@@ -475,8 +509,8 @@ export class ImageGen extends plugin {
     async text2img() {
         const e = this.e
         
-        // 检查功能是否启用
-        if (!config.get('features.imageGen.enabled')) {
+        // 检查功能是否启用（支持群组独立配置）
+        if (!await this.isImageGenEnabled()) {
             return false
         }
         
@@ -505,7 +539,7 @@ export class ImageGen extends plugin {
     async img2img() {
         const e = this.e
         
-        if (!config.get('features.imageGen.enabled')) {
+        if (!await this.isImageGenEnabled()) {
             return false
         }
         
@@ -539,7 +573,7 @@ export class ImageGen extends plugin {
     async text2video() {
         const e = this.e
         
-        if (!config.get('features.imageGen.enabled')) {
+        if (!await this.isImageGenEnabled()) {
             return false
         }
         
@@ -568,7 +602,7 @@ export class ImageGen extends plugin {
     async img2video() {
         const e = this.e
         
-        if (!config.get('features.imageGen.enabled')) {
+        if (!await this.isImageGenEnabled()) {
             return false
         }
         
@@ -602,7 +636,7 @@ export class ImageGen extends plugin {
     async presetHandler() {
         const e = this.e
         
-        if (!config.get('features.imageGen.enabled')) {
+        if (!await this.isImageGenEnabled()) {
             return false
         }
         const preset = presetMgr.findPreset(e.msg)
