@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import { AbstractClient, preprocessImageUrls, parseXmlToolCalls } from '../AbstractClient.js'
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
+import { statsService } from '../../../services/stats/StatsService.js'
 
 /**
  * @typedef {import('../../types').BaseClientOptions} BaseClientOptions
@@ -261,10 +262,27 @@ export class GeminiClient extends AbstractClient {
         const texts = Array.isArray(text) ? text : [text]
         const embeddings = []
 
+        const embeddingStartTime = Date.now()
         for (const t of texts) {
             const result = await embeddingModel.embedContent(t)
             embeddings.push(result.embedding.values)
         }
+
+        // 记录Embedding统计
+        try {
+            const inputTokens = texts.reduce((sum, t) => sum + statsService.estimateTokens(t), 0)
+            await statsService.recordApiCall({
+                channelId: this.options?.channelId || 'gemini-embedding',
+                channelName: this.options?.channelName || 'Gemini Embedding',
+                model,
+                inputTokens,
+                outputTokens: 0,
+                duration: Date.now() - embeddingStartTime,
+                success: true,
+                source: 'embedding',
+                request: { inputCount: texts.length, model },
+            })
+        } catch (e) { /* 统计失败不影响主流程 */ }
 
         return {
             embeddings,

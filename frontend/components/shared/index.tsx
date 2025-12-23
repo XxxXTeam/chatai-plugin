@@ -21,11 +21,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 
-// ==================== 类型定义 ====================
-
 type ButtonProps = React.ComponentPropsWithoutRef<typeof Button>
-
-// ==================== 页面布局组件 ====================
 
 interface PageHeaderProps {
   title: string

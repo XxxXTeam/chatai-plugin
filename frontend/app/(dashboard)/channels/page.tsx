@@ -31,8 +31,9 @@ import { Progress } from '@/components/ui/progress'
 import { PageHeader, PageContainer } from '@/components/layout/PageHeader'
 import { channelsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, Trash2, TestTube, Loader2, Plug, RefreshCw, Download, Eye, EyeOff, List, CheckCircle, XCircle, ChevronDown, ChevronUp, Settings2, Upload, FileDown, X, Zap, Globe, Key, Layers, MoreHorizontal, Copy, Power, PowerOff } from 'lucide-react'
+import { Plus, Trash2, TestTube, Loader2, Plug, RefreshCw, Download, Eye, EyeOff, List, CheckCircle, XCircle, ChevronDown, ChevronUp, Settings2, Upload, FileDown, X, Zap, Globe, Key, Layers, MoreHorizontal, Copy, Power, PowerOff, HelpCircle, Info } from 'lucide-react'
 import { Slider } from '@/components/ui/slider'
+import { ApiKeyManager, ApiKeyItem, keyStrategies } from '@/components/channels'
 import {
   Collapsible,
   CollapsibleContent,
@@ -46,6 +47,8 @@ interface Channel {
   adapterType: string
   baseUrl: string
   apiKey: string
+  apiKeys?: ApiKeyItem[]  // 多API Key支持
+  strategy?: string       // 轮询策略
   models: string[]
   enabled: boolean
   status?: 'active' | 'error' | 'unknown'
@@ -330,6 +333,9 @@ export default function ChannelsPage() {
     adapterType: 'openai',
     baseUrl: '',
     apiKey: '',
+    apiKeys: [] as ApiKeyItem[],  // 多API Key
+    strategy: 'round-robin',       // 轮询策略
+    useMultiKey: false,            // 是否启用多Key模式
     models: '',
     enabled: true,
     priority: 0,
@@ -395,6 +401,9 @@ export default function ChannelsPage() {
       adapterType: 'openai',
       baseUrl: '',
       apiKey: '',
+      apiKeys: [],
+      strategy: 'round-robin',
+      useMultiKey: false,
       models: '',
       enabled: true,
       priority: 0,
@@ -414,11 +423,15 @@ export default function ChannelsPage() {
   const handleOpenDialog = (channel?: Channel) => {
     if (channel) {
       setEditingChannel(channel)
+      const hasMultiKeys = channel.apiKeys && channel.apiKeys.length > 0
       setForm({
         name: channel.name || '',
         adapterType: channel.adapterType || 'openai',
         baseUrl: channel.baseUrl || '',
         apiKey: channel.apiKey || '',
+        apiKeys: channel.apiKeys || [],
+        strategy: channel.strategy || 'round-robin',
+        useMultiKey: hasMultiKeys,
         models: channel.models?.join(', ') || '',
         enabled: channel.enabled !== false,
         priority: channel.priority || 0,
@@ -435,15 +448,31 @@ export default function ChannelsPage() {
   }
 
   const handleSave = async () => {
-    if (!form.name || !form.apiKey) {
-      toast.error('请填写渠道名称和 API Key')
+    // 验证：必须有渠道名称，并且至少有一个 API Key
+    if (!form.name) {
+      toast.error('请填写渠道名称')
       return
+    }
+    if (form.useMultiKey) {
+      if (form.apiKeys.length === 0) {
+        toast.error('请至少添加一个 API Key')
+        return
+      }
+    } else {
+      if (!form.apiKey) {
+        toast.error('请填写 API Key')
+        return
+      }
     }
 
     setSaving(true)
     try {
       const data = {
         ...form,
+        // 多Key模式时，将第一个Key也设置为apiKey以保持兼容
+        apiKey: form.useMultiKey ? (form.apiKeys[0]?.key || '') : form.apiKey,
+        apiKeys: form.useMultiKey ? form.apiKeys : [],
+        strategy: form.useMultiKey ? form.strategy : 'round-robin',
         models: form.models.split(',').map(m => m.trim()).filter(Boolean),
         customHeaders: form.customHeaders,
         headersTemplate: form.headersTemplate,
@@ -849,26 +878,96 @@ export default function ChannelsPage() {
                       )}
                     </div>
                   </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="apiKey">API Key</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        id="apiKey"
-                        type={showApiKey ? 'text' : 'password'}
-                        value={form.apiKey}
-                        onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
-                        placeholder="sk-..."
-                        className="flex-1"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon"
-                        onClick={() => setShowApiKey(!showApiKey)}
-                      >
-                        {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </Button>
+                  {/* API Key 配置区域 */}
+                  <div className="grid gap-3">
+                    <div className="flex items-center justify-between">
+                      <Label className="flex items-center gap-2">
+                        API Key
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="max-w-[300px]">
+                              <p className="font-medium mb-1">多 API Key 功能</p>
+                              <p className="text-xs">启用后可配置多个 API Key，支持轮询、随机、权重等策略自动切换，用于负载均衡和故障转移。</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </Label>
+                      <div className="flex items-center gap-2">
+                        <Label htmlFor="useMultiKey" className="text-xs text-muted-foreground">多Key模式</Label>
+                        <Switch
+                          id="useMultiKey"
+                          checked={form.useMultiKey}
+                          onCheckedChange={(checked) => {
+                            if (checked && form.apiKey && form.apiKeys.length === 0) {
+                              // 切换到多Key模式时，将当前单Key转为第一个Key
+                              setForm({
+                                ...form,
+                                useMultiKey: true,
+                                apiKeys: [{
+                                  key: form.apiKey,
+                                  name: 'Key 1',
+                                  enabled: true,
+                                  weight: 100
+                                }]
+                              })
+                            } else {
+                              setForm({ ...form, useMultiKey: checked })
+                            }
+                          }}
+                        />
+                      </div>
                     </div>
+
+                    {/* 单Key模式 */}
+                    {!form.useMultiKey && (
+                      <div className="flex gap-2">
+                        <Input
+                          id="apiKey"
+                          type={showApiKey ? 'text' : 'password'}
+                          value={form.apiKey}
+                          onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+                          placeholder="sk-..."
+                          className="flex-1"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          onClick={() => setShowApiKey(!showApiKey)}
+                        >
+                          {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* 多Key模式 */}
+                    {form.useMultiKey && (
+                      <div className="space-y-3 p-3 border rounded-lg bg-muted/30">
+                        <div className="flex items-start gap-2 p-2 bg-blue-50 dark:bg-blue-950/30 rounded text-xs text-blue-700 dark:text-blue-300">
+                          <Info className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                          <div>
+                            <p className="font-medium">多 API Key 模式说明</p>
+                            <ul className="mt-1 space-y-0.5 text-blue-600 dark:text-blue-400">
+                              <li>• <strong>轮询</strong>：按顺序依次使用每个Key</li>
+                              <li>• <strong>随机</strong>：每次随机选择一个Key</li>
+                              <li>• <strong>权重</strong>：根据权重值随机分配（权重越高使用概率越大）</li>
+                              <li>• <strong>最少使用</strong>：优先使用调用次数最少的Key</li>
+                              <li>• <strong>故障转移</strong>：按顺序使用，失败后自动切换下一个</li>
+                            </ul>
+                          </div>
+                        </div>
+                        
+                        <ApiKeyManager
+                          apiKeys={form.apiKeys}
+                          strategy={form.strategy}
+                          onChange={(keys, strategy) => setForm({ ...form, apiKeys: keys, strategy })}
+                          showStats={!!editingChannel}
+                        />
+                      </div>
+                    )}
                   </div>
                   <div className="grid gap-2">
                     <div className="flex items-center justify-between">
@@ -1437,6 +1536,24 @@ export default function ChannelsPage() {
                       </Badge>
                     ) : (
                       <Badge variant="secondary" className="text-xs">未测试</Badge>
+                    )}
+                    {/* 多Key信息显示 */}
+                    {channel.apiKeys && channel.apiKeys.length > 0 && (
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge variant="outline" className="text-xs cursor-help">
+                              <Key className="h-3 w-3 mr-1" />
+                              {channel.apiKeys.filter(k => k.enabled !== false).length}/{channel.apiKeys.length}
+                            </Badge>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p className="font-medium mb-1">多 API Key 模式</p>
+                            <p className="text-xs">策略: {keyStrategies.find(s => s.value === channel.strategy)?.label || channel.strategy}</p>
+                            <p className="text-xs">启用: {channel.apiKeys.filter(k => k.enabled !== false).length} / 总数: {channel.apiKeys.length}</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
                     )}
                     {channel.stats?.totalCalls ? (
                       <TooltipProvider>

@@ -16,6 +16,7 @@ import { channelManager } from './llm/ChannelManager.js'
 import { imageService } from './media/ImageService.js'
 import { databaseService } from './storage/DatabaseService.js'
 import { getScopeManager } from './scope/ScopeManager.js'
+import { statsService } from './stats/StatsService.js'
 import { usageStats } from './stats/UsageStats.js'
 
 // 获取 scopeManager 实例
@@ -802,8 +803,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== Tool Call Statistics API ====================
         // GET /api/stats/tool-calls - 获取工具调用统计汇总
         this.app.get('/api/stats/tool-calls', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -2041,23 +2040,19 @@ export class WebServer {
                         ? `连接成功！耗时 ${elapsed}ms，AI回复：${replyText.substring(0, 50)}${replyText.length > 50 ? '...' : ''}`
                         : `连接成功！耗时 ${elapsed}ms`
                     
-                    // 使用插件计算 Token（不依赖 API 返回）
-                    const inputTokens = usageStats.estimateTokens(testMessage)
-                    const outputTokens = usageStats.estimateTokens(replyText || '')
-                    
                     // 记录使用统计
-                    await usageStats.record({
+                    await statsService.recordApiCall({
                         channelId: id || 'test',
                         channelName,
                         model: testModel,
                         keyIndex: usedKeyIndex,
                         keyName: usedKeyName,
                         strategy: usedStrategy,
-                        inputTokens,
-                        outputTokens,
                         duration: elapsed,
                         success: true,
                         source: 'test',
+                        responseText: replyText || '',
+                        apiUsage,
                         request: { messages: [{ role: 'user', content: testMessage }], model: testModel },
                     })
 
@@ -2094,7 +2089,7 @@ export class WebServer {
                 })
 
                 // 记录失败统计
-                await usageStats.record({
+                await statsService.recordApiCall({
                     channelId: id || 'test',
                     channelName,
                     model: models?.[0] || 'unknown',
@@ -3199,7 +3194,6 @@ export default {
             }
         })
 
-        // ==================== OpenAI Compatible Routes ====================
         // GET /api/openai/models - OpenAI compatible models list (protected)
         this.app.get('/api/openai/models', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -3242,8 +3236,6 @@ export default {
                 })
             }
         })
-
-        // ==================== Users API ====================
         // GET /api/users/list - List all users with stats
         this.app.get('/api/users/list', this.authMiddleware.bind(this), async (req, res) => {
             try {
@@ -3298,8 +3290,6 @@ export default {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // ==================== Conversations API ====================
         // GET /api/conversations/list - List all conversations
         this.app.get('/api/conversations/list', this.authMiddleware.bind(this), async (req, res) => {
             try {

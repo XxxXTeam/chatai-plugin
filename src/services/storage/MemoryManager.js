@@ -3,7 +3,7 @@ const logger = chatLogger
 import config from '../../../config/config.js'
 import { databaseService } from './DatabaseService.js'
 import { LlmService } from '../llm/LlmService.js'
-import { usageStats } from '../stats/UsageStats.js'
+import { statsService } from '../stats/StatsService.js'
 
 /**
  * Memory Manager - 使用数据库存储记忆
@@ -220,16 +220,15 @@ ${dialogText}
             // 记录统计（群聊记忆分析）
             try {
                 const recordSuccess = !!responseText
-                await usageStats.record({
+                await statsService.recordApiCall({
                     channelId: channelInfo.id || 'memory',
                     channelName: channelInfo.name || '记忆服务',
                     model,
-                    inputTokens: usageStats.estimateTokens(prompt),
-                    outputTokens: usageStats.estimateTokens(responseText),
                     duration: Date.now() - startTime,
                     success: recordSuccess,
                     source: '记忆提取',
                     groupId,
+                    responseText,
                     request: { messages: [{ role: 'user', content: prompt }], model },
                     response: !recordSuccess ? { error: '响应为空' } : null,
                 })
@@ -494,16 +493,15 @@ ${dialogText}
             // 记录统计（用户记忆提取）
             try {
                 const recordSuccess = !!responseText && responseText !== '无'
-                await usageStats.record({
+                await statsService.recordApiCall({
                     channelId: channelInfo2.id || 'memory',
                     channelName: channelInfo2.name || '记忆服务',
                     model: model2,
-                    inputTokens: usageStats.estimateTokens(prompt),
-                    outputTokens: usageStats.estimateTokens(responseText),
                     duration: Date.now() - startTime2,
                     success: recordSuccess,
                     source: '用户记忆',
                     userId,
+                    responseText,
                     request: { messages: [{ role: 'user', content: prompt }], model: model2 },
                     response: !recordSuccess ? { error: '响应为空或无效' } : null,
                 })
@@ -578,16 +576,15 @@ ${dialogText}
             const memoryContent = result.contents?.[0]?.text?.trim()
             try {
                 const recordSuccess = !!memoryContent
-                await usageStats.record({
+                await statsService.recordApiCall({
                     channelId: channelInfo3.id || 'memory',
                     channelName: channelInfo3.name || '记忆服务',
                     model: model3,
-                    inputTokens: usageStats.estimateTokens(extractPrompt),
-                    outputTokens: usageStats.estimateTokens(memoryContent || ''),
                     duration: Date.now() - startTime3,
                     success: recordSuccess,
                     source: '记忆提取',
                     userId,
+                    responseText: memoryContent || '',
                     request: { messages: [{ role: 'user', content: extractPrompt }], model: model3 },
                     response: !recordSuccess ? { error: '响应为空' } : null,
                 })

@@ -8,6 +8,7 @@ import './converter.js'
 import { proxyService } from '../../../services/proxy/ProxyService.js'
 import { logService } from '../../../services/stats/LogService.js'
 import { requestTemplateService } from '../../../services/proxy/RequestTemplateService.js'
+import { statsService } from '../../../services/stats/StatsService.js'
 
 /**
  * @typedef {import('../../types').BaseClientOptions} BaseClientOptions
@@ -448,6 +449,22 @@ export class OpenAIClient extends AbstractClient {
         // Defensive check
         if (!chatCompletion || !chatCompletion.choices || !Array.isArray(chatCompletion.choices)) {
             logger.error('[OpenAI适配器] 响应格式错误，完整响应:', JSON.stringify(chatCompletion))
+            
+            // 分析可能的原因并提供更有用的错误信息
+            const usage = chatCompletion?.usage
+            if (usage) {
+                const promptTokens = usage.prompt_tokens || usage.input_tokens || 0
+                const completionTokens = usage.completion_tokens || usage.output_tokens || 0
+                
+                // 检测Token超限情况
+                if (promptTokens > 100000 && completionTokens === 0) {
+                    throw new Error(`请求Token过大(${Math.round(promptTokens/1000)}K)，超出模型上下文限制，请清理对话历史或减少工具数量`)
+                }
+                if (promptTokens > 0 && completionTokens === 0) {
+                    throw new Error(`API未能生成回复(输入${Math.round(promptTokens/1000)}K tokens)，可能是模型繁忙或Token超限`)
+                }
+            }
+            
             throw new Error('API返回格式不符合OpenAI标准: choices字段缺失或格式错误')
         }
 
@@ -869,11 +886,29 @@ export class OpenAIClient extends AbstractClient {
             },
         })
 
+        const embeddingStartTime = Date.now()
         const embeddings = await client.embeddings.create({
             input: text,
             dimensions: options.dimensions,
             model: options.model,
         })
+
+        // 记录Embedding统计
+        try {
+            const inputTexts = Array.isArray(text) ? text : [text]
+            const inputTokens = inputTexts.reduce((sum, t) => sum + statsService.estimateTokens(t), 0)
+            await statsService.recordApiCall({
+                channelId: this.options?.channelId || 'embedding',
+                channelName: this.options?.channelName || 'Embedding服务',
+                model: options.model || 'text-embedding-3-small',
+                inputTokens,
+                outputTokens: 0,
+                duration: Date.now() - embeddingStartTime,
+                success: true,
+                source: 'embedding',
+                request: { inputCount: inputTexts.length, model: options.model },
+            })
+        } catch (e) { /* 统计失败不影响主流程 */ }
 
         return {
             embeddings: embeddings.data.map(e => e.embedding),
