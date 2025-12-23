@@ -273,6 +273,7 @@ export class ChatService {
         
         // 从ScopeManager获取群组/用户的预设配置（支持群聊和私聊）
         let scopePresetId = null
+        let scopePresetSource = null
         let groupModelId = null
         try {
             const sm = await ensureScopeManager()
@@ -287,6 +288,7 @@ export class ChatService {
             // 获取作用域配置的预设ID
             if (effectiveSettings?.presetId) {
                 scopePresetId = effectiveSettings.presetId
+                scopePresetSource = effectiveSettings.source
                 logger.debug(`[ChatService] 使用作用域预设: ${scopePresetId} (来源: ${effectiveSettings.source}, 场景: ${isPrivate ? '私聊' : '群聊'})`)
             }
             
@@ -452,7 +454,9 @@ export class ChatService {
                     groupId: scopeGroupId,
                     userId: pureUserId,
                     isIndependent: independentResult.isIndependent,
-                    source: independentResult.source,
+                    promptSource: independentResult.source,
+                    presetSource: scopePresetSource || 'default',
+                    presetId: scopePresetId || effectivePresetId,
                     forceIsolation,
                     conversationId,
                     hasPrefixPersona: !!prefixPersona
@@ -461,9 +465,21 @@ export class ChatService {
         } catch (e) { 
             logger.warn(`[ChatService] 获取独立人设失败:`, e.message) 
         }
+        // 处理前缀人格：可能是presetId或直接的systemPrompt文本
+        let prefixPresetId = null
         if (prefixPersona) {
-            systemPrompt = prefixPersona
-            logger.debug(`[ChatService] 使用前缀人格覆盖`)
+            // 检查是否为presetId（UUID格式或预设名称）
+            const prefixPreset = presetManager.get(prefixPersona)
+            if (prefixPreset) {
+                // prefixPersona是一个有效的presetId
+                prefixPresetId = prefixPersona
+                systemPrompt = prefixPreset.systemPrompt || ''
+                logger.debug(`[ChatService] 使用前缀人格预设: ${prefixPresetId} (${prefixPreset.name || prefixPresetId})`)
+            } else {
+                // prefixPersona是直接的systemPrompt文本
+                systemPrompt = prefixPersona
+                logger.debug(`[ChatService] 使用前缀人格文本覆盖`)
+            }
         }
         if (config.get('memory.enabled') && !isNewSession) {
             try {
@@ -525,24 +541,26 @@ export class ChatService {
         try {
             const { knowledgeService } = await import('../storage/KnowledgeService.js')
             await knowledgeService.init()
-            const knowledgePrompt = knowledgeService.buildKnowledgePrompt(effectivePresetId, {
+            // 优先使用前缀人格预设的知识库，否则使用作用域预设的知识库
+            const knowledgePresetId = prefixPresetId || effectivePresetId
+            const knowledgePrompt = knowledgeService.buildKnowledgePrompt(knowledgePresetId, {
                 maxLength: config.get('knowledge.maxLength') || 15000,
                 includeTriples: config.get('knowledge.includeTriples') !== false
             })
             if (knowledgePrompt) {
                 systemPrompt += '\n\n' + knowledgePrompt
-                logger.debug(`[ChatService] 已添加知识库上下文 (${knowledgePrompt.length} 字符)`)
+                logger.debug(`[ChatService] 已添加知识库上下文 (${knowledgePrompt.length} 字符, 预设: ${knowledgePresetId})`)
                 // 收集知识库调试信息
                 if (debugInfo) {
                     debugInfo.knowledge = {
                         hasKnowledge: true,
                         length: knowledgePrompt.length,
-                        presetId: effectivePresetId,
+                        presetId: knowledgePresetId,
                         preview: knowledgePrompt.substring(0, 500) + (knowledgePrompt.length > 500 ? '...' : '')
                     }
                 }
             } else if (debugInfo) {
-                debugInfo.knowledge = { hasKnowledge: false }
+                debugInfo.knowledge = { hasKnowledge: false, presetId: knowledgePresetId }
             }
         } catch (err) {
             logger.debug('[ChatService] 知识库服务未加载或无内容:', err.message)
