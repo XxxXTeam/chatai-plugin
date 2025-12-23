@@ -738,7 +738,7 @@ export function SwitchRow({
 
 // ==================== 导出 ====================
 
-export default {
+const SharedComponents = {
   PageHeader,
   PageContainer,
   SectionCard,
@@ -758,3 +758,5 @@ export default {
   CopyButton,
   SwitchRow,
 }
+
+export default SharedComponents

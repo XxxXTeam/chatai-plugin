@@ -54,7 +54,7 @@ export default function ContextPage() {
     saveTimeoutRef.current = setTimeout(async () => {
       setSaveStatus('saving')
       try {
-        await configApi.updateAdvanced(configToSave)
+        await configApi.updateAdvanced(configToSave as unknown as Record<string, unknown>)
         setSaveStatus('saved')
         setTimeout(() => setSaveStatus('idle'), 2000)
       } catch (error) {
@@ -91,7 +91,7 @@ export default function ContextPage() {
     if (!config) return
     setSaving(true)
     try {
-      await configApi.updateAdvanced(config)
+      await configApi.updateAdvanced(config as unknown as Record<string, unknown>)
       setSaveStatus('saved')
       toast.success('配置已保存')
       setTimeout(() => setSaveStatus('idle'), 2000)
@@ -359,13 +359,13 @@ export default function ContextPage() {
             <div>
               <Label>启用群上下文传递</Label>
               <p className="text-sm text-muted-foreground">
-                {(config.context as any)?.groupContextSharing === true || (config.context as any)?.groupContextSharing === undefined
+                {(config.context as { groupContextSharing?: boolean })?.groupContextSharing === true || (config.context as { groupContextSharing?: boolean })?.groupContextSharing === undefined
                   ? '群内其他消息会作为上下文传递给 AI' 
                   : '仅传递@消息，不携带群聊上下文'}
               </p>
             </div>
             <Switch
-              checked={(config.context as any)?.groupContextSharing === true || (config.context as any)?.groupContextSharing === undefined}
+              checked={(config.context as { groupContextSharing?: boolean })?.groupContextSharing === true || (config.context as { groupContextSharing?: boolean })?.groupContextSharing === undefined}
               onCheckedChange={(checked) => updateConfig('context.groupContextSharing', checked)}
             />
           </div>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import Editor from 'react-simple-code-editor'
 import Prism from 'prismjs'
 import 'prismjs/components/prism-javascript'
@@ -24,11 +24,7 @@ export function CodeEditor({
   minHeight = '200px',
   readOnly = false,
 }: CodeEditorProps) {
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  const [mounted] = useState(() => typeof window !== 'undefined')
 
   const highlight = useCallback(
     (code: string) => {

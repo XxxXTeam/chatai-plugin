@@ -118,12 +118,17 @@ function PieChart({
   const total = data.reduce((sum, item) => sum + item.value, 0)
   if (total === 0) return <div className="text-center text-muted-foreground py-8">暂无数据</div>
   
-  let currentAngle = 0
+  // 预先计算累积角度
+  const cumulativeAngles = data.reduce<number[]>((acc, item, idx) => {
+    const prevAngle = idx === 0 ? 0 : acc[idx - 1] + (data[idx - 1].value / total) * 360
+    acc.push(prevAngle)
+    return acc
+  }, [])
+  
   const segments = data.map((item, idx) => {
     const percentage = item.value / total
     const angle = percentage * 360
-    const startAngle = currentAngle
-    currentAngle += angle
+    const startAngle = cumulativeAngles[idx]
     
     // 计算扇形路径
     const startRad = (startAngle - 90) * Math.PI / 180

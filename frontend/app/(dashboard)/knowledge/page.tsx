@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
+// import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { 
@@ -24,12 +24,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { ScrollArea } from '@/components/ui/scroll-area'
+// import { ScrollArea } from '@/components/ui/scroll-area'
 import { knowledgeApi, presetsApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { 
   Plus, Trash2, Loader2, BookOpen, FileText, Search, 
-  Link2, Unlink, RefreshCw, Upload, FileDown, Tags, Edit as EditIcon, Import, Maximize2
+  Link2, Unlink, RefreshCw, Upload, Maximize2
 } from 'lucide-react'
 import { MarkdownEditor } from '@/components/ui/markdown-editor'
 import { useRouter } from 'next/navigation'
@@ -72,7 +72,7 @@ export default function KnowledgePage() {
     format: 'openie' as 'openie' | 'raw',
     mergeMode: 'create' as 'create' | 'merge' | 'replace',
     tags: '',
-    fileContent: null as any,
+    fileContent: null as string | null,
     fileName: ''
   })
 
@@ -132,9 +132,9 @@ export default function KnowledgePage() {
       setDialogOpen(true)
       
       // 如果内容被截断，获取完整内容
-      if ((doc as any).truncated || (doc as any).contentLength > 500) {
+      if ((doc as { truncated?: boolean }).truncated || (doc as { contentLength?: number }).contentLength && (doc as { contentLength: number }).contentLength > 500) {
         try {
-          const res = await knowledgeApi.get(doc.id) as any
+          const res = await knowledgeApi.get(doc.id) as { data?: { content?: string } }
           if (res?.data?.content) {
             setForm(prev => ({ ...prev, content: res.data.content }))
           }
@@ -292,7 +292,7 @@ export default function KnowledgePage() {
         name: importForm.name || importForm.fileName,
         tags: importForm.tags.split(/[,，]/).map(s => s.trim()).filter(Boolean),
         mergeMode: importForm.mergeMode
-      }) as any
+      }) as { data?: { stats?: { imported: number; entityCount: number; tripleCount: number } } }
 
       const stats = res?.data?.stats
       if (stats) {
@@ -311,8 +311,9 @@ export default function KnowledgePage() {
         fileName: ''
       })
       fetchDocuments()
-    } catch (error: any) {
-      toast.error('导入失败: ' + (error?.response?.data?.message || error?.message || '未知错误'))
+    } catch (error) {
+      const err = error as { response?: { data?: { message?: string } }; message?: string }
+      toast.error('导入失败: ' + (err?.response?.data?.message || err?.message || '未知错误'))
       console.error(error)
     } finally {
       setImporting(false)
@@ -528,9 +529,9 @@ export default function KnowledgePage() {
                   {doc.content?.substring(0, 200) || '(无内容)'}
                   {(doc.content?.length || 0) > 200 ? '...' : ''}
                 </div>
-                {(doc as any).contentLength > 0 && (
+                {(doc as { contentLength?: number }).contentLength && (doc as { contentLength: number }).contentLength > 0 && (
                   <div className="text-xs text-muted-foreground">
-                    内容长度: {((doc as any).contentLength / 1000).toFixed(1)}K 字符
+                    内容长度: {((doc as { contentLength: number }).contentLength / 1000).toFixed(1)}K 字符
                   </div>
                 )}
                 

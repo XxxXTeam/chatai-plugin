@@ -97,9 +97,64 @@ export class AICommands extends plugin {
                 {
                     reg: '^#(群记忆|群聊记忆)$',
                     fnc: 'viewGroupMemory'
+                },
+                {
+                    reg: '^#(总结记忆|记忆总结|整理记忆)$',
+                    fnc: 'summarizeMemory'
                 }
             ]
         })
+    }
+    
+    /**
+     * 手动触发记忆总结（覆盖式）
+     * #总结记忆 / #记忆总结 / #整理记忆
+     */
+    async summarizeMemory() {
+        const e = this.e
+        try {
+            await memoryManager.init()
+            
+            const userId = e.user_id || e.sender?.user_id || 'unknown'
+            const groupId = e.group_id || null
+            const fullUserId = groupId ? `${groupId}_${userId}` : String(userId)
+            
+            await this.reply('🔄 正在整理记忆...', true)
+            
+            // 执行覆盖式总结
+            const result = await memoryManager.summarizeUserMemory(fullUserId)
+            
+            if (!result.success) {
+                await this.reply(`❌ 记忆整理失败: ${result.error}`, true)
+                return true
+            }
+            
+            // 构建反馈
+            const feedbackLines = [
+                '✅ 记忆整理完成',
+                `━━━━━━━━━━━━`,
+                `📊 整理前: ${result.beforeCount} 条`,
+                `📊 整理后: ${result.afterCount} 条`,
+            ]
+            
+            if (result.memories && result.memories.length > 0) {
+                feedbackLines.push(``, `📝 当前记忆:`)
+                result.memories.slice(0, 5).forEach((m, i) => {
+                    feedbackLines.push(`  ${i + 1}. ${m.substring(0, 40)}${m.length > 40 ? '...' : ''}`)
+                })
+                if (result.memories.length > 5) {
+                    feedbackLines.push(`  ... 共 ${result.memories.length} 条`)
+                }
+            }
+            
+            feedbackLines.push(``, `💡 记忆已合并去重，保留有价值的信息`)
+            
+            await this.reply(feedbackLines.join('\n'), true)
+        } catch (error) {
+            logger.error('[AI-Commands] Summarize memory error:', error)
+            await this.reply('记忆整理失败: ' + error.message, true)
+        }
+        return true
     }
 
     /**

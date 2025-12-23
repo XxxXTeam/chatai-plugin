@@ -25,13 +25,11 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { Progress } from '@/components/ui/progress'
 import { PageHeader, PageContainer } from '@/components/layout/PageHeader'
 import { channelsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, Trash2, TestTube, Loader2, Plug, RefreshCw, Download, Eye, EyeOff, List, CheckCircle, XCircle, ChevronDown, ChevronUp, Settings2, Upload, FileDown, X, Zap, Globe, Key, Layers, MoreHorizontal, Copy, Power, PowerOff, HelpCircle, Info } from 'lucide-react'
+import { Plus, Trash2, TestTube, Loader2, Plug, RefreshCw, Download, Eye, EyeOff, List, CheckCircle, XCircle, ChevronDown, ChevronUp, Settings2, Upload, FileDown, X, Zap, Key, Info } from 'lucide-react'
 import { Slider } from '@/components/ui/slider'
 import { ApiKeyManager, ApiKeyItem, keyStrategies } from '@/components/channels'
 import {
@@ -436,10 +434,10 @@ export default function ChannelsPage() {
         enabled: channel.enabled !== false,
         priority: channel.priority || 0,
         customHeaders: channel.customHeaders || {},
-        headersTemplate: (channel as any).headersTemplate || '',
-        requestBodyTemplate: (channel as any).requestBodyTemplate || '',
-        advanced: (channel as any).advanced || { ...defaultAdvanced },
-        imageConfig: (channel as any).imageConfig || { ...defaultImageConfig }
+        headersTemplate: (channel as unknown as Record<string, unknown>).headersTemplate as string || '',
+        requestBodyTemplate: (channel as unknown as Record<string, unknown>).requestBodyTemplate as string || '',
+        advanced: (channel as unknown as Record<string, unknown>).advanced as typeof defaultAdvanced || { ...defaultAdvanced },
+        imageConfig: (channel as unknown as Record<string, unknown>).imageConfig as typeof defaultImageConfig || { ...defaultImageConfig }
       })
     } else {
       resetForm()
@@ -520,7 +518,7 @@ export default function ChannelsPage() {
         baseUrl: channel.baseUrl,
         apiKey: channel.apiKey,
         models: channel.models,
-      }) as any
+      }) as { data?: { success?: boolean; message?: string }; success?: boolean; message?: string }
       if (res?.data?.success || res?.success) {
         toast.success(res?.data?.message || res?.message || '连接成功')
       } else {
@@ -535,12 +533,8 @@ export default function ChannelsPage() {
     }
   }
 
-  const getDefaultBaseUrl = (adapterType: string) => {
-    return ''
-  }
-
   // 检测 URL 是否已包含自定义路径
-  const hasCustomPath = (url: string) => {
+  const _hasCustomPath = (url: string) => {
     try {
       const parsed = new URL(url)
       const path = parsed.pathname.replace(/\/+$/, '')
@@ -579,11 +573,11 @@ export default function ChannelsPage() {
         adapterType: form.adapterType,
         baseUrl: form.baseUrl || '',  // 留空让后端使用SDK默认地址
         apiKey: form.apiKey,
-      }) as any
+      }) as { data?: { models?: unknown[] }; models?: unknown[] }
       const models = res?.data?.models || res?.models || []
       if (Array.isArray(models) && models.length > 0) {
         // 提取模型ID
-        const modelIds = models.map((m: any) => typeof m === 'string' ? m : m.id || m.name).filter(Boolean)
+        const modelIds = models.map((m: unknown) => typeof m === 'string' ? m : (m as Record<string, string>)?.id || (m as Record<string, string>)?.name).filter(Boolean)
         setAvailableModels(modelIds)
         // 设置当前已选模型
         const currentModels = form.models.split(',').map(m => m.trim()).filter(Boolean)
@@ -1010,7 +1004,7 @@ export default function ChannelsPage() {
                     )}
                     {!form.models && (
                       <p className="text-xs text-muted-foreground p-2 border rounded-lg bg-muted/30">
-                        点击"获取模型"自动获取可用模型，或"选择模型"从列表中选择
+                        点击&quot;获取模型&quot;自动获取可用模型，或&quot;选择模型&quot;从列表中选择
                       </p>
                     )}
                     {/* 自定义模型输入 */}
