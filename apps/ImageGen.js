@@ -59,8 +59,8 @@ class PresetManager {
             { keywords: ['手办', '手办化', '变手办', '转手办'], needImage: true,
               prompt: 'Please accurately transform the main subject in this photo into a realistic, masterpiece-like 1/7 scale PVC statue. Behind this statue, a packaging box should be placed: the box has a large clear front window on its front side, and is printed with subject artwork, product name, brand logo, barcode, as well as a small specifications or authenticity verification panel. A small price tag sticker must also be attached to one corner of the box. Meanwhile, a computer monitor is placed at the back, and the monitor screen needs to display the ZBrush modeling process of this statue. In front of the packaging box, this statue should be placed on a round plastic base. The statue must have 3D dimensionality and a sense of realism, and the texture of the PVC material needs to be clearly represented. The human figure\'s expression and movements must be exactly consistent with those in the photo.' },
             { keywords: ['Q版', 'q版', '表情包', '表情', 'p表情', 'P表情', '表情切割'], needImage: true,
-              prompt: '请以图片中的主要人物生成q版半身像表情符号包中的人物形象给我。丰富多彩的手绘风格，采用4x6的布局，涵盖了各种常见的聊天用语。要求:1.注意正确的头饰。2.不要复制原始图像。3.所有注释都应该是手写的简体中文。4.每个表情符号行动应该是独特的。5.生成的图像需要是4K，分辨率为16:9。',
-              splitGrid: { cols: 6, rows: 4 } },
+              prompt: '请以图片中的主要人物生成q版半身像表情符号包中的人物形象给我。丰富多彩的手绘风格，采用5列4行的网格布局，共20个表情，涵盖了各种常见的聊天用语。要求:1.注意正确的头饰。2.不要复制原始图像。3.所有注释都应该是手写的简体中文。4.每个表情符号行动应该是独特的。5.生成的图像需要是4K，分辨率为16:9。6.严格按照5列4行的网格排列，每个表情大小相同。',
+              splitGrid: { cols: 5, rows: 4 } },
             { keywords: ['动漫化', '二次元化', '卡通化'], needImage: true,
               prompt: '将图片中的人物转换为高质量动漫风格，保持人物的主要特征和表情，使用精美的日系动漫画风，色彩鲜艳，线条流畅。' },
             { keywords: ['赛博朋克', '赛博'], needImage: true,
@@ -88,13 +88,18 @@ class PresetManager {
                     needSave = true
                     updated.uid = this.generateUid()
                 }
-                // 从默认预设中合并splitGrid配置
+                // 从默认预设中同步splitGrid配置（总是使用最新的默认值）
                 const matchDefault = defaultPresets.find(dp => 
                     dp.keywords.some(k => p.keywords?.includes(k))
                 )
-                if (matchDefault?.splitGrid && !p.splitGrid) {
-                    updated.splitGrid = matchDefault.splitGrid
-                    needSave = true
+                if (matchDefault?.splitGrid) {
+                    const defaultGrid = matchDefault.splitGrid
+                    const currentGrid = p.splitGrid || {}
+                    // 如果默认配置与当前不同，更新为默认值
+                    if (currentGrid.cols !== defaultGrid.cols || currentGrid.rows !== defaultGrid.rows) {
+                        updated.splitGrid = defaultGrid
+                        needSave = true
+                    }
                 }
                 return updated
             })
@@ -211,7 +216,7 @@ class PresetManager {
         const merged = []
         // 表情相关关键词，匹配时自动添加splitGrid
         const emojiKeywords = ['q版', '表情包', '表情', 'p表情', '表情切割']
-        const defaultSplitGrid = { cols: 6, rows: 4 }
+        const defaultSplitGrid = { cols: 5, rows: 4 }
         
         const addPresets = (presets) => {
             for (const p of presets) {
@@ -296,11 +301,25 @@ export class ImageGen extends plugin {
                 { reg: /^#?(谷歌状态|画图状态|api状态)$/i, fnc: 'apiStatus' },
                 { reg: /^#?(绘图帮助|画图帮助|绘图帮助)$/i, fnc: 'showHelp' },
                 { reg: /^#?(更新预设|更新焚决|刷新预设|重载预设)$/i, fnc: 'updatePresets' },
+                { reg: /^#?(绘图模型|画图模型|设置绘图模型|切换绘图模型)\s*(.*)$/i, fnc: 'setModel' },
             ]
         })
         
         this.timeout = config.get('features.imageGen.timeout') || 600000
         this.maxImages = config.get('features.imageGen.maxImages') || 3
+    }
+
+    /**
+     * 获取全局撤回配置的延迟时间
+     * @param {number} defaultDelay - 默认延迟(秒)
+     * @returns {number} 撤回延迟秒数，0表示不撤回
+     */
+    getRecallDelay(defaultDelay = 60) {
+        const autoRecall = config.get('basic.autoRecall')
+        if (autoRecall?.enabled === true) {
+            return autoRecall.delay || defaultDelay
+        }
+        return 0
     }
 
     /**
@@ -315,11 +334,7 @@ export class ImageGen extends plugin {
         if (e.isGroup && e.group_id) {
             try {
                 const groupId = String(e.group_id)
-                if (!databaseService.initialized) {
-                    await databaseService.init()
-                }
-                const scopeManager = getScopeManager(databaseService)
-                await scopeManager.init()
+                const scopeManager = await getScopeManagerLazy()
                 const groupSettings = await scopeManager.getGroupSettings(groupId)
                 const groupFeatures = groupSettings?.settings || {}
                 
@@ -552,7 +567,8 @@ export class ImageGen extends plugin {
             return true
         }
         
-        await e.reply('正在生成图片，请稍候...', true, { recallMsg: 60 })
+        const recallDelay = this.getRecallDelay(60)
+        await e.reply('正在生成图片，请稍候...', true, { recallMsg: recallDelay })
         
         try {
             const result = await this.generateImage({ prompt })
@@ -583,7 +599,8 @@ export class ImageGen extends plugin {
         
         const prompt = e.msg.replace(/^#?图生图\s*/s, '').trim() || '请根据这张图片进行艺术化处理'
         
-        await e.reply('正在处理图片，请稍候...', true, { recallMsg: 60 })
+        const recallDelay = this.getRecallDelay(60)
+        await e.reply('正在处理图片，请稍候...', true, { recallMsg: recallDelay })
         
         try {
             const result = await this.generateImage({ 
@@ -615,7 +632,8 @@ export class ImageGen extends plugin {
             return true
         }
         
-        await e.reply('正在生成视频，这可能需要几分钟，请耐心等待...', true, { recallMsg: 120 })
+        const recallDelay = this.getRecallDelay(120)
+        await e.reply('正在生成视频，这可能需要几分钟，请耐心等待...', true, { recallMsg: recallDelay })
         
         try {
             const result = await this.generateVideo({ prompt })
@@ -646,7 +664,8 @@ export class ImageGen extends plugin {
         
         const prompt = e.msg.replace(/^#?图生视频\s*/s, '').trim() || '请根据这张图片生成一段流畅的视频动画'
         
-        await e.reply('正在根据图片生成视频，这可能需要几分钟，请耐心等待...', true, { recallMsg: 120 })
+        const recallDelay = this.getRecallDelay(120)
+        await e.reply('正在根据图片生成视频，这可能需要几分钟，请耐心等待...', true, { recallMsg: recallDelay })
         
         try {
             const result = await this.generateVideo({ 
@@ -685,7 +704,8 @@ export class ImageGen extends plugin {
         const pureMsg = e.msg.replace(/^#?/, '')
         const hasSplit = !!(preset.splitGrid && preset.splitGrid.cols && preset.splitGrid.rows)
         logger.debug('[ImageGen] hasSplit:', hasSplit)
-        await e.reply(`正在生成${pureMsg}效果，请稍候...${hasSplit ? '（完成后将自动切割）' : ''}`, true, { recallMsg: 60 })
+        const recallDelay = this.getRecallDelay(60)
+        await e.reply(`正在生成${pureMsg}效果，请稍候...${hasSplit ? '（完成后将自动切割）' : ''}`, true, { recallMsg: recallDelay })
         
         try {
             const result = await this.generateImage({
@@ -703,6 +723,94 @@ export class ImageGen extends plugin {
             await e.reply(`处理失败: ${err.message}`, true)
         }
         
+        return true
+    }
+
+    /**
+     * 切换绘图模型
+     */
+    async setModel() {
+        const e = this.e
+        const match = e.msg.match(/^#?(绘图模型|画图模型|设置绘图模型|切换绘图模型)\s*(.*)$/i)
+        const modelName = match?.[2]?.trim()
+        
+        // 获取当前配置
+        const currentModel = config.get('features.imageGen.model') || 'gemini-2.0-flash-preview-image-generation'
+        const currentVideoModel = config.get('features.imageGen.videoModel') || 'veo-2.0-generate-001'
+        
+        // 从API配置中获取可用模型列表
+        const apis = this.getApiList()
+        const allModels = new Set()
+        apis.forEach(api => {
+            if (Array.isArray(api.models)) {
+                api.models.forEach(m => allModels.add(m))
+            }
+        })
+        const availableModels = Array.from(allModels)
+        
+        // 分离图片模型和视频模型
+        const imageModels = availableModels.filter(m => 
+            m.includes('image') || m.includes('imagen') || m.includes('gemini')
+        )
+        const videoModels = availableModels.filter(m => 
+            m.includes('veo') || m.includes('video')
+        )
+        
+        if (!modelName) {
+            // 显示当前模型和可用模型列表
+            let reply = [
+                '【绘图模型设置】',
+                '',
+                `当前图片模型: ${currentModel}`,
+                `当前视频模型: ${currentVideoModel}`,
+            ]
+            
+            if (imageModels.length > 0) {
+                reply.push('', '可用图片模型:')
+                reply.push(...imageModels.map((m, i) => 
+                    `${i + 1}. ${m}${m === currentModel ? ' ✓' : ''}`
+                ))
+            }
+            
+            if (videoModels.length > 0) {
+                reply.push('', '可用视频模型:')
+                reply.push(...videoModels.map((m, i) => 
+                    `${i + 1}. ${m}${m === currentVideoModel ? ' ✓' : ''}`
+                ))
+            }
+            
+            if (availableModels.length === 0) {
+                reply.push('', '⚠️ API配置中未定义模型列表，可直接输入模型名称切换')
+            }
+            
+            reply.push('', '使用方法: #绘图模型 模型名称')
+            
+            await e.reply(reply.join('\n'), true)
+            return true
+        }
+        
+        // 支持通过序号选择模型
+        const numMatch = modelName.match(/^(\d+)$/)
+        if (numMatch) {
+            const idx = parseInt(numMatch[1]) - 1
+            if (idx >= 0 && idx < imageModels.length) {
+                const selected = imageModels[idx]
+                config.set('features.imageGen.model', selected)
+                await e.reply(`✅ 图片模型已切换为: ${selected}`, true)
+                return true
+            }
+        }
+        
+        // 检查是否是视频模型
+        if (videoModels.includes(modelName) || modelName.includes('veo') || modelName.includes('video')) {
+            config.set('features.imageGen.videoModel', modelName)
+            await e.reply(`✅ 视频模型已切换为: ${modelName}`, true)
+            return true
+        }
+        
+        // 设置图片模型（支持任意模型名）
+        config.set('features.imageGen.model', modelName)
+        await e.reply(`✅ 图片模型已切换为: ${modelName}`, true)
         return true
     }
 
@@ -836,7 +944,8 @@ export class ImageGen extends plugin {
                     
                     if (!response.ok) {
                         const errorText = await response.text().catch(() => '')
-                        throw new Error(`API 错误: ${response.status} ${errorText.substring(0, 100)}`)
+                        logger.error(`[ImageGen] API响应错误 ${response.status}:`, errorText)
+                        throw new Error(`API 错误 ${response.status}: ${errorText || '未知错误'}`)
                     }
                     
                     const data = await response.json()
@@ -1099,7 +1208,7 @@ export class ImageGen extends plugin {
                 `✅ 表情生成完成，正在切割...请稍等`
             ], true)
 
-            const { cols = 6, rows = 4 } = splitGrid
+            const { cols = 5, rows = 4 } = splitGrid
             const bot = e.bot || Bot
             const botInfo = {
                 user_id: bot.uin || bot.self_id || e.self_id,

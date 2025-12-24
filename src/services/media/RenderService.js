@@ -391,7 +391,7 @@ class RenderService {
     }
 
     /**
-     * 渲染词云图片
+     * 渲染词云图片 - 使用优化的螺旋布局算法，按权重从中心向外排列
      * @param {Array<{word: string, weight: number}>} words - 词频数组
      * @param {Object} options - 选项
      * @param {string} options.title - 标题
@@ -412,23 +412,31 @@ class RenderService {
             throw new Error('没有足够的词汇生成词云')
         }
 
-        // 归一化权重
+        // 限制词数，避免太多词导致布局缓慢
+        const maxWords = Math.min(words.length, 120)
+        
+        // 归一化权重并按权重降序排序（大的在前，放中间）
         const maxWeight = Math.max(...words.map(w => w.weight))
         const minWeight = Math.min(...words.map(w => w.weight))
-        const normalizedWords = words.map(w => ({
-            ...w,
-            size: minWeight === maxWeight 
-                ? 40 
-                : 16 + ((w.weight - minWeight) / (maxWeight - minWeight)) * 60
-        }))
+        const weightRange = maxWeight - minWeight || 1
+        
+        const normalizedWords = words
+            .slice(0, maxWords)
+            .map(w => {
+                // 使用对数缩放让大小差异更明显
+                const normalizedWeight = (w.weight - minWeight) / weightRange
+                const logScale = Math.log10(normalizedWeight * 9 + 1) // 0~1 映射到 log(1)~log(10)
+                return {
+                    ...w,
+                    size: Math.round(20 + logScale * 56) // 20~76px
+                }
+            })
+            .sort((a, b) => b.size - a.size)
 
-        // 生成随机颜色（柔和的彩色）
-        const colors = [
-            '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
-            '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9',
-            '#F8B500', '#FF69B4', '#00CED1', '#FF7F50', '#9370DB',
-            '#20B2AA', '#FFB6C1', '#87CEEB', '#FFA07A', '#8FBC8F'
-        ]
+        // 更丰富的彩色调色板（按权重分组配色）
+        const highWeightColors = ['#E74C3C', '#9B59B6', '#3498DB', '#1ABC9C', '#F39C12']
+        const midWeightColors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#DDA0DD', '#F7DC6F']
+        const lowWeightColors = ['#85C1E9', '#A9DFBF', '#F5B7B1', '#D7BDE2', '#AED6F1', '#FADBD8']
 
         const timestamp = new Date().toLocaleString('zh-CN', {
             year: 'numeric',
@@ -437,6 +445,10 @@ class RenderService {
             hour: '2-digit',
             minute: '2-digit'
         })
+
+        // 词云区域尺寸
+        const cloudWidth = width - 48
+        const cloudHeight = height - 160
 
         const wordCloudHtml = `
             <!DOCTYPE html>
@@ -454,59 +466,52 @@ class RenderService {
                     .container {
                         background: rgba(255, 255, 255, 0.95);
                         border-radius: 16px;
-                        padding: 24px;
+                        padding: 20px;
                         box-shadow: 0 10px 40px rgba(0,0,0,0.2);
                     }
                     .header {
                         text-align: center;
-                        margin-bottom: 20px;
-                        padding-bottom: 16px;
+                        margin-bottom: 12px;
+                        padding-bottom: 12px;
                         border-bottom: 2px solid #eee;
                     }
                     .header h1 {
-                        font-size: 28px;
+                        font-size: 24px;
                         color: #333;
-                        margin-bottom: 8px;
+                        margin-bottom: 4px;
                     }
                     .header .subtitle {
-                        font-size: 14px;
+                        font-size: 13px;
                         color: #666;
                     }
                     .word-cloud {
-                        width: 100%;
-                        height: ${height - 180}px;
-                        display: flex;
-                        flex-wrap: wrap;
-                        justify-content: center;
-                        align-items: center;
-                        align-content: center;
-                        gap: 8px 16px;
-                        padding: 20px;
+                        width: ${cloudWidth}px;
+                        height: ${cloudHeight}px;
+                        position: relative;
+                        margin: 0 auto;
+                        overflow: hidden;
                     }
                     .word {
-                        display: inline-block;
-                        padding: 4px 8px;
-                        transition: transform 0.2s;
-                        cursor: default;
+                        position: absolute;
                         white-space: nowrap;
-                    }
-                    .word:hover {
-                        transform: scale(1.1);
+                        cursor: default;
+                        text-shadow: 1px 1px 2px rgba(0,0,0,0.08);
+                        line-height: 1.1;
                     }
                     .footer {
                         text-align: center;
-                        padding-top: 16px;
+                        padding-top: 10px;
                         border-top: 1px solid #eee;
-                        margin-top: 16px;
+                        margin-top: 10px;
                     }
                     .footer .credit {
-                        font-size: 12px;
+                        font-size: 11px;
                         color: #999;
                     }
                     .footer .timestamp {
-                        font-size: 11px;
+                        font-size: 10px;
                         color: #bbb;
-                        margin-top: 4px;
+                        margin-top: 2px;
                     }
                 </style>
             </head>
@@ -516,18 +521,137 @@ class RenderService {
                         <h1>☁️ ${title}</h1>
                         ${subtitle ? `<div class="subtitle">${subtitle}</div>` : ''}
                     </div>
-                    <div class="word-cloud">
-                        ${normalizedWords.map((w, i) => {
-                            const color = colors[i % colors.length]
-                            const rotation = (Math.random() - 0.5) * 20
-                            return `<span class="word" style="font-size: ${w.size}px; color: ${color}; transform: rotate(${rotation}deg); font-weight: ${w.size > 40 ? 'bold' : 'normal'};">${w.word}</span>`
-                        }).join('')}
-                    </div>
+                    <div class="word-cloud" id="wordCloud"></div>
                     <div class="footer">
                         <div class="credit">Created By Yunzai-Bot and ChatAI-Plugin</div>
                         <div class="timestamp">生成时间：${timestamp}</div>
                     </div>
                 </div>
+                <script>
+                    const highColors = ${JSON.stringify(highWeightColors)};
+                    const midColors = ${JSON.stringify(midWeightColors)};
+                    const lowColors = ${JSON.stringify(lowWeightColors)};
+                    
+                    // 词云数据
+                    const words = ${JSON.stringify(normalizedWords.map((w, i, arr) => {
+                        // 根据排名选择颜色组
+                        const rank = i / arr.length
+                        let colorPool, colorIdx
+                        if (rank < 0.15) {
+                            colorPool = 'high'
+                            colorIdx = i % highWeightColors.length
+                        } else if (rank < 0.5) {
+                            colorPool = 'mid'
+                            colorIdx = (i - Math.floor(arr.length * 0.15)) % midWeightColors.length
+                        } else {
+                            colorPool = 'low'
+                            colorIdx = (i - Math.floor(arr.length * 0.5)) % lowWeightColors.length
+                        }
+                        return {
+                            word: w.word,
+                            size: w.size,
+                            colorPool,
+                            colorIdx
+                        }
+                    }))};
+                    
+                    const container = document.getElementById('wordCloud');
+                    const containerWidth = ${cloudWidth};
+                    const containerHeight = ${cloudHeight};
+                    const centerX = containerWidth / 2;
+                    const centerY = containerHeight / 2;
+                    
+                    // 已放置的词的边界框
+                    const placedBoxes = [];
+                    
+                    // 检测碰撞（带padding）
+                    function checkCollision(box, padding = 4) {
+                        const expandedBox = {
+                            left: box.left - padding,
+                            top: box.top - padding,
+                            right: box.right + padding,
+                            bottom: box.bottom + padding
+                        };
+                        for (const placed of placedBoxes) {
+                            if (!(expandedBox.right < placed.left || 
+                                  expandedBox.left > placed.right || 
+                                  expandedBox.bottom < placed.top || 
+                                  expandedBox.top > placed.bottom)) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                    
+                    // 检查是否在边界内
+                    function isInBounds(box, margin = 5) {
+                        return box.left >= margin && 
+                               box.right <= containerWidth - margin &&
+                               box.top >= margin && 
+                               box.bottom <= containerHeight - margin;
+                    }
+                    
+                    // 阿基米德螺旋布局算法（优化版）
+                    function spiralPlace(wordEl, fontSize) {
+                        const wordWidth = wordEl.offsetWidth;
+                        const wordHeight = wordEl.offsetHeight;
+                        
+                        // 从中心开始，使用阿基米德螺旋
+                        const a = 0;  // 起始半径
+                        const b = 3;  // 螺旋扩展速度
+                        const maxAngle = 50 * Math.PI; // 最大旋转角度
+                        const angleStep = fontSize > 50 ? 0.15 : fontSize > 35 ? 0.2 : 0.25;
+                        
+                        for (let angle = 0; angle < maxAngle; angle += angleStep) {
+                            const radius = a + b * angle;
+                            const x = centerX + radius * Math.cos(angle) - wordWidth / 2;
+                            const y = centerY + radius * Math.sin(angle) - wordHeight / 2;
+                            
+                            const box = {
+                                left: x,
+                                top: y,
+                                right: x + wordWidth,
+                                bottom: y + wordHeight
+                            };
+                            
+                            if (isInBounds(box) && !checkCollision(box)) {
+                                wordEl.style.left = x + 'px';
+                                wordEl.style.top = y + 'px';
+                                placedBoxes.push(box);
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                    
+                    // 放置所有词（按大小降序，大词优先占据中心位置）
+                    let placedCount = 0;
+                    words.forEach((w, index) => {
+                        const span = document.createElement('span');
+                        span.className = 'word';
+                        span.textContent = w.word;
+                        span.style.fontSize = w.size + 'px';
+                        
+                        // 根据颜色池选择颜色
+                        const colorPools = { high: highColors, mid: midColors, low: lowColors };
+                        span.style.color = colorPools[w.colorPool][w.colorIdx];
+                        
+                        // 大词加粗
+                        span.style.fontWeight = w.size > 50 ? 'bold' : w.size > 35 ? '600' : 'normal';
+                        span.style.opacity = '0';
+                        
+                        container.appendChild(span);
+                        
+                        if (spiralPlace(span, w.size)) {
+                            span.style.opacity = '1';
+                            placedCount++;
+                        } else {
+                            span.remove();
+                        }
+                    });
+                    
+                    console.log('词云已放置 ' + placedCount + '/' + words.length + ' 个词');
+                </script>
             </body>
             </html>
         `
@@ -538,6 +662,11 @@ class RenderService {
             const page = await browser.newPage()
             await page.setViewport({ width, height })
             await page.setContent(wordCloudHtml, { waitUntil: 'networkidle0', timeout: 30000 })
+            // 等待词云布局完成
+            await page.waitForFunction(() => {
+                const words = document.querySelectorAll('.word');
+                return words.length > 0 && Array.from(words).some(w => w.style.opacity === '1');
+            }, { timeout: 8000 }).catch(() => {})
             const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
             await page.close()
             return imageBuffer
