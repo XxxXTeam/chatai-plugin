@@ -48,6 +48,9 @@ export class bym extends plugin {
         const globalEnabled = config.get('bym.enable')
         let enabled = globalEnabled
         
+        // 群组独立伪人配置
+        let groupBymConfig = null
+        
         // 检查群组独立设置
         if (e.isGroup && e.group_id) {
             try {
@@ -59,6 +62,9 @@ export class bym extends plugin {
                 await scopeManager.init()
                 const groupSettings = await scopeManager.getGroupSettings(groupId)
                 const groupFeatures = groupSettings?.settings || {}
+                
+                // 保存群组配置供后续使用
+                groupBymConfig = groupFeatures
                 
                 // 如果群组有独立设置，使用群组设置
                 if (groupFeatures.bymEnabled !== undefined) {
@@ -83,9 +89,12 @@ export class bym extends plugin {
             logger.debug('[BYM] 跳过: 消息包含图片且未启用图片处理')
             return false
         }
-        let probabilityRaw = config.get('bym.probability')
+        // 优先使用群组独立概率配置
+        let probabilityRaw = groupBymConfig?.bymProbability !== undefined 
+            ? groupBymConfig.bymProbability 
+            : config.get('bym.probability')
         let probability = probabilityRaw
-        logger.debug(`[BYM] probability原始值: ${probabilityRaw}, 类型: ${typeof probabilityRaw}`)
+        logger.debug(`[BYM] probability原始值: ${probabilityRaw}, 类型: ${typeof probabilityRaw}, 来源: ${groupBymConfig?.bymProbability !== undefined ? '群组配置' : '全局配置'}`)
         
         if (probability === undefined || probability === null || isNaN(Number(probability))) {
             probability = 0.02 // 默认2%
@@ -116,11 +125,18 @@ export class bym extends plugin {
             logger.info('[BYM] 伪人模式触发')
             const { LlmService } = await import('../src/services/llm/LlmService.js')
             
-            // 获取伪人模型或默认模型（注意：空字符串要视为未配置）
+            // 获取伪人模型：优先群组配置 > 全局配置 > 默认模型
+            const groupBymModel = groupBymConfig?.bymModel
             const configBymModel = config.get('bym.model')
-            const bymModel = (configBymModel && typeof configBymModel === 'string' && configBymModel.trim()) 
-                ? configBymModel 
-                : LlmService.selectModel({ isRoleplay: true })
+            const bymModel = (groupBymModel && typeof groupBymModel === 'string' && groupBymModel.trim())
+                ? groupBymModel
+                : (configBymModel && typeof configBymModel === 'string' && configBymModel.trim()) 
+                    ? configBymModel 
+                    : LlmService.selectModel({ isRoleplay: true })
+            
+            if (groupBymModel && groupBymModel.trim()) {
+                logger.debug(`[BYM] 使用群组独立模型: ${bymModel}`)
+            }
             
             // 使用getChatClient获取客户端，它会自动处理渠道选择
             const client = await LlmService.getChatClient({ 
@@ -317,13 +333,25 @@ export class bym extends plugin {
                 systemPrompt += `\n当前群聊: ${e.group_name}`
             }
 
+            // 获取温度和maxTokens：优先群组配置 > 全局配置
+            const bymTemperature = groupBymConfig?.bymTemperature !== undefined 
+                ? groupBymConfig.bymTemperature 
+                : (config.get('bym.temperature') || 0.9)
+            const bymMaxTokens = groupBymConfig?.bymMaxTokens !== undefined 
+                ? groupBymConfig.bymMaxTokens 
+                : (config.get('bym.maxTokens') || 100)
+            
+            if (groupBymConfig?.bymTemperature !== undefined || groupBymConfig?.bymMaxTokens !== undefined) {
+                logger.debug(`[BYM] 使用群组独立参数: temperature=${bymTemperature}, maxTokens=${bymMaxTokens}`)
+            }
+
             const bymStartTime = Date.now()
             const response = await client.sendMessage(userMessage, {
                 model: bymModel,
                 conversationId: `bym_${e.group_id || e.user_id}_${Date.now()}`, // Use group_id for context if available
                 systemOverride: systemPrompt,
-                temperature: config.get('bym.temperature') || 0.9,
-                maxToken: config.get('bym.maxTokens') || 100,
+                temperature: bymTemperature,
+                maxToken: bymMaxTokens,
             })
 
             const replyText = response.contents

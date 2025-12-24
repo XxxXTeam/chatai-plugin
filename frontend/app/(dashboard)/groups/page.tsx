@@ -92,6 +92,10 @@ export default function GroupsPage() {
     bymEnabled: 'inherit' as 'inherit' | 'on' | 'off',
     bymPresetId: '__default__' as string,  // 伪人预设选择
     bymPrompt: '',  // 自定义伪人提示词
+    bymProbability: 'inherit' as 'inherit' | number,  // 伪人触发概率
+    bymModel: '',  // 伪人使用模型
+    bymTemperature: 'inherit' as 'inherit' | number,  // 伪人温度
+    bymMaxTokens: 'inherit' as 'inherit' | number,  // 伪人最大Token
     imageGenEnabled: 'inherit' as 'inherit' | 'on' | 'off',
     summaryEnabled: 'inherit' as 'inherit' | 'on' | 'off',
     eventEnabled: 'inherit' as 'inherit' | 'on' | 'off',
@@ -144,6 +148,10 @@ export default function GroupsPage() {
       bymEnabled: 'inherit',
       bymPresetId: '__default__',
       bymPrompt: '',
+      bymProbability: 'inherit' as 'inherit' | number,
+      bymModel: '',
+      bymTemperature: 'inherit' as 'inherit' | number,
+      bymMaxTokens: 'inherit' as 'inherit' | number,
       imageGenEnabled: 'inherit',
       summaryEnabled: 'inherit',
       eventEnabled: 'inherit',
@@ -173,6 +181,10 @@ export default function GroupsPage() {
         bymEnabled: settings.bymEnabled === undefined ? 'inherit' : settings.bymEnabled ? 'on' : 'off',
         bymPresetId: settings.bymPresetId || '__default__',
         bymPrompt: settings.bymPrompt || '',
+        bymProbability: settings.bymProbability === undefined ? 'inherit' : settings.bymProbability,
+        bymModel: settings.bymModel || '',
+        bymTemperature: settings.bymTemperature === undefined ? 'inherit' : settings.bymTemperature,
+        bymMaxTokens: settings.bymMaxTokens === undefined ? 'inherit' : settings.bymMaxTokens,
         imageGenEnabled: settings.imageGenEnabled === undefined ? 'inherit' : settings.imageGenEnabled ? 'on' : 'off',
         summaryEnabled: settings.summaryEnabled === undefined ? 'inherit' : settings.summaryEnabled ? 'on' : 'off',
         eventEnabled: settings.eventEnabled === undefined ? 'inherit' : settings.eventEnabled ? 'on' : 'off',
@@ -204,6 +216,10 @@ export default function GroupsPage() {
         bymEnabled: form.bymEnabled === 'inherit' ? undefined : form.bymEnabled === 'on',
         bymPresetId: form.bymPresetId === '__default__' ? undefined : form.bymPresetId,
         bymPrompt: form.bymPrompt || undefined,
+        bymProbability: form.bymProbability === 'inherit' ? undefined : form.bymProbability,
+        bymModel: form.bymModel || undefined,
+        bymTemperature: form.bymTemperature === 'inherit' ? undefined : form.bymTemperature,
+        bymMaxTokens: form.bymMaxTokens === 'inherit' ? undefined : form.bymMaxTokens,
         imageGenEnabled: form.imageGenEnabled === 'inherit' ? undefined : form.imageGenEnabled === 'on',
         summaryEnabled: form.summaryEnabled === 'inherit' ? undefined : form.summaryEnabled === 'on',
         eventEnabled: form.eventEnabled === 'inherit' ? undefined : form.eventEnabled === 'on',
@@ -477,6 +493,114 @@ export default function GroupsPage() {
                             />
                           </div>
                         )}
+                        
+                        {/* 伪人触发概率 */}
+                        <div className="grid gap-2">
+                          <div className="flex items-center justify-between">
+                            <Label className="text-sm">触发概率</Label>
+                            <Select
+                              value={form.bymProbability === 'inherit' ? 'inherit' : 'custom'}
+                              onValueChange={(v) => setForm({ ...form, bymProbability: v === 'inherit' ? 'inherit' : 0.02 })}
+                            >
+                              <SelectTrigger className="w-28">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="inherit">继承全局</SelectItem>
+                                <SelectItem value="custom">自定义</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {form.bymProbability !== 'inherit' && (
+                            <div className="flex items-center gap-2">
+                              <Input
+                                type="number"
+                                min={0}
+                                max={100}
+                                step={1}
+                                value={typeof form.bymProbability === 'number' ? Math.round(form.bymProbability * 100) : 2}
+                                onChange={(e) => setForm({ ...form, bymProbability: Math.min(1, Math.max(0, parseInt(e.target.value) / 100)) })}
+                                className="w-20"
+                              />
+                              <span className="text-sm text-muted-foreground">%</span>
+                            </div>
+                          )}
+                        </div>
+                        
+                        {/* 伪人使用模型 */}
+                        <div className="grid gap-2">
+                          <Label className="text-sm">使用模型</Label>
+                          <Input
+                            value={form.bymModel}
+                            onChange={(e) => setForm({ ...form, bymModel: e.target.value })}
+                            placeholder="留空继承全局设置"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            指定该群伪人模式使用的模型，留空使用全局伪人模型
+                          </p>
+                        </div>
+                        
+                        {/* 伪人温度 */}
+                        <div className="grid gap-2">
+                          <div className="flex items-center justify-between">
+                            <Label className="text-sm">回复温度</Label>
+                            <Select
+                              value={form.bymTemperature === 'inherit' ? 'inherit' : 'custom'}
+                              onValueChange={(v) => setForm({ ...form, bymTemperature: v === 'inherit' ? 'inherit' : 0.9 })}
+                            >
+                              <SelectTrigger className="w-28">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="inherit">继承全局</SelectItem>
+                                <SelectItem value="custom">自定义</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {form.bymTemperature !== 'inherit' && (
+                            <div className="flex items-center gap-2">
+                              <Input
+                                type="number"
+                                min={0}
+                                max={2}
+                                step={0.1}
+                                value={typeof form.bymTemperature === 'number' ? form.bymTemperature : 0.9}
+                                onChange={(e) => setForm({ ...form, bymTemperature: Math.min(2, Math.max(0, parseFloat(e.target.value))) })}
+                                className="w-20"
+                              />
+                              <span className="text-xs text-muted-foreground">（0-2，越高越随机）</span>
+                            </div>
+                          )}
+                        </div>
+                        
+                        {/* 伪人最大Token */}
+                        <div className="grid gap-2">
+                          <div className="flex items-center justify-between">
+                            <Label className="text-sm">最大Token</Label>
+                            <Select
+                              value={form.bymMaxTokens === 'inherit' ? 'inherit' : 'custom'}
+                              onValueChange={(v) => setForm({ ...form, bymMaxTokens: v === 'inherit' ? 'inherit' : 100 })}
+                            >
+                              <SelectTrigger className="w-28">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="inherit">继承全局</SelectItem>
+                                <SelectItem value="custom">自定义</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {form.bymMaxTokens !== 'inherit' && (
+                            <Input
+                              type="number"
+                              min={10}
+                              max={2000}
+                              value={typeof form.bymMaxTokens === 'number' ? form.bymMaxTokens : 100}
+                              onChange={(e) => setForm({ ...form, bymMaxTokens: Math.min(2000, Math.max(10, parseInt(e.target.value))) })}
+                              placeholder="100"
+                            />
+                          )}
+                        </div>
                       </div>
                     )}
                     

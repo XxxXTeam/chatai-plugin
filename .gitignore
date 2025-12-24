@@ -20,7 +20,7 @@ data/mcp-servers.json
 data/stats.json
 
 
-
+sakura-plugin/
 src/services/workflow/
 data/workflows/
 !data/workflows/.gitkeep
