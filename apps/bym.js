@@ -347,9 +347,16 @@ export class bym extends plugin {
             }
 
             const bymStartTime = Date.now()
+            
+            // 构建正确的 conversationId，与 ChatService 保持一致
+            // 群聊使用 group:groupId，私聊使用 user:userId
+            const groupId = e.group_id ? String(e.group_id) : null
+            const userId = String(e.user_id || e.sender?.user_id)
+            const bymConversationId = groupId ? `group:${groupId}` : `user:${userId}`
+            
             const response = await client.sendMessage(userMessage, {
                 model: bymModel,
-                conversationId: `bym_${e.group_id || e.user_id}_${Date.now()}`, // Use group_id for context if available
+                conversationId: bymConversationId, // 使用与普通聊天相同的会话ID，共享上下文
                 systemOverride: systemPrompt,
                 temperature: bymTemperature,
                 maxToken: bymMaxTokens,

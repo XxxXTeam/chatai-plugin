@@ -525,11 +525,23 @@ export async function getOriginalMessage(e, bot = null, messageCache = null) {
  */
 export function parseMessageContent(message) {
     if (!message) return { content: '', type: 'unknown' }
+    if (typeof message === 'function') {
+        try {
+            message = message()
+        } catch {
+            return { content: '', type: 'unknown' }
+        }
+    }
     if (typeof message === 'string') return { content: message, type: 'text' }
     
     if (!Array.isArray(message)) {
         if (message.text) return { content: message.text, type: 'text' }
-        return { content: String(message), type: 'text' }
+        if (message.raw_message) return { content: message.raw_message, type: 'text' }
+        if (message.content) return parseMessageContent(message.content)
+        if (typeof message === 'object' && message !== null) {
+            return { content: '', type: 'unknown' }
+        }
+        return { content: '', type: 'unknown' }
     }
     
     const parts = []

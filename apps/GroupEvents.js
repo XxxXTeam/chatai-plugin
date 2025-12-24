@@ -179,8 +179,24 @@ function replacePlaceholders(template, data) {
  */
 function parseMessageSegments(message) {
     if (!message) return { text: '', type: 'unknown' }
+    // 如果是函数（某些适配器的getter），尝试调用它
+    if (typeof message === 'function') {
+        try {
+            message = message()
+        } catch {
+            return { text: '', type: 'unknown' }
+        }
+    }
     if (typeof message === 'string') return { text: message, type: 'text' }
-    if (!Array.isArray(message)) return { text: String(message), type: 'text' }
+    if (!Array.isArray(message)) {
+        // 避免将函数或非预期对象转为字符串
+        if (typeof message === 'object' && message !== null) {
+            if (message.text) return { text: message.text, type: 'text' }
+            if (message.raw_message) return { text: message.raw_message, type: 'text' }
+            if (message.content) return parseMessageSegments(message.content)
+        }
+        return { text: '', type: 'unknown' }
+    }
     
     const parts = []
     let msgType = 'text'

@@ -556,6 +556,7 @@ export class ChatListener extends plugin {
         // 构建请求选项
         const chatOptions = {
             userId,
+            groupId,  // 显式传递 groupId，确保上下文正确隔离
             message: finalMessage,
             images,
             event: e,
