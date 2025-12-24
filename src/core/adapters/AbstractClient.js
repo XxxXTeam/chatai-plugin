@@ -1154,7 +1154,7 @@ const DEFAULT_TOOL_CALL_LIMIT = {
  */
 
 /**
- * Abstract base client for all LLM adapters
+ * 所有LLM适配器的抽象基类
  */
 export class AbstractClient {
     /**
@@ -1183,7 +1183,7 @@ export class AbstractClient {
     }
 
     /**
-     * Main send message method
+     * 主要的发送消息方法
      * @param {UserMessage | undefined} message
      * @param {SendMessageOption | Partial<SendMessageOption>} options
      * @returns {Promise<ModelResponse>}
@@ -1223,14 +1223,14 @@ export class AbstractClient {
 
             const modelResponse = await this._sendMessage(histories, apiKey, options)
 
-            // Save user request
+            // 保存用户请求
             if (thisRequestMsg && this.shouldPersistHistory(thisRequestMsg)) {
                 await this.historyManager.saveHistory(thisRequestMsg, options.conversationId)
                 options.parentMessageId = thisRequestMsg.id
                 modelResponse.parentId = thisRequestMsg.id
             }
 
-            // Save model response
+            // 保存模型响应
             if (this.shouldPersistHistory(modelResponse)) {
                 const filteredResponse = this.filterToolCallJsonFromResponse(modelResponse)
                 // 过滤后内容不为空才保存
@@ -1241,7 +1241,7 @@ export class AbstractClient {
 
             options.parentMessageId = modelResponse.id
 
-            // Handle tool calls with improved logic
+            // 使用改进的逻辑处理工具调用
             if (modelResponse.toolCalls && modelResponse.toolCalls.length > 0) {
                 // 初始化工具调用追踪状态
                 this.initToolCallTracking(options)

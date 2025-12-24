@@ -104,8 +104,6 @@ export class Chat extends plugin {
       logger.debug(`[Chat] 跳过: 系统命令 ${rawMsg.substring(0, 20)}...`)
       return false
     }
-
-    // === 私聊处理 ===
     if (!e.isGroup) {
       const privateCfg = triggerCfg.private || {}
       // 私聊未启用则跳过
@@ -139,7 +137,6 @@ export class Chat extends plugin {
         }
       }
     } else {
-      // === 群聊处理 ===
       let groupCfg = { ...(triggerCfg.group || {}) }
       
       // 检查群组特定的触发模式配置

@@ -94,7 +94,7 @@ export class ChannelManager {
     }
 
     /**
-     * Load channels from configuration
+     * 从配置加载渠道
      */
     async loadChannels() {
         const channels = config.get('channels') || []
@@ -166,26 +166,26 @@ export class ChannelManager {
     }
 
     /**
-     * Get all channels
-     * @returns {Array} List of channels
+     * 获取所有渠道
+     * @returns {Array} 渠道列表
      */
     getAll() {
         return Array.from(this.channels.values())
     }
 
     /**
-     * Get channel by ID
-     * @param {string} id
-     * @returns {Object|null}
+     * 根据ID获取渠道
+     * @param {string} id - 渠道ID
+     * @returns {Object|null} 渠道对象或null
      */
     get(id) {
         return this.channels.get(id) || null
     }
 
     /**
-     * Create new channel
-     * @param {Object} channelData
-     * @returns {Object} Created channel
+     * 创建新渠道
+     * @param {Object} channelData - 渠道数据
+     * @returns {Object} 创建的渠道
      */
     async create(channelData) {
         const id = channelData.id || `${channelData.adapterType}-${crypto.randomBytes(4).toString('hex')}`
@@ -274,16 +274,16 @@ export class ChannelManager {
     }
 
     /**
-     * Update channel
-     * @param {string} id
-     * @param {Object} updates
-     * @returns {Object|null}
+     * 更新渠道
+     * @param {string} id - 渠道ID
+     * @param {Object} updates - 更新内容
+     * @returns {Object|null} 更新后的渠道或null
      */
     async update(id, updates) {
         const channel = this.channels.get(id)
         if (!channel) return null
 
-        // Update allowed fields
+        // 更新允许的字段
         const allowedFields = [
             'name', 'adapterType', 'baseUrl', 'apiKey', 'apiKeys', 'strategy', 
             'models', 'priority', 'enabled', 'advanced', 'customHeaders', 
@@ -302,7 +302,7 @@ export class ChannelManager {
             }
         }
 
-        // Clear model cache if credentials or adapter type changed
+        // 如果凭据或适配器类型变更，清除模型缓存
         if (updates.apiKey || updates.baseUrl || updates.apiKeys || updates.adapterType) {
             channel.modelsCached = false
             channel.status = undefined  // Reset status when config changes
@@ -316,12 +316,12 @@ export class ChannelManager {
     }
 
     /**
-     * Delete channel
-     * @param {string} id
-     * @returns {boolean}
+     * 删除渠道
+     * @param {string} id - 渠道ID
+     * @returns {boolean} 是否删除成功
      */
     async delete(id) {
-        // Don't allow deleting default channels, only disable them
+        // 不允许删除默认渠道，只能禁用
         if (id.endsWith('-default')) {
             const channel = this.channels.get(id)
             if (channel) {
@@ -341,9 +341,9 @@ export class ChannelManager {
     }
 
     /**
-     * Fetch models from API for a channel
-     * @param {string} id
-     * @returns {Promise<Array>}
+     * 从渠道API获取模型列表
+     * @param {string} id - 渠道ID
+     * @returns {Promise<Array>} 模型列表
      */
     async fetchModels(id) {
         const channel = this.channels.get(id)
@@ -351,13 +351,13 @@ export class ChannelManager {
             throw new Error('Channel not found')
         }
 
-        // Check cache
+        // 检查缓存
         const cached = await redisClient.get(`models:${id}`)
         if (cached) {
             try {
                 return JSON.parse(cached)
             } catch (e) {
-                // Ignore parse error
+                // 忽略解析错误
             }
         }
 
@@ -372,10 +372,10 @@ export class ChannelManager {
                 models = await this.fetchClaudeModels(channel)
             }
 
-            // Cache the result (1 hour)
+            // 缓存结果（1小时）
             await redisClient.set(`models:${id}`, JSON.stringify(models), 3600)
 
-            // Update channel
+            // 更新渠道
             channel.models = models
             channel.modelsCached = true
             channel.status = 'active'
@@ -390,7 +390,7 @@ export class ChannelManager {
     }
 
     /**
-     * Fetch OpenAI models
+     * 获取OpenAI模型列表
      */
     async fetchOpenAIModels(channel) {
         const OpenAI = (await import('openai')).default
@@ -413,11 +413,11 @@ export class ChannelManager {
     }
 
     /**
-     * Fetch Gemini models
+     * 获取Gemini模型列表
      */
     async fetchGeminiModels(channel) {
-        // Gemini doesn't have a public models list API yet
-        // Return known models
+        // Gemini暂无公开的模型列表API
+        // 返回已知模型
         return [
             'gemini-pro',
             'gemini-pro-vision',
@@ -432,7 +432,7 @@ export class ChannelManager {
     }
 
     /**
-     * Fetch Claude models
+     * 获取Claude模型列表
      */
     async fetchClaudeModels(channel) {
         return [
@@ -454,7 +454,7 @@ export class ChannelManager {
     getChannelKey(channel, options = {}) {
         const { recordUsage = true } = options
 
-        // Legacy/Single key
+        // 旧版/单个key
         if (!channel.apiKeys || channel.apiKeys.length === 0) {
             return { key: channel.apiKey, keyIndex: -1, keyObj: null }
         }

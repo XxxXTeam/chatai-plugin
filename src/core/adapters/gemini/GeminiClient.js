@@ -17,7 +17,7 @@ import { statsService } from '../../../services/stats/StatsService.js'
  */
 
 /**
- * Gemini client implementation
+ * Gemini客户端实现
  */
 export class GeminiClient extends AbstractClient {
     /**
@@ -30,7 +30,7 @@ export class GeminiClient extends AbstractClient {
     }
 
     /**
-     * Send message to Gemini
+     * 发送消息到Gemini
      * @param {IMessage[]} histories
      * @param {string} apiKey
      * @param {SendMessageOption} options
@@ -43,15 +43,15 @@ export class GeminiClient extends AbstractClient {
         const model = options.model || 'gemini-2.5-flash'
         const preprocessedHistories = await preprocessImageUrls(histories)
 
-        // Separate system prompt from history
+        // 从历史记录中分离系统提示词
         let systemInstruction = options.systemOverride || ''
         const converter = getFromChaiteConverter('gemini')
 
-        // Convert history to Gemini format
+        // 将历史记录转换为Gemini格式
         const contents = []
         for (const history of preprocessedHistories) {
             if (history.role === 'system') {
-                // System messages become system instruction
+                // 系统消息变为系统指令
                 systemInstruction = history.content
                     .filter(c => c.type === 'text')
                     .map(c => c.text)
@@ -66,7 +66,7 @@ export class GeminiClient extends AbstractClient {
             }
         }
 
-        // Configure safety settings
+        // 配置安全设置
         const safetySettings = [
             {
                 category: HarmCategory.HARM_CATEGORY_HARASSMENT,
@@ -86,11 +86,11 @@ export class GeminiClient extends AbstractClient {
             },
         ]
 
-        // Convert tools
+        // 转换工具
         const toolConvert = getFromChaiteToolConverter('gemini')
         const tools = this.tools.length > 0 ? this.tools.map(toolConvert) : undefined
 
-        // Create generative model
+        // 创建生成式模型
         const generativeModel = genAI.getGenerativeModel({
             model,
             systemInstruction: systemInstruction || undefined,
@@ -102,7 +102,7 @@ export class GeminiClient extends AbstractClient {
             },
         }, requestOptions)
 
-        // Generate content
+        // 生成内容
         const result = await generativeModel.generateContent({
             contents,
         })
@@ -118,7 +118,7 @@ export class GeminiClient extends AbstractClient {
         const id = crypto.randomUUID()
         const toChaiteConverter = getIntoChaiteConverter('gemini')
 
-        // Convert response to Chaite format
+        // 将响应转换为Chaite格式
         const chaiteMessage = toChaiteConverter(response)
 
         let responseContents = chaiteMessage.content || []

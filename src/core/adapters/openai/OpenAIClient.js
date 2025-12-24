@@ -22,8 +22,9 @@ import { statsService } from '../../../services/stats/StatsService.js'
  */
 
 /**
+ * 验证并清理消息数组
  * @param {Array} messages - OpenAI 格式的消息数组
- * @returns {Array} - 清理后的消息数组
+ * @returns {Array} 清理后的消息数组
  */
 function validateAndCleanMessages(messages) {
     if (!messages || !Array.isArray(messages)) return messages
@@ -111,7 +112,7 @@ function validateAndCleanMessages(messages) {
 /**
  * 递归清理工具定义中的 enum 值，确保都是字符串类型（Gemini API 要求）
  * @param {object} obj - 工具定义对象
- * @returns {object} - 清理后的对象
+ * @returns {object} 清理后的对象
  */
 function sanitizeToolEnums(obj) {
     if (!obj || typeof obj !== 'object') return obj
@@ -134,7 +135,7 @@ function sanitizeToolEnums(obj) {
 }
 
 /**
- * OpenAI client implementation
+ * OpenAI客户端实现
  */
 export class OpenAIClient extends AbstractClient {
     /**
@@ -147,7 +148,7 @@ export class OpenAIClient extends AbstractClient {
     }
 
     /**
-     * Send message to OpenAI
+     * 发送消息到OpenAI
      * @param {IMessage[]} histories
      * @param {string} apiKey
      * @param {SendMessageOption} options

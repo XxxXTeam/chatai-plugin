@@ -45,11 +45,19 @@ export class ScopeManager {
           groupId TEXT PRIMARY KEY,
           systemPrompt TEXT,
           presetId TEXT,
+          knowledgeIds TEXT,
+          inheritFrom TEXT,
           settings TEXT,
           createdAt INTEGER,
           updatedAt INTEGER
         )
       `)
+      try {
+        this.db.db.exec(`ALTER TABLE group_scopes ADD COLUMN knowledgeIds TEXT`)
+      } catch (e) { /* 列已存在 */ }
+      try {
+        this.db.db.exec(`ALTER TABLE group_scopes ADD COLUMN inheritFrom TEXT`)
+      } catch (e) { /* 列已存在 */ }
 
       // 创建群用户组合作用域表（支持群内用户独立人格）
       this.db.db.exec(`
@@ -181,6 +189,8 @@ export class ScopeManager {
         groupId: row.groupId,
         systemPrompt: row.systemPrompt,
         presetId: row.presetId,
+        knowledgeIds: row.knowledgeIds ? JSON.parse(row.knowledgeIds) : [],
+        inheritFrom: row.inheritFrom ? JSON.parse(row.inheritFrom) : [],
         settings: row.settings ? JSON.parse(row.settings) : {},
         createdAt: row.createdAt,
         updatedAt: row.updatedAt
@@ -202,12 +212,12 @@ export class ScopeManager {
     
     try {
       const now = Date.now()
-      const { systemPrompt, presetId, ...otherSettings } = settings
+      const { systemPrompt, presetId, knowledgeIds, inheritFrom, ...otherSettings } = settings
       
       const stmt = this.db.db.prepare(`
         INSERT OR REPLACE INTO group_scopes 
-        (groupId, systemPrompt, presetId, settings, createdAt, updatedAt)
-        VALUES (?, ?, ?, ?, COALESCE((SELECT createdAt FROM group_scopes WHERE groupId = ?), ?), ?)
+        (groupId, systemPrompt, presetId, knowledgeIds, inheritFrom, settings, createdAt, updatedAt)
+        VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT createdAt FROM group_scopes WHERE groupId = ?), ?), ?)
       `)
       
       // 支持空人设：区分 undefined 和 空字符串
@@ -216,6 +226,8 @@ export class ScopeManager {
         groupId,
         finalPrompt,
         presetId || null,
+        knowledgeIds ? JSON.stringify(knowledgeIds) : null,
+        inheritFrom ? JSON.stringify(inheritFrom) : null,
         JSON.stringify(otherSettings),
         groupId,
         now,
@@ -356,6 +368,8 @@ export class ScopeManager {
         groupId: row.groupId,
         systemPrompt: row.systemPrompt,
         presetId: row.presetId,
+        knowledgeIds: row.knowledgeIds ? JSON.parse(row.knowledgeIds) : [],
+        inheritFrom: row.inheritFrom ? JSON.parse(row.inheritFrom) : [],
         settings: row.settings ? JSON.parse(row.settings) : {},
         createdAt: row.createdAt,
         updatedAt: row.updatedAt
@@ -989,6 +1003,8 @@ export class ScopeManager {
           groupId: row.groupId,
           systemPrompt: row.systemPrompt,
           presetId: row.presetId,
+          knowledgeIds: row.knowledgeIds ? JSON.parse(row.knowledgeIds) : [],
+          inheritFrom: row.inheritFrom ? JSON.parse(row.inheritFrom) : [],
           updatedAt: row.updatedAt
         })),
         groupUsers: groupUsers.map(row => ({
@@ -1008,6 +1024,301 @@ export class ScopeManager {
     } catch (error) {
       logger.error('[ScopeManager] 搜索失败:', error)
       return { users: [], groups: [], groupUsers: [], privates: [] }
+    }
+  }
+
+  /**
+   * 设置群组知识库
+   * @param {string} groupId 群组ID
+   * @param {string[]} knowledgeIds 知识库ID列表
+   * @returns {Promise<boolean>}
+   */
+  async setGroupKnowledge(groupId, knowledgeIds) {
+    const settings = await this.getGroupSettings(groupId) || {}
+    return await this.setGroupSettings(groupId, {
+      ...settings,
+      knowledgeIds: Array.isArray(knowledgeIds) ? knowledgeIds : []
+    })
+  }
+
+  /**
+   * 添加群组知识库
+   * @param {string} groupId 群组ID
+   * @param {string} knowledgeId 知识库ID
+   * @returns {Promise<boolean>}
+   */
+  async addGroupKnowledge(groupId, knowledgeId) {
+    const settings = await this.getGroupSettings(groupId) || {}
+    const existing = settings.knowledgeIds || []
+    if (!existing.includes(knowledgeId)) {
+      existing.push(knowledgeId)
+    }
+    return await this.setGroupSettings(groupId, {
+      ...settings,
+      knowledgeIds: existing
+    })
+  }
+
+  /**
+   * 移除群组知识库
+   * @param {string} groupId 群组ID
+   * @param {string} knowledgeId 知识库ID
+   * @returns {Promise<boolean>}
+   */
+  async removeGroupKnowledge(groupId, knowledgeId) {
+    const settings = await this.getGroupSettings(groupId) || {}
+    const existing = settings.knowledgeIds || []
+    const idx = existing.indexOf(knowledgeId)
+    if (idx !== -1) {
+      existing.splice(idx, 1)
+    }
+    return await this.setGroupSettings(groupId, {
+      ...settings,
+      knowledgeIds: existing
+    })
+  }
+
+  /**
+   * 设置群组继承来源
+   * 支持继承格式：
+   * - 'preset:预设ID' - 继承预设的提示词和知识库
+   * - 'group:群号' - 继承其他群的提示词和知识库
+   * - 'knowledge:知识库ID' - 直接继承知识库
+   * @param {string} groupId 群组ID
+   * @param {string[]} inheritFrom 继承来源列表
+   * @returns {Promise<boolean>}
+   */
+  async setGroupInheritance(groupId, inheritFrom) {
+    const settings = await this.getGroupSettings(groupId) || {}
+    return await this.setGroupSettings(groupId, {
+      ...settings,
+      inheritFrom: Array.isArray(inheritFrom) ? inheritFrom : []
+    })
+  }
+
+  /**
+   * 添加群组继承来源
+   * @param {string} groupId 群组ID
+   * @param {string} source 继承来源
+   * @returns {Promise<boolean>}
+   */
+  async addGroupInheritance(groupId, source) {
+    const settings = await this.getGroupSettings(groupId) || {}
+    const existing = settings.inheritFrom || []
+    if (!existing.includes(source)) {
+      existing.push(source)
+    }
+    return await this.setGroupSettings(groupId, {
+      ...settings,
+      inheritFrom: existing
+    })
+  }
+
+  /**
+   * 移除群组继承来源
+   * @param {string} groupId 群组ID
+   * @param {string} source 继承来源
+   * @returns {Promise<boolean>}
+   */
+  async removeGroupInheritance(groupId, source) {
+    const settings = await this.getGroupSettings(groupId) || {}
+    const existing = settings.inheritFrom || []
+    const idx = existing.indexOf(source)
+    if (idx !== -1) {
+      existing.splice(idx, 1)
+    }
+    return await this.setGroupSettings(groupId, {
+      ...settings,
+      inheritFrom: existing
+    })
+  }
+
+  /**
+   * 解析群组的完整配置（包含继承）
+   * @param {string} groupId 群组ID
+   * @param {Object} options 选项
+   * @returns {Promise<{systemPrompt: string, knowledgeIds: string[], presetId: string, sources: string[]}>}
+   */
+  async resolveGroupConfig(groupId, options = {}) {
+    const { maxDepth = 5, visited = new Set() } = options
+    
+    // 防止循环继承
+    if (visited.has(`group:${groupId}`)) {
+      logger.warn(`[ScopeManager] 检测到循环继承: group:${groupId}`)
+      return { systemPrompt: '', knowledgeIds: [], presetId: null, sources: [] }
+    }
+    visited.add(`group:${groupId}`)
+    
+    const settings = await this.getGroupSettings(groupId)
+    if (!settings) {
+      return { systemPrompt: '', knowledgeIds: [], presetId: null, sources: [] }
+    }
+    
+    const result = {
+      systemPrompt: settings.systemPrompt || '',
+      knowledgeIds: [...(settings.knowledgeIds || [])],
+      presetId: settings.presetId || null,
+      sources: [`group:${groupId}`]
+    }
+    
+    // 处理继承
+    const inheritFrom = settings.inheritFrom || []
+    if (inheritFrom.length > 0 && maxDepth > 0) {
+      for (const source of inheritFrom) {
+        const [type, id] = source.split(':')
+        
+        if (type === 'preset') {
+          // 继承预设
+          try {
+            const { presetManager } = await import('../preset/PresetManager.js')
+            await presetManager.init()
+            const preset = presetManager.get(id)
+            if (preset) {
+              // 合并预设提示词（如果本群没有设置）
+              if (!result.systemPrompt && preset.systemPrompt) {
+                result.systemPrompt = preset.systemPrompt
+              }
+              // 获取预设关联的知识库
+              const presetKnowledge = presetManager.getPresetKnowledge(id)
+              for (const doc of presetKnowledge) {
+                if (!result.knowledgeIds.includes(doc.id)) {
+                  result.knowledgeIds.push(doc.id)
+                }
+              }
+              result.sources.push(source)
+              logger.debug(`[ScopeManager] 群 ${groupId} 继承预设 ${id}`)
+            }
+          } catch (err) {
+            logger.warn(`[ScopeManager] 加载预设 ${id} 失败:`, err.message)
+          }
+        } else if (type === 'group') {
+          // 继承其他群配置（递归）
+          const inherited = await this.resolveGroupConfig(id, { maxDepth: maxDepth - 1, visited })
+          if (inherited.systemPrompt && !result.systemPrompt) {
+            result.systemPrompt = inherited.systemPrompt
+          }
+          for (const kId of inherited.knowledgeIds) {
+            if (!result.knowledgeIds.includes(kId)) {
+              result.knowledgeIds.push(kId)
+            }
+          }
+          result.sources.push(...inherited.sources)
+        } else if (type === 'knowledge') {
+          // 直接继承知识库
+          if (!result.knowledgeIds.includes(id)) {
+            result.knowledgeIds.push(id)
+          }
+          result.sources.push(source)
+        }
+      }
+    }
+    
+    return result
+  }
+
+  /**
+   * 构建群组的完整系统提示词（包含继承和知识库）
+   * @param {string} groupId 群组ID
+   * @param {Object} options 选项
+   * @returns {Promise<{prompt: string, knowledgePrompt: string, sources: string[]}>}
+   */
+  async buildGroupPrompt(groupId, options = {}) {
+    const { includeKnowledge = true, maxKnowledgeLength = 15000 } = options
+    
+    const config = await this.resolveGroupConfig(groupId)
+    let prompt = config.systemPrompt || ''
+    let knowledgePrompt = ''
+    
+    // 构建知识库提示词
+    if (includeKnowledge && config.knowledgeIds.length > 0) {
+      try {
+        const { knowledgeService } = await import('../storage/KnowledgeService.js')
+        await knowledgeService.init()
+        
+        const parts = []
+        parts.push('【群组知识库】')
+        parts.push('以下是本群配置的参考信息：')
+        parts.push('')
+        
+        let totalLength = 0
+        for (const kId of config.knowledgeIds) {
+          const doc = knowledgeService.get(kId)
+          if (!doc || !doc.content) continue
+          
+          let docContent = doc.content
+          const maxDocLength = Math.floor((maxKnowledgeLength - 200) / Math.min(config.knowledgeIds.length, 3))
+          if (docContent.length > maxDocLength) {
+            docContent = docContent.substring(0, maxDocLength) + '\n...(内容已截断)'
+          }
+          
+          const docText = `### 📚 ${doc.name}\n${docContent}`
+          if (totalLength + docText.length > maxKnowledgeLength) break
+          
+          parts.push(docText)
+          totalLength += docText.length
+        }
+        
+        if (parts.length > 3) {
+          parts.push('')
+          parts.push('---')
+          knowledgePrompt = parts.join('\n\n')
+        }
+      } catch (err) {
+        logger.warn(`[ScopeManager] 构建群组知识库失败:`, err.message)
+      }
+    }
+    
+    return {
+      prompt,
+      knowledgePrompt,
+      presetId: config.presetId,
+      knowledgeIds: config.knowledgeIds,
+      sources: config.sources
+    }
+  }
+
+  /**
+   * 获取群组的有效配置（用于伪人模式）
+   * 整合系统提示词、知识库和继承配置
+   * @param {string} groupId 群组ID
+   * @param {string} userId 用户ID（可选，用于群用户级别配置）
+   * @param {Object} options 选项
+   * @returns {Promise<Object>}
+   */
+  async getEffectiveBymConfig(groupId, userId = null, options = {}) {
+    const { defaultPrompt = '', includeKnowledge = true } = options
+    
+    // 1. 获取群组完整配置（包含继承）
+    const groupConfig = await this.buildGroupPrompt(groupId, { includeKnowledge })
+    
+    // 2. 获取优先级配置
+    const effectiveSettings = await this.getEffectiveSettings(groupId, userId, { isPrivate: false })
+    
+    // 3. 构建最终配置
+    let finalPrompt = ''
+    let sources = []
+    
+    // 优先使用用户/群用户级别的独立人设
+    if (effectiveSettings.hasIndependentPrompt) {
+      finalPrompt = effectiveSettings.systemPrompt
+      sources.push(effectiveSettings.source)
+    } else if (groupConfig.prompt) {
+      // 其次使用群组提示词（包含继承）
+      finalPrompt = groupConfig.prompt
+      sources = groupConfig.sources
+    } else {
+      // 最后使用默认提示词
+      finalPrompt = defaultPrompt
+      sources.push('default')
+    }
+    
+    return {
+      systemPrompt: finalPrompt,
+      knowledgePrompt: groupConfig.knowledgePrompt,
+      knowledgeIds: groupConfig.knowledgeIds,
+      presetId: effectiveSettings.presetId || groupConfig.presetId,
+      sources,
+      hasIndependentPrompt: effectiveSettings.hasIndependentPrompt
     }
   }
 }

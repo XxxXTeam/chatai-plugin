@@ -14,7 +14,7 @@ import './converter.js'
  */
 
 /**
- * Claude client implementation
+ * Claude客户端实现
  */
 export class ClaudeClient extends AbstractClient {
     /**
@@ -27,7 +27,7 @@ export class ClaudeClient extends AbstractClient {
     }
 
     /**
-     * Send message to Claude
+     * 发送消息到Claude
      * @param {IMessage[]} histories
      * @param {string} apiKey
      * @param {SendMessageOption} options
@@ -41,15 +41,15 @@ export class ClaudeClient extends AbstractClient {
 
         const model = options.model || 'claude-3-5-sonnet-20241022'
 
-        // Separate system prompt from history
+        // 从历史记录中分离系统提示词
         let systemPrompt = options.systemOverride || ''
         const converter = getFromChaiteConverter('claude')
 
-        // Convert history to Claude format
+        // 将历史记录转换为Claude格式
         const messages = []
         for (const history of histories) {
             if (history.role === 'system') {
-                // System messages become system parameter
+                // 系统消息变为系统参数
                 systemPrompt = history.content
                     .filter(c => c.type === 'text')
                     .map(c => c.text)
@@ -64,11 +64,11 @@ export class ClaudeClient extends AbstractClient {
             }
         }
 
-        // Convert tools
+        // 转换工具
         const toolConvert = getFromChaiteToolConverter('claude')
         const tools = this.tools.length > 0 ? this.tools.map(toolConvert) : undefined
 
-        // Make API call
+        // 调用API
         const response = await client.messages.create({
             model,
             max_tokens: options.maxToken || 4096,
@@ -87,7 +87,7 @@ export class ClaudeClient extends AbstractClient {
         const id = crypto.randomUUID()
         const toChaiteConverter = getIntoChaiteConverter('claude')
 
-        // Convert response to Chaite format
+        // 将响应转换为Chaite格式
         const chaiteMessage = toChaiteConverter(response)
 
         let contents = chaiteMessage.content || []
@@ -132,7 +132,7 @@ export class ClaudeClient extends AbstractClient {
     }
 
     /**
-     * Send message with streaming
+     * 流式发送消息
      * @param {IMessage[]} histories
      * @param {SendMessageOption | Partial<SendMessageOption>} options
      * @returns {Promise<AsyncGenerator<string, void, unknown>>}

@@ -4,20 +4,20 @@
  */
 
 /**
- * Default in-memory history manager
+ * 默认内存历史管理器
  * @implements {HistoryManager}
  */
 import { databaseService } from '../../services/storage/DatabaseService.js'
 
 /**
- * Default persistent history manager
+ * 默认持久化历史管理器
  * @implements {HistoryManager}
  */
 class DefaultHistoryManager {
     constructor() {
         this.name = 'DefaultHistoryManager'
-        // Initialize DB with default path, or it should be initialized by the main app
-        // For safety, we try to init here if not already
+        // 使用默认路径初始化数据库，或者应该由主应用初始化
+        // 为安全起见，如果未初始化，我们在这里尝试初始化
         databaseService.init()
     }
 
@@ -45,10 +45,10 @@ class DefaultHistoryManager {
             return history
         }
 
-        // Find the message and return history up to that point
+        // 查找消息并返回到该点为止的历史记录
         const index = history.findIndex(msg => msg.id === messageId)
         if (index === -1) {
-            // If messageId not found, return full history (might be a new message just saved)
+            // 如果未找到messageId，返回完整历史（可能是刚保存的新消息）
             return history
         }
 
@@ -56,7 +56,7 @@ class DefaultHistoryManager {
     }
 
     /**
-     * Trim history to keep only the last N messages
+     * 修剪历史记录，只保留最后N条消息
      * @param {string} conversationId
      * @param {number} maxMessages
      */

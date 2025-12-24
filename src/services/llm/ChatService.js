@@ -109,7 +109,7 @@ export class ChatService {
     }
 
     /**
-     * Internal implementation of sendMessage
+     * sendMessage的内部实现
      */
     async _sendMessageImpl(options) {
         const {
@@ -121,7 +121,7 @@ export class ChatService {
             preset,
             presetId,
             adapterType,
-            event, // Yunzai event for tool context
+            event, // Yunzai事件对象，用于工具上下文
             mode = 'chat',
             debugMode = false,  // 调试模式
             prefixPersona = null,  // 前缀人格（独立于普通人设）
@@ -146,11 +146,11 @@ export class ChatService {
             throw new Error('userId is required')
         }
 
-        // Initialize services
+        // 初始化服务
         await contextManager.init()
         await mcpManager.init()
 
-        // Get group ID from options or event for proper isolation
+        // 从选项或事件中获取群组ID以实现正确隔离
         const groupId = options.groupId || event?.group_id || event?.data?.group_id || null
         
         // 提取纯userId（不带群号前缀）
@@ -174,7 +174,7 @@ export class ChatService {
             conversationId = contextManager.getConversationId(userId, groupId)
         }
 
-        // Build message content
+        // 构建消息内容
         const messageContent = []
         if (message) {
             messageContent.push({ type: 'text', text: message })
@@ -250,7 +250,7 @@ export class ChatService {
                 
                 logger.warn('[ChatService] 无法处理的图片引用:', typeof imageRef, imageRef)
             } catch (error) {
-                logger.error('[ChatService] Failed to process image:', error)
+                logger.error('[ChatService] 处理图片失败:', error)
             }
         }
         const userMessage = {
@@ -327,7 +327,7 @@ export class ChatService {
             throw new Error('未配置模型，请先在管理面板「设置 → 模型配置」中配置默认模型')
         }
 
-        // Set tool context if event is provided
+        // 如果提供了事件，设置工具上下文
         if (event) {
             setToolContext({ event, bot: event.bot || Bot })
         }
@@ -358,7 +358,7 @@ export class ChatService {
         const effectivePresetId = effectivePresetIdForModel
         const isNewSession = presetManager.isContextCleared(conversationId)
 
-        // Channel advanced config
+        // 渠道高级配置
         const channelAdvanced = channel?.advanced || {}
         const channelLlm = channelAdvanced.llm || {}
         const channelThinking = channelAdvanced.thinking || {}

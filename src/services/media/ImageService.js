@@ -8,21 +8,24 @@ import { redisClient } from '../../core/cache/RedisClient.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+
+const urlValidationCache = new Map()
+const URL_CACHE_TTL = 5 * 60 * 1000 // 5分钟
+
 /**
- * Image Service - Handle image uploads and processing
+ * 图片服务 - 处理图片上传和加工
  */
 export class ImageService {
     constructor() {
         this.storagePath = path.join(__dirname, '../../../data/images')
         this.maxSize = 10 * 1024 * 1024 // 10MB
         this.allowedFormats = ['jpg', 'jpeg', 'png', 'gif', 'webp']
-        this.allowedFormats = ['jpg', 'jpeg', 'png', 'gif', 'webp']
 
         this.init()
     }
 
     /**
-     * Initialize storage directory
+     * 初始化存储目录
      */
     init() {
         if (!fs.existsSync(this.storagePath)) {
@@ -31,36 +34,36 @@ export class ImageService {
     }
 
     /**
-     * Upload and process image
-     * @param {Buffer} buffer - Image buffer
-     * @param {string} originalName - Original filename
-     * @returns {Promise<Object>} Image metadata
+     * 上传并处理图片
+     * @param {Buffer} buffer - 图片缓冲区
+     * @param {string} originalName - 原始文件名
+     * @returns {Promise<Object>} 图片元数据
      */
     async uploadImage(buffer, originalName = 'image.png') {
-        // Validate size
+        // 验证大小
         if (buffer.length > this.maxSize) {
             throw new Error(`Image size exceeds maximum allowed size of ${this.maxSize / 1024 / 1024}MB`)
         }
 
-        // Generate unique ID
+        // 生成唯一ID
         const id = crypto.randomBytes(16).toString('hex')
         const ext = path.extname(originalName).toLowerCase().replace('.', '') || 'png'
 
-        // Validate format
+        // 验证格式
         if (!this.allowedFormats.includes(ext)) {
             throw new Error(`Unsupported image format: ${ext}`)
         }
 
-        // Process image with sharp
+        // 使用sharp处理图片
         const image = sharp(buffer)
         const metadata = await image.metadata()
 
-        // Save original
+        // 保存原图
         const filename = `${id}.${ext}`
         const filepath = path.join(this.storagePath, filename)
         await image.toFile(filepath)
 
-        // Create thumbnail
+        // 创建缩略图
         const thumbnailFilename = `${id}_thumb.webp`
         const thumbnailPath = path.join(this.storagePath, thumbnailFilename)
         await sharp(buffer)
@@ -80,30 +83,29 @@ export class ImageService {
             uploadedAt: Date.now()
         }
 
-        // Cache metadata
-        // Cache metadata (24 hours)
+        // 缓存元数据（24小时）
         await redisClient.set(`image:${id}`, JSON.stringify(imageData), 86400)
 
         return imageData
     }
 
     /**
-     * Get image by ID
-     * @param {string} id
-     * @returns {Object|null}
+     * 根据ID获取图片
+     * @param {string} id - 图片ID
+     * @returns {Object|null} 图片信息或null
      */
     async getImage(id) {
-        // Check cache
+        // 检查缓存
         const cached = await redisClient.get(`image:${id}`)
         if (cached) {
             try {
                 return JSON.parse(cached)
             } catch (e) {
-                // Ignore
+                // 忽略错误
             }
         }
 
-        // Try to find file
+        // 尝试查找文件
         const files = fs.readdirSync(this.storagePath)
         const imageFile = files.find(f => f.startsWith(id) && !f.includes('_thumb'))
 
@@ -124,9 +126,9 @@ export class ImageService {
     }
 
     /**
-     * Get image buffer
-     * @param {string} id
-     * @returns {Buffer|null}
+     * 获取图片缓冲区
+     * @param {string} id - 图片ID
+     * @returns {Buffer|null} 图片缓冲区或null
      */
     async getImageBuffer(id) {
         const image = await this.getImage(id)
@@ -137,16 +139,16 @@ export class ImageService {
     }
 
     /**
-     * Get image as base64
-     * @param {string} id
-     * @param {string} format - Output format (jpeg, png, webp)
-     * @returns {Promise<string>} Base64 encoded image
+     * 获取图片的base64编码
+     * @param {string} id - 图片ID
+     * @param {string} format - 输出格式 (jpeg, png, webp)
+     * @returns {Promise<string>} Base64编码的图片
      */
     async getImageBase64(id, format = 'jpeg') {
         const buffer = await this.getImageBuffer(id)
         if (!buffer) return null
 
-        // Convert to desired format
+        // 转换为目标格式
         let processedBuffer = buffer
         if (format !== 'original') {
             processedBuffer = await sharp(buffer)
@@ -161,50 +163,326 @@ export class ImageService {
     }
 
     /**
-     * Download image from URL
-     * @param {string} url
-     * @returns {Promise<Object>} Image metadata
+     * 验证图片URL是否可访问
+     * @param {string} url - 图片URL
+     * @param {number} timeout - 超时时间(ms)
+     * @returns {Promise<{valid: boolean, error?: string, contentType?: string, size?: number}>}
      */
-    async downloadImage(url) {
-        const response = await fetch(url)
-        if (!response.ok) {
-            throw new Error(`Failed to download image: ${response.statusText}`)
+    async validateImageUrl(url, timeout = 10000) {
+        if (!url || typeof url !== 'string') {
+            return { valid: false, error: '无效的URL' }
         }
 
-        const buffer = Buffer.from(await response.arrayBuffer())
-        const urlPath = new URL(url).pathname
-        const originalName = path.basename(urlPath) || 'downloaded_image.jpg'
+        // base64格式直接有效
+        if (url.startsWith('base64://') || url.startsWith('data:image')) {
+            return { valid: true, isBase64: true }
+        }
+
+        // 本地文件检查
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            if (fs.existsSync(url)) {
+                return { valid: true, isLocal: true }
+            }
+            return { valid: false, error: '本地文件不存在' }
+        }
+
+        // 检查缓存
+        const cacheKey = `url_valid:${url}`
+        const cached = urlValidationCache.get(cacheKey)
+        if (cached && Date.now() - cached.time < URL_CACHE_TTL) {
+            return cached.result
+        }
+
+        try {
+            const controller = new AbortController()
+            const timeoutId = setTimeout(() => controller.abort(), timeout)
+
+            const response = await fetch(url, {
+                method: 'HEAD',
+                signal: controller.signal,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            })
+
+            clearTimeout(timeoutId)
+
+            if (!response.ok) {
+                // HEAD失败，尝试GET（某些服务器不支持HEAD）
+                const getResponse = await fetch(url, {
+                    method: 'GET',
+                    signal: AbortSignal.timeout(timeout),
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Range': 'bytes=0-1024' // 只获取前1KB验证
+                    }
+                })
+                
+                if (!getResponse.ok && getResponse.status !== 206) {
+                    const result = { valid: false, error: `HTTP ${getResponse.status}` }
+                    urlValidationCache.set(cacheKey, { result, time: Date.now() })
+                    return result
+                }
+            }
+
+            const contentType = response.headers.get('content-type') || ''
+            const contentLength = response.headers.get('content-length')
+
+            // 验证是否为图片类型
+            const isImage = contentType.startsWith('image/') || 
+                           url.match(/\.(jpg|jpeg|png|gif|webp|bmp)$/i)
+
+            const result = {
+                valid: isImage,
+                contentType,
+                size: contentLength ? parseInt(contentLength) : undefined,
+                error: isImage ? undefined : '非图片类型'
+            }
+
+            urlValidationCache.set(cacheKey, { result, time: Date.now() })
+            return result
+        } catch (err) {
+            const result = { 
+                valid: false, 
+                error: err.name === 'AbortError' ? '请求超时' : err.message 
+            }
+            urlValidationCache.set(cacheKey, { result, time: Date.now() })
+            return result
+        }
+    }
+
+    /**
+     * 下载图片并转为Buffer
+     * @param {string} url - 图片URL
+     * @param {number} timeout - 超时时间(ms)
+     * @returns {Promise<Buffer>}
+     */
+    async downloadImageBuffer(url, timeout = 30000) {
+        if (!url || typeof url !== 'string') {
+            throw new Error('无效的URL')
+        }
+
+        // base64格式
+        if (url.startsWith('base64://')) {
+            return Buffer.from(url.replace('base64://', ''), 'base64')
+        }
+        if (url.startsWith('data:image')) {
+            const base64Data = url.split(',')[1]
+            return Buffer.from(base64Data, 'base64')
+        }
+
+        // 本地文件
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            if (fs.existsSync(url)) {
+                return fs.readFileSync(url)
+            }
+            throw new Error('本地文件不存在')
+        }
+
+        // HTTP下载
+        const response = await fetch(url, {
+            signal: AbortSignal.timeout(timeout),
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        })
+
+        if (!response.ok) {
+            throw new Error(`下载失败: HTTP ${response.status}`)
+        }
+
+        return Buffer.from(await response.arrayBuffer())
+    }
+
+    /**
+     * 从URL下载图片
+     * @param {string} url - 图片URL
+     * @returns {Promise<Object>} 图片元数据
+     */
+    async downloadImage(url) {
+        const buffer = await this.downloadImageBuffer(url)
+        let originalName = 'downloaded_image.jpg'
+        
+        try {
+            if (url.startsWith('http')) {
+                const urlPath = new URL(url).pathname
+                originalName = path.basename(urlPath) || originalName
+            }
+        } catch {}
 
         return await this.uploadImage(buffer, originalName)
     }
 
     /**
-     * Convert image URL to base64 for API usage
-     * @param {string} url
-     * @returns {Promise<string>}
+     * 将图片URL转换为base64用于API调用
+     * @param {string} url - 图片URL
+     * @returns {Promise<string>} base64编码的图片
      */
     async urlToBase64(url) {
+        // 已经是base64格式
+        if (url.startsWith('base64://')) {
+            const base64Data = url.replace('base64://', '')
+            return `data:image/jpeg;base64,${base64Data}`
+        }
+        if (url.startsWith('data:image')) {
+            return url
+        }
+
         const imageData = await this.downloadImage(url)
         return await this.getImageBase64(imageData.id)
     }
 
     /**
-     * Delete image
-     * @param {string} id
+     * 准备图片用于API调用（验证URL并在需要时转为base64）
+     * @param {string} url - 图片URL
+     * @param {Object} options - 选项
+     * @param {boolean} options.forceBase64 - 强制转为base64
+     * @param {number} options.timeout - 超时时间
+     * @returns {Promise<{url: string, converted: boolean, error?: string}>}
+     */
+    async prepareImageForApi(url, options = {}) {
+        const { forceBase64 = false, timeout = 15000 } = options
+
+        if (!url) {
+            return { url: '', converted: false, error: '空URL' }
+        }
+
+        // 已经是base64，直接返回
+        if (url.startsWith('data:image')) {
+            return { url, converted: false }
+        }
+        if (url.startsWith('base64://')) {
+            const base64Data = url.replace('base64://', '')
+            return { url: `data:image/jpeg;base64,${base64Data}`, converted: true }
+        }
+
+        // 本地文件直接转base64
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            try {
+                if (fs.existsSync(url)) {
+                    const buffer = fs.readFileSync(url)
+                    const base64 = buffer.toString('base64')
+                    const ext = path.extname(url).toLowerCase().replace('.', '') || 'jpeg'
+                    const mimeType = ext === 'png' ? 'image/png' : 
+                                    ext === 'gif' ? 'image/gif' : 
+                                    ext === 'webp' ? 'image/webp' : 'image/jpeg'
+                    return { url: `data:${mimeType};base64,${base64}`, converted: true }
+                }
+            } catch (err) {
+                logger.warn('[ImageService] 读取本地文件失败:', err.message)
+            }
+            return { url: '', converted: false, error: '本地文件不存在' }
+        }
+
+        // 强制转base64
+        if (forceBase64) {
+            try {
+                const base64Url = await this.urlToBase64(url)
+                return { url: base64Url, converted: true }
+            } catch (err) {
+                return { url: '', converted: false, error: err.message }
+            }
+        }
+
+        // 验证URL可访问性
+        const validation = await this.validateImageUrl(url, timeout)
+        
+        if (validation.valid) {
+            // QQ头像等特殊URL可能需要转base64才能被外部API访问
+            const needsConversion = this.shouldConvertToBase64(url)
+            
+            if (needsConversion) {
+                try {
+                    const base64Url = await this.urlToBase64(url)
+                    logger.debug('[ImageService] URL需要转换:', url.substring(0, 50))
+                    return { url: base64Url, converted: true }
+                } catch (err) {
+                    logger.warn('[ImageService] 转base64失败，使用原URL:', err.message)
+                    return { url, converted: false }
+                }
+            }
+            
+            return { url, converted: false }
+        }
+
+        // URL不可访问，尝试转base64
+        logger.warn('[ImageService] URL不可访问，尝试转base64:', url.substring(0, 80), validation.error)
+        try {
+            const base64Url = await this.urlToBase64(url)
+            return { url: base64Url, converted: true }
+        } catch (err) {
+            logger.error('[ImageService] 转base64也失败:', err.message)
+            return { url: '', converted: false, error: `无法获取图片: ${validation.error}` }
+        }
+    }
+
+    /**
+     * 批量准备图片用于API
+     * @param {string[]} urls - 图片URL数组
+     * @param {Object} options - 选项
+     * @returns {Promise<{urls: string[], errors: string[]}>}
+     */
+    async prepareImagesForApi(urls, options = {}) {
+        const results = await Promise.all(
+            urls.map(url => this.prepareImageForApi(url, options))
+        )
+
+        const validUrls = []
+        const errors = []
+
+        for (let i = 0; i < results.length; i++) {
+            const result = results[i]
+            if (result.url) {
+                validUrls.push(result.url)
+            } else if (result.error) {
+                errors.push(`图片${i + 1}: ${result.error}`)
+            }
+        }
+
+        return { urls: validUrls, errors }
+    }
+
+    /**
+     * 判断URL是否需要转为base64（内网/特殊域名）
+     * @param {string} url
      * @returns {boolean}
+     */
+    shouldConvertToBase64(url) {
+        if (!url || !url.startsWith('http')) return false
+        
+        const needConvertPatterns = [
+            /qlogo\.cn/i,           // QQ头像
+            /gchat\.qpic\.cn/i,     // QQ图片
+            /c2cpicdw\.qpic\.cn/i,  // QQ私聊图片
+            /p\.qpic\.cn/i,         // QQ其他图片
+            /multimedia\.nt\.qq\.com/i, // NTQQ多媒体
+            /localhost/i,           // 本地服务
+            /127\.0\.0\.1/,         // 本地IP
+            /192\.168\./,           // 内网IP
+            /10\./,                 // 内网IP
+            /172\.(1[6-9]|2[0-9]|3[01])\./  // 内网IP
+        ]
+        
+        return needConvertPatterns.some(pattern => pattern.test(url))
+    }
+
+    /**
+     * 删除图片
+     * @param {string} id - 图片ID
+     * @returns {boolean} 是否删除成功
      */
     async deleteImage(id) {
         const image = await this.getImage(id)
         if (!image) return false
 
         try {
-            // Delete main image
+            // 删除主图片
             const filepath = path.join(this.storagePath, image.filename)
             if (fs.existsSync(filepath)) {
                 fs.unlinkSync(filepath)
             }
 
-            // Delete thumbnail
+            // 删除缩略图
             if (image.thumbnailFilename) {
                 const thumbPath = path.join(this.storagePath, image.thumbnailFilename)
                 if (fs.existsSync(thumbPath)) {
@@ -221,7 +499,7 @@ export class ImageService {
     }
 
     /**
-     * Clean up old images (older than 7 days)
+     * 清理旧图片（超过7天）
      */
     async cleanupOldImages() {
         const files = fs.readdirSync(this.storagePath)
@@ -244,14 +522,9 @@ export class ImageService {
     }
 
     /**
-     * Process Yunzai image message segments
-     * @param {Array} segments - Message segments from Yunzai
-     * @returns {Promise<Array>} Processed image content
-     */
-    /**
-     * Process Yunzai image message segments
-     * @param {Array} segments - Message segments from Yunzai
-     * @returns {Promise<Array>} Processed image content
+     * 处理Yunzai图片消息段
+     * @param {Array} segments - Yunzai的消息段
+     * @returns {Promise<Array>} 处理后的图片内容
      */
     async processYunzaiImages(segments) {
         const imageContents = []
@@ -262,18 +535,18 @@ export class ImageService {
                     let imageUrl = segment.file || segment.url
                     let base64 = ''
 
-                    // Handle base64 images
+                    // 处理base64图片
                     if (imageUrl && imageUrl.startsWith('base64://')) {
                         const base64Data = imageUrl.replace('base64://', '')
                         const buffer = Buffer.from(base64Data, 'base64')
                         const uploaded = await this.uploadImage(buffer, 'yunzai_image.png')
                         base64 = await this.getImageBase64(uploaded.id, 'jpeg')
                     }
-                    // Handle URL images
+                    // 处理URL图片
                     else if (imageUrl && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'))) {
                         base64 = await this.urlToBase64(imageUrl)
                     }
-                    // Handle local file paths
+                    // 处理本地文件路径
                     else if (imageUrl && fs.existsSync(imageUrl)) {
                         const buffer = fs.readFileSync(imageUrl)
                         const uploaded = await this.uploadImage(buffer, path.basename(imageUrl))
@@ -298,24 +571,24 @@ export class ImageService {
     }
 
     /**
-     * Convert image for API usage (ensure format and size limits)
-     * @param {string} imageId
-     * @param {string} targetFormat
-     * @returns {Promise<string>} Base64 string
+     * 转换图片用于API调用（确保格式和大小限制）
+     * @param {string} imageId - 图片ID
+     * @param {string} targetFormat - 目标格式
+     * @returns {Promise<string>} Base64字符串
      */
     async convertForApi(imageId, targetFormat = 'jpeg') {
         return await this.getImageBase64(imageId, targetFormat)
     }
 
     /**
-     * Compress image
-     * @param {string} imageId - Image ID
-     * @param {Object} options - Compression options
-     * @param {number} [options.quality=80] - Quality (1-100)
-     * @param {number} [options.maxWidth] - Max width
-     * @param {number} [options.maxHeight] - Max height
-     * @param {string} [options.format='jpeg'] - Output format
-     * @returns {Promise<Object>} - New image data
+     * 压缩图片
+     * @param {string} imageId - 图片ID
+     * @param {Object} options - 压缩选项
+     * @param {number} [options.quality=80] - 质量 (1-100)
+     * @param {number} [options.maxWidth] - 最大宽度
+     * @param {number} [options.maxHeight] - 最大高度
+     * @param {string} [options.format='jpeg'] - 输出格式
+     * @returns {Promise<Object>} 新图片数据
      */
     async compressImage(imageId, options = {}) {
         const {
@@ -332,7 +605,7 @@ export class ImageService {
 
         let processor = sharp(buffer)
 
-        // Resize if dimensions specified
+        // 如果指定了尺寸则调整大小
         if (maxWidth || maxHeight) {
             processor = processor.resize(maxWidth, maxHeight, {
                 fit: 'inside',
@@ -340,7 +613,7 @@ export class ImageService {
             })
         }
 
-        // Convert and compress
+        // 转换并压缩
         if (format === 'jpeg' || format === 'jpg') {
             processor = processor.jpeg({ quality })
         } else if (format === 'png') {
@@ -354,7 +627,7 @@ export class ImageService {
         const newSize = compressedBuffer.length
         const reduction = ((originalSize - newSize) / originalSize * 100).toFixed(2)
 
-        // Save compressed version
+        // 保存压缩版本
         const newImageData = await this.uploadImage(compressedBuffer, `compressed.${format}`)
 
         return {
@@ -366,10 +639,10 @@ export class ImageService {
     }
 
     /**
-     * Convert image format
-     * @param {string} imageId - Image ID
-     * @param {string} targetFormat - Target format (jpeg, png, webp)
-     * @returns {Promise<Object>} - New image data
+     * 转换图片格式
+     * @param {string} imageId - 图片ID
+     * @param {string} targetFormat - 目标格式 (jpeg, png, webp)
+     * @returns {Promise<Object>} 新图片数据
      */
     async convertFormat(imageId, targetFormat) {
         const allowedFormats = ['jpeg', 'jpg', 'png', 'webp', 'gif']
@@ -393,17 +666,17 @@ export class ImageService {
             convertedBuffer = await sharp(buffer).gif().toBuffer()
         }
 
-        // Upload converted image
+        // 上传转换后的图片
         return await this.uploadImage(convertedBuffer, `converted.${targetFormat}`)
     }
 
     /**
-     * Resize image
-     * @param {string} imageId - Image ID
-     * @param {number} width - Target width
-     * @param {number} height - Target height
-     * @param {string} [fit='inside'] - Fit mode (cover, contain, fill, inside, outside)
-     * @returns {Promise<Object>} - New image data
+     * 调整图片大小
+     * @param {string} imageId - 图片ID
+     * @param {number} width - 目标宽度
+     * @param {number} height - 目标高度
+     * @param {string} [fit='inside'] - 适应模式 (cover, contain, fill, inside, outside)
+     * @returns {Promise<Object>} 新图片数据
      */
     async resizeImage(imageId, width, height, fit = 'inside') {
         const buffer = await this.getImageBuffer(imageId)
@@ -420,77 +693,117 @@ export class ImageService {
 
     /**
      * 切割网格图片（用于表情包等）
+     * 使用简单均分算法，每个单元格向内收缩一定比例避免切到边缘
      * @param {Buffer|string} input - 图片Buffer或URL
      * @param {Object} options - 切割选项
-     * @param {number} [options.cols=5] - 列数
+     * @param {number} [options.cols=6] - 列数
      * @param {number} [options.rows=4] - 行数
-     * @param {number} [options.padding=0] - 内边距（像素）
-     * @param {boolean} [options.autoPadding=false] - 是否自动检测边距（默认关闭，AI生成图片通常不需要）
+     * @param {number} [options.shrinkPercent=5] - 每边收缩百分比(0-20)，用于去除单元格间的间隙
      * @returns {Promise<Buffer[]>} 切割后的图片Buffer数组
      */
     async splitGridImage(input, options = {}) {
-        const { cols = 5, rows = 4, autoPadding = false } = options
-        let { padding = 0 } = options
+        const { cols = 6, rows = 4, shrinkPercent = 5 } = options
         
+        // 获取图片Buffer
         let buffer
         if (Buffer.isBuffer(input)) {
             buffer = input
         } else if (typeof input === 'string') {
-            if (input.startsWith('http://') || input.startsWith('https://')) {
-                const response = await fetch(input)
-                if (!response.ok) throw new Error(`下载图片失败: ${response.status}`)
-                buffer = Buffer.from(await response.arrayBuffer())
-            } else if (input.startsWith('base64://')) {
-                buffer = Buffer.from(input.replace('base64://', ''), 'base64')
-            } else if (input.startsWith('data:image')) {
-                const base64Data = input.split(',')[1]
-                buffer = Buffer.from(base64Data, 'base64')
-            } else {
-                throw new Error('不支持的图片格式')
+            try {
+                buffer = await this.downloadImageBuffer(input)
+            } catch (err) {
+                logger.error('[ImageService] 下载切割图片失败:', err.message)
+                throw new Error(`获取图片失败: ${err.message}`)
             }
         } else {
             throw new Error('输入必须是Buffer或URL字符串')
         }
 
-        const image = sharp(buffer)
-        const metadata = await image.metadata()
-        const { width, height } = metadata
-
-        // 自动估算边距（AI生成的表情包通常有约2-5%的边距）
-        if (autoPadding && padding === 0) {
-            padding = Math.round(Math.min(width, height) * 0.02)
+        // 验证图片数据
+        if (!buffer || buffer.length === 0) {
+            throw new Error('图片数据为空')
         }
 
-        const cellWidth = Math.floor((width - padding * 2) / cols)
-        const cellHeight = Math.floor((height - padding * 2) / rows)
+        let metadata
+        try {
+            const image = sharp(buffer)
+            metadata = await image.metadata()
+        } catch (err) {
+            logger.error('[ImageService] 解析图片元数据失败:', err.message)
+            throw new Error(`图片格式无效: ${err.message}`)
+        }
+
+        const { width, height } = metadata
         
-        logger.debug(`[ImageService] 切割参数: ${cols}x${rows}, 图片${width}x${height}, 单元格${cellWidth}x${cellHeight}, 边距${padding}`)
+        if (!width || !height || width < cols || height < rows) {
+            throw new Error(`图片尺寸无效: ${width}x${height}，无法切割为 ${cols}x${rows}`)
+        }
+
+        // 简单均分计算每个格子的基准尺寸
+        const baseCellWidth = width / cols
+        const baseCellHeight = height / rows
+        
+        // 计算收缩像素（每边收缩 shrinkPercent%）
+        const shrinkX = Math.round(baseCellWidth * Math.min(shrinkPercent, 20) / 100)
+        const shrinkY = Math.round(baseCellHeight * Math.min(shrinkPercent, 20) / 100)
+        
+        // 实际提取的单元格尺寸
+        const cellWidth = Math.floor(baseCellWidth - shrinkX * 2)
+        const cellHeight = Math.floor(baseCellHeight - shrinkY * 2)
+        
+        // 验证单元格尺寸
+        if (cellWidth < 10 || cellHeight < 10) {
+            throw new Error(`计算的单元格尺寸过小: ${cellWidth}x${cellHeight}`)
+        }
+        
+        logger.debug(`[ImageService] 切割参数: ${cols}x${rows}, 图片${width}x${height}, 基准格${Math.round(baseCellWidth)}x${Math.round(baseCellHeight)}, 实际格${cellWidth}x${cellHeight}, 收缩${shrinkX}x${shrinkY}`)
 
         const results = []
         
         for (let row = 0; row < rows; row++) {
             for (let col = 0; col < cols; col++) {
-                const left = padding + col * cellWidth
-                const top = padding + row * cellHeight
+                // 计算每个单元格的中心位置，然后向外扩展
+                const centerX = (col + 0.5) * baseCellWidth
+                const centerY = (row + 0.5) * baseCellHeight
+                
+                // 从中心向外计算提取区域
+                const left = Math.round(centerX - cellWidth / 2)
+                const top = Math.round(centerY - cellHeight / 2)
+                
+                // 边界保护
+                const safeLeft = Math.max(0, Math.min(left, width - cellWidth))
+                const safeTop = Math.max(0, Math.min(top, height - cellHeight))
+                const safeWidth = Math.min(cellWidth, width - safeLeft)
+                const safeHeight = Math.min(cellHeight, height - safeTop)
+                
+                if (safeWidth <= 0 || safeHeight <= 0) {
+                    logger.warn(`[ImageService] 跳过无效单元格 [${row},${col}]`)
+                    continue
+                }
                 
                 try {
                     const cellBuffer = await sharp(buffer)
                         .extract({
-                            left,
-                            top,
-                            width: cellWidth,
-                            height: cellHeight
+                            left: safeLeft,
+                            top: safeTop,
+                            width: safeWidth,
+                            height: safeHeight
                         })
                         .png()
                         .toBuffer()
                     
                     results.push(cellBuffer)
                 } catch (err) {
-                    logger.warn(`[ImageService] 切割单元格失败 [${row},${col}]:`, err.message)
+                    logger.warn(`[ImageService] 切割单元格失败 [${row},${col}]: ${err.message}`)
                 }
             }
         }
 
+        if (results.length === 0) {
+            throw new Error('切割失败：未能生成任何单元格')
+        }
+
+        logger.info(`[ImageService] 切割完成: 成功 ${results.length}/${cols * rows} 个`)
         return results
     }
 
@@ -506,10 +819,10 @@ export class ImageService {
     }
 
     /**
-     * Extract text from image (OCR)
-     * @param {string} id Image ID
-     * @param {string} [lang='eng'] Language code
-     * @returns {Promise<string>} Extracted text
+     * 从图片中提取文字 (OCR)
+     * @param {string} id - 图片ID
+     * @param {string} [lang='eng'] - 语言代码
+     * @returns {Promise<string>} 提取的文字
      */
     async extractText(id, lang = 'eng') {
         const image = await this.getImage(id)
@@ -532,5 +845,5 @@ export class ImageService {
     }
 }
 
-// Export singleton
+// 导出单例
 export const imageService = new ImageService()

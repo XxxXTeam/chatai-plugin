@@ -6,17 +6,17 @@ import { presetManager } from '../preset/PresetManager.js'
 import { channelManager } from './ChannelManager.js'
 
 /**
- * Service for managing LLM clients and configurations
+ * LLM客户端和配置管理服务
  */
 export class LlmService {
     /**
-     * Create an LLM client based on configuration
-     * @param {Object} options - Override options
-     * @param {string} [options.adapterType] - Adapter type (default: 'openai')
-     * @param {boolean} [options.enableTools=true] - Whether to enable tools
-     * @param {Object} [options.event] - Yunzai event for tool context
-     * @param {string} [options.presetId] - Preset ID for tools config
-     * @returns {Promise<OpenAIClient>} Configured client
+     * 根据配置创建LLM客户端
+     * @param {Object} options - 覆盖选项
+     * @param {string} [options.adapterType] - 适配器类型 (默认: 'openai')
+     * @param {boolean} [options.enableTools=true] - 是否启用工具
+     * @param {Object} [options.event] - Yunzai事件对象，用于工具上下文
+     * @param {string} [options.presetId] - 预设id，用于工具配置
+     * @returns {Promise<OpenAIClient>} 配置好的客户端
      */
     static async createClient(options = {}) {
         const enableTools = options.enableTools !== false
@@ -25,7 +25,7 @@ export class LlmService {
         const enableReasoning = options.enableReasoning || false
         const reasoningEffort = options.reasoningEffort || 'low'
 
-        // Load configuration from channelManager
+        // 从渠道管理器加载配置
         await channelManager.init()
         
         let apiKey, baseUrl, ClientClass, adapterType
@@ -64,22 +64,22 @@ export class LlmService {
             throw new Error(`${adapterType} API Key not configured`)
         }
 
-        // Set tool context if event is provided
+        // 如果提供了事件，设置工具上下文
         if (options.event) {
             setToolContext({ event: options.event, bot: options.event.bot || Bot })
         }
 
-        // Get tools if enabled (including builtin tools)
+        // 如果启用工具，获取工具（包括内置工具）
         let tools = []
         if (enableTools) {
-            // Get preset tools config if available
+            // 如果可用，获取预设工具配置
             let toolsConfig = null
             if (options.presetId) {
                 await presetManager.init()
                 toolsConfig = presetManager.getToolsConfig(options.presetId)
             }
             
-            // Get all tools (MCP + builtin)
+            // 获取所有工具 (MCP + 内置)
             tools = await getAllTools({
                 toolsConfig,
                 event: options.event,
@@ -88,7 +88,7 @@ export class LlmService {
             })
         }
 
-        // Create client
+        // 创建客户端
         const clientConfig = {
             apiKey,
             baseUrl,
@@ -120,7 +120,7 @@ export class LlmService {
     }
 
     /**
-     * Create a client for embeddings (使用配置的 embedding 模型渠道)
+     * 创建嵌入向量客户端 (使用配置的 embedding 模型渠道)
      */
     static async getEmbeddingClient() {
         // 从 channelManager 获取可用的 API 配置
