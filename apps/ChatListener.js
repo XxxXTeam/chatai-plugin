@@ -3,6 +3,7 @@ import config from '../config/config.js'
 import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMessage, recordSentMessage } from '../src/utils/messageDedup.js'
 import { isDebugEnabled } from './Commands.js'
 import { cacheGroupMessage } from './GroupEvents.js'
+import { emojiThiefService } from './EmojiThief.js'
 
 // 懒加载服务缓存
 let _chatService = null
@@ -587,6 +588,19 @@ export class ChatListener extends plugin {
                     
                     const quoteReply = config.get('basic.quoteReply') === true
                     await this.reply(replyContent, quoteReply)
+                    
+                    // 表情包小偷 - 对话触发模式
+                    if (e.isGroup && e.group_id) {
+                        try {
+                            const emojiMsg = await emojiThiefService.tryTrigger(e, 'chat')
+                            if (emojiMsg) {
+                                await new Promise(resolve => setTimeout(resolve, Math.random() * 1000 + 300))
+                                await this.reply(emojiMsg)
+                            }
+                        } catch (err) {
+                            logger.debug('[ChatListener] 表情包触发失败:', err.message)
+                        }
+                    }
                 }
             }
             
