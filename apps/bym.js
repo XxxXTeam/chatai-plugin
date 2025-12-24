@@ -138,13 +138,11 @@ export class bym extends plugin {
             if (!messageText.trim()) {
                 return false
             }
-
-            // === 构建系统提示词（支持继承人格配置和知识库） ===
             let systemPrompt = ''
             let scopePresetId = null
             const inheritPersonality = config.get('bym.inheritPersonality') !== false // 默认启用继承
             
-            // 1. 尝试获取独立人格配置和预设
+            // 1. 尝试获取群组完整配置（包含继承和知识库）
             if (inheritPersonality) {
                 try {
                     if (!databaseService.initialized) {
@@ -158,37 +156,89 @@ export class bym extends plugin {
                     const defaultBymPrompt = config.get('bym.systemPrompt') || 
                         '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。'
                     
-                    // 获取完整的作用域配置（包含presetId）
-                    const effectiveSettings = await scopeManager.getEffectiveSettings(groupId, userId, { isPrivate: !groupId })
-                    
-                    // 优先使用预设
-                    if (effectiveSettings?.presetId) {
-                        scopePresetId = effectiveSettings.presetId
-                        const { presetManager } = await import('../src/services/preset/PresetManager.js')
-                        await presetManager.init()
-                        const preset = presetManager.get(scopePresetId)
-                        if (preset?.systemPrompt) {
-                            systemPrompt = preset.systemPrompt
-                            logger.info(`[BYM] 使用作用域预设: ${scopePresetId} (${preset.name || scopePresetId})`)
+                    // 使用新的群组有效配置方法（包含继承和群组知识库）
+                    if (groupId) {
+                        // 首先检查群组是否设置了伪人专用预设
+                        const groupSettings = await scopeManager.getGroupSettings(groupId)
+                        const bymPresetId = groupSettings?.settings?.bymPresetId
+                        const bymPrompt = groupSettings?.settings?.bymPrompt
+                        
+                        if (bymPresetId && bymPresetId !== '__default__') {
+                            if (bymPresetId === '__custom__' && bymPrompt) {
+                                // 使用自定义伪人提示词
+                                systemPrompt = bymPrompt
+                                logger.info(`[BYM] 使用群组自定义伪人提示词`)
+                            } else {
+                                // 使用指定的预设
+                                try {
+                                    const { presetManager } = await import('../src/services/preset/PresetManager.js')
+                                    await presetManager.init()
+                                    const preset = presetManager.get(bymPresetId)
+                                    if (preset?.systemPrompt) {
+                                        systemPrompt = preset.systemPrompt
+                                        scopePresetId = bymPresetId
+                                        logger.info(`[BYM] 使用群组伪人预设: ${bymPresetId} (${preset.name || bymPresetId})`)
+                                    }
+                                } catch (err) {
+                                    logger.warn(`[BYM] 加载伪人预设 ${bymPresetId} 失败:`, err.message)
+                                }
+                            }
                         }
-                    }
-                    
-                    // 如果没有预设systemPrompt，使用独立人格
-                    if (!systemPrompt) {
-                        const independentResult = await scopeManager.getIndependentPrompt(groupId, userId, defaultBymPrompt)
-                        if (independentResult.isIndependent) {
+                        
+                        // 如果没有专用伪人预设，使用群组有效配置
+                        if (!systemPrompt) {
+                            const bymConfig = await scopeManager.getEffectiveBymConfig(groupId, userId, {
+                                defaultPrompt: defaultBymPrompt,
+                                includeKnowledge: true
+                            })
+                            
+                            systemPrompt = bymConfig.systemPrompt || defaultBymPrompt
+                            scopePresetId = bymConfig.presetId
+                            
+                            // 记录配置来源
+                            if (bymConfig.sources.length > 0) {
+                                logger.info(`[BYM] 配置来源: ${bymConfig.sources.join(' -> ')}`)
+                            }
+                        }
+                        
+                        // 添加群组知识库（无论使用哪种预设都添加）
+                        const bymConfig = await scopeManager.getEffectiveBymConfig(groupId, userId, {
+                            defaultPrompt: '',
+                            includeKnowledge: true
+                        })
+                        if (bymConfig.knowledgePrompt) {
+                            systemPrompt += '\n\n' + bymConfig.knowledgePrompt
+                            logger.info(`[BYM] 已添加群组知识库 (${bymConfig.knowledgeIds.length} 个, ${bymConfig.knowledgePrompt.length} 字符)`)
+                        }
+                    } else {
+                        // 私聊场景：使用原有逻辑
+                        const effectiveSettings = await scopeManager.getEffectiveSettings(null, userId, { isPrivate: true })
+                        
+                        if (effectiveSettings?.presetId) {
+                            scopePresetId = effectiveSettings.presetId
+                            const { presetManager } = await import('../src/services/preset/PresetManager.js')
+                            await presetManager.init()
+                            const preset = presetManager.get(scopePresetId)
+                            if (preset?.systemPrompt) {
+                                systemPrompt = preset.systemPrompt
+                                logger.info(`[BYM] 使用作用域预设: ${scopePresetId} (${preset.name || scopePresetId})`)
+                            }
+                        }
+                        
+                        if (!systemPrompt) {
+                            const independentResult = await scopeManager.getIndependentPrompt(null, userId, defaultBymPrompt)
                             systemPrompt = independentResult.prompt
-                            logger.info(`[BYM] 使用独立人格 (来源: ${independentResult.source})`)
-                        } else {
-                            systemPrompt = defaultBymPrompt
+                            if (independentResult.isIndependent) {
+                                logger.info(`[BYM] 使用独立人格 (来源: ${independentResult.source})`)
+                            }
                         }
                     }
                     
                     // 添加伪人模式行为指导
                     systemPrompt += '\n\n【伪人模式行为指导】\n请用简短、自然、口语化的方式回复，就像真人聊天一样。回复要简洁（通常1-2句话），可以使用语气词和网络用语。'
                     
-                    // 加载知识库
-                    if (scopePresetId) {
+                    // 如果有预设且群组没有独立知识库，尝试加载预设知识库
+                    if (scopePresetId && !systemPrompt.includes('【群组知识库】')) {
                         try {
                             const { knowledgeService } = await import('../src/services/storage/KnowledgeService.js')
                             await knowledgeService.init()
@@ -198,10 +248,10 @@ export class bym extends plugin {
                             })
                             if (knowledgePrompt) {
                                 systemPrompt += '\n\n' + knowledgePrompt
-                                logger.info(`[BYM] 已添加知识库 (${knowledgePrompt.length} 字符)`)
+                                logger.info(`[BYM] 已添加预设知识库 (${knowledgePrompt.length} 字符)`)
                             }
                         } catch (err) {
-                            logger.debug('[BYM] 加载知识库失败:', err.message)
+                            logger.debug('[BYM] 加载预设知识库失败:', err.message)
                         }
                     }
                 } catch (err) {

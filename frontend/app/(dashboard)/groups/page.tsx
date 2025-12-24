@@ -26,9 +26,9 @@ import {
 } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
-import { scopeApi, presetsApi, channelsApi } from '@/lib/api'
+import { scopeApi, presetsApi, channelsApi, knowledgeApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, Trash2, Loader2, Users, RefreshCw, Settings, FileText, Bot, ChevronDown } from 'lucide-react'
+import { Plus, Trash2, Loader2, Users, RefreshCw, Settings, FileText, Bot, ChevronDown, BookOpen, GitBranch, X } from 'lucide-react'
 import { ModelSelector } from '@/components/ModelSelector'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 
@@ -40,10 +40,17 @@ interface GroupScope {
   modelId?: string
   enabled: boolean
   triggerMode?: string
+  knowledgeIds?: string[]
+  inheritFrom?: string[]
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   settings?: any
   createdAt?: number
   updatedAt?: number
+}
+
+interface KnowledgeDoc {
+  id: string
+  name: string
 }
 
 interface Channel {
@@ -60,6 +67,7 @@ interface Preset {
 export default function GroupsPage() {
   const [groups, setGroups] = useState<GroupScope[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
+  const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDoc[]>([])
   const [, setChannels] = useState<Channel[]>([])
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -71,6 +79,7 @@ export default function GroupsPage() {
   const [deleting, setDeleting] = useState(false)
   const [modelSelectorOpen, setModelSelectorOpen] = useState(false)
   const [allModels, setAllModels] = useState<string[]>([])
+  const [newInheritSource, setNewInheritSource] = useState('')
 
   const [form, setForm] = useState({
     groupId: '',
@@ -81,21 +90,27 @@ export default function GroupsPage() {
     enabled: true,
     triggerMode: 'default',
     bymEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    bymPresetId: '__default__' as string,  // 伪人预设选择
+    bymPrompt: '',  // 自定义伪人提示词
     imageGenEnabled: 'inherit' as 'inherit' | 'on' | 'off',
     summaryEnabled: 'inherit' as 'inherit' | 'on' | 'off',
     eventEnabled: 'inherit' as 'inherit' | 'on' | 'off',
     customPrefix: '',
+    knowledgeIds: [] as string[],
+    inheritFrom: [] as string[],
   })
 
   const fetchData = async () => {
     try {
-      const [groupsRes, presetsRes, channelsRes] = await Promise.all([
+      const [groupsRes, presetsRes, channelsRes, knowledgeRes] = await Promise.all([
         scopeApi.getGroups(),
         presetsApi.list(),
-        channelsApi.list()
+        channelsApi.list(),
+        knowledgeApi.list()
       ])
       setGroups(groupsRes?.data || [])
       setPresets(presetsRes?.data || [])
+      setKnowledgeDocs((knowledgeRes?.data || []).map((k: { id: string; name: string }) => ({ id: k.id, name: k.name })))
       setChannels(channelsRes?.data || [])
       // 提取所有模型
       const models = new Set<string>()
@@ -127,12 +142,17 @@ export default function GroupsPage() {
       enabled: true,
       triggerMode: 'default',
       bymEnabled: 'inherit',
+      bymPresetId: '__default__',
+      bymPrompt: '',
       imageGenEnabled: 'inherit',
       summaryEnabled: 'inherit',
       eventEnabled: 'inherit',
       customPrefix: '',
+      knowledgeIds: [],
+      inheritFrom: [],
     })
     setEditingGroup(null)
+    setNewInheritSource('')
   }
 
   const handleOpenDialog = (group?: GroupScope) => {
@@ -151,10 +171,14 @@ export default function GroupsPage() {
         enabled: group.enabled ?? settings.enabled ?? true,
         triggerMode: settings.triggerMode || group.triggerMode || 'default',
         bymEnabled: settings.bymEnabled === undefined ? 'inherit' : settings.bymEnabled ? 'on' : 'off',
+        bymPresetId: settings.bymPresetId || '__default__',
+        bymPrompt: settings.bymPrompt || '',
         imageGenEnabled: settings.imageGenEnabled === undefined ? 'inherit' : settings.imageGenEnabled ? 'on' : 'off',
         summaryEnabled: settings.summaryEnabled === undefined ? 'inherit' : settings.summaryEnabled ? 'on' : 'off',
         eventEnabled: settings.eventEnabled === undefined ? 'inherit' : settings.eventEnabled ? 'on' : 'off',
         customPrefix: settings.customPrefix || '',
+        knowledgeIds: group.knowledgeIds || [],
+        inheritFrom: group.inheritFrom || [],
       })
     } else {
       resetForm()
@@ -178,10 +202,14 @@ export default function GroupsPage() {
         enabled: form.enabled,
         triggerMode: form.triggerMode,
         bymEnabled: form.bymEnabled === 'inherit' ? undefined : form.bymEnabled === 'on',
+        bymPresetId: form.bymPresetId === '__default__' ? undefined : form.bymPresetId,
+        bymPrompt: form.bymPrompt || undefined,
         imageGenEnabled: form.imageGenEnabled === 'inherit' ? undefined : form.imageGenEnabled === 'on',
         summaryEnabled: form.summaryEnabled === 'inherit' ? undefined : form.summaryEnabled === 'on',
         eventEnabled: form.eventEnabled === 'inherit' ? undefined : form.eventEnabled === 'on',
         customPrefix: form.customPrefix || undefined,
+        knowledgeIds: form.knowledgeIds.length > 0 ? form.knowledgeIds : undefined,
+        inheritFrom: form.inheritFrom.length > 0 ? form.inheritFrom : undefined,
       })
       toast.success('群配置已保存')
       setDialogOpen(false)
@@ -365,22 +393,16 @@ export default function GroupsPage() {
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="systemPrompt">
-                    独立人设 <span className="text-xs text-muted-foreground">(设置后将完全替代默认预设)</span>
+                    独立人设 <span className="text-xs text-muted-foreground">(设置后对话将使用此人设)</span>
                   </Label>
                   <Textarea
                     id="systemPrompt"
                     value={form.systemPrompt}
                     onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
-                    placeholder="不填写则使用预设配置...​
-
-示例：
-你是本群的AI助手，会称呼群友为“大佬”。"
-                    rows={6}
+                    placeholder="不填写则使用预设配置..."
+                    rows={4}
                     className="font-mono text-sm"
                   />
-                  <p className="text-xs text-muted-foreground">
-                    设置后，此群的所有对话都将使用这个人设。清空则恢复使用预设。
-                  </p>
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>启用AI响应</Label>
@@ -414,6 +436,50 @@ export default function GroupsPage() {
                         </SelectContent>
                       </Select>
                     </div>
+                    
+                    {/* 伪人人设配置 - 仅在伪人模式开启时显示 */}
+                    {form.bymEnabled !== 'off' && (
+                      <div className="ml-4 pl-4 border-l-2 border-muted space-y-3">
+                        <div className="grid gap-2">
+                          <Label className="text-sm">伪人人设</Label>
+                          <Select
+                            value={form.bymPresetId}
+                            onValueChange={(v) => setForm({ ...form, bymPresetId: v })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="选择人设..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__default__">使用默认预设</SelectItem>
+                              <SelectItem value="__custom__">自定义提示词</SelectItem>
+                              {presets.map((preset) => (
+                                <SelectItem key={preset.id} value={preset.id}>
+                                  {preset.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground">
+                            选择伪人模式使用的人设预设
+                          </p>
+                        </div>
+                        
+                        {/* 自定义伪人提示词 */}
+                        {form.bymPresetId === '__custom__' && (
+                          <div className="grid gap-2">
+                            <Label className="text-sm">自定义伪人提示词</Label>
+                            <Textarea
+                              value={form.bymPrompt}
+                              onChange={(e) => setForm({ ...form, bymPrompt: e.target.value })}
+                              placeholder="你是一个真实的群友，说话简短自然，会使用网络用语..."
+                              rows={4}
+                              className="font-mono text-sm"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
                     <div className="flex items-center justify-between">
                       <div>
                         <span className="text-sm">🎨 绘图功能</span>
@@ -482,6 +548,161 @@ export default function GroupsPage() {
                     onChange={(e) => setForm({ ...form, customPrefix: e.target.value })}
                     placeholder="例如: #ai 或 /chat"
                   />
+                </div>
+
+                {/* 群组知识库配置 */}
+                <div className="border-t pt-4 mt-4">
+                  <Label className="text-base font-medium flex items-center gap-2">
+                    <BookOpen className="h-4 w-4" />
+                    群组知识库
+                  </Label>
+                  <p className="text-xs text-muted-foreground mb-3">为本群配置专属知识库，伪人模式将参考这些知识</p>
+                  <div className="space-y-2">
+                    {form.knowledgeIds.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {form.knowledgeIds.map((kId) => {
+                          const doc = knowledgeDocs.find(d => d.id === kId)
+                          return (
+                            <Badge key={kId} variant="secondary" className="flex items-center gap-1">
+                              <BookOpen className="h-3 w-3" />
+                              {doc?.name || kId}
+                              <button
+                                type="button"
+                                onClick={() => setForm({
+                                  ...form,
+                                  knowledgeIds: form.knowledgeIds.filter(id => id !== kId)
+                                })}
+                                className="ml-1 hover:text-destructive"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </Badge>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">暂未配置知识库</p>
+                    )}
+                    <Select
+                      value=""
+                      onValueChange={(value) => {
+                        if (value && !form.knowledgeIds.includes(value)) {
+                          setForm({ ...form, knowledgeIds: [...form.knowledgeIds, value] })
+                        }
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="添加知识库..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {knowledgeDocs
+                          .filter(d => !form.knowledgeIds.includes(d.id))
+                          .map((doc) => (
+                            <SelectItem key={doc.id} value={doc.id}>
+                              {doc.name}
+                            </SelectItem>
+                          ))}
+                        {knowledgeDocs.filter(d => !form.knowledgeIds.includes(d.id)).length === 0 && (
+                          <div className="text-sm text-muted-foreground py-2 px-2">
+                            {knowledgeDocs.length === 0 ? '暂无可用知识库' : '已添加全部知识库'}
+                          </div>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {/* 继承配置 */}
+                <div className="border-t pt-4 mt-4">
+                  <Label className="text-base font-medium flex items-center gap-2">
+                    <GitBranch className="h-4 w-4" />
+                    继承配置
+                  </Label>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    从其他来源继承提示词和知识库，支持：preset:预设ID、group:群号、knowledge:知识库ID
+                  </p>
+                  <div className="space-y-2">
+                    {form.inheritFrom.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {form.inheritFrom.map((source) => {
+                          const [type, id] = source.split(':')
+                          let label = source
+                          if (type === 'preset') {
+                            const preset = presets.find(p => p.id === id)
+                            label = `预设: ${preset?.name || id}`
+                          } else if (type === 'group') {
+                            const group = groups.find(g => g.groupId === id)
+                            label = `群: ${group?.groupName || id}`
+                          } else if (type === 'knowledge') {
+                            const doc = knowledgeDocs.find(d => d.id === id)
+                            label = `知识库: ${doc?.name || id}`
+                          }
+                          return (
+                            <Badge key={source} variant="outline" className="flex items-center gap-1">
+                              <GitBranch className="h-3 w-3" />
+                              {label}
+                              <button
+                                type="button"
+                                onClick={() => setForm({
+                                  ...form,
+                                  inheritFrom: form.inheritFrom.filter(s => s !== source)
+                                })}
+                                className="ml-1 hover:text-destructive"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </Badge>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">暂未配置继承</p>
+                    )}
+                    <div className="flex gap-2">
+                      <Input
+                        value={newInheritSource}
+                        onChange={(e) => setNewInheritSource(e.target.value)}
+                        placeholder="preset:default 或 group:123456"
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          if (newInheritSource && !form.inheritFrom.includes(newInheritSource)) {
+                            setForm({ ...form, inheritFrom: [...form.inheritFrom, newInheritSource] })
+                            setNewInheritSource('')
+                          }
+                        }}
+                        disabled={!newInheritSource}
+                      >
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    {/* 快捷添加 */}
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      <span className="text-xs text-muted-foreground mr-1">快捷添加:</span>
+                      {presets.slice(0, 3).map(p => (
+                        <Button
+                          key={p.id}
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 text-xs"
+                          onClick={() => {
+                            const source = `preset:${p.id}`
+                            if (!form.inheritFrom.includes(source)) {
+                              setForm({ ...form, inheritFrom: [...form.inheritFrom, source] })
+                            }
+                          }}
+                          disabled={form.inheritFrom.includes(`preset:${p.id}`)}
+                        >
+                          {p.name}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
               </ScrollArea>
@@ -557,6 +778,18 @@ export default function GroupsPage() {
                           </span>
                         )}
                         <span>模式: {group.triggerMode || '默认'}</span>
+                        {group.knowledgeIds && group.knowledgeIds.length > 0 && (
+                          <span className="flex items-center gap-1">
+                            <BookOpen className="h-3 w-3" />
+                            知识库: {group.knowledgeIds.length}个
+                          </span>
+                        )}
+                        {group.inheritFrom && group.inheritFrom.length > 0 && (
+                          <span className="flex items-center gap-1">
+                            <GitBranch className="h-3 w-3" />
+                            继承: {group.inheritFrom.length}项
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div className="flex gap-2">

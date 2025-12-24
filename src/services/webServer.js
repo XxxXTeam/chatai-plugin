@@ -3570,6 +3570,123 @@ export default {
             }
         })
 
+        // ==================== 群组知识库与继承 API ====================
+        
+        // GET /api/scope/group/:groupId/knowledge - 获取群组知识库配置
+        this.app.get('/api/scope/group/:groupId/knowledge', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const settings = await sm.getGroupSettings(req.params.groupId)
+                res.json(ChaiteResponse.ok({
+                    knowledgeIds: settings?.knowledgeIds || [],
+                    inheritFrom: settings?.inheritFrom || []
+                }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // PUT /api/scope/group/:groupId/knowledge - 设置群组知识库
+        this.app.put('/api/scope/group/:groupId/knowledge', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const { knowledgeIds } = req.body
+                await sm.setGroupKnowledge(req.params.groupId, knowledgeIds || [])
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/scope/group/:groupId/knowledge/:knowledgeId - 添加群组知识库
+        this.app.post('/api/scope/group/:groupId/knowledge/:knowledgeId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                await sm.addGroupKnowledge(req.params.groupId, req.params.knowledgeId)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/scope/group/:groupId/knowledge/:knowledgeId - 移除群组知识库
+        this.app.delete('/api/scope/group/:groupId/knowledge/:knowledgeId', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                await sm.removeGroupKnowledge(req.params.groupId, req.params.knowledgeId)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // PUT /api/scope/group/:groupId/inheritance - 设置群组继承来源
+        this.app.put('/api/scope/group/:groupId/inheritance', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const { inheritFrom } = req.body
+                await sm.setGroupInheritance(req.params.groupId, inheritFrom || [])
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // POST /api/scope/group/:groupId/inheritance - 添加群组继承来源
+        this.app.post('/api/scope/group/:groupId/inheritance', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const { source } = req.body
+                if (!source) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '缺少继承来源'))
+                }
+                await sm.addGroupInheritance(req.params.groupId, source)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // DELETE /api/scope/group/:groupId/inheritance - 移除群组继承来源
+        this.app.delete('/api/scope/group/:groupId/inheritance', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const { source } = req.body
+                if (!source) {
+                    return res.status(400).json(ChaiteResponse.fail(null, '缺少继承来源'))
+                }
+                await sm.removeGroupInheritance(req.params.groupId, source)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/scope/group/:groupId/resolved - 获取群组解析后的完整配置（含继承）
+        this.app.get('/api/scope/group/:groupId/resolved', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const resolved = await sm.resolveGroupConfig(req.params.groupId)
+                res.json(ChaiteResponse.ok(resolved))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
+        // GET /api/scope/group/:groupId/bym-config - 获取群组伪人模式有效配置
+        this.app.get('/api/scope/group/:groupId/bym-config', this.authMiddleware.bind(this), async (req, res) => {
+            try {
+                const sm = await ensureScopeManager()
+                const userId = req.query.userId || null
+                const bymConfig = await sm.getEffectiveBymConfig(req.params.groupId, userId, {
+                    includeKnowledge: req.query.includeKnowledge !== 'false'
+                })
+                res.json(ChaiteResponse.ok(bymConfig))
+            } catch (error) {
+                res.status(500).json(ChaiteResponse.fail(null, error.message))
+            }
+        })
+
         // ==================== 私聊作用域 API ====================
         // GET /api/scope/privates - 列出所有私聊作用域配置
         this.app.get('/api/scope/privates', this.authMiddleware.bind(this), async (req, res) => {

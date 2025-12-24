@@ -351,12 +351,10 @@ class Config {
             },
             // AI触发配置
             trigger: {
-                // === 私聊触发 ===
                 private: {
                     enabled: true,          // 是否响应私聊
                     mode: 'prefix',         // 私聊触发模式: 'always'(总是), 'prefix'(需前缀), 'off'(关闭)
                 },
-                // === 群聊触发 ===
                 group: {
                     enabled: true,          // 是否响应群聊
                     at: true,               // @机器人触发
@@ -365,12 +363,9 @@ class Config {
                     random: false,          // 随机触发
                     randomRate: 0.05,       // 随机触发概率
                 },
-                // === 触发词配置 ===
                 prefixes: ['#chat'],        // 前缀列表
                 keywords: [],               // 关键词列表
-                // === 消息采集 ===
                 collectGroupMsg: true,      // 采集群消息用于记忆
-                // === 访问控制 ===
                 blacklistUsers: [],         // 用户黑名单
                 whitelistUsers: [],         // 用户白名单（空=不限）
                 blacklistGroups: [],        // 群黑名单

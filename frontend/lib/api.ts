@@ -339,6 +339,23 @@ export const scopeApi = {
   getPrivate: (userId: string) => api.get(`/api/scope/private/${userId}`),
   updatePrivate: <T extends object>(userId: string, data: T) => api.put(`/api/scope/private/${userId}`, data as Record<string, unknown>),
   deletePrivate: (userId: string) => api.delete(`/api/scope/private/${userId}`),
+  // 群组知识库与继承
+  getGroupKnowledge: (groupId: string) => api.get(`/api/scope/group/${groupId}/knowledge`),
+  setGroupKnowledge: (groupId: string, knowledgeIds: string[]) => 
+    api.put(`/api/scope/group/${groupId}/knowledge`, { knowledgeIds }),
+  addGroupKnowledge: (groupId: string, knowledgeId: string) => 
+    api.post(`/api/scope/group/${groupId}/knowledge/${knowledgeId}`),
+  removeGroupKnowledge: (groupId: string, knowledgeId: string) => 
+    api.delete(`/api/scope/group/${groupId}/knowledge/${knowledgeId}`),
+  setGroupInheritance: (groupId: string, inheritFrom: string[]) => 
+    api.put(`/api/scope/group/${groupId}/inheritance`, { inheritFrom }),
+  addGroupInheritance: (groupId: string, source: string) => 
+    api.post(`/api/scope/group/${groupId}/inheritance`, { source }),
+  removeGroupInheritance: (groupId: string, source: string) => 
+    api.delete(`/api/scope/group/${groupId}/inheritance`, { data: { source } }),
+  getGroupResolved: (groupId: string) => api.get(`/api/scope/group/${groupId}/resolved`),
+  getGroupBymConfig: (groupId: string, userId?: string) => 
+    api.get(`/api/scope/group/${groupId}/bym-config${userId ? `?userId=${userId}` : ''}`),
   // 其他
   getEffective: (userId: string) => api.get(`/api/scope/effective/${userId}`),
   getPersonalityConfig: () => api.get('/api/config/personality'),

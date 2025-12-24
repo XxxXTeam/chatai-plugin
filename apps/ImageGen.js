@@ -1,5 +1,5 @@
 import config from '../config/config.js'
-import { segment } from '../src/utils/messageParser.js'
+import { segment, MessageApi } from '../src/utils/messageParser.js'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -910,6 +910,28 @@ export class ImageGen extends plugin {
         const startTime = Date.now()
         const maxApiCount = this.getApiCount()
         let lastError = null
+        let preparedUrls = imageUrls
+        if (imageUrls.length > 0) {
+            try {
+                const imgSvc = await getImageService()
+                const { urls, errors } = await imgSvc.prepareImagesForApi(imageUrls, { timeout: 15000 })
+                preparedUrls = urls
+                
+                if (errors.length > 0) {
+                    logger.warn(`[ImageGen] 部分图片处理失败: ${errors.join(', ')}`)
+                }
+                if (preparedUrls.length === 0 && imageUrls.length > 0) {
+                    return {
+                        success: false,
+                        error: `所有图片都无法获取: ${errors.join('; ')}`,
+                        duration: this.formatDuration(Date.now() - startTime)
+                    }
+                }
+                logger.debug(`[ImageGen] 图片预处理完成: ${imageUrls.length} -> ${preparedUrls.length}`)
+            } catch (prepErr) {
+                logger.warn('[ImageGen] 图片预处理失败，使用原始URL:', prepErr.message)
+            }
+        }
         
         for (let apiIndex = 0; apiIndex < maxApiCount; apiIndex++) {
             const apiConf = getApiConfig(apiIndex)
@@ -923,8 +945,8 @@ export class ImageGen extends plugin {
                     
                     const content = []
                     if (prompt) content.push({ type: 'text', text: prompt })
-                    if (imageUrls.length) {
-                        content.push(...imageUrls.map(url => ({ type: 'image_url', image_url: { url } })))
+                    if (preparedUrls.length) {
+                        content.push(...preparedUrls.map(url => ({ type: 'image_url', image_url: { url } })))
                     }
                     
                     const response = await fetch(apiConf.apiUrl, {
@@ -1208,7 +1230,7 @@ export class ImageGen extends plugin {
                 `✅ 表情生成完成，正在切割...请稍等`
             ], true)
 
-            const { cols = 5, rows = 4 } = splitGrid
+            const { cols = 6, rows = 4 } = splitGrid
             const bot = e.bot || Bot
             const botInfo = {
                 user_id: bot.uin || bot.self_id || e.self_id,
@@ -1218,7 +1240,22 @@ export class ImageGen extends plugin {
             for (const imageUrl of result.images) {
                 try {
                     const imgSvc = await getImageService()
-                    const splitImages = await imgSvc.splitEmojiGrid(imageUrl, { cols, rows })
+                    
+                    // 预处理图片URL：验证并在需要时转为base64
+                    let processedUrl = imageUrl
+                    try {
+                        const prepared = await imgSvc.prepareImageForApi(imageUrl, { forceBase64: false })
+                        if (prepared.url) {
+                            processedUrl = prepared.url
+                            logger.debug('[ImageGen] 切割图片URL已处理:', prepared.converted ? '已转换' : '无需转换')
+                        } else if (prepared.error) {
+                            logger.warn('[ImageGen] 图片预处理失败:', prepared.error)
+                        }
+                    } catch (prepErr) {
+                        logger.warn('[ImageGen] 图片预处理异常:', prepErr.message)
+                    }
+                    
+                    const splitImages = await imgSvc.splitEmojiGrid(processedUrl, { cols, rows })
                     
                     if (splitImages.length === 0) {
                         await e.reply('切割失败：未能生成切割图片', true)
@@ -1296,14 +1333,25 @@ export class ImageGen extends plugin {
     async getAllImages(e) {
         const urls = []
         const bot = e.bot || Bot
+        
+        // 提取图片URL（优先级：url > file > path）
         const extractImgUrl = (m) => {
             if (m.type !== 'image') return null
             const d = m.data || m
-            return d.url || d.file || d.path || m.url || m.file || null
+            // 优先使用url，然后是file，最后是path
+            let imgUrl = d.url || m.url || d.file || m.file || d.path || null
+            
+            // 处理file://协议
+            if (imgUrl && imgUrl.startsWith('file://')) {
+                imgUrl = imgUrl.replace('file://', '')
+            }
+            
+            return imgUrl
         }
         
         logger.debug('[ImageGen] getAllImages 开始, hasGetReply=', !!e.getReply, 'hasSource=', !!e.source, 'reply_id=', e.reply_id)
         
+        // 从引用消息获取图片
         if (e.getReply || e.source || e.reply_id) {
             try {
                 let source = null
@@ -1402,6 +1450,7 @@ export class ImageGen extends plugin {
             }
         }
         
+        // 从当前消息获取图片
         const msgArray = Array.isArray(e.message) ? e.message : []
         logger.debug('[ImageGen] 当前消息数组:', msgArray.map(m => m.type))
         
@@ -1412,6 +1461,7 @@ export class ImageGen extends plugin {
                 urls.push(imgUrl)
             }
         }
+        
         // 只有在没有其他图片时，才添加@用户头像
         if (urls.length === 0) {
             for (const m of msgArray) {
@@ -1428,6 +1478,7 @@ export class ImageGen extends plugin {
             }
         }
         
+        // 回退到发送者头像
         const hasQuote = !!(e.getReply || e.source || e.reply_id)
         if (urls.length === 0 && !hasQuote && e.user_id) {
             logger.debug('[ImageGen] 回退到发送者头像:', e.user_id)

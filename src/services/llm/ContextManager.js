@@ -18,7 +18,7 @@ export class ContextManager {
     }
 
     /**
-     * Initialize context manager
+     * 初始化上下文管理器
      */
     async init() {
         if (this.initialized) return
