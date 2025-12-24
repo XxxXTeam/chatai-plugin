@@ -79,7 +79,6 @@ export default function GroupsPage() {
   const [deleting, setDeleting] = useState(false)
   const [modelSelectorOpen, setModelSelectorOpen] = useState(false)
   const [allModels, setAllModels] = useState<string[]>([])
-  const [newInheritSource, setNewInheritSource] = useState('')
 
   const [form, setForm] = useState({
     groupId: '',
@@ -96,6 +95,12 @@ export default function GroupsPage() {
     bymModel: '',  // 伪人使用模型
     bymTemperature: 'inherit' as 'inherit' | number,  // 伪人温度
     bymMaxTokens: 'inherit' as 'inherit' | number,  // 伪人最大Token
+    emojiThiefEnabled: 'inherit' as 'inherit' | 'on' | 'off',  // 表情包小偷开关
+    emojiThiefSeparateFolder: true,  // 独立文件夹
+    emojiThiefMaxCount: 500,  // 最大表情包数量
+    emojiThiefStealRate: 1.0,  // 偷取概率
+    emojiThiefTriggerMode: 'random' as string,  // 发送模式
+    emojiThiefTriggerRate: 0.05,  // 发送概率
     imageGenEnabled: 'inherit' as 'inherit' | 'on' | 'off',
     summaryEnabled: 'inherit' as 'inherit' | 'on' | 'off',
     eventEnabled: 'inherit' as 'inherit' | 'on' | 'off',
@@ -152,6 +157,12 @@ export default function GroupsPage() {
       bymModel: '',
       bymTemperature: 'inherit' as 'inherit' | number,
       bymMaxTokens: 'inherit' as 'inherit' | number,
+      emojiThiefEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+      emojiThiefSeparateFolder: true,
+      emojiThiefMaxCount: 500,
+      emojiThiefStealRate: 1.0,
+      emojiThiefTriggerMode: 'random',
+      emojiThiefTriggerRate: 0.05,
       imageGenEnabled: 'inherit',
       summaryEnabled: 'inherit',
       eventEnabled: 'inherit',
@@ -160,15 +171,12 @@ export default function GroupsPage() {
       inheritFrom: [],
     })
     setEditingGroup(null)
-    setNewInheritSource('')
   }
 
   const handleOpenDialog = (group?: GroupScope) => {
     if (group) {
       setEditingGroup(group)
-      // 兼容 settings 嵌套结构 - 优先从 settings 中读取
       const settings = group.settings || {}
-      // modelId 被存储在 settings JSON 字段中
       const savedModelId = settings.modelId || group.modelId || ''
       setForm({
         groupId: group.groupId,
@@ -185,6 +193,12 @@ export default function GroupsPage() {
         bymModel: settings.bymModel || '',
         bymTemperature: settings.bymTemperature === undefined ? 'inherit' : settings.bymTemperature,
         bymMaxTokens: settings.bymMaxTokens === undefined ? 'inherit' : settings.bymMaxTokens,
+        emojiThiefEnabled: settings.emojiThiefEnabled === undefined ? 'inherit' : settings.emojiThiefEnabled ? 'on' : 'off',
+        emojiThiefSeparateFolder: settings.emojiThiefSeparateFolder ?? true,
+        emojiThiefMaxCount: settings.emojiThiefMaxCount ?? 500,
+        emojiThiefStealRate: settings.emojiThiefStealRate ?? 1.0,
+        emojiThiefTriggerMode: settings.emojiThiefTriggerMode || 'random',
+        emojiThiefTriggerRate: settings.emojiThiefTriggerRate ?? 0.05,
         imageGenEnabled: settings.imageGenEnabled === undefined ? 'inherit' : settings.imageGenEnabled ? 'on' : 'off',
         summaryEnabled: settings.summaryEnabled === undefined ? 'inherit' : settings.summaryEnabled ? 'on' : 'off',
         eventEnabled: settings.eventEnabled === undefined ? 'inherit' : settings.eventEnabled ? 'on' : 'off',
@@ -220,6 +234,12 @@ export default function GroupsPage() {
         bymModel: form.bymModel || undefined,
         bymTemperature: form.bymTemperature === 'inherit' ? undefined : form.bymTemperature,
         bymMaxTokens: form.bymMaxTokens === 'inherit' ? undefined : form.bymMaxTokens,
+        emojiThiefEnabled: form.emojiThiefEnabled === 'inherit' ? undefined : form.emojiThiefEnabled === 'on',
+        emojiThiefSeparateFolder: form.emojiThiefSeparateFolder,
+        emojiThiefMaxCount: form.emojiThiefMaxCount,
+        emojiThiefStealRate: form.emojiThiefStealRate,
+        emojiThiefTriggerMode: form.emojiThiefTriggerMode,
+        emojiThiefTriggerRate: form.emojiThiefTriggerRate,
         imageGenEnabled: form.imageGenEnabled === 'inherit' ? undefined : form.imageGenEnabled === 'on',
         summaryEnabled: form.summaryEnabled === 'inherit' ? undefined : form.summaryEnabled === 'on',
         eventEnabled: form.eventEnabled === 'inherit' ? undefined : form.eventEnabled === 'on',
@@ -530,14 +550,22 @@ export default function GroupsPage() {
                         {/* 伪人使用模型 */}
                         <div className="grid gap-2">
                           <Label className="text-sm">使用模型</Label>
-                          <Input
-                            value={form.bymModel}
-                            onChange={(e) => setForm({ ...form, bymModel: e.target.value })}
-                            placeholder="留空继承全局设置"
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            指定该群伪人模式使用的模型，留空使用全局伪人模型
-                          </p>
+                          <Select
+                            value={form.bymModel || '__default__'}
+                            onValueChange={(v) => setForm({ ...form, bymModel: v === '__default__' ? '' : v })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="继承全局设置" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__default__">继承全局设置</SelectItem>
+                              {allModels.map((model) => (
+                                <SelectItem key={model} value={model}>
+                                  {model}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
                         
                         {/* 伪人温度 */}
@@ -601,6 +629,111 @@ export default function GroupsPage() {
                             />
                           )}
                         </div>
+                      </div>
+                    )}
+                    
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-sm">📦 表情包小偷</span>
+                        <p className="text-xs text-muted-foreground">收集群聊表情包并随机发送</p>
+                      </div>
+                      <Select
+                        value={form.emojiThiefEnabled}
+                        onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, emojiThiefEnabled: v })}
+                      >
+                        <SelectTrigger className="w-32">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="inherit">继承全局</SelectItem>
+                          <SelectItem value="on">开启</SelectItem>
+                          <SelectItem value="off">关闭</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    
+                    {/* 表情包小偷详细配置 */}
+                    {form.emojiThiefEnabled !== 'off' && (
+                      <div className="ml-4 pl-4 border-l-2 border-muted space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label className="text-sm">独立存储</Label>
+                            <p className="text-xs text-muted-foreground">开启后表情包存放在群独立文件夹，关闭则共享</p>
+                          </div>
+                          <Switch
+                            checked={form.emojiThiefSeparateFolder}
+                            onCheckedChange={(checked) => setForm({ ...form, emojiThiefSeparateFolder: checked })}
+                          />
+                        </div>
+                        
+                        <div className="grid gap-2">
+                          <Label className="text-sm">最大表情包数量</Label>
+                          <Input
+                            type="number"
+                            min={10}
+                            max={5000}
+                            value={form.emojiThiefMaxCount}
+                            onChange={(e) => setForm({ ...form, emojiThiefMaxCount: Math.min(5000, Math.max(10, parseInt(e.target.value) || 500)) })}
+                            placeholder="500"
+                          />
+                          <p className="text-xs text-muted-foreground">达到上限后会随机删除旧表情包</p>
+                        </div>
+                        
+                        <div className="grid gap-2">
+                          <div className="flex items-center justify-between">
+                            <Label className="text-sm">偷取概率</Label>
+                            <span className="text-sm text-muted-foreground">{Math.round(form.emojiThiefStealRate * 100)}%</span>
+                          </div>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={100}
+                            value={Math.round(form.emojiThiefStealRate * 100)}
+                            onChange={(e) => setForm({ ...form, emojiThiefStealRate: Math.min(1, Math.max(0.01, parseInt(e.target.value) / 100)) })}
+                            className="w-24"
+                          />
+                          <p className="text-xs text-muted-foreground">收到表情包时偷取的概率</p>
+                        </div>
+                        
+                        <div className="grid gap-2">
+                          <Label className="text-sm">发送模式</Label>
+                          <Select
+                            value={form.emojiThiefTriggerMode}
+                            onValueChange={(v) => setForm({ ...form, emojiThiefTriggerMode: v })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="random">随机发送</SelectItem>
+                              <SelectItem value="bym_follow">伪人触发跟随</SelectItem>
+                              <SelectItem value="bym_random">伪人触发随机</SelectItem>
+                              <SelectItem value="chat_follow">对话跟随</SelectItem>
+                              <SelectItem value="chat_random">对话随机</SelectItem>
+                              <SelectItem value="off">仅收集不发送</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground">
+                            跟随=100%发送，随机=按概率发送
+                          </p>
+                        </div>
+                        
+                        {['random', 'bym_random', 'chat_random'].includes(form.emojiThiefTriggerMode) && (
+                          <div className="grid gap-2">
+                            <div className="flex items-center justify-between">
+                              <Label className="text-sm">发送概率</Label>
+                              <span className="text-sm text-muted-foreground">{Math.round(form.emojiThiefTriggerRate * 100)}%</span>
+                            </div>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={100}
+                              value={Math.round(form.emojiThiefTriggerRate * 100)}
+                              onChange={(e) => setForm({ ...form, emojiThiefTriggerRate: Math.min(1, Math.max(0.01, parseInt(e.target.value) / 100)) })}
+                              className="w-24"
+                            />
+                          </div>
+                        )}
                       </div>
                     )}
                     
@@ -742,11 +875,9 @@ export default function GroupsPage() {
                     <GitBranch className="h-4 w-4" />
                     继承配置
                   </Label>
-                  <p className="text-xs text-muted-foreground mb-3">
-                    从其他来源继承提示词和知识库，支持：preset:预设ID、group:群号、knowledge:知识库ID
-                  </p>
-                  <div className="space-y-2">
-                    {form.inheritFrom.length > 0 ? (
+                  <p className="text-xs text-muted-foreground mb-3">从其他来源继承提示词和知识库</p>
+                  <div className="space-y-3">
+                    {form.inheritFrom.length > 0 && (
                       <div className="flex flex-wrap gap-2">
                         {form.inheritFrom.map((source) => {
                           const [type, id] = source.split(':')
@@ -757,9 +888,6 @@ export default function GroupsPage() {
                           } else if (type === 'group') {
                             const group = groups.find(g => g.groupId === id)
                             label = `群: ${group?.groupName || id}`
-                          } else if (type === 'knowledge') {
-                            const doc = knowledgeDocs.find(d => d.id === id)
-                            label = `知识库: ${doc?.name || id}`
                           }
                           return (
                             <Badge key={source} variant="outline" className="flex items-center gap-1">
@@ -779,52 +907,56 @@ export default function GroupsPage() {
                           )
                         })}
                       </div>
-                    ) : (
-                      <p className="text-sm text-muted-foreground">暂未配置继承</p>
                     )}
-                    <div className="flex gap-2">
-                      <Input
-                        value={newInheritSource}
-                        onChange={(e) => setNewInheritSource(e.target.value)}
-                        placeholder="preset:default 或 group:123456"
-                        className="flex-1"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          if (newInheritSource && !form.inheritFrom.includes(newInheritSource)) {
-                            setForm({ ...form, inheritFrom: [...form.inheritFrom, newInheritSource] })
-                            setNewInheritSource('')
+                    <div className="grid grid-cols-2 gap-2">
+                      <Select
+                        value=""
+                        onValueChange={(v) => {
+                          if (v && !form.inheritFrom.includes(v)) {
+                            setForm({ ...form, inheritFrom: [...form.inheritFrom, v] })
                           }
                         }}
-                        disabled={!newInheritSource}
                       >
-                        <Plus className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    {/* 快捷添加 */}
-                    <div className="flex flex-wrap gap-1 mt-2">
-                      <span className="text-xs text-muted-foreground mr-1">快捷添加:</span>
-                      {presets.slice(0, 3).map(p => (
-                        <Button
-                          key={p.id}
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 text-xs"
-                          onClick={() => {
-                            const source = `preset:${p.id}`
-                            if (!form.inheritFrom.includes(source)) {
-                              setForm({ ...form, inheritFrom: [...form.inheritFrom, source] })
-                            }
-                          }}
-                          disabled={form.inheritFrom.includes(`preset:${p.id}`)}
-                        >
-                          {p.name}
-                        </Button>
-                      ))}
+                        <SelectTrigger>
+                          <SelectValue placeholder="添加预设..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {presets
+                            .filter(p => !form.inheritFrom.includes(`preset:${p.id}`))
+                            .map((p) => (
+                              <SelectItem key={p.id} value={`preset:${p.id}`}>
+                                {p.name}
+                              </SelectItem>
+                            ))}
+                          {presets.filter(p => !form.inheritFrom.includes(`preset:${p.id}`)).length === 0 && (
+                            <div className="text-sm text-muted-foreground py-2 px-2">无可添加预设</div>
+                          )}
+                        </SelectContent>
+                      </Select>
+                      <Select
+                        value=""
+                        onValueChange={(v) => {
+                          if (v && !form.inheritFrom.includes(v)) {
+                            setForm({ ...form, inheritFrom: [...form.inheritFrom, v] })
+                          }
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="添加群组..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {groups
+                            .filter(g => g.groupId !== form.groupId && !form.inheritFrom.includes(`group:${g.groupId}`))
+                            .map((g) => (
+                              <SelectItem key={g.groupId} value={`group:${g.groupId}`}>
+                                {g.groupName || g.groupId}
+                              </SelectItem>
+                            ))}
+                          {groups.filter(g => g.groupId !== form.groupId && !form.inheritFrom.includes(`group:${g.groupId}`)).length === 0 && (
+                            <div className="text-sm text-muted-foreground py-2 px-2">无可添加群组</div>
+                          )}
+                        </SelectContent>
+                      </Select>
                     </div>
                   </div>
                 </div>

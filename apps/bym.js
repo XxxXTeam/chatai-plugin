@@ -5,6 +5,7 @@ import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMe
 import { getScopeManager } from '../src/services/scope/ScopeManager.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
 import { usageStats } from '../src/services/stats/UsageStats.js'
+import { emojiThiefService } from './EmojiThief.js'
 
 /**
  * 伪人模式 (BYM - Be Yourself Mode)
@@ -378,6 +379,17 @@ export class bym extends plugin {
                 const autoRecall = config.get('basic.autoRecall')
                 const recallDelay = autoRecall?.enabled === true ? (autoRecall.delay || 60) : 0
                 await this.reply(replyText, false, { recallMsg: recallDelay })
+                
+                // 表情包小偷 - 伪人触发模式
+                try {
+                    const emojiMsg = await emojiThiefService.tryTrigger(e, 'bym')
+                    if (emojiMsg) {
+                        await new Promise(resolve => setTimeout(resolve, Math.random() * 1000 + 300))
+                        await this.reply(emojiMsg)
+                    }
+                } catch (err) {
+                    logger.debug('[BYM] 表情包触发失败:', err.message)
+                }
             }
 
             return true
