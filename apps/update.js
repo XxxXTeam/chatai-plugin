@@ -6,15 +6,13 @@ import config from '../config/config.js'
 
 const require = createRequire(import.meta.url)
 const { exec, execSync } = require('child_process')
-
-// 获取插件目录路径（相对于Yunzai根目录）
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const pluginPath = path.resolve(__dirname, '..')
 
 let uping = false
-let upingTimeout = null // 超时自动解锁
-const UPING_TIMEOUT = 120000 // 2分钟超时
+let upingTimeout = null 
+const UPING_TIMEOUT = 120000 
 
 /**
  * 插件更新
@@ -43,7 +41,6 @@ export class update extends plugin {
         if (!this.e.isMaster) return false
 
         if (uping) {
-            // 检查是否超时锁定
             if (upingTimeout && Date.now() > upingTimeout) {
                 logger.warn('[Update] 检测到锁定超时，强制解锁')
                 uping = false
@@ -68,10 +65,7 @@ export class update extends plugin {
      */
     async runUpdate(isForce) {
         try {
-            // 先检查远程更新
             await this.reply('正在检查更新...')
-            
-            // fetch远程信息
             let fetchRet = await this.execSync(`git -C "${pluginPath}" fetch --all`)
             if (fetchRet.error) {
                 logger.warn('[Update] git fetch warning:', fetchRet.error.toString())

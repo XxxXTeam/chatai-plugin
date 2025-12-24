@@ -60,7 +60,7 @@ class PresetManager {
               prompt: 'Please accurately transform the main subject in this photo into a realistic, masterpiece-like 1/7 scale PVC statue. Behind this statue, a packaging box should be placed: the box has a large clear front window on its front side, and is printed with subject artwork, product name, brand logo, barcode, as well as a small specifications or authenticity verification panel. A small price tag sticker must also be attached to one corner of the box. Meanwhile, a computer monitor is placed at the back, and the monitor screen needs to display the ZBrush modeling process of this statue. In front of the packaging box, this statue should be placed on a round plastic base. The statue must have 3D dimensionality and a sense of realism, and the texture of the PVC material needs to be clearly represented. The human figure\'s expression and movements must be exactly consistent with those in the photo.' },
             { keywords: ['Q版', 'q版', '表情包', '表情', 'p表情', 'P表情', '表情切割'], needImage: true,
               prompt: '请以图片中的主要人物生成q版半身像表情符号包中的人物形象给我。丰富多彩的手绘风格，采用5列4行的网格布局，共20个表情，涵盖了各种常见的聊天用语。要求:1.注意正确的头饰。2.不要复制原始图像。3.所有注释都应该是手写的简体中文。4.每个表情符号行动应该是独特的。5.生成的图像需要是4K，分辨率为16:9。6.严格按照5列4行的网格排列，每个表情大小相同。',
-              splitGrid: { cols: 5, rows: 4 } },
+              splitGrid: { cols: 6, rows: 4 } },
             { keywords: ['动漫化', '二次元化', '卡通化'], needImage: true,
               prompt: '将图片中的人物转换为高质量动漫风格，保持人物的主要特征和表情，使用精美的日系动漫画风，色彩鲜艳，线条流畅。' },
             { keywords: ['赛博朋克', '赛博'], needImage: true,
@@ -88,18 +88,15 @@ class PresetManager {
                     needSave = true
                     updated.uid = this.generateUid()
                 }
-                // 从默认预设中同步splitGrid配置（总是使用最新的默认值）
+                // splitGrid配置优先级：配置文件 > 内置默认值
+                // 如果配置文件中已有splitGrid，保留配置值；否则使用默认值
                 const matchDefault = defaultPresets.find(dp => 
                     dp.keywords.some(k => p.keywords?.includes(k))
                 )
-                if (matchDefault?.splitGrid) {
-                    const defaultGrid = matchDefault.splitGrid
-                    const currentGrid = p.splitGrid || {}
-                    // 如果默认配置与当前不同，更新为默认值
-                    if (currentGrid.cols !== defaultGrid.cols || currentGrid.rows !== defaultGrid.rows) {
-                        updated.splitGrid = defaultGrid
-                        needSave = true
-                    }
+                if (matchDefault?.splitGrid && !p.splitGrid) {
+                    // 配置中没有splitGrid，使用默认值
+                    updated.splitGrid = matchDefault.splitGrid
+                    needSave = true
                 }
                 return updated
             })
@@ -216,14 +213,14 @@ class PresetManager {
         const merged = []
         // 表情相关关键词，匹配时自动添加splitGrid
         const emojiKeywords = ['q版', '表情包', '表情', 'p表情', '表情切割']
-        const defaultSplitGrid = { cols: 5, rows: 4 }
+        const builtinEmojiPreset = this.builtinPresets.find(p => p.splitGrid)
+        const defaultSplitGrid = builtinEmojiPreset?.splitGrid || { cols: 5, rows: 4 }
         
         const addPresets = (presets) => {
             for (const p of presets) {
                 const newKeywords = p.keywords.filter(k => !usedKeywords.has(k.toLowerCase()))
                 if (newKeywords.length > 0) {
                     let preset = { ...p, keywords: newKeywords }
-                    // 如果预设没有splitGrid但关键词匹配表情类，自动添加
                     if (!preset.splitGrid) {
                         const hasEmojiKeyword = p.keywords.some(k => 
                             emojiKeywords.includes(k.toLowerCase())
@@ -1230,7 +1227,7 @@ export class ImageGen extends plugin {
                 `✅ 表情生成完成，正在切割...请稍等`
             ], true)
 
-            const { cols = 6, rows = 4 } = splitGrid
+            const { cols, rows } = splitGrid
             const bot = e.bot || Bot
             const botInfo = {
                 user_id: bot.uin || bot.self_id || e.self_id,
