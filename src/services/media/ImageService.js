@@ -692,17 +692,16 @@ export class ImageService {
     }
 
     /**
-     * 切割网格图片（用于表情包等）
-     * 使用简单均分算法，每个单元格向内收缩一定比例避免切到边缘
+     * 切割网格图片
      * @param {Buffer|string} input - 图片Buffer或URL
      * @param {Object} options - 切割选项
-     * @param {number} [options.cols=6] - 列数
+     * @param {number} [options.cols=6] - 列数（会被分成两个半边）
      * @param {number} [options.rows=4] - 行数
-     * @param {number} [options.shrinkPercent=5] - 每边收缩百分比(0-20)，用于去除单元格间的间隙
+     * @param {number} [options.shrinkPercent=2] - 每边收缩百分比(0-20)，用于去除单元格间的间隙
      * @returns {Promise<Buffer[]>} 切割后的图片Buffer数组
      */
     async splitGridImage(input, options = {}) {
-        const { cols = 6, rows = 4, shrinkPercent = 5 } = options
+        const { cols = 6, rows = 4, shrinkPercent = 2 } = options
         
         // 获取图片Buffer
         let buffer
@@ -738,45 +737,42 @@ export class ImageService {
         if (!width || !height || width < cols || height < rows) {
             throw new Error(`图片尺寸无效: ${width}x${height}，无法切割为 ${cols}x${rows}`)
         }
-
-        // 简单均分计算每个格子的基准尺寸
-        const baseCellWidth = width / cols
-        const baseCellHeight = height / rows
-        
-        // 计算收缩像素（每边收缩 shrinkPercent%）
-        const shrinkX = Math.round(baseCellWidth * Math.min(shrinkPercent, 20) / 100)
-        const shrinkY = Math.round(baseCellHeight * Math.min(shrinkPercent, 20) / 100)
-        
-        // 实际提取的单元格尺寸
-        const cellWidth = Math.floor(baseCellWidth - shrinkX * 2)
-        const cellHeight = Math.floor(baseCellHeight - shrinkY * 2)
-        
-        // 验证单元格尺寸
-        if (cellWidth < 10 || cellHeight < 10) {
-            throw new Error(`计算的单元格尺寸过小: ${cellWidth}x${cellHeight}`)
+        const halfCols = cols / 2
+        const halfWidth = width / 2
+        const cellWidth = halfWidth / halfCols
+        const cellHeight = height / rows
+        const shrinkX = Math.round(cellWidth * Math.min(shrinkPercent, 20) / 100)
+        const shrinkY = Math.round(cellHeight * Math.min(shrinkPercent, 20) / 100)
+        const extractWidth = Math.floor(cellWidth - shrinkX * 2)
+        const extractHeight = Math.floor(cellHeight - shrinkY * 2)
+        if (extractWidth < 10 || extractHeight < 10) {
+            throw new Error(`计算的单元格尺寸过小: ${extractWidth}x${extractHeight}`)
         }
         
-        logger.debug(`[ImageService] 切割参数: ${cols}x${rows}, 图片${width}x${height}, 基准格${Math.round(baseCellWidth)}x${Math.round(baseCellHeight)}, 实际格${cellWidth}x${cellHeight}, 收缩${shrinkX}x${shrinkY}`)
+        logger.debug(`[ImageService] 切割参数: ${cols}x${rows}, 图片${width}x${height}, 半边${halfCols}列, 格子${Math.round(cellWidth)}x${Math.round(cellHeight)}, 提取${extractWidth}x${extractHeight}`)
 
         const results = []
         
         for (let row = 0; row < rows; row++) {
             for (let col = 0; col < cols; col++) {
-                // 计算每个单元格的中心位置，然后向外扩展
-                const centerX = (col + 0.5) * baseCellWidth
-                const centerY = (row + 0.5) * baseCellHeight
+                // 判断在左半边还是右半边
+                const isRightHalf = col >= halfCols
+                const localCol = isRightHalf ? col - halfCols : col
+                const baseX = isRightHalf ? halfWidth : 0
                 
-                // 从中心向外计算提取区域
-                const left = Math.round(centerX - cellWidth / 2)
-                const top = Math.round(centerY - cellHeight / 2)
+                // 计算该格子的中心位置
+                const centerX = baseX + (localCol + 0.5) * cellWidth
+                const centerY = (row + 0.5) * cellHeight
+                
+                // 从中心向外扩展提取区域
+                const left = Math.round(centerX - extractWidth / 2)
+                const top = Math.round(centerY - extractHeight / 2)
                 
                 // 边界保护
-                const safeLeft = Math.max(0, Math.min(left, width - cellWidth))
-                const safeTop = Math.max(0, Math.min(top, height - cellHeight))
-                const safeWidth = Math.min(cellWidth, width - safeLeft)
-                const safeHeight = Math.min(cellHeight, height - safeTop)
+                const safeLeft = Math.max(0, Math.min(left, width - extractWidth))
+                const safeTop = Math.max(0, Math.min(top, height - extractHeight))
                 
-                if (safeWidth <= 0 || safeHeight <= 0) {
+                if (extractWidth <= 0 || extractHeight <= 0) {
                     logger.warn(`[ImageService] 跳过无效单元格 [${row},${col}]`)
                     continue
                 }
@@ -786,8 +782,8 @@ export class ImageService {
                         .extract({
                             left: safeLeft,
                             top: safeTop,
-                            width: safeWidth,
-                            height: safeHeight
+                            width: extractWidth,
+                            height: extractHeight
                         })
                         .png()
                         .toBuffer()
