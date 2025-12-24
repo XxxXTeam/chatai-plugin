@@ -422,13 +422,15 @@ export class ImageService {
      * 切割网格图片（用于表情包等）
      * @param {Buffer|string} input - 图片Buffer或URL
      * @param {Object} options - 切割选项
-     * @param {number} [options.cols=6] - 列数
+     * @param {number} [options.cols=5] - 列数
      * @param {number} [options.rows=4] - 行数
      * @param {number} [options.padding=0] - 内边距（像素）
+     * @param {boolean} [options.autoPadding=false] - 是否自动检测边距（默认关闭，AI生成图片通常不需要）
      * @returns {Promise<Buffer[]>} 切割后的图片Buffer数组
      */
     async splitGridImage(input, options = {}) {
-        const { cols = 6, rows = 4, padding = 0 } = options
+        const { cols = 5, rows = 4, autoPadding = false } = options
+        let { padding = 0 } = options
         
         let buffer
         if (Buffer.isBuffer(input)) {
@@ -454,8 +456,15 @@ export class ImageService {
         const metadata = await image.metadata()
         const { width, height } = metadata
 
+        // 自动估算边距（AI生成的表情包通常有约2-5%的边距）
+        if (autoPadding && padding === 0) {
+            padding = Math.round(Math.min(width, height) * 0.02)
+        }
+
         const cellWidth = Math.floor((width - padding * 2) / cols)
         const cellHeight = Math.floor((height - padding * 2) / rows)
+        
+        logger.debug(`[ImageService] 切割参数: ${cols}x${rows}, 图片${width}x${height}, 单元格${cellWidth}x${cellHeight}, 边距${padding}`)
 
         const results = []
         
