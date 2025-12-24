@@ -497,10 +497,11 @@ export class Chat extends plugin {
       // 传递 debug 模式给 ChatService
       const result = await chatService.sendMessage({
         userId: fullUserId,
-        message: enhancedMsg,  // 使用enhancedMsg而不是msg，包含引用/转发解析结果
+        groupId: groupId ? String(groupId) : null,  
+        message: enhancedMsg, 
         images: imageIds,
         model: model,
-        mode: 'chat',  // 指定模式
+        mode: 'chat', 
         preset: preset,
         presetId: presetId,
         event: e,  // Pass event for tool context

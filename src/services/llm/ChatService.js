@@ -125,7 +125,8 @@ export class ChatService {
             mode = 'chat',
             debugMode = false,  // 调试模式
             prefixPersona = null,  // 前缀人格（独立于普通人设）
-            disableTools = false  // 禁用工具调用（用于防止递归）
+            disableTools = false,  // 禁用工具调用（用于防止递归）
+            skipHistory = false  // 跳过历史记录（用于事件响应等场景）
         } = options
 
         // 调试信息收集
@@ -161,17 +162,15 @@ export class ChatService {
             const sm = await ensureScopeManager()
             const groupUserSettings = await sm.getGroupUserSettings(String(groupId), cleanUserId)
             const userSettings = await sm.getUserSettings(cleanUserId)
-            // 如果用户在群内或全局设置了独立人格，强制使用独立会话
             if (groupUserSettings?.systemPrompt || userSettings?.systemPrompt) {
                 forceIsolation = true
             }
         }
         let conversationId
         if (forceIsolation && groupId) {
-            // 强制独立会话：使用群+用户的组合ID
             conversationId = `group:${groupId}:user:${cleanUserId}`
         } else {
-            conversationId = contextManager.getConversationId(userId, groupId)
+            conversationId = contextManager.getConversationId(cleanUserId, groupId)
         }
 
         // 构建消息内容
@@ -266,7 +265,8 @@ export class ChatService {
             source_type: groupId ? 'group' : 'private',
             ...(groupId && { group_id: groupId })
         }
-        let history = await contextManager.getContextHistory(conversationId, 20)
+        // 如果 skipHistory 为 true，跳过历史记录（用于事件响应等不需要上下文的场景）
+        let history = skipHistory ? [] : await contextManager.getContextHistory(conversationId, 20)
         
         // 获取默认预设配置
         await presetManager.init()
@@ -659,6 +659,8 @@ export class ChatService {
             conversationId,
             systemOverride: systemPrompt,
             stream: useStreaming,
+            // 跳过历史时，同时禁用客户端的历史读取
+            disableHistoryRead: skipHistory,
         }
         logger.debug(`[ChatService] 请求参数: temperature=${requestOptions.temperature}, maxToken=${requestOptions.maxToken}, 来源: ${presetParams.temperature !== undefined ? '预设' : (channelLlm.temperature !== undefined ? '渠道' : '默认')}`)
         
