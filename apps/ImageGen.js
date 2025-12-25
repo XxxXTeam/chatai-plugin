@@ -88,13 +88,10 @@ class PresetManager {
                     needSave = true
                     updated.uid = this.generateUid()
                 }
-                // splitGrid配置优先级：配置文件 > 内置默认值
-                // 如果配置文件中已有splitGrid，保留配置值；否则使用默认值
                 const matchDefault = defaultPresets.find(dp => 
                     dp.keywords.some(k => p.keywords?.includes(k))
                 )
                 if (matchDefault?.splitGrid && !p.splitGrid) {
-                    // 配置中没有splitGrid，使用默认值
                     updated.splitGrid = matchDefault.splitGrid
                     needSave = true
                 }
@@ -345,6 +342,32 @@ export class ImageGen extends plugin {
         }
         
         return globalEnabled
+    }
+
+    /**
+     * 获取群组的图像生成模型（支持群组独立配置）
+     * @returns {Promise<string|null>} 群组独立模型，如果没有配置则返回null
+     */
+    async getGroupImageModel() {
+        const e = this.e
+        
+        if (e.isGroup && e.group_id) {
+            try {
+                const groupId = String(e.group_id)
+                const scopeManager = await getScopeManagerLazy()
+                const groupSettings = await scopeManager.getGroupSettings(groupId)
+                const groupFeatures = groupSettings?.settings || {}
+                
+                if (groupFeatures.imageGenModel && groupFeatures.imageGenModel.trim()) {
+                    logger.info(`[ImageGen] 使用群组独立模型: ${groupFeatures.imageGenModel} (群: ${groupId})`)
+                    return groupFeatures.imageGenModel.trim()
+                }
+            } catch (err) {
+                logger.debug('[ImageGen] 获取群组模型设置失败:', err.message)
+            }
+        }
+        
+        return null
     }
 
     /**
@@ -832,11 +855,12 @@ export class ImageGen extends plugin {
 
     /**
      * 获取所有API列表（图片+视频通用）
+     * @param {string} [overrideModel] - 覆盖模型（用于群组独立配置）
      * @returns {Array<{baseUrl: string, apiKey: string, model: string, videoModel: string}>}
      */
-    getApiList() {
+    getApiList(overrideModel = null) {
         const apiConfig = config.get('features.imageGen') || {}
-        const globalModel = apiConfig.model || 'gemini-3-pro-image'
+        const globalModel = overrideModel || apiConfig.model || 'gemini-3-pro-image'
         const globalVideoModel = apiConfig.videoModel || 'veo-2.0-generate-001'
         if (Array.isArray(apiConfig.apis) && apiConfig.apis.length > 0) {
             return apiConfig.apis
@@ -872,9 +896,10 @@ export class ImageGen extends plugin {
     /**
      * 获取图片生成API配置
      * @param {number} apiIndex - API索引
+     * @param {string} [overrideModel] - 覆盖模型（用于群组独立配置）
      */
-    getImageApiConfig(apiIndex = 0) {
-        const apis = this.getApiList()
+    getImageApiConfig(apiIndex = 0, overrideModel = null) {
+        const apis = this.getApiList(overrideModel)
         if (apiIndex >= apis.length) return null
         
         const api = apis[apiIndex]
@@ -1038,10 +1063,13 @@ export class ImageGen extends plugin {
      * 调用图片生成 API
      */
     async generateImage({ prompt, imageUrls = [] }) {
+        // 获取群组独立模型配置
+        const groupModel = await this.getGroupImageModel()
+        
         const result = await this.callGenApi({
             prompt,
             imageUrls,
-            getApiConfig: (idx) => this.getImageApiConfig(idx),
+            getApiConfig: (idx) => this.getImageApiConfig(idx, groupModel),
             extractResult: (data) => this.extractImages(data),
             maxEmptyRetries: 2,
             retryDelay: 1000,
