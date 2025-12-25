@@ -72,20 +72,29 @@ export class LlmService {
         // 如果启用工具，获取工具（包括内置工具）
         let tools = []
         if (enableTools) {
-            // 如果可用，获取预设工具配置
-            let toolsConfig = null
-            if (options.presetId) {
-                await presetManager.init()
-                toolsConfig = presetManager.getToolsConfig(options.presetId)
+            // 优先使用预选的工具列表（来自工具组调度）
+            if (options.preSelectedTools && options.preSelectedTools.length > 0) {
+                // 将预选工具转换为客户端格式
+                const { convertMcpTools } = await import('../../core/utils/toolAdapter.js')
+                const requestContext = options.event ? { event: options.event, bot: options.event.bot || Bot } : null
+                tools = convertMcpTools(options.preSelectedTools, requestContext)
+                logger.debug(`[LlmService] 使用预选工具: ${tools.length} 个`)
+            } else {
+                // 如果可用，获取预设工具配置
+                let toolsConfig = null
+                if (options.presetId) {
+                    await presetManager.init()
+                    toolsConfig = presetManager.getToolsConfig(options.presetId)
+                }
+                
+                // 获取所有工具 (MCP + 内置)
+                tools = await getAllTools({
+                    toolsConfig,
+                    event: options.event,
+                    presetId: options.presetId,
+                    userPermission: options.event?.sender?.role || 'member'
+                })
             }
-            
-            // 获取所有工具 (MCP + 内置)
-            tools = await getAllTools({
-                toolsConfig,
-                event: options.event,
-                presetId: options.presetId,
-                userPermission: options.event?.sender?.role || 'member'
-            })
         }
 
         // 创建客户端
@@ -209,10 +218,24 @@ export class LlmService {
     }
 
     /**
-     * Model type enum
+     * 模型类型枚举
+     * 
+     * 模型使用场景分离原则：
+     * - 对话模型(chat)：普通聊天，不带工具
+     * - 工具模型(tool)：执行工具调用
+     * - 调度模型(dispatch)：分析需要哪些工具组（轻量快速）
+     * - 图像模型(image)：图像理解和生成
+     * - 伪人模型(roleplay)：模拟真人回复
+     * - 搜索模型(search)：联网搜索
+     * 
+     * 默认模型(default)在对应模型未配置时使用
      */
     static ModelType = {
-        CHAT: 'chat',           // 对话模型 - 普通聊天
+        DEFAULT: 'default',     // 默认模型 - 未配置时的回退
+        CHAT: 'chat',           // 对话模型 - 普通聊天（无工具）
+        TOOL: 'tool',           // 工具模型 - 执行工具调用
+        DISPATCH: 'dispatch',   // 调度模型 - 选择工具组
+        IMAGE: 'image',         // 图像模型 - 图像理解/生成
         ROLEPLAY: 'roleplay',   // 伪人模型 - 模拟真人回复
         SEARCH: 'search'        // 搜索模型 - 联网搜索
     }
@@ -283,10 +306,32 @@ export class LlmService {
     }
 
     /**
-     * 获取对话模型
+     * 获取对话模型（无工具）
      */
     static getChatModel() {
         return this.getModel(this.ModelType.CHAT)
+    }
+
+    /**
+     * 获取工具模型（执行工具调用）
+     */
+    static getToolModel() {
+        return this.getModel(this.ModelType.TOOL)
+    }
+
+    /**
+     * 获取调度模型（选择工具组，轻量快速）
+     * 未配置时回退到默认模型
+     */
+    static getDispatchModel() {
+        return this.getModel(this.ModelType.DISPATCH)  // 回退到默认
+    }
+
+    /**
+     * 获取图像模型
+     */
+    static getImageModel() {
+        return this.getModel(this.ModelType.IMAGE)
     }
 
     /**
@@ -304,30 +349,90 @@ export class LlmService {
     }
 
     /**
-     * 根据场景自动选择最佳模型
      * @param {Object} options
+     * @param {boolean} options.needsTools - 是否需要工具调用
+     * @param {boolean} options.isDispatch - 是否是调度阶段
+     * @param {boolean} options.hasImages - 是否包含图像
      * @param {boolean} options.isRoleplay - 是否是伪人模式
      * @param {boolean} options.needsSearch - 是否需要搜索
+     * @returns {string} 模型名称
      */
     static selectModel(options = {}) {
-        // 伪人模式优先 - 使用伪人模型
-        if (options.isRoleplay) {
+        const { needsTools, isDispatch, hasImages, isRoleplay, needsSearch } = options
+        if (isDispatch) {
+            const model = this.getDispatchModel()
+            if (model) {
+                logger.debug(`[LlmService] selectModel: 使用调度模型 ${model}`)
+                return model
+            }
+            // 调度模型未配置，返回空表示跳过调度
+            logger.debug(`[LlmService] selectModel: 调度模型未配置，跳过调度阶段`)
+            return ''
+        }
+        
+        // 2. 工具调用 - 使用工具模型
+        if (needsTools) {
+            const model = this.getToolModel()
+            if (model) {
+                logger.debug(`[LlmService] selectModel: 使用工具模型 ${model}`)
+                return model
+            }
+        }
+        
+        // 3. 图像处理 - 使用图像模型
+        if (hasImages) {
+            const model = this.getImageModel()
+            if (model) {
+                logger.debug(`[LlmService] selectModel: 使用图像模型 ${model}`)
+                return model
+            }
+        }
+        
+        // 4. 伪人模式 - 使用伪人模型
+        if (isRoleplay) {
             const model = this.getRoleplayModel()
-            if (model) return model
+            if (model) {
+                logger.debug(`[LlmService] selectModel: 使用伪人模型 ${model}`)
+                return model
+            }
         }
         
-        // 搜索需求
-        if (options.needsSearch) {
+        // 5. 搜索需求 - 使用搜索模型
+        if (needsSearch) {
             const model = this.getSearchModel()
-            if (model) return model
+            if (model) {
+                logger.debug(`[LlmService] selectModel: 使用搜索模型 ${model}`)
+                return model
+            }
         }
         
-        // 使用对话模型
+        // 6. 普通对话 - 使用对话模型
         const chatModel = this.getChatModel()
-        if (chatModel) return chatModel
+        if (chatModel) {
+            logger.debug(`[LlmService] selectModel: 使用对话模型 ${chatModel}`)
+            return chatModel
+        }
         
-        // 回退到默认模型
-        return this.getDefaultModel()
+        // 7. 回退到默认模型
+        const defaultModel = this.getDefaultModel()
+        logger.debug(`[LlmService] selectModel: 回退到默认模型 ${defaultModel}`)
+        return defaultModel
+    }
+
+    /**
+     * 获取模型配置信息（用于调试和日志）
+     * @returns {Object} 模型配置
+     */
+    static getModelConfig() {
+        return {
+            default: this.getDefaultModel(),
+            chat: this.getModel(this.ModelType.CHAT, false) || '(使用默认)',
+            tool: this.getModel(this.ModelType.TOOL, false) || '(使用默认)',
+            dispatch: this.getModel(this.ModelType.DISPATCH, false) || '(使用默认)',
+            image: this.getModel(this.ModelType.IMAGE, false) || '(使用默认)',
+            roleplay: this.getModel(this.ModelType.ROLEPLAY, false) || '(使用默认)',
+            search: this.getModel(this.ModelType.SEARCH, false) || '(使用默认)'
+        }
     }
 
     /**

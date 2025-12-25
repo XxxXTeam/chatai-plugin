@@ -66,6 +66,9 @@ interface Config {
     defaultModel: string
     models: {
       chat: string
+      tool: string
+      dispatch: string
+      image: string
       roleplay: string
       search: string
     }
@@ -101,6 +104,8 @@ interface Config {
     useForwardMsg: boolean
     parallelExecution: boolean
     sendIntermediateReply: boolean
+    useToolGroups: boolean
+    dispatchFirst: boolean
   }
   personality: {
     isolateContext: {
@@ -169,12 +174,12 @@ const defaultConfig: Config = {
   admin: { masterQQ: [], loginNotifyPrivate: true, sensitiveCommandMasterOnly: true },
   llm: { 
     defaultModel: '', 
-    models: { chat: '', roleplay: '', search: '' },
+    models: { chat: '', tool: '', dispatch: '', image: '', roleplay: '', search: '' },
     fallback: { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false }
   },
   context: { maxMessages: 20, autoEnd: { enabled: false, maxRounds: 50 }, groupContextSharing: true, globalSystemPrompt: '' },
   bym: { enable: false, probability: 0.02, temperature: 0.9, maxTokens: 100, recall: false, model: '', systemPrompt: '', inheritPersonality: true },
-  tools: { showCallLogs: true, useForwardMsg: true, parallelExecution: true, sendIntermediateReply: true },
+  tools: { showCallLogs: true, useForwardMsg: true, parallelExecution: true, sendIntermediateReply: true, useToolGroups: false, dispatchFirst: false },
   personality: { isolateContext: { enabled: false, clearOnSwitch: false } },
   thinking: { enabled: true, showThinkingContent: true, useForwardMsg: true },
   features: {
@@ -210,14 +215,28 @@ const defaultConfig: Config = {
   }
 }
 
-type ModelCategory = 'chat' | 'roleplay' | 'search' | 'fallback' | 'default'
+type ModelCategory = 'chat' | 'tool' | 'dispatch' | 'image' | 'roleplay' | 'search' | 'fallback' | 'default'
 
 const MODEL_CATEGORY_LABELS: Record<ModelCategory, string> = {
   default: '默认模型',
   chat: '对话模型',
+  tool: '工具模型',
+  dispatch: '调度模型',
+  image: '图像模型',
   roleplay: '伪人模型',
   search: '搜索模型',
   fallback: '备选模型'
+}
+
+const MODEL_CATEGORY_DESCRIPTIONS: Record<ModelCategory, string> = {
+  default: '其他模型未配置时使用',
+  chat: '普通对话，不传递工具',
+  tool: '执行工具调用',
+  dispatch: '选择工具组（轻量快速）',
+  image: '图像理解和生成',
+  roleplay: '伪人模式回复',
+  search: '联网搜索',
+  fallback: '主模型失败时使用'
 }
 
 export default function SettingsPage() {
@@ -285,7 +304,7 @@ export default function SettingsPage() {
         
         // 确保 llm 和 llm.models 对象存在
         if (!merged.llm) merged.llm = { defaultModel: '', models: {}, fallback: { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false } }
-        if (!merged.llm.models) merged.llm.models = { chat: '', roleplay: '', search: '' }
+        if (!merged.llm.models) merged.llm.models = { chat: '', tool: '', dispatch: '', image: '', roleplay: '', search: '' }
         if (!merged.llm.fallback) merged.llm.fallback = { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false }
         
         // 确保 prefixPersonas 是数组
@@ -382,6 +401,9 @@ export default function SettingsPage() {
   const isSingleSelectMode = () => {
     return editingModelCategory === 'default' || 
            editingModelCategory === 'chat' || 
+           editingModelCategory === 'tool' ||
+           editingModelCategory === 'dispatch' ||
+           editingModelCategory === 'image' ||
            editingModelCategory === 'roleplay' || 
            editingModelCategory === 'search'
   }
@@ -798,10 +820,11 @@ export default function SettingsPage() {
               <CardDescription>为不同场景配置专用模型（同一模型配置多个渠道时自动轮询）</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              {(['chat', 'roleplay', 'search'] as ModelCategory[]).map((category) => (
+              {(['chat', 'tool', 'dispatch', 'image', 'roleplay', 'search'] as ModelCategory[]).map((category) => (
                 <div key={category} className="flex items-center justify-between p-3 border rounded-lg">
                   <div>
                     <Label>{MODEL_CATEGORY_LABELS[category]}</Label>
+                    <p className="text-xs text-muted-foreground">{MODEL_CATEGORY_DESCRIPTIONS[category]}</p>
                     <p className="text-sm text-muted-foreground mt-1">
                       {config.llm?.models?.[category] || '使用默认模型'}
                     </p>
@@ -937,6 +960,40 @@ export default function SettingsPage() {
                 <div><Label>发送中间回复</Label><p className="text-sm text-muted-foreground">工具调用前先发送模型的文本回复</p></div>
                 <Switch checked={config.tools?.sendIntermediateReply ?? true} onCheckedChange={(v) => updateConfig('tools.sendIntermediateReply', v)} />
               </div>
+            </CardContent>
+          </Card>
+
+          {/* 工具组调度 */}
+          <Card>
+            <CardHeader>
+              <CardTitle>工具组调度</CardTitle>
+              <CardDescription>使用调度模型选择工具组，减少上下文消耗</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label>启用工具组模式</Label>
+                  <p className="text-sm text-muted-foreground">将工具按功能分组，调度时只传组摘要</p>
+                </div>
+                <Switch checked={config.tools?.useToolGroups ?? false} onCheckedChange={(v) => updateConfig('tools.useToolGroups', v)} />
+              </div>
+              {config.tools?.useToolGroups && (
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>调度优先</Label>
+                    <p className="text-sm text-muted-foreground">先用调度模型选择工具组，再用工具模型执行</p>
+                  </div>
+                  <Switch checked={config.tools?.dispatchFirst ?? false} onCheckedChange={(v) => updateConfig('tools.dispatchFirst', v)} />
+                </div>
+              )}
+              {config.tools?.useToolGroups && (
+                <Alert>
+                  <Info className="h-4 w-4" />
+                  <AlertDescription>
+                    工具组配置请在「MCP工具」页面管理。调度模型和工具模型请在上方「模型」标签页配置。
+                  </AlertDescription>
+                </Alert>
+              )}
             </CardContent>
           </Card>
           

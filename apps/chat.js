@@ -466,21 +466,13 @@ export class Chat extends plugin {
       if (presetId) {
         preset = presetManager.get(presetId)
       }
-
+      const hasImages = imageIds.length > 0
       const { LlmService } = await import('../src/services/llm/LlmService.js')
-
-      // 使用 selectModel 自动选择最佳模型
-      const model = LlmService.selectModel({
-        needsTools: preset?.enableTools !== false,  // 根据预设决定是否需要工具
-        needsReasoning: preset?.enableReasoning,
-        isRoleplay: false
-      })
-
-      // 获取最佳渠道
-      const channel = channelManager.getBestChannel(model)
+      const previewModel = LlmService.getDefaultModel()
+      const channel = channelManager.getBestChannel(previewModel)
       
       addDebugLog('🔧 模型与渠道', {
-        selectedModel: model,
+        selectedModel: previewModel,
         presetId,
         presetName: preset?.name,
         channelId: channel?.id,
@@ -488,19 +480,14 @@ export class Chat extends plugin {
         adapterType: channel?.adapterType,
         baseUrl: channel?.baseUrl?.substring(0, 50)
       })
-
-      // Send message using ChatService
       if (config.get('basic.showThinkingMessage') !== false) {
         await this.reply('思考中...', true)
       }
-
-      // 传递 debug 模式给 ChatService
       const result = await chatService.sendMessage({
         userId: fullUserId,
         groupId: groupId ? String(groupId) : null,  
         message: enhancedMsg, 
         images: imageIds,
-        model: model,
         mode: 'chat', 
         preset: preset,
         presetId: presetId,

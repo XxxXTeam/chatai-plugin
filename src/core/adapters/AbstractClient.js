@@ -763,25 +763,43 @@ export function parseXmlToolCalls(text) {
         }
     }
     
-    // 工具调用数量限制和去重
-    const MAX_TOOL_CALLS = 10
+    // 工具调用数量限制和智能去重
+    const MAX_TOOL_CALLS = 15
     if (toolCalls.length > 0) {
-        const seen = new Set()
+        // 智能去重：只去除连续重复的调用，允许间隔的重复调用（如多次@同一个人）
+        // 同时记录每个工具调用的次数，超过阈值才去重
         const deduped = []
+        const callCounts = new Map()  // 工具调用计数
+        const MAX_SAME_CALL = 3  // 同一调用最多允许次数
+        
         for (const tc of toolCalls) {
             const sig = `${tc.function.name}:${tc.function.arguments}`
-            if (!seen.has(sig)) {
-                seen.add(sig)
+            const count = callCounts.get(sig) || 0
+            
+            // 检查是否与上一个调用完全相同（连续重复）
+            const lastCall = deduped[deduped.length - 1]
+            const isConsecutiveDupe = lastCall && 
+                lastCall.function.name === tc.function.name &&
+                lastCall.function.arguments === tc.function.arguments
+            
+            // 允许非连续重复，或者次数未超限
+            if (!isConsecutiveDupe && count < MAX_SAME_CALL) {
+                callCounts.set(sig, count + 1)
                 deduped.push(tc)
+            } else if (isConsecutiveDupe) {
+                logger.debug(`[Tool Parser] 跳过连续重复调用: ${tc.function.name}`)
+            } else {
+                logger.debug(`[Tool Parser] 同一调用超过 ${MAX_SAME_CALL} 次，跳过: ${tc.function.name}`)
             }
         }
+        
         if (deduped.length > MAX_TOOL_CALLS) {
             logger.warn(`[Tool Parser] 工具调用数量 ${deduped.length} 超过限制 ${MAX_TOOL_CALLS}，截断`)
             deduped.length = MAX_TOOL_CALLS
         }
         
         if (deduped.length !== toolCalls.length) {
-            logger.debug(`[Tool Parser] 去重: ${toolCalls.length} -> ${deduped.length}`)
+            logger.debug(`[Tool Parser] 智能去重: ${toolCalls.length} -> ${deduped.length}`)
         }
         cleanText = cleanText
             .replace(/\{\s*"tool_calls"\s*:\s*\[[\s\S]*?\]\s*\}/g, '')

@@ -783,6 +783,194 @@ export const messageTools = [
             }
         }
     },
+
+    {
+        name: 'deep_parse_message',
+        description: '深度解析消息内容。递归解析合并转发、引用消息，直到获取最内层的所有数据。适用于需要获取转发消息中的完整内容、引用链等场景。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                forward_id: { type: 'string', description: '合并转发消息的ID（res_id）' },
+                message_id: { type: 'string', description: '消息ID，用于获取引用消息' },
+                max_depth: { type: 'number', description: '最大递归深度，默认5' },
+                include_images: { type: 'boolean', description: '是否包含图片URL，默认true' },
+                flatten: { type: 'boolean', description: '是否展平为一维数组，默认false' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = e?.bot || global.Bot
+                
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+                
+                const maxDepth = args.max_depth || 50
+                const includeImages = args.include_images !== false
+                const flatten = args.flatten || false
+                
+                // 递归解析函数
+                async function parseDeep(content, depth = 0) {
+                    if (depth >= maxDepth) {
+                        return { type: 'max_depth_reached', depth }
+                    }
+                    
+                    const results = []
+                    const segments = Array.isArray(content) ? content : [content]
+                    
+                    for (const seg of segments) {
+                        if (!seg) continue
+                        
+                        const segType = seg.type || (typeof seg === 'string' ? 'text' : 'unknown')
+                        const segData = seg.data || seg
+                        
+                        // 处理合并转发
+                        if (segType === 'forward') {
+                            const forwardId = segData.id || segData.res_id
+                            if (forwardId) {
+                                try {
+                                    let forwardContent = null
+                                    if (bot.getForwardMsg) {
+                                        forwardContent = await bot.getForwardMsg(forwardId)
+                                    } else if (bot.get_forward_msg) {
+                                        forwardContent = await bot.get_forward_msg(forwardId)
+                                    }
+                                    
+                                    if (forwardContent) {
+                                        const messages = forwardContent.messages || forwardContent.message || []
+                                        const innerResults = []
+                                        
+                                        for (const msg of messages) {
+                                            const msgContent = msg.content || msg.message || []
+                                            const parsed = await parseDeep(msgContent, depth + 1)
+                                            innerResults.push({
+                                                sender: {
+                                                    user_id: msg.sender?.user_id || msg.user_id,
+                                                    nickname: msg.sender?.nickname || msg.nickname || '未知'
+                                                },
+                                                time: msg.time,
+                                                content: parsed
+                                            })
+                                        }
+                                        
+                                        results.push({
+                                            type: 'forward',
+                                            depth,
+                                            count: innerResults.length,
+                                            messages: innerResults
+                                        })
+                                    }
+                                } catch (err) {
+                                    results.push({ type: 'forward_error', id: forwardId, error: err.message })
+                                }
+                            }
+                        }
+                        // 处理引用消息
+                        else if (segType === 'reply') {
+                            const replyId = segData.id || segData.message_id
+                            if (replyId) {
+                                try {
+                                    let replyMsg = null
+                                    if (bot.getMsg) {
+                                        replyMsg = await bot.getMsg(replyId)
+                                    } else if (bot.get_msg) {
+                                        replyMsg = await bot.get_msg(replyId)
+                                    }
+                                    
+                                    if (replyMsg) {
+                                        const msgContent = replyMsg.message || replyMsg.content || []
+                                        const parsed = await parseDeep(msgContent, depth + 1)
+                                        results.push({
+                                            type: 'reply',
+                                            depth,
+                                            original_id: replyId,
+                                            sender: replyMsg.sender,
+                                            content: parsed
+                                        })
+                                    }
+                                } catch (err) {
+                                    results.push({ type: 'reply_error', id: replyId, error: err.message })
+                                }
+                            }
+                        }
+                        // 处理图片
+                        else if (segType === 'image' && includeImages) {
+                            results.push({
+                                type: 'image',
+                                url: segData.url || segData.file,
+                                file: segData.file
+                            })
+                        }
+                        // 处理文本
+                        else if (segType === 'text') {
+                            const text = segData.text || (typeof segData === 'string' ? segData : '')
+                            if (text.trim()) {
+                                results.push({ type: 'text', text: text.trim() })
+                            }
+                        }
+                        // 处理@
+                        else if (segType === 'at') {
+                            results.push({
+                                type: 'at',
+                                qq: segData.qq || segData.user_id,
+                                name: segData.name
+                            })
+                        }
+                        // 其他类型
+                        else if (segType !== 'unknown') {
+                            results.push({ type: segType, data: segData })
+                        }
+                    }
+                    
+                    return results
+                }
+                
+                // 开始解析
+                let result
+                if (args.forward_id) {
+                    result = await parseDeep([{ type: 'forward', data: { id: args.forward_id } }])
+                } else if (args.message_id) {
+                    result = await parseDeep([{ type: 'reply', data: { id: args.message_id } }])
+                } else if (e?.source) {
+                    // 自动解析当前消息的引用
+                    result = await parseDeep([{ type: 'reply', data: { id: e.source.message_id || e.source.seq } }])
+                } else {
+                    return { success: false, error: '请提供 forward_id 或 message_id' }
+                }
+                
+                // 展平结果
+                if (flatten) {
+                    const flattened = []
+                    function flattenResults(items) {
+                        for (const item of items) {
+                            if (item.type === 'forward' && item.messages) {
+                                for (const msg of item.messages) {
+                                    if (Array.isArray(msg.content)) {
+                                        flattenResults(msg.content)
+                                    }
+                                }
+                            } else if (item.type === 'reply' && Array.isArray(item.content)) {
+                                flattenResults(item.content)
+                            } else if (item.type === 'text' || item.type === 'image') {
+                                flattened.push(item)
+                            }
+                        }
+                    }
+                    flattenResults(result)
+                    result = flattened
+                }
+                
+                return {
+                    success: true,
+                    max_depth: maxDepth,
+                    result
+                }
+            } catch (err) {
+                return { success: false, error: `深度解析失败: ${err.message}` }
+            }
+        }
+    },
     
     {
         name: 'send_forward_msg',

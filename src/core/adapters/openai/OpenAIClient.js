@@ -385,6 +385,49 @@ export class OpenAIClient extends AbstractClient {
                 }
                 
                 logger.debug(`[OpenAI适配器] Stream完成: ${chunkCount} chunks`)
+                let finalContent = allContent || ''
+                let extractedReasoning = allReasoningContent || ''
+                if (finalContent) {
+                    const endTagIdx = finalContent.toLowerCase().lastIndexOf('</think>')
+                    if (endTagIdx !== -1) {
+                        const beforeEnd = finalContent.substring(0, endTagIdx)
+                        const startTagIdx = beforeEnd.toLowerCase().lastIndexOf('<think>')
+                        
+                        if (startTagIdx !== -1) {
+                            const thinkContent = finalContent.substring(startTagIdx + 7, endTagIdx).trim()
+                            const beforeThink = finalContent.substring(0, startTagIdx).trim()
+                            const afterThink = finalContent.substring(endTagIdx + 8).trim()
+                            
+                            if (thinkContent) {
+                                extractedReasoning = extractedReasoning ? extractedReasoning + '\n' + thinkContent : thinkContent
+                            }
+                            finalContent = (beforeThink + ' ' + afterThink).trim()
+                            logger.debug(`[OpenAI适配器] 剥离<think>(反向): 思考=${thinkContent.length}字符, 剩余=${finalContent.length}字符`)
+                        } else {
+                            const thinkContent = beforeEnd.trim()
+                            const afterThink = finalContent.substring(endTagIdx + 8).trim()
+                            
+                            if (thinkContent) {
+                                extractedReasoning = extractedReasoning ? extractedReasoning + '\n' + thinkContent : thinkContent
+                            }
+                            finalContent = afterThink
+                            logger.debug(`[OpenAI适配器] 剥离<think>(无开始): 思考=${thinkContent.length}字符, 剩余=${finalContent.length}字符`)
+                        }
+                    } 
+                    else {
+                        const startTagIdx = finalContent.toLowerCase().indexOf('<think>')
+                        if (startTagIdx !== -1) {
+                            const beforeThink = finalContent.substring(0, startTagIdx).trim()
+                            const thinkContent = finalContent.substring(startTagIdx + 7).trim()
+                            
+                            if (thinkContent) {
+                                extractedReasoning = extractedReasoning ? extractedReasoning + '\n' + thinkContent : thinkContent
+                            }
+                            finalContent = beforeThink
+                            logger.debug(`[OpenAI适配器] 剥离<think>(截断): 思考=${thinkContent.length}字符, 剩余=${finalContent.length}字符`)
+                        }
+                    }
+                }
                 
                 // 构建完整的响应对象
                 const toolCalls = Array.from(toolCallsMap.values()).filter(tc => tc.id && tc.function.name)
@@ -392,8 +435,8 @@ export class OpenAIClient extends AbstractClient {
                     choices: [{
                         message: {
                             role: 'assistant',
-                            content: allContent || null,
-                            reasoning_content: allReasoningContent || null,
+                            content: finalContent || null,
+                            reasoning_content: extractedReasoning || null,
                             tool_calls: toolCalls.length > 0 ? toolCalls : undefined
                         },
                         finish_reason: finishReason
@@ -401,7 +444,7 @@ export class OpenAIClient extends AbstractClient {
                     usage: usage || {}
                 }
                 
-                logger.debug(`[OpenAI适配器] Stream响应: finish=${finishReason}, tools=${toolCalls.length}, content=${allContent.length}字符`)
+                logger.debug(`[OpenAI适配器] Stream响应: finish=${finishReason}, tools=${toolCalls.length}, content=${finalContent.length}字符`)
             } else {
                 chatCompletion = response
                 
@@ -775,22 +818,31 @@ export class OpenAIClient extends AbstractClient {
                 yield { type: 'tool_calls', toolCalls }
             }
             
-            if (hasReasoningField) {
-                // 有 reasoning_content 字段，最后输出思考内容
-                if (allReasoning.trim()) {
-                    logger.debug('[OpenAI适配器] 输出reasoning_content，长度:', allReasoning.length)
-                    yield { type: 'reasoning', text: allReasoning.trim() }
-                }
-            } else if (allContent) {
-                // 检查 <think> 标签（支持多种格式，包括不完整的标签）
-                // 匹配完整的 <think>...</think> 或只有开头的 <think>...
-                const fullThinkMatch = allContent.match(/^\s*<think>([\s\S]*?)<\/think>\s*/i)
-                const partialThinkMatch = !fullThinkMatch && allContent.match(/^\s*<think>([\s\S]*)/i)
+            // 无论是否有 reasoning_content 字段，始终检测并剥离 <think> 标签
+            if (hasReasoningField && allReasoning.trim()) {
+                logger.debug('[OpenAI适配器] 输出reasoning_content，长度:', allReasoning.length)
+                yield { type: 'reasoning', text: allReasoning.trim() }
+            }
+            
+            // 检查 allContent 中是否有 <think> 标签需要剥离
+            if (allContent) {
+                logger.debug(`[OpenAI适配器] 检查<think>标签, allContent长度: ${allContent.length}, 前100字符: ${allContent.substring(0, 100)}`)
+                
+                // 检查 <think> 标签（支持多种格式）
+                // 使用更宽松的正则：匹配 <think>...</think>
+                const fullThinkMatch = allContent.match(/<think>([\s\S]*?)<\/think>/i)
+                
+                // 备用：尝试匹配不完整的标签
+                const partialThinkMatch = !fullThinkMatch && allContent.match(/<think>([\s\S]*)/i)
+                
+                logger.debug(`[OpenAI适配器] fullThinkMatch: ${!!fullThinkMatch}, partialThinkMatch: ${!!partialThinkMatch}`)
                 
                 if (fullThinkMatch) {
                     const thinkContent = fullThinkMatch[1].trim()
                     // 移除整个 <think>...</think> 标签，获取剩余内容
-                    const restContent = allContent.substring(fullThinkMatch[0].length).trim()
+                    const restContent = allContent.replace(/<think>[\s\S]*?<\/think>/i, '').trim()
+                    
+                    logger.debug(`[OpenAI适配器] 检测到完整<think>标签, 思考长度: ${thinkContent.length}, 剩余长度: ${restContent.length}`)
 
                     if (thinkContent) {
                         logger.debug('[OpenAI适配器] 检测到<think>标签，长度:', thinkContent.length)
