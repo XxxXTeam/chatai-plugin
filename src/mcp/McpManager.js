@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import config from '../../config/config.js'
 import { McpClient } from './McpClient.js'
 import { builtinMcpServer, setBuiltinToolContext } from './BuiltinMcpServer.js'
+import { toolGroupManager } from '../services/tools/ToolGroupManager.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -917,6 +918,109 @@ export class McpManager {
             size: this.toolResultCache.size,
             entries: Array.from(this.toolResultCache.keys())
         }
+    }
+
+    /**
+     * 获取工具组管理器
+     * @returns {ToolGroupManager}
+     */
+    getToolGroupManager() {
+        return toolGroupManager
+    }
+
+    /**
+     * 初始化工具组管理器
+     */
+    async initToolGroups() {
+        await toolGroupManager.init()
+    }
+
+    /**
+     * 获取工具组摘要（用于调度模型）
+     * 只返回 index、name、description，不返回具体工具列表
+     * 
+     * @returns {Array<{index: number, name: string, description: string, toolCount: number}>}
+     */
+    getToolGroupSummary() {
+        return toolGroupManager.getGroupSummary()
+    }
+
+    /**
+     * 构建调度提示词
+     * @returns {string}
+     */
+    buildDispatchPrompt() {
+        return toolGroupManager.buildDispatchPrompt()
+    }
+
+    /**
+     * 根据工具组索引获取完整工具列表
+     * 
+     * @param {number[]} indexes - 工具组索引数组
+     * @param {Object} options - 选项
+     * @returns {Promise<Array>} 工具列表
+     */
+    async getToolsByGroupIndexes(indexes, options = {}) {
+        return toolGroupManager.getToolsByGroupIndexes(indexes, options)
+    }
+
+    /**
+     * 解析调度模型的响应，提取选中的工具组索引
+     * 
+     * @param {string} response - 调度模型的响应
+     * @returns {number[]} 工具组索引数组
+     */
+    parseDispatchResponse(response) {
+        return toolGroupManager.parseDispatchResponse(response)
+    }
+
+    /**
+     * 判断是否启用工具组模式
+     * @returns {boolean}
+     */
+    isToolGroupsEnabled() {
+        return config.get('tools.useToolGroups') === true
+    }
+
+    /**
+     * 判断是否启用调度优先模式
+     * @returns {boolean}
+     */
+    isDispatchFirstEnabled() {
+        return config.get('tools.dispatchFirst') === true
+    }
+
+    /**
+     * 获取所有工具组
+     * @returns {Array}
+     */
+    getAllToolGroups() {
+        return toolGroupManager.getAllGroups()
+    }
+
+    /**
+     * 添加工具组
+     * @param {Object} group
+     */
+    addToolGroup(group) {
+        toolGroupManager.addGroup(group)
+    }
+
+    /**
+     * 更新工具组
+     * @param {number} index
+     * @param {Object} updates
+     */
+    updateToolGroup(index, updates) {
+        return toolGroupManager.updateGroup(index, updates)
+    }
+
+    /**
+     * 删除工具组
+     * @param {number} index
+     */
+    deleteToolGroup(index) {
+        return toolGroupManager.deleteGroup(index)
     }
 }
 

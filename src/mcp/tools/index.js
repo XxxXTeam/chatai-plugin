@@ -18,6 +18,7 @@ import { utilsTools } from './utils.js'
 import { botTools } from './bot.js'
 import { voiceTools } from './voice.js'
 import { extraTools } from './extra.js'
+import { shellTools } from './shell.js'
 
 /**
  * 工具类别配置
@@ -113,6 +114,13 @@ export const toolCategories = {
         description: '天气查询、一言、骰子、倒计时、提醒、插画等',
         icon: 'Sparkles',
         tools: extraTools
+    },
+    shell: {
+        name: '系统命令',
+        description: '执行Shell命令、获取系统信息、环境变量等（危险）',
+        icon: 'Terminal',
+        tools: shellTools,
+        dangerous: true
     }
 }
 

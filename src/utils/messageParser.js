@@ -1193,11 +1193,15 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
     let forwardInfo = null
     const parseLog = [] // 解析日志
     
-    // 防止无限递归，最多3层嵌套
-    const MAX_DEPTH = 10
+    // 防止无限递归，最多5层嵌套
+    const MAX_DEPTH = 50
     if (depth >= MAX_DEPTH) {
+        parseLog.push(`[Forward] 达到最大深度 ${MAX_DEPTH}，停止解析`)
         return { text: '[嵌套转发消息，层级过深]', contents: [], forwardInfo: null }
     }
+    
+    // 用于收集所有待解析的转发消息（循环解析）
+    const pendingForwards = []
 
     try {
         // 尝试获取转发消息内容 - 支持多种方式
@@ -1214,9 +1218,6 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
         }
         // 输出完整结构用于调试 (限制长度)
         parseLog.push(`[Forward] 完整结构: ${JSON.stringify(forwardElement).substring(0, 500)}`)
-        
-        // NC/NapCat 文档: forward 消息段 { type: "forward", data: { id: "", content: [] } }
-        // content 在 [收] 时直接包含，优先检查
         if (forwardElement.data?.content && Array.isArray(forwardElement.data.content)) {
             forwardMessages = forwardElement.data.content
             parseMethod = 'data_content'
@@ -1237,7 +1238,6 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
             parseMethod = 'data_message'
             parseLog.push(`[Forward] 使用 data.message 方式, 消息数: ${forwardMessages.length}`)
         }
-        // 方式3: 通过 id 获取 (icqq e.group.getForwardMsg)
         else if (forwardElement.id && e.group?.getForwardMsg) {
             parseLog.push(`[Forward] 尝试通过 id=${forwardElement.id} 获取`)
             try {
@@ -1248,7 +1248,6 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
                 parseLog.push(`[Forward] 通过 id 获取失败: ${err.message}`)
             }
         }
-        // 方式4: 通过 data.id 获取 (NC 格式)
         else if (forwardElement.data?.id && e.group?.getForwardMsg) {
             parseLog.push(`[Forward] 尝试通过 data.id=${forwardElement.data.id} 获取`)
             try {
@@ -1433,6 +1432,44 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
                     } else if (valType === 'record') {
                         forwardTexts.push(`${nickname}: [语音]`)
                         msgInfo.content.push({ type: 'record' })
+                    } else if (valType === 'json') {
+                        // JSON 卡片消息 - 尝试解析内容
+                        try {
+                            const jsonStr = valData.data || val.data || ''
+                            const jsonData = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr
+                            
+                            // 检查是否是嵌套的合并转发
+                            if (jsonData.app === 'com.tencent.multimsg') {
+                                const resid = jsonData.meta?.detail?.resid
+                                if (resid) {
+                                    // 递归解析嵌套转发
+                                    const nestedResult = await parseForwardMessage(e, { id: resid, resid }, depth + 1)
+                                    if (nestedResult.text) {
+                                        forwardTexts.push(`${nickname}: ${nestedResult.text}`)
+                                    } else {
+                                        // 使用预览信息
+                                        const preview = jsonData.meta?.detail?.news?.map(n => n.text).join('\n') || '[嵌套转发]'
+                                        forwardTexts.push(`${nickname}: ${preview}`)
+                                    }
+                                    contents.push(...nestedResult.contents)
+                                    msgInfo.content.push({ type: 'forward', nested: true, parsed: !!nestedResult.text })
+                                } else {
+                                    const preview = jsonData.meta?.detail?.news?.map(n => n.text).join('\n') || '[转发消息]'
+                                    forwardTexts.push(`${nickname}: ${preview}`)
+                                    msgInfo.content.push({ type: 'forward', preview })
+                                }
+                            } else {
+                                // 其他 JSON 卡片 - 提取关键信息
+                                const prompt = jsonData.prompt || jsonData.desc || jsonData.meta?.detail?.desc || ''
+                                const title = jsonData.meta?.detail?.title || jsonData.meta?.news?.title || ''
+                                const cardInfo = title ? `[卡片:${title}]` : (prompt ? `[卡片:${prompt}]` : '[JSON卡片]')
+                                forwardTexts.push(`${nickname}: ${cardInfo}`)
+                                msgInfo.content.push({ type: 'json', prompt, title, app: jsonData.app })
+                            }
+                        } catch {
+                            forwardTexts.push(`${nickname}: [JSON消息]`)
+                            msgInfo.content.push({ type: 'json' })
+                        }
                     } else if (valType) {
                         // 其他类型
                         forwardTexts.push(`${nickname}: [${valType}]`)

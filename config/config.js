@@ -85,8 +85,14 @@ class Config {
                 dimensions: 1536,
                 // 模型分类配置（每个分类配置一个模型名，空则使用默认模型）
                 models: {
-                    // 对话模型 - 用于普通聊天
+                    // 对话模型 - 用于普通聊天（无工具调用）
                     chat: '',
+                    // 工具模型 - 用于执行工具调用
+                    tool: '',
+                    // 调度模型 - 用于分析需要调用哪些工具组（轻量快速）
+                    dispatch: '',
+                    // 图像模型 - 用于图像理解和生成
+                    image: '',
                     // 伪人模型 - 用于模拟真人回复
                     roleplay: '',
                     // 搜索模型 - 用于联网搜索
@@ -126,7 +132,19 @@ class Config {
                 useForwardMsg: true,       // 工具日志使用合并转发
                 parallelExecution: true,   // 启用并行工具执行
                 sendIntermediateReply: true, // 工具调用前发送模型的中间回复
+                // 工具组配置 - 调度模型只接收工具组摘要，选中后返回完整工具列表
+                useToolGroups: true,       // 启用工具组模式
+                dispatchFirst: true,       // 先用调度模型选择工具组，再用工具模型执行
             },
+            // 工具组定义（可在面板配置）
+            toolGroups: [
+                { index: 0, name: 'system', description: '系统工具：获取时间、日期、系统信息等', tools: ['get_time', 'get_date', 'get_system_info'] },
+                { index: 1, name: 'qq', description: 'QQ操作：发消息、获取群信息、管理成员等', tools: ['send_message', 'get_group_info', 'get_member_info', 'kick_member', 'mute_member'] },
+                { index: 2, name: 'web', description: '网络工具：搜索、获取网页内容、访问URL等', tools: ['web_search', 'fetch_url', 'read_webpage'] },
+                { index: 3, name: 'file', description: '文件操作：读写文件、列目录等', tools: ['read_file', 'write_file', 'list_directory'] },
+                { index: 4, name: 'memory', description: '记忆管理：保存和检索用户记忆', tools: ['save_memory', 'get_memory', 'search_memory'] },
+                { index: 5, name: 'image', description: '图像处理：生成、编辑、分析图片', tools: ['generate_image', 'edit_image', 'analyze_image'] },
+            ],
             builtinTools: {
                 enabled: true,
                 // 允许的工具列表，空数组表示允许所有
