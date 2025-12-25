@@ -756,7 +756,26 @@ export class ScopeManager {
     
     let effectivePrompt = null
     let effectivePresetId = null
+    let effectiveModelId = null
+    let effectiveEnabled = null
     let source = 'default'
+    let modelSource = 'default'
+    
+    // 功能开关配置
+    let featureConfig = {
+      toolsEnabled: undefined,
+      imageGenEnabled: undefined,
+      imageGenModel: undefined,
+      summaryEnabled: undefined,
+      summaryModel: undefined,
+      triggerMode: undefined,
+      // 模型分类配置
+      chatModel: undefined,
+      toolModel: undefined,
+      dispatchModel: undefined,
+      imageModel: undefined,
+      searchModel: undefined
+    }
 
     // 预加载所有可能的配置
     const settingsCache = {}
@@ -771,25 +790,35 @@ export class ScopeManager {
     
     // 输出调试日志（仅debug级别）
     const scene = isPrivate ? '私聊' : '群聊'
-    logger.debug(`[ScopeManager] 查询人格配置 [${scene}]: groupId=${groupId}, userId=${userId}, 优先级: ${priorityOrder.join(' > ')}`)
+    logger.debug(`[ScopeManager] 查询配置 [${scene}]: groupId=${groupId}, userId=${userId}, 优先级: ${priorityOrder.join(' > ')}`)
 
     // 按优先级顺序查找
     for (const level of priorityOrder) {
-      if (effectivePrompt && effectivePresetId) break // 都找到了就停止
-      
       let settings = null
+      let innerSettings = null
+      
       switch (level) {
         case 'group_user':
-          if (groupId && !isPrivate) settings = settingsCache.group_user
+          if (groupId && !isPrivate) {
+            settings = settingsCache.group_user
+            innerSettings = settings?.settings || {}
+          }
           break
         case 'group':
-          if (groupId && !isPrivate) settings = settingsCache.group
+          if (groupId && !isPrivate) {
+            settings = settingsCache.group
+            innerSettings = settings?.settings || {}
+          }
           break
         case 'private':
-          if (isPrivate) settings = settingsCache.private
+          if (isPrivate) {
+            settings = settingsCache.private
+            innerSettings = settings?.settings || {}
+          }
           break
         case 'user':
           settings = settingsCache.user
+          innerSettings = settings?.settings || {}
           break
         case 'default':
           // default 由外部处理，这里跳过
@@ -798,31 +827,97 @@ export class ScopeManager {
       
       if (settings) {
         // 支持空人设：区分"未设置"(null/undefined)和"设置为空"("")
-        // 当 systemPrompt 是空字符串时，表示用户明确设置了空人设
         if (effectivePrompt === null && settings.systemPrompt !== undefined && settings.systemPrompt !== null) {
-          effectivePrompt = settings.systemPrompt  // 可以是空字符串
+          effectivePrompt = settings.systemPrompt
           source = level
           logger.debug(`[ScopeManager] 使用 ${level} 的 systemPrompt${settings.systemPrompt === '' ? ' (空人设)' : ''}`)
         }
+        
         if (!effectivePresetId && settings.presetId) {
           effectivePresetId = settings.presetId
           if (source === 'default') source = level
+        }
+        
+        // 模型配置：优先从 settings.modelId 或 innerSettings.modelId 获取
+        if (!effectiveModelId) {
+          const modelId = innerSettings?.modelId || settings?.modelId
+          if (modelId && typeof modelId === 'string' && modelId.trim()) {
+            effectiveModelId = modelId.trim()
+            modelSource = level
+            logger.debug(`[ScopeManager] 使用 ${level} 的模型: ${effectiveModelId}`)
+          }
+        }
+        
+        // 启用状态
+        if (effectiveEnabled === null) {
+          const enabled = innerSettings?.enabled ?? settings?.enabled
+          if (enabled !== undefined) {
+            effectiveEnabled = enabled
+          }
+        }
+        
+        // 功能开关配置（仅从群组配置获取）
+        if (level === 'group' && innerSettings) {
+          if (featureConfig.toolsEnabled === undefined && innerSettings.toolsEnabled !== undefined) {
+            featureConfig.toolsEnabled = innerSettings.toolsEnabled
+          }
+          if (featureConfig.imageGenEnabled === undefined && innerSettings.imageGenEnabled !== undefined) {
+            featureConfig.imageGenEnabled = innerSettings.imageGenEnabled
+          }
+          if (featureConfig.imageGenModel === undefined && innerSettings.imageGenModel) {
+            featureConfig.imageGenModel = innerSettings.imageGenModel
+          }
+          if (featureConfig.summaryEnabled === undefined && innerSettings.summaryEnabled !== undefined) {
+            featureConfig.summaryEnabled = innerSettings.summaryEnabled
+          }
+          if (featureConfig.summaryModel === undefined && innerSettings.summaryModel) {
+            featureConfig.summaryModel = innerSettings.summaryModel
+          }
+          if (featureConfig.triggerMode === undefined && innerSettings.triggerMode) {
+            featureConfig.triggerMode = innerSettings.triggerMode
+          }
+          // 模型分类配置（chatModel优先，兼容旧的modelId）
+          if (featureConfig.chatModel === undefined) {
+            const chatModel = innerSettings.chatModel || innerSettings.modelId
+            if (chatModel) {
+              featureConfig.chatModel = chatModel
+            }
+          }
+          if (featureConfig.toolModel === undefined && innerSettings.toolModel) {
+            featureConfig.toolModel = innerSettings.toolModel
+          }
+          if (featureConfig.dispatchModel === undefined && innerSettings.dispatchModel) {
+            featureConfig.dispatchModel = innerSettings.dispatchModel
+          }
+          if (featureConfig.imageModel === undefined && innerSettings.imageModel) {
+            featureConfig.imageModel = innerSettings.imageModel
+          }
+          if (featureConfig.searchModel === undefined && innerSettings.searchModel) {
+            featureConfig.searchModel = innerSettings.searchModel
+          }
         }
       }
     }
 
     // 空字符串也算有独立人设（用户明确设置为空）
     const hasIndependentPrompt = effectivePrompt !== null && effectivePrompt !== undefined
-    logger.debug(`[ScopeManager] 最终生效来源: ${source}, hasPrompt=${hasIndependentPrompt}, isEmpty=${effectivePrompt === ''}`)
+    
+    // 输出最终配置摘要
+    logger.debug(`[ScopeManager] 生效配置: 来源=${source}, 模型=${effectiveModelId || '(默认)'} (来源: ${modelSource}), 预设=${effectivePresetId || '(默认)'}, 独立人设=${hasIndependentPrompt}`)
 
     return {
       systemPrompt: effectivePrompt,
       presetId: effectivePresetId,
+      modelId: effectiveModelId,
+      enabled: effectiveEnabled,
       source,
+      modelSource,
       // 标记是否有独立人设（包括空字符串）
       hasIndependentPrompt,
       // 返回优先级信息
-      priorityOrder
+      priorityOrder,
+      // 功能配置
+      features: featureConfig
     }
   }
 
@@ -1319,6 +1414,86 @@ export class ScopeManager {
       presetId: effectiveSettings.presetId || groupConfig.presetId,
       sources,
       hasIndependentPrompt: effectiveSettings.hasIndependentPrompt
+    }
+  }
+
+  /**
+   * 获取群组的功能模型配置
+   * @param {string} groupId 群组ID
+   * @param {string} feature 功能类型: 'chat' | 'image' | 'summary' | 'tools'
+   * @returns {Promise<{model: string|null, enabled: boolean|null, source: string}>}
+   */
+  async getFeatureModel(groupId, feature) {
+    await this.init()
+    
+    const groupSettings = await this.getGroupSettings(groupId)
+    if (!groupSettings) {
+      return { model: null, enabled: null, source: 'default' }
+    }
+    
+    const settings = groupSettings.settings || {}
+    
+    switch (feature) {
+      case 'chat':
+        return {
+          model: settings.modelId || null,
+          enabled: settings.enabled,
+          source: settings.modelId ? 'group' : 'default'
+        }
+      case 'image':
+        return {
+          model: settings.imageGenModel || null,
+          enabled: settings.imageGenEnabled,
+          source: settings.imageGenModel ? 'group' : 'default'
+        }
+      case 'summary':
+        return {
+          model: settings.summaryModel || null,
+          enabled: settings.summaryEnabled,
+          source: settings.summaryModel ? 'group' : 'default'
+        }
+      case 'tools':
+        return {
+          model: null,
+          enabled: settings.toolsEnabled,
+          source: settings.toolsEnabled !== undefined ? 'group' : 'default'
+        }
+      default:
+        return { model: null, enabled: null, source: 'default' }
+    }
+  }
+
+  /**
+   * 获取群组完整配置摘要（用于日志和调试）
+   * @param {string} groupId 群组ID
+   * @returns {Promise<Object>}
+   */
+  async getGroupConfigSummary(groupId) {
+    await this.init()
+    
+    const groupSettings = await this.getGroupSettings(groupId)
+    if (!groupSettings) {
+      return { exists: false, groupId }
+    }
+    
+    const settings = groupSettings.settings || {}
+    
+    return {
+      exists: true,
+      groupId,
+      enabled: settings.enabled ?? true,
+      presetId: groupSettings.presetId || '(默认)',
+      modelId: settings.modelId || '(默认)',
+      triggerMode: settings.triggerMode || 'default',
+      features: {
+        tools: settings.toolsEnabled === undefined ? '继承' : settings.toolsEnabled ? '开启' : '关闭',
+        imageGen: settings.imageGenEnabled === undefined ? '继承' : settings.imageGenEnabled ? '开启' : '关闭',
+        imageGenModel: settings.imageGenModel || '(默认)',
+        summary: settings.summaryEnabled === undefined ? '继承' : settings.summaryEnabled ? '开启' : '关闭',
+        summaryModel: settings.summaryModel || '(默认)'
+      },
+      hasCustomPrompt: !!groupSettings.systemPrompt,
+      knowledgeCount: (groupSettings.knowledgeIds || []).length
     }
   }
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,10 +13,17 @@ import {
   DialogContent, 
   DialogDescription, 
   DialogHeader, 
-  DialogTitle, 
-  DialogTrigger,
+  DialogTitle,
   DialogFooter
 } from '@/components/ui/dialog'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetFooter,
+} from '@/components/ui/sheet'
 import {
   Select,
   SelectContent,
@@ -26,11 +33,24 @@ import {
 } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { scopeApi, presetsApi, channelsApi, knowledgeApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, Trash2, Loader2, Users, RefreshCw, Settings, FileText, Bot, ChevronDown, BookOpen, GitBranch, X } from 'lucide-react'
+import { 
+  Plus, Trash2, Loader2, Users, RefreshCw, Settings, FileText, Bot, 
+  ChevronDown, BookOpen, GitBranch, X, Search, Power, PowerOff,
+  Sparkles, Image, MessageSquare, PartyPopper, Palette, Zap, MoreHorizontal
+} from 'lucide-react'
 import { ModelSelector } from '@/components/ModelSelector'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { cn } from '@/lib/utils'
 
 interface GroupScope {
   groupId: string
@@ -64,6 +84,17 @@ interface Preset {
   name: string
 }
 
+// 快速切换状态的辅助函数
+const getStatusText = (enabled: boolean) => enabled ? '已启用' : '已禁用'
+
+// 触发模式显示名称
+const triggerModeNames: Record<string, string> = {
+  'default': '默认',
+  'at': '仅@触发',
+  'prefix': '仅前缀',
+  'all': '全部消息'
+}
+
 export default function GroupsPage() {
   const [groups, setGroups] = useState<GroupScope[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
@@ -79,13 +110,30 @@ export default function GroupsPage() {
   const [deleting, setDeleting] = useState(false)
   const [modelSelectorOpen, setModelSelectorOpen] = useState(false)
   const [allModels, setAllModels] = useState<string[]>([])
+  const [statusFilter, setStatusFilter] = useState<'all' | 'enabled' | 'disabled'>('all')
+  const [isMobile, setIsMobile] = useState(false)
+  const [formTab, setFormTab] = useState('basic')
+  const [togglingGroup, setTogglingGroup] = useState<string | null>(null)
+
+  // 检测移动端
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768)
+    checkMobile()
+    window.addEventListener('resize', checkMobile)
+    return () => window.removeEventListener('resize', checkMobile)
+  }, [])
 
   const [form, setForm] = useState({
     groupId: '',
     groupName: '',
     presetId: '__default__',
     systemPrompt: '',
-    modelId: '__default__',
+    modelId: '__default__',  // 默认模型（兼容旧配置）
+    chatModel: '',  // 对话模型
+    toolModel: '',  // 工具模型
+    dispatchModel: '',  // 调度模型
+    imageModel: '',  // 图像理解模型
+    searchModel: '',  // 搜索模型
     enabled: true,
     triggerMode: 'default',
     bymEnabled: 'inherit' as 'inherit' | 'on' | 'off',
@@ -101,8 +149,11 @@ export default function GroupsPage() {
     emojiThiefStealRate: 1.0,  // 偷取概率
     emojiThiefTriggerMode: 'random' as string,  // 发送模式
     emojiThiefTriggerRate: 0.05,  // 发送概率
+    toolsEnabled: 'inherit' as 'inherit' | 'on' | 'off',  // 工具调用开关
     imageGenEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    imageGenModel: '',  // 绘图功能独立模型
     summaryEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    summaryModel: '',  // 总结功能独立模型
     eventEnabled: 'inherit' as 'inherit' | 'on' | 'off',
     customPrefix: '',
     knowledgeIds: [] as string[],
@@ -148,6 +199,11 @@ export default function GroupsPage() {
       presetId: '__default__',
       systemPrompt: '',
       modelId: '__default__',
+      chatModel: '',
+      toolModel: '',
+      dispatchModel: '',
+      imageModel: '',
+      searchModel: '',
       enabled: true,
       triggerMode: 'default',
       bymEnabled: 'inherit',
@@ -163,8 +219,11 @@ export default function GroupsPage() {
       emojiThiefStealRate: 1.0,
       emojiThiefTriggerMode: 'random',
       emojiThiefTriggerRate: 0.05,
+      toolsEnabled: 'inherit',
       imageGenEnabled: 'inherit',
+      imageGenModel: '',
       summaryEnabled: 'inherit',
+      summaryModel: '',
       eventEnabled: 'inherit',
       customPrefix: '',
       knowledgeIds: [],
@@ -177,13 +236,19 @@ export default function GroupsPage() {
     if (group) {
       setEditingGroup(group)
       const settings = group.settings || {}
-      const savedModelId = settings.modelId || group.modelId || ''
+      // 兼容旧配置：如果没有chatModel，使用modelId
+      const savedChatModel = settings.chatModel || settings.modelId || group.modelId || ''
       setForm({
         groupId: group.groupId,
         groupName: settings.groupName || group.groupName || '',
         presetId: group.presetId || settings.presetId || '__default__',
         systemPrompt: group.systemPrompt || settings.systemPrompt || '',
-        modelId: savedModelId || '__default__',
+        modelId: '__default__', 
+        chatModel: savedChatModel,
+        toolModel: settings.toolModel || '',
+        dispatchModel: settings.dispatchModel || '',
+        imageModel: settings.imageModel || '',
+        searchModel: settings.searchModel || '',
         enabled: group.enabled ?? settings.enabled ?? true,
         triggerMode: settings.triggerMode || group.triggerMode || 'default',
         bymEnabled: settings.bymEnabled === undefined ? 'inherit' : settings.bymEnabled ? 'on' : 'off',
@@ -199,8 +264,11 @@ export default function GroupsPage() {
         emojiThiefStealRate: settings.emojiThiefStealRate ?? 1.0,
         emojiThiefTriggerMode: settings.emojiThiefTriggerMode || 'random',
         emojiThiefTriggerRate: settings.emojiThiefTriggerRate ?? 0.05,
+        toolsEnabled: settings.toolsEnabled === undefined ? 'inherit' : settings.toolsEnabled ? 'on' : 'off',
         imageGenEnabled: settings.imageGenEnabled === undefined ? 'inherit' : settings.imageGenEnabled ? 'on' : 'off',
+        imageGenModel: settings.imageGenModel || '',
         summaryEnabled: settings.summaryEnabled === undefined ? 'inherit' : settings.summaryEnabled ? 'on' : 'off',
+        summaryModel: settings.summaryModel || '',
         eventEnabled: settings.eventEnabled === undefined ? 'inherit' : settings.eventEnabled ? 'on' : 'off',
         customPrefix: settings.customPrefix || '',
         knowledgeIds: group.knowledgeIds || [],
@@ -224,7 +292,11 @@ export default function GroupsPage() {
         groupName: form.groupName,
         presetId: form.presetId === '__default__' ? '' : form.presetId,
         systemPrompt: form.systemPrompt || null,
-        modelId: form.modelId === '__default__' ? '' : form.modelId,
+        chatModel: form.chatModel || undefined,
+        toolModel: form.toolModel || undefined,
+        dispatchModel: form.dispatchModel || undefined,
+        imageModel: form.imageModel || undefined,
+        searchModel: form.searchModel || undefined,
         enabled: form.enabled,
         triggerMode: form.triggerMode,
         bymEnabled: form.bymEnabled === 'inherit' ? undefined : form.bymEnabled === 'on',
@@ -240,8 +312,11 @@ export default function GroupsPage() {
         emojiThiefStealRate: form.emojiThiefStealRate,
         emojiThiefTriggerMode: form.emojiThiefTriggerMode,
         emojiThiefTriggerRate: form.emojiThiefTriggerRate,
+        toolsEnabled: form.toolsEnabled === 'inherit' ? undefined : form.toolsEnabled === 'on',
         imageGenEnabled: form.imageGenEnabled === 'inherit' ? undefined : form.imageGenEnabled === 'on',
+        imageGenModel: form.imageGenModel || undefined,
         summaryEnabled: form.summaryEnabled === 'inherit' ? undefined : form.summaryEnabled === 'on',
+        summaryModel: form.summaryModel || undefined,
         eventEnabled: form.eventEnabled === 'inherit' ? undefined : form.eventEnabled === 'on',
         customPrefix: form.customPrefix || undefined,
         knowledgeIds: form.knowledgeIds.length > 0 ? form.knowledgeIds : undefined,
@@ -282,10 +357,41 @@ export default function GroupsPage() {
     setDeleteDialogOpen(true)
   }
 
-  const filteredGroups = groups.filter(group => 
-    group.groupId.includes(searchQuery) || 
-    group.groupName?.includes(searchQuery)
-  )
+  // 快速切换群组启用状态
+  const handleQuickToggle = async (group: GroupScope) => {
+    const newEnabled = !(group.enabled ?? group.settings?.enabled ?? true)
+    setTogglingGroup(group.groupId)
+    try {
+      await scopeApi.updateGroup(group.groupId, { enabled: newEnabled })
+      toast.success(newEnabled ? '已启用群组' : '已禁用群组')
+      fetchData()
+    } catch (error) {
+      toast.error('切换失败')
+      console.error(error)
+    } finally {
+      setTogglingGroup(null)
+    }
+  }
+
+  // 过滤群组
+  const filteredGroups = useMemo(() => {
+    return groups.filter(group => {
+      const matchesSearch = group.groupId.includes(searchQuery) || 
+        group.groupName?.toLowerCase().includes(searchQuery.toLowerCase())
+      const isEnabled = group.enabled ?? group.settings?.enabled ?? true
+      const matchesStatus = statusFilter === 'all' || 
+        (statusFilter === 'enabled' && isEnabled) ||
+        (statusFilter === 'disabled' && !isEnabled)
+      return matchesSearch && matchesStatus
+    })
+  }, [groups, searchQuery, statusFilter])
+
+  // 统计信息
+  const stats = useMemo(() => ({
+    total: groups.length,
+    enabled: groups.filter(g => g.enabled ?? g.settings?.enabled ?? true).length,
+    disabled: groups.filter(g => !(g.enabled ?? g.settings?.enabled ?? true)).length,
+  }), [groups])
 
   if (loading) {
     return (
@@ -307,694 +413,719 @@ export default function GroupsPage() {
     )
   }
 
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h2 className="text-2xl font-bold">群组管理</h2>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={fetchData}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            刷新
-          </Button>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={() => handleOpenDialog()}>
-                <Plus className="mr-2 h-4 w-4" />
-                添加群
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh]">
-              <DialogHeader>
-                <DialogTitle>{editingGroup ? '编辑群配置' : '添加群'}</DialogTitle>
-                <DialogDescription>配置群聊个性化设置和独立人设</DialogDescription>
-              </DialogHeader>
-              <ScrollArea className="max-h-[60vh] pr-4">
-              <div className="space-y-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="groupId">群号</Label>
-                  <Input
-                    id="groupId"
-                    value={form.groupId}
-                    onChange={(e) => setForm({ ...form, groupId: e.target.value })}
-                    placeholder="123456789"
-                    disabled={!!editingGroup}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="groupName">群名称</Label>
-                  <Input
-                    id="groupName"
-                    value={form.groupName}
-                    onChange={(e) => setForm({ ...form, groupName: e.target.value })}
-                    placeholder="可选"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="presetId">使用预设</Label>
-                  <Select
-                    value={form.presetId}
-                    onValueChange={(value) => setForm({ ...form, presetId: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="使用默认预设" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__default__">使用默认预设</SelectItem>
-                      {presets.map((preset) => (
-                        <SelectItem key={preset.id} value={preset.id}>
-                          {preset.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="modelId">
-                    使用模型 <span className="text-xs text-muted-foreground">(设置后群聊将使用指定模型)</span>
-                  </Label>
-                  <Collapsible open={modelSelectorOpen} onOpenChange={setModelSelectorOpen}>
-                    <CollapsibleTrigger asChild>
-                      <Button variant="outline" className="w-full justify-between">
-                        <span className="truncate">
-                          {form.modelId && form.modelId !== '__default__' ? form.modelId : '使用默认模型'}
-                        </span>
-                        <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${modelSelectorOpen ? 'rotate-180' : ''}`} />
+  // 表单内容渲染 - 用于 Dialog 和 Sheet
+  const renderFormContent = () => (
+    <Tabs value={formTab} onValueChange={setFormTab} className="w-full">
+      <TabsList className="grid w-full grid-cols-4 mb-4">
+        <TabsTrigger value="basic" className="text-xs sm:text-sm">
+          <Settings className="h-3.5 w-3.5 mr-1 hidden sm:inline" />
+          基础
+        </TabsTrigger>
+        <TabsTrigger value="features" className="text-xs sm:text-sm">
+          <Zap className="h-3.5 w-3.5 mr-1 hidden sm:inline" />
+          功能
+        </TabsTrigger>
+        <TabsTrigger value="bym" className="text-xs sm:text-sm">
+          <Sparkles className="h-3.5 w-3.5 mr-1 hidden sm:inline" />
+          伪人
+        </TabsTrigger>
+        <TabsTrigger value="advanced" className="text-xs sm:text-sm">
+          <BookOpen className="h-3.5 w-3.5 mr-1 hidden sm:inline" />
+          高级
+        </TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="basic" className="space-y-4 mt-0">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="groupId">群号 *</Label>
+            <Input
+              id="groupId"
+              value={form.groupId}
+              onChange={(e) => setForm({ ...form, groupId: e.target.value })}
+              placeholder="123456789"
+              disabled={!!editingGroup}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="groupName">群名称</Label>
+            <Input
+              id="groupName"
+              value={form.groupName}
+              onChange={(e) => setForm({ ...form, groupName: e.target.value })}
+              placeholder="可选，便于识别"
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label>使用预设</Label>
+            <Select value={form.presetId} onValueChange={(v) => setForm({ ...form, presetId: v })}>
+              <SelectTrigger>
+                <SelectValue placeholder="使用默认预设" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__default__">使用默认预设</SelectItem>
+                {presets.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>触发模式</Label>
+            <Select value={form.triggerMode} onValueChange={(v) => setForm({ ...form, triggerMode: v })}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">默认</SelectItem>
+                <SelectItem value="at">仅@触发</SelectItem>
+                <SelectItem value="prefix">仅前缀触发</SelectItem>
+                <SelectItem value="all">全部消息</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label>独立人设</Label>
+          <Textarea
+            value={form.systemPrompt}
+            onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
+            placeholder="不填写则使用预设配置..."
+            rows={3}
+            className="font-mono text-sm resize-none"
+          />
+        </div>
+
+        <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+          <div className="flex items-center gap-2">
+            <Power className="h-4 w-4 text-muted-foreground" />
+            <Label className="font-normal">启用AI响应</Label>
+          </div>
+          <Switch checked={form.enabled} onCheckedChange={(v) => setForm({ ...form, enabled: v })} />
+        </div>
+      </TabsContent>
+
+      <TabsContent value="features" className="space-y-3 mt-0">
+        <p className="text-xs text-muted-foreground mb-2">群管理员也可通过命令控制这些功能</p>
+        
+        {/* 工具调用 */}
+        <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-md bg-muted">
+              <Zap className="h-4 w-4 text-muted-foreground" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">工具调用</p>
+              <p className="text-xs text-muted-foreground">允许AI使用搜索、代码执行等工具</p>
+            </div>
+          </div>
+          <Select
+            value={form.toolsEnabled}
+            onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, toolsEnabled: v })}
+          >
+            <SelectTrigger className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="inherit">继承</SelectItem>
+              <SelectItem value="on">开启</SelectItem>
+              <SelectItem value="off">关闭</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* 绘图功能 */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-md bg-muted">
+                <Image className="h-4 w-4 text-muted-foreground" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">绘图功能</p>
+                <p className="text-xs text-muted-foreground">文生图、图生图等</p>
+              </div>
+            </div>
+            <Select
+              value={form.imageGenEnabled}
+              onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, imageGenEnabled: v })}
+            >
+              <SelectTrigger className="w-28">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="inherit">继承</SelectItem>
+                <SelectItem value="on">开启</SelectItem>
+                <SelectItem value="off">关闭</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {form.imageGenEnabled === 'on' && (
+            <div className="ml-4 pl-4 border-l-2 border-muted space-y-2 animate-fade-in">
+              <Label className="text-xs">绘图模型</Label>
+              <Select value={form.imageGenModel || '__default__'} onValueChange={(v) => setForm({ ...form, imageGenModel: v === '__default__' ? '' : v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="继承全局" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">继承全局</SelectItem>
+                  {allModels.filter(m => m.includes('image') || m.includes('gemini') || m.includes('dalle') || m.includes('flux')).map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+        </div>
+
+        {/* 群聊总结 */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-md bg-muted">
+                <MessageSquare className="h-4 w-4 text-muted-foreground" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">群聊总结</p>
+                <p className="text-xs text-muted-foreground">允许使用群聊总结</p>
+              </div>
+            </div>
+            <Select
+              value={form.summaryEnabled}
+              onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, summaryEnabled: v })}
+            >
+              <SelectTrigger className="w-28">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="inherit">继承</SelectItem>
+                <SelectItem value="on">开启</SelectItem>
+                <SelectItem value="off">关闭</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {form.summaryEnabled === 'on' && (
+            <div className="ml-4 pl-4 border-l-2 border-muted space-y-2 animate-fade-in">
+              <Label className="text-xs">总结模型</Label>
+              <Select value={form.summaryModel || '__default__'} onValueChange={(v) => setForm({ ...form, summaryModel: v === '__default__' ? '' : v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="继承全局" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">继承全局</SelectItem>
+                  {allModels.map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+        </div>
+
+        {/* 事件处理 */}
+        <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-md bg-muted">
+              <PartyPopper className="h-4 w-4 text-muted-foreground" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">事件处理</p>
+              <p className="text-xs text-muted-foreground">入群欢迎、退群提醒</p>
+            </div>
+          </div>
+          <Select
+            value={form.eventEnabled}
+            onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, eventEnabled: v })}
+          >
+            <SelectTrigger className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="inherit">继承</SelectItem>
+              <SelectItem value="on">开启</SelectItem>
+              <SelectItem value="off">关闭</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* 表情小偷 */}
+        <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-md bg-muted">
+              <Palette className="h-4 w-4 text-muted-foreground" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">表情小偷</p>
+              <p className="text-xs text-muted-foreground">收集并发送表情包</p>
+            </div>
+          </div>
+          <Select
+            value={form.emojiThiefEnabled}
+            onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, emojiThiefEnabled: v })}
+          >
+            <SelectTrigger className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="inherit">继承</SelectItem>
+              <SelectItem value="on">开启</SelectItem>
+              <SelectItem value="off">关闭</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {form.emojiThiefEnabled !== 'off' && (
+          <div className="ml-4 pl-4 border-l-2 border-muted space-y-3 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <Label className="text-sm">独立存储</Label>
+              <Switch
+                checked={form.emojiThiefSeparateFolder}
+                onCheckedChange={(v) => setForm({ ...form, emojiThiefSeparateFolder: v })}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">最大数量</Label>
+                <Input
+                  type="number" min={10} max={5000}
+                  value={form.emojiThiefMaxCount}
+                  onChange={(e) => setForm({ ...form, emojiThiefMaxCount: parseInt(e.target.value) || 500 })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">偷取概率</Label>
+                <Input
+                  type="number" min={1} max={100}
+                  value={Math.round(form.emojiThiefStealRate * 100)}
+                  onChange={(e) => setForm({ ...form, emojiThiefStealRate: parseInt(e.target.value) / 100 })}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-2 pt-2">
+          <Label>自定义前缀</Label>
+          <Input
+            value={form.customPrefix}
+            onChange={(e) => setForm({ ...form, customPrefix: e.target.value })}
+            placeholder="留空使用全局前缀，如 #ai"
+          />
+        </div>
+      </TabsContent>
+
+      <TabsContent value="bym" className="space-y-4 mt-0">
+        <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-md bg-gradient-to-br from-purple-500/20 to-pink-500/20">
+              <Sparkles className="h-4 w-4 text-purple-500" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">伪人模式</p>
+              <p className="text-xs text-muted-foreground">随机回复，模拟真人聊天</p>
+            </div>
+          </div>
+          <Select
+            value={form.bymEnabled}
+            onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, bymEnabled: v })}
+          >
+            <SelectTrigger className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="inherit">继承</SelectItem>
+              <SelectItem value="on">开启</SelectItem>
+              <SelectItem value="off">关闭</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {form.bymEnabled !== 'off' && (
+          <div className="space-y-4 animate-fade-in">
+            <div className="space-y-2">
+              <Label>伪人人设</Label>
+              <Select value={form.bymPresetId} onValueChange={(v) => setForm({ ...form, bymPresetId: v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="选择人设..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">使用默认预设</SelectItem>
+                  <SelectItem value="__custom__">自定义提示词</SelectItem>
+                  {presets.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {form.bymPresetId === '__custom__' && (
+              <div className="space-y-2">
+                <Label>自定义提示词</Label>
+                <Textarea
+                  value={form.bymPrompt}
+                  onChange={(e) => setForm({ ...form, bymPrompt: e.target.value })}
+                  placeholder="你是一个真实的群友..."
+                  rows={3}
+                  className="font-mono text-sm"
+                />
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-sm">触发概率</Label>
+                <div className="flex items-center gap-2">
+                  {form.bymProbability === 'inherit' ? (
+                    <Button variant="outline" size="sm" className="w-full" onClick={() => setForm({ ...form, bymProbability: 0.02 })}>
+                      继承全局
+                    </Button>
+                  ) : (
+                    <>
+                      <Input
+                        type="number" min={0} max={100}
+                        value={typeof form.bymProbability === 'number' ? Math.round(form.bymProbability * 100) : 2}
+                        onChange={(e) => setForm({ ...form, bymProbability: parseInt(e.target.value) / 100 })}
+                        className="w-20"
+                      />
+                      <span className="text-sm">%</span>
+                      <Button variant="ghost" size="sm" onClick={() => setForm({ ...form, bymProbability: 'inherit' })}>
+                        <X className="h-3 w-3" />
                       </Button>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent className="mt-2">
-                      <div className="border rounded-lg p-3">
-                        <div className="mb-2">
-                          <Button 
-                            variant="ghost" 
-                            size="sm" 
-                            className="w-full justify-start text-muted-foreground"
-                            onClick={() => {
-                              setForm({ ...form, modelId: '__default__' })
-                              setModelSelectorOpen(false)
-                            }}
-                          >
-                            使用默认模型
-                          </Button>
-                        </div>
-                        <ModelSelector
-                          value={form.modelId && form.modelId !== '__default__' ? [form.modelId] : []}
-                          allModels={allModels}
-                          onChange={(models) => {
-                            setForm({ ...form, modelId: models[0] || '__default__' })
-                            if (models.length > 0) setModelSelectorOpen(false)
-                          }}
-                          singleSelect={true}
-                          allowCustom={true}
-                        />
-                      </div>
-                    </CollapsibleContent>
-                  </Collapsible>
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="triggerMode">触发模式</Label>
-                  <Select
-                    value={form.triggerMode}
-                    onValueChange={(value) => setForm({ ...form, triggerMode: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="default">默认</SelectItem>
-                      <SelectItem value="at">仅@触发</SelectItem>
-                      <SelectItem value="prefix">仅前缀触发</SelectItem>
-                      <SelectItem value="all">全部消息</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="systemPrompt">
-                    独立人设 <span className="text-xs text-muted-foreground">(设置后对话将使用此人设)</span>
-                  </Label>
-                  <Textarea
-                    id="systemPrompt"
-                    value={form.systemPrompt}
-                    onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
-                    placeholder="不填写则使用预设配置..."
-                    rows={4}
-                    className="font-mono text-sm"
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <Label>启用AI响应</Label>
-                  <Switch
-                    checked={form.enabled}
-                    onCheckedChange={(checked) => setForm({ ...form, enabled: checked })}
-                  />
-                </div>
-                
-                {/* 群组功能开关 */}
-                <div className="border-t pt-4 mt-4">
-                  <Label className="text-base font-medium">群组功能开关</Label>
-                  <p className="text-xs text-muted-foreground mb-3">群管理员也可通过命令控制这些功能</p>
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="text-sm">🎭 伪人模式</span>
-                        <p className="text-xs text-muted-foreground">随机回复消息，模拟真人聊天</p>
-                      </div>
-                      <Select
-                        value={form.bymEnabled}
-                        onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, bymEnabled: v })}
-                      >
-                        <SelectTrigger className="w-32">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="inherit">继承全局</SelectItem>
-                          <SelectItem value="on">开启</SelectItem>
-                          <SelectItem value="off">关闭</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    
-                    {/* 伪人人设配置 - 仅在伪人模式开启时显示 */}
-                    {form.bymEnabled !== 'off' && (
-                      <div className="ml-4 pl-4 border-l-2 border-muted space-y-3">
-                        <div className="grid gap-2">
-                          <Label className="text-sm">伪人人设</Label>
-                          <Select
-                            value={form.bymPresetId}
-                            onValueChange={(v) => setForm({ ...form, bymPresetId: v })}
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="选择人设..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__default__">使用默认预设</SelectItem>
-                              <SelectItem value="__custom__">自定义提示词</SelectItem>
-                              {presets.map((preset) => (
-                                <SelectItem key={preset.id} value={preset.id}>
-                                  {preset.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <p className="text-xs text-muted-foreground">
-                            选择伪人模式使用的人设预设
-                          </p>
-                        </div>
-                        
-                        {/* 自定义伪人提示词 */}
-                        {form.bymPresetId === '__custom__' && (
-                          <div className="grid gap-2">
-                            <Label className="text-sm">自定义伪人提示词</Label>
-                            <Textarea
-                              value={form.bymPrompt}
-                              onChange={(e) => setForm({ ...form, bymPrompt: e.target.value })}
-                              placeholder="你是一个真实的群友，说话简短自然，会使用网络用语..."
-                              rows={4}
-                              className="font-mono text-sm"
-                            />
-                          </div>
-                        )}
-                        
-                        {/* 伪人触发概率 */}
-                        <div className="grid gap-2">
-                          <div className="flex items-center justify-between">
-                            <Label className="text-sm">触发概率</Label>
-                            <Select
-                              value={form.bymProbability === 'inherit' ? 'inherit' : 'custom'}
-                              onValueChange={(v) => setForm({ ...form, bymProbability: v === 'inherit' ? 'inherit' : 0.02 })}
-                            >
-                              <SelectTrigger className="w-28">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="inherit">继承全局</SelectItem>
-                                <SelectItem value="custom">自定义</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          {form.bymProbability !== 'inherit' && (
-                            <div className="flex items-center gap-2">
-                              <Input
-                                type="number"
-                                min={0}
-                                max={100}
-                                step={1}
-                                value={typeof form.bymProbability === 'number' ? Math.round(form.bymProbability * 100) : 2}
-                                onChange={(e) => setForm({ ...form, bymProbability: Math.min(1, Math.max(0, parseInt(e.target.value) / 100)) })}
-                                className="w-20"
-                              />
-                              <span className="text-sm text-muted-foreground">%</span>
-                            </div>
-                          )}
-                        </div>
-                        
-                        {/* 伪人使用模型 */}
-                        <div className="grid gap-2">
-                          <Label className="text-sm">使用模型</Label>
-                          <Select
-                            value={form.bymModel || '__default__'}
-                            onValueChange={(v) => setForm({ ...form, bymModel: v === '__default__' ? '' : v })}
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="继承全局设置" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__default__">继承全局设置</SelectItem>
-                              {allModels.map((model) => (
-                                <SelectItem key={model} value={model}>
-                                  {model}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        
-                        {/* 伪人温度 */}
-                        <div className="grid gap-2">
-                          <div className="flex items-center justify-between">
-                            <Label className="text-sm">回复温度</Label>
-                            <Select
-                              value={form.bymTemperature === 'inherit' ? 'inherit' : 'custom'}
-                              onValueChange={(v) => setForm({ ...form, bymTemperature: v === 'inherit' ? 'inherit' : 0.9 })}
-                            >
-                              <SelectTrigger className="w-28">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="inherit">继承全局</SelectItem>
-                                <SelectItem value="custom">自定义</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          {form.bymTemperature !== 'inherit' && (
-                            <div className="flex items-center gap-2">
-                              <Input
-                                type="number"
-                                min={0}
-                                max={2}
-                                step={0.1}
-                                value={typeof form.bymTemperature === 'number' ? form.bymTemperature : 0.9}
-                                onChange={(e) => setForm({ ...form, bymTemperature: Math.min(2, Math.max(0, parseFloat(e.target.value))) })}
-                                className="w-20"
-                              />
-                              <span className="text-xs text-muted-foreground">（0-2，越高越随机）</span>
-                            </div>
-                          )}
-                        </div>
-                        
-                        {/* 伪人最大Token */}
-                        <div className="grid gap-2">
-                          <div className="flex items-center justify-between">
-                            <Label className="text-sm">最大Token</Label>
-                            <Select
-                              value={form.bymMaxTokens === 'inherit' ? 'inherit' : 'custom'}
-                              onValueChange={(v) => setForm({ ...form, bymMaxTokens: v === 'inherit' ? 'inherit' : 100 })}
-                            >
-                              <SelectTrigger className="w-28">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="inherit">继承全局</SelectItem>
-                                <SelectItem value="custom">自定义</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          {form.bymMaxTokens !== 'inherit' && (
-                            <Input
-                              type="number"
-                              min={10}
-                              max={2000}
-                              value={typeof form.bymMaxTokens === 'number' ? form.bymMaxTokens : 100}
-                              onChange={(e) => setForm({ ...form, bymMaxTokens: Math.min(2000, Math.max(10, parseInt(e.target.value))) })}
-                              placeholder="100"
-                            />
-                          )}
-                        </div>
-                      </div>
-                    )}
-                    
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="text-sm">📦 表情包小偷</span>
-                        <p className="text-xs text-muted-foreground">收集群聊表情包并随机发送</p>
-                      </div>
-                      <Select
-                        value={form.emojiThiefEnabled}
-                        onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, emojiThiefEnabled: v })}
-                      >
-                        <SelectTrigger className="w-32">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="inherit">继承全局</SelectItem>
-                          <SelectItem value="on">开启</SelectItem>
-                          <SelectItem value="off">关闭</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    
-                    {/* 表情包小偷详细配置 */}
-                    {form.emojiThiefEnabled !== 'off' && (
-                      <div className="ml-4 pl-4 border-l-2 border-muted space-y-3">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <Label className="text-sm">独立存储</Label>
-                            <p className="text-xs text-muted-foreground">开启后表情包存放在群独立文件夹，关闭则共享</p>
-                          </div>
-                          <Switch
-                            checked={form.emojiThiefSeparateFolder}
-                            onCheckedChange={(checked) => setForm({ ...form, emojiThiefSeparateFolder: checked })}
-                          />
-                        </div>
-                        
-                        <div className="grid gap-2">
-                          <Label className="text-sm">最大表情包数量</Label>
-                          <Input
-                            type="number"
-                            min={10}
-                            max={5000}
-                            value={form.emojiThiefMaxCount}
-                            onChange={(e) => setForm({ ...form, emojiThiefMaxCount: Math.min(5000, Math.max(10, parseInt(e.target.value) || 500)) })}
-                            placeholder="500"
-                          />
-                          <p className="text-xs text-muted-foreground">达到上限后会随机删除旧表情包</p>
-                        </div>
-                        
-                        <div className="grid gap-2">
-                          <div className="flex items-center justify-between">
-                            <Label className="text-sm">偷取概率</Label>
-                            <span className="text-sm text-muted-foreground">{Math.round(form.emojiThiefStealRate * 100)}%</span>
-                          </div>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={100}
-                            value={Math.round(form.emojiThiefStealRate * 100)}
-                            onChange={(e) => setForm({ ...form, emojiThiefStealRate: Math.min(1, Math.max(0.01, parseInt(e.target.value) / 100)) })}
-                            className="w-24"
-                          />
-                          <p className="text-xs text-muted-foreground">收到表情包时偷取的概率</p>
-                        </div>
-                        
-                        <div className="grid gap-2">
-                          <Label className="text-sm">发送模式</Label>
-                          <Select
-                            value={form.emojiThiefTriggerMode}
-                            onValueChange={(v) => setForm({ ...form, emojiThiefTriggerMode: v })}
-                          >
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="random">随机发送</SelectItem>
-                              <SelectItem value="bym_follow">伪人触发跟随</SelectItem>
-                              <SelectItem value="bym_random">伪人触发随机</SelectItem>
-                              <SelectItem value="chat_follow">对话跟随</SelectItem>
-                              <SelectItem value="chat_random">对话随机</SelectItem>
-                              <SelectItem value="off">仅收集不发送</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <p className="text-xs text-muted-foreground">
-                            跟随=100%发送，随机=按概率发送
-                          </p>
-                        </div>
-                        
-                        {['random', 'bym_random', 'chat_random'].includes(form.emojiThiefTriggerMode) && (
-                          <div className="grid gap-2">
-                            <div className="flex items-center justify-between">
-                              <Label className="text-sm">发送概率</Label>
-                              <span className="text-sm text-muted-foreground">{Math.round(form.emojiThiefTriggerRate * 100)}%</span>
-                            </div>
-                            <Input
-                              type="number"
-                              min={1}
-                              max={100}
-                              value={Math.round(form.emojiThiefTriggerRate * 100)}
-                              onChange={(e) => setForm({ ...form, emojiThiefTriggerRate: Math.min(1, Math.max(0.01, parseInt(e.target.value) / 100)) })}
-                              className="w-24"
-                            />
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="text-sm">🎨 绘图功能</span>
-                        <p className="text-xs text-muted-foreground">文生图、图生图、视频生成等</p>
-                      </div>
-                      <Select
-                        value={form.imageGenEnabled}
-                        onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, imageGenEnabled: v })}
-                      >
-                        <SelectTrigger className="w-32">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="inherit">继承全局</SelectItem>
-                          <SelectItem value="on">开启</SelectItem>
-                          <SelectItem value="off">关闭</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="text-sm">📊 群聊总结</span>
-                        <p className="text-xs text-muted-foreground">允许使用群聊总结功能</p>
-                      </div>
-                      <Select
-                        value={form.summaryEnabled}
-                        onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, summaryEnabled: v })}
-                      >
-                        <SelectTrigger className="w-32">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="inherit">继承全局</SelectItem>
-                          <SelectItem value="on">开启</SelectItem>
-                          <SelectItem value="off">关闭</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="text-sm">📢 事件处理</span>
-                        <p className="text-xs text-muted-foreground">入群欢迎、退群提醒等</p>
-                      </div>
-                      <Select
-                        value={form.eventEnabled}
-                        onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, eventEnabled: v })}
-                      >
-                        <SelectTrigger className="w-32">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="inherit">继承全局</SelectItem>
-                          <SelectItem value="on">开启</SelectItem>
-                          <SelectItem value="off">关闭</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                </div>
-                
-                {/* 自定义前缀 */}
-                <div className="grid gap-2">
-                  <Label>自定义前缀 <span className="text-xs text-muted-foreground">(留空使用全局前缀)</span></Label>
-                  <Input
-                    value={form.customPrefix}
-                    onChange={(e) => setForm({ ...form, customPrefix: e.target.value })}
-                    placeholder="例如: #ai 或 /chat"
-                  />
-                </div>
-
-                {/* 群组知识库配置 */}
-                <div className="border-t pt-4 mt-4">
-                  <Label className="text-base font-medium flex items-center gap-2">
-                    <BookOpen className="h-4 w-4" />
-                    群组知识库
-                  </Label>
-                  <p className="text-xs text-muted-foreground mb-3">为本群配置专属知识库，伪人模式将参考这些知识</p>
-                  <div className="space-y-2">
-                    {form.knowledgeIds.length > 0 ? (
-                      <div className="flex flex-wrap gap-2">
-                        {form.knowledgeIds.map((kId) => {
-                          const doc = knowledgeDocs.find(d => d.id === kId)
-                          return (
-                            <Badge key={kId} variant="secondary" className="flex items-center gap-1">
-                              <BookOpen className="h-3 w-3" />
-                              {doc?.name || kId}
-                              <button
-                                type="button"
-                                onClick={() => setForm({
-                                  ...form,
-                                  knowledgeIds: form.knowledgeIds.filter(id => id !== kId)
-                                })}
-                                className="ml-1 hover:text-destructive"
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            </Badge>
-                          )
-                        })}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-muted-foreground">暂未配置知识库</p>
-                    )}
-                    <Select
-                      value=""
-                      onValueChange={(value) => {
-                        if (value && !form.knowledgeIds.includes(value)) {
-                          setForm({ ...form, knowledgeIds: [...form.knowledgeIds, value] })
-                        }
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="添加知识库..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {knowledgeDocs
-                          .filter(d => !form.knowledgeIds.includes(d.id))
-                          .map((doc) => (
-                            <SelectItem key={doc.id} value={doc.id}>
-                              {doc.name}
-                            </SelectItem>
-                          ))}
-                        {knowledgeDocs.filter(d => !form.knowledgeIds.includes(d.id)).length === 0 && (
-                          <div className="text-sm text-muted-foreground py-2 px-2">
-                            {knowledgeDocs.length === 0 ? '暂无可用知识库' : '已添加全部知识库'}
-                          </div>
-                        )}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                {/* 继承配置 */}
-                <div className="border-t pt-4 mt-4">
-                  <Label className="text-base font-medium flex items-center gap-2">
-                    <GitBranch className="h-4 w-4" />
-                    继承配置
-                  </Label>
-                  <p className="text-xs text-muted-foreground mb-3">从其他来源继承提示词和知识库</p>
-                  <div className="space-y-3">
-                    {form.inheritFrom.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {form.inheritFrom.map((source) => {
-                          const [type, id] = source.split(':')
-                          let label = source
-                          if (type === 'preset') {
-                            const preset = presets.find(p => p.id === id)
-                            label = `预设: ${preset?.name || id}`
-                          } else if (type === 'group') {
-                            const group = groups.find(g => g.groupId === id)
-                            label = `群: ${group?.groupName || id}`
-                          }
-                          return (
-                            <Badge key={source} variant="outline" className="flex items-center gap-1">
-                              <GitBranch className="h-3 w-3" />
-                              {label}
-                              <button
-                                type="button"
-                                onClick={() => setForm({
-                                  ...form,
-                                  inheritFrom: form.inheritFrom.filter(s => s !== source)
-                                })}
-                                className="ml-1 hover:text-destructive"
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            </Badge>
-                          )
-                        })}
-                      </div>
-                    )}
-                    <div className="grid grid-cols-2 gap-2">
-                      <Select
-                        value=""
-                        onValueChange={(v) => {
-                          if (v && !form.inheritFrom.includes(v)) {
-                            setForm({ ...form, inheritFrom: [...form.inheritFrom, v] })
-                          }
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="添加预设..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {presets
-                            .filter(p => !form.inheritFrom.includes(`preset:${p.id}`))
-                            .map((p) => (
-                              <SelectItem key={p.id} value={`preset:${p.id}`}>
-                                {p.name}
-                              </SelectItem>
-                            ))}
-                          {presets.filter(p => !form.inheritFrom.includes(`preset:${p.id}`)).length === 0 && (
-                            <div className="text-sm text-muted-foreground py-2 px-2">无可添加预设</div>
-                          )}
-                        </SelectContent>
-                      </Select>
-                      <Select
-                        value=""
-                        onValueChange={(v) => {
-                          if (v && !form.inheritFrom.includes(v)) {
-                            setForm({ ...form, inheritFrom: [...form.inheritFrom, v] })
-                          }
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="添加群组..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {groups
-                            .filter(g => g.groupId !== form.groupId && !form.inheritFrom.includes(`group:${g.groupId}`))
-                            .map((g) => (
-                              <SelectItem key={g.groupId} value={`group:${g.groupId}`}>
-                                {g.groupName || g.groupId}
-                              </SelectItem>
-                            ))}
-                          {groups.filter(g => g.groupId !== form.groupId && !form.inheritFrom.includes(`group:${g.groupId}`)).length === 0 && (
-                            <div className="text-sm text-muted-foreground py-2 px-2">无可添加群组</div>
-                          )}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
+                    </>
+                  )}
                 </div>
               </div>
-              </ScrollArea>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setDialogOpen(false)}>
-                  取消
-                </Button>
-                <Button onClick={handleSave} disabled={saving}>
-                  {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  保存
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
+              <div className="space-y-2">
+                <Label className="text-sm">使用模型</Label>
+                <Select value={form.bymModel || '__default__'} onValueChange={(v) => setForm({ ...form, bymModel: v === '__default__' ? '' : v })}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="继承" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__default__">继承全局</SelectItem>
+                    {allModels.map((m) => (
+                      <SelectItem key={m} value={m}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-sm">温度</Label>
+                {form.bymTemperature === 'inherit' ? (
+                  <Button variant="outline" size="sm" className="w-full" onClick={() => setForm({ ...form, bymTemperature: 0.9 })}>
+                    继承全局
+                  </Button>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number" min={0} max={2} step={0.1}
+                      value={typeof form.bymTemperature === 'number' ? form.bymTemperature : 0.9}
+                      onChange={(e) => setForm({ ...form, bymTemperature: parseFloat(e.target.value) })}
+                    />
+                    <Button variant="ghost" size="sm" onClick={() => setForm({ ...form, bymTemperature: 'inherit' })}>
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label className="text-sm">最大Token</Label>
+                {form.bymMaxTokens === 'inherit' ? (
+                  <Button variant="outline" size="sm" className="w-full" onClick={() => setForm({ ...form, bymMaxTokens: 100 })}>
+                    继承全局
+                  </Button>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number" min={10} max={2000}
+                      value={typeof form.bymMaxTokens === 'number' ? form.bymMaxTokens : 100}
+                      onChange={(e) => setForm({ ...form, bymMaxTokens: parseInt(e.target.value) })}
+                    />
+                    <Button variant="ghost" size="sm" onClick={() => setForm({ ...form, bymMaxTokens: 'inherit' })}>
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </TabsContent>
+
+      <TabsContent value="advanced" className="space-y-4 mt-0">
+        {/* 模型分类配置 */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Bot className="h-4 w-4 text-muted-foreground" />
+            <Label>模型配置</Label>
+          </div>
+          <p className="text-xs text-muted-foreground">为本群配置各场景独立模型（留空使用全局配置）</p>
+          
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">对话模型 <span className="text-muted-foreground">（主模型）</span></Label>
+              <Select value={form.chatModel || '__default__'} onValueChange={(v) => setForm({ ...form, chatModel: v === '__default__' ? '' : v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="使用全局配置" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">使用全局配置</SelectItem>
+                  {allModels.map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="space-y-1.5">
+              <Label className="text-xs">工具模型 <span className="text-muted-foreground">（需要调用工具时）</span></Label>
+              <Select value={form.toolModel || '__default__'} onValueChange={(v) => setForm({ ...form, toolModel: v === '__default__' ? '' : v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="使用全局配置" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">使用全局配置</SelectItem>
+                  {allModels.map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="space-y-1.5">
+              <Label className="text-xs">调度模型 <span className="text-muted-foreground">（工具组分类）</span></Label>
+              <Select value={form.dispatchModel || '__default__'} onValueChange={(v) => setForm({ ...form, dispatchModel: v === '__default__' ? '' : v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="使用全局配置" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">使用全局配置</SelectItem>
+                  {allModels.map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="space-y-1.5">
+              <Label className="text-xs">图像模型 <span className="text-muted-foreground">（图片理解）</span></Label>
+              <Select value={form.imageModel || '__default__'} onValueChange={(v) => setForm({ ...form, imageModel: v === '__default__' ? '' : v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="使用全局配置" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">使用全局配置</SelectItem>
+                  {allModels.map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="space-y-1.5">
+              <Label className="text-xs">搜索模型 <span className="text-muted-foreground">（联网搜索）</span></Label>
+              <Select value={form.searchModel || '__default__'} onValueChange={(v) => setForm({ ...form, searchModel: v === '__default__' ? '' : v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="使用全局配置" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">使用全局配置</SelectItem>
+                  {allModels.map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <BookOpen className="h-4 w-4 text-muted-foreground" />
+            <Label>群组知识库</Label>
+          </div>
+          <p className="text-xs text-muted-foreground">为本群配置专属知识库</p>
+          {form.knowledgeIds.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {form.knowledgeIds.map((kId) => {
+                const doc = knowledgeDocs.find(d => d.id === kId)
+                return (
+                  <Badge key={kId} variant="secondary" className="gap-1">
+                    {doc?.name || kId}
+                    <button onClick={() => setForm({ ...form, knowledgeIds: form.knowledgeIds.filter(id => id !== kId) })}>
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                )
+              })}
+            </div>
+          )}
+          <Select value="" onValueChange={(v) => v && !form.knowledgeIds.includes(v) && setForm({ ...form, knowledgeIds: [...form.knowledgeIds, v] })}>
+            <SelectTrigger>
+              <SelectValue placeholder="添加知识库..." />
+            </SelectTrigger>
+            <SelectContent>
+              {knowledgeDocs.filter(d => !form.knowledgeIds.includes(d.id)).map((doc) => (
+                <SelectItem key={doc.id} value={doc.id}>{doc.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-3 pt-2">
+          <div className="flex items-center gap-2">
+            <GitBranch className="h-4 w-4 text-muted-foreground" />
+            <Label>继承配置</Label>
+          </div>
+          <p className="text-xs text-muted-foreground">从其他来源继承提示词和知识库</p>
+          {form.inheritFrom.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {form.inheritFrom.map((source) => {
+                const [type, id] = source.split(':')
+                let label = source
+                if (type === 'preset') label = `预设: ${presets.find(p => p.id === id)?.name || id}`
+                else if (type === 'group') label = `群: ${groups.find(g => g.groupId === id)?.groupName || id}`
+                return (
+                  <Badge key={source} variant="outline" className="gap-1">
+                    {label}
+                    <button onClick={() => setForm({ ...form, inheritFrom: form.inheritFrom.filter(s => s !== source) })}>
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                )
+              })}
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            <Select value="" onValueChange={(v) => v && !form.inheritFrom.includes(v) && setForm({ ...form, inheritFrom: [...form.inheritFrom, v] })}>
+              <SelectTrigger><SelectValue placeholder="预设..." /></SelectTrigger>
+              <SelectContent>
+                {presets.filter(p => !form.inheritFrom.includes(`preset:${p.id}`)).map((p) => (
+                  <SelectItem key={p.id} value={`preset:${p.id}`}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value="" onValueChange={(v) => v && !form.inheritFrom.includes(v) && setForm({ ...form, inheritFrom: [...form.inheritFrom, v] })}>
+              <SelectTrigger><SelectValue placeholder="群组..." /></SelectTrigger>
+              <SelectContent>
+                {groups.filter(g => g.groupId !== form.groupId && !form.inheritFrom.includes(`group:${g.groupId}`)).map((g) => (
+                  <SelectItem key={g.groupId} value={`group:${g.groupId}`}>{g.groupName || g.groupId}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </TabsContent>
+    </Tabs>
+  )
+
+  return (
+    <div className="space-y-4 sm:space-y-6">
+      {/* 页面头部 */}
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold">群组管理</h1>
+            <p className="text-sm text-muted-foreground mt-0.5">配置群聊个性化设置和独立人设</p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={fetchData} className="gap-1.5">
+              <RefreshCw className="h-4 w-4" />
+              <span className="hidden sm:inline">刷新</span>
+            </Button>
+            <Button size="sm" onClick={() => { resetForm(); setFormTab('basic'); setDialogOpen(true) }} className="gap-1.5">
+              <Plus className="h-4 w-4" />
+              <span>添加群</span>
+            </Button>
+          </div>
+        </div>
+
+        {/* 统计卡片 */}
+        <div className="grid grid-cols-3 gap-2 sm:gap-4">
+          <button
+            onClick={() => setStatusFilter('all')}
+            className={cn(
+              "p-3 sm:p-4 rounded-xl border transition-all text-left",
+              statusFilter === 'all' ? "border-primary bg-primary/5 shadow-sm" : "hover:border-muted-foreground/30"
+            )}
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <Users className="h-4 w-4 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">全部</span>
+            </div>
+            <p className="text-lg sm:text-2xl font-bold">{stats.total}</p>
+          </button>
+          <button
+            onClick={() => setStatusFilter('enabled')}
+            className={cn(
+              "p-3 sm:p-4 rounded-xl border transition-all text-left",
+              statusFilter === 'enabled' ? "border-emerald-500 bg-emerald-500/5 shadow-sm" : "hover:border-muted-foreground/30"
+            )}
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <Power className="h-4 w-4 text-emerald-500" />
+              <span className="text-xs text-muted-foreground">已启用</span>
+            </div>
+            <p className="text-lg sm:text-2xl font-bold text-emerald-600">{stats.enabled}</p>
+          </button>
+          <button
+            onClick={() => setStatusFilter('disabled')}
+            className={cn(
+              "p-3 sm:p-4 rounded-xl border transition-all text-left",
+              statusFilter === 'disabled' ? "border-zinc-500 bg-zinc-500/5 shadow-sm" : "hover:border-muted-foreground/30"
+            )}
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <PowerOff className="h-4 w-4 text-zinc-400" />
+              <span className="text-xs text-muted-foreground">已禁用</span>
+            </div>
+            <p className="text-lg sm:text-2xl font-bold text-zinc-500">{stats.disabled}</p>
+          </button>
         </div>
       </div>
 
-      {/* 搜索框 */}
-      <div className="flex gap-4">
+      {/* 搜索栏 */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
           placeholder="搜索群号或群名称..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full sm:max-w-sm"
+          className="pl-9 h-10"
         />
+        {searchQuery && (
+          <Button
+            variant="ghost" size="sm"
+            className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
+            onClick={() => setSearchQuery('')}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        )}
       </div>
 
+      {/* 群组列表 */}
       {filteredGroups.length === 0 ? (
-        <Card>
+        <Card className="border-dashed">
           <CardContent className="flex flex-col items-center justify-center py-12">
-            <Users className="h-12 w-12 text-muted-foreground mb-4" />
-            <p className="text-muted-foreground">
-              {searchQuery ? '未找到匹配的群' : '暂无群配置'}
+            <div className="p-4 rounded-full bg-muted mb-4">
+              <Users className="h-8 w-8 text-muted-foreground" />
+            </div>
+            <p className="text-lg font-medium mb-1">
+              {searchQuery || statusFilter !== 'all' ? '未找到匹配的群' : '暂无群配置'}
             </p>
-            {!searchQuery && (
-              <Button className="mt-4" onClick={() => handleOpenDialog()}>
+            <p className="text-sm text-muted-foreground mb-4">
+              {searchQuery ? '尝试其他搜索词' : '添加群组来配置个性化设置'}
+            </p>
+            {!searchQuery && statusFilter === 'all' && (
+              <Button onClick={() => { resetForm(); setFormTab('basic'); setDialogOpen(true) }}>
                 <Plus className="mr-2 h-4 w-4" />
                 添加第一个群
               </Button>
@@ -1002,92 +1133,181 @@ export default function GroupsPage() {
           </CardContent>
         </Card>
       ) : (
-        <ScrollArea className="h-[calc(100vh-320px)] sm:h-[calc(100vh-280px)]">
-          <div className="space-y-3 pr-2 sm:pr-4">
-            {filteredGroups.map((group) => (
-              <Card key={group.groupId}>
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="font-medium">{group.groupId}</span>
+        <div className="space-y-2 sm:space-y-3">
+          {filteredGroups.map((group) => {
+            const isEnabled = group.enabled ?? group.settings?.enabled ?? true
+            const modelId = group.settings?.modelId || group.modelId
+            const settings = group.settings || {}
+            
+            return (
+              <Card 
+                key={group.groupId} 
+                className={cn(
+                  "group transition-all hover:shadow-md",
+                  !isEnabled && "opacity-60"
+                )}
+              >
+                <CardContent className="p-3 sm:p-4">
+                  <div className="flex items-start gap-3">
+                    {/* 状态指示器 */}
+                    <button
+                      onClick={() => handleQuickToggle(group)}
+                      disabled={togglingGroup === group.groupId}
+                      className={cn(
+                        "mt-1 flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center transition-all",
+                        isEnabled 
+                          ? "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20" 
+                          : "bg-zinc-500/10 text-zinc-500 hover:bg-zinc-500/20"
+                      )}
+                    >
+                      {togglingGroup === group.groupId ? (
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      ) : isEnabled ? (
+                        <Power className="h-5 w-5" />
+                      ) : (
+                        <PowerOff className="h-5 w-5" />
+                      )}
+                    </button>
+
+                    {/* 主内容区 */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold text-base">{group.groupName || group.groupId}</span>
                         {group.groupName && (
-                          <span className="text-muted-foreground">({group.groupName})</span>
+                          <span className="text-xs text-muted-foreground font-mono">#{group.groupId}</span>
                         )}
-                        <Badge variant={(group.enabled ?? group.settings?.enabled) ? 'default' : 'secondary'}>
-                          {(group.enabled ?? group.settings?.enabled) ? '已启用' : '已禁用'}
+                        <Badge variant={isEnabled ? 'default' : 'secondary'} className="text-xs">
+                          {getStatusText(isEnabled)}
                         </Badge>
                       </div>
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
-                        {group.systemPrompt ? (
-                          <span className="flex items-center gap-1">
+                      
+                      {/* 配置标签 */}
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {group.systemPrompt && (
+                          <Badge variant="outline" className="text-xs gap-1 font-normal">
                             <FileText className="h-3 w-3" />
                             独立人设
-                          </span>
-                        ) : (
-                          <span>预设: {presets.find(p => p.id === group.presetId)?.name || '默认'}</span>
+                          </Badge>
                         )}
-                        {(group.settings?.modelId || group.modelId) && (
-                          <span className="flex items-center gap-1">
-                            <Bot className="h-3 w-3" />
-                            独立模型: {(group.settings?.modelId || group.modelId)?.substring(0, 20)}
-                          </span>
+                        {!group.systemPrompt && (
+                          <Badge variant="outline" className="text-xs gap-1 font-normal">
+                            <Palette className="h-3 w-3" />
+                            {presets.find(p => p.id === group.presetId)?.name || '默认预设'}
+                          </Badge>
                         )}
-                        <span>模式: {group.triggerMode || '默认'}</span>
+                        {modelId && (
+                          <Badge variant="outline" className="text-xs gap-1 font-normal max-w-[140px] truncate">
+                            <Bot className="h-3 w-3 flex-shrink-0" />
+                            {modelId}
+                          </Badge>
+                        )}
+                        <Badge variant="outline" className="text-xs gap-1 font-normal">
+                          <Zap className="h-3 w-3" />
+                          {triggerModeNames[group.triggerMode || 'default'] || '默认'}
+                        </Badge>
+                        {settings.bymEnabled && (
+                          <Badge variant="outline" className="text-xs gap-1 font-normal bg-purple-500/10 border-purple-500/30">
+                            <Sparkles className="h-3 w-3 text-purple-500" />
+                            伪人
+                          </Badge>
+                        )}
                         {group.knowledgeIds && group.knowledgeIds.length > 0 && (
-                          <span className="flex items-center gap-1">
+                          <Badge variant="outline" className="text-xs gap-1 font-normal">
                             <BookOpen className="h-3 w-3" />
-                            知识库: {group.knowledgeIds.length}个
-                          </span>
-                        )}
-                        {group.inheritFrom && group.inheritFrom.length > 0 && (
-                          <span className="flex items-center gap-1">
-                            <GitBranch className="h-3 w-3" />
-                            继承: {group.inheritFrom.length}项
-                          </span>
+                            {group.knowledgeIds.length}
+                          </Badge>
                         )}
                       </div>
                     </div>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleOpenDialog(group)}
-                      >
+
+                    {/* 操作按钮 */}
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleOpenDialog(group)}>
                         <Settings className="h-4 w-4" />
                       </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => openDeleteDialog(group)}
-                        className="text-destructive hover:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-8 w-8">
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleOpenDialog(group)}>
+                            <Settings className="h-4 w-4 mr-2" />
+                            编辑配置
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleQuickToggle(group)}>
+                            {isEnabled ? <PowerOff className="h-4 w-4 mr-2" /> : <Power className="h-4 w-4 mr-2" />}
+                            {isEnabled ? '禁用群组' : '启用群组'}
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem className="text-destructive" onClick={() => openDeleteDialog(group)}>
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            删除配置
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </div>
                 </CardContent>
               </Card>
-            ))}
-          </div>
-        </ScrollArea>
+            )
+          })}
+        </div>
+      )}
+
+      {/* 编辑对话框 - 桌面端使用 Dialog，移动端使用 Sheet */}
+      {isMobile ? (
+        <Sheet open={dialogOpen} onOpenChange={setDialogOpen}>
+          <SheetContent side="bottom" className="h-[85vh] rounded-t-2xl">
+            <SheetHeader className="pb-4">
+              <SheetTitle>{editingGroup ? '编辑群配置' : '添加群'}</SheetTitle>
+              <SheetDescription>配置群聊个性化设置</SheetDescription>
+            </SheetHeader>
+            <ScrollArea className="h-[calc(85vh-180px)] pr-4">
+              {renderFormContent()}
+            </ScrollArea>
+            <SheetFooter className="pt-4 flex-row gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setDialogOpen(false)}>取消</Button>
+              <Button className="flex-1" onClick={handleSave} disabled={saving}>
+                {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                保存
+              </Button>
+            </SheetFooter>
+          </SheetContent>
+        </Sheet>
+      ) : (
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogContent className="max-w-2xl max-h-[85vh]">
+            <DialogHeader>
+              <DialogTitle>{editingGroup ? '编辑群配置' : '添加群'}</DialogTitle>
+              <DialogDescription>配置群聊个性化设置和独立人设</DialogDescription>
+            </DialogHeader>
+            <ScrollArea className="max-h-[60vh] pr-4">
+              {renderFormContent()}
+            </ScrollArea>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDialogOpen(false)}>取消</Button>
+              <Button onClick={handleSave} disabled={saving}>
+                {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                保存
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* 删除确认对话框 */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>确认删除</DialogTitle>
             <DialogDescription>
-              确定要删除群 {deletingGroup?.groupId} 
-              {deletingGroup?.groupName && ` (${deletingGroup.groupName})`} 的配置吗？
-              此操作不可撤销。
+              确定要删除群 <strong>{deletingGroup?.groupName || deletingGroup?.groupId}</strong> 的配置吗？此操作不可撤销。
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>
-              取消
-            </Button>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>取消</Button>
             <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
               {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               删除

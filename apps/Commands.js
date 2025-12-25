@@ -46,6 +46,35 @@ async function isGroupFeatureEnabled(groupId, feature, globalDefault) {
 }
 
 /**
+ * 获取群组的功能模型配置
+ * @param {string} groupId - 群组ID
+ * @param {string} modelKey - 模型配置键名 (summaryModel, imageGenModel等)
+ * @returns {Promise<string|null>}
+ */
+async function getGroupFeatureModel(groupId, modelKey) {
+    if (!groupId) return null
+    
+    try {
+        if (!databaseService.initialized) {
+            await databaseService.init()
+        }
+        const scopeManager = getScopeManager(databaseService)
+        await scopeManager.init()
+        const groupSettings = await scopeManager.getGroupSettings(String(groupId))
+        const settings = groupSettings?.settings || {}
+        
+        if (settings[modelKey] && settings[modelKey].trim()) {
+            logger.info(`[Commands] 使用群组独立${modelKey}: ${settings[modelKey]} (群: ${groupId})`)
+            return settings[modelKey].trim()
+        }
+    } catch (err) {
+        logger.debug(`[Commands] 获取群组${modelKey}设置失败:`, err.message)
+    }
+    
+    return null
+}
+
+/**
  * 检查是否启用debug模式
  * @param {Object} e - 事件对象
  * @returns {boolean}
@@ -599,10 +628,14 @@ ${dialogText}
 - 使用要点形式，避免长段落
 - 如有争议或有趣的互动，优先提取`
 
+            // 获取群组独立的总结模型配置
+            const groupSummaryModel = await getGroupFeatureModel(e.group_id, 'summaryModel')
+            
             const result = await chatService.sendMessage({
                 userId: `summary_${e.group_id}`,
                 groupId: e.group_id ? String(e.group_id) : null,
                 message: summaryPrompt,
+                model: groupSummaryModel || undefined,  // 使用群组独立模型
                 mode: 'chat'
             })
 
