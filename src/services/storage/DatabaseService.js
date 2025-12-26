@@ -28,7 +28,7 @@ class DatabaseService {
 
         // 始终使用插件的 data 目录
         const targetDir = dataDir || this.dataDir
-        
+
         if (!fs.existsSync(targetDir)) {
             fs.mkdirSync(targetDir, { recursive: true })
         }
@@ -70,7 +70,7 @@ class DatabaseService {
             CREATE INDEX IF NOT EXISTS idx_memories_timestamp ON memories(timestamp);
         `)
     }
-    
+
     /**
      * 保存记忆
      */
@@ -89,7 +89,7 @@ class DatabaseService {
         )
         return result.lastInsertRowid
     }
-    
+
     /**
      * 获取用户的所有记忆
      */
@@ -110,28 +110,53 @@ class DatabaseService {
             metadata: row.metadata ? JSON.parse(row.metadata) : null
         }))
     }
-    
+
     /**
      * 搜索记忆（简单文本匹配）
      */
     searchMemories(userId, query, limit = 10) {
-        const stmt = this.db.prepare(`
-            SELECT * FROM memories 
-            WHERE user_id = ? AND content LIKE ? 
-            ORDER BY importance DESC, timestamp DESC 
-            LIMIT ?
-        `)
-        return stmt.all(userId, `%${query}%`, limit).map(row => ({
-            id: row.id,
-            userId: row.user_id,
-            content: row.content,
-            source: row.source,
-            importance: row.importance,
-            timestamp: row.timestamp,
-            metadata: row.metadata ? JSON.parse(row.metadata) : null
-        }))
+        // 修复 "LIKE or GLOB pattern too complex" 错误
+        // 1. 限制查询字符串长度（防止过长导致模式复杂）
+        // 2. 转义特殊字符
+        if (!query || typeof query !== 'string') {
+            return []
+        }
+
+        // 限制查询长度为200字符
+        let safeQuery = query.substring(0, 200)
+
+        // 转义 LIKE 特殊字符: % _ [ ] 
+        safeQuery = safeQuery
+            .replace(/[%_\[\]]/g, '\\$&')
+            .trim()
+
+        // 如果查询为空，返回空数组
+        if (!safeQuery) {
+            return []
+        }
+
+        try {
+            const stmt = this.db.prepare(`
+                SELECT * FROM memories 
+                WHERE user_id = ? AND content LIKE ? ESCAPE '\\'
+                ORDER BY importance DESC, timestamp DESC 
+                LIMIT ?
+            `)
+            return stmt.all(userId, `%${safeQuery}%`, limit).map(row => ({
+                id: row.id,
+                userId: row.user_id,
+                content: row.content,
+                source: row.source,
+                importance: row.importance,
+                timestamp: row.timestamp,
+                metadata: row.metadata ? JSON.parse(row.metadata) : null
+            }))
+        } catch (err) {
+            safeLogger.warn(`[DatabaseService] 搜索记忆失败: ${err.message}, query="${query.substring(0, 50)}..."`)
+            return []
+        }
     }
-    
+
     /**
      * 删除记忆
      */
@@ -139,7 +164,7 @@ class DatabaseService {
         const stmt = this.db.prepare('DELETE FROM memories WHERE id = ?')
         return stmt.run(memoryId).changes > 0
     }
-    
+
     /**
      * 清空用户所有记忆
      */
@@ -147,7 +172,7 @@ class DatabaseService {
         const stmt = this.db.prepare('DELETE FROM memories WHERE user_id = ?')
         return stmt.run(userId).changes
     }
-    
+
     /**
      * 清空所有用户的记忆
      */
@@ -155,7 +180,7 @@ class DatabaseService {
         const stmt = this.db.prepare('DELETE FROM memories')
         return stmt.run().changes
     }
-    
+
     /**
      * 按前缀获取记忆
      */
@@ -176,7 +201,7 @@ class DatabaseService {
             metadata: row.metadata ? JSON.parse(row.metadata) : null
         }))
     }
-    
+
     /**
      * 获取记忆统计
      */
@@ -194,7 +219,7 @@ class DatabaseService {
         `)
         return stmt.get()
     }
-    
+
     /**
      * 获取所有有记忆的用户
      */
@@ -225,13 +250,13 @@ class DatabaseService {
                 WHERE conversation_id = ? AND content LIKE ?
                 LIMIT 1
             `).get(conversationId, `%"id":"${message.id}"%`)
-            
+
             if (existing) {
                 // 消息已存在，跳过保存
                 return
             }
         }
-        
+
         // 内容去重：检查最近5条消息是否有相同内容（防止重复触发）
         const contentHash = this.hashContent(message.content, message.role)
         const recentDuplicate = this.db.prepare(`
@@ -240,7 +265,7 @@ class DatabaseService {
             ORDER BY timestamp DESC 
             LIMIT 5
         `).all(conversationId)
-        
+
         for (const recent of recentDuplicate) {
             const recentMsg = this.db.prepare(`SELECT content, role FROM messages WHERE id = ?`).get(recent.id)
             if (recentMsg) {
@@ -255,7 +280,7 @@ class DatabaseService {
                 }
             }
         }
-        
+
         const stmt = this.db.prepare(`
             INSERT INTO messages (conversation_id, role, content, timestamp, metadata)
             VALUES (?, ?, ?, ?, ?)
@@ -274,7 +299,7 @@ class DatabaseService {
 
         stmt.run(conversationId, message.role, content, timestamp, metadata)
     }
-    
+
     /**
      * 生成消息内容的简单哈希用于去重
      * @param {any} content 
@@ -329,7 +354,7 @@ class DatabaseService {
     mapRowToMessage(row) {
         try {
             const parsed = JSON.parse(row.content)
-            
+
             // Handle both old format (content directly) and new format (full message object)
             if (parsed.content !== undefined) {
                 // New format: full message object
@@ -427,19 +452,19 @@ class DatabaseService {
             } catch {
                 lastMessage = String(row.last_content || '').substring(0, 100)
             }
-            
+
             // 解析 userId 和 groupId
             const parts = row.conversation_id.split(':')
             let userId = row.conversation_id
             let groupId = undefined
-            
+
             if (parts[0] === 'user') {
                 userId = parts[1] || parts[0]
             } else if (parts[0] === 'group') {
                 groupId = parts[1]
                 userId = parts[3] || parts[1]
             }
-            
+
             return {
                 id: row.conversation_id,
                 userId,
@@ -512,7 +537,7 @@ class DatabaseService {
         const messages = this.db.prepare('SELECT COUNT(*) as count FROM messages').get()
         const oldest = this.db.prepare('SELECT MIN(timestamp) as ts FROM messages').get()
         const newest = this.db.prepare('SELECT MAX(timestamp) as ts FROM messages').get()
-        
+
         return {
             conversationCount: conversations.count,
             messageCount: messages.count,
@@ -526,7 +551,7 @@ class DatabaseService {
      */
     getUsers() {
         const userMap = new Map()
-        
+
         // 1. 先从 user_settings 文件加载所有已设置的用户
         const allSettings = this._loadUserSettings()
         for (const [key, settings] of Object.entries(allSettings)) {
@@ -545,7 +570,7 @@ class DatabaseService {
                 })
             }
         }
-        
+
         // 2. 从数据库消息中提取用户信息
         const stmt = this.db.prepare(`
             SELECT 
@@ -557,14 +582,14 @@ class DatabaseService {
             GROUP BY conversation_id
             ORDER BY last_activity DESC
         `)
-        
+
         const rows = stmt.all()
-        
+
         for (const row of rows) {
             // 解析 userId
             const parts = row.conversation_id.split('_')
             const userId = parts.length > 1 ? parts[parts.length - 1] : parts[0]
-            
+
             if (!userMap.has(userId)) {
                 userMap.set(userId, {
                     userId,
@@ -577,7 +602,7 @@ class DatabaseService {
                     settings: {}
                 })
             }
-            
+
             const user = userMap.get(userId)
             user.conversationCount++
             user.messageCount += row.message_count
@@ -588,7 +613,7 @@ class DatabaseService {
                 user.firstActivity = row.first_activity
             }
         }
-        
+
         return Array.from(userMap.values())
     }
 
@@ -665,7 +690,7 @@ class DatabaseService {
             `user:${userId}`,
             userId.replace('user:', '')  // 如果传入的是带前缀的
         ]
-        
+
         for (const key of keysToCheck) {
             const settings = this.getUserSettings(key)
             if (settings.blocked === true) {

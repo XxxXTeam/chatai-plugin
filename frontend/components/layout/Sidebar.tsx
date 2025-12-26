@@ -127,9 +127,9 @@ function isItemActive(itemHref: string, pathname: string, allItems: NavItem[]): 
   // 精确匹配
   if (pathname === itemHref) return true
   const hasMoreSpecificMatch = allItems.some(
-    other => other.href !== itemHref && 
-             other.href.startsWith(itemHref + '/') && 
-             (pathname === other.href || pathname.startsWith(other.href + '/'))
+    other => other.href !== itemHref &&
+      other.href.startsWith(itemHref + '/') &&
+      (pathname === other.href || pathname.startsWith(other.href + '/'))
   )
   if (hasMoreSpecificMatch) return false
   // 前缀匹配
@@ -142,13 +142,13 @@ function isGroupActive(group: NavGroup, pathname: string): boolean {
 }
 
 // 导航分组组件
-function NavGroupItem({ 
-  group, 
-  pathname, 
+function NavGroupItem({
+  group,
+  pathname,
   onNavClick,
   isOpen,
   onToggle
-}: { 
+}: {
   group: NavGroup
   pathname: string
   onNavClick?: () => void
@@ -157,51 +157,57 @@ function NavGroupItem({
 }) {
   const hasActiveItem = isGroupActive(group, pathname)
   const Icon = group.icon
-  
+
   // 单项分组直接渲染链接
   if (group.items.length === 1) {
     const item = group.items[0]
     const isActive = pathname === item.href
     const ItemIcon = item.icon || Icon
-    
+
     return (
       <Link
         href={item.href}
         className={cn(
-          'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200',
+          'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-300 relative overflow-hidden group/item',
           isActive
-            ? 'bg-primary text-primary-foreground shadow-md'
-            : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+            ? 'text-primary-foreground shadow-lg shadow-primary/25'
+            : 'text-muted-foreground hover:text-foreground hover:bg-accent/50 hover:shadow-sm'
         )}
         onClick={onNavClick}
       >
+        {isActive && (
+          <div className="absolute inset-0 bg-gradient-to-r from-primary to-primary/80 opacity-100 transition-opacity" />
+        )}
         <div className={cn(
-          'flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
-          isActive ? 'bg-primary-foreground/20' : 'bg-muted'
+          'flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-300 relative z-10',
+          isActive ? 'bg-white/20 text-white' : 'bg-muted/50 group-hover/item:bg-background group-hover/item:scale-110'
         )}>
           <ItemIcon className="h-4 w-4" />
         </div>
-        <span>{item.label}</span>
+        <span className="relative z-10">{item.label}</span>
       </Link>
     )
   }
 
   return (
     <Collapsible open={isOpen} onOpenChange={onToggle}>
-      <CollapsibleTrigger className="w-full group">
+      <CollapsibleTrigger className="w-full group/trigger">
         <div className={cn(
-          'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 w-full',
-          hasActiveItem ? 'text-foreground bg-accent/50' : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+          'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-300 w-full relative overflow-hidden',
+          hasActiveItem ? 'text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-accent/40'
         )}>
+          {hasActiveItem && (
+            <div className="absolute inset-0 bg-primary/5 opacity-100 transition-opacity" />
+          )}
           <div className={cn(
-            'flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
-            hasActiveItem ? 'bg-primary/10 text-primary' : 'bg-muted group-hover:bg-muted-foreground/10'
+            'flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-300 relative z-10',
+            hasActiveItem ? 'bg-primary/10 text-primary shadow-sm' : 'bg-muted/50 group-hover/trigger:bg-background group-hover/trigger:scale-110'
           )}>
             <Icon className="h-4 w-4" />
           </div>
-          <span className="flex-1 text-left">{group.label}</span>
+          <span className="flex-1 text-left relative z-10">{group.label}</span>
           <ChevronDown className={cn(
-            'h-4 w-4 transition-transform duration-200 text-muted-foreground',
+            'h-4 w-4 transition-transform duration-300 text-muted-foreground/70 group-hover/trigger:text-foreground relative z-10',
             isOpen && 'rotate-180'
           )} />
         </div>
@@ -210,7 +216,7 @@ function NavGroupItem({
         {group.items.map((item) => {
           const isActive = isItemActive(item.href, pathname, group.items)
           const ItemIcon = item.icon
-          
+
           return (
             <Link
               key={item.href}
@@ -280,15 +286,15 @@ export function Sidebar() {
   return (
     <TooltipProvider>
       {/* Desktop Sidebar */}
-      <aside className="hidden lg:block w-64 bg-gradient-to-b from-card to-card/95 border-r border-border/50 h-screen sticky top-0">
-        <div className="flex h-16 items-center px-5 border-b border-border/50">
+      <aside className="hidden lg:block w-64 glass-sidebar h-screen sticky top-0 transition-all duration-300">
+        <div className="flex h-16 items-center px-6 border-b border-border/40 backdrop-blur-md bg-background/20">
           <Link href="/" className="flex items-center gap-3 group">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80 shadow-md group-hover:shadow-lg group-hover:scale-105 transition-all duration-300">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80 shadow-lg shadow-primary/20 group-hover:shadow-primary/40 group-hover:scale-110 transition-all duration-300">
               <Bot className="h-5 w-5 text-primary-foreground" />
             </div>
             <div className="flex flex-col">
-              <span className="font-bold text-lg leading-tight">ChatAI</span>
-              <span className="text-[10px] text-muted-foreground leading-tight">AI Assistant</span>
+              <span className="font-bold text-lg leading-tight tracking-tight">ChatAI</span>
+              <span className="text-[10px] text-muted-foreground leading-tight uppercase tracking-wider font-semibold">Assistant</span>
             </div>
           </Link>
         </div>
@@ -299,8 +305,8 @@ export function Sidebar() {
 
       {/* Mobile Sheet */}
       <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
-        <SheetContent side="left" className="w-72 p-0 bg-gradient-to-b from-card to-card/95">
-          <SheetHeader className="h-16 flex flex-row items-center px-5 border-b border-border/50">
+        <SheetContent side="left" className="w-72 p-0 glass-sidebar border-r-0">
+          <SheetHeader className="h-16 flex flex-row items-center px-6 border-b border-border/40 bg-background/20">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80 shadow-md mr-3">
               <Bot className="h-5 w-5 text-primary-foreground" />
             </div>

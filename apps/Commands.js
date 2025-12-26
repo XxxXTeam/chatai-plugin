@@ -514,6 +514,7 @@ export class AICommands extends plugin {
         try {
             await this.reply('正在分析群聊消息...', true)
             const maxMessages = config.get('features.groupSummary.maxMessages') || 300
+            const maxChars = config.get('features.groupSummary.maxChars') || 6000
             const groupId = String(e.group_id)
             await memoryManager.init()
             let messages = []
@@ -587,7 +588,7 @@ export class AICommands extends plugin {
 
             // 构建总结提示
             const recentMessages = messages.slice(-maxMessages)
-            const dialogText = recentMessages.map(m => {
+            let dialogText = recentMessages.map(m => {
                 if (typeof m.content === 'string' && m.content.startsWith('[')) {
                     return m.content  // 已格式化
                 }
@@ -595,6 +596,11 @@ export class AICommands extends plugin {
                     (Array.isArray(m.content) ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') : m.content)
                 return `[${m.nickname || '用户'}]: ${content}`
             }).join('\n')
+            let truncatedNote = ''
+            if (dialogText.length > maxChars) {
+                dialogText = dialogText.slice(-maxChars)
+                truncatedNote = '\n\n⚠️ 消息过长，已截断到最近部分。'
+            }
             
             // 统计参与者
             const participants = new Set(recentMessages.map(m => m.nickname || m.userId || '用户'))
@@ -603,6 +609,9 @@ export class AICommands extends plugin {
 
 【群聊记录】
 ${dialogText}
+
+【数据来源】
+${dataSource || '混合/未知'}
 
 【输出要求】
 请严格按以下格式输出，使用 emoji 美化：
@@ -626,25 +635,30 @@ ${dialogText}
 注意：
 - 保持简洁，每项不超过2-3行
 - 使用要点形式，避免长段落
-- 如有争议或有趣的互动，优先提取`
+- 如有争议或有趣的互动，优先提取${truncatedNote}`
 
             // 获取群组独立的总结模型配置
             const groupSummaryModel = await getGroupFeatureModel(e.group_id, 'summaryModel')
-            
-            const result = await chatService.sendMessage({
-                userId: `summary_${e.group_id}`,
-                groupId: e.group_id ? String(e.group_id) : null,
-                message: summaryPrompt,
-                model: groupSummaryModel || undefined,  // 使用群组独立模型
-                mode: 'chat'
-            })
-
             let summaryText = ''
-            if (result.response && Array.isArray(result.response)) {
-                summaryText = result.response
-                    .filter(c => c.type === 'text')
-                    .map(c => c.text)
-                    .join('\n')
+            try {
+                const result = await chatService.sendMessage({
+                    userId: `summary_${e.group_id}`,
+                    groupId: e.group_id ? String(e.group_id) : null,
+                    message: summaryPrompt,
+                    model: groupSummaryModel || undefined,  // 使用群组独立模型
+                    mode: 'chat'
+                })
+
+                if (result.response && Array.isArray(result.response)) {
+                    summaryText = result.response
+                        .filter(c => c.type === 'text')
+                        .map(c => c.text)
+                        .join('\n')
+                }
+            } catch (invokeErr) {
+                logger.error('[AI-Commands] 调用模型生成群聊总结失败:', invokeErr)
+                await this.reply(`群聊总结生成失败：${invokeErr.message || '模型调用异常'}`, true)
+                return true
             }
 
             if (summaryText) {

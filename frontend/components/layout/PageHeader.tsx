@@ -12,25 +12,25 @@ interface PageHeaderProps {
   className?: string
 }
 
-export function PageHeader({ 
-  title, 
-  description, 
-  icon: Icon, 
+export function PageHeader({
+  title,
+  description,
+  icon: Icon,
   actions,
-  className 
+  className
 }: PageHeaderProps) {
   return (
-    <div className={cn('flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between pb-2', className)}>
+    <div className={cn('flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between pb-6 animate-fade-in', className)}>
       <div className="flex items-center gap-4">
         {Icon && (
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/10 shadow-sm">
-            <Icon className="h-6 w-6 text-primary" />
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/10 via-primary/5 to-transparent border border-primary/10 shadow-sm glass-card group">
+            <Icon className="h-7 w-7 text-primary group-hover:scale-110 transition-transform duration-300" />
           </div>
         )}
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/70">{title}</h1>
           {description && (
-            <p className="text-muted-foreground text-sm">{description}</p>
+            <p className="text-muted-foreground/80 text-sm font-medium">{description}</p>
           )}
         </div>
       </div>

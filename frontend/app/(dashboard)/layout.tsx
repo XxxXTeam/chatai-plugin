@@ -37,7 +37,7 @@ export default function DashboardLayout({
         }
       }
     }
-    
+
     if (!token) {
       router.push('/login/')
       return
@@ -76,7 +76,12 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="flex h-screen overflow-hidden bg-background relative">
+      {/* Background Decor */}
+      <div className="absolute inset-0 bg-[#f8fafc] dark:bg-[#020617] -z-10" />
+      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-primary/5 blur-[120px] -z-10 animate-pulse-soft" />
+      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-blue-500/5 blur-[120px] -z-10 animate-pulse-soft delay-700" />
+
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header />
