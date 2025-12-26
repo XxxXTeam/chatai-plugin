@@ -8,12 +8,12 @@ import { Label } from '@/components/ui/label'
 // import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { 
-  Dialog, 
-  DialogContent, 
-  DialogDescription, 
-  DialogHeader, 
-  DialogTitle, 
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
   DialogTrigger,
   DialogFooter
 } from '@/components/ui/dialog'
@@ -27,8 +27,8 @@ import {
 // import { ScrollArea } from '@/components/ui/scroll-area'
 import { knowledgeApi, presetsApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { 
-  Plus, Trash2, Loader2, BookOpen, FileText, Search, 
+import {
+  Plus, Trash2, Loader2, BookOpen, FileText, Search,
   Link2, Unlink, RefreshCw, Upload, Maximize2
 } from 'lucide-react'
 import { MarkdownEditor } from '@/components/ui/markdown-editor'
@@ -67,12 +67,21 @@ export default function KnowledgePage() {
   // 导入对话框
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [importing, setImporting] = useState(false)
-  const [importForm, setImportForm] = useState({
+  interface ImportForm {
+    name: string
+    format: 'openie' | 'raw'
+    mergeMode: 'create' | 'merge' | 'replace'
+    tags: string
+    fileContent: unknown
+    fileName: string
+  }
+
+  const [importForm, setImportForm] = useState<ImportForm>({
     name: '',
-    format: 'openie' as 'openie' | 'raw',
-    mergeMode: 'create' as 'create' | 'merge' | 'replace',
+    format: 'openie',
+    mergeMode: 'create',
     tags: '',
-    fileContent: null as string | null,
+    fileContent: null,
     fileName: ''
   })
 
@@ -130,7 +139,7 @@ export default function KnowledgePage() {
         tags: (doc.tags || []).join(', '),
       })
       setDialogOpen(true)
-      
+
       // 如果内容被截断，获取完整内容
       if ((doc as { truncated?: boolean }).truncated || (doc as { contentLength?: number }).contentLength && (doc as { contentLength: number }).contentLength > 500) {
         try {
@@ -238,22 +247,25 @@ export default function KnowledgePage() {
 
     try {
       const text = await file.text()
-      let content: any
+      let content: unknown
 
       if (file.name.endsWith('.json')) {
         content = JSON.parse(text)
         // 自动检测格式
-        if (content.docs && Array.isArray(content.docs)) {
-          setImportForm(prev => ({ 
-            ...prev, 
+        const isObject = content && typeof content === 'object';
+        const hasDocs = isObject && 'docs' in (content as Record<string, unknown>) && Array.isArray((content as Record<string, unknown>).docs);
+
+        if (hasDocs) {
+          setImportForm(prev => ({
+            ...prev,
             format: 'openie',
             fileContent: content,
             fileName: file.name,
             name: prev.name || file.name.replace(/\.[^.]+$/, '')
           }))
         } else {
-          setImportForm(prev => ({ 
-            ...prev, 
+          setImportForm(prev => ({
+            ...prev,
             format: 'raw',
             fileContent: content,
             fileName: file.name,
@@ -262,8 +274,8 @@ export default function KnowledgePage() {
         }
       } else {
         // 非 JSON 文件作为原始文本
-        setImportForm(prev => ({ 
-          ...prev, 
+        setImportForm(prev => ({
+          ...prev,
           format: 'raw',
           fileContent: text,
           fileName: file.name,
@@ -300,7 +312,7 @@ export default function KnowledgePage() {
       } else {
         toast.success('导入成功')
       }
-      
+
       setImportDialogOpen(false)
       setImportForm({
         name: '',
@@ -534,7 +546,7 @@ export default function KnowledgePage() {
                     内容长度: {((doc as { contentLength: number }).contentLength / 1000).toFixed(1)}K 字符
                   </div>
                 )}
-                
+
                 {/* 标签 */}
                 {doc.tags && doc.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1">
@@ -550,7 +562,7 @@ export default function KnowledgePage() {
                     )}
                   </div>
                 )}
-                
+
                 {/* 关联的预设 */}
                 {doc.presetIds && doc.presetIds.length > 0 && (
                   <div className="flex flex-wrap gap-1">
@@ -576,7 +588,7 @@ export default function KnowledgePage() {
                     )}
                   </div>
                 )}
-                
+
                 <div className="flex gap-2">
                   <Button
                     variant="outline"

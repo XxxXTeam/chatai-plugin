@@ -47,6 +47,10 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  /* Custom Gradients */
+  --bg-gradient-primary: linear-gradient(135deg, var(--primary) 0%, oklch(0.6 0.2 300) 100%);
+  --bg-gradient-glass: linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.05));
 }
 
 :root {
@@ -134,6 +138,7 @@
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply bg-background text-foreground;
   }
@@ -144,21 +149,33 @@
   .card-hover {
     @apply transition-all duration-300 ease-out;
   }
+
   .card-hover:hover {
     @apply shadow-lg -translate-y-0.5;
   }
-  
+
   .glass-card {
-    @apply backdrop-blur-md bg-card/70 border-border/40;
-    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.05);
+    @apply backdrop-blur-xl bg-card/60 border-border/40;
+    box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
   }
+
   .dark .glass-card {
-    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.2);
+    @apply bg-card/40;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
   }
-  
+
+  .glass-panel {
+    @apply backdrop-blur-md bg-background/80 border-b border-border/40 sticky top-0 z-50;
+  }
+
+  .glass-sidebar {
+    @apply backdrop-blur-xl bg-card/90 border-r border-border/40;
+  }
+
   .gradient-border {
     position: relative;
   }
+
   .gradient-border::before {
     content: "";
     position: absolute;
@@ -177,14 +194,16 @@
     position: relative;
     overflow: hidden;
   }
+
   .btn-glow::after {
     content: "";
     position: absolute;
     inset: -50%;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
     transform: translateX(-100%) rotate(45deg);
     transition: transform 0.6s;
   }
+
   .btn-glow:hover::after {
     transform: translateX(100%) rotate(45deg);
   }
@@ -193,18 +212,22 @@
   .status-dot {
     @apply w-2 h-2 rounded-full;
   }
+
   .status-dot-success {
     @apply bg-success;
     box-shadow: 0 0 8px var(--success);
   }
+
   .status-dot-warning {
     @apply bg-warning;
     box-shadow: 0 0 8px var(--warning);
   }
+
   .status-dot-error {
     @apply bg-destructive;
     box-shadow: 0 0 8px var(--destructive);
   }
+
   .status-dot-info {
     @apply bg-info;
     box-shadow: 0 0 8px var(--info);
@@ -212,22 +235,37 @@
 
   /* 渐变文本 */
   .text-gradient {
-    background: linear-gradient(135deg, var(--primary) 0%, oklch(0.6 0.2 300) 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    @apply text-transparent bg-clip-text;
+    background-image: linear-gradient(135deg, var(--primary) 0%, oklch(0.6 0.2 300) 100%);
+  }
+
+  .text-gradient-gold {
+    @apply text-transparent bg-clip-text;
+    background-image: linear-gradient(135deg, #FFD700 0%, #FFA500 100%);
+  }
+
+  /* 悬停发光 */
+  .hover-glow {
+    @apply transition-all duration-300;
+  }
+
+  .hover-glow:hover {
+    box-shadow: 0 0 20px 5px var(--primary-foreground);
   }
 
   /* 空状态样式 */
   .empty-state {
     @apply flex flex-col items-center justify-center py-12 px-4 text-center;
   }
+
   .empty-state-icon {
     @apply w-16 h-16 mb-4 text-muted-foreground/40;
   }
+
   .empty-state-title {
     @apply text-lg font-semibold text-foreground/80 mb-2;
   }
+
   .empty-state-desc {
     @apply text-sm text-muted-foreground max-w-sm;
   }
@@ -247,53 +285,119 @@
 
 /* 动画效果 */
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes fade-in-up {
-  from { opacity: 0; transform: translateY(16px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes scale-in {
-  from { opacity: 0; transform: scale(0.95); }
-  to { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 @keyframes slide-in-left {
-  from { opacity: 0; transform: translateX(-12px); }
-  to { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 @keyframes slide-in-right {
-  from { opacity: 0; transform: translateX(12px); }
-  to { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 @keyframes slide-in-up {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 @keyframes pulse-soft {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.6;
+  }
 }
 
 @keyframes bounce-soft {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
+
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-4px);
+  }
 }
 
 @keyframes spin-slow {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .animate-fade-in {
@@ -337,28 +441,47 @@
 }
 
 /* 延迟动画 */
-.delay-100 { animation-delay: 100ms; }
-.delay-200 { animation-delay: 200ms; }
-.delay-300 { animation-delay: 300ms; }
-.delay-400 { animation-delay: 400ms; }
-.delay-500 { animation-delay: 500ms; }
+.delay-100 {
+  animation-delay: 100ms;
+}
+
+.delay-200 {
+  animation-delay: 200ms;
+}
+
+.delay-300 {
+  animation-delay: 300ms;
+}
+
+.delay-400 {
+  animation-delay: 400ms;
+}
+
+.delay-500 {
+  animation-delay: 500ms;
+}
 
 /* 统计卡片渐变 */
 .stat-gradient-blue {
   background: linear-gradient(135deg, oklch(0.55 0.2 250) 0%, oklch(0.45 0.18 270) 100%);
 }
+
 .stat-gradient-green {
   background: linear-gradient(135deg, oklch(0.6 0.18 145) 0%, oklch(0.5 0.15 165) 100%);
 }
+
 .stat-gradient-amber {
   background: linear-gradient(135deg, oklch(0.7 0.18 75) 0%, oklch(0.6 0.16 55) 100%);
 }
+
 .stat-gradient-purple {
   background: linear-gradient(135deg, oklch(0.55 0.2 300) 0%, oklch(0.45 0.18 320) 100%);
 }
+
 .stat-gradient-cyan {
   background: linear-gradient(135deg, oklch(0.6 0.18 200) 0%, oklch(0.5 0.16 220) 100%);
 }
+
 .stat-gradient-rose {
   background: linear-gradient(135deg, oklch(0.65 0.2 10) 0%, oklch(0.55 0.22 350) 100%);
 }
@@ -373,6 +496,7 @@
 .nav-item {
   @apply relative overflow-hidden;
 }
+
 .nav-item::before {
   content: "";
   position: absolute;
@@ -385,6 +509,7 @@
   transform-origin: right;
   transition: transform 0.3s ease;
 }
+
 .nav-item:hover::before {
   transform: scaleX(1);
   transform-origin: left;
@@ -395,13 +520,16 @@
   width: 6px;
   height: 6px;
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 3px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: var(--muted-foreground);
 }
@@ -418,12 +546,14 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
 .line-clamp-2 {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
 .line-clamp-3 {
   display: -webkit-box;
   -webkit-line-clamp: 3;
