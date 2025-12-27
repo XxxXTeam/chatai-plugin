@@ -891,64 +891,201 @@ export class ChatService {
                 const maxRetries = fallbackConfig.maxRetries || 3
                 const retryDelay = fallbackConfig.retryDelay || 500
                 const notifyOnFallback = fallbackConfig.notifyOnFallback
+                const enableChannelSwitch = fallbackConfig.enableChannelSwitch !== false // 默认启用渠道切换
+                const enableKeyRotation = fallbackConfig.enableKeyRotation !== false // 默认启用Key轮换
+                const emptyRetries = fallbackConfig.emptyRetries || 2 // 空响应重试次数
+                
                 const modelsToTry = [llmModel, ...fallbackModels.filter(m => m && m !== llmModel)]
                 let response = null
                 let usedModel = llmModel
+                let usedChannel = channel
                 let fallbackUsed = false
-                let totalRetryCount = 0  // 总重试次数
+                let channelSwitched = false
+                let totalRetryCount = 0
+                let currentKeyIndex = clientOptions.keyIndex ?? -1
+                
                 for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
                     const currentModel = modelsToTry[modelIndex]
                     const isMainModel = modelIndex === 0
                     let retryCount = 0
+                    let emptyRetryCount = 0
+                    let currentClient = client
+                    let currentChannel = isMainModel ? channel : null
+                    
+                    // 备选模型时获取新渠道
+                    if (!isMainModel) {
+                        currentChannel = channelManager.getBestChannel(currentModel)
+                        if (currentChannel) {
+                            const keyInfo = channelManager.getChannelKey(currentChannel)
+                            currentKeyIndex = keyInfo.keyIndex
+                            const fallbackClientOptions = {
+                                ...clientOptions,
+                                adapterType: currentChannel.adapterType,
+                                baseUrl: currentChannel.baseUrl,
+                                apiKey: keyInfo.key,
+                                keyIndex: keyInfo.keyIndex
+                            }
+                            currentClient = await LlmService.createClient(fallbackClientOptions)
+                        }
+                    }
+                    
                     while (retryCount <= (isMainModel ? maxRetries : 1)) {
                         try {
                             const currentRequestOptions = { ...requestOptions, model: currentModel }
-                            let currentClient = client
-                            if (!isMainModel) {
-                                const fallbackChannel = channelManager.getBestChannel(currentModel)
-                                if (fallbackChannel) {
-                                    const fallbackClientOptions = {
-                                        ...clientOptions,
-                                        adapterType: fallbackChannel.adapterType,
-                                        baseUrl: fallbackChannel.baseUrl,
-                                        apiKey: channelManager.getChannelKey(fallbackChannel).key
-                                    }
-                                    currentClient = await LlmService.createClient(fallbackClientOptions)
-                                }
-                            }
-                            
                             response = await currentClient.sendMessage(userMessage, currentRequestOptions)
-                            const hasToolCallLogs = response.toolCallLogs && response.toolCallLogs.length > 0
-                            const hasContents = response.contents && response.contents.length > 0
+                            
+                            const hasToolCallLogs = response?.toolCallLogs?.length > 0
+                            const hasContents = response?.contents?.length > 0
+                            const hasTextContent = response?.contents?.some(c => c.type === 'text' && c.text?.trim())
                             const hasAnyContent = hasContents || hasToolCallLogs
                             
-                            if (response && (hasAnyContent || response.id)) {
-                                // 成功响应
+                            // 成功响应：有内容或有工具调用
+                            if (response && hasAnyContent) {
+                                // 检查是否为空文本响应（无工具调用且无文本）
+                                if (!hasToolCallLogs && !hasTextContent && emptyRetryCount < emptyRetries) {
+                                    emptyRetryCount++
+                                    logger.warn(`[ChatService] 模型 ${currentModel} 返回空文本，重试第${emptyRetryCount}次...`)
+                                    await new Promise(r => setTimeout(r, retryDelay * emptyRetryCount))
+                                    continue
+                                }
+                                
+                                // 成功
                                 usedModel = currentModel
+                                usedChannel = currentChannel
                                 if (!isMainModel) {
                                     fallbackUsed = true
-                                    logger.debug(`[ChatService] 使用备选模型成功: ${currentModel}`)
-                                    if (notifyOnFallback && event && event.reply) {
-                                        try {
-                                            await event.reply(`[已切换至备选模型: ${currentModel}]`, false)
-                                        } catch (e) { }
+                                    logger.info(`[ChatService] 使用备选模型成功: ${currentModel}`)
+                                    if (notifyOnFallback && event?.reply) {
+                                        try { await event.reply(`[已切换至备选模型: ${currentModel}]`, false) } catch {}
                                     }
+                                }
+                                // 成功后重置渠道错误计数
+                                if (currentChannel) {
+                                    channelManager.resetChannelError(currentChannel.id)
                                 }
                                 break
                             }
-                            retryCount++
-                            if (retryCount <= (isMainModel ? maxRetries : 1)) {
-                                logger.warn(`[ChatService] 模型${currentModel}返回空响应，重试第${retryCount}次...`)
-                                await new Promise(r => setTimeout(r, retryDelay * retryCount))
+                            
+                            // 空响应处理
+                            emptyRetryCount++
+                            if (emptyRetryCount <= emptyRetries) {
+                                logger.warn(`[ChatService] 模型 ${currentModel} 返回空响应，重试第${emptyRetryCount}次...`)
+                                await new Promise(r => setTimeout(r, retryDelay * emptyRetryCount))
+                                continue
                             }
+                            
+                            // 空响应重试耗尽，尝试切换Key
+                            if (enableKeyRotation && currentChannel && currentKeyIndex >= 0) {
+                                const nextKey = channelManager.getNextAvailableKey(currentChannel.id, currentKeyIndex)
+                                if (nextKey) {
+                                    logger.info(`[ChatService] 空响应后切换Key: ${currentChannel.name} Key#${nextKey.keyIndex + 1}`)
+                                    currentKeyIndex = nextKey.keyIndex
+                                    const newClientOptions = { ...clientOptions, apiKey: nextKey.key, keyIndex: nextKey.keyIndex }
+                                    currentClient = await LlmService.createClient(newClientOptions)
+                                    emptyRetryCount = 0 // 重置空响应计数
+                                    continue
+                                }
+                            }
+                            
+                            // 尝试切换渠道
+                            if (enableChannelSwitch && isMainModel) {
+                                const altChannels = channelManager.getAvailableChannels(currentModel, { 
+                                    excludeChannelId: currentChannel?.id 
+                                })
+                                if (altChannels.length > 0) {
+                                    const altChannel = altChannels[0]
+                                    const altKeyInfo = channelManager.getChannelKey(altChannel)
+                                    logger.info(`[ChatService] 空响应后切换渠道: ${currentChannel?.name} -> ${altChannel.name}`)
+                                    currentChannel = altChannel
+                                    currentKeyIndex = altKeyInfo.keyIndex
+                                    channelSwitched = true
+                                    const altClientOptions = {
+                                        ...clientOptions,
+                                        adapterType: altChannel.adapterType,
+                                        baseUrl: altChannel.baseUrl,
+                                        apiKey: altKeyInfo.key,
+                                        keyIndex: altKeyInfo.keyIndex
+                                    }
+                                    currentClient = await LlmService.createClient(altClientOptions)
+                                    emptyRetryCount = 0
+                                    continue
+                                }
+                            }
+                            
+                            // 无法处理空响应，进入下一个模型
+                            break
+                            
                         } catch (modelError) {
                             lastError = modelError
-                            logger.error(`[ChatService] 模型${currentModel}请求失败: ${modelError.message}`)
+                            const errorMsg = modelError.message || ''
+                            
+                            // 分析错误类型
+                            let errorType = 'unknown'
+                            if (errorMsg.includes('401') || errorMsg.includes('Unauthorized') || errorMsg.includes('invalid_api_key')) {
+                                errorType = 'auth'
+                            } else if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('rate_limit')) {
+                                errorType = 'quota'
+                            } else if (errorMsg.includes('timeout') || errorMsg.includes('ETIMEDOUT')) {
+                                errorType = 'timeout'
+                            } else if (errorMsg.includes('ECONNREFUSED') || errorMsg.includes('network')) {
+                                errorType = 'network'
+                            }
+                            
+                            logger.error(`[ChatService] 模型 ${currentModel} 请求失败 (${errorType}): ${errorMsg}`)
+                            
+                            // 报告渠道错误
+                            if (currentChannel) {
+                                await channelManager.reportError(currentChannel.id, {
+                                    keyIndex: currentKeyIndex,
+                                    errorType,
+                                    errorMessage: errorMsg
+                                })
+                            }
+                            
+                            // 认证错误: 尝试切换Key
+                            if (errorType === 'auth' && enableKeyRotation && currentChannel && currentKeyIndex >= 0) {
+                                const nextKey = channelManager.getNextAvailableKey(currentChannel.id, currentKeyIndex)
+                                if (nextKey) {
+                                    logger.info(`[ChatService] 认证失败后切换Key: ${currentChannel.name} Key#${nextKey.keyIndex + 1}`)
+                                    currentKeyIndex = nextKey.keyIndex
+                                    const newClientOptions = { ...clientOptions, apiKey: nextKey.key, keyIndex: nextKey.keyIndex }
+                                    currentClient = await LlmService.createClient(newClientOptions)
+                                    continue // 不增加retryCount，直接重试
+                                }
+                            }
+                            
+                            // 配额/限流错误: 尝试切换渠道
+                            if ((errorType === 'quota' || errorType === 'auth') && enableChannelSwitch && isMainModel) {
+                                const altChannels = channelManager.getAvailableChannels(currentModel, {
+                                    excludeChannelId: currentChannel?.id
+                                })
+                                if (altChannels.length > 0) {
+                                    const altChannel = altChannels[0]
+                                    const altKeyInfo = channelManager.getChannelKey(altChannel)
+                                    logger.info(`[ChatService] ${errorType}错误后切换渠道: ${currentChannel?.name} -> ${altChannel.name}`)
+                                    currentChannel = altChannel
+                                    currentKeyIndex = altKeyInfo.keyIndex
+                                    channelSwitched = true
+                                    const altClientOptions = {
+                                        ...clientOptions,
+                                        adapterType: altChannel.adapterType,
+                                        baseUrl: altChannel.baseUrl,
+                                        apiKey: altKeyInfo.key,
+                                        keyIndex: altKeyInfo.keyIndex
+                                    }
+                                    currentClient = await LlmService.createClient(altClientOptions)
+                                    continue
+                                }
+                            }
                             
                             retryCount++
                             totalRetryCount++
+                            
                             if (retryCount <= (isMainModel ? maxRetries : 1)) {
-                                await new Promise(r => setTimeout(r, retryDelay * retryCount))
+                                // 指数退避延迟
+                                const delay = Math.min(retryDelay * Math.pow(2, retryCount - 1), 10000)
+                                logger.debug(`[ChatService] ${delay}ms后重试...`)
+                                await new Promise(r => setTimeout(r, delay))
                             }
                         }
                     }
@@ -961,7 +1098,7 @@ export class ChatService {
                         break
                     }
                     
-                    logger.debug(`[ChatService] 尝试备选模型: ${modelsToTry[modelIndex + 1]}`)
+                    logger.info(`[ChatService] 尝试备选模型: ${modelsToTry[modelIndex + 1]}`)
                 }
                 
                 // 如果所有模型都失败，抛出最后一个错误
@@ -970,7 +1107,7 @@ export class ChatService {
                 }
                 
                 if (!response) {
-                    logger.warn('[ChatService] 所有模型尝试后仍无有效响应')
+                    logger.warn('[ChatService] 所有模型和渠道尝试后仍无有效响应')
                 }
                 
                 finalResponse = response?.contents || []
@@ -987,10 +1124,16 @@ export class ChatService {
                     })
                 }
                 
-                // 记录实际使用的模型
+                // 记录实际使用的模型和渠道切换信息
                 if (debugInfo) {
                     debugInfo.usedModel = usedModel
                     debugInfo.fallbackUsed = fallbackUsed
+                    debugInfo.channelSwitched = channelSwitched
+                    debugInfo.usedChannel = usedChannel ? {
+                        id: usedChannel.id,
+                        name: usedChannel.name
+                    } : null
+                    debugInfo.totalRetryCount = totalRetryCount
                 }
             }
             

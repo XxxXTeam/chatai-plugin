@@ -7,6 +7,7 @@ import { getWebServer } from '../src/services/webServer.js'
 import { getScopeManager } from '../src/services/scope/ScopeManager.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
 import { chatService } from '../src/services/llm/ChatService.js'
+import { isQQBotPlatform, urlToQRCode } from '../src/utils/platformAdapter.js'
 
 // 缓存 Yunzai 主人配置
 let yunzaiCfg = null
@@ -255,6 +256,9 @@ export class AIManagement extends plugin {
         const warningText = permanent ? '\n\n⚠️ 请妥善保管此链接，不要泄露给他人！' : ''
         const newTokenText = forceNew ? '（已重新生成）' : ''
         
+        // 检测是否为QQBot平台，需要将URL转为二维码
+        const isQQBot = isQQBotPlatform(this.e)
+        
         // 构建消息内容
         const messages = []
         
@@ -265,50 +269,76 @@ export class AIManagement extends plugin {
             user_id: this.e.self_id
         })
         
-        // 所有本地IPv4地址
-        if (localUrls && localUrls.length > 0) {
+        // QQBot平台：优先使用公网地址或第一个可用地址生成二维码
+        if (isQQBot) {
+            const primaryUrl = publicUrl || (customUrls && customUrls[0]?.url) || localUrl
+            if (primaryUrl) {
+                const qrcode = await urlToQRCode(primaryUrl)
+                if (qrcode) {
+                    messages.push({
+                        message: [
+                            `📱 请扫描二维码打开管理面板：`,
+                            { type: 'image', file: qrcode }
+                        ],
+                        nickname: 'AI管理面板',
+                        user_id: this.e.self_id
+                    })
+                }
+            }
+            
+            // 使用说明（QQBot版本）
             messages.push({
-                message: `📍 本地地址（IPv4）：\n${localUrls.join('\n')}`,
+                message: `📌 使用说明：\n1. 使用手机扫描上方二维码\n2. 或在浏览器中打开链接\n3. 链接包含登录凭证，请勿分享${warningText}`,
                 nickname: 'AI管理面板',
                 user_id: this.e.self_id
             })
-        }
-        
-        // 所有本地IPv6地址
-        if (localIPv6Urls && localIPv6Urls.length > 0) {
-            messages.push({
-                message: `📍 本地地址（IPv6）：\n${localIPv6Urls.join('\n')}`,
-                nickname: 'AI管理面板',
-                user_id: this.e.self_id
-            })
-        }
-        
-        // 公网地址
-        if (publicUrl) {
-            messages.push({
-                message: `🌐 公网地址：\n${publicUrl}`,
-                nickname: 'AI管理面板',
-                user_id: this.e.self_id
-            })
-        }
-        
-        // 自定义地址
-        if (customUrls && customUrls.length > 0) {
-            for (const custom of customUrls) {
+        } else {
+            // 非QQBot平台：正常显示URL列表
+            // 所有本地IPv4地址
+            if (localUrls && localUrls.length > 0) {
                 messages.push({
-                    message: `🔗 ${custom.label}：\n${custom.url}`,
+                    message: `📍 本地地址（IPv4）：\n${localUrls.join('\n')}`,
                     nickname: 'AI管理面板',
                     user_id: this.e.self_id
                 })
             }
+            
+            // 所有本地IPv6地址
+            if (localIPv6Urls && localIPv6Urls.length > 0) {
+                messages.push({
+                    message: `📍 本地地址（IPv6）：\n${localIPv6Urls.join('\n')}`,
+                    nickname: 'AI管理面板',
+                    user_id: this.e.self_id
+                })
+            }
+            
+            // 公网地址
+            if (publicUrl) {
+                messages.push({
+                    message: `🌐 公网地址：\n${publicUrl}`,
+                    nickname: 'AI管理面板',
+                    user_id: this.e.self_id
+                })
+            }
+            
+            // 自定义地址
+            if (customUrls && customUrls.length > 0) {
+                for (const custom of customUrls) {
+                    messages.push({
+                        message: `🔗 ${custom.label}：\n${custom.url}`,
+                        nickname: 'AI管理面板',
+                        user_id: this.e.self_id
+                    })
+                }
+            }
+            
+            // 使用说明
+            messages.push({
+                message: `📌 使用说明：\n1. 点击链接在浏览器中打开\n2. 优先使用与设备同网段的地址\n3. 如本地访问失败，请尝试公网地址\n4. 链接包含登录凭证，请勿分享${warningText}`,
+                nickname: 'AI管理面板',
+                user_id: this.e.self_id
+            })
         }
-        
-        // 使用说明
-        messages.push({
-            message: `📌 使用说明：\n1. 点击链接在浏览器中打开\n2. 优先使用与设备同网段的地址\n3. 如本地访问失败，请尝试公网地址\n4. 链接包含登录凭证，请勿分享${warningText}`,
-            nickname: 'AI管理面板',
-            user_id: this.e.self_id
-        })
         
         // 私聊发送
         const userId = this.e.user_id
@@ -331,49 +361,79 @@ export class AIManagement extends plugin {
                 }
             }
             
-            // 备用：直接私聊发送文本
-            const textParts = [
-                `🔐 AI插件管理面板（${validityText}）`,
-                ''
-            ]
-            
-            // 添加所有IPv4地址
-            if (localUrls && localUrls.length > 0) {
-                textParts.push(`📍 本地地址（IPv4）：`)
-                textParts.push(...localUrls)
-                textParts.push('')
-            }
-            
-            // 添加所有IPv6地址
-            if (localIPv6Urls && localIPv6Urls.length > 0) {
-                textParts.push(`📍 本地地址（IPv6）：`)
-                textParts.push(...localIPv6Urls)
-                textParts.push('')
-            }
-            
-            if (publicUrl) {
-                textParts.push(`🌐 公网地址：`, publicUrl, '')
-            }
-            
-            // 添加自定义地址
-            if (customUrls && customUrls.length > 0) {
-                for (const custom of customUrls) {
-                    textParts.push(`🔗 ${custom.label}：`, custom.url, '')
+            if (isQQBot) {
+                const msgParts = [`🔐 AI插件管理面板（${validityText}）`]
+                
+                // 收集所有可用URL
+                const allUrls = []
+                if (customUrls && customUrls.length > 0) {
+                    for (const custom of customUrls) {
+                        allUrls.push({ label: custom.label, url: custom.url })
+                    }
                 }
-            }
-            
-            textParts.push(`📌 链接包含登录凭证，请勿分享${warningText}`)
-            
-            const textMsg = textParts.filter(Boolean).join('\n')
-            
-            if (this.e.friend?.sendMsg) {
-                await this.e.friend.sendMsg(textMsg)
-            } else if (bot?.sendPrivateMsg) {
-                await bot.sendPrivateMsg(userId, textMsg)
-            } else {
-                // 最后备用：直接回复
-                await this.reply(textMsg, true)
+                if (publicUrl) {
+                    allUrls.push({ label: '公网', url: publicUrl })
+                }
+                if (localUrl) {
+                    allUrls.push({ label: '本地', url: localUrl })
+                }
+                
+                // 为每个URL生成二维码
+                for (const item of allUrls) {
+                    const qrcode = await urlToQRCode(item.url)
+                    if (qrcode) {
+                        msgParts.push(`\n📍 ${item.label}：`)
+                        msgParts.push({ type: 'image', file: qrcode })
+                    }
+                }
+                
+                msgParts.push(`\n📌 链接包含登录凭证，请勿分享${warningText}`)
+                await this.reply(msgParts, true)
                 return
+            } else {
+                // 非QQBot平台：发送文本
+                const textParts = [
+                    `🔐 AI插件管理面板（${validityText}）`,
+                    ''
+                ]
+                
+                // 添加所有IPv4地址
+                if (localUrls && localUrls.length > 0) {
+                    textParts.push(`📍 本地地址（IPv4）：`)
+                    textParts.push(...localUrls)
+                    textParts.push('')
+                }
+                
+                // 添加所有IPv6地址
+                if (localIPv6Urls && localIPv6Urls.length > 0) {
+                    textParts.push(`📍 本地地址（IPv6）：`)
+                    textParts.push(...localIPv6Urls)
+                    textParts.push('')
+                }
+                
+                if (publicUrl) {
+                    textParts.push(`🌐 公网地址：`, publicUrl, '')
+                }
+                
+                // 添加自定义地址
+                if (customUrls && customUrls.length > 0) {
+                    for (const custom of customUrls) {
+                        textParts.push(`🔗 ${custom.label}：`, custom.url, '')
+                    }
+                }
+                
+                textParts.push(`📌 链接包含登录凭证，请勿分享${warningText}`)
+                
+                const textMsg = textParts.filter(Boolean).join('\n')
+                
+                if (this.e.friend?.sendMsg) {
+                    await this.e.friend.sendMsg(textMsg)
+                } else if (bot?.sendPrivateMsg) {
+                    await bot.sendPrivateMsg(userId, textMsg)
+                } else {
+                    await this.reply(textMsg, true)
+                    return
+                }
             }
             
             if (this.e.group_id) {
@@ -381,8 +441,17 @@ export class AIManagement extends plugin {
             }
         } catch (err) {
             logger.error('[Management] 私聊发送失败:', err)
-            // 私聊失败时在群里回复（仅本地第一个地址）
-            await this.reply(`管理面板（${validityText}）：\n${localUrl}${warningText}`, true)
+            // 私聊失败时在群里回复
+            if (isQQBot) {
+                const qrcode = await urlToQRCode(localUrl)
+                const fallbackMsg = [`管理面板（${validityText}）：\n请扫描二维码：`]
+                if (qrcode) {
+                    fallbackMsg.push({ type: 'image', file: qrcode })
+                }
+                await this.reply(fallbackMsg, true)
+            } else {
+                await this.reply(`管理面板（${validityText}）：\n${localUrl}${warningText}`, true)
+            }
         }
     }
     
