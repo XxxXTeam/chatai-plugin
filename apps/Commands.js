@@ -605,37 +605,20 @@ export class AICommands extends plugin {
             // 统计参与者
             const participants = new Set(recentMessages.map(m => m.nickname || m.userId || '用户'))
             
-            const summaryPrompt = `请分析以下群聊记录并生成结构化总结：
+            const summaryPrompt = `请根据以下群聊记录，对群聊内容进行全面的总结分析。请从以下几个维度进行分析，并以清晰、有条理的Markdown格式呈现你的结论：
 
-【群聊记录】
-${dialogText}
+1. **热门话题**：群友们最近在讨论什么话题？有哪些热点事件或共同关注的内容？
 
-【数据来源】
-${dataSource || '混合/未知'}
+2. **活跃成员**：哪些成员发言最多？他们主要在讨论什么？
 
-【输出要求】
-请严格按以下格式输出，使用 emoji 美化：
+3. **群聊氛围**：群聊的整体氛围如何？（例如：轻松愉快、严肃认真、热烈讨论等）
 
-📌 **核心话题** (2-3个最主要的讨论话题)
-• 话题1：简要描述
-• 话题2：简要描述
+4. **关键信息**：有没有重要的通知、决定或值得关注的信息？
 
-💬 **关键讨论**
-列出最重要的观点交流（3-5条）
+5. **互动情况**：群友之间的互动如何？有哪些有趣的对话或互动？
 
-👥 **活跃成员**
-最活跃的发言者及其主要贡献
-
-📊 **氛围评估**
-一句话总结群聊氛围和互动质量
-
-⏰ **时间范围**
-总结的消息时间跨度
-
-注意：
-- 保持简洁，每项不超过2-3行
-- 使用要点形式，避免长段落
-- 如有争议或有趣的互动，优先提取${truncatedNote}`
+以下是最近的群聊记录（共1000条消息）：
+${dialogText}${truncatedNote}`
 
             // 获取群组独立的总结模型配置
             const groupSummaryModel = await getGroupFeatureModel(e.group_id, 'summaryModel')
