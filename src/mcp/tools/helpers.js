@@ -1552,3 +1552,246 @@ export function buildLinkCard(title, desc, url, image, source = '') {
 export function buildBigImageCard(image, title = '', desc = '') {
     return buildLinkCard(title || '[图片]', desc, image, image)
 }
+
+/**
+ * 检测是否为QQBot平台
+ * @param {Object} e - 事件对象
+ * @returns {boolean}
+ */
+export function isQQBotPlatform(e) {
+    if (!e) return false
+    const bot = e.bot || (typeof Bot !== 'undefined' ? Bot : null)
+    
+    // 检查adapter id/name
+    if (bot?.adapter?.id === 'QQBot' || bot?.adapter?.name === 'QQBot') {
+        return true
+    }
+    
+    // 检查version信息
+    if (bot?.version?.id === 'QQBot' || bot?.version?.name === 'QQBot') {
+        return true
+    }
+    
+    // 检查user_id/group_id格式
+    const userId = String(e.user_id || e.sender?.user_id || '')
+    const groupId = String(e.group_id || '')
+    if (userId.includes(':') || userId.startsWith('qg_') || 
+        groupId.includes(':') || groupId.startsWith('qg_')) {
+        return true
+    }
+    
+    return false
+}
+
+/**
+ * 构建QQBot按钮消息
+ * @param {Array} buttons - 按钮配置数组 [{text, link?, callback?, input?, send?, permission?}]
+ * @returns {Array} 按钮消息段
+ */
+export function buildQQBotButtonRows(buttons) {
+    const rows = []
+    let currentRow = []
+    
+    for (const btn of buttons) {
+        const button = {
+            id: btn.id || `btn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            render_data: {
+                label: btn.text || btn.label,
+                visited_label: btn.clicked_text || btn.text || btn.label,
+                style: btn.style || 0
+            },
+            action: {
+                permission: { type: 2 } // 默认所有人可用
+            }
+        }
+        
+        // 按钮类型
+        if (btn.link || btn.url) {
+            button.action.type = 0 // 跳转链接
+            button.action.data = btn.link || btn.url
+        } else if (btn.callback) {
+            button.action.type = 1 // 回调
+        } else if (btn.input) {
+            button.action.type = 2 // 输入框
+            button.action.data = btn.input
+            button.action.enter = btn.send !== false
+        }
+        
+        // 权限设置
+        if (btn.permission === 'admin') {
+            button.action.permission = { type: 1 }
+        } else if (Array.isArray(btn.permission)) {
+            button.action.permission = { type: 0, specify_user_ids: btn.permission }
+        }
+        
+        currentRow.push(button)
+        
+        // 每行最多5个按钮
+        if (currentRow.length >= 5) {
+            rows.push({ type: 'button', buttons: [...currentRow] })
+            currentRow = []
+        }
+    }
+    
+    if (currentRow.length > 0) {
+        rows.push({ type: 'button', buttons: currentRow })
+    }
+    
+    return rows
+}
+
+/**
+ * 构建QQBot Markdown消息
+ * @param {string} content - Markdown内容
+ * @param {Object} options - 选项 {templateId?, params?}
+ * @returns {Object} Markdown消息段
+ */
+export function buildQQBotMarkdown(content, options = {}) {
+    if (options.templateId) {
+        const msg = {
+            type: 'markdown',
+            custom_template_id: options.templateId
+        }
+        if (options.params) {
+            msg.params = Object.entries(options.params).map(([key, values]) => ({
+                key,
+                values: Array.isArray(values) ? values : [values]
+            }))
+        }
+        return msg
+    }
+    
+    return {
+        type: 'markdown',
+        content: content
+    }
+}
+
+/**
+ * 构建QQBot Embed消息
+ * @param {Object} config - {title, prompt?, thumbnail?, fields?}
+ * @returns {Object} Embed消息段
+ */
+export function buildQQBotEmbed(config) {
+    return {
+        type: 'embed',
+        title: config.title,
+        prompt: config.prompt || config.title,
+        thumbnail: config.thumbnail ? { url: config.thumbnail } : undefined,
+        fields: (config.fields || []).map(f => ({ name: f.name || f.title || f }))
+    }
+}
+
+/**
+ * 构建QQBot Ark卡片消息
+ * @param {Object} config - Ark配置
+ * @returns {Object} Ark消息段
+ */
+export function buildQQBotArk(config) {
+    // Ark 23 - 链接+文本列表
+    if (config.type === 'link' || config.template === 23) {
+        return {
+            type: 'ark',
+            template_id: 23,
+            kv: [
+                { key: '#DESC#', value: config.desc || '' },
+                { key: '#PROMPT#', value: config.prompt || config.title || '' },
+                { key: '#LIST#', obj: (config.list || []).map(item => ({
+                    obj_kv: [{ key: 'desc', value: item.desc || item.text || item }]
+                }))}
+            ]
+        }
+    }
+    
+    // Ark 24 - 文本+缩略图
+    if (config.type === 'text' || config.template === 24) {
+        return {
+            type: 'ark',
+            template_id: 24,
+            kv: [
+                { key: '#DESC#', value: config.desc || '' },
+                { key: '#PROMPT#', value: config.prompt || '' },
+                { key: '#TITLE#', value: config.title || '' },
+                { key: '#SUBTITLE#', value: config.subtitle || '' },
+                { key: '#COVER#', value: config.cover || config.image || '' }
+            ]
+        }
+    }
+    
+    // 自定义Ark
+    return {
+        type: 'ark',
+        template_id: config.template || config.template_id,
+        kv: config.kv || []
+    }
+}
+
+/**
+ * 为QQBot平台处理消息，自动转换不支持的元素
+ * @param {Object} e - 事件对象
+ * @param {Array|string} message - 消息内容
+ * @returns {Array} 处理后的消息段
+ */
+export function processMessageForQQBot(e, message) {
+    if (!isQQBotPlatform(e)) {
+        return Array.isArray(message) ? message : [message]
+    }
+    
+    const segments = Array.isArray(message) ? message : 
+        (typeof message === 'string' ? [{ type: 'text', text: message }] : [message])
+    
+    const result = []
+    
+    for (const seg of segments) {
+        if (typeof seg === 'string') {
+            result.push({ type: 'text', text: seg })
+            continue
+        }
+        
+        switch (seg.type) {
+            case 'text':
+                // 处理@转换
+                let text = seg.text || seg.data?.text || ''
+                text = text.replace(/@/g, '@\u200b') // 防止误触发@
+                result.push({ type: 'text', text })
+                break
+                
+            case 'at':
+                // QQBot @格式转换
+                const qq = seg.qq || seg.data?.qq
+                if (qq === 'all') {
+                    result.push({ type: 'text', text: '@everyone' })
+                } else {
+                    result.push({ type: 'at', user_id: qq })
+                }
+                break
+                
+            case 'image':
+            case 'record':
+            case 'video':
+            case 'face':
+            case 'markdown':
+            case 'button':
+            case 'ark':
+            case 'embed':
+                result.push(seg)
+                break
+                
+            case 'reply':
+                // QQBot回复格式
+                const id = seg.id || seg.data?.id
+                if (id?.startsWith?.('event_')) {
+                    result.push({ type: 'reply', event_id: id.replace(/^event_/, '') })
+                } else {
+                    result.push(seg)
+                }
+                break
+                
+            default:
+                // 其他类型转为文本
+                result.push({ type: 'text', text: `[${seg.type}]` })
+        }
+    }
+    
+    return result
+}

@@ -937,17 +937,157 @@ export class ChannelManager {
     /**
      * Report channel error
      * @param {string} channelId 
+     * @param {Object} options - 错误选项
+     * @param {number} options.keyIndex - 出错的key索引
+     * @param {string} options.errorType - 错误类型: 'auth' | 'quota' | 'timeout' | 'network' | 'empty' | 'unknown'
+     * @param {string} options.errorMessage - 错误信息
      */
-    async reportError(channelId) {
+    async reportError(channelId, options = {}) {
         const channel = this.channels.get(channelId)
         if (!channel) return
 
+        const { keyIndex = -1, errorType = 'unknown', errorMessage = '' } = options
+        
         channel.lastErrorTime = Date.now()
         channel.errorCount = (channel.errorCount || 0) + 1
+        channel.lastErrorType = errorType
+        channel.lastErrorMessage = errorMessage
 
-        // If too many errors, mark as error status
-        if (channel.errorCount > 5) {
-            channel.status = 'error'
+        // 如果指定了key索引，记录key级别的错误
+        if (keyIndex >= 0) {
+            this.reportKeyError(channelId, keyIndex)
+        }
+
+        // 根据错误类型决定渠道状态
+        if (errorType === 'auth') {
+            // 认证错误，5次后标记为error
+            if (channel.errorCount >= 3) {
+                channel.status = ChannelStatus.ERROR
+                logger.warn(`[ChannelManager] 渠道 ${channel.name} 认证错误次数过多，已禁用`)
+            }
+        } else if (errorType === 'quota') {
+            // 配额超限
+            channel.status = ChannelStatus.QUOTA_EXCEEDED
+            logger.warn(`[ChannelManager] 渠道 ${channel.name} 配额超限`)
+        } else if (channel.errorCount > 5) {
+            channel.status = ChannelStatus.ERROR
+        }
+    }
+
+    /**
+     * 重置渠道错误状态
+     * @param {string} channelId
+     */
+    resetChannelError(channelId) {
+        const channel = this.channels.get(channelId)
+        if (!channel) return
+        
+        channel.errorCount = 0
+        channel.lastErrorTime = null
+        channel.lastErrorType = null
+        channel.lastErrorMessage = null
+        if (channel.status === ChannelStatus.ERROR) {
+            channel.status = ChannelStatus.IDLE
+        }
+    }
+
+    /**
+     * 获取指定模型的所有可用渠道（用于重试）
+     * @param {string} model - 模型名称
+     * @param {Object} options - 选项
+     * @param {string} options.excludeChannelId - 排除的渠道ID
+     * @param {boolean} options.includeErrorChannels - 是否包含错误状态的渠道
+     * @returns {Array} 可用渠道列表
+     */
+    getAvailableChannels(model, options = {}) {
+        const { excludeChannelId = null, includeErrorChannels = false } = options
+        const now = Date.now()
+        
+        return Array.from(this.channels.values())
+            .filter(ch => {
+                // 基础过滤
+                if (!ch.enabled) return false
+                if (excludeChannelId && ch.id === excludeChannelId) return false
+                
+                // 模型支持检查
+                const hasModel = ch.models?.includes(model) || ch.models?.includes('*')
+                if (!hasModel) return false
+                
+                // 状态检查
+                if (!includeErrorChannels && ch.status === ChannelStatus.ERROR) return false
+                if (ch.status === ChannelStatus.QUOTA_EXCEEDED) return false
+                
+                // 错误冷却检查（5分钟）
+                if (ch.lastErrorTime && (now - ch.lastErrorTime < 5 * 60 * 1000)) {
+                    // 但如果有多个key，可能还有可用的
+                    const availableKeys = this.getAvailableKeysCount(ch)
+                    if (availableKeys === 0) return false
+                }
+                
+                return true
+            })
+            .sort((a, b) => {
+                // 优先级排序：priority > 错误次数少 > 最近未使用
+                if (a.priority !== b.priority) return a.priority - b.priority
+                if ((a.errorCount || 0) !== (b.errorCount || 0)) return (a.errorCount || 0) - (b.errorCount || 0)
+                return (a.lastUsed || 0) - (b.lastUsed || 0)
+            })
+    }
+
+    /**
+     * 获取渠道中可用的APIKey数量
+     * @param {Object} channel
+     * @returns {number}
+     */
+    getAvailableKeysCount(channel) {
+        if (!channel.apiKeys || channel.apiKeys.length === 0) {
+            return channel.apiKey ? 1 : 0
+        }
+        
+        return channel.apiKeys.filter(k => {
+            if (typeof k === 'string') return true
+            return k.enabled !== false && (k.errorCount || 0) < 10
+        }).length
+    }
+
+    /**
+     * 尝试获取下一个可用的Key（同一渠道内切换）
+     * @param {string} channelId
+     * @param {number} currentKeyIndex - 当前失败的key索引
+     * @returns {{ key: string, keyIndex: number, keyObj: Object } | null}
+     */
+    getNextAvailableKey(channelId, currentKeyIndex) {
+        const channel = this.channels.get(channelId)
+        if (!channel || !channel.apiKeys || channel.apiKeys.length <= 1) {
+            return null
+        }
+
+        const activeKeys = channel.apiKeys
+            .map((k, i) => ({ key: k, index: i }))
+            .filter(({ key, index }) => {
+                if (index === currentKeyIndex) return false // 排除当前失败的key
+                if (typeof key === 'string') return true
+                return key.enabled !== false && (key.errorCount || 0) < 10
+            })
+
+        if (activeKeys.length === 0) return null
+
+        // 选择错误次数最少的key
+        activeKeys.sort((a, b) => {
+            const errA = typeof a.key === 'object' ? (a.key.errorCount || 0) : 0
+            const errB = typeof b.key === 'object' ? (b.key.errorCount || 0) : 0
+            return errA - errB
+        })
+
+        const selected = activeKeys[0]
+        const keyValue = typeof selected.key === 'string' ? selected.key : selected.key.key
+        
+        logger.info(`[ChannelManager] 渠道 ${channel.name} 切换到备用Key #${selected.index + 1}`)
+        
+        return {
+            key: keyValue,
+            keyIndex: selected.index,
+            keyObj: selected.key
         }
     }
 

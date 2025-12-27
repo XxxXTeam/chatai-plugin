@@ -4,6 +4,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { getBotIds } from '../src/utils/messageDedup.js'
+import { isQQBotPlatform, getAvatarUrl, getQQBotAvatarUrl, getUserInfo } from '../src/utils/platformAdapter.js'
 
 // 懒加载服务
 let _statsService = null
@@ -1257,9 +1258,10 @@ export class ImageGen extends plugin {
 
             const { cols, rows } = splitGrid
             const bot = e.bot || Bot
+            // 使用统一的Bot信息获取
             const botInfo = {
-                user_id: bot.uin || bot.self_id || e.self_id,
-                nickname: bot.nickname || 'Bot'
+                user_id: bot.uin || bot.self_id || e.self_id || 10000,
+                nickname: bot.nickname || bot.info?.nickname || 'Bot'
             }
             
             for (const imageUrl of result.images) {
@@ -1493,8 +1495,9 @@ export class ImageGen extends plugin {
                 if (m.type === 'at') {
                     const qq = m.qq || m.data?.qq
                     if (qq && qq !== 'all' && String(qq) !== String(e.self_id)) {
-                        const avatarUrl = `https://q1.qlogo.cn/g?b=qq&nk=${qq}&s=640`
-                        if (!urls.includes(avatarUrl)) {
+                        // 使用统一的头像获取接口（支持QQBot）
+                        const avatarUrl = getAvatarUrl(e, qq, 640)
+                        if (avatarUrl && !urls.includes(avatarUrl)) {
                             logger.debug('[ImageGen] 添加@用户头像:', qq)
                             urls.push(avatarUrl)
                         }
@@ -1506,8 +1509,15 @@ export class ImageGen extends plugin {
         // 回退到发送者头像
         const hasQuote = !!(e.getReply || e.source || e.reply_id)
         if (urls.length === 0 && !hasQuote && e.user_id) {
-            logger.debug('[ImageGen] 回退到发送者头像:', e.user_id)
-            urls.push(`https://q1.qlogo.cn/g?b=qq&nk=${e.user_id}&s=640`)
+            // 使用统一的头像获取接口（支持QQBot）
+            const senderAvatar = getAvatarUrl(e, e.user_id, 640)
+            if (senderAvatar) {
+                logger.debug('[ImageGen] 回退到发送者头像:', e.user_id)
+                urls.push(senderAvatar)
+            } else {
+                // QQBot平台无法获取头像时，提示用户发送图片
+                logger.debug('[ImageGen] QQBot平台无法获取用户头像')
+            }
         }
         
         logger.debug('[ImageGen] 最终获取到的图片数:', urls.length)

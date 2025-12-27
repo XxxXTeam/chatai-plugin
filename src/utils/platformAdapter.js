@@ -64,7 +64,7 @@ export function getBotInfo(e) {
 }
 
 /**
- * 获取用户信息 - 统一接口
+ * 获取用户信息 - 统一接口（支持QQBot）
  * @param {Object} e - 事件对象
  * @param {string|number} userId - 用户ID
  * @param {string|number} [groupId] - 群ID (可选)
@@ -73,7 +73,15 @@ export function getBotInfo(e) {
 export async function getUserInfo(e, userId, groupId = null) {
     const bot = e?.bot || Bot
     const platform = detectPlatform(e)
-    userId = parseInt(userId)
+    const userIdStr = String(userId)
+    
+    // 检测是否为QQBot平台用户
+    const isQQBot = isQQBotPlatform(e) || userIdStr.includes(':') || userIdStr.startsWith('qg_')
+    
+    // 为QQBot用户生成头像URL
+    const avatarUrl = isQQBot 
+        ? getQQBotAvatarUrl(e, userId) 
+        : `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
     
     const defaultInfo = {
         user_id: userId,
@@ -85,8 +93,41 @@ export async function getUserInfo(e, userId, groupId = null) {
         level: 0,
         role: 'member',
         title: '',
-        avatar: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
+        avatar: avatarUrl,
+        isQQBot: isQQBot
     }
+    
+    // QQBot平台特殊处理
+    if (isQQBot) {
+        // 尝试从事件中获取用户信息
+        if (e?.sender && String(e.sender.user_id) === userIdStr) {
+            return {
+                ...defaultInfo,
+                nickname: e.sender.nickname || e.sender.card || defaultInfo.nickname,
+                card: e.sender.card || '',
+                role: e.sender.role || 'member',
+                avatar: e.sender.avatar || avatarUrl
+            }
+        }
+        
+        // 尝试从Bot缓存获取
+        try {
+            const userInfo = bot?.fl?.get?.(userId) || bot?.gl?.get?.(groupId)?.get?.(userId)
+            if (userInfo) {
+                return {
+                    ...defaultInfo,
+                    nickname: userInfo.nickname || userInfo.card || defaultInfo.nickname,
+                    card: userInfo.card || '',
+                    avatar: userInfo.avatar || avatarUrl
+                }
+            }
+        } catch {}
+        
+        return defaultInfo
+    }
+    
+    // 普通QQ用户，转为数字ID
+    const numericUserId = parseInt(userId)
     
     try {
         switch (platform) {
@@ -94,7 +135,7 @@ export async function getUserInfo(e, userId, groupId = null) {
                 if (groupId) {
                     // 获取群成员信息
                     const group = bot.pickGroup(parseInt(groupId))
-                    const member = group.pickMember(userId)
+                    const member = group.pickMember(numericUserId)
                     const info = await member.getInfo?.() || member.info || member
                     return {
                         ...defaultInfo,
@@ -430,15 +471,104 @@ export async function sendPoke(e, userId, groupId = null) {
 }
 
 /**
- * 获取头像URL - 统一接口
- * @param {string|number} userId - 用户ID
+ * 获取头像URL - 统一接口（支持QQBot）
+ * @param {Object|string|number} eOrUserId - 事件对象或用户ID
+ * @param {string|number} [userIdOrSize] - 用户ID或尺寸
  * @param {number} [size=640] - 头像尺寸
  * @returns {string} 头像URL
  */
-export function getAvatarUrl(userId, size = 640) {
-    userId = parseInt(userId)
-    // QQ头像接口
-    return `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=${size}`
+export function getAvatarUrl(eOrUserId, userIdOrSize = 640, size = 640) {
+    // 兼容两种调用方式：getAvatarUrl(userId, size) 和 getAvatarUrl(e, userId, size)
+    let e = null
+    let userId
+    let avatarSize = size
+    
+    if (typeof eOrUserId === 'object' && eOrUserId !== null && !Array.isArray(eOrUserId)) {
+        // 新方式：getAvatarUrl(e, userId, size)
+        e = eOrUserId
+        userId = userIdOrSize
+        avatarSize = size
+    } else {
+        // 旧方式：getAvatarUrl(userId, size)
+        userId = eOrUserId
+        avatarSize = typeof userIdOrSize === 'number' ? userIdOrSize : 640
+    }
+    
+    const userIdStr = String(userId)
+    
+    // 检测QQBot用户
+    if (userIdStr.includes(':') || userIdStr.startsWith('qg_')) {
+        return getQQBotAvatarUrl(e, userId)
+    }
+    
+    // 普通QQ头像接口
+    const numericId = parseInt(userId)
+    if (!isNaN(numericId)) {
+        return `https://q1.qlogo.cn/g?b=qq&nk=${numericId}&s=${avatarSize}`
+    }
+    
+    return ''
+}
+
+/**
+ * 获取QQBot平台用户头像URL
+ * @param {Object} e - 事件对象
+ * @param {string} userId - 用户ID (可能是 appid:openid 或 qg_xxx 格式)
+ * @returns {string} 头像URL
+ */
+export function getQQBotAvatarUrl(e, userId = null) {
+    const bot = e?.bot || (typeof Bot !== 'undefined' ? Bot : null)
+    
+    // 获取真正的appid
+    const realAppid = bot?.info?.appid || bot?.sdk?.config?.appid
+    
+    // 如果没有传userId，尝试获取发送者的openid
+    if (!userId) {
+        // 优先从 raw.author 获取发送者openid（最可靠）
+        const senderOpenid = e?.raw?.author?.member_openid || e?.raw?.author?.id
+        if (senderOpenid && realAppid) {
+            return `https://q.qlogo.cn/qqapp/${realAppid}/${senderOpenid}/0`
+        }
+        
+        // 其次尝试从 user_id 解析
+        userId = e?.user_id || e?.sender?.user_id
+    }
+    
+    if (!userId) return ''
+    
+    const userIdStr = String(userId)
+    
+    // 优先从sender获取已有头像
+    if (e?.sender?.avatar) {
+        return e.sender.avatar
+    }
+    
+    // 频道用户 (qg_xxx)
+    if (userIdStr.startsWith('qg_')) {
+        // 尝试从缓存获取头像
+        const userInfo = bot?.fl?.get?.(userId)
+        if (userInfo?.avatar) return userInfo.avatar
+        
+        // 频道用户没有标准头像URL，返回空
+        return ''
+    }
+    
+    // QQ群用户 (uin:openid 格式，如 3889048706:0EBFE6A6EE3727677897DBEB2F4E2F92)
+    // 格式: https://q.qlogo.cn/qqapp/${realAppid}/${openid}/0
+    if (userIdStr.includes(':')) {
+        const openid = userIdStr.split(':')[1] // openid部分
+        
+        if (realAppid && openid) {
+            return `https://q.qlogo.cn/qqapp/${realAppid}/${openid}/0`
+        }
+    }
+    
+    // 纯openid格式（没有冒号）
+    if (realAppid && userIdStr && !userIdStr.includes(':')) {
+        return `https://q.qlogo.cn/qqapp/${realAppid}/${userIdStr}/0`
+    }
+    
+    return ''
 }
 
 /**
@@ -958,6 +1088,158 @@ export async function safeReply(e, msg, quote = false) {
 
 
 /**
+ * 检测是否为QQBot平台用户
+ * @param {Object} e - 事件对象
+ * @returns {boolean}
+ */
+export function isQQBotPlatform(e) {
+    if (!e) return false
+    const bot = e.bot || Bot
+    
+    // 检查adapter id/name
+    if (bot?.adapter?.id === 'QQBot' || bot?.adapter?.name === 'QQBot') {
+        return true
+    }
+    
+    // 检查version信息
+    if (bot?.version?.id === 'QQBot' || bot?.version?.name === 'QQBot') {
+        return true
+    }
+    
+    // 检查self_id格式（QQBot的self_id通常是纯数字appid）
+    const selfId = String(e.self_id || bot?.uin || '')
+    
+    // 检查user_id格式（QQBot用户ID带有特殊前缀或分隔符）
+    const userId = String(e.user_id || e.sender?.user_id || '')
+    if (userId.includes(':') || userId.startsWith('qg_')) {
+        return true
+    }
+    
+    // 检查group_id格式
+    const groupId = String(e.group_id || '')
+    if (groupId.includes(':') || groupId.startsWith('qg_')) {
+        return true
+    }
+    
+    return false
+}
+
+/**
+ * 将URL转换为二维码图片（base64格式）
+ * @param {string} url - 要转换的URL
+ * @returns {Promise<string|null>} base64图片字符串，失败返回null
+ */
+export async function urlToQRCode(url) {
+    try {
+        const QRCode = (await import('qrcode')).default
+        const dataUrl = await QRCode.toDataURL(url, {
+            margin: 2,
+            width: 256,
+            color: {
+                dark: '#000000',
+                light: '#ffffff'
+            }
+        })
+        return dataUrl.replace('data:image/png;base64,', 'base64://')
+    } catch (err) {
+        logger?.debug?.(`[PlatformAdapter] 生成二维码失败: ${err.message}`)
+        return null
+    }
+}
+
+/**
+ * 为QQBot平台处理消息中的URL，将其转换为二维码
+ * @param {Object} e - 事件对象
+ * @param {string|Array} message - 消息内容
+ * @param {Object} options - 选项
+ * @param {boolean} options.includeButton - 是否添加URL按钮（默认true）
+ * @returns {Promise<Array>} 处理后的消息段数组
+ */
+export async function processUrlForQQBot(e, message, options = {}) {
+    const { includeButton = true } = options
+    
+    if (!isQQBotPlatform(e)) {
+        // 非QQBot平台，直接返回原消息
+        return Array.isArray(message) ? message : [message]
+    }
+    
+    const urlRegex = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/gi
+    const segments = []
+    
+    // 如果是字符串消息
+    if (typeof message === 'string') {
+        const urls = message.match(urlRegex) || []
+        let text = message
+        
+        for (const url of urls) {
+            // 生成二维码
+            const qrcode = await urlToQRCode(url)
+            if (qrcode) {
+                // 替换URL为提示文本
+                text = text.replace(url, '[链接请扫描下方二维码]')
+                // 添加二维码图片
+                segments.push({ type: 'image', file: qrcode })
+                // 添加URL按钮（如果segment可用）
+                if (includeButton && typeof segment !== 'undefined') {
+                    try {
+                        segments.push(segment.button([{ text: '打开链接', link: url }]))
+                    } catch {}
+                }
+            }
+        }
+        
+        if (text.trim()) {
+            segments.unshift(text)
+        }
+        
+        return segments.length > 0 ? segments : [message]
+    }
+    
+    // 如果是消息段数组
+    if (Array.isArray(message)) {
+        for (const seg of message) {
+            if (typeof seg === 'string') {
+                const processed = await processUrlForQQBot(e, seg, options)
+                segments.push(...processed)
+            } else if (seg.type === 'text' && seg.text) {
+                const processed = await processUrlForQQBot(e, seg.text, options)
+                segments.push(...processed)
+            } else {
+                segments.push(seg)
+            }
+        }
+        return segments
+    }
+    
+    return [message]
+}
+
+/**
+ * 智能发送消息 - 自动处理QQBot平台的URL转二维码
+ * @param {Object} e - 事件对象
+ * @param {string|Array} message - 消息内容
+ * @param {boolean} quote - 是否引用回复
+ * @returns {Promise<Object|null>}
+ */
+export async function smartReply(e, message, quote = false) {
+    if (!e?.reply) return null
+    
+    try {
+        // 对QQBot平台自动处理URL
+        if (isQQBotPlatform(e)) {
+            const processedMsg = await processUrlForQQBot(e, message)
+            return await e.reply(processedMsg, quote)
+        }
+        
+        return await e.reply(message, quote)
+    } catch (err) {
+        logger?.warn?.('[PlatformAdapter] 智能回复失败:', err.message)
+        // 回退到普通回复
+        return await safeReply(e, message, quote)
+    }
+}
+
+/**
  * @deprecated 使用 detectFramework 代替
  */
 export function getBotFramework() {
@@ -987,6 +1269,7 @@ export default {
     detectAdapter,
     detectPlatform,
     getBotInfo,
+    isQQBotPlatform,
     // Bot 实例管理
     getBot,
     getBotSelfId,
@@ -1001,6 +1284,10 @@ export default {
     isGroupMessage,
     isPrivateMessage,
     safeReply,
+    smartReply,
+    // QQBot URL处理
+    urlToQRCode,
+    processUrlForQQBot,
     // 用户/群信息
     getUserInfo,
     getGroupInfo,
@@ -1020,6 +1307,7 @@ export default {
     getGroupChatHistory,
     // 头像
     getAvatarUrl,
+    getQQBotAvatarUrl,
     getGroupAvatarUrl,
     // 消息段处理
     normalizeSegment,
