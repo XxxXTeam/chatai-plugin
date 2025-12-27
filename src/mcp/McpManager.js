@@ -817,7 +817,8 @@ export class McpManager {
             }
         }
 
-        // 重新加载
+        // 重新加载模块化工具（根据最新配置）
+        await builtinMcpServer.loadModularTools()
         const tools = builtinMcpServer.listTools()
         for (const tool of tools) {
             this.tools.set(tool.name, {

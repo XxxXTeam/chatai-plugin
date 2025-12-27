@@ -15,7 +15,7 @@ const execAsync = promisify(exec)
 export const shellTools = [
     {
         name: 'execute_command',
-        description: '执行 Shell 命令。这是一个危险操作，仅限管理员使用。支持执行系统命令并返回输出结果。',
+        description: '执行 Shell 命令。这是一个危险操作，支持执行系统命令并返回输出结果。',
         inputSchema: {
             type: 'object',
             properties: {
@@ -41,14 +41,6 @@ export const shellTools = [
         dangerous: true,
         handler: async (args, context) => {
             const { command, cwd, timeout = 30000, shell = '/bin/bash' } = args
-            
-            // 安全检查：只有主人可以执行
-            if (!context?.isMaster) {
-                return {
-                    success: false,
-                    error: '权限不足：只有主人可以执行命令'
-                }
-            }
             
             // 危险命令黑名单
             const dangerousPatterns = [

@@ -384,13 +384,26 @@ export class ChatService {
         const groupToolModel = scopeFeatures.toolModel || null
         const groupDispatchModel = scopeFeatures.dispatchModel || null
         const groupImageModel = scopeFeatures.imageModel || null
+        const groupDrawModel = scopeFeatures.drawModel || null
         const groupSearchModel = scopeFeatures.searchModel || null
+        const groupRoleplayModel = scopeFeatures.roleplayModel || null
         
         // 检查工具模型是否已配置（优先群组配置，其次全局配置）
         const toolModelConfigured = !!groupToolModel || !!LlmService.getModel(LlmService.ModelType.TOOL, false)
         
         if (!llmModel) {
-            if (selectedToolGroupIndexes.length > 0 && toolsFromGroups.length > 0) {
+            if (hasImages) {
+                llmModel = groupImageModel || groupChatModel || LlmService.selectModel({ hasImages: true })
+                actualEnableTools = toolsAllowed
+                modelScenario = 'image'
+                // 如果有工具组选中，仍然可以传递工具
+                if (selectedToolGroupIndexes.length > 0 && toolsFromGroups.length > 0) {
+                    actualTools = toolsFromGroups
+                    logger.info(`[ChatService] 场景=图像处理+工具，模型: ${llmModel}${groupImageModel ? ' (群组图像模型)' : ''}，工具数: ${toolsFromGroups.length}`)
+                } else {
+                    logger.info(`[ChatService] 场景=图像处理，模型: ${llmModel}${groupImageModel ? ' (群组图像模型)' : groupChatModel ? ' (群组对话模型)' : ''}`)
+                }
+            } else if (selectedToolGroupIndexes.length > 0 && toolsFromGroups.length > 0) {
                 // 调度选中了工具组
                 if (toolModelConfigured) {
                     // 工具模型已配置 -> 优先使用群组工具模型，其次全局工具模型
@@ -411,12 +424,6 @@ export class ChatService {
                 actualEnableTools = toolsAllowed
                 modelScenario = 'chat'
                 logger.debug(`[ChatService] 场景=调度无需执行工具，模型: ${llmModel}${groupChatModel ? ' (群组配置)' : ''}`)
-            } else if (hasImages) {
-                // 有图片 -> 优先使用群组图像模型
-                llmModel = groupImageModel || groupChatModel || LlmService.selectModel({ hasImages: true })
-                actualEnableTools = toolsAllowed
-                modelScenario = 'image'
-                logger.debug(`[ChatService] 场景=图像处理，模型: ${llmModel}${groupImageModel ? ' (群组图像模型)' : groupChatModel ? ' (群组对话模型)' : ''}`)
             } else {
                 // 普通对话 -> 优先使用群组对话模型
                 llmModel = groupChatModel || LlmService.selectModel({})

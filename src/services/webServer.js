@@ -12,7 +12,7 @@ import { chatLogger, c as colors } from '../core/utils/logger.js'
 import { mcpManager } from '../mcp/McpManager.js'
 import { builtinMcpServer } from '../mcp/BuiltinMcpServer.js'
 import { presetManager } from './preset/PresetManager.js'
-import { channelManager } from './llm/ChannelManager.js'
+import { channelManager, normalizeBaseUrl } from './llm/ChannelManager.js'
 import { imageService } from './media/ImageService.js'
 import { databaseService } from './storage/DatabaseService.js'
 import { getScopeManager } from './scope/ScopeManager.js'
@@ -345,6 +345,17 @@ async function getServerAddresses(port) {
         
         const getPublicIP = () => new Promise((resolve) => {
             const services = [
+                // 国内 API 源（优先）
+                { url: 'https://myip.ipip.net/ip', https: true },
+                { url: 'https://ip.3322.net', https: true , parser: (data) => {
+                    const match = data.match(/(\d+\.\d+\.\d+\.\d+)/)
+                    return match ? match[1] : null
+                }},
+                { url: 'http://ip.chinaz.com/getip.aspx', https: false, parser: (data) => {
+                    const match = data.match(/(\d+\.\d+\.\d+\.\d+)/)
+                    return match ? match[1] : null
+                }},
+                // 国际 API 源
                 { url: 'https://api.ipify.org', https: true },
                 { url: 'https://icanhazip.com', https: true },
                 { url: 'https://ifconfig.me/ip', https: true },
@@ -353,32 +364,83 @@ async function getServerAddresses(port) {
             ]
             
             let resolved = false
+            let failedCount = 0
+            const totalServices = services.length
+            
             const timeout = setTimeout(() => {
                 if (!resolved) {
                     resolved = true
-                    chatLogger.debug('[WebServer] 公网IP获取超时')
-                    resolve(null)
+                    chatLogger.debug('[WebServer] 公网IP获取超时，尝试使用网卡外网IP')
+                    // 尝试从本地地址中找一个非内网IP
+                    const externalIP = findExternalIP(addresses.local)
+                    resolve(externalIP)
                 }
-            }, 8000) // 增加超时时间
+            }, 8000)
+            
+            // 尝试从本地地址找外网IP的函数
+            function findExternalIP(localAddresses) {
+                for (const addr of localAddresses) {
+                    const match = addr.match(/(\d+\.\d+\.\d+\.\d+)/)
+                    if (match) {
+                        const ip = match[1]
+                        // 排除内网IP段
+                        if (!ip.startsWith('10.') && 
+                            !ip.startsWith('192.168.') && 
+                            !ip.startsWith('172.16.') && !ip.startsWith('172.17.') && 
+                            !ip.startsWith('172.18.') && !ip.startsWith('172.19.') &&
+                            !ip.startsWith('172.2') && !ip.startsWith('172.30.') && !ip.startsWith('172.31.') &&
+                            !ip.startsWith('127.') &&
+                            ip !== '0.0.0.0') {
+                            return ip
+                        }
+                    }
+                }
+                return null
+            }
             
             for (const service of services) {
                 const client = service.https ? https : http
-                const req = client.get(service.url, { timeout: 5000 }, (res) => {
+                const req = client.get(service.url, { timeout: 3000 }, (res) => {
                     let data = ''
                     res.on('data', chunk => data += chunk)
                     res.on('end', () => {
-                        const ip = data.trim()
-                        if (!resolved && ip && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
+                        if (resolved) return
+                        let ip = data.trim()
+                        // 使用自定义解析器
+                        if (service.parser) {
+                            ip = service.parser(data)
+                        }
+                        if (ip && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
                             resolved = true
                             clearTimeout(timeout)
                             chatLogger.debug(`[WebServer] 公网IP获取成功: ${ip} (from ${service.url})`)
                             resolve(ip)
+                        } else {
+                            failedCount++
+                            checkAllFailed()
                         }
                     })
                 })
                 req.on('error', (err) => {
                     chatLogger.debug(`[WebServer] 公网IP服务 ${service.url} 失败: ${err.message}`)
+                    failedCount++
+                    checkAllFailed()
                 })
+                req.on('timeout', () => {
+                    req.destroy()
+                    failedCount++
+                    checkAllFailed()
+                })
+            }
+            
+            function checkAllFailed() {
+                if (!resolved && failedCount >= totalServices) {
+                    resolved = true
+                    clearTimeout(timeout)
+                    chatLogger.debug('[WebServer] 所有公网IP API失败，尝试使用网卡外网IP')
+                    const externalIP = findExternalIP(addresses.local)
+                    resolve(externalIP)
+                }
             }
         })
         
@@ -1959,11 +2021,10 @@ export class WebServer {
                 chatLogger.info(`[测试渠道] 使用临时Key: ${usedKeyName}`)
             }
 
-            // Auto-append /v1 if missing for OpenAI-compatible APIs
-            if (adapterType === 'openai' && baseUrl && !baseUrl.endsWith('/v1')) {
-                if (!baseUrl.includes('/chat/') && !baseUrl.includes('/models')) {
-                    baseUrl = baseUrl.replace(/\/$/, '') + '/v1'
-                }
+            // 对于前端直接传入的URL（非已保存渠道），需要进行规范化处理
+            // 使用统一的normalizeBaseUrl函数，避免重复拼接问题（如 /v2/v1）
+            if (!id && baseUrl) {
+                baseUrl = normalizeBaseUrl(baseUrl, adapterType)
             }
 
             chatLogger.info(`[测试渠道] 类型: ${adapterType}, BaseURL: ${baseUrl}`)
@@ -2165,12 +2226,10 @@ export class WebServer {
         this.app.post('/api/channels/fetch-models', this.authMiddleware.bind(this), async (req, res) => {
             let { adapterType, baseUrl, apiKey } = req.body
 
-            // Auto-append /v1 if missing for OpenAI-compatible APIs
-            if (adapterType === 'openai' && baseUrl && !baseUrl.endsWith('/v1')) {
-                // Check if it's not already a complete API path
-                if (!baseUrl.includes('/chat/') && !baseUrl.includes('/models')) {
-                    baseUrl = baseUrl.replace(/\/$/, '') + '/v1'
-                }
+            // 对于前端直接传入的URL，需要进行规范化处理
+            // 使用统一的normalizeBaseUrl函数，避免重复拼接问题（如 /v2/v1）
+            if (baseUrl) {
+                baseUrl = normalizeBaseUrl(baseUrl, adapterType)
             }
 
             try {
@@ -2693,8 +2752,11 @@ export default {
                 }
 
                 // 统一通过 mcpManager 调用（包括内置工具和自定义工具）
+                // 管理面板测试工具时，设置 isMaster: true（已通过认证）
                 await mcpManager.init()
-                const result = await mcpManager.callTool(toolName, args || {})
+                const result = await mcpManager.callTool(toolName, args || {}, {
+                    context: { isMaster: true, isAdminTest: true }
+                })
 
                 res.json(ChaiteResponse.ok({
                     success: true,

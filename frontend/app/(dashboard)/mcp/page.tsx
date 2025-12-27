@@ -583,8 +583,8 @@ export default {
             {/* 内置工具 - 按类别分组 */}
             <TabsContent value="builtin" className="space-y-4">
               {categories.length > 0 ? (
-                <ScrollArea className="h-[600px]">
-                  <div className="space-y-3 pr-4">
+                <div className="max-h-[70vh] overflow-y-auto">
+                  <div className="space-y-3 pr-2">
                     {categories.map((category) => {
                       const IconComponent = categoryIcons[category.key] || Wrench
                       const isExpanded = expandedCategory === category.key
@@ -662,7 +662,7 @@ export default {
                       )
                     })}
                   </div>
-                </ScrollArea>
+                </div>
               ) : (
                 <Card>
                   <CardContent className="flex flex-col items-center justify-center py-12">

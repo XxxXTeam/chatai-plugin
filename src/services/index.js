@@ -1,5 +1,6 @@
 export { LlmService } from './llm/LlmService.js'
 export { ChatService, chatService } from './llm/ChatService.js'
+export { ModelDispatcher, modelDispatcher, TaskType, ExecutionMode } from './llm/ModelDispatcher.js'
 export { channelManager } from './llm/ChannelManager.js'
 export { contextManager } from './llm/ContextManager.js'
 export { presetManager } from './preset/PresetManager.js'

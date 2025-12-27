@@ -234,8 +234,9 @@ export class LlmService {
         DEFAULT: 'default',     // 默认模型 - 未配置时的回退
         CHAT: 'chat',           // 对话模型 - 普通聊天（无工具）
         TOOL: 'tool',           // 工具模型 - 执行工具调用
-        DISPATCH: 'dispatch',   // 调度模型 - 选择工具组
-        IMAGE: 'image',         // 图像模型 - 图像理解/生成
+        DISPATCH: 'dispatch',   // 调度模型 - 分析意图、控制流程、生成提示词
+        IMAGE: 'image',         // 图像理解模型 - 仅负责理解/分析图片
+        DRAW: 'draw',           // 绘图模型 - 负责生成图片
         ROLEPLAY: 'roleplay',   // 伪人模型 - 模拟真人回复
         SEARCH: 'search'        // 搜索模型 - 联网搜索
     }
@@ -328,10 +329,17 @@ export class LlmService {
     }
 
     /**
-     * 获取图像模型
+     * 获取图像理解模型（仅负责理解/分析图片）
      */
     static getImageModel() {
         return this.getModel(this.ModelType.IMAGE)
+    }
+
+    /**
+     * 获取绘图模型（负责生成图片）
+     */
+    static getDrawModel() {
+        return this.getModel(this.ModelType.DRAW)
     }
 
     /**
@@ -353,12 +361,13 @@ export class LlmService {
      * @param {boolean} options.needsTools - 是否需要工具调用
      * @param {boolean} options.isDispatch - 是否是调度阶段
      * @param {boolean} options.hasImages - 是否包含图像
+     * @param {boolean} options.needsDraw - 是否需要生成图片
      * @param {boolean} options.isRoleplay - 是否是伪人模式
      * @param {boolean} options.needsSearch - 是否需要搜索
      * @returns {string} 模型名称
      */
     static selectModel(options = {}) {
-        const { needsTools, isDispatch, hasImages, isRoleplay, needsSearch } = options
+        const { needsTools, isDispatch, hasImages, needsDraw, isRoleplay, needsSearch } = options
         if (isDispatch) {
             const model = this.getDispatchModel()
             if (model) {
@@ -370,7 +379,16 @@ export class LlmService {
             return ''
         }
         
-        // 2. 工具调用 - 使用工具模型
+        // 2. 绘图需求 - 使用绘图模型（优先级高于工具）
+        if (needsDraw) {
+            const model = this.getDrawModel()
+            if (model) {
+                logger.debug(`[LlmService] selectModel: 使用绘图模型 ${model}`)
+                return model
+            }
+        }
+        
+        // 3. 工具调用 - 使用工具模型
         if (needsTools) {
             const model = this.getToolModel()
             if (model) {
@@ -379,7 +397,7 @@ export class LlmService {
             }
         }
         
-        // 3. 图像处理 - 使用图像模型
+        // 4. 图像处理 - 使用图像模型
         if (hasImages) {
             const model = this.getImageModel()
             if (model) {
@@ -388,7 +406,7 @@ export class LlmService {
             }
         }
         
-        // 4. 伪人模式 - 使用伪人模型
+        // 5. 伪人模式 - 使用伪人模型
         if (isRoleplay) {
             const model = this.getRoleplayModel()
             if (model) {
@@ -397,7 +415,7 @@ export class LlmService {
             }
         }
         
-        // 5. 搜索需求 - 使用搜索模型
+        // 6. 搜索需求 - 使用搜索模型
         if (needsSearch) {
             const model = this.getSearchModel()
             if (model) {
@@ -406,14 +424,14 @@ export class LlmService {
             }
         }
         
-        // 6. 普通对话 - 使用对话模型
+        // 7. 普通对话 - 使用对话模型
         const chatModel = this.getChatModel()
         if (chatModel) {
             logger.debug(`[LlmService] selectModel: 使用对话模型 ${chatModel}`)
             return chatModel
         }
         
-        // 7. 回退到默认模型
+        // 8. 回退到默认模型
         const defaultModel = this.getDefaultModel()
         logger.debug(`[LlmService] selectModel: 回退到默认模型 ${defaultModel}`)
         return defaultModel
@@ -430,6 +448,7 @@ export class LlmService {
             tool: this.getModel(this.ModelType.TOOL, false) || '(使用默认)',
             dispatch: this.getModel(this.ModelType.DISPATCH, false) || '(使用默认)',
             image: this.getModel(this.ModelType.IMAGE, false) || '(使用默认)',
+            draw: this.getModel(this.ModelType.DRAW, false) || '(使用默认)',
             roleplay: this.getModel(this.ModelType.ROLEPLAY, false) || '(使用默认)',
             search: this.getModel(this.ModelType.SEARCH, false) || '(使用默认)'
         }

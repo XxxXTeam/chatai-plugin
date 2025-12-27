@@ -774,7 +774,9 @@ export class ScopeManager {
       toolModel: undefined,
       dispatchModel: undefined,
       imageModel: undefined,
-      searchModel: undefined
+      drawModel: undefined,
+      searchModel: undefined,
+      roleplayModel: undefined
     }
 
     // 预加载所有可能的配置
@@ -892,8 +894,14 @@ export class ScopeManager {
           if (featureConfig.imageModel === undefined && innerSettings.imageModel) {
             featureConfig.imageModel = innerSettings.imageModel
           }
+          if (featureConfig.drawModel === undefined && innerSettings.drawModel) {
+            featureConfig.drawModel = innerSettings.drawModel
+          }
           if (featureConfig.searchModel === undefined && innerSettings.searchModel) {
             featureConfig.searchModel = innerSettings.searchModel
+          }
+          if (featureConfig.roleplayModel === undefined && innerSettings.roleplayModel) {
+            featureConfig.roleplayModel = innerSettings.roleplayModel
           }
         }
       }
