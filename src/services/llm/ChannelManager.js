@@ -35,7 +35,7 @@ function hasCustomPath(url) {
  * @param {string} adapterType 
  * @returns {string}
  */
-function normalizeBaseUrl(baseUrl, adapterType) {
+export function normalizeBaseUrl(baseUrl, adapterType) {
     // 如果为空，使用默认地址
     if (!baseUrl || !baseUrl.trim()) {
         return DEFAULT_BASE_URLS[adapterType] || ''

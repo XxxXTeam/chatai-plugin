@@ -69,6 +69,7 @@ interface Config {
       tool: string
       dispatch: string
       image: string
+      draw: string
       roleplay: string
       search: string
     }
@@ -174,7 +175,7 @@ const defaultConfig: Config = {
   admin: { masterQQ: [], loginNotifyPrivate: true, sensitiveCommandMasterOnly: true },
   llm: { 
     defaultModel: '', 
-    models: { chat: '', tool: '', dispatch: '', image: '', roleplay: '', search: '' },
+    models: { chat: '', tool: '', dispatch: '', image: '', draw: '', roleplay: '', search: '' },
     fallback: { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false }
   },
   context: { maxMessages: 20, autoEnd: { enabled: false, maxRounds: 50 }, groupContextSharing: true, globalSystemPrompt: '' },
@@ -215,14 +216,15 @@ const defaultConfig: Config = {
   }
 }
 
-type ModelCategory = 'chat' | 'tool' | 'dispatch' | 'image' | 'roleplay' | 'search' | 'fallback' | 'default'
+type ModelCategory = 'chat' | 'tool' | 'dispatch' | 'image' | 'draw' | 'roleplay' | 'search' | 'fallback' | 'default'
 
 const MODEL_CATEGORY_LABELS: Record<ModelCategory, string> = {
   default: '默认模型',
   chat: '对话模型',
   tool: '工具模型',
   dispatch: '调度模型',
-  image: '图像模型',
+  image: '图像理解模型',
+  draw: '绘图模型',
   roleplay: '伪人模型',
   search: '搜索模型',
   fallback: '备选模型'
@@ -233,7 +235,8 @@ const MODEL_CATEGORY_DESCRIPTIONS: Record<ModelCategory, string> = {
   chat: '普通对话，不传递工具',
   tool: '执行工具调用',
   dispatch: '选择工具组（轻量快速）',
-  image: '图像理解和生成',
+  image: '分析理解图片内容',
+  draw: '生成图片（如DALL-E）',
   roleplay: '伪人模式回复',
   search: '联网搜索',
   fallback: '主模型失败时使用'
@@ -304,7 +307,7 @@ export default function SettingsPage() {
         
         // 确保 llm 和 llm.models 对象存在
         if (!merged.llm) merged.llm = { defaultModel: '', models: {}, fallback: { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false } }
-        if (!merged.llm.models) merged.llm.models = { chat: '', tool: '', dispatch: '', image: '', roleplay: '', search: '' }
+        if (!merged.llm.models) merged.llm.models = { chat: '', tool: '', dispatch: '', image: '', draw: '', roleplay: '', search: '' }
         if (!merged.llm.fallback) merged.llm.fallback = { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false }
         
         // 确保 prefixPersonas 是数组
@@ -820,7 +823,7 @@ export default function SettingsPage() {
               <CardDescription>为不同场景配置专用模型（同一模型配置多个渠道时自动轮询）</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              {(['chat', 'tool', 'dispatch', 'image', 'roleplay', 'search'] as ModelCategory[]).map((category) => (
+              {(['chat', 'tool', 'dispatch', 'image', 'draw', 'roleplay', 'search'] as ModelCategory[]).map((category) => (
                 <div key={category} className="flex items-center justify-between p-3 border rounded-lg">
                   <div>
                     <Label>{MODEL_CATEGORY_LABELS[category]}</Label>

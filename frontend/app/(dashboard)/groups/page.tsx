@@ -133,7 +133,9 @@ export default function GroupsPage() {
     toolModel: '',  // 工具模型
     dispatchModel: '',  // 调度模型
     imageModel: '',  // 图像理解模型
+    drawModel: '',  // 绘图模型
     searchModel: '',  // 搜索模型
+    roleplayModel: '',  // 伪人模型
     enabled: true,
     triggerMode: 'default',
     bymEnabled: 'inherit' as 'inherit' | 'on' | 'off',
@@ -203,7 +205,9 @@ export default function GroupsPage() {
       toolModel: '',
       dispatchModel: '',
       imageModel: '',
+      drawModel: '',
       searchModel: '',
+      roleplayModel: '',
       enabled: true,
       triggerMode: 'default',
       bymEnabled: 'inherit',
@@ -248,7 +252,9 @@ export default function GroupsPage() {
         toolModel: settings.toolModel || '',
         dispatchModel: settings.dispatchModel || '',
         imageModel: settings.imageModel || '',
+        drawModel: settings.drawModel || '',
         searchModel: settings.searchModel || '',
+        roleplayModel: settings.roleplayModel || '',
         enabled: group.enabled ?? settings.enabled ?? true,
         triggerMode: settings.triggerMode || group.triggerMode || 'default',
         bymEnabled: settings.bymEnabled === undefined ? 'inherit' : settings.bymEnabled ? 'on' : 'off',
@@ -296,7 +302,9 @@ export default function GroupsPage() {
         toolModel: form.toolModel || undefined,
         dispatchModel: form.dispatchModel || undefined,
         imageModel: form.imageModel || undefined,
+        drawModel: form.drawModel || undefined,
         searchModel: form.searchModel || undefined,
+        roleplayModel: form.roleplayModel || undefined,
         enabled: form.enabled,
         triggerMode: form.triggerMode,
         bymEnabled: form.bymEnabled === 'inherit' ? undefined : form.bymEnabled === 'on',
@@ -875,7 +883,7 @@ export default function GroupsPage() {
                 <SelectTrigger>
                   <SelectValue placeholder="使用全局配置" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="max-h-[200px] overflow-y-auto">
                   <SelectItem value="__default__">使用全局配置</SelectItem>
                   {allModels.map((m) => (
                     <SelectItem key={m} value={m}>{m}</SelectItem>
@@ -890,7 +898,7 @@ export default function GroupsPage() {
                 <SelectTrigger>
                   <SelectValue placeholder="使用全局配置" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="max-h-[200px] overflow-y-auto">
                   <SelectItem value="__default__">使用全局配置</SelectItem>
                   {allModels.map((m) => (
                     <SelectItem key={m} value={m}>{m}</SelectItem>
@@ -905,7 +913,7 @@ export default function GroupsPage() {
                 <SelectTrigger>
                   <SelectValue placeholder="使用全局配置" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="max-h-[200px] overflow-y-auto">
                   <SelectItem value="__default__">使用全局配置</SelectItem>
                   {allModels.map((m) => (
                     <SelectItem key={m} value={m}>{m}</SelectItem>
@@ -915,12 +923,27 @@ export default function GroupsPage() {
             </div>
             
             <div className="space-y-1.5">
-              <Label className="text-xs">图像模型 <span className="text-muted-foreground">（图片理解）</span></Label>
+              <Label className="text-xs">图像理解模型 <span className="text-muted-foreground">（分析图片）</span></Label>
               <Select value={form.imageModel || '__default__'} onValueChange={(v) => setForm({ ...form, imageModel: v === '__default__' ? '' : v })}>
                 <SelectTrigger>
                   <SelectValue placeholder="使用全局配置" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="max-h-[200px] overflow-y-auto">
+                  <SelectItem value="__default__">使用全局配置</SelectItem>
+                  {allModels.map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="space-y-1.5">
+              <Label className="text-xs">绘图模型 <span className="text-muted-foreground">（生成图片）</span></Label>
+              <Select value={form.drawModel || '__default__'} onValueChange={(v) => setForm({ ...form, drawModel: v === '__default__' ? '' : v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="使用全局配置" />
+                </SelectTrigger>
+                <SelectContent className="max-h-[200px] overflow-y-auto">
                   <SelectItem value="__default__">使用全局配置</SelectItem>
                   {allModels.map((m) => (
                     <SelectItem key={m} value={m}>{m}</SelectItem>
@@ -935,7 +958,22 @@ export default function GroupsPage() {
                 <SelectTrigger>
                   <SelectValue placeholder="使用全局配置" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="max-h-[200px] overflow-y-auto">
+                  <SelectItem value="__default__">使用全局配置</SelectItem>
+                  {allModels.map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="space-y-1.5">
+              <Label className="text-xs">伪人模型 <span className="text-muted-foreground">（模拟真人）</span></Label>
+              <Select value={form.roleplayModel || '__default__'} onValueChange={(v) => setForm({ ...form, roleplayModel: v === '__default__' ? '' : v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="使用全局配置" />
+                </SelectTrigger>
+                <SelectContent className="max-h-[200px] overflow-y-auto">
                   <SelectItem value="__default__">使用全局配置</SelectItem>
                   {allModels.map((m) => (
                     <SelectItem key={m} value={m}>{m}</SelectItem>

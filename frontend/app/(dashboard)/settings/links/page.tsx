@@ -433,7 +433,7 @@ export default function LoginLinksPage() {
                   const loginUrl = generateLoginUrl(link.baseUrl)
                   return (
                     <TableRow key={link.id}>
-                      <TableCell className="font-medium">{link.label}</TableCell>
+                      <TableCell className="font-medium">{link.label || '(未命名)'}</TableCell>
                       <TableCell className="text-muted-foreground">
                         <a 
                           href={link.baseUrl} 

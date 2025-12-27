@@ -28,6 +28,7 @@ import {
   Activity,
   FileText,
   Server,
+  Link as LinkIcon,
   type LucideIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -86,6 +87,7 @@ const navGroups: NavGroup[] = [
       { href: '/presets', label: '预设管理', icon: Palette },
       { href: '/scope', label: '人设管理', icon: UserCog },
       { href: '/settings/proxy', label: '代理设置', icon: Globe },
+      { href: '/settings/links', label: '登录链接', icon: LinkIcon },
     ],
   },
   {

@@ -6,7 +6,7 @@ const logger = chatLogger
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getBotFramework } from '../utils/bot.js'
+import { getBotFramework, isMaster as checkIsMaster } from '../utils/bot.js'
 import config from '../../config/config.js'
 import { validateParams, paramError } from './tools/helpers.js'
 
@@ -70,13 +70,21 @@ class ToolContext {
         this.event = null
         this.callbacks = new Map()
         this._adapterInfo = null
+        this._isMaster = false
     }
 
     setContext(ctx) {
         if (ctx.bot) this.bot = ctx.bot
         if (ctx.event) this.event = ctx.event
-        // 每次设置上下文时更新适配器信息
+        // 每次设置上下文时更新适配器信息和主人判断
         this._adapterInfo = null
+        // 更新主人判断
+        const userId = this.event?.user_id
+        this._isMaster = userId ? checkIsMaster(userId) : false
+    }
+    
+    get isMaster() {
+        return this._isMaster
     }
 
     getBot(botId) {
@@ -826,7 +834,21 @@ export class BuiltinMcpServer {
      * @returns {Object} 上下文包装器
      */
     createRequestContext(requestContext) {
-        // 如果有传入的请求上下文，使用它（用于并发隔离）
+        // 如果直接传入了 isMaster（如管理面板测试），创建简化上下文
+        if (requestContext && requestContext.isMaster !== undefined && !requestContext.event) {
+            return {
+                getBot: () => global.Bot,
+                getEvent: () => null,
+                getAdapter: () => ({ adapter: 'unknown', isNT: false }),
+                isIcqq: () => false,
+                isNapCat: () => false,
+                isNT: () => false,
+                isMaster: requestContext.isMaster,
+                isAdminTest: requestContext.isAdminTest || false,
+                registerCallback: (id, cb) => toolContext.registerCallback(id, cb),
+                executeCallback: (id, data) => toolContext.executeCallback(id, data)
+            }
+        }
         if (requestContext && requestContext.event) {
             const getBot = (botId) => {
                 if (requestContext.bot) return requestContext.bot
@@ -837,8 +859,6 @@ export class BuiltinMcpServer {
                 }
                 return Bot
             }
-            
-            // 缓存适配器信息
             let _adapterInfo = null
             const getAdapter = () => {
                 if (_adapterInfo) return _adapterInfo
@@ -852,6 +872,8 @@ export class BuiltinMcpServer {
                 adapterCache.set(botId, _adapterInfo)
                 return _adapterInfo
             }
+            const userId = requestContext.event?.user_id
+            const isMasterUser = userId ? checkIsMaster(userId) : false
             
             return {
                 getBot,
@@ -860,6 +882,7 @@ export class BuiltinMcpServer {
                 isIcqq: () => getAdapter().adapter === 'icqq',
                 isNapCat: () => getAdapter().adapter === 'napcat',
                 isNT: () => getAdapter().isNT,
+                isMaster: isMasterUser,  
                 registerCallback: (id, cb) => toolContext.registerCallback(id, cb),
                 executeCallback: (id, data) => toolContext.executeCallback(id, data)
             }
