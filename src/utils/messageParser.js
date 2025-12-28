@@ -23,6 +23,7 @@
  * - music: 音乐分享
  * - poke: 戳一戳
  * - mface: 商城表情
+ * - bface: 原创表情/大表情
  * - markdown: Markdown消息
  */
 
@@ -110,6 +111,19 @@ function getMediaUrl(data, debug = false) {
     }
     
     return null
+}
+
+/**
+ * 获取 bface 原创表情的图片 URL
+ * @param {string} file - bface 的 file 哈希值
+ * @returns {string|null} 图片 URL
+ */
+export function getBfaceUrl(file) {
+    if (!file || typeof file !== 'string' || file.length < 32) {
+        return null
+    }
+    // 格式: https://gxh.vip.qq.com/club/item/parcel/item/{前2字符}/{前32字符}/raw300.gif
+    return `https://gxh.vip.qq.com/club/item/parcel/item/${file.substring(0, 2)}/${file.substring(0, 32)}/raw300.gif`
 }
 
 /**
@@ -542,6 +556,32 @@ export async function parseUserMessage(e, options = {}) {
                     // 商城表情 (NC/OneBot)
                     const mfaceName = segData.summary || segData.text || val.summary || ''
                     text += `[商城表情${mfaceName ? ':' + mfaceName : ''}]`
+                    break
+                }
+                
+                case 'bface': {
+                    // 原创表情/大表情 (icqq/TRSS)
+                    // 消息结构: { type: 'bface', file: 'hash...', text: '[表情名]' }
+                    const bfaceFile = segData.file || val.file || ''
+                    const bfaceName = segData.text || val.text || ''
+                    const bfaceUrl = getBfaceUrl(bfaceFile)
+                    
+                    if (bfaceUrl) {
+                        logger.debug(`[MessageParser][Bface] 原创表情: name=${bfaceName}, file=${bfaceFile.substring(0, 32)}..., url=${bfaceUrl}`)
+                        
+                        contents.push({
+                            type: 'image_url',
+                            image_url: { url: bfaceUrl },
+                            source: 'bface',
+                            bface: {
+                                file: bfaceFile,
+                                name: bfaceName,
+                                url: bfaceUrl
+                            }
+                        })
+                    } else {
+                        text += `[原创表情${bfaceName ? ':' + bfaceName : ''}]`
+                    }
                     break
                 }
                 
@@ -1051,6 +1091,30 @@ async function parseReplyMessage(e, options) {
                     break
                 }
                 
+                case 'bface': {
+                    // 原创表情/大表情 (icqq/TRSS)
+                    const bfaceFile = valData.file || val.file || ''
+                    const bfaceName = valData.text || val.text || ''
+                    const bfaceUrl = getBfaceUrl(bfaceFile)
+                    
+                    if (bfaceUrl && handleReplyImage) {
+                        parseLog.push(`[Reply][Bface] 原创表情: name=${bfaceName}, url=${bfaceUrl}`)
+                        contents.push({
+                            type: 'image_url',
+                            image_url: { url: bfaceUrl },
+                            source: 'reply_bface',
+                            bface: {
+                                file: bfaceFile,
+                                name: bfaceName,
+                                url: bfaceUrl
+                            }
+                        })
+                    } else {
+                        replyTextContent += `[原创表情${bfaceName ? ':' + bfaceName : ''}]`
+                    }
+                    break
+                }
+                
                 case 'at': {
                     const atQQ = valData.qq || val.qq || ''
                     replyTextContent += `@${atQQ} `
@@ -1403,6 +1467,21 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
                         const faceId = valData.id || val.id || ''
                         forwardTexts.push(`${nickname}: [表情:${faceId}]`)
                         msgInfo.content.push({ type: 'face', id: faceId })
+                    } else if (valType === 'bface') {
+                        // 原创表情/大表情
+                        const bfaceFile = valData.file || val.file || ''
+                        const bfaceName = valData.text || val.text || ''
+                        const bfaceUrl = getBfaceUrl(bfaceFile)
+                        forwardTexts.push(`${nickname}: [原创表情${bfaceName ? ':' + bfaceName : ''}]`)
+                        msgInfo.content.push({ type: 'bface', file: bfaceFile, name: bfaceName, url: bfaceUrl })
+                        if (bfaceUrl) {
+                            contents.push({
+                                type: 'image_url',
+                                image_url: { url: bfaceUrl },
+                                source: 'forward_bface',
+                                bface: { file: bfaceFile, name: bfaceName, url: bfaceUrl }
+                            })
+                        }
                     } else if (valType === 'at') {
                         const atQQ = valData.qq || val.qq || ''
                         forwardTexts.push(`${nickname}: @${atQQ}`)

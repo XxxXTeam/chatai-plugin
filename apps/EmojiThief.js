@@ -5,6 +5,7 @@ import axios from 'axios'
 import crypto from 'crypto'
 import { getScopeManager } from '../src/services/scope/ScopeManager.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
+import { getBfaceUrl } from '../src/utils/messageParser.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -124,41 +125,60 @@ class EmojiThiefService {
         let collectedCount = 0
 
         for (const item of e.message) {
+            // 获取表情URL（支持多种类型）
+            let emojiUrl = null
+            let emojiType = null
+            
             // 检查是否是表情包类型的图片
             if (item.type === 'image' && (item.sub_type === 1 || item.emoji_id)) {
-                try {
-                    // 根据偷取概率决定是否偷取
-                    if (Math.random() > config.stealRate) {
-                        continue
-                    }
-                    
-                    // 如果达到上限，随机删除一个
-                    if (md5Db.size >= config.maxCount) {
-                        await this.removeRandomEmoji(emojiDir, md5Db)
-                    }
-                    
-                    const response = await axios.get(item.url, { 
-                        responseType: 'arraybuffer', 
-                        timeout: 10000 
-                    })
-                    const buffer = response.data
-                    const hash = crypto.createHash('md5').update(buffer).digest('hex')
-                    
-                    if (md5Db.has(hash)) continue
-                    
-                    // 判断文件类型
-                    const ext = this.detectImageType(buffer) || 'gif'
-                    const fileName = `${hash}.${ext}`
-                    const filePath = path.join(emojiDir, fileName)
-                    
-                    await fsp.writeFile(filePath, buffer)
-                    md5Db.add(hash)
-                    hasNewEmoji = true
-                    collectedCount++
-                    
-                } catch (error) {
-                    logger.debug(`[EmojiThief] 处理表情包失败: ${error.message}`)
+                emojiUrl = item.url
+                emojiType = 'image'
+            }
+            // 支持 bface 原创表情
+            else if (item.type === 'bface' && item.file) {
+                emojiUrl = getBfaceUrl(item.file)
+                if (emojiUrl) {
+                    emojiType = 'bface'
+                    logger.debug(`[EmojiThief] 发现bface表情: ${item.text || '未知'}, url=${emojiUrl}`)
                 }
+            }
+            
+            if (!emojiUrl) continue
+            
+            try {
+                // 根据偷取概率决定是否偷取
+                if (Math.random() > config.stealRate) {
+                    continue
+                }
+                
+                // 如果达到上限，随机删除一个
+                if (md5Db.size >= config.maxCount) {
+                    await this.removeRandomEmoji(emojiDir, md5Db)
+                }
+                
+                const response = await axios.get(emojiUrl, { 
+                    responseType: 'arraybuffer', 
+                    timeout: 10000 
+                })
+                const buffer = response.data
+                const hash = crypto.createHash('md5').update(buffer).digest('hex')
+                
+                if (md5Db.has(hash)) continue
+                
+                // 判断文件类型
+                const ext = this.detectImageType(buffer) || 'gif'
+                const fileName = `${hash}.${ext}`
+                const filePath = path.join(emojiDir, fileName)
+                
+                await fsp.writeFile(filePath, buffer)
+                md5Db.add(hash)
+                hasNewEmoji = true
+                collectedCount++
+                
+                logger.debug(`[EmojiThief] 收集${emojiType}表情成功: ${fileName}`)
+                
+            } catch (error) {
+                logger.debug(`[EmojiThief] 处理${emojiType || ''}表情包失败: ${error.message}`)
             }
         }
 
