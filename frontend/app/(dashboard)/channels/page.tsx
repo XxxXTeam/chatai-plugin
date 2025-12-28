@@ -80,7 +80,7 @@ interface ChannelPresetCategory {
 }
 
 const PRESET_CATEGORIES: ChannelPresetCategory[] = [
-  { name: '内置免费API', icon: '🆓', presets: ['free-glm', 'free-xiaomi', 'free-gemini', 'free-grok'] },
+  { name: '内置免费API', icon: '🆓', presets: ['free-glm', 'free-xiaomi', 'free-gemini', 'free-grok', 'free-api'] },
   { name: '国际厂商', icon: '🌍', presets: ['openai', 'gemini', 'claude', 'grok', 'mistral', 'cohere', 'groq'] },
   { name: '国内厂商', icon: '🇨🇳', presets: ['deepseek', 'zhipu', 'qwen', 'baichuan', 'minimax', 'moonshot', 'yi', 'doubao', 'spark', 'hunyuan', 'baidu'] },
   { name: '中转服务', icon: '🔄', presets: ['openrouter', 'siliconflow', 'together', 'fireworks', 'novita'] },
@@ -120,7 +120,14 @@ const CHANNEL_PRESETS: Record<string, ChannelPreset> = {
     models: 'mimo-v2-flash-studio, mimo-v2-flash-studio-thinking, mimo-v2-flash-studio-search, mimo-v2-flash-studio-thinking-search, mimo-v2-flash-studio-search-thinking, mimo-v2-flash, mimo-v2-flash-thinking, mimo-v2-flash-search, mimo-v2-flash-thinking-search, mimo-v2-flash-search-thinking',
     description: '免费小米MiMo API',
   },
-  
+    'free-api': {
+    name: '免费内置接口',
+    adapterType: 'openai',
+    baseUrl: 'https://ai.openel.top/',
+    apiKey: 'sk-LnATx3JUr565w2Kmme1r5om3WkO2YAsglOPaVael6UfgswXj',
+    models: '',
+    description: '免费多模型 API',
+  },
   // ========== 国际厂商 ==========
   'openai': {
     name: 'OpenAI',
@@ -736,7 +743,8 @@ export default function ChannelsPage() {
                           
                           // 根据预设类型显示不同提示
                           const presetHints: Record<string, { type: 'success' | 'info', message: string, url?: string }> = {
-                            'free-glm': { type: 'success', message: '免费GLM配置已填充' },
+                            'free-api': { type: 'success', message: '作者内置免费API,使用前请手动点击获取模型更新模型列表' },
+                            'free-glm': { type: 'success', message: '免费GLM' },
                             'free-xiaomi': { type: 'success', message: '免费小米MiMo' },
                             'free-gemini': { type: 'info', message: '免费Gemini - 需手动获取API Key', url: preset.authUrl },
                             'free-grok': { type: 'info', message: '免费Grok - 需在 x.ai 获取API Key' },
