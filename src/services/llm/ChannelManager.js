@@ -828,7 +828,6 @@ export class ChannelManager {
     }
 
     /**
-     * Get best channel for a model
      * @param {string} model
      * @param {Object} options - 选项
      * @param {boolean} options.ignoreErrorCooldown - 忽略错误冷却时间，默认false
@@ -837,29 +836,23 @@ export class ChannelManager {
     getBestChannel(model, options = {}) {
         const { ignoreErrorCooldown = false } = options
         const strategy = config.get('loadBalancing.strategy') || 'priority'
-
-        // Filter channels that support the model and are enabled
         const allChannels = Array.from(this.channels.values())
-        logger.debug(`[ChannelManager] getBestChannel(${model}): 总渠道数=${allChannels.length}`)
-        
-        let candidates = allChannels.filter(ch => {
+        const modelChannels = allChannels.filter(ch => {
             const hasModel = ch.models?.includes(model) || ch.models?.includes('*')
             const isEnabled = ch.enabled !== false
+            return hasModel && isEnabled
+        })
+        const modelChannelsCount = modelChannels.length
+        let candidates = modelChannels.filter(ch => {
             const notError = ch.status !== 'error'
-            if (!hasModel || !isEnabled || !notError) {
-                logger.debug(`[ChannelManager] 渠道 ${ch.id} 被过滤: enabled=${isEnabled}, status=${ch.status}, hasModel=${hasModel}`)
+            if (!notError) {
+                logger.debug(`[ChannelManager] 渠道 ${ch.id} 被过滤: status=${ch.status}`)
             }
-            return isEnabled && notError && hasModel
+            return notError
         })
         const now = Date.now()
-        
-        // 记录过滤前支持该模型的渠道数
-        const modelChannelsCount = candidates.length
-        
-        // 错误冷却过滤（可通过选项跳过）
         if (!ignoreErrorCooldown) {
             candidates = candidates.filter(ch => {
-                // 根据连续错误次数动态调整冷却时间：1次=30秒，2次=1分钟，3次+=5分钟
                 const errorCount = ch.errorCount || 0
                 let cooldownMs = 0
                 if (errorCount === 1) cooldownMs = 30 * 1000       // 30秒
@@ -872,21 +865,15 @@ export class ChannelManager {
                 }
                 return true
             })
-            
-            // 如果冷却过滤后无可用渠道，忽略冷却取全部该模型渠道
             if (candidates.length === 0 && modelChannelsCount > 0) {
-                logger.warn(`[ChannelManager] 所有渠道都在冷却中，忽略冷却取全部该模型渠道(${modelChannelsCount}个)`)
                 candidates = allChannels.filter(ch => {
                     const hasModel = ch.models?.includes(model) || ch.models?.includes('*')
                     const isEnabled = ch.enabled !== false
-                    // 忽略冷却，但仍排除已禁用的渠道
                     const notDisabled = ch.status !== ChannelStatus.DISABLED
                     return hasModel && isEnabled && notDisabled
                 })
             }
         }
-
-        logger.debug(`[ChannelManager] 错误时间过滤后候选: ${candidates.map(c => c.id).join(', ')}`)
         candidates = candidates.filter(ch => {
             if (ch.quota && ch.usage && ch.quota.daily > 0) {
                 const today = new Date().toISOString().split('T')[0]
@@ -897,6 +884,9 @@ export class ChannelManager {
             }
             return true
         })
+        if (candidates.length === 0 && modelChannelsCount > 0) {
+            candidates = modelChannels.filter(ch => ch.status !== ChannelStatus.DISABLED)
+        }
         
         if (candidates.length === 0) return null
 
