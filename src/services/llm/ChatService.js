@@ -350,10 +350,25 @@ export class ChatService {
         const groupDispatchModelForDispatch = scopeFeatures.dispatchModel || null
         
         if (shouldDispatch) {
-            try {
-                // 第一阶段：使用调度模型选择工具组（优先群组配置）
+            try { 
                 dispatchInfo = await this.dispatchToolGroups(message, { event, debugMode, groupDispatchModel: groupDispatchModelForDispatch })
                 selectedToolGroupIndexes = dispatchInfo.indexes
+                
+                // 检查是否有特殊任务需要处理（非纯chat任务）
+                const specialTasks = dispatchInfo.tasks?.filter(t => t.type !== 'chat') || []
+                
+                if (specialTasks.length > 0) {
+                    return await this.executeMultiTasks({
+                        tasks: dispatchInfo.tasks,
+                        executionMode: dispatchInfo.executionMode,
+                        originalMessage: message,
+                        event,
+                        images,
+                        conversationId,
+                        scopeFeatures,
+                        toolsAllowed
+                    })
+                }
                 
                 if (selectedToolGroupIndexes.length > 0) {
                     // 根据选中的索引获取完整工具列表
@@ -369,10 +384,6 @@ export class ChatService {
             // 启用了工具组调度但调度模型未配置，跳过调度，使用全量工具
             logger.debug(`[ChatService] 调度模型未配置，跳过调度阶段，使用全量工具模式`)
         }
-        
-        // 根据调度结果选择模型和工具配置
-        // 核心原则：只有明确配置了工具模型时，才进行模型分离
-        // 否则使用对话模型/默认模型 + 传工具（由模型自己决定是否调用）
         
         let llmModel = model
         let actualEnableTools = false
@@ -1424,10 +1435,11 @@ export class ChatService {
     /**
      * @param {string} message - 用户消息
      * @param {Object} options - 选项
-     * @returns {Promise<{indexes: number[], dispatchResponse: string}>}
+     * @returns {Promise<{indexes: number[], dispatchResponse: string, tasks: Array, executionMode: string, analysis: string}>}
      */
     async dispatchToolGroups(message, options = {}) {
         const { event, debugMode, groupDispatchModel } = options
+        const defaultReturn = { indexes: [], dispatchResponse: '', tasks: [{ type: 'chat', priority: 1, params: {} }], executionMode: 'sequential', analysis: '' }
         
         // 初始化工具组管理器
         await toolGroupManager.init()
@@ -1437,14 +1449,14 @@ export class ChatService {
         
         if (!dispatchModel) {
             logger.warn('[ChatService] 未配置调度模型，跳过工具组调度')
-            return { indexes: [], dispatchResponse: '' }
+            return defaultReturn
         }
         
         // 构建调度提示词
         const dispatchPrompt = toolGroupManager.buildDispatchPrompt()
         
         if (!dispatchPrompt) {
-            return { indexes: [], dispatchResponse: '' }
+            return defaultReturn
         }
         
         try {
@@ -1454,7 +1466,7 @@ export class ChatService {
             
             if (!channel) {
                 logger.warn('[ChatService] 未找到支持调度模型的渠道')
-                return { indexes: [], dispatchResponse: '' }
+                return defaultReturn
             }
             
             const clientOptions = {
@@ -1486,17 +1498,23 @@ export class ChatService {
                 ?.map(c => c.text)
                 ?.join('') || ''
             
-            const indexes = toolGroupManager.parseDispatchResponse(responseText)
+            // 使用增强版解析（支持多任务）
+            const parsed = toolGroupManager.parseDispatchResponseV2(responseText)
             
-            if (debugMode) {
-                logger.debug(`[ChatService] 调度结果: 模型=${dispatchModel}, 响应=${responseText}, 选中工具组=${JSON.stringify(indexes)}`)
+            const taskTypes = parsed.tasks.map(t => t.type).join(',')
+            logger.info(`[ChatService] 调度结果: 模型=${dispatchModel}, 分析="${parsed.analysis}", 任务=[${taskTypes}], 执行模式=${parsed.executionMode}`)
+            
+            return { 
+                indexes: parsed.toolGroups, 
+                dispatchResponse: responseText,
+                tasks: parsed.tasks,
+                executionMode: parsed.executionMode,
+                analysis: parsed.analysis
             }
-            
-            return { indexes, dispatchResponse: responseText }
             
         } catch (error) {
             logger.error('[ChatService] 工具组调度失败:', error.message)
-            return { indexes: [], dispatchResponse: '' }
+            return defaultReturn
         }
     }
 
@@ -1613,6 +1631,692 @@ export class ChatService {
         const dispatchFirst = config.get('tools.dispatchFirst')
         
         return useToolGroups === true && dispatchFirst === true
+    }
+
+    /**
+     * 处理绘图任务
+     * 调用 ImageGen 的绘图 API 生成图片
+     * 
+     * @param {Object} options - 选项
+     * @returns {Promise<Object>} 返回与 chat 方法相同格式的结果
+     */
+    async handleDrawTask(options = {}) {
+        const { drawPrompt, originalMessage, event, images = [], conversationId, scopeFeatures = {} } = options
+        const startTime = Date.now()
+        
+        try {
+            // 动态导入 ImageGen 避免循环依赖
+            const { ImageGen } = await import('../../../apps/ImageGen.js')
+            const imageGen = new ImageGen()
+            
+            // 设置事件上下文（ImageGen 需要 this.e）
+            imageGen.e = event
+            
+            // 获取群组独立的绘图模型配置
+            const groupDrawModel = scopeFeatures.drawModel || null
+            let overrideModel = groupDrawModel
+            
+            // 如果没有群组配置，检查全局绘图模型
+            if (!overrideModel) {
+                overrideModel = LlmService.getDrawModel()
+            }
+            
+            // 准备图片URL（如果是图生图）
+            const imageUrls = images.map(img => {
+                if (typeof img === 'string') return img
+                return img.url || img.file || img
+            }).filter(Boolean)
+            
+            logger.info(`[ChatService] 绘图任务: prompt="${drawPrompt.substring(0, 100)}...", 参考图=${imageUrls.length}张, 模型=${overrideModel || '默认'}`)
+            
+            // 调用绘图 API
+            const result = await imageGen.generateImage({
+                prompt: drawPrompt,
+                imageUrls
+            })
+            
+            const duration = Date.now() - startTime
+            
+            if (result.success && result.images?.length > 0) {
+                // 发送生成的图片
+                const { segment } = await import('../../utils/messageParser.js')
+                
+                if (event?.reply) {
+                    // 先发送图片
+                    await event.reply(result.images.map(url => segment.image(url)), true)
+                }
+                
+                // 调用对话模型生成符合人设的自然回复
+                let naturalReply = ''
+                try {
+                    const chatModel = scopeFeatures.chatModel || LlmService.getChatModel() || LlmService.getDefaultModel()
+                    await channelManager.init()
+                    const channel = channelManager.getBestChannel(chatModel)
+                    
+                    if (channel) {
+                        const client = await LlmService.createClient({
+                            enableTools: false,
+                            adapterType: channel.adapterType,
+                            baseUrl: channel.baseUrl,
+                            apiKey: channelManager.getChannelKey(channel).key,
+                            presetId: scopeFeatures.presetId || 'default'
+                        })
+                        
+                        // 获取历史上下文以保持人设一致性
+                        let contextMessages = []
+                        if (conversationId) {
+                            try {
+                                const context = await contextManager.getContext(conversationId)
+                                contextMessages = context?.messages?.slice(-4) || []
+                            } catch {}
+                        }
+                        
+                        // 构建让对话模型生成自然回复的提示
+                        const systemPrompt = `你刚刚成功帮用户生成了一张图片。请用简短、自然、符合你人设的方式回复。要有趣味性，不要太正式，不需要描述图片内容。`
+                        
+                        const messages = [
+                            ...contextMessages,
+                            { role: 'user', content: [{ type: 'text', text: originalMessage }] },
+                            { role: 'assistant', content: [{ type: 'text', text: `[已生成图片: ${drawPrompt.substring(0, 50)}...]` }] },
+                            { role: 'user', content: [{ type: 'text', text: systemPrompt }] }
+                        ]
+                        
+                        const response = await client.sendMessage(messages[messages.length - 1], {
+                            model: chatModel,
+                            maxToken: 256,
+                            temperature: 0.9,
+                            messages: messages.slice(0, -1)
+                        })
+                        
+                        naturalReply = response.contents
+                            ?.filter(c => c.type === 'text')
+                            ?.map(c => c.text)
+                            ?.join('') || ''
+                    }
+                } catch (replyErr) {
+                    logger.debug(`[ChatService] 生成自然回复失败: ${replyErr.message}`)
+                }
+                
+                // 发送自然回复
+                if (event?.reply && naturalReply) {
+                    await event.reply(naturalReply, true)
+                } else if (event?.reply) {
+                    await event.reply(`✅ 图片生成完成 (${this.formatDuration(duration)})`, true)
+                }
+                
+                // 返回成功结果
+                return {
+                    success: true,
+                    contents: [{ 
+                        type: 'text', 
+                        text: naturalReply || `已根据提示词生成图片: ${drawPrompt}` 
+                    }],
+                    images: result.images,
+                    usage: { inputTokens: 0, outputTokens: 0 },
+                    duration,
+                    taskType: 'draw',
+                    drawPrompt
+                }
+            } else {
+                // 生成失败
+                const errorMsg = result.error || '图片生成失败'
+                logger.warn(`[ChatService] 绘图失败: ${errorMsg}`)
+                
+                if (event?.reply) {
+                    await event.reply(`❌ ${errorMsg}`, true)
+                }
+                
+                return {
+                    success: false,
+                    contents: [{ type: 'text', text: errorMsg }],
+                    error: errorMsg,
+                    duration,
+                    taskType: 'draw'
+                }
+            }
+        } catch (error) {
+            const duration = Date.now() - startTime
+            logger.error(`[ChatService] 绘图任务异常:`, error)
+            
+            const errorMsg = `绘图失败: ${error.message}`
+            if (event?.reply) {
+                await event.reply(`❌ ${errorMsg}`, true)
+            }
+            
+            return {
+                success: false,
+                contents: [{ type: 'text', text: errorMsg }],
+                error: errorMsg,
+                duration,
+                taskType: 'draw'
+            }
+        }
+    }
+
+    /**
+     * 执行多步任务
+     * 支持串行/并行执行，任务间可以传递结果
+     * 
+     * @param {Object} options - 选项
+     * @returns {Promise<Object>} 执行结果
+     */
+    async executeMultiTasks(options = {}) {
+        const { tasks, executionMode, originalMessage, event, images = [], conversationId, scopeFeatures = {}, toolsAllowed } = options
+        const startTime = Date.now()
+        const results = []
+        let previousResult = null
+        
+        // 按优先级排序任务
+        const sortedTasks = [...tasks].sort((a, b) => (a.priority || 1) - (b.priority || 1))
+        
+        logger.info(`[ChatService] 开始执行 ${sortedTasks.length} 个任务，模式: ${executionMode}`)
+        
+        try {
+            if (executionMode === 'parallel') {
+                // 并行执行（仅对无依赖的任务）
+                const independentTasks = sortedTasks.filter(t => !t.dependsOn)
+                const dependentTasks = sortedTasks.filter(t => t.dependsOn)
+                
+                // 先并行执行无依赖任务
+                if (independentTasks.length > 0) {
+                    const parallelResults = await Promise.all(
+                        independentTasks.map((task, idx) => 
+                            this.executeSingleTask(task, { 
+                                taskIndex: idx + 1,
+                                originalMessage, event, images, conversationId, scopeFeatures, toolsAllowed,
+                                previousResult: null
+                            })
+                        )
+                    )
+                    results.push(...parallelResults)
+                }
+                
+                // 再串行执行有依赖的任务
+                for (const task of dependentTasks) {
+                    const depResult = results.find((r, idx) => idx + 1 === task.dependsOn)
+                    const result = await this.executeSingleTask(task, {
+                        taskIndex: results.length + 1,
+                        originalMessage, event, images, conversationId, scopeFeatures, toolsAllowed,
+                        previousResult: depResult
+                    })
+                    results.push(result)
+                }
+            } else {
+                // 串行执行
+                for (let i = 0; i < sortedTasks.length; i++) {
+                    const task = sortedTasks[i]
+                    const result = await this.executeSingleTask(task, {
+                        taskIndex: i + 1,
+                        originalMessage, event, images, conversationId, scopeFeatures, toolsAllowed,
+                        previousResult
+                    })
+                    results.push(result)
+                    previousResult = result
+                }
+            }
+            
+            const duration = Date.now() - startTime
+            const successCount = results.filter(r => r.success).length
+            
+            logger.info(`[ChatService] 多任务执行完成: ${successCount}/${results.length} 成功, 耗时 ${this.formatDuration(duration)}`)
+
+            // 合并结果
+            return {
+                success: successCount > 0,
+                contents: results.flatMap(r => r.contents || []),
+                results,
+                usage: {
+                    inputTokens: results.reduce((sum, r) => sum + (r.usage?.inputTokens || 0), 0),
+                    outputTokens: results.reduce((sum, r) => sum + (r.usage?.outputTokens || 0), 0)
+                },
+                duration,
+                taskCount: results.length
+            }
+        } catch (error) {
+            logger.error(`[ChatService] 多任务执行异常:`, error)
+            return {
+                success: false,
+                contents: [{ type: 'text', text: `任务执行失败: ${error.message}` }],
+                error: error.message,
+                duration: Date.now() - startTime
+            }
+        }
+    }
+
+    /**
+     * 执行单个任务
+     * 
+     * @param {Object} task - 任务定义
+     * @param {Object} context - 执行上下文
+     * @returns {Promise<Object>} 任务结果
+     */
+    async executeSingleTask(task, context = {}) {
+        const { taskIndex, originalMessage, event, images, conversationId, scopeFeatures, toolsAllowed, previousResult } = context
+        const { type, params = {} } = task
+        const startTime = Date.now()
+        
+        logger.debug(`[ChatService] 执行任务 #${taskIndex}: type=${type}`)
+        
+        try {
+            switch (type) {
+                case 'draw': {
+                    // 绘图任务 - 使用绘图模型
+                    let drawPrompt = params.drawPrompt || params.prompt || ''
+                    
+                    // 如果依赖上一步结果，拼接描述
+                    if (previousResult?.contents?.[0]?.text && drawPrompt.includes('上一步')) {
+                        drawPrompt = previousResult.contents[0].text
+                    }
+                    
+                    return await this.handleDrawTask({
+                        drawPrompt,
+                        originalMessage,
+                        event,
+                        images,
+                        conversationId,
+                        scopeFeatures
+                    })
+                }
+                
+                case 'image_understand': {
+                    // 图像理解任务 - 使用图像理解模型
+                    return await this.handleImageUnderstandTask({
+                        prompt: params.prompt || '请描述这张图片的内容',
+                        event,
+                        images,
+                        conversationId,
+                        scopeFeatures
+                    })
+                }
+                
+                case 'tool': {
+                    // 工具调用任务 - 使用工具模型
+                    const toolGroups = params.toolGroups || []
+                    return await this.handleToolTask({
+                        toolGroups,
+                        originalMessage,
+                        event,
+                        images,
+                        conversationId,
+                        scopeFeatures,
+                        toolsAllowed
+                    })
+                }
+                
+                case 'search': {
+                    // 搜索任务 - 使用搜索模型
+                    return await this.handleSearchTask({
+                        query: params.query || originalMessage,
+                        event,
+                        conversationId,
+                        scopeFeatures
+                    })
+                }
+                
+                case 'chat':
+                default: {
+                    // 普通对话 - 使用对话模型
+                    return await this.handleChatTask({
+                        message: originalMessage,
+                        event,
+                        images,
+                        conversationId,
+                        scopeFeatures,
+                        previousResult
+                    })
+                }
+            }
+        } catch (error) {
+            logger.error(`[ChatService] 任务 #${taskIndex} 执行失败:`, error)
+            return {
+                success: false,
+                taskType: type,
+                contents: [{ type: 'text', text: `任务执行失败: ${error.message}` }],
+                error: error.message,
+                duration: Date.now() - startTime
+            }
+        }
+    }
+
+    /**
+     * 处理图像理解任务
+     */
+    async handleImageUnderstandTask(options = {}) {
+        const { prompt, event, images = [], conversationId, scopeFeatures = {} } = options
+        const startTime = Date.now()
+        
+        try {
+            // 获取图像理解模型
+            const imageModel = scopeFeatures.imageModel || LlmService.getImageModel() || LlmService.getDefaultModel()
+            
+            logger.info(`[ChatService] 图像理解任务: model=${imageModel}, 图片数=${images.length}`)
+            
+            // 准备图片
+            const imageUrls = images.map(img => typeof img === 'string' ? img : (img.url || img.file || img)).filter(Boolean)
+            
+            if (imageUrls.length === 0) {
+                return {
+                    success: false,
+                    taskType: 'image_understand',
+                    contents: [{ type: 'text', text: '没有找到可分析的图片' }],
+                    duration: Date.now() - startTime
+                }
+            }
+            
+            // 调用图像理解模型
+            await channelManager.init()
+            const channel = channelManager.getBestChannel(imageModel)
+            
+            if (!channel) {
+                throw new Error('未找到支持图像理解模型的渠道')
+            }
+            
+            const client = await LlmService.createClient({
+                enableTools: false,
+                adapterType: channel.adapterType,
+                baseUrl: channel.baseUrl,
+                apiKey: channelManager.getChannelKey(channel).key
+            })
+            
+            // 构建消息内容
+            const content = [
+                { type: 'text', text: prompt },
+                ...imageUrls.map(url => ({ type: 'image_url', image_url: { url } }))
+            ]
+            
+            const response = await client.sendMessage({
+                role: 'user',
+                content
+            }, {
+                model: imageModel,
+                maxToken: 2048,
+                temperature: 0.7
+            })
+            
+            const responseText = response.contents
+                ?.filter(c => c.type === 'text')
+                ?.map(c => c.text)
+                ?.join('') || ''
+            
+            const duration = Date.now() - startTime
+            
+            // 回复用户
+            if (event?.reply && responseText) {
+                await event.reply(responseText, true)
+            }
+            
+            return {
+                success: true,
+                taskType: 'image_understand',
+                contents: [{ type: 'text', text: responseText }],
+                usage: response.usage || { inputTokens: 0, outputTokens: 0 },
+                duration
+            }
+        } catch (error) {
+            logger.error(`[ChatService] 图像理解任务失败:`, error)
+            return {
+                success: false,
+                taskType: 'image_understand',
+                contents: [{ type: 'text', text: `图像理解失败: ${error.message}` }],
+                error: error.message,
+                duration: Date.now() - startTime
+            }
+        }
+    }
+
+    /**
+     * 处理工具调用任务
+     */
+    async handleToolTask(options = {}) {
+        const { toolGroups, originalMessage, event, images = [], conversationId, scopeFeatures = {}, toolsAllowed } = options
+        const startTime = Date.now()
+        
+        try {
+            // 获取工具
+            const tools = await this.getToolsForGroups(toolGroups, { applyConfig: true })
+            
+            if (tools.length === 0) {
+                return {
+                    success: false,
+                    taskType: 'tool',
+                    contents: [{ type: 'text', text: '没有找到可用的工具' }],
+                    duration: Date.now() - startTime
+                }
+            }
+            
+            // 获取工具模型：优先作用域配置 > 全局工具模型（未配置则使用默认模型）
+            const toolModel = scopeFeatures.toolModel || LlmService.getToolModel()
+            
+            logger.info(`[ChatService] 工具调用任务: model=${toolModel}, 工具数=${tools.length}`)
+            
+            // 调用工具模型
+            await channelManager.init()
+            const channel = channelManager.getBestChannel(toolModel)
+            
+            if (!channel) {
+                throw new Error('未找到支持工具模型的渠道')
+            }
+            
+            // 设置工具上下文
+            if (event) {
+                setToolContext({ event, bot: event.bot || Bot })
+            }
+            
+            const client = await LlmService.createClient({
+                enableTools: true,
+                preSelectedTools: tools,
+                adapterType: channel.adapterType,
+                baseUrl: channel.baseUrl,
+                apiKey: channelManager.getChannelKey(channel).key,
+                event
+            })
+            
+            // 准备消息内容
+            const content = [{ type: 'text', text: originalMessage }]
+            const imageUrls = images.map(img => typeof img === 'string' ? img : (img.url || img.file || img)).filter(Boolean)
+            if (imageUrls.length > 0) {
+                content.push(...imageUrls.map(url => ({ type: 'image_url', image_url: { url } })))
+            }
+            
+            const response = await client.sendMessage({
+                role: 'user',
+                content
+            }, {
+                model: toolModel,
+                maxToken: 2048,
+                temperature: 0.7
+            })
+            
+            const responseText = response.contents
+                ?.filter(c => c.type === 'text')
+                ?.map(c => c.text)
+                ?.join('') || ''
+            
+            const duration = Date.now() - startTime
+            
+            // 回复用户
+            if (event?.reply && responseText) {
+                await event.reply(responseText, true)
+            }
+            
+            return {
+                success: true,
+                taskType: 'tool',
+                contents: response.contents || [{ type: 'text', text: responseText }],
+                usage: response.usage || { inputTokens: 0, outputTokens: 0 },
+                duration
+            }
+        } catch (error) {
+            logger.error(`[ChatService] 工具调用任务失败:`, error)
+            return {
+                success: false,
+                taskType: 'tool',
+                contents: [{ type: 'text', text: `工具调用失败: ${error.message}` }],
+                error: error.message,
+                duration: Date.now() - startTime
+            }
+        }
+    }
+
+    /**
+     * 处理搜索任务
+     */
+    async handleSearchTask(options = {}) {
+        const { query, event, conversationId, scopeFeatures = {} } = options
+        const startTime = Date.now()
+        
+        try {
+            // 获取搜索模型：优先作用域配置 > 全局搜索模型（未配置则使用默认模型）
+            const searchModel = scopeFeatures.searchModel || LlmService.getSearchModel()
+            
+            logger.info(`[ChatService] 搜索任务: model=${searchModel}, query="${query.substring(0, 50)}..."`)
+            
+            // 使用搜索工具组
+            const searchTools = await this.getToolsForGroups([10], { applyConfig: true }) // 假设搜索工具组索引为10
+            
+            await channelManager.init()
+            const channel = channelManager.getBestChannel(searchModel)
+            
+            if (!channel) {
+                throw new Error('未找到支持搜索模型的渠道')
+            }
+            
+            if (event) {
+                setToolContext({ event, bot: event.bot || Bot })
+            }
+            
+            const client = await LlmService.createClient({
+                enableTools: searchTools.length > 0,
+                preSelectedTools: searchTools.length > 0 ? searchTools : null,
+                adapterType: channel.adapterType,
+                baseUrl: channel.baseUrl,
+                apiKey: channelManager.getChannelKey(channel).key,
+                event
+            })
+            
+            const response = await client.sendMessage({
+                role: 'user',
+                content: [{ type: 'text', text: `请搜索: ${query}` }]
+            }, {
+                model: searchModel,
+                maxToken: 2048,
+                temperature: 0.7
+            })
+            
+            const responseText = response.contents
+                ?.filter(c => c.type === 'text')
+                ?.map(c => c.text)
+                ?.join('') || ''
+            
+            const duration = Date.now() - startTime
+            
+            if (event?.reply && responseText) {
+                await event.reply(responseText, true)
+            }
+            
+            return {
+                success: true,
+                taskType: 'search',
+                contents: [{ type: 'text', text: responseText }],
+                usage: response.usage || { inputTokens: 0, outputTokens: 0 },
+                duration
+            }
+        } catch (error) {
+            logger.error(`[ChatService] 搜索任务失败:`, error)
+            return {
+                success: false,
+                taskType: 'search',
+                contents: [{ type: 'text', text: `搜索失败: ${error.message}` }],
+                error: error.message,
+                duration: Date.now() - startTime
+            }
+        }
+    }
+
+    /**
+     * 处理普通对话任务
+     */
+    async handleChatTask(options = {}) {
+        const { message, event, images = [], conversationId, scopeFeatures = {}, previousResult } = options
+        const startTime = Date.now()
+        
+        try {
+            // 获取对话模型
+            const chatModel = scopeFeatures.chatModel || LlmService.getChatModel() || LlmService.getDefaultModel()
+            
+            logger.info(`[ChatService] 对话任务: model=${chatModel}`)
+            
+            await channelManager.init()
+            const channel = channelManager.getBestChannel(chatModel)
+            
+            if (!channel) {
+                throw new Error('未找到支持对话模型的渠道')
+            }
+            
+            const client = await LlmService.createClient({
+                enableTools: false,
+                adapterType: channel.adapterType,
+                baseUrl: channel.baseUrl,
+                apiKey: channelManager.getChannelKey(channel).key
+            })
+            
+            // 如果有上一步结果，添加到消息中
+            let fullMessage = message
+            if (previousResult?.contents?.[0]?.text) {
+                fullMessage = `${message}\n\n[上一步结果]: ${previousResult.contents[0].text}`
+            }
+            
+            const content = [{ type: 'text', text: fullMessage }]
+            const imageUrls = images.map(img => typeof img === 'string' ? img : (img.url || img.file || img)).filter(Boolean)
+            if (imageUrls.length > 0) {
+                content.push(...imageUrls.map(url => ({ type: 'image_url', image_url: { url } })))
+            }
+            
+            const response = await client.sendMessage({
+                role: 'user',
+                content
+            }, {
+                model: chatModel,
+                maxToken: 2048,
+                temperature: 0.9
+            })
+            
+            const responseText = response.contents
+                ?.filter(c => c.type === 'text')
+                ?.map(c => c.text)
+                ?.join('') || ''
+            
+            const duration = Date.now() - startTime
+            
+            if (event?.reply && responseText) {
+                await event.reply(responseText, true)
+            }
+            
+            return {
+                success: true,
+                taskType: 'chat',
+                contents: [{ type: 'text', text: responseText }],
+                usage: response.usage || { inputTokens: 0, outputTokens: 0 },
+                duration
+            }
+        } catch (error) {
+            logger.error(`[ChatService] 对话任务失败:`, error)
+            return {
+                success: false,
+                taskType: 'chat',
+                contents: [{ type: 'text', text: `对话失败: ${error.message}` }],
+                error: error.message,
+                duration: Date.now() - startTime
+            }
+        }
+    }
+
+    /**
+     * 格式化时长
+     */
+    formatDuration(ms) {
+        if (ms < 1000) return `${ms}ms`
+        return `${(ms / 1000).toFixed(1)}s`
     }
 }
 

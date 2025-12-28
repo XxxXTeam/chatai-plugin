@@ -1120,6 +1120,159 @@ export class ChannelManager {
     }
 
     /**
+     * @param {string} model - 模型名称
+     * @param {Function} executor - 执行函数，接收 (channel, keyInfo) 返回 Promise
+     * @param {Object} options - 选项
+     * @param {number} options.maxRetries - 最大重试次数，默认3
+     * @param {number} options.retryDelay - 重试延迟(ms)，默认1000
+     * @param {boolean} options.switchChannel - 是否尝试切换渠道，默认true
+     * @param {boolean} options.switchKey - 是否尝试切换同渠道的Key，默认true
+     * @returns {Promise<{success: boolean, result?: any, error?: string, attempts: number, channelsUsed: string[]}>}
+     */
+    async withRetry(model, executor, options = {}) {
+        const { 
+            maxRetries = 3, 
+            retryDelay = 1000, 
+            switchChannel = true, 
+            switchKey = true 
+        } = options
+        
+        let attempts = 0
+        let lastError = null
+        const channelsUsed = []
+        const triedChannels = new Set()
+        
+        // 获取初始渠道
+        let currentChannel = this.getBestChannel(model)
+        if (!currentChannel) {
+            return { 
+                success: false, 
+                error: `未找到支持模型 ${model} 的可用渠道`, 
+                attempts: 0, 
+                channelsUsed: [] 
+            }
+        }
+        
+        while (attempts < maxRetries) {
+            attempts++
+            channelsUsed.push(currentChannel.id)
+            triedChannels.add(currentChannel.id)
+            
+            // 获取当前渠道的Key信息
+            const keyInfo = this.getChannelKey(currentChannel)
+            
+            try {
+                this.startRequest(currentChannel.id)
+                
+                logger.debug(`[ChannelManager] 执行请求: 渠道=${currentChannel.name}, 尝试=${attempts}/${maxRetries}`)
+                
+                const result = await executor(currentChannel, keyInfo)
+                
+                // 成功，报告并返回
+                this.reportSuccess(currentChannel.id)
+                this.endRequest(currentChannel.id)
+                
+                return { 
+                    success: true, 
+                    result, 
+                    attempts, 
+                    channelsUsed 
+                }
+                
+            } catch (error) {
+                this.endRequest(currentChannel.id)
+                lastError = error
+                
+                // 分析错误类型
+                const errorType = this.classifyError(error)
+                logger.warn(`[ChannelManager] 请求失败: 渠道=${currentChannel.name}, 类型=${errorType}, 错误=${error.message}`)
+                
+                // 报告错误
+                await this.reportError(currentChannel.id, { 
+                    keyIndex: keyInfo.keyIndex, 
+                    errorType,
+                    errorMessage: error.message,
+                    isRetry: attempts > 1
+                })
+                
+                // 判断是否需要重试
+                if (attempts >= maxRetries) {
+                    break
+                }
+                
+                // 尝试切换策略
+                let switched = false
+                
+                // 1. 先尝试同渠道切换Key
+                if (switchKey && currentChannel.apiKeys?.length > 1) {
+                    const nextKey = this.getNextAvailableKey(currentChannel.id, keyInfo.keyIndex)
+                    if (nextKey) {
+                        logger.info(`[ChannelManager] 切换Key: ${currentChannel.name} Key#${keyInfo.keyIndex + 1} -> Key#${nextKey.keyIndex + 1}`)
+                        currentChannel.keyIndex = nextKey.keyIndex
+                        switched = true
+                    }
+                }
+                
+                // 2. Key切换失败，尝试切换渠道
+                if (!switched && switchChannel) {
+                    const fallbackChannels = this.getAvailableChannels(model, { 
+                        excludeChannelId: currentChannel.id 
+                    }).filter(ch => !triedChannels.has(ch.id))
+                    
+                    if (fallbackChannels.length > 0) {
+                        const nextChannel = fallbackChannels[0]
+                        logger.info(`[ChannelManager] 切换渠道: ${currentChannel.name} -> ${nextChannel.name}`)
+                        currentChannel = nextChannel
+                        switched = true
+                    }
+                }
+                
+                // 3. 都无法切换，延迟后重试当前渠道
+                if (!switched) {
+                    logger.debug(`[ChannelManager] 无可切换渠道，延迟${retryDelay}ms后重试`)
+                }
+                
+                // 延迟重试
+                await new Promise(r => setTimeout(r, retryDelay * attempts))
+            }
+        }
+        
+        return { 
+            success: false, 
+            error: lastError?.message || '请求失败，已达最大重试次数', 
+            attempts, 
+            channelsUsed 
+        }
+    }
+
+    /**
+     * 分类错误类型
+     * @param {Error} error
+     * @returns {string} 错误类型
+     */
+    classifyError(error) {
+        const msg = error.message?.toLowerCase() || ''
+        
+        if (msg.includes('401') || msg.includes('403') || msg.includes('unauthorized') || msg.includes('invalid api key')) {
+            return 'auth'
+        }
+        if (msg.includes('429') || msg.includes('rate limit') || msg.includes('quota') || msg.includes('exceeded')) {
+            return 'quota'
+        }
+        if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('econnrefused') || msg.includes('enotfound')) {
+            return 'network'
+        }
+        if (msg.includes('choices字段缺失') || msg.includes('未能生成回复') || msg.includes('completion_tokens') && msg.includes('0')) {
+            return 'empty'
+        }
+        if (msg.includes('500') || msg.includes('502') || msg.includes('503') || msg.includes('504')) {
+            return 'server'
+        }
+        
+        return 'unknown'
+    }
+
+    /**
      * 尝试获取下一个可用的Key（同一渠道内切换）
      * @param {string} channelId
      * @param {number} currentKeyIndex - 当前失败的key索引

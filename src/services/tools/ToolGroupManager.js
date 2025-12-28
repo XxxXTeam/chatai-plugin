@@ -66,43 +66,153 @@ export class ToolGroupManager {
      */
     buildDispatchPrompt() {
         const summary = this.getGroupSummary()
-        if (summary.length === 0) {
-            return ''
-        }
         
-        let prompt = `你可以使用以下工具组来完成任务。请分析用户的请求，选择需要使用的工具组索引。
+        let prompt = `请分析用户的请求，生成任务执行计划。支持多步骤任务，任务可以串行或并行执行。
 
-可用工具组：
+## 任务类型：
+
+1. **draw（绘图生成）** - 生成/绘制/画图片
+   示例："帮我画一只猫"、"生成一张风景图"
+   需要: drawPrompt（优化后的英文绘图提示词）
+
+2. **image_understand（图像理解）** - 分析/理解/描述图片内容
+   示例："这张图片里有什么"、"描述一下这个图"
+   需要: prompt（分析指令）
+
+3. **tool（工具调用）** - 执行具体操作
+   示例："查天气"、"发消息"、"查时间"
+   需要: toolGroups（工具组索引）
+
+4. **search（联网搜索）** - 查询最新信息
+   示例："搜索最新新闻"、"查一下xxx"
+   需要: query（搜索关键词）
+
+5. **chat（普通对话）** - 闲聊、问答、创作文字
+   示例："你好"、"写一首诗"
+
 `
-        for (const group of summary) {
-            const displayName = group.displayName || group.name
-            prompt += `- [${group.index}] ${displayName}: ${group.description} (${group.toolCount}个工具)\n`
+        if (summary.length > 0) {
+            prompt += `## 可用工具组：
+`
+            for (const group of summary) {
+                const displayName = group.displayName || group.name
+                prompt += `- [${group.index}] ${displayName}: ${group.description} (${group.toolCount}个工具)\n`
+            }
         }
         
         prompt += `
-判断规则：
-1. 返回空数组 [] 的情况（优先判断）：
-   - 简单问候：你好、早安、晚安、在吗、hi、hello等
-   - 闲聊对话：聊天、情感交流、问答、讨论观点
-   - 知识问答：解释概念、回答问题、提供建议
-   - 创作请求：写文章、写代码、翻译、总结等
+## 返回格式（JSON）：
+{
+    "analysis": "简要分析用户意图",
+    "tasks": [
+        {
+            "type": "任务类型",
+            "priority": 1,
+            "params": {
+                "prompt": "任务提示词",
+                "drawPrompt": "绘图提示词(type=draw时)",
+                "toolGroups": [工具组索引(type=tool时)],
+                "query": "搜索关键词(type=search时)"
+            },
+            "dependsOn": null
+        }
+    ],
+    "executionMode": "sequential|parallel"
+}
 
-2. 需要返回工具组索引的情况：
-   - 明确要求执行操作：查天气、搜索、发消息、查时间等
-   - 需要实时数据：当前时间、最新新闻、实时信息
-   - 询问可用功能："有什么工具"、"能做什么"、"有什么功能"
+## 示例：
 
-重要：大多数对话不需要工具，优先返回空数组 []
+用户说"帮我画一只可爱的小猫"
+{"analysis":"用户需要生成猫的图片","tasks":[{"type":"draw","priority":1,"params":{"drawPrompt":"a cute little cat, adorable, fluffy fur, big eyes, high quality, detailed"}}],"executionMode":"sequential"}
 
-请只返回JSON数组，例如：[] 或 [0, 2]
-`
+用户说"这张图片里有什么？然后帮我画一张类似的"
+{"analysis":"先理解图片内容，再根据内容生成类似图片","tasks":[{"type":"image_understand","priority":1,"params":{"prompt":"详细描述这张图片的内容、风格、主题"}},{"type":"draw","priority":2,"params":{"drawPrompt":"根据上一步的描述生成"},"dependsOn":1}],"executionMode":"sequential"}
+
+用户说"现在几点了，顺便查下北京天气"
+{"analysis":"用户需要查时间和天气，可以并行执行","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[0]}},{"type":"tool","priority":1,"params":{"toolGroups":[14]}}],"executionMode":"parallel"}
+
+用户说"你好"
+{"analysis":"简单问候","tasks":[{"type":"chat","priority":1,"params":{}}],"executionMode":"sequential"}
+
+只返回JSON，不要其他内容。`
         return prompt
+    }
+
+    /**
+     * 解析调度响应（增强版V2，支持多任务）
+     * @param {string} response - 调度模型响应
+     * @returns {{analysis: string, tasks: Array, executionMode: string, toolGroups: number[]}}
+     */
+    parseDispatchResponseV2(response) {
+        const defaultResult = { 
+            analysis: '', 
+            tasks: [{ type: 'chat', priority: 1, params: {} }], 
+            executionMode: 'sequential',
+            toolGroups: []
+        }
+        
+        if (!response || typeof response !== 'string') {
+            return defaultResult
+        }
+        
+        try {
+            // 提取 JSON 对象
+            const jsonMatch = response.match(/\{[\s\S]*\}/)
+            if (jsonMatch) {
+                const parsed = JSON.parse(jsonMatch[0])
+                
+                const analysis = parsed.analysis || ''
+                const executionMode = ['sequential', 'parallel'].includes(parsed.executionMode) 
+                    ? parsed.executionMode 
+                    : 'sequential'
+                
+                // 解析任务列表
+                let tasks = []
+                if (Array.isArray(parsed.tasks) && parsed.tasks.length > 0) {
+                    tasks = parsed.tasks.map((t, idx) => {
+                        const type = ['draw', 'image_understand', 'tool', 'search', 'chat'].includes(t.type) 
+                            ? t.type 
+                            : 'chat'
+                        return {
+                            type,
+                            priority: t.priority || idx + 1,
+                            params: t.params || {},
+                            dependsOn: t.dependsOn || null
+                        }
+                    })
+                } else {
+                    tasks = [{ type: 'chat', priority: 1, params: {} }]
+                }
+                
+                // 提取所有工具组索引（用于兼容）
+                const toolGroups = tasks
+                    .filter(t => t.type === 'tool' && Array.isArray(t.params?.toolGroups))
+                    .flatMap(t => t.params.toolGroups)
+                    .filter(i => typeof i === 'number' && this.groups.has(i))
+                
+                return { analysis, tasks, executionMode, toolGroups }
+            }
+        } catch {
+            // JSON解析失败，尝试旧格式兼容
+        }
+        
+        // 兼容旧格式：纯数组
+        const indexes = this.parseDispatchResponse(response)
+        if (indexes.length > 0) {
+            return { 
+                analysis: '', 
+                tasks: [{ type: 'tool', priority: 1, params: { toolGroups: indexes } }], 
+                executionMode: 'sequential',
+                toolGroups: indexes
+            }
+        }
+        
+        return defaultResult
     }
 
     /**
      * @param {number[]} indexes - 工具组索引数组
      * @param {Object} options - 选项
-     * @returns {Promise<Array>} 工具列表
      */
     async getToolsByGroupIndexes(indexes, options = {}) {
         if (!Array.isArray(indexes) || indexes.length === 0) {

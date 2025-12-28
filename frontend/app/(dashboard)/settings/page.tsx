@@ -58,7 +58,6 @@ interface Config {
     }
   }
   admin: {
-    masterQQ: string[]
     loginNotifyPrivate: boolean
     sensitiveCommandMasterOnly: boolean
   }
@@ -172,7 +171,7 @@ const defaultConfig: Config = {
     quoteReply: true,
     autoRecall: { enabled: false, delay: 60, recallError: true }
   },
-  admin: { masterQQ: [], loginNotifyPrivate: true, sensitiveCommandMasterOnly: true },
+  admin: { loginNotifyPrivate: true, sensitiveCommandMasterOnly: true },
   llm: { 
     defaultModel: '', 
     models: { chat: '', tool: '', dispatch: '', image: '', draw: '', roleplay: '', search: '' },
@@ -762,10 +761,13 @@ export default function SettingsPage() {
               <CardDescription>管理员和权限设置</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label>主人QQ</Label>
-                <DynamicTags value={config.admin?.masterQQ || []} onChange={(v) => updateConfig('admin.masterQQ', v)} placeholder="多个用回车分隔，留空使用Yunzai配置" />
-              </div>
+              <Alert>
+                <Info className="h-4 w-4" />
+                <AlertDescription>
+                  主人列表使用 Yunzai 框架配置，请编辑 <code className="bg-muted px-1 rounded">config/config/other.yaml</code> 中的 <code className="bg-muted px-1 rounded">masterQQ</code> 字段。
+                  更多权限设置请前往 <a href="/permissions" className="text-primary underline">权限管理</a> 页面。
+                </AlertDescription>
+              </Alert>
               <div className="flex items-center justify-between">
                 <div><Label>登录链接私聊推送</Label><p className="text-sm text-muted-foreground">群聊中触发管理面板命令时私聊推送登录链接</p></div>
                 <Switch checked={config.admin?.loginNotifyPrivate ?? true} onCheckedChange={(v) => updateConfig('admin.loginNotifyPrivate', v)} />

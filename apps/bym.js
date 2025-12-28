@@ -4,7 +4,7 @@ import { cleanCQCode } from '../src/utils/messageParser.js'
 import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMessage } from '../src/utils/messageDedup.js'
 import { getScopeManager } from '../src/services/scope/ScopeManager.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
-import { usageStats } from '../src/services/stats/UsageStats.js'
+import { statsService } from '../src/services/stats/StatsService.js'
 import { emojiThiefService } from './EmojiThief.js'
 
 /**
@@ -366,20 +366,30 @@ export class bym extends plugin {
                 .filter(c => c.type === 'text')
                 .map(c => c.text)
                 .join('\n')
+            // 记录统计（使用 statsService.recordApiCall 确保正确记录）
             try {
-                await usageStats.record({
+                await statsService.recordApiCall({
                     channelId: 'bym',
                     channelName: '伪人模式',
                     model: bymModel,
-                    inputTokens: usageStats.estimateTokens(messageText),
-                    outputTokens: usageStats.estimateTokens(replyText),
                     duration: Date.now() - bymStartTime,
                     success: !!replyText,
                     source: 'bym',
                     userId: String(e.user_id),
-                    groupId: e.group_id ? String(e.group_id) : null
+                    groupId: e.group_id ? String(e.group_id) : null,
+                    messages: [{ role: 'user', content: messageText }],
+                    responseText: replyText,
+                    apiUsage: response.usage || null,
+                    request: {
+                        model: bymModel,
+                        temperature: bymTemperature,
+                        maxToken: bymMaxTokens,
+                        systemPrompt: systemPrompt?.substring(0, 200) + '...'
+                    }
                 })
-            } catch (err) { /* 统计失败不影响主流程 */ }
+            } catch (err) { 
+                logger.debug('[BYM] 统计记录失败:', err.message)
+            }
 
             if (replyText) {
                 await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 500))
