@@ -1167,6 +1167,10 @@ export class ChatService {
             if (channel) {
                 channelManager.endRequest(channel.id)
                 if (finalUsage) channelManager.reportUsage(channel.id, finalUsage?.totalTokens || 0)
+                // 成功时重置渠道错误计数
+                if (finalResponse?.length > 0) {
+                    channelManager.reportSuccess(channel.id)
+                }
             }
             
             // 记录统计（使用统一入口）
