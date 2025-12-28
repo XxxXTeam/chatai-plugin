@@ -830,9 +830,12 @@ export class ChannelManager {
     /**
      * Get best channel for a model
      * @param {string} model
+     * @param {Object} options - 选项
+     * @param {boolean} options.ignoreErrorCooldown - 忽略错误冷却时间，默认false
      * @returns {Object|null}
      */
-    getBestChannel(model) {
+    getBestChannel(model, options = {}) {
+        const { ignoreErrorCooldown = false } = options
         const strategy = config.get('loadBalancing.strategy') || 'priority'
 
         // Filter channels that support the model and are enabled
@@ -850,12 +853,38 @@ export class ChannelManager {
         })
         const now = Date.now()
         
-        candidates = candidates.filter(ch => {
-            if (ch.lastErrorTime && (now - ch.lastErrorTime < 5 * 60 * 1000)) {
-                return false
+        // 记录过滤前支持该模型的渠道数
+        const modelChannelsCount = candidates.length
+        
+        // 错误冷却过滤（可通过选项跳过）
+        if (!ignoreErrorCooldown) {
+            candidates = candidates.filter(ch => {
+                // 根据连续错误次数动态调整冷却时间：1次=30秒，2次=1分钟，3次+=5分钟
+                const errorCount = ch.errorCount || 0
+                let cooldownMs = 0
+                if (errorCount === 1) cooldownMs = 30 * 1000       // 30秒
+                else if (errorCount === 2) cooldownMs = 60 * 1000  // 1分钟
+                else if (errorCount >= 3) cooldownMs = 5 * 60 * 1000 // 5分钟
+                
+                if (ch.lastErrorTime && cooldownMs > 0 && (now - ch.lastErrorTime < cooldownMs)) {
+                    logger.debug(`[ChannelManager] 渠道 ${ch.id} 在冷却中: 错误${errorCount}次, 剩余${Math.ceil((cooldownMs - (now - ch.lastErrorTime)) / 1000)}秒`)
+                    return false
+                }
+                return true
+            })
+            
+            // 如果冷却过滤后无可用渠道，忽略冷却取全部该模型渠道
+            if (candidates.length === 0 && modelChannelsCount > 0) {
+                logger.warn(`[ChannelManager] 所有渠道都在冷却中，忽略冷却取全部该模型渠道(${modelChannelsCount}个)`)
+                candidates = allChannels.filter(ch => {
+                    const hasModel = ch.models?.includes(model) || ch.models?.includes('*')
+                    const isEnabled = ch.enabled !== false
+                    // 忽略冷却，但仍排除已禁用的渠道
+                    const notDisabled = ch.status !== ChannelStatus.DISABLED
+                    return hasModel && isEnabled && notDisabled
+                })
             }
-            return true
-        })
+        }
 
         logger.debug(`[ChannelManager] 错误时间过滤后候选: ${candidates.map(c => c.id).join(', ')}`)
         candidates = candidates.filter(ch => {
@@ -941,15 +970,14 @@ export class ChannelManager {
      * @param {number} options.keyIndex - 出错的key索引
      * @param {string} options.errorType - 错误类型: 'auth' | 'quota' | 'timeout' | 'network' | 'empty' | 'unknown'
      * @param {string} options.errorMessage - 错误信息
+     * @param {boolean} options.isRetry - 是否为重试请求（重试时不增加错误计数）
      */
     async reportError(channelId, options = {}) {
         const channel = this.channels.get(channelId)
         if (!channel) return
 
-        const { keyIndex = -1, errorType = 'unknown', errorMessage = '' } = options
+        const { keyIndex = -1, errorType = 'unknown', errorMessage = '', isRetry = false } = options
         
-        channel.lastErrorTime = Date.now()
-        channel.errorCount = (channel.errorCount || 0) + 1
         channel.lastErrorType = errorType
         channel.lastErrorMessage = errorMessage
 
@@ -958,10 +986,16 @@ export class ChannelManager {
             this.reportKeyError(channelId, keyIndex)
         }
 
+        // 重试请求不增加渠道级别的错误计数
+        if (!isRetry) {
+            channel.lastErrorTime = Date.now()
+            channel.errorCount = (channel.errorCount || 0) + 1
+        }
+
         // 根据错误类型决定渠道状态
         if (errorType === 'auth') {
             // 认证错误，5次后标记为error
-            if (channel.errorCount >= 3) {
+            if (channel.errorCount >= 5) {
                 channel.status = ChannelStatus.ERROR
                 logger.warn(`[ChannelManager] 渠道 ${channel.name} 认证错误次数过多，已禁用`)
             }
@@ -969,8 +1003,36 @@ export class ChannelManager {
             // 配额超限
             channel.status = ChannelStatus.QUOTA_EXCEEDED
             logger.warn(`[ChannelManager] 渠道 ${channel.name} 配额超限`)
-        } else if (channel.errorCount > 5) {
+        } else if (channel.errorCount >= 10) {
+            // 非认证错误需要更多次数才禁用
             channel.status = ChannelStatus.ERROR
+            logger.warn(`[ChannelManager] 渠道 ${channel.name} 错误次数过多(${channel.errorCount})，已禁用`)
+        }
+        
+        logger.debug(`[ChannelManager] 渠道 ${channel.name} 错误: ${errorType}, 累计${channel.errorCount}次`)
+    }
+
+    /**
+     * 报告渠道请求成功，重置错误计数
+     * @param {string} channelId 
+     */
+    reportSuccess(channelId) {
+        const channel = this.channels.get(channelId)
+        if (!channel) return
+        
+        // 成功时重置错误计数
+        if (channel.errorCount > 0) {
+            channel.errorCount = 0
+            channel.lastErrorTime = null
+            channel.lastErrorType = null
+            channel.lastErrorMessage = null
+            logger.debug(`[ChannelManager] 渠道 ${channel.name} 请求成功，重置错误计数`)
+        }
+        
+        // 如果之前是error状态，恢复为idle
+        if (channel.status === ChannelStatus.ERROR) {
+            channel.status = ChannelStatus.IDLE
+            logger.info(`[ChannelManager] 渠道 ${channel.name} 恢复正常`)
         }
     }
 
@@ -1003,7 +1065,7 @@ export class ChannelManager {
         const { excludeChannelId = null, includeErrorChannels = false } = options
         const now = Date.now()
         
-        return Array.from(this.channels.values())
+        let candidates = Array.from(this.channels.values())
             .filter(ch => {
                 // 基础过滤
                 if (!ch.enabled) return false
@@ -1017,8 +1079,14 @@ export class ChannelManager {
                 if (!includeErrorChannels && ch.status === ChannelStatus.ERROR) return false
                 if (ch.status === ChannelStatus.QUOTA_EXCEEDED) return false
                 
-                // 错误冷却检查（5分钟）
-                if (ch.lastErrorTime && (now - ch.lastErrorTime < 5 * 60 * 1000)) {
+                // 错误冷却检查（动态冷却时间）
+                const errorCount = ch.errorCount || 0
+                let cooldownMs = 0
+                if (errorCount === 1) cooldownMs = 30 * 1000
+                else if (errorCount === 2) cooldownMs = 60 * 1000
+                else if (errorCount >= 3) cooldownMs = 5 * 60 * 1000
+                
+                if (ch.lastErrorTime && cooldownMs > 0 && (now - ch.lastErrorTime < cooldownMs)) {
                     // 但如果有多个key，可能还有可用的
                     const availableKeys = this.getAvailableKeysCount(ch)
                     if (availableKeys === 0) return false
@@ -1026,12 +1094,13 @@ export class ChannelManager {
                 
                 return true
             })
-            .sort((a, b) => {
-                // 优先级排序：priority > 错误次数少 > 最近未使用
-                if (a.priority !== b.priority) return a.priority - b.priority
-                if ((a.errorCount || 0) !== (b.errorCount || 0)) return (a.errorCount || 0) - (b.errorCount || 0)
-                return (a.lastUsed || 0) - (b.lastUsed || 0)
-            })
+        
+        return candidates.sort((a, b) => {
+            // 优先级排序：priority > 错误次数少 > 最近未使用
+            if (a.priority !== b.priority) return a.priority - b.priority
+            if ((a.errorCount || 0) !== (b.errorCount || 0)) return (a.errorCount || 0) - (b.errorCount || 0)
+            return (a.lastUsed || 0) - (b.lastUsed || 0)
+        })
     }
 
     /**
