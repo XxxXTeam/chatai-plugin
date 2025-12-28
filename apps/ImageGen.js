@@ -1363,17 +1363,31 @@ export class ImageGen extends plugin {
         
         // 提取图片URL（优先级：url > file > path）
         const extractImgUrl = (m) => {
-            if (m.type !== 'image') return null
             const d = m.data || m
-            // 优先使用url，然后是file，最后是path
-            let imgUrl = d.url || m.url || d.file || m.file || d.path || null
             
-            // 处理file://协议
-            if (imgUrl && imgUrl.startsWith('file://')) {
-                imgUrl = imgUrl.replace('file://', '')
+            // 处理普通图片
+            if (m.type === 'image') {
+                // 优先使用url，然后是file，最后是path
+                let imgUrl = d.url || m.url || d.file || m.file || d.path || null
+                
+                // 处理file://协议
+                if (imgUrl && imgUrl.startsWith('file://')) {
+                    imgUrl = imgUrl.replace('file://', '')
+                }
+                
+                return imgUrl
             }
             
-            return imgUrl
+            // 处理 bface 原创表情
+            if (m.type === 'bface') {
+                const bfaceFile = d.file || m.file || ''
+                if (bfaceFile && bfaceFile.length >= 32) {
+                    // 构建 bface URL
+                    return `https://gxh.vip.qq.com/club/item/parcel/item/${bfaceFile.substring(0, 2)}/${bfaceFile.substring(0, 32)}/raw300.gif`
+                }
+            }
+            
+            return null
         }
         
         logger.debug('[ImageGen] getAllImages 开始, hasGetReply=', !!e.getReply, 'hasSource=', !!e.source, 'reply_id=', e.reply_id)
