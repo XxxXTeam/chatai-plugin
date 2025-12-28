@@ -914,6 +914,7 @@ export class ChatService {
                 let channelSwitched = false
                 let totalRetryCount = 0
                 let currentKeyIndex = clientOptions.keyIndex ?? -1
+                const switchChain = [channel?.name || channel?.id || 'unknown'] // 记录渠道切换链
                 
                 for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
                     const currentModel = modelsToTry[modelIndex]
@@ -1010,6 +1011,7 @@ export class ChatService {
                                     currentChannel = altChannel
                                     currentKeyIndex = altKeyInfo.keyIndex
                                     channelSwitched = true
+                                    switchChain.push(altChannel.name || altChannel.id)
                                     const altClientOptions = {
                                         ...clientOptions,
                                         adapterType: altChannel.adapterType,
@@ -1077,6 +1079,7 @@ export class ChatService {
                                     currentChannel = altChannel
                                     currentKeyIndex = altKeyInfo.keyIndex
                                     channelSwitched = true
+                                    switchChain.push(altChannel.name || altChannel.id)
                                     const altClientOptions = {
                                         ...clientOptions,
                                         adapterType: altChannel.adapterType,
@@ -1111,9 +1114,12 @@ export class ChatService {
                     
                     logger.info(`[ChatService] 尝试备选模型: ${modelsToTry[modelIndex + 1]}`)
                 }
-                
-                // 如果所有模型都失败，抛出最后一个错误
                 if (!response && lastError) {
+                    if (debugInfo) {
+                        debugInfo.totalRetryCount = totalRetryCount
+                        debugInfo.switchChain = switchChain.length > 1 ? switchChain : null
+                        debugInfo.channelSwitched = channelSwitched
+                    }
                     throw lastError
                 }
                 
@@ -1124,8 +1130,6 @@ export class ChatService {
                 finalResponse = response?.contents || []
                 finalUsage = response?.usage || {}
                 allToolLogs = response?.toolCallLogs || []
-                
-                // 过滤掉纯工具调用JSON格式的文本（如 {"tool_calls": []}）
                 if (finalResponse.length > 0) {
                     finalResponse = finalResponse.filter(c => {
                         if (c.type === 'text' && c.text) {
@@ -1145,6 +1149,7 @@ export class ChatService {
                         name: usedChannel.name
                     } : null
                     debugInfo.totalRetryCount = totalRetryCount
+                    debugInfo.switchChain = switchChain.length > 1 ? switchChain : null 
                 }
             }
             
@@ -1192,22 +1197,23 @@ export class ChatService {
                 const requestSuccess = !!finalResponse?.length
                 
                 await statsService.recordApiCall({
-                    channelId: channel?.id || `no-channel-${llmModel}`,
-                    channelName: channel?.name || `无渠道(${llmModel})`,
+                    channelId: debugInfo?.usedChannel?.id || channel?.id || `no-channel-${llmModel}`,
+                    channelName: debugInfo?.usedChannel?.name || channel?.name || `无渠道(${llmModel})`,
                     model: debugInfo?.usedModel || llmModel,
                     keyIndex: keyInfo.keyIndex ?? -1,
                     keyName: keyInfo.keyName || '',
                     strategy: keyInfo.strategy || '',
                     duration: requestDuration,
                     success: requestSuccess,
-                    error: !requestSuccess ? lastError?.message : null,
+                    error: !requestSuccess ? (lastError?.message || lastError?.toString() || '未知错误') : null,
                     source: 'chat',
                     userId,
                     groupId: groupId || null,
                     stream: useStreaming,
-                    channelSwitched: debugInfo?.fallbackUsed || false,
-                    previousChannelId: debugInfo?.fallbackFrom || null,
-                    // Token计算：优先使用API返回值
+                    retryCount: debugInfo?.totalRetryCount || 0,
+                    channelSwitched: debugInfo?.channelSwitched || false,
+                    previousChannelId: debugInfo?.channelSwitched ? channel?.id : null,
+                    switchChain: debugInfo?.switchChain || null,
                     apiUsage: finalUsage,
                     messages,
                     responseText,
@@ -1221,7 +1227,12 @@ export class ChatService {
                         topP: requestOptions.topP,
                         systemPrompt: systemPrompt?.substring(0, 500) + (systemPrompt?.length > 500 ? '...' : ''),
                     },
-                    response: !requestSuccess ? { error: lastError?.message, contents: finalResponse } : null,
+                    response: !requestSuccess ? { 
+                        error: lastError?.message || lastError?.toString() || '未知错误',
+                        code: lastError?.code || lastError?.status || null,
+                        type: lastError?.type || lastError?.name || null,
+                        contents: finalResponse 
+                    } : null,
                 })
                 
                 // 记录工具调用
@@ -1478,7 +1489,7 @@ export class ChatService {
             
             const client = await LlmService.createClient(clientOptions)
             
-            // 发送调度请求
+            // 发送调度请求（带重试）
             const dispatchMessage = {
                 role: 'user',
                 content: [
@@ -1486,11 +1497,37 @@ export class ChatService {
                 ]
             }
             
-            const response = await client.sendMessage(dispatchMessage, {
-                model: dispatchModel,
-                maxToken: 512,  // 调度响应需要足够空间（含思考）
-                temperature: 0.3  // 低温度，更确定性
-            })
+            let response = null
+            let lastError = null
+            const maxRetries = 2
+            
+            for (let attempt = 0; attempt <= maxRetries; attempt++) {
+                try {
+                    response = await client.sendMessage(dispatchMessage, {
+                        model: dispatchModel,
+                        maxToken: 512,
+                        temperature: 0.3 + (attempt * 0.2)  // 重试时稍微提高温度
+                    })
+                    
+                    // 检查响应是否有效
+                    if (response?.contents?.length > 0) {
+                        break
+                    }
+                    
+                    logger.warn(`[ChatService] 调度响应为空，尝试重试 (${attempt + 1}/${maxRetries + 1})`)
+                    lastError = new Error('调度模型返回空响应')
+                } catch (err) {
+                    lastError = err
+                    if (attempt < maxRetries) {
+                        logger.warn(`[ChatService] 调度请求失败，重试中: ${err.message}`)
+                        await new Promise(r => setTimeout(r, 500 * (attempt + 1)))
+                    }
+                }
+            }
+            
+            if (!response?.contents?.length) {
+                throw lastError || new Error('调度模型未返回有效响应')
+            }
             
             // 解析响应
             const responseText = response.contents

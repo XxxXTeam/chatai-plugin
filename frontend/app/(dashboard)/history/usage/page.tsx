@@ -94,7 +94,26 @@ interface UsageStats {
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(2)}s`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+function getDurationStyle(ms: number): string {
+  if (ms < 3000) return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+  if (ms < 10000) return 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+  if (ms < 30000) return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+  return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+}
+function getSourceStyle(source: string): { bg: string; text: string; label: string } {
+  switch (source) {
+    case 'chat': return { bg: 'bg-purple-100 dark:bg-purple-900/30', text: 'text-purple-700 dark:text-purple-400', label: '消费' }
+    case 'bym': return { bg: 'bg-blue-100 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-400', label: '伪人' }
+    case 'test': return { bg: 'bg-gray-100 dark:bg-gray-800', text: 'text-gray-700 dark:text-gray-400', label: '测试' }
+    case 'health_check': return { bg: 'bg-gray-100 dark:bg-gray-800', text: 'text-gray-700 dark:text-gray-400', label: '检查' }
+    case 'imagegen': return { bg: 'bg-pink-100 dark:bg-pink-900/30', text: 'text-pink-700 dark:text-pink-400', label: '绘图' }
+    default: 
+      if (source?.startsWith('memory')) return { bg: 'bg-cyan-100 dark:bg-cyan-900/30', text: 'text-cyan-700 dark:text-cyan-400', label: '记忆' }
+      return { bg: 'bg-gray-100 dark:bg-gray-800', text: 'text-gray-600 dark:text-gray-400', label: source || '-' }
+  }
 }
 
 function formatTime(timestamp: number): string {
@@ -376,78 +395,79 @@ export default function UsageStatsPage() {
           <ScrollArea className="h-[400px]">
             <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[100px]">时间</TableHead>
-                  <TableHead>渠道</TableHead>
+                <TableRow className="text-xs">
+                  <TableHead className="w-[130px]">时间</TableHead>
+                  <TableHead className="w-[60px]">渠道</TableHead>
+                  <TableHead className="hidden md:table-cell w-[50px]">Key</TableHead>
+                  <TableHead className="hidden lg:table-cell">类型</TableHead>
                   <TableHead>模型</TableHead>
-                  <TableHead className="hidden lg:table-cell">Key</TableHead>
-                  <TableHead className="hidden md:table-cell text-center">流式</TableHead>
+                  <TableHead className="w-[70px]">用时</TableHead>
+                  <TableHead className="hidden md:table-cell w-[50px] text-center">流式</TableHead>
                   <TableHead className="hidden lg:table-cell text-right">输入</TableHead>
                   <TableHead className="hidden lg:table-cell text-right">输出</TableHead>
-                  <TableHead className="hidden sm:table-cell">来源</TableHead>
-                  <TableHead className="text-right">耗时</TableHead>
-                  <TableHead className="hidden xl:table-cell">切换</TableHead>
+                  <TableHead className="hidden xl:table-cell">重试</TableHead>
                   <TableHead className="text-center">状态</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {records.length > 0 ? records.map((record) => (
-                  <TableRow 
-                    key={record.id} 
-                    className="cursor-pointer hover:bg-muted/50"
-                    onClick={() => setSelectedRecord(record)}
-                  >
-                    <TableCell className="text-xs whitespace-nowrap">{formatTime(record.timestamp)}</TableCell>
-                    <TableCell>
-                      <span className="truncate max-w-[80px] inline-block text-sm">{record.channelName || record.channelId}</span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="truncate max-w-[100px] inline-block text-sm">{record.model}</span>
-                    </TableCell>
-                    <TableCell className="hidden lg:table-cell">
-                      <Badge variant="outline" className="text-xs">Key {record.keyIndex >= 0 ? record.keyIndex + 1 : 0}</Badge>
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell text-center">
-                      {record.stream ? <Badge variant="secondary" className="text-xs">流</Badge> : <span className="text-muted-foreground text-xs">-</span>}
-                    </TableCell>
-                    <TableCell className="hidden lg:table-cell text-right text-xs">{formatNumber(record.inputTokens)}</TableCell>
-                    <TableCell className="hidden lg:table-cell text-right text-xs">{formatNumber(record.outputTokens)}</TableCell>
-                    <TableCell className="hidden sm:table-cell">
-                      <Badge variant={
-                        record.source === 'chat' ? 'default' : 
-                        record.source === 'bym' ? 'default' :
-                        record.source === 'test' || record.source === 'health_check' ? 'secondary' : 
-                        record.source === 'imagegen' ? 'default' :
-                        record.source?.startsWith('memory') ? 'outline' : 'outline'
-                      } className="text-xs">
-                        {record.source === 'chat' ? '对话' : 
-                         record.source === 'bym' ? '伪人' :
-                         record.source === 'test' ? '测试' : 
-                         record.source === 'health_check' ? '检查' :
-                         record.source === 'imagegen' ? '绘图' :
-                         record.source === 'memory_group' ? '群记忆' :
-                         record.source === 'memory_user' ? '用户记忆' :
-                         record.source === 'memory_extract' ? '记忆提取' :
-                         record.source}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right text-sm whitespace-nowrap">{formatDuration(record.duration)}</TableCell>
-                    <TableCell className="hidden xl:table-cell text-xs">
-                      {record.channelSwitched ? (
-                        <span className="text-orange-500">{record.previousChannelId} → {record.channelId}</span>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-center">
-                      {record.success ? (
-                        <CheckCircle className="h-4 w-4 text-green-500 inline" />
-                      ) : (
-                        <XCircle className="h-4 w-4 text-red-500 inline" />
-                      )}
-                    </TableCell>
-                  </TableRow>
-                )) : (
+                {records.length > 0 ? records.map((record) => {
+                  const sourceStyle = getSourceStyle(record.source)
+                  const durationStyle = getDurationStyle(record.duration)
+                  return (
+                    <TableRow 
+                      key={record.id} 
+                      className="cursor-pointer hover:bg-muted/50 text-xs"
+                      onClick={() => setSelectedRecord(record)}
+                    >
+                      <TableCell className="whitespace-nowrap font-mono">{formatTime(record.timestamp)}</TableCell>
+                      <TableCell>
+                        <span className="font-medium text-blue-600 dark:text-blue-400">{record.channelName || record.channelId}</span>
+                      </TableCell>
+                      <TableCell className="hidden md:table-cell text-center">
+                        <span className="text-muted-foreground">{record.keyIndex >= 0 ? record.keyIndex + 1 : 0}</span>
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${sourceStyle.bg} ${sourceStyle.text}`}>
+                          {sourceStyle.label}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <span className="truncate max-w-[120px] inline-block text-muted-foreground" title={record.model}>
+                          {record.model}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${durationStyle}`}>
+                          {formatDuration(record.duration)}
+                        </span>
+                      </TableCell>
+                      <TableCell className="hidden md:table-cell text-center">
+                        <span className="text-muted-foreground">{record.stream ? '流' : '非流'}</span>
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell text-right tabular-nums">{formatNumber(record.inputTokens)}</TableCell>
+                      <TableCell className="hidden lg:table-cell text-right tabular-nums">{formatNumber(record.outputTokens)}</TableCell>
+                      <TableCell className="hidden xl:table-cell">
+                        {(record.retryCount && record.retryCount > 0) || record.switchChain?.length ? (
+                          <span className="text-orange-500" title={record.switchChain?.join(' → ') || ''}>
+                            {record.switchChain?.length 
+                              ? record.switchChain.join('→')
+                              : `重试:${record.retryCount}`
+                            }
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {record.success ? (
+                          <CheckCircle className="h-3.5 w-3.5 text-green-500 inline" />
+                        ) : (
+                          <XCircle className="h-3.5 w-3.5 text-red-500 inline" />
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )
+                }) : (
                   <TableRow>
                     <TableCell colSpan={11} className="text-center text-muted-foreground py-8">
                       暂无调用记录

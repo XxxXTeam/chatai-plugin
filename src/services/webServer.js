@@ -829,15 +829,17 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // GET /api/stats/usage/recent - 获取最近使用记录
         this.app.get('/api/stats/usage/recent', this.authMiddleware.bind(this), async (req, res) => {
             try {
-                const { limit = 100, channelId, model, success, source } = req.query
+                const { limit = 100, channelId, model, success, status, source } = req.query
                 const filter = {}
                 if (channelId) filter.channelId = channelId
                 if (model) filter.model = model
-                if (success !== undefined) filter.success = success === 'true'
+                if (success !== undefined) {
+                    filter.success = success === 'true'
+                } else if (status !== undefined) {
+                    filter.success = status === 'success'
+                }
                 if (source) filter.source = source
                 const records = await usageStats.getRecent(parseInt(limit), filter)
                 res.json(ChaiteResponse.ok(records))
@@ -845,8 +847,6 @@ export class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // GET /api/stats/usage/channel/:id - 获取渠道统计
         this.app.get('/api/stats/usage/channel/:id', this.authMiddleware.bind(this), async (req, res) => {
             try {
                 const stats = await usageStats.getChannelStats(req.params.id)

@@ -177,6 +177,7 @@ class StatsService {
      * @param {boolean} [options.stream] - 是否流式
      * @param {Object} [options.request] - 请求信息
      * @param {Object} [options.response] - 响应信息（仅失败时）
+     * @param {number} [options.retryCount] - 重试次数
      * @param {boolean} [options.channelSwitched] - 是否切换了渠道
      * @param {string} [options.previousChannelId] - 切换前的渠道ID
      * @param {Array} [options.messages] - 消息数组（用于估算tokens）
@@ -203,19 +204,17 @@ class StatsService {
             stream = false,
             request = null,
             response = null,
+            retryCount = 0,
             channelSwitched = false,
             previousChannelId = null,
+            switchChain = null,
             messages = null,
             responseText = null,
             apiUsage = null
         } = options
-
-        // 统一的Token计算逻辑：优先使用API返回值，否则使用估算
         let inputTokens = providedInputTokens
         let outputTokens = providedOutputTokens
         let isEstimated = false
-
-        // 如果有API返回的usage，优先使用
         if (apiUsage) {
             if (apiUsage.prompt_tokens !== undefined) {
                 inputTokens = apiUsage.prompt_tokens
@@ -233,8 +232,6 @@ class StatsService {
                 outputTokens = apiUsage.output_tokens
             }
         }
-
-        // 如果仍然没有token数据，使用估算
         if (inputTokens === undefined || inputTokens === null) {
             if (messages) {
                 inputTokens = usageStats.estimateMessagesTokens(messages)
@@ -285,8 +282,10 @@ class StatsService {
                 duration,
                 success,
                 error,
+                retryCount,
                 channelSwitched,
                 previousChannelId,
+                switchChain,
                 source,
                 userId,
                 groupId,

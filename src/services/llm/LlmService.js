@@ -280,17 +280,14 @@ export class LlmService {
                 return modeModel.trim()
             }
         }
-        
-        // 该 mode 未配置，回退到默认模型
         if (fallbackToDefault) {
             const defaultModel = this.getDefaultModel()
             if (defaultModel) {
                 logger.debug(`[LlmService] getModel(${mode}): 回退到默认模型: ${defaultModel}`)
                 return defaultModel
             }
+            logger.warn(`[LlmService] getModel(${mode}): 未找到任何可用模型`)
         }
-        
-        logger.warn(`[LlmService] getModel(${mode}): 未找到任何可用模型`)
         return ''
     }
     
