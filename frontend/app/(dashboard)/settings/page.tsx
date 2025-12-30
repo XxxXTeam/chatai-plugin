@@ -32,7 +32,7 @@ import {
 } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader, PageContainer } from '@/components/layout/PageHeader'
-import { configApi, channelsApi } from '@/lib/api'
+import { configApi, channelsApi, presetsApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { 
   Save, Loader2, Info, X, RefreshCw, Settings2, Check,
@@ -96,6 +96,7 @@ interface Config {
     maxTokens: number
     recall: boolean
     model: string
+    presetId: string
     systemPrompt: string
     inheritPersonality: boolean
   }
@@ -178,7 +179,7 @@ const defaultConfig: Config = {
     fallback: { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false }
   },
   context: { maxMessages: 20, autoEnd: { enabled: false, maxRounds: 50 }, groupContextSharing: true, globalSystemPrompt: '' },
-  bym: { enable: false, probability: 0.02, temperature: 0.9, maxTokens: 100, recall: false, model: '', systemPrompt: '', inheritPersonality: true },
+  bym: { enable: false, probability: 0.02, temperature: 0.9, maxTokens: 100, recall: false, model: '', presetId: '', systemPrompt: '', inheritPersonality: true },
   tools: { showCallLogs: true, useForwardMsg: true, parallelExecution: true, sendIntermediateReply: true, useToolGroups: false, dispatchFirst: false },
   personality: { isolateContext: { enabled: false, clearOnSwitch: false } },
   thinking: { enabled: true, showThinkingContent: true, useForwardMsg: true },
@@ -248,6 +249,7 @@ export default function SettingsPage() {
   const [allModels, setAllModels] = useState<string[]>([])
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [fetchingModels, setFetchingModels] = useState(false)
+  const [presets, setPresets] = useState<Array<{ id: string; name: string }>>([])
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
   const [editingModelCategory, setEditingModelCategory] = useState<ModelCategory>('chat')
   const [tempSelectedModels, setTempSelectedModels] = useState<string[]>([])
@@ -281,9 +283,10 @@ export default function SettingsPage() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [configRes, channelsRes] = await Promise.all([
+        const [configRes, channelsRes, presetsRes] = await Promise.all([
           configApi.get(),
-          channelsApi.list().catch(() => ({ data: [] }))
+          channelsApi.list().catch(() => ({ data: [] })),
+          presetsApi.list().catch(() => ({ data: [] }))
         ])
         
         // 深度合并配置
@@ -334,6 +337,10 @@ export default function SettingsPage() {
         const modelList = Array.from(models).sort()
         setAllModels(modelList)
         setAvailableModels(modelList)
+        
+        // 设置预设列表
+        const presetsData = (presetsRes as { data?: Array<{ id: string; name: string }> })?.data || []
+        setPresets(presetsData)
       } catch (error) {
         toast.error('加载配置失败')
         console.error(error)
@@ -908,35 +915,56 @@ export default function SettingsPage() {
                 <div><Label>启用伪人模式</Label><p className="text-sm text-muted-foreground">AI回复更像真人</p></div>
                 <Switch checked={config.bym?.enable ?? false} onCheckedChange={(v) => updateConfig('bym.enable', v)} />
               </div>
-              {config.bym?.enable && (
-                <>
-                  <div className="space-y-2">
-                    <div className="flex justify-between"><Label>触发概率</Label><span className="text-sm text-muted-foreground">{((config.bym?.probability ?? 0.02) * 100).toFixed(0)}%</span></div>
-                    <Slider value={[config.bym?.probability ?? 0.02]} min={0.01} max={1} step={0.01} onValueChange={(v) => updateConfig('bym.probability', v[0])} />
-                    <p className="text-xs text-muted-foreground">最小1%，如需完全禁用请关闭伪人模式开关</p>
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between"><Label>回复温度</Label><span className="text-sm text-muted-foreground">{config.bym?.temperature || 0.9}</span></div>
-                    <Slider value={[config.bym?.temperature || 0.9]} min={0} max={2} step={0.1} onValueChange={(v) => updateConfig('bym.temperature', v[0])} />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>最大Token</Label>
-                    <Input type="number" value={config.bym?.maxTokens || 100} onChange={(e) => updateConfig('bym.maxTokens', parseInt(e.target.value))} />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label>启用记忆</Label>
-                    <Switch checked={config.bym?.recall ?? false} onCheckedChange={(v) => updateConfig('bym.recall', v)} />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>使用模型</Label>
-                    <Input value={config.bym?.model || ''} onChange={(e) => updateConfig('bym.model', e.target.value)} placeholder="留空使用默认模型" />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>系统提示词</Label>
-                    <Textarea value={config.bym?.systemPrompt || ''} onChange={(e) => updateConfig('bym.systemPrompt', e.target.value)} placeholder="伪人模式的系统提示词" rows={3} />
-                  </div>
-                </>
-              )}
+              <div className="space-y-2">
+                <div className="flex justify-between"><Label>触发概率</Label><span className="text-sm text-muted-foreground">{((config.bym?.probability ?? 0.02) * 100).toFixed(0)}%</span></div>
+                <Slider value={[config.bym?.probability ?? 0.02]} min={0.01} max={1} step={0.01} onValueChange={(v) => updateConfig('bym.probability', v[0])} />
+                <p className="text-xs text-muted-foreground">全局默认概率，群组可继承此值</p>
+              </div>
+              <div className="space-y-2">
+                <div className="flex justify-between"><Label>回复温度</Label><span className="text-sm text-muted-foreground">{config.bym?.temperature || 0.9}</span></div>
+                <Slider value={[config.bym?.temperature || 0.9]} min={0} max={2} step={0.1} onValueChange={(v) => updateConfig('bym.temperature', v[0])} />
+              </div>
+              <div className="grid gap-2">
+                <Label>最大Token</Label>
+                <Input type="number" value={config.bym?.maxTokens || 100} onChange={(e) => updateConfig('bym.maxTokens', parseInt(e.target.value))} />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label>启用记忆</Label>
+                <Switch checked={config.bym?.recall ?? false} onCheckedChange={(v) => updateConfig('bym.recall', v)} />
+              </div>
+              <div className="grid gap-2">
+                <Label>使用模型</Label>
+                <Select value={config.bym?.model || '__default__'} onValueChange={(v) => updateConfig('bym.model', v === '__default__' ? '' : v)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="使用默认模型" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-[200px] overflow-y-auto">
+                    <SelectItem value="__default__">使用默认模型</SelectItem>
+                    {allModels.map((m) => (
+                      <SelectItem key={m} value={m}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>伪人预设</Label>
+                <Select value={config.bym?.presetId || '__default__'} onValueChange={(v) => updateConfig('bym.presetId', v === '__default__' ? '' : v)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择预设..." />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-[200px] overflow-y-auto">
+                    <SelectItem value="__default__">使用默认人设</SelectItem>
+                    {presets.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">选择预设后将覆盖下方的系统提示词</p>
+              </div>
+              <div className="grid gap-2">
+                <Label>系统提示词</Label>
+                <Textarea value={config.bym?.systemPrompt || ''} onChange={(e) => updateConfig('bym.systemPrompt', e.target.value)} placeholder="伪人模式的系统提示词（选择预设后此项无效）" rows={3} />
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -1088,7 +1116,17 @@ export default function SettingsPage() {
               </div>
               <div className="grid gap-2">
                 <Label>总结模型</Label>
-                <Input value={config.features?.groupSummary?.model || ''} onChange={(e) => updateConfig('features.groupSummary.model', e.target.value)} placeholder="留空使用默认对话模型" />
+                <Select value={config.features?.groupSummary?.model || '__default__'} onValueChange={(v) => updateConfig('features.groupSummary.model', v === '__default__' ? '' : v)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="使用默认模型" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-[200px] overflow-y-auto">
+                    <SelectItem value="__default__">使用默认模型</SelectItem>
+                    {allModels.map((m) => (
+                      <SelectItem key={m} value={m}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <p className="text-xs text-muted-foreground">指定用于群聊总结的模型</p>
               </div>
             </CardContent>
@@ -1108,7 +1146,17 @@ export default function SettingsPage() {
               </div>
               <div className="grid gap-2">
                 <Label>画像模型</Label>
-                <Input value={config.features?.userPortrait?.model || ''} onChange={(e) => updateConfig('features.userPortrait.model', e.target.value)} placeholder="留空使用默认对话模型" />
+                <Select value={config.features?.userPortrait?.model || '__default__'} onValueChange={(v) => updateConfig('features.userPortrait.model', v === '__default__' ? '' : v)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="使用默认模型" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-[200px] overflow-y-auto">
+                    <SelectItem value="__default__">使用默认模型</SelectItem>
+                    {allModels.map((m) => (
+                      <SelectItem key={m} value={m}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <p className="text-xs text-muted-foreground">指定用于生成用户画像的模型</p>
               </div>
             </CardContent>

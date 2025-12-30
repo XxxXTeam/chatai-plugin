@@ -392,6 +392,24 @@ export default function ChannelsPage() {
     fetchChannels()
   }, [])
 
+  // 深度合并对象
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const deepMerge = <T extends Record<string, any>>(target: T, source: any): T => {
+    const result = { ...target }
+    if (source && typeof source === 'object') {
+      for (const key in target) {
+        if (key in source && source[key] !== undefined && source[key] !== null) {
+          if (typeof source[key] === 'object' && !Array.isArray(source[key]) && typeof target[key] === 'object') {
+            result[key] = deepMerge(target[key], source[key])
+          } else {
+            result[key] = source[key]
+          }
+        }
+      }
+    }
+    return result
+  }
+
   const defaultAdvanced = {
     streaming: { enabled: false, chunkSize: 1024 },
     thinking: { enableReasoning: false, defaultLevel: 'medium', adaptThinking: true, sendThinkingAsMessage: false },
@@ -451,8 +469,8 @@ export default function ChannelsPage() {
         customHeaders: channel.customHeaders || {},
         headersTemplate: (channel as unknown as Record<string, unknown>).headersTemplate as string || '',
         requestBodyTemplate: (channel as unknown as Record<string, unknown>).requestBodyTemplate as string || '',
-        advanced: (channel as unknown as Record<string, unknown>).advanced as typeof defaultAdvanced || { ...defaultAdvanced },
-        imageConfig: (channel as unknown as Record<string, unknown>).imageConfig as typeof defaultImageConfig || { ...defaultImageConfig }
+        advanced: deepMerge({ ...defaultAdvanced }, (channel as unknown as { advanced?: typeof defaultAdvanced }).advanced || {}),
+        imageConfig: deepMerge({ ...defaultImageConfig }, (channel as unknown as { imageConfig?: typeof defaultImageConfig }).imageConfig || {})
       })
     } else {
       resetForm()
@@ -616,16 +634,21 @@ export default function ChannelsPage() {
     setModelSelectorOpen(false)
   }
 
-  // 导出渠道
+  // 导出渠道（包含完整配置）
   const exportChannels = () => {
     const exportData = channels.map(ch => ({
       name: ch.name,
       adapterType: ch.adapterType,
       baseUrl: ch.baseUrl,
+      apiKey: ch.apiKey,
+      apiKeys: ch.apiKeys,
+      strategy: ch.strategy,
       models: ch.models,
       priority: ch.priority,
       enabled: ch.enabled,
-      // 不导出 apiKey
+      customHeaders: ch.customHeaders,
+      advanced: (ch as unknown as Record<string, unknown>).advanced,
+      imageConfig: (ch as unknown as Record<string, unknown>).imageConfig,
     }))
     const data = JSON.stringify(exportData, null, 2)
     const blob = new Blob([data], { type: 'application/json' })
@@ -635,7 +658,7 @@ export default function ChannelsPage() {
     a.download = `channels_${new Date().toISOString().slice(0, 10)}.json`
     a.click()
     URL.revokeObjectURL(url)
-    toast.success('导出成功（不含 API Key）')
+    toast.success('导出成功（含 API Key，请妥善保管）')
   }
 
   // 导入渠道

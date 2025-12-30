@@ -282,8 +282,26 @@ export class bym extends plugin {
                         '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。'
                 }
             } else {
-                systemPrompt = config.get('bym.systemPrompt') ||
-                    '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。'
+                // 检查全局伪人预设配置
+                const globalBymPresetId = config.get('bym.presetId')
+                if (globalBymPresetId) {
+                    try {
+                        const { presetManager } = await import('../src/services/preset/PresetManager.js')
+                        await presetManager.init()
+                        const preset = presetManager.get(globalBymPresetId)
+                        if (preset?.systemPrompt) {
+                            systemPrompt = preset.systemPrompt
+                            logger.info(`[BYM] 使用全局伪人预设: ${globalBymPresetId} (${preset.name || globalBymPresetId})`)
+                        }
+                    } catch (err) {
+                        logger.warn(`[BYM] 加载全局伪人预设 ${globalBymPresetId} 失败:`, err.message)
+                    }
+                }
+                // 如果没有预设或预设加载失败，使用系统提示词
+                if (!systemPrompt) {
+                    systemPrompt = config.get('bym.systemPrompt') ||
+                        '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。'
+                }
             }
             const presetMap = config.get('bym.presetMap') || {}
             for (const [keyword, presetId] of Object.entries(presetMap)) {

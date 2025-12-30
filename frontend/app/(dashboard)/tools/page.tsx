@@ -773,12 +773,19 @@ export default function ToolsPage() {
               <Label>危险工具列表</Label>
               <div className="flex flex-wrap gap-2">
                 {builtinConfig.dangerousTools.map(tool => (
-                  <Badge key={tool} variant="destructive" className="gap-1">
+                  <Badge key={tool} variant="destructive" className="gap-1 pr-1">
                     {tool}
-                    <X
-                      className="h-3 w-3 cursor-pointer"
-                      onClick={() => removeTag(builtinConfig.dangerousTools, (v) => setBuiltinConfig({ ...builtinConfig, dangerousTools: v }), tool)}
-                    />
+                    <button
+                      type="button"
+                      className="ml-1 rounded-full hover:bg-red-700/50 p-0.5"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        setBuiltinConfig({ ...builtinConfig, dangerousTools: builtinConfig.dangerousTools.filter(t => t !== tool) })
+                      }}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
                   </Badge>
                 ))}
               </div>
