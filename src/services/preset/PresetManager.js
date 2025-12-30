@@ -469,13 +469,17 @@ export class PresetManager {
      * 支持的变量：
      * - {{user_name}} 用户名称
      * - {{user_id}} 用户ID
-     * - {{group_name}} 群名称
-     * - {{group_id}} 群ID
-     * - {{bot_name}} 机器人名称
      * - {{date}} 当前日期
      * - {{time}} 当前时间
-     * - {{datetime}} 当前日期时间
+     * - {{datetime}} 日期时间
      * - {{weekday}} 星期几
+     * - {{year}} / {{month}} / {{day}} 年/月/日
+     * - {{bot_name}} Bot名称
+     * - {{bot_id}} Bot QQ号
+     * - {{user_name}} 用户名称（群名片或昵称）
+     * - {{user_id}} 用户QQ号
+     * - {{group_name}} 群名称
+     * - {{group_id}} 群号
      * @param {string} text 原始文本
      * @param {Object} context 上下文变量
      * @returns {string} 替换后的文本
@@ -494,10 +498,17 @@ export class PresetManager {
             weekday: `星期${weekdays[now.getDay()]}`,
             year: now.getFullYear().toString(),
             month: (now.getMonth() + 1).toString(),
-            day: now.getDate().toString()
+            day: now.getDate().toString(),
+            // 用户/群组/Bot相关（从context获取，提供默认值）
+            bot_name: context.bot_name || 'AI助手',
+            bot_id: context.bot_id || '',
+            user_name: context.user_name || '用户',
+            user_id: context.user_id || '',
+            group_name: context.group_name || '',
+            group_id: context.group_id || ''
         }
         
-        // 合并上下文变量
+        // 合并上下文变量（context优先）
         const vars = { ...builtinVars, ...context }
         
         // 替换 {{variable}} 格式的变量

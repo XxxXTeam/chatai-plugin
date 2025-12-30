@@ -25,3 +25,4 @@ src/services/workflow/
 data/workflows/
 !data/workflows/.gitkeep
 TODO.md
+QQBotWs/*

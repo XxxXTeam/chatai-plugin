@@ -430,20 +430,17 @@ export class ChatService {
                 actualEnableTools = true
                 actualTools = toolsFromGroups
             } else if (shouldDispatch && selectedToolGroupIndexes.length === 0) {
-                // 调度执行了但没有选中工具组 -> 使用对话模型
                 llmModel = groupChatModel || LlmService.selectModel({})
-                actualEnableTools = toolsAllowed
+                actualEnableTools = false  
                 modelScenario = 'chat'
-                logger.debug(`[ChatService] 场景=调度无需执行工具，模型: ${llmModel}${groupChatModel ? ' (群组配置)' : ''}`)
+                logger.debug(`[ChatService] 场景=调度无需执行工具，模型: ${llmModel}${groupChatModel ? ' (群组配置)' : ''}，不传工具`)
             } else {
-                // 普通对话 -> 优先使用群组对话模型
                 llmModel = groupChatModel || LlmService.selectModel({})
                 actualEnableTools = toolsAllowed
                 modelScenario = 'chat'
                 logger.debug(`[ChatService] 场景=普通对话，模型: ${llmModel}${groupChatModel ? ' (群组配置)' : ''}，传工具=${actualEnableTools}`)
             }
         } else {
-            // 传入了 model
             if (toolsAllowed) {
                 actualEnableTools = true
                 if (toolsFromGroups.length > 0) {
@@ -454,8 +451,6 @@ export class ChatService {
                 modelScenario = 'chat'
             }
         }
-        
-        // 预设模型覆盖（如果预设指定了模型）
         if (!model && currentPreset?.model && currentPreset.model.trim()) {
             llmModel = currentPreset.model.trim()
             logger.debug(`[ChatService] 使用预设模型覆盖: ${llmModel} (预设: ${currentPreset.name || effectivePresetIdForModel})`)
@@ -558,8 +553,12 @@ export class ChatService {
             promptContext.group_name = event.group_name || ''
             promptContext.group_id = event.group_id?.toString() || ''
             promptContext.bot_name = event.bot?.nickname || 'AI助手'
+            promptContext.bot_id = event.self_id?.toString() || ''
         }
-        const defaultPrompt = preset?.systemPrompt || presetManager.buildSystemPrompt(effectivePresetId, promptContext)
+        // 预设的systemPrompt也需要经过占位符替换
+        let defaultPrompt = preset?.systemPrompt 
+            ? presetManager.replaceVariables(preset.systemPrompt, promptContext)
+            : presetManager.buildSystemPrompt(effectivePresetId, promptContext)
         if (debugInfo) {
             debugInfo.preset = {
                 id: effectivePresetId,
@@ -1841,6 +1840,40 @@ export class ChatService {
         const { tasks, executionMode, originalMessage, event, images = [], conversationId, scopeFeatures = {}, toolsAllowed } = options
         const startTime = Date.now()
         const results = []
+        let systemPrompt = ''
+        try {
+            const groupId = event?.group_id ? String(event.group_id) : null
+            const userId = event?.user_id ? String(event.user_id) : null
+            if (groupId || userId) {
+                const sm = await ensureScopeManager()
+                const effectiveSettings = await sm.getEffectiveSettings(groupId, userId, { isPrivate: !groupId })
+                if (effectiveSettings?.hasIndependentPrompt) {
+                    systemPrompt = effectiveSettings.systemPrompt || ''
+                } else if (effectiveSettings?.presetId) {
+                    await presetManager.init()
+                    const preset = presetManager.get(effectiveSettings.presetId)
+                    if (preset?.systemPrompt) {
+                        systemPrompt = preset.systemPrompt
+                    }
+                }
+                
+                // 对人设进行占位符替换
+                if (systemPrompt) {
+                    const promptContext = {
+                        user_name: event?.sender?.card || event?.sender?.nickname || '用户',
+                        user_id: event?.user_id?.toString() || userId || '',
+                        group_name: event?.group_name || '',
+                        group_id: groupId || '',
+                        bot_name: event?.bot?.nickname || 'AI助手',
+                        bot_id: event?.self_id?.toString() || ''
+                    }
+                    systemPrompt = presetManager.replaceVariables(systemPrompt, promptContext)
+                    logger.debug(`[ChatService] 多任务执行: 已获取人设 (${systemPrompt.length} 字符)`)
+                }
+            }
+        } catch (err) {
+            logger.warn(`[ChatService] 获取人设失败:`, err.message)
+        }
         let previousResult = null
         
         // 按优先级排序任务
@@ -1861,7 +1894,8 @@ export class ChatService {
                             this.executeSingleTask(task, { 
                                 taskIndex: idx + 1,
                                 originalMessage, event, images, conversationId, scopeFeatures, toolsAllowed,
-                                previousResult: null
+                                previousResult: null,
+                                systemPrompt
                             })
                         )
                     )
@@ -1874,7 +1908,8 @@ export class ChatService {
                     const result = await this.executeSingleTask(task, {
                         taskIndex: results.length + 1,
                         originalMessage, event, images, conversationId, scopeFeatures, toolsAllowed,
-                        previousResult: depResult
+                        previousResult: depResult,
+                        systemPrompt
                     })
                     results.push(result)
                 }
@@ -1885,7 +1920,8 @@ export class ChatService {
                     const result = await this.executeSingleTask(task, {
                         taskIndex: i + 1,
                         originalMessage, event, images, conversationId, scopeFeatures, toolsAllowed,
-                        previousResult
+                        previousResult,
+                        systemPrompt
                     })
                     results.push(result)
                     previousResult = result
@@ -1928,7 +1964,7 @@ export class ChatService {
      * @returns {Promise<Object>} 任务结果
      */
     async executeSingleTask(task, context = {}) {
-        const { taskIndex, originalMessage, event, images, conversationId, scopeFeatures, toolsAllowed, previousResult } = context
+        const { taskIndex, originalMessage, event, images, conversationId, scopeFeatures, toolsAllowed, previousResult, systemPrompt } = context
         const { type, params = {} } = task
         const startTime = Date.now()
         
@@ -1976,7 +2012,8 @@ export class ChatService {
                         images,
                         conversationId,
                         scopeFeatures,
-                        toolsAllowed
+                        toolsAllowed,
+                        systemPrompt
                     })
                 }
                 
@@ -1999,7 +2036,8 @@ export class ChatService {
                         images,
                         conversationId,
                         scopeFeatures,
-                        previousResult
+                        previousResult,
+                        systemPrompt
                     })
                 }
             }
@@ -2105,7 +2143,7 @@ export class ChatService {
      * 处理工具调用任务
      */
     async handleToolTask(options = {}) {
-        const { toolGroups, originalMessage, event, images = [], conversationId, scopeFeatures = {}, toolsAllowed } = options
+        const { toolGroups, originalMessage, event, images = [], conversationId, scopeFeatures = {}, toolsAllowed, systemPrompt } = options
         const startTime = Date.now()
         
         try {
@@ -2161,7 +2199,8 @@ export class ChatService {
             }, {
                 model: toolModel,
                 maxToken: 2048,
-                temperature: 0.7
+                temperature: 0.7,
+                systemOverride: systemPrompt || undefined
             })
             
             const responseText = response.contents
@@ -2274,7 +2313,7 @@ export class ChatService {
      * 处理普通对话任务
      */
     async handleChatTask(options = {}) {
-        const { message, event, images = [], conversationId, scopeFeatures = {}, previousResult } = options
+        const { message, event, images = [], conversationId, scopeFeatures = {}, previousResult, systemPrompt } = options
         const startTime = Date.now()
         
         try {
@@ -2315,7 +2354,8 @@ export class ChatService {
             }, {
                 model: chatModel,
                 maxToken: 2048,
-                temperature: 0.9
+                temperature: 0.9,
+                systemOverride: systemPrompt || undefined
             })
             
             const responseText = response.contents

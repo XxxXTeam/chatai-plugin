@@ -205,10 +205,13 @@ export class AIManagement extends plugin {
             // 更新功能设置
             currentFeatures[feature] = enabled
             
+            // 正确结构：顶层字段单独传递，功能设置存储在otherSettings中
             await scopeManager.setGroupSettings(groupId, {
-                ...existingSettings,
-                ...currentFeatures,
-                [feature]: enabled
+                systemPrompt: existingSettings.systemPrompt,
+                presetId: existingSettings.presetId,
+                knowledgeIds: existingSettings.knowledgeIds,
+                inheritFrom: existingSettings.inheritFrom,
+                ...currentFeatures
             })
             
             return true

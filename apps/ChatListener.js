@@ -7,6 +7,21 @@ import { emojiThiefService } from './EmojiThief.js'
 
 // 懒加载服务缓存
 let _chatService = null
+let _qqBotSender = null
+
+async function getQQBotSender() {
+    if (!_qqBotSender) {
+        try {
+            const { qqBotSender } = await import('../src/services/qqbot/QQBotSender.js')
+            _qqBotSender = qqBotSender
+            logger.debug('[ChatListener] QQBotSender加载成功')
+        } catch (err) {
+            logger.warn('[ChatListener] QQBotSender加载失败:', err.message)
+            _qqBotSender = null
+        }
+    }
+    return _qqBotSender
+}
 let _memoryManager = null
 let _statsService = null
 let _scopeManager = null
@@ -160,6 +175,8 @@ export class ChatListener extends plugin {
             const listenerConfig = config.get('listener') || {}
             triggerCfg = this.convertLegacyConfig(listenerConfig)
         }
+        // 深拷贝配置，避免修改群组配置时污染全局配置
+        triggerCfg = JSON.parse(JSON.stringify(triggerCfg))
         if (e.isGroup && e.group_id && triggerCfg.collectGroupMsg !== false) {
             try {
                 const mm = await getMemoryManager()
@@ -587,8 +604,31 @@ export class ChatListener extends plugin {
                         recordSentMessage(replyTextContent)
                     }
                     
-                    const quoteReply = config.get('basic.quoteReply') === true
-                    await this.reply(replyContent, quoteReply)
+                    // 尝试使用官方Bot代发
+                    let usedOfficialBot = false
+                    if (e.isGroup && e.group_id) {
+                        const sender = await getQQBotSender()
+                        if (sender) {
+                            const shouldUse = sender.shouldUseOfficialBot(e.group_id)
+                            if (shouldUse) {
+                                logger.info(`[ChatListener] 尝试官方Bot代发...`)
+                                const relayResult = await sender.relayFromIC(e.group_id, replyTextContent, e)
+                                if (relayResult.success) {
+                                    usedOfficialBot = true
+                                    logger.mark(`[ChatListener] 官方Bot代发成功`)
+                                } else if (!relayResult.useIC) {
+                                    logger.warn(`[ChatListener] 官方Bot代发失败: ${relayResult.error}`)
+                                    return
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 如果没有使用官方Bot，使用IC发送
+                    if (!usedOfficialBot) {
+                        const quoteReply = config.get('basic.quoteReply') === true
+                        await this.reply(replyContent, quoteReply)
+                    }
                     
                     // 表情包小偷 - 对话触发模式
                     if (e.isGroup && e.group_id) {
