@@ -119,8 +119,8 @@ interface Config {
     useForwardMsg: boolean
   }
   features: {
-    groupSummary: { enabled: boolean; maxMessages: number }
-    userPortrait: { enabled: boolean; minMessages: number }
+    groupSummary: { enabled: boolean; maxMessages: number; model?: string }
+    userPortrait: { enabled: boolean; minMessages: number; model?: string }
     poke: { enabled: boolean; pokeBack: boolean; message: string; prompt?: string }
     reaction: { enabled: boolean; prompt?: string; removePrompt?: string }
     recall: { enabled: boolean; aiResponse: boolean; prompt?: string }
@@ -183,8 +183,8 @@ const defaultConfig: Config = {
   personality: { isolateContext: { enabled: false, clearOnSwitch: false } },
   thinking: { enabled: true, showThinkingContent: true, useForwardMsg: true },
   features: {
-    groupSummary: { enabled: true, maxMessages: 100 },
-    userPortrait: { enabled: true, minMessages: 10 },
+    groupSummary: { enabled: true, maxMessages: 100, model: '' },
+    userPortrait: { enabled: true, minMessages: 10, model: '' },
     poke: { enabled: false, pokeBack: false, message: '别戳了~', prompt: '' },
     reaction: { enabled: false, prompt: '', removePrompt: '' },
     recall: { enabled: false, aiResponse: true, prompt: '' },
@@ -1086,6 +1086,11 @@ export default function SettingsPage() {
                 <Input type="number" value={config.features?.groupSummary?.maxMessages || 100} onChange={(e) => updateConfig('features.groupSummary.maxMessages', parseInt(e.target.value))} />
                 <p className="text-xs text-muted-foreground">总结时分析的最大消息数量</p>
               </div>
+              <div className="grid gap-2">
+                <Label>总结模型</Label>
+                <Input value={config.features?.groupSummary?.model || ''} onChange={(e) => updateConfig('features.groupSummary.model', e.target.value)} placeholder="留空使用默认对话模型" />
+                <p className="text-xs text-muted-foreground">指定用于群聊总结的模型</p>
+              </div>
             </CardContent>
           </Card>
 
@@ -1100,6 +1105,11 @@ export default function SettingsPage() {
                 <Label>最少消息数</Label>
                 <Input type="number" value={config.features?.userPortrait?.minMessages || 10} onChange={(e) => updateConfig('features.userPortrait.minMessages', parseInt(e.target.value))} />
                 <p className="text-xs text-muted-foreground">生成画像需要的最少消息数量</p>
+              </div>
+              <div className="grid gap-2">
+                <Label>画像模型</Label>
+                <Input value={config.features?.userPortrait?.model || ''} onChange={(e) => updateConfig('features.userPortrait.model', e.target.value)} placeholder="留空使用默认对话模型" />
+                <p className="text-xs text-muted-foreground">指定用于生成用户画像的模型</p>
               </div>
             </CardContent>
           </Card>
