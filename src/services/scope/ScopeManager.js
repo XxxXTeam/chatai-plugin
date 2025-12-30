@@ -213,6 +213,11 @@ export class ScopeManager {
     try {
       const now = Date.now()
       const { systemPrompt, presetId, knowledgeIds, inheritFrom, ...otherSettings } = settings
+      let finalOtherSettings = { ...otherSettings }
+      if (otherSettings.settings && typeof otherSettings.settings === 'object') {
+        const { settings: nestedSettings, ...rest } = otherSettings
+        finalOtherSettings = { ...rest, ...nestedSettings }
+      }
       
       const stmt = this.db.db.prepare(`
         INSERT OR REPLACE INTO group_scopes 
@@ -228,7 +233,7 @@ export class ScopeManager {
         presetId || null,
         knowledgeIds ? JSON.stringify(knowledgeIds) : null,
         inheritFrom ? JSON.stringify(inheritFrom) : null,
-        JSON.stringify(otherSettings),
+        JSON.stringify(finalOtherSettings),
         groupId,
         now,
         now

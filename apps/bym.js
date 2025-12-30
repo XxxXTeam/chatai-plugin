@@ -101,6 +101,11 @@ export class bym extends plugin {
             probability = 0.02 // 默认2%
         } else {
             probability = Number(probability)
+            // 如果概率值大于1，认为是百分比格式（如15表示15%），转换为小数
+            if (probability > 1) {
+                probability = probability / 100
+                logger.debug(`[BYM] 检测到百分比格式，已转换: ${probabilityRaw} -> ${probability}`)
+            }
         }
         probability = Math.max(0, Math.min(1, probability)) // 确保在0-1范围内
         

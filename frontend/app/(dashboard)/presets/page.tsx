@@ -458,9 +458,22 @@ export default function PresetsPage() {
                         placeholder="你是一个有帮助的AI助手..."
                         rows={8}
                       />
-                      <p className="text-xs text-muted-foreground">
-                        支持占位符：{'{{user_name}}'} {'{{group_name}}'} {'{{date}}'} 等
-                      </p>
+                      <div className="text-xs text-muted-foreground space-y-1">
+                        <p className="font-medium">支持占位符（运行时自动替换）：</p>
+                        <p>
+                          <code className="bg-muted px-1 rounded">{'{{bot_name}}'}</code> Bot名称 | 
+                          <code className="bg-muted px-1 rounded ml-1">{'{{bot_id}}'}</code> Bot QQ号 | 
+                          <code className="bg-muted px-1 rounded ml-1">{'{{user_name}}'}</code> 用户名称 | 
+                          <code className="bg-muted px-1 rounded ml-1">{'{{user_id}}'}</code> 用户QQ号
+                        </p>
+                        <p>
+                          <code className="bg-muted px-1 rounded">{'{{group_name}}'}</code> 群名称 | 
+                          <code className="bg-muted px-1 rounded ml-1">{'{{group_id}}'}</code> 群号 | 
+                          <code className="bg-muted px-1 rounded ml-1">{'{{date}}'}</code> 日期 | 
+                          <code className="bg-muted px-1 rounded ml-1">{'{{time}}'}</code> 时间 | 
+                          <code className="bg-muted px-1 rounded ml-1">{'{{weekday}}'}</code> 星期
+                        </p>
+                      </div>
                     </>
                   )}
                 </div>
