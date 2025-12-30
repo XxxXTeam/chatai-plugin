@@ -587,7 +587,7 @@ export class BuiltinMcpServer {
                 readFile: (filePath) => fs.readFileSync(filePath, 'utf-8'),
                 // 写入文件
                 writeFile: (filePath, content) => fs.writeFileSync(filePath, content),
-                // 执行 shell 命令（受限）
+                // 执行 shell 命令
                 exec: async (cmd) => {
                     // 危险命令黑名单
                     const dangerousPatterns = [
@@ -657,6 +657,29 @@ export class BuiltinMcpServer {
     async callTool(name, args, requestContext = null) {
         // 创建请求级上下文包装器，优先使用传入的上下文
         const ctx = this.createRequestContext(requestContext)
+        
+        // 检查危险工具拦截
+        const builtinConfig = config.get('tools.builtin') || {}
+        const dangerousTools = builtinConfig.dangerousTools || ['kick_member', 'mute_member', 'recall_message']
+        const disabledTools = builtinConfig.disabledTools || []
+        
+        // 检查是否是被禁用的工具
+        if (disabledTools.includes(name)) {
+            logger.warn(`[BuiltinMCP] 工具 ${name} 已被禁用，拒绝执行`)
+            return {
+                content: [{ type: 'text', text: `工具 "${name}" 已被管理员禁用，无法执行` }],
+                isError: true
+            }
+        }
+        
+        // 检查是否是危险工具且未允许危险操作
+        if (dangerousTools.includes(name) && !builtinConfig.allowDangerous) {
+            logger.warn(`[BuiltinMCP] 危险工具 ${name} 被拦截，需要在设置中开启"允许危险操作"`)
+            return {
+                content: [{ type: 'text', text: `危险工具 "${name}" 已被拦截。此工具可能执行踢人、禁言、撤回等危险操作。如需使用，请在管理面板的"工具管理-高级设置"中开启"允许危险操作"选项。` }],
+                isError: true
+            }
+        }
         
         // 记录开始时间用于统计
         const startTime = Date.now()

@@ -447,13 +447,12 @@ export default function UsageStatsPage() {
                       <TableCell className="hidden lg:table-cell text-right tabular-nums">{formatNumber(record.inputTokens)}</TableCell>
                       <TableCell className="hidden lg:table-cell text-right tabular-nums">{formatNumber(record.outputTokens)}</TableCell>
                       <TableCell className="hidden xl:table-cell">
-                        {(record.retryCount && record.retryCount > 0) || record.switchChain?.length ? (
-                          <span className="text-orange-500" title={record.switchChain?.join(' → ') || ''}>
-                            {record.switchChain?.length 
-                              ? record.switchChain.join('→')
-                              : `重试:${record.retryCount}`
-                            }
+                        {(record.switchChain && record.switchChain.length > 1) ? (
+                          <span className="text-orange-500 truncate max-w-[100px] inline-block" title={record.switchChain.join(' → ')}>
+                            {record.switchChain.join('→')}
                           </span>
+                        ) : (record.retryCount && record.retryCount > 0) ? (
+                          <span className="text-orange-500">重试:{record.retryCount}</span>
                         ) : (
                           <span className="text-muted-foreground">-</span>
                         )}
