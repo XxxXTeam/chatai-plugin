@@ -235,19 +235,35 @@ export class PresetManager {
     }
 
     /**
-     * 获取预设（优先用户预设，其次内置预设）
-     * @param {string} id
+     * 获取预设（优先用户预设，其次内置预设，支持按ID或名称查找）
+     * @param {string} idOrName - 预设ID或名称
      * @returns {Object|null}
      */
-    get(id) {
-        // 优先返回用户预设
-        if (this.presets.has(id)) {
-            return this.presets.get(id)
+    get(idOrName) {
+        if (!idOrName) return null
+        
+        // 优先按ID查找用户预设
+        if (this.presets.has(idOrName)) {
+            return this.presets.get(idOrName)
         }
-        // 其次返回内置预设
-        if (this.builtinPresets.has(id)) {
-            return this.builtinPresets.get(id)
+        // 其次按ID查找内置预设
+        if (this.builtinPresets.has(idOrName)) {
+            return this.builtinPresets.get(idOrName)
         }
+        
+        // 按名称查找用户预设
+        for (const preset of this.presets.values()) {
+            if (preset.name === idOrName) {
+                return preset
+            }
+        }
+        // 按名称查找内置预设
+        for (const preset of this.builtinPresets.values()) {
+            if (preset.name === idOrName) {
+                return preset
+            }
+        }
+        
         return null
     }
 

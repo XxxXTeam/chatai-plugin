@@ -617,21 +617,19 @@ export class ChatService {
         } catch (e) { 
             logger.warn(`[ChatService] 获取独立人设失败:`, e.message) 
         }
-        // 处理前缀人格：可能是presetId或直接的systemPrompt文本
         let prefixPresetId = null
         if (prefixPersona) {
-            // 检查是否为presetId（UUID格式或预设名称）
+            logger.debug(`[ChatService] 收到前缀人格参数: "${prefixPersona}" (长度: ${prefixPersona?.length || 0})`)
             const prefixPreset = presetManager.get(prefixPersona)
             if (prefixPreset) {
-                // prefixPersona是一个有效的presetId
                 prefixPresetId = prefixPersona
                 systemPrompt = prefixPreset.systemPrompt || ''
                 logger.debug(`[ChatService] 使用前缀人格预设: ${prefixPresetId} (${prefixPreset.name || prefixPresetId})`)
             } else {
-                // prefixPersona是直接的systemPrompt文本
                 systemPrompt = prefixPersona
-                logger.debug(`[ChatService] 使用前缀人格文本覆盖`)
+                logger.debug(`[ChatService] 使用前缀人格文本覆盖 (内容长度: ${prefixPersona.length})`)
             }
+            logger.debug(`[ChatService] 前缀人格应用后systemPrompt长度: ${systemPrompt.length}`)
         }
         if (config.get('memory.enabled') && !isNewSession) {
             try {

@@ -136,6 +136,7 @@ export default function GroupsPage() {
     drawModel: '',  // 绘图模型
     searchModel: '',  // 搜索模型
     roleplayModel: '',  // 伪人模型
+    profileModel: '',  // 画像模型
     enabled: true,
     triggerMode: 'default',
     bymEnabled: 'inherit' as 'inherit' | 'on' | 'off',
@@ -208,6 +209,7 @@ export default function GroupsPage() {
       drawModel: '',
       searchModel: '',
       roleplayModel: '',
+      profileModel: '',
       enabled: true,
       triggerMode: 'default',
       bymEnabled: 'inherit',
@@ -255,6 +257,7 @@ export default function GroupsPage() {
         drawModel: settings.drawModel || '',
         searchModel: settings.searchModel || '',
         roleplayModel: settings.roleplayModel || '',
+        profileModel: settings.profileModel || '',
         enabled: group.enabled ?? settings.enabled ?? true,
         triggerMode: settings.triggerMode || group.triggerMode || 'default',
         bymEnabled: settings.bymEnabled === undefined ? 'inherit' : settings.bymEnabled ? 'on' : 'off',
@@ -305,6 +308,7 @@ export default function GroupsPage() {
         drawModel: form.drawModel || undefined,
         searchModel: form.searchModel || undefined,
         roleplayModel: form.roleplayModel || undefined,
+        profileModel: form.profileModel || undefined,
         enabled: form.enabled,
         triggerMode: form.triggerMode,
         bymEnabled: form.bymEnabled === 'inherit' ? undefined : form.bymEnabled === 'on',
@@ -495,6 +499,15 @@ export default function GroupsPage() {
               </SelectContent>
             </Select>
           </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label>自定义前缀</Label>
+          <Input
+            value={form.customPrefix}
+            onChange={(e) => setForm({ ...form, customPrefix: e.target.value })}
+            placeholder="留空使用全局前缀，如 #ai"
+          />
         </div>
 
         <div className="space-y-2">
@@ -716,14 +729,6 @@ export default function GroupsPage() {
           </div>
         )}
 
-        <div className="space-y-2 pt-2">
-          <Label>自定义前缀</Label>
-          <Input
-            value={form.customPrefix}
-            onChange={(e) => setForm({ ...form, customPrefix: e.target.value })}
-            placeholder="留空使用全局前缀，如 #ai"
-          />
-        </div>
       </TabsContent>
 
       <TabsContent value="bym" className="space-y-4 mt-0">
@@ -970,6 +975,36 @@ export default function GroupsPage() {
             <div className="space-y-1.5">
               <Label className="text-xs">伪人模型 <span className="text-muted-foreground">（模拟真人）</span></Label>
               <Select value={form.roleplayModel || '__default__'} onValueChange={(v) => setForm({ ...form, roleplayModel: v === '__default__' ? '' : v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="使用全局配置" />
+                </SelectTrigger>
+                <SelectContent className="max-h-[200px] overflow-y-auto">
+                  <SelectItem value="__default__">使用全局配置</SelectItem>
+                  {allModels.map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="space-y-1.5">
+              <Label className="text-xs">总结模型 <span className="text-muted-foreground">（群聊总结）</span></Label>
+              <Select value={form.summaryModel || '__default__'} onValueChange={(v) => setForm({ ...form, summaryModel: v === '__default__' ? '' : v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="使用全局配置" />
+                </SelectTrigger>
+                <SelectContent className="max-h-[200px] overflow-y-auto">
+                  <SelectItem value="__default__">使用全局配置</SelectItem>
+                  {allModels.map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="space-y-1.5">
+              <Label className="text-xs">画像模型 <span className="text-muted-foreground">（用户画像分析）</span></Label>
+              <Select value={form.profileModel || '__default__'} onValueChange={(v) => setForm({ ...form, profileModel: v === '__default__' ? '' : v })}>
                 <SelectTrigger>
                   <SelectValue placeholder="使用全局配置" />
                 </SelectTrigger>

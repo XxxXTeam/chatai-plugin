@@ -90,7 +90,7 @@ const CACHE_TTL = 60000 // 1分钟缓存
 /**
  * 获取群组独立的触发配置
  * @param {string} groupId
- * @returns {Promise<{triggerMode?: string, customPrefix?: string}>}
+ * @returns {Promise<{triggerMode?: string, customPrefix?: string, prefixPersonas?: Array}>}
  */
 async function getGroupTriggerConfig(groupId) {
     if (!groupId) return {}
@@ -108,7 +108,8 @@ async function getGroupTriggerConfig(groupId) {
         
         const cfg = {
             triggerMode: settings.triggerMode,
-            customPrefix: settings.customPrefix
+            customPrefix: settings.customPrefix,
+            prefixPersonas: settings.prefixPersonas
         }
         
         groupTriggerCache.set(cacheKey, { config: cfg, time: Date.now() })
@@ -236,6 +237,11 @@ export class ChatListener extends plugin {
                     triggerCfg.prefixes = [groupConfig.customPrefix, ...triggerCfg.prefixes]
                 }
                 logger.debug(`[ChatListener] 使用群组自定义前缀: ${groupConfig.customPrefix}`)
+            }
+            if (Array.isArray(groupConfig.prefixPersonas) && groupConfig.prefixPersonas.length > 0) {
+                const globalPrefixPersonas = triggerCfg.prefixPersonas || []
+                triggerCfg.prefixPersonas = [...groupConfig.prefixPersonas, ...globalPrefixPersonas]
+                logger.debug(`[ChatListener] 使用群组前缀人格配置: ${groupConfig.prefixPersonas.length} 个`)
             }
         }
         
@@ -387,16 +393,19 @@ export class ChatListener extends plugin {
      */
     checkPrefix(msg, prefixes = [], prefixPersonas = []) {
         if (Array.isArray(prefixPersonas) && prefixPersonas.length > 0) {
+            logger.debug(`[ChatListener] 检查前缀人格, 共 ${prefixPersonas.length} 个配置`)
             for (const persona of prefixPersonas) {
                 if (!persona?.prefix) continue
                 const prefix = persona.prefix.trim()
                 if (msg.startsWith(prefix)) {
                     const content = msg.slice(prefix.length).trimStart()
+                    const personaValue = persona.preset || persona.systemPrompt
+                    logger.debug(`[ChatListener] 匹配前缀人格: prefix="${prefix}", preset="${persona.preset}", systemPrompt长度=${persona.systemPrompt?.length || 0}, 最终值="${personaValue?.substring(0, 50) || ''}"`)
                     return { 
                         matched: true, 
                         prefix, 
                         content,
-                        persona: persona.preset || persona.systemPrompt,
+                        persona: personaValue,
                         isPersonaPrefix: true
                     }
                 }
