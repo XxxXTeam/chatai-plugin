@@ -187,6 +187,9 @@ export const channelsApi = {
   update: (id: string, data: Record<string, unknown>) => api.put(`/api/channels/${id}`, data),
   delete: (id: string) => api.delete(`/api/channels/${id}`),
   test: (data: Record<string, unknown>) => api.post('/api/channels/test', data),
+  testModel: (data: { channelId: string; model: string }) => api.post('/api/channels/test-model', data),
+  batchTest: (data: { channelId: string; models: string[]; concurrency?: number }) => 
+    api.post('/api/channels/batch-test', data),
   fetchModels: (data: Record<string, unknown>) => api.post('/api/channels/fetch-models', data),
   getStats: () => api.get('/api/channels/stats'),
 }
@@ -480,5 +483,40 @@ export const imageGenApi = {
   updateBuiltinPreset: (uid: string, data: { keywords: string[]; prompt: string; needImage?: boolean }) =>
     api.put(`/api/imagegen/builtin-presets/${uid}`, data),
   deleteBuiltinPreset: (uid: string) => api.delete(`/api/imagegen/builtin-presets/${uid}`),
+}
+
+export function getFetchHeaders(method: string, path: string, body?: unknown): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  
+  const token = typeof window !== 'undefined' ? localStorage.getItem('chatai_token') : null
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  
+  if (typeof window !== 'undefined') {
+    headers['X-Client-Fingerprint'] = getFingerprint()
+    
+    if (method.toUpperCase() !== 'GET') {
+      const timestamp = Date.now().toString()
+      const nonce = generateNonce()
+      const bodyHash = body ? calculateBodyHash(body) : ''
+      const signature = generateSignature(
+        method.toUpperCase(),
+        path,
+        timestamp,
+        bodyHash,
+        nonce
+      )
+      
+      headers['X-Timestamp'] = timestamp
+      headers['X-Nonce'] = nonce
+      headers['X-Body-Hash'] = bodyHash
+      headers['X-Signature'] = signature
+    }
+  }
+  
+  return headers
 }
 

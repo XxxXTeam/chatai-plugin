@@ -3,17 +3,42 @@
  * 统一导出所有路由创建函数
  */
 
-export { createPresetRoutes, createPresetsConfigRoutes } from './presetRoutes.js'
+import { createConversationRoutes, createContextRoutes } from './conversationRoutes.js'
+import { createPresetRoutes, createPresetsConfigRoutes } from './presetRoutes.js'
+import channelRoutes from './channelRoutes.js'
+import statsRoutes from './statsRoutes.js'
+import testPanelRoutes from './testPanelRoutes.js'
+import systemRoutes from './systemRoutes.js'
+import configRoutes from './configRoutes.js'
+import scopeRoutes from './scopeRoutes.js'
+import toolsRoutes from './toolsRoutes.js'
+import proxyRoutes from './proxyRoutes.js'
+import mcpRoutes from './mcpRoutes.js'
+import knowledgeRoutes from './knowledgeRoutes.js'
+import imageRoutes from './imageRoutes.js'
+import logsRoutes from './logsRoutes.js'
+import memoryRoutes from './memoryRoutes.js'
+import { ChaiteResponse, ApiResponse, getDatabase } from './shared.js'
 
-/**
- * 使用示例：
- * 
- * import { createPresetRoutes, createPresetsConfigRoutes } from './routes/index.js'
- * 
- * // 在 WebServer 的 setupRoutes 中使用：
- * this.app.use('/api/preset', createPresetRoutes(this.authMiddleware.bind(this)))
- * this.app.use('/api/presets', createPresetsConfigRoutes(this.authMiddleware.bind(this)))
- * 
- * 这样可以将原来分散在 webServer.js 中的路由代码模块化，
- * 减少主文件的代码量，提高可维护性。
- */
+export { 
+    createConversationRoutes,
+    createContextRoutes,
+    channelRoutes,
+    statsRoutes,
+    testPanelRoutes,
+    systemRoutes,
+    configRoutes,
+    scopeRoutes,
+    toolsRoutes,
+    proxyRoutes,
+    mcpRoutes,
+    knowledgeRoutes,
+    imageRoutes,
+    logsRoutes,
+    memoryRoutes,
+    createPresetRoutes,
+    createPresetsConfigRoutes,
+    ChaiteResponse,
+    ApiResponse,
+    getDatabase
+}

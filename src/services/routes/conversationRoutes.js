@@ -4,6 +4,7 @@
 
 import express from 'express'
 import { ChaiteResponse, getDatabase } from './shared.js'
+import { chatLogger as logger } from '../../core/utils/logger.js'
 
 /**
  * 创建对话路由

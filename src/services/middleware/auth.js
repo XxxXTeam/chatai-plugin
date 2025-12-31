@@ -365,7 +365,7 @@ export const rateLimiter = new RateLimiter()
  * @param {boolean} options.byUser - 是否按用户限流
  */
 export function rateLimit(options = {}) {
-    const { maxRequests = 100, windowMs = 60000, byUser = false } = options
+    const { maxRequests = 1000000, windowMs = 60000, byUser = false } = options
 
     return (req, res, next) => {
         const key = byUser && req.auth?.userId 

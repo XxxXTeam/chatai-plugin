@@ -144,9 +144,26 @@ class QQBotMessageHandler {
 
         const cleanContent = this.cleanAtContent(content || '')
         logger.info(`群消息 [${group_openid}] ${author.member_openid}: ${cleanContent.substring(0, 50) || '(空)'}`)
+        
+        // IC代发模式：存储被动消息ID
         const icRelayCfg = config.get('qqBotProxy.icRelay')
         if (icRelayCfg?.enabled) {
             qqBotSender.onOfficialBotTriggered(group_openid, id)
+            
+            // 同时存储到事件ID（作为备用）
+            const icGroupId = qqBotSender.getICGroupId(group_openid)
+            if (icGroupId) {
+                // 群@消息也可以作为事件ID使用
+                qqBotSender.saveEventId(icGroupId, id, group_openid, author.member_openid)
+            }
+            
+            // 检查是否需要回复带按钮的MD消息（用于获取buttonId）
+            const buttonCfg = icRelayCfg.button
+            const mdCfg = icRelayCfg.markdown
+            if (buttonCfg?.enabled && buttonCfg?.templateId && mdCfg?.enabled && mdCfg?.templateId) {
+                // 回复带按钮的MD消息
+                await this.replyWithButtonMD(group_openid, id, botInstance)
+            }
             return
         }
 
@@ -170,12 +187,20 @@ class QQBotMessageHandler {
         logger.debug('收到互动事件:', JSON.stringify(data).substring(0, 200))
         
         // 处理按钮点击事件
-        const { id, group_openid, data: interactionData } = data
+        const { id, group_openid, data: interactionData, group_member_openid } = data
         
         if (group_openid && id) {
-            // 存储交互事件ID供IC代发使用
-            qqBotSender.onInteractionCreate(group_openid, id)
-            logger.info(`按钮点击事件: group=${group_openid}, eventId=${id}`)
+            // 存储交互事件ID供IC代发使用（包含用户ID）
+            qqBotSender.onInteractionCreate(group_openid, id, group_member_openid)
+            logger.info(`按钮点击事件: group=${group_openid}, eventId=${id}, user=${group_member_openid}`)
+            
+            // 提取按钮ID信息（用于后续模拟点击）
+            const buttonId = interactionData?.resolved?.button_id
+            const buttonData = interactionData?.resolved?.button_data
+            if (buttonId && buttonData) {
+                // 保存按钮ID供后续模拟点击使用
+                qqBotSender.saveButtonIdFromInteraction(group_openid, buttonId, buttonData)
+            }
             
             // 回应交互事件（必须回应否则客户端会显示loading）
             await this.ackInteraction(data, botInstance)
@@ -211,6 +236,75 @@ class QQBotMessageHandler {
         } catch (err) {
             logger.debug(`确认交互事件失败: ${err.message}`)
         }
+    }
+
+    async replyWithButtonMD(groupOpenId, msgId, botInstance) {
+        try {
+            const bot = await this.getBotInstance(botInstance)
+            if (!bot) return
+
+            const accessToken = await this.getAccessToken(bot.bot_id)
+            if (!accessToken) return
+
+            const icRelayCfg = config.get('qqBotProxy.icRelay')
+            const mdCfg = icRelayCfg?.markdown
+            const buttonCfg = icRelayCfg?.button
+
+            const apiBase = bot.sandbox 
+                ? 'https://sandbox.api.sgroup.qq.com'
+                : 'https://api.sgroup.qq.com'
+            
+            const apiPath = `/v2/groups/${groupOpenId}/messages`
+            const proxyUrl = config.get('qqBotProxy.proxyUrl') || 'http://localhost:2173'
+            const sendUrl = `${proxyUrl}/proxy?url=${encodeURIComponent(apiBase + apiPath)}`
+
+            // 构建MD模板参数
+            const templateKeys = this.parseTemplateKeys(mdCfg?.templateKeys)
+            const params = templateKeys.map((key, idx) => ({
+                key,
+                values: [idx === 0 ? '点击按钮' : ' ']
+            }))
+
+            const body = {
+                msg_type: 2,
+                msg_id: msgId,
+                msg_seq: Math.floor(Math.random() * 1000000),
+                markdown: {
+                    custom_template_id: mdCfg.templateId,
+                    params,
+                },
+                keyboard: {
+                    id: buttonCfg.templateId,
+                },
+            }
+
+            const res = await fetch(sendUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `QQBot ${accessToken}`,
+                    'X-Union-Appid': bot.appid,
+                },
+                body: JSON.stringify(body),
+            })
+
+            const result = await res.json()
+            if (result.code) {
+                logger.warn(`回复按钮MD失败: ${result.code} ${result.message}`)
+            } else {
+                logger.info(`按钮MD回复成功: ${groupOpenId}`)
+            }
+        } catch (err) {
+            logger.error(`回复按钮MD异常: ${err.message}`)
+        }
+    }
+
+    parseTemplateKeys(keysStr) {
+        if (!keysStr) return ['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9', 'v10']
+        if (keysStr.includes(',')) {
+            return keysStr.split(',').map(k => k.trim())
+        }
+        return keysStr.split('')
     }
 
     async getBotInstance(botInstance) {

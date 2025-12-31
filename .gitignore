@@ -26,3 +26,12 @@ data/workflows/
 !data/workflows/.gitkeep
 TODO.md
 QQBotWs/*
+apps/QQBotProxy.js
+apps/QQBotRelayTest.js
+apps/QQBotProxy.js.bak
+src/services/qqbot/QQBotSender.js
+src/services/qqbot/QQBotSender.js
+src/services/qqbot/QQBotMessageHandler.js
+src/services/qqbot/*
+src/services/qqbot/QQBotSender.js
+src/services/webServer.old.js

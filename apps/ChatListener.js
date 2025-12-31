@@ -621,13 +621,16 @@ export class ChatListener extends plugin {
                             const shouldUse = sender.shouldUseOfficialBot(e.group_id)
                             if (shouldUse) {
                                 logger.info(`[ChatListener] 尝试官方Bot代发...`)
-                                const relayResult = await sender.relayFromIC(e.group_id, replyTextContent, e)
+                                // 使用增强版代发（支持事件ID和媒体消息）
+                                const relayResult = await sender.relayFromICEnhanced(e.group_id, replyContent, e)
                                 if (relayResult.success) {
                                     usedOfficialBot = true
                                     logger.mark(`[ChatListener] 官方Bot代发成功`)
                                 } else if (!relayResult.useIC) {
                                     logger.warn(`[ChatListener] 官方Bot代发失败: ${relayResult.error}`)
                                     return
+                                } else {
+                                    logger.debug(`[ChatListener] 代发回退到IC: ${relayResult.error}`)
                                 }
                             }
                         }

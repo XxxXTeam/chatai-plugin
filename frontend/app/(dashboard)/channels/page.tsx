@@ -31,7 +31,7 @@ import { channelsApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { Plus, Trash2, TestTube, Loader2, Plug, RefreshCw, Download, Eye, EyeOff, List, CheckCircle, XCircle, ChevronDown, ChevronUp, Settings2, Upload, FileDown, X, Zap, Key, Info } from 'lucide-react'
 import { Slider } from '@/components/ui/slider'
-import { ApiKeyManager, ApiKeyItem, keyStrategies } from '@/components/channels'
+import { ApiKeyManager, ApiKeyItem, keyStrategies, BatchTestPanel } from '@/components/channels'
 import {
   Collapsible,
   CollapsibleContent,
@@ -340,6 +340,8 @@ export default function ChannelsPage() {
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [selectedModels, setSelectedModels] = useState<string[]>([])
   const [customModelInput, setCustomModelInput] = useState('')
+  const [batchTestOpen, setBatchTestOpen] = useState(false)
+  const [batchTestChannel, setBatchTestChannel] = useState<Channel | null>(null)
 
   const [form, setForm] = useState({
     name: '',
@@ -1610,20 +1612,35 @@ export default function ChannelsPage() {
                 
                 {/* 操作按钮 */}
                 <div className="flex gap-2 pt-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex-1"
-                    onClick={() => handleTest(channel)}
-                    disabled={testing === channel.id}
-                  >
-                    {testing === channel.id ? (
-                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <TestTube className="mr-1.5 h-3.5 w-3.5" />
-                    )}
-                    测试
-                  </Button>
+                  {/* 分割按钮：测试 + 批量测试 */}
+                  <div className="flex">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="rounded-r-none border-r-0"
+                      onClick={() => handleTest(channel)}
+                      disabled={testing === channel.id || !channel.models?.length}
+                    >
+                      {testing === channel.id ? (
+                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <TestTube className="mr-1.5 h-3.5 w-3.5" />
+                      )}
+                      测试
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="rounded-l-none px-1.5"
+                      onClick={() => {
+                        setBatchTestChannel(channel)
+                        setBatchTestOpen(true)
+                      }}
+                      disabled={!channel.models?.length}
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                   <Button
                     variant="outline"
                     size="sm"
@@ -1676,6 +1693,17 @@ export default function ChannelsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 批量测试面板 */}
+      {batchTestChannel && (
+        <BatchTestPanel
+          open={batchTestOpen}
+          onOpenChange={setBatchTestOpen}
+          channelId={batchTestChannel.id}
+          channelName={batchTestChannel.name}
+          models={batchTestChannel.models || []}
+        />
+      )}
     </PageContainer>
   )
 }
