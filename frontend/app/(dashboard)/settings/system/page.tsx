@@ -16,6 +16,7 @@ import { Save, Loader2, Check, Server, Database, Globe, AlertTriangle } from 'lu
 interface SystemConfig {
   web: {
     port: number
+    [key: string]: unknown  // 保留其他字段
   }
   redis: {
     enabled: boolean
@@ -23,7 +24,9 @@ interface SystemConfig {
     port: number
     password: string
     db: number
+    [key: string]: unknown  // 保留其他字段
   }
+  [key: string]: unknown  // 保留其他顶级字段
 }
 
 export default function SystemSettingsPage() {
@@ -60,18 +63,22 @@ export default function SystemSettingsPage() {
   useEffect(() => {
     const fetchConfig = async () => {
       try {
-        const res = await configApi.getAdvanced()
-        const data = (res as { data: SystemConfig }).data
+        const res = await configApi.getAdvanced() as { data: SystemConfig }
+        // 保留完整配置，只设置缺失的默认值
+        const data = (res.data || {}) as SystemConfig
         setConfig({
+          ...data,
           web: {
-            port: data?.web?.port || 3000
+            ...data?.web,
+            port: data?.web?.port ?? 3000
           },
           redis: {
+            ...data?.redis,
             enabled: data?.redis?.enabled ?? true,
             host: data?.redis?.host || '127.0.0.1',
-            port: data?.redis?.port || 6379,
-            password: data?.redis?.password || '',
-            db: data?.redis?.db || 0
+            port: data?.redis?.port ?? 6379,
+            password: data?.redis?.password ?? '',
+            db: data?.redis?.db ?? 0
           }
         })
         setTimeout(() => { isInitialLoad.current = false }, 100)

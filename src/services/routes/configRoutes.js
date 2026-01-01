@@ -12,10 +12,18 @@ const router = express.Router()
 router.get('/', (req, res) => {
     try {
         const safeConfig = {
+            basic: config.get('basic'),
+            admin: config.get('admin'),
             llm: config.get('llm'),
             presets: config.get('presets'),
-            triggers: config.get('triggers'),
+            trigger: config.get('trigger'),
+            context: config.get('context'),
+            bym: config.get('bym'),
+            tools: config.get('tools'),
+            personality: config.get('personality'),
+            thinking: config.get('thinking'),
             features: config.get('features'),
+            memory: config.get('memory'),
             web: {
                 enabled: config.get('web.enabled'),
                 port: config.get('web.port'),
