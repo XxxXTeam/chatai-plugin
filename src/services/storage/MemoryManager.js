@@ -186,8 +186,14 @@ export class MemoryManager {
             if (groupConfig.extractTopics) analysisTypes.push('讨论话题')
             if (groupConfig.extractRelations) analysisTypes.push('社交关系')
             
-            // 覆盖式总结prompt
-            const prompt = `你是一个记忆管理专家。请综合现有记忆和新群聊记录，生成更新后的完整群聊记忆。
+            // 覆盖式总结prompt - 改进版：更准确区分用户身份
+            const prompt = `你是群聊记忆管理专家。分析群聊记录，提取有价值的信息。
+
+【重要规则】
+- 每条消息格式为 [昵称]: 内容，昵称就是该用户的群名片
+- 只提取用户自己透露的具体信息，不要推测
+- 区分不同用户，按昵称分别记录
+- 忽略无意义的日常对话（如"哈哈"、"好的"等）
 
 【分析维度】${analysisTypes.join('、') || '用户特征、话题、关系'}
 
@@ -199,18 +205,18 @@ ${dialogText}
 
 【总结要求】
 1. 合并现有记忆和新信息，删除重复或过时的
-2. 只保留具体、有长期价值的信息
-3. 用户信息必须包含具体昵称和信息
-4. 话题必须是具体主题（如"讨论游戏原神"）
-5. 不要输出模糊标题或抽象描述
+2. 用户信息必须关联到具体昵称（如"小明喜欢打游戏"而不是"有人喜欢打游戏"）
+3. 话题必须是具体主题（如"讨论原神3.0版本"而不是"聊游戏"）
+4. 关系必须指明具体人物（如"小明和小红是好友"）
+5. 不要输出分析过程，只输出结果
 
 【输出格式】
-每行一条，统一格式：
-【用户:昵称】具体信息
+每行一条，严格按以下格式：
+【用户:昵称】该用户的具体信息
 【话题】具体话题内容
 【关系】A和B：关系描述
 
-最多15条，没有有效信息则输出"无"：`
+最多15条，没有有效信息则只输出"无"：`
 
             const startTime = Date.now()
             const memoryModel = config.get('memory.model')
@@ -337,18 +343,39 @@ ${dialogText}
      * @returns {boolean}
      */
     _isInvalidMemoryLine(line) {
+        const trimmed = line.trim()
+        
+        // 长度检查
+        if (trimmed.length < 3 || trimmed.length > 200) return true
+        
         const invalidPatterns = [
+            // 英文分析标题
             /^(identifying|understanding|pinpointing|interpreting|decoding|analyzing)/i,
             /^(personal data|user goals|user identity|user intent|dialogue structure)/i,
-            /^(提取|分析|总结|理解|识别)/,
-            /^(步骤|第[一二三四五]|\d+\.|\d+、)/,
-            /^(以下是|根据|综合|结合)/,
-            /^[-=]{3,}/,
+            /^(summary|conclusion|analysis|result|output|note)/i,
+            // 中文分析标题
+            /^(提取|分析|总结|理解|识别|归纳|整理|梳理)/,
+            /^(步骤|第[一二三四五六七八九十]|\d+\.|\d+、|\d+\))/,
+            /^(以下是|根据|综合|结合|通过|经过)/,
+            /^(用户信息|话题|关系|记忆|内容)[:：]?\s*$/,
+            // 分隔符和空内容
+            /^[-=*#]{3,}/,
+            /^[【\[].+[】\]][:：]?\s*$/,  // 纯标题行如【用户信息】
             /^无$/,
+            /^暂无$/,
+            /^没有/,
+            /^无有效/,
+            // AI常见废话
+            /^好的|^明白|^收到|^了解/,
+            /^根据对话|^从对话中|^在对话中/,
+            // 引用AI回复的错误记忆
+            /^助手[:：]/,
+            /^AI[:：]/,
+            /^机器人[:：]/,
         ]
         
         for (const pattern of invalidPatterns) {
-            if (pattern.test(line.trim())) return true
+            if (pattern.test(trimmed)) return true
         }
         return false
     }
@@ -357,10 +384,13 @@ ${dialogText}
      * 获取群聊相关记忆
      * @param {string} groupId - 群ID
      * @param {string} [userId] - 可选的用户ID
+     * @param {Object} [options] - 选项
+     * @param {string} [options.nickname] - 用户昵称（用于按昵称查找记忆）
      * @returns {Object} 群聊记忆上下文
      */
-    async getGroupMemoryContext(groupId, userId = null) {
+    async getGroupMemoryContext(groupId, userId = null, options = {}) {
         await this.init()
+        const { nickname } = options
         
         const result = {
             userInfo: [],
@@ -369,10 +399,20 @@ ${dialogText}
         }
         
         try {
-            // 获取用户信息记忆
+            // 获取用户信息记忆（按userId）
             if (userId) {
                 const userMemories = databaseService.getMemories(`group:${groupId}:user:${userId}`, 5)
-                result.userInfo = userMemories.map(m => m.content)
+                result.userInfo.push(...userMemories.map(m => m.content))
+            }
+            
+            // 获取用户信息记忆（按昵称）- 支持按昵称存储的记忆格式
+            if (nickname) {
+                const nicknameMemories = databaseService.getMemories(`group:${groupId}:user:${nickname}`, 5)
+                for (const m of nicknameMemories) {
+                    if (!result.userInfo.includes(m.content)) {
+                        result.userInfo.push(m.content)
+                    }
+                }
             }
             
             // 获取话题记忆
@@ -513,19 +553,22 @@ ${dialogText}
             
             const botName = global.Bot?.nickname || config.get('basic.botName') || '助手'
             const contextHint = isGroupConversation 
-                ? `这是【群聊】对话。"用户:"后面的内容是与机器人直接对话的那个人说的话。
-- 对话中可能出现其他群友的名字或信息（如[某某]:xxx格式），这些是其他人，不是当前用户
-- 只提取与机器人直接对话的"用户"本人的信息`
+                ? `这是【群聊】中的对话记录。
+- "用户:"后面是与机器人直接对话的那个人说的话
+- 消息中的[某某]:xxx格式表示其他群友的发言，不是当前用户
+- 只提取与机器人直接对话的"用户"本人透露的信息
+- 不要把其他群友的信息当成当前用户的信息`
                 : `这是【私聊】对话。"用户:"后面是用户本人说的话。`
             
-            // 覆盖式总结prompt - 类似画像逻辑
-            const prompt = `你是一个用户记忆管理专家。请综合分析现有记忆和最新对话，生成一份完整的用户记忆总结。
+            // 覆盖式总结prompt - 改进版：更准确区分用户身份
+            const prompt = `你是用户记忆管理专家。分析对话，提取用户透露的个人信息。
 
 【重要规则】
 ${contextHint}
-- "助手:"或"${botName}"是机器人/AI的回复，不是用户信息
-- 只记录用户本人明确表达的具体信息
-- 必须是具体事实，不要写分析标题或抽象描述
+- "助手:"或"${botName}"是机器人/AI的回复，绝对不是用户信息
+- 只记录用户自己明确说出的具体信息
+- 不要推测或臆断用户信息
+- 不要把AI回复的内容当成用户信息
 
 【现有记忆】
 ${existingMemoryList || '暂无'}
@@ -533,19 +576,20 @@ ${existingMemoryList || '暂无'}
 【最新对话】
 ${dialogText}
 
+【提取类型】
+- 基本信息：姓名、年龄、职业、所在地等
+- 偏好习惯：喜欢/不喜欢的事物
+- 重要事件：生日、纪念日、计划等
+- 个性特点：兴趣爱好、性格等
+
 【总结要求】
-1. 合并现有记忆和新对话中的有效信息
-2. 删除重复、过时或无效的记忆
-3. 只保留具体、有长期价值的用户信息：
-   - 基本信息：姓名、年龄、职业、所在地等
-   - 偏好：喜欢/不喜欢的事物、习惯
-   - 重要事件：生日、纪念日、重要计划等
-   - 个性特点：性格、兴趣爱好等
-4. 每条记忆必须是具体事实，不超过50字
-5. 不要输出标题、序号或格式说明
+1. 合并现有记忆和新信息，删除重复或过时的
+2. 每条必须是用户明确说过的具体事实
+3. 格式：直接描述事实，不超过50字
+4. 不要输出分析过程或格式说明
 
 【输出格式】
-直接输出记忆内容，每行一条，最多10条。没有有效信息则输出"无"：`
+每行一条记忆，最多10条。没有有效信息则只输出"无"：`
 
             const startTime2 = Date.now()
             const memoryModel2 = config.get('memory.model')
@@ -754,25 +798,57 @@ ${existingMemoryList || '暂无'}
      * 获取用户记忆上下文
      * @param {string} userId
      * @param {string} query
+     * @param {Object} options - 选项
+     * @param {Object} options.event - 事件对象
+     * @param {string} options.groupId - 群ID（用于获取群相关记忆）
+     * @param {boolean} options.includeProfile - 是否包含用户画像
      * @returns {string} 格式化的记忆上下文
      */
-    async getMemoryContext(userId, query) {
+    async getMemoryContext(userId, query, options = {}) {
         if (!config.get('memory.enabled')) return ''
         
         await this.init()
+        const { groupId, includeProfile } = options
         const pureUserId = userId?.includes('_') ? userId.split('_').pop() : userId
         let allMemories = []
+        
+        // 1. 获取用户基础记忆
         const userMemories = databaseService.getMemories(pureUserId, 10)
         allMemories.push(...userMemories)
+        
+        // 2. 如果在群聊中，尝试获取群内用户记忆
+        if (groupId) {
+            const groupUserKey = `group:${groupId}:user:${pureUserId}`
+            const groupUserMemories = databaseService.getMemories(groupUserKey, 5)
+            for (const gm of groupUserMemories) {
+                if (!allMemories.find(m => m.id === gm.id)) {
+                    allMemories.push(gm)
+                }
+            }
+            logger.debug(`[MemoryManager] 群 ${groupId} 用户 ${pureUserId} 加载 ${groupUserMemories.length} 条群内记忆`)
+        }
+        
+        // 3. 搜索相关记忆
         if (query && query.trim()) {
             const searchedMemories = databaseService.searchMemories(pureUserId, query, 5)
-            // 合并去重
             for (const sm of searchedMemories) {
                 if (!allMemories.find(m => m.id === sm.id)) {
                     allMemories.push(sm)
                 }
             }
+            // 群内搜索
+            if (groupId) {
+                const groupUserKey = `group:${groupId}:user:${pureUserId}`
+                const groupSearched = databaseService.searchMemories(groupUserKey, query, 3)
+                for (const gs of groupSearched) {
+                    if (!allMemories.find(m => m.id === gs.id)) {
+                        allMemories.push(gs)
+                    }
+                }
+            }
         }
+        
+        // 4. 兼容旧格式的组合ID
         if (userId?.includes('_')) {
             const combinedMemories = databaseService.getMemories(userId, 5)
             for (const cm of combinedMemories) {
@@ -786,6 +862,8 @@ ${existingMemoryList || '暂无'}
             logger.debug(`[MemoryManager] 用户 ${pureUserId} 无记忆数据`)
             return ''
         }
+        
+        // 按重要性和时间排序
         allMemories.sort((a, b) => {
             const importanceA = a.importance || 5
             const importanceB = b.importance || 5
@@ -797,7 +875,7 @@ ${existingMemoryList || '暂无'}
         const selectedMemories = allMemories.slice(0, 15)
 
         const memoryText = selectedMemories.map(m => `- ${m.content}`).join('\n')
-        logger.info(`[MemoryManager] 为用户 ${pureUserId} 加载 ${selectedMemories.length} 条记忆`)
+        logger.info(`[MemoryManager] 为用户 ${pureUserId}${groupId ? ` (群${groupId})` : ''} 加载 ${selectedMemories.length} 条记忆`)
         logger.debug(`[MemoryManager] 记忆内容:\n${memoryText}`)
         return `\n【用户记忆】\n${memoryText}\n`
     }
@@ -1017,6 +1095,162 @@ ${existingMemoryList || '暂无'}
             }
         } catch (error) {
             logger.error(`[MemoryManager] 群记忆总结失败 [${groupId}]:`, error.message)
+            return { success: false, error: error.message }
+        }
+    }
+    
+    /**
+     * 搜索群聊记忆
+     * @param {string} groupId - 群ID
+     * @param {string} query - 搜索关键词
+     * @param {Object} options - 选项
+     * @returns {Object} 搜索结果
+     */
+    async searchGroupMemory(groupId, query, options = {}) {
+        await this.init()
+        const { limit = 10, type = 'all' } = options
+        
+        const results = {
+            topics: [],
+            relations: [],
+            userInfos: [],
+            total: 0
+        }
+        
+        try {
+            // 搜索话题
+            if (type === 'all' || type === 'topics') {
+                const topicKey = `group:${groupId}:topics`
+                const topics = databaseService.searchMemories(topicKey, query, limit)
+                results.topics = topics.map(t => t.content)
+            }
+            
+            // 搜索关系
+            if (type === 'all' || type === 'relations') {
+                const relationKey = `group:${groupId}:relations`
+                const relations = databaseService.searchMemories(relationKey, query, limit)
+                results.relations = relations.map(r => r.content)
+            }
+            
+            // 搜索用户信息
+            if (type === 'all' || type === 'users') {
+                const userInfos = databaseService.getMemoriesByPrefix(`group:${groupId}:user:`, 50)
+                const matchedUsers = userInfos.filter(u => 
+                    u.content?.toLowerCase().includes(query.toLowerCase()) ||
+                    u.userId?.toLowerCase().includes(query.toLowerCase())
+                )
+                results.userInfos = matchedUsers.slice(0, limit).map(u => ({
+                    user: u.userId?.replace(`group:${groupId}:user:`, ''),
+                    content: u.content
+                }))
+            }
+            
+            results.total = results.topics.length + results.relations.length + results.userInfos.length
+            
+            logger.debug(`[MemoryManager] 群 ${groupId} 搜索 "${query}": 找到 ${results.total} 条结果`)
+            return results
+        } catch (error) {
+            logger.error(`[MemoryManager] 搜索群记忆失败:`, error.message)
+            return results
+        }
+    }
+    
+    /**
+     * 获取群内所有用户的记忆摘要
+     * @param {string} groupId - 群ID
+     * @returns {Array} 用户记忆列表
+     */
+    async getGroupUsersSummary(groupId) {
+        await this.init()
+        
+        try {
+            const userInfos = databaseService.getMemoriesByPrefix(`group:${groupId}:user:`, 100)
+            
+            // 按用户分组
+            const userMap = new Map()
+            for (const info of userInfos) {
+                const user = info.userId?.replace(`group:${groupId}:user:`, '') || 'unknown'
+                if (!userMap.has(user)) {
+                    userMap.set(user, [])
+                }
+                userMap.get(user).push(info.content)
+            }
+            
+            // 转换为数组
+            const result = []
+            for (const [user, memories] of userMap) {
+                result.push({
+                    user,
+                    memories,
+                    count: memories.length
+                })
+            }
+            
+            return result.sort((a, b) => b.count - a.count)
+        } catch (error) {
+            logger.error(`[MemoryManager] 获取群用户摘要失败:`, error.message)
+            return []
+        }
+    }
+    
+    /**
+     * 列出所有有记忆的群
+     * @returns {Array} 群ID列表
+     */
+    async listGroups() {
+        await this.init()
+        
+        try {
+            const allMemories = databaseService.getMemoriesByPrefix('group:', 1000)
+            const groupIds = new Set()
+            
+            for (const m of allMemories) {
+                const match = m.userId?.match(/^group:(\d+)/)
+                if (match) {
+                    groupIds.add(match[1])
+                }
+            }
+            
+            return Array.from(groupIds)
+        } catch (error) {
+            logger.error(`[MemoryManager] 列出群失败:`, error.message)
+            return []
+        }
+    }
+    
+    /**
+     * 清除群的所有记忆
+     * @param {string} groupId - 群ID
+     * @returns {Object} 清除结果
+     */
+    async clearGroupMemory(groupId) {
+        await this.init()
+        
+        try {
+            let cleared = 0
+            
+            // 清除话题
+            cleared += databaseService.clearMemories(`group:${groupId}:topics`)
+            
+            // 清除关系
+            cleared += databaseService.clearMemories(`group:${groupId}:relations`)
+            
+            // 清除用户信息
+            const userInfos = databaseService.getMemoriesByPrefix(`group:${groupId}:user:`, 100)
+            for (const info of userInfos) {
+                databaseService.deleteMemory(info.id)
+                cleared++
+            }
+            
+            // 清除消息缓冲区
+            if (this.groupMessageBuffer) {
+                this.groupMessageBuffer.delete(groupId)
+            }
+            
+            logger.info(`[MemoryManager] 清除群 ${groupId} 的 ${cleared} 条记忆`)
+            return { success: true, cleared }
+        } catch (error) {
+            logger.error(`[MemoryManager] 清除群记忆失败:`, error.message)
             return { success: false, error: error.message }
         }
     }

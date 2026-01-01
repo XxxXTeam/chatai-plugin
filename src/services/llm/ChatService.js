@@ -621,17 +621,39 @@ export class ChatService {
         if (prefixPersona) {
             logger.debug(`[ChatService] 收到前缀人格参数: "${prefixPersona}" (长度: ${prefixPersona?.length || 0})`)
             const prefixPreset = presetManager.get(prefixPersona)
+            
+            // 保存原有的基础人设用于合并
+            const basePrompt = systemPrompt
+            
             if (prefixPreset) {
                 prefixPresetId = prefixPersona
-                systemPrompt = prefixPreset.systemPrompt || ''
+                const prefixPromptText = prefixPreset.systemPrompt || ''
+                // 合并模式：前缀人格 + 基础人设（如果前缀人格不为空）
+                if (prefixPromptText) {
+                    // 前缀人格覆盖基础人设，但保留基础人设作为补充
+                    systemPrompt = prefixPromptText
+                    if (basePrompt && basePrompt !== prefixPromptText) {
+                        // 可选：将基础人设作为额外上下文附加（如果需要保留）
+                        logger.debug(`[ChatService] 前缀人格已覆盖基础人设 (基础人设长度: ${basePrompt.length})`)
+                    }
+                }
                 logger.debug(`[ChatService] 使用前缀人格预设: ${prefixPresetId} (${prefixPreset.name || prefixPresetId})`)
             } else {
-                systemPrompt = prefixPersona
-                logger.debug(`[ChatService] 使用前缀人格文本覆盖 (内容长度: ${prefixPersona.length})`)
+                // 纯文本前缀人格 - 作为附加内容而不是完全覆盖
+                if (prefixPersona.startsWith('覆盖:') || prefixPersona.startsWith('override:')) {
+                    // 显式覆盖模式
+                    systemPrompt = prefixPersona.replace(/^(覆盖:|override:)/, '').trim()
+                    logger.debug(`[ChatService] 前缀人格显式覆盖模式 (内容长度: ${systemPrompt.length})`)
+                } else {
+                    // 默认合并模式：将前缀人格放在基础人设之前
+                    systemPrompt = prefixPersona + (basePrompt ? '\n\n' + basePrompt : '')
+                    logger.debug(`[ChatService] 前缀人格合并模式 (前缀: ${prefixPersona.length}, 基础: ${basePrompt?.length || 0})`)
+                }
             }
             logger.debug(`[ChatService] 前缀人格应用后systemPrompt长度: ${systemPrompt.length}`)
         }
-        if (config.get('memory.enabled') && !isNewSession) {
+        // 记忆上下文：即使是新会话也应该加载已有记忆（只是不携带历史消息）
+        if (config.get('memory.enabled')) {
             try {
                 await memoryManager.init()
                 const memoryContext = await memoryManager.getMemoryContext(userId, message || '', {
@@ -1842,6 +1864,8 @@ export class ChatService {
         try {
             const groupId = event?.group_id ? String(event.group_id) : null
             const userId = event?.user_id ? String(event.user_id) : null
+            const cleanUserId = userId?.includes('_') ? userId.split('_').pop() : userId
+            
             if (groupId || userId) {
                 const sm = await ensureScopeManager()
                 const effectiveSettings = await sm.getEffectiveSettings(groupId, userId, { isPrivate: !groupId })
@@ -1867,6 +1891,46 @@ export class ChatService {
                     }
                     systemPrompt = presetManager.replaceVariables(systemPrompt, promptContext)
                     logger.debug(`[ChatService] 多任务执行: 已获取人设 (${systemPrompt.length} 字符)`)
+                }
+                
+                // 添加记忆上下文到systemPrompt
+                if (config.get('memory.enabled')) {
+                    try {
+                        await memoryManager.init()
+                        // 用户记忆
+                        const memoryContext = await memoryManager.getMemoryContext(userId, originalMessage || '', {
+                            event,
+                            groupId,
+                            includeProfile: true
+                        })
+                        if (memoryContext) {
+                            systemPrompt += memoryContext
+                            logger.debug(`[ChatService] 多任务执行: 已添加用户记忆 (${memoryContext.length} 字符)`)
+                        }
+                        // 群聊记忆
+                        if (groupId && config.get('memory.groupContext.enabled')) {
+                            const nickname = event?.sender?.card || event?.sender?.nickname
+                            const groupMemory = await memoryManager.getGroupMemoryContext(groupId, cleanUserId, { nickname })
+                            if (groupMemory) {
+                                const parts = []
+                                if (groupMemory.userInfo?.length > 0) {
+                                    parts.push(`群成员信息：${groupMemory.userInfo.join('；')}`)
+                                }
+                                if (groupMemory.topics?.length > 0) {
+                                    parts.push(`最近话题：${groupMemory.topics.join('；')}`)
+                                }
+                                if (groupMemory.relations?.length > 0) {
+                                    parts.push(`群友关系：${groupMemory.relations.join('；')}`)
+                                }
+                                if (parts.length > 0) {
+                                    systemPrompt += `\n【群聊记忆】\n${parts.join('\n')}\n`
+                                    logger.debug(`[ChatService] 多任务执行: 已添加群聊记忆`)
+                                }
+                            }
+                        }
+                    } catch (memErr) {
+                        logger.warn(`[ChatService] 多任务执行: 获取记忆失败:`, memErr.message)
+                    }
                 }
             }
         } catch (err) {
@@ -1996,7 +2060,8 @@ export class ChatService {
                         event,
                         images,
                         conversationId,
-                        scopeFeatures
+                        scopeFeatures,
+                        systemPrompt
                     })
                 }
                 
@@ -2021,7 +2086,8 @@ export class ChatService {
                         query: params.query || originalMessage,
                         event,
                         conversationId,
-                        scopeFeatures
+                        scopeFeatures,
+                        systemPrompt
                     })
                 }
                 
@@ -2055,7 +2121,7 @@ export class ChatService {
      * 处理图像理解任务
      */
     async handleImageUnderstandTask(options = {}) {
-        const { prompt, event, images = [], conversationId, scopeFeatures = {} } = options
+        const { prompt, event, images = [], conversationId, scopeFeatures = {}, systemPrompt } = options
         const startTime = Date.now()
         
         try {
@@ -2103,7 +2169,8 @@ export class ChatService {
             }, {
                 model: imageModel,
                 maxToken: 2048,
-                temperature: 0.7
+                temperature: 0.7,
+                systemOverride: systemPrompt || undefined
             })
             
             const responseText = response.contents
@@ -2236,7 +2303,7 @@ export class ChatService {
      * 处理搜索任务
      */
     async handleSearchTask(options = {}) {
-        const { query, event, conversationId, scopeFeatures = {} } = options
+        const { query, event, conversationId, scopeFeatures = {}, systemPrompt } = options
         const startTime = Date.now()
         
         try {
@@ -2274,7 +2341,8 @@ export class ChatService {
             }, {
                 model: searchModel,
                 maxToken: 2048,
-                temperature: 0.7
+                temperature: 0.7,
+                systemOverride: systemPrompt || undefined
             })
             
             const responseText = response.contents

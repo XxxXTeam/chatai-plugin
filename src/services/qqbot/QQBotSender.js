@@ -1263,6 +1263,85 @@ class QQBotSender {
         }
     }
 
+    // 发送带按钮的MD消息以获取event_id
+    async sendButtonMDForEventId(groupOpenId, icGroupId) {
+        const cfg = config.get('qqBotProxy.icRelay')
+        const mdCfg = cfg?.markdown
+        const buttonCfg = cfg?.button
+        
+        // 需要MD模板和按钮配置
+        if (!mdCfg?.enabled || !mdCfg?.templateId) {
+            logger.debug('未配置MD模板，无法发送按钮消息获取event_id')
+            return { success: false, error: 'No markdown template configured' }
+        }
+        
+        if (!buttonCfg?.enabled || !buttonCfg?.templateId) {
+            logger.debug('未配置按钮模板，无法获取event_id')
+            return { success: false, error: 'No button template configured' }
+        }
+
+        const appid = this.getBotForGroup(icGroupId)
+        const bot = await this.getBotInstance(appid)
+        if (!bot) return { success: false, error: 'No bot available' }
+
+        const accessToken = await this.getAccessToken(bot.bot_id)
+        if (!accessToken) return { success: false, error: 'No access token' }
+
+        const apiBase = bot.sandbox 
+            ? 'https://sandbox.api.sgroup.qq.com'
+            : 'https://api.sgroup.qq.com'
+        
+        const apiPath = `/v2/groups/${groupOpenId}/messages`
+        const sendUrl = `${this.proxyUrl}/proxy?url=${encodeURIComponent(apiBase + apiPath)}`
+
+        // 构建简单的MD消息内容
+        const templateKeys = this.parseTemplateKeys(mdCfg.templateKeys)
+        const params = this.buildMarkdownParams('💬', templateKeys)
+
+        const body = {
+            msg_type: 2, // markdown消息
+            markdown: {
+                custom_template_id: mdCfg.templateId,
+                params,
+            },
+            keyboard: {
+                id: buttonCfg.templateId,
+            },
+            msg_seq: Math.floor(Math.random() * 1000000),
+        }
+
+        // 尝试使用被动消息ID
+        const passive = this.getPassiveMessage(groupOpenId)
+        if (passive?.msgId) {
+            body.msg_id = passive.msgId
+        }
+
+        try {
+            const res = await fetch(sendUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `QQBot ${accessToken}`,
+                    'X-Union-Appid': bot.appid,
+                },
+                body: JSON.stringify(body),
+            })
+
+            const result = await res.json()
+            
+            if (result.code) {
+                logger.warn(`发送按钮MD获取event_id失败: ${result.code} ${result.message}`)
+                return { success: false, error: result.message, code: result.code }
+            }
+            
+            logger.debug(`按钮MD发送成功，等待用户点击获取event_id`)
+            return { success: true, data: result }
+        } catch (err) {
+            logger.error(`发送按钮MD异常: ${err.message}`)
+            return { success: false, error: err.message }
+        }
+    }
+
     async sendGroupMarkdownMessageWithEventId(groupOpenId, content, eventId, appid) {
         const cfg = config.get('qqBotProxy.icRelay.markdown')
         if (!cfg?.enabled || !cfg?.templateId) {
