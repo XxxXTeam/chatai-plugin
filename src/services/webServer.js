@@ -2,12 +2,20 @@ import express from 'express'
 import cookieParser from 'cookie-parser'
 import fs from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import crypto from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import config from '../../config/config.js'
 import { chatLogger, c as colors } from '../core/utils/logger.js'
 import { redisClient } from '../core/cache/RedisClient.js'
+
+/**
+ * 检测是否为TRSS环境
+ */
+function isTRSSEnvironment() {
+    return !!(global.Bot?.express && global.Bot?.server)
+}
 
 // 获取本地和公网地址
 async function getServerAddresses(port) {
@@ -73,7 +81,7 @@ import {
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-const SIGNATURE_SECRET = 'chatai-signature-key-2024'
+const SIGNATURE_SECRET = 'chatai-signature-key-2026'
 let authKey = config.get('web.jwtSecret')
 if (!authKey) {
     authKey = crypto.randomUUID()
@@ -374,7 +382,7 @@ window.location.href = '/';
         // 生成临时登录Token - 公开接口，Token输出到控制台
         this.app.get('/api/auth/token/generate', async (req, res) => {
             try {
-                const token = authHandler.generateToken(false) // 5分钟有效
+                const token = authHandler.generateToken() // 5分钟有效
                 chatLogger.info('========================================')
                 chatLogger.info('[ChatAI] 管理面板登录 Token (5分钟有效):')
                 chatLogger.info(token)
@@ -425,56 +433,24 @@ window.location.href = '/';
             }
         })
 
-        // ==================== 挂载模块化路由 ====================
-        // 健康检查（公开）
         this.app.get('/api/health', systemRoutes)
-        
-        // 渠道路由（优先匹配具体路径）
         this.app.use('/api/channels', auth, channelRoutes)
-        
-        // 配置路由
         this.app.use('/api/config', auth, configRoutes)
-        
-        // 测试面板路由
         this.app.use('/api/test-panel', auth, testPanelRoutes)
-        
-        // 作用域路由
         this.app.use('/api/scope', auth, scopeRoutes)
-        
-        // 工具路由
         this.app.use('/api/tools', auth, toolsRoutes)
-        
-        // 代理路由
         this.app.use('/api/proxy', auth, proxyRoutes)
-        
-        // MCP路由
         this.app.use('/api/mcp', auth, mcpRoutes)
-        
-        // 知识库路由
         this.app.use('/api/knowledge', auth, knowledgeRoutes)
-        
-        // 图像生成路由
         this.app.use('/api/imagegen', auth, imageRoutes)
-        
-        // 日志路由
         this.app.use('/api/logs', auth, logsRoutes)
         this.app.use('/api/placeholders', auth, logsRoutes)
-        
-        // 记忆路由
         this.app.use('/api/memory', auth, memoryRoutes)
-        
-        // 系统路由（stats, metrics, system/info）
         this.app.use('/api', auth, systemRoutes)
-        
-        // 对话路由
         this.app.use('/api/conversations', createConversationRoutes(auth))
         this.app.use('/api/context', createContextRoutes(auth))
-        
-        // 预设路由
         this.app.use('/api/preset', createPresetRoutes(auth))
         this.app.use('/api/presets', createPresetsConfigRoutes(auth))
-
-        // SPA fallback
         this.app.get('*', (req, res) => {
             const indexFile = path.join(__dirname, '../../resources/web/index.html')
             if (fs.existsSync(indexFile)) {
@@ -487,21 +463,22 @@ window.location.href = '/';
 
     getLoginInfo(permanent = false) {
         const token = authHandler.generateToken(5 * 60, permanent)
+        const mountPath = ''
         const localUrls = (this.addresses?.local || [`http://127.0.0.1:${this.port}`]).map(addr => 
-            `${addr}/login/token?token=${token}`
+            `${addr}${mountPath}/login/token?token=${token}`
         )
         const loginLinks = config.get('web.loginLinks') || []
         const customUrls = loginLinks.map(link => ({
             label: link.label,
-            url: `${link.baseUrl.replace(/\/$/, '')}/login/token?token=${token}`
+            url: `${link.baseUrl.replace(/\/$/, '')}${mountPath}/login/token?token=${token}`
         }))
         
         let publicUrl = null
         const configPublicUrl = config.get('web.publicUrl')
         if (configPublicUrl) {
-            publicUrl = `${configPublicUrl.replace(/\/$/, '')}/login/token?token=${token}`
+            publicUrl = `${configPublicUrl.replace(/\/$/, '')}${mountPath}/login/token?token=${token}`
         } else if (this.addresses?.public) {
-            publicUrl = `${this.addresses.public}/login/token?token=${token}`
+            publicUrl = `${this.addresses.public}${mountPath}/login/token?token=${token}`
         }
         
         return {
@@ -511,24 +488,90 @@ window.location.href = '/';
             customUrls: customUrls.length > 0 ? customUrls : null,
             validity: permanent ? '永久有效' : '5分钟内有效',
             isPermanent: permanent,
-            token
+            token,
+            mountPath  // 返回挂载路径供前端使用
         }
     }
 
     async start() {
         this.startTime = Date.now()
+        this.isTRSS = isTRSSEnvironment()
+        const sharePort = config.get('web.sharePort') !== false
+        if (this.isTRSS && sharePort) {
+            await this.startWithSharedPort()
+        } else {
+            await this.startWithOwnPort()
+        }
         
-        const tryListen = (port) => {
+        this.addresses = await getServerAddresses(this.port)
+        this.printStartupBanner()
+        return { port: this.port }
+    }
+    
+    /**
+     * TRSS环境下共享端口启动
+     */
+    async startWithSharedPort() {
+        const botExpress = global.Bot.express
+        const botServer = global.Bot.server
+        
+        // 获取TRSS服务器端口
+        const address = botServer.address()
+        this.port = address?.port || config.get('web.port') || 3000
+        this.server = botServer
+        this.sharedPort = true
+        
+        // 挂载路径配置
+        const mountPath = config.get('web.mountPath') || '/chatai'
+        this.mountPath = mountPath
+        
+        const rootPaths = [
+            '/_next',      
+            '/assets',     
+            '/api',        
+            '/login',      
+        ]
+        botExpress.use(this.app)
+        const quietPaths = [...rootPaths, mountPath]
+        if (Array.isArray(botExpress.quiet)) {
+            botExpress.quiet.push(...quietPaths)
+        }
+        if (Array.isArray(botExpress.skip_auth)) {
+            botExpress.skip_auth.push(...quietPaths)
+        }
+        
+        chatLogger.info(`[WebServer] TRSS环境已共享端口 ${this.port}`)
+    }
+    
+    /**
+     * 独立端口启动
+     */
+    async startWithOwnPort() {
+        const tryListen = (port, retries = 3) => {
             return new Promise((resolve, reject) => {
                 const server = this.app.listen(port, () => {
                     this.port = port
                     this.server = server
                     resolve()
                 })
-                server.on('error', (error) => {
+                server.on('error', async (error) => {
                     if (error.code === 'EADDRINUSE') {
-                        chatLogger.warn(`[WebServer] 端口 ${port} 已被占用，尝试端口 ${port + 1}...`)
-                        resolve(tryListen(port + 1))
+                        if (retries > 0) {
+                            chatLogger.warn(`[WebServer] 端口 ${port} 已被占用，尝试释放端口...`)
+                            // 尝试请求旧服务释放端口
+                            try {
+                                const fetch = (await import('node-fetch')).default
+                                await Promise.race([
+                                    fetch(`http://localhost:${port}/api/system/release_port`, { method: 'DELETE' }).catch(() => {}),
+                                    new Promise(r => setTimeout(r, 3000))
+                                ])
+                                await new Promise(r => setTimeout(r, 1000))
+                            } catch {}
+                            resolve(tryListen(port, retries - 1))
+                        } else {
+                            chatLogger.warn(`[WebServer] 端口 ${port} 已被占用，尝试端口 ${port + 1}...`)
+                            resolve(tryListen(port + 1, 3))
+                        }
                     } else {
                         reject(error)
                     }
@@ -537,13 +580,15 @@ window.location.href = '/';
         }
 
         await tryListen(this.port)
-        this.addresses = await getServerAddresses(this.port)
-        this.printStartupBanner()
     }
 
     printStartupBanner() {
         const startTime = Date.now() - (this.startTime || Date.now())
         const items = []
+        
+        if (this.sharedPort) {
+            items.push({ label: '模式', value: 'TRSS共享端口', color: colors.magenta })
+        }
         
         if (this.addresses.local?.length > 0) {
             items.push({ label: '本地地址', value: '', color: colors.yellow })
@@ -560,14 +605,83 @@ window.location.href = '/';
     }
 
     stop() {
-        if (this.server) {
+        if (this.server && !this.sharedPort) {
             this.server.close()
             chatLogger.info('[WebServer] 管理面板已停止')
         }
     }
+    
+    /**
+     * 重载服务（用于热更新）
+     */
+    async reload() {
+        chatLogger.info('[WebServer] 正在重载服务...')
+        
+        // 如果是共享端口模式，不需要重启服务器
+        if (this.sharedPort) {
+            chatLogger.info('[WebServer] 共享端口模式，路由已自动更新')
+            return true
+        }
+        
+        // 关闭现有服务器
+        await new Promise((resolve) => {
+            if (this.server) {
+                this.server.close((err) => {
+                    if (err) chatLogger.warn('[WebServer] 关闭服务时出现警告:', err.message)
+                    resolve()
+                })
+            } else {
+                resolve()
+            }
+        })
+        
+        // 等待端口释放
+        await new Promise(r => setTimeout(r, 500))
+        
+        // 重新初始化
+        this.app = express()
+        this.setupMiddleware()
+        this.setupRoutes()
+        
+        // 重新启动
+        await this.startWithOwnPort()
+        this.addresses = await getServerAddresses(this.port)
+        
+        chatLogger.info('[WebServer] 服务重载完成')
+        return true
+    }
 }
 
 let webServerInstance = null
+
+/**
+ * 获取本地IP地址列表
+ */
+function getLocalIps(port) {
+    const ips = []
+    const portStr = port ? `:${port}` : ''
+    try {
+        const networks = os.networkInterfaces()
+        for (const [name, wlans] of Object.entries(networks)) {
+            for (const wlan of wlans) {
+                if (name === 'lo' || name === 'docker0') continue
+                if (wlan.address.startsWith('fe') || wlan.address.startsWith('fc')) continue
+                if (['127.0.0.1', '::1'].includes(wlan.address)) continue
+                if (wlan.family === 'IPv6') {
+                    ips.push(`[${wlan.address}]${portStr}`)
+                } else {
+                    ips.push(`${wlan.address}${portStr}`)
+                }
+            }
+        }
+    } catch (e) {
+        chatLogger.warn('[WebServer] 无法获取IP地址:', e.message)
+    }
+    if (ips.length === 0) {
+        ips.push(`localhost${portStr}`)
+    }
+    return ips
+}
 
 export function getWebServer() {
     if (!webServerInstance) {
@@ -576,4 +690,13 @@ export function getWebServer() {
     return webServerInstance
 }
 
-export { authHandler, authKey, ChaiteResponse }
+/**
+ * 重载WebServer（用于热更新）
+ */
+export async function reloadWebServer() {
+    if (webServerInstance) {
+        await webServerInstance.reload()
+    }
+}
+
+export { authHandler, authKey, ChaiteResponse, isTRSSEnvironment, getLocalIps }

@@ -1,6 +1,6 @@
 import axios from 'axios'
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || ''
-const SIGNATURE_SECRET = 'chatai-signature-key-2024'
+const SIGNATURE_SECRET = 'chatai-signature-key-2026'
 function generateFingerprint(): string {
   if (typeof window === 'undefined') return ''
   
@@ -365,21 +365,21 @@ export const scopeApi = {
   updatePersonalityConfig: <T extends object>(data: T) => api.patch('/api/config/personality', data as Record<string, unknown>),
 }
 
-// System API
 export const systemApi = {
   getHealth: () => api.get('/api/health'),
   getMetrics: () => api.get('/api/metrics'),
   getState: () => api.get('/api/state'),
+  getServerMode: () => api.get('/api/system/server-mode'),
+  setServerMode: (sharePort: boolean) => api.put('/api/system/server-mode', { sharePort }),
+  restart: (type: 'reload' | 'full' = 'reload') => api.post('/api/system/restart', { type }),
+  getVersion: () => api.get('/api/system/version'),
 }
 
-// Auth Token Management API
 export const tokenApi = {
   generatePermanent: (forceNew = false) => api.post('/api/auth/token/permanent', { forceNew }),
   revokePermanent: () => api.delete('/api/auth/token/permanent'),
   getStatus: () => api.get('/api/auth/token/status'),
 }
-
-// Proxy API
 export interface ProxyProfile {
   id: string
   name: string
@@ -434,7 +434,6 @@ export const statsApi = {
   getFull: () => api.get('/api/stats/full'),
   reset: () => api.post('/api/stats/reset'),
   getUnified: () => api.get('/api/stats/unified'),
-  // 工具调用统计
   getToolCalls: () => api.get('/api/stats/tool-calls'),
   getToolCallRecords: (filter?: { limit?: number; toolName?: string; success?: boolean; userId?: string; groupId?: string }) => {
     const params = new URLSearchParams()
@@ -449,7 +448,6 @@ export const statsApi = {
   getToolCallErrors: (limit = 50) => api.get(`/api/stats/tool-calls/errors?limit=${limit}`),
   clearToolCalls: () => api.post('/api/stats/tool-calls/clear'),
 }
-
 export const usageStatsApi = {
   get: () => api.get('/api/stats/usage'),
   getRecent: (limit = 100, filter?: { source?: string; status?: string }) => {

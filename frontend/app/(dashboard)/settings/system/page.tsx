@@ -9,14 +9,25 @@ import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { configApi } from '@/lib/api'
+import { Badge } from '@/components/ui/badge'
+import { configApi, systemApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { Save, Loader2, Check, Server, Database, Globe, AlertTriangle } from 'lucide-react'
+import { Save, Loader2, Check, Server, Database, AlertTriangle, RefreshCw, Download, Power } from 'lucide-react'
 
 interface SystemConfig {
   web: {
     port: number
-    [key: string]: unknown  // 保留其他字段
+    sharePort: boolean
+    mountPath: string
+    [key: string]: unknown
+  }
+  update: {
+    autoCheck: boolean
+    checkOnStart: boolean
+    autoUpdate: boolean
+    autoRestart: boolean
+    notifyMaster: boolean
+    [key: string]: unknown
   }
   redis: {
     enabled: boolean
@@ -24,9 +35,17 @@ interface SystemConfig {
     port: number
     password: string
     db: number
-    [key: string]: unknown  // 保留其他字段
+    [key: string]: unknown
   }
-  [key: string]: unknown  // 保留其他顶级字段
+  [key: string]: unknown
+}
+
+interface ServerModeInfo {
+  isTRSS: boolean
+  sharePortEnabled: boolean
+  currentMode: 'shared' | 'standalone'
+  port: number
+  canRestart: boolean
 }
 
 export default function SystemSettingsPage() {
@@ -34,6 +53,8 @@ export default function SystemSettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const [serverMode, setServerMode] = useState<ServerModeInfo | null>(null)
+  const [restarting, setRestarting] = useState(false)
   const isInitialLoad = useRef(true)
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
@@ -64,13 +85,22 @@ export default function SystemSettingsPage() {
     const fetchConfig = async () => {
       try {
         const res = await configApi.getAdvanced() as { data: SystemConfig }
-        // 保留完整配置，只设置缺失的默认值
         const data = (res.data || {}) as SystemConfig
         setConfig({
           ...data,
           web: {
             ...data?.web,
-            port: data?.web?.port ?? 3000
+            port: data?.web?.port ?? 3000,
+            sharePort: data?.web?.sharePort ?? true,
+            mountPath: data?.web?.mountPath || '/chatai'
+          },
+          update: {
+            ...data?.update,
+            autoCheck: data?.update?.autoCheck ?? true,
+            checkOnStart: data?.update?.checkOnStart ?? true,
+            autoUpdate: data?.update?.autoUpdate ?? false,
+            autoRestart: data?.update?.autoRestart ?? false,
+            notifyMaster: data?.update?.notifyMaster ?? true
           },
           redis: {
             ...data?.redis,
@@ -89,8 +119,41 @@ export default function SystemSettingsPage() {
         setLoading(false)
       }
     }
+    
+    const fetchServerMode = async () => {
+      try {
+        const res = await systemApi.getServerMode() as unknown as { code: number; data: ServerModeInfo }
+        if (res?.code === 0) {
+          setServerMode(res.data)
+        }
+      } catch (error) {
+        console.error('获取服务器模式失败', error)
+      }
+    }
+    
     fetchConfig()
+    fetchServerMode()
   }, [])
+
+  const handleRestart = async (type: 'reload' | 'full') => {
+    setRestarting(true)
+    try {
+      const res = await systemApi.restart(type) as unknown as { code: number; message?: string }
+      if (res?.code === 0) {
+        toast.success(type === 'full' ? '正在重启Bot...' : '正在重载服务...')
+        if (type === 'full') {
+          setTimeout(() => window.location.reload(), 3000)
+        }
+      } else {
+        toast.error(res?.message || '操作失败')
+      }
+    } catch (error) {
+      toast.error('请求失败')
+      console.error(error)
+    } finally {
+      setRestarting(false)
+    }
+  }
 
   const handleSave = async () => {
     if (!config) return
@@ -169,16 +232,43 @@ export default function SystemSettingsPage() {
         </AlertDescription>
       </Alert>
 
-      {/* Web 服务设置 */}
+      {/* 服务器模式 */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Globe className="h-5 w-5" />
-            Web 服务
+            <Server className="h-5 w-5" />
+            服务器模式
           </CardTitle>
-          <CardDescription>管理面板和 API 服务配置</CardDescription>
+          <CardDescription>Web 服务运行模式配置</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {serverMode && (
+            <div className="flex items-center gap-2 mb-4">
+              <Badge variant={serverMode.isTRSS ? 'default' : 'secondary'}>
+                {serverMode.isTRSS ? 'TRSS 环境' : '标准环境'}
+              </Badge>
+              <Badge variant={serverMode.currentMode === 'shared' ? 'default' : 'outline'}>
+                {serverMode.currentMode === 'shared' ? '共享端口' : '独立端口'}
+              </Badge>
+              <Badge variant="outline">端口 {serverMode.port}</Badge>
+            </div>
+          )}
+          
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>共享端口模式</Label>
+              <p className="text-sm text-muted-foreground">
+                在 TRSS 环境下与 Bot 共享端口（推荐）
+              </p>
+            </div>
+            <Switch
+              checked={config.web?.sharePort ?? true}
+              onCheckedChange={(checked) => updateConfig('web.sharePort', checked)}
+            />
+          </div>
+
+          <Separator />
+          
           <div className="grid gap-2">
             <Label htmlFor="webPort">监听端口</Label>
             <Input
@@ -191,9 +281,123 @@ export default function SystemSettingsPage() {
               className="max-w-xs"
             />
             <p className="text-xs text-muted-foreground">
-              管理面板和 API 服务的监听端口，默认 3000。修改后需要重启生效。
+              独立端口模式下使用的端口，共享端口模式下此配置无效
             </p>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* 自动更新设置 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Download className="h-5 w-5" />
+            自动更新
+          </CardTitle>
+          <CardDescription>插件更新检查和自动更新配置</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>自动检查更新</Label>
+              <p className="text-sm text-muted-foreground">
+                每天凌晨 4 点自动检查是否有新版本
+              </p>
+            </div>
+            <Switch
+              checked={config.update?.autoCheck ?? true}
+              onCheckedChange={(checked) => updateConfig('update.autoCheck', checked)}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>启动时检查</Label>
+              <p className="text-sm text-muted-foreground">
+                Bot 启动时检查是否有新版本
+              </p>
+            </div>
+            <Switch
+              checked={config.update?.checkOnStart ?? true}
+              onCheckedChange={(checked) => updateConfig('update.checkOnStart', checked)}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>通知主人</Label>
+              <p className="text-sm text-muted-foreground">
+                发现新版本时私聊通知主人
+              </p>
+            </div>
+            <Switch
+              checked={config.update?.notifyMaster ?? true}
+              onCheckedChange={(checked) => updateConfig('update.notifyMaster', checked)}
+            />
+          </div>
+
+          <Separator />
+
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>自动更新</Label>
+              <p className="text-sm text-muted-foreground text-orange-500">
+                检测到新版本时自动执行更新（谨慎开启）
+              </p>
+            </div>
+            <Switch
+              checked={config.update?.autoUpdate ?? false}
+              onCheckedChange={(checked) => updateConfig('update.autoUpdate', checked)}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>更新后自动重启</Label>
+              <p className="text-sm text-muted-foreground text-orange-500">
+                更新完成后自动重启 Bot（需开启自动更新）
+              </p>
+            </div>
+            <Switch
+              checked={config.update?.autoRestart ?? false}
+              onCheckedChange={(checked) => updateConfig('update.autoRestart', checked)}
+              disabled={!config.update?.autoUpdate}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 重启操作 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Power className="h-5 w-5" />
+            服务控制
+          </CardTitle>
+          <CardDescription>重启或重载服务</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex gap-3">
+            <Button 
+              variant="outline" 
+              onClick={() => handleRestart('reload')}
+              disabled={restarting}
+            >
+              {restarting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              重载 Web 服务
+            </Button>
+            <Button 
+              variant="destructive" 
+              onClick={() => handleRestart('full')}
+              disabled={restarting || !serverMode?.canRestart}
+            >
+              {restarting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Power className="mr-2 h-4 w-4" />}
+              重启 Bot
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            重载 Web 服务不会中断 Bot 运行，重启 Bot 会断开所有连接
+          </p>
         </CardContent>
       </Card>
 
@@ -288,7 +492,7 @@ export default function SystemSettingsPage() {
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">当前监听端口</span>
-              <span className="font-mono">{config.web?.port || 3000}</span>
+              <span className="font-mono">{serverMode?.port || config.web?.port || 3000}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Redis 状态</span>

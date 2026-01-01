@@ -174,6 +174,15 @@ class Config {
             },
             web: {
                 port: 3000,
+                sharePort: false,           // TRSS环境下共享端口
+                mountPath: '/chatai',      // TRSS共享端口时的挂载路径
+            },
+            update: {
+                autoCheck: true,           // 启用自动检查更新
+                checkOnStart: true,        // 启动时检查更新
+                autoUpdate: false,         // 自动更新（不推荐）
+                autoRestart: false,        // 更新后自动重启
+                notifyMaster: true,        // 有更新时通知主人
             },
             proxy: {
                 enabled: false,
