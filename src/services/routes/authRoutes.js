@@ -108,8 +108,21 @@ class ClientFingerprintValidator {
 export const authHandler = new FrontendAuthHandler()
 export const fingerprintValidator = new ClientFingerprintValidator()
 
-// Auth key for JWT
-export let authKey = crypto.randomUUID()
+// Auth key for JWT (持久化到配置，避免重启后token失效)
+let _authKey = null
+export function getAuthKey() {
+    if (!_authKey) {
+        _authKey = config.get('web.jwtSecret')
+        if (!_authKey) {
+            _authKey = crypto.randomUUID()
+            config.set('web.jwtSecret', _authKey)
+            chatLogger.info('[Auth] 已生成新的JWT密钥')
+        }
+    }
+    return _authKey
+}
+// 导出 authKey 为向后兼容（不推荐直接使用）
+export { getAuthKey as authKey }
 
 // Create auth middleware factory
 export function createAuthMiddleware() {
@@ -126,7 +139,7 @@ export function createAuthMiddleware() {
         }
 
         try {
-            const decoded = jwt.verify(token, authKey)
+            const decoded = jwt.verify(token, getAuthKey())
             
             const fingerprint = req.headers['x-client-fingerprint']
             if (!fingerprintValidator.validate(token, fingerprint)) {
@@ -156,7 +169,7 @@ export function setupAuthRoutes(app) {
 
         if (existingToken) {
             try {
-                jwt.verify(existingToken, authKey)
+                jwt.verify(existingToken, getAuthKey())
                 return res.redirect('/')
             } catch {}
         }
@@ -175,7 +188,7 @@ export function setupAuthRoutes(app) {
                     jti: crypto.randomUUID(),
                     iss: 'chatai-panel',
                     aud: 'chatai-client'
-                }, authKey, { 
+                }, getAuthKey(), { 
                     expiresIn: '30d',
                     algorithm: 'HS256'
                 })
@@ -222,7 +235,7 @@ export function setupAuthRoutes(app) {
                     jti: crypto.randomUUID(),
                     iss: 'chatai-panel',
                     aud: 'chatai-client'
-                }, authKey, { 
+                }, getAuthKey(), { 
                     expiresIn: '30d',
                     algorithm: 'HS256'
                 })
@@ -266,7 +279,7 @@ export function setupAuthRoutes(app) {
         }
 
         try {
-            const decoded = jwt.verify(token, authKey)
+            const decoded = jwt.verify(token, getAuthKey())
             res.json(ApiResponse.ok({ 
                 authenticated: true, 
                 loginTime: decoded.loginTime 
