@@ -17,6 +17,314 @@ class RenderService {
         this.browser = null
         this.defaultTheme = 'light'
         this.templateDir = path.join(__dirname, '../../resources/templates')
+        
+        // 数学公式检测正则表达式
+        this.mathPatterns = {
+            // LaTeX 块级公式 $$...$$
+            blockLatex: /\$\$[\s\S]+?\$\$/g,
+            // LaTeX 行内公式 $...$（排除货币符号）
+            inlineLatex: /(?<!\\)\$(?!\s)([^$\n]+?)(?<!\s)\$/g,
+            // \[...\] 块级公式
+            bracketBlock: /\\\[[\s\S]+?\\\]/g,
+            // \(...\) 行内公式
+            bracketInline: /\\\([\s\S]+?\\\)/g,
+            // \begin{...}...\end{...} 环境
+            latexEnv: /\\begin\{[^}]+\}[\s\S]+?\\end\{[^}]+\}/g,
+            // 常见数学命令
+            mathCommands: /\\(frac|sqrt|sum|int|prod|lim|sin|cos|tan|log|ln|exp|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|sigma|omega|infty|partial|nabla|cdot|times|div|pm|mp|leq|geq|neq|approx|equiv|subset|supset|cap|cup|in|notin|forall|exists|rightarrow|leftarrow|Rightarrow|Leftarrow|vec|hat|bar|dot|ddot|matrix|bmatrix|pmatrix|cases)\b/,
+            // 函数表示如 f(x), g(x), f'(x), f''(x)
+            functionNotation: /\b[fghFGH]'*\s*\([^)]+\)/g,
+            // 极限表示 lim(x→...) 或 lim_{x→...}
+            limitNotation: /lim\s*[({\[]?\s*[a-zA-Z]\s*(?:→|->)+\s*[^)\]}>\s]+/gi,
+            // 下标和上标 Unicode 字符
+            subscriptSuperscript: /[₀-₉ₐ-ₜ²³¹⁰-ⁿⁱ]/g,
+            // 导数表示 f'(x), y', dy/dx
+            derivativeNotation: /\b[a-zA-Z]'+'|d[a-zA-Z]\/d[a-zA-Z]/g,
+            // 积分表示 ∫
+            integralSymbol: /∫/g,
+            // 数学符号 ∑, ∏, ∞, ∂, √, ±, ≈, ≠, ≤, ≥, ∈, ∉
+            mathSymbols: /[∑∏∞∂√±≈≠≤≥∈∉⊂⊃∩∪∀∃→←⇒⇐×÷∙⋅]/g,
+            // 三角函数（无空格）sinx, cosx, tanx
+            trigFunctions: /\b(sin|cos|tan|cot|sec|csc|arcsin|arccos|arctan|sinh|cosh|tanh)[a-zA-Zα-ω]/gi,
+            // 常见数学表达式模式（含上标、分数线等）
+            mathExprPattern: /[a-zA-Z][²³⁰-ⁿ]|[a-zA-Z]\^\d+|\([^)]+\)\/\([^)]+\)|\[[^\]]+\]\/\[[^\]]+\]/g,
+            // 希腊字母
+            greekLetters: /[α-ωΑ-Ω]/g,
+            // 数学区间表示 [a,b], (a,b), [a,b)
+            intervalNotation: /[\[(]\s*-?\d*[a-zA-Z]?\s*,\s*-?\d*[a-zA-Z]?\s*[\])]/g
+        }
+    }
+
+    /**
+     * 检测文本中是否包含数学公式
+     * @param {string} text - 要检测的文本
+     * @returns {{ hasMath: boolean, confidence: 'high'|'medium'|'low', matches: string[] }}
+     */
+    detectMathFormulas(text) {
+        if (!text || typeof text !== 'string') {
+            return { hasMath: false, confidence: 'low', matches: [] }
+        }
+        
+        const matches = []
+        let confidence = 'low'
+        let mathScore = 0  
+        const blockMatches = text.match(this.mathPatterns.blockLatex) || []
+        if (blockMatches.length > 0) {
+            matches.push(...blockMatches)
+            confidence = 'high'
+            mathScore += blockMatches.length * 10
+        }
+        
+        // 检测 \[...\] 块级公式
+        const bracketBlockMatches = text.match(this.mathPatterns.bracketBlock) || []
+        if (bracketBlockMatches.length > 0) {
+            matches.push(...bracketBlockMatches)
+            confidence = 'high'
+            mathScore += bracketBlockMatches.length * 10
+        }
+        
+        // 检测 LaTeX 环境
+        const envMatches = text.match(this.mathPatterns.latexEnv) || []
+        if (envMatches.length > 0) {
+            matches.push(...envMatches)
+            confidence = 'high'
+            mathScore += envMatches.length * 10
+        }
+        
+        // 检测行内 LaTeX 公式 $...$
+        const inlineMatches = text.match(this.mathPatterns.inlineLatex) || []
+        if (inlineMatches.length > 0) {
+            const validInline = inlineMatches.filter(m => {
+                return this.mathPatterns.mathCommands.test(m) || 
+                       /[+\-*/=<>^_{}\\]/.test(m) ||
+                       /\d+[a-zA-Z]|[a-zA-Z]\d+/.test(m)
+            })
+            if (validInline.length > 0) {
+                matches.push(...validInline)
+                if (confidence !== 'high') confidence = 'medium'
+                mathScore += validInline.length * 5
+            }
+        }
+        
+        // 检测 \(...\) 行内公式
+        const bracketInlineMatches = text.match(this.mathPatterns.bracketInline) || []
+        if (bracketInlineMatches.length > 0) {
+            matches.push(...bracketInlineMatches)
+            if (confidence !== 'high') confidence = 'medium'
+            mathScore += bracketInlineMatches.length * 5
+        }
+        const funcMatches = text.match(this.mathPatterns.functionNotation) || []
+        mathScore += funcMatches.length * 3
+        
+        // 检测极限表示 lim(x→...)
+        const limitMatches = text.match(this.mathPatterns.limitNotation) || []
+        mathScore += limitMatches.length * 5
+        
+        // 检测下标/上标 Unicode
+        const subSupMatches = text.match(this.mathPatterns.subscriptSuperscript) || []
+        mathScore += subSupMatches.length * 2
+        
+        // 检测导数表示
+        const derivMatches = text.match(this.mathPatterns.derivativeNotation) || []
+        mathScore += derivMatches.length * 3
+        
+        // 检测积分符号
+        const integralMatches = text.match(this.mathPatterns.integralSymbol) || []
+        mathScore += integralMatches.length * 5
+        
+        // 检测数学符号 (∑, ∞, ∂ 等)
+        const symbolMatches = text.match(this.mathPatterns.mathSymbols) || []
+        mathScore += symbolMatches.length * 3
+        
+        // 检测三角函数 sinx, cosx
+        const trigMatches = text.match(this.mathPatterns.trigFunctions) || []
+        mathScore += trigMatches.length * 2
+        
+        // 检测希腊字母
+        const greekMatches = text.match(this.mathPatterns.greekLetters) || []
+        mathScore += greekMatches.length * 1
+        
+        // 检测数学区间表示 [a,b]
+        const intervalMatches = text.match(this.mathPatterns.intervalNotation) || []
+        mathScore += intervalMatches.length * 2
+        
+        // 检测数学表达式模式 x², x^2
+        const exprMatches = text.match(this.mathPatterns.mathExprPattern) || []
+        mathScore += exprMatches.length * 2
+        
+        // 检测LaTeX数学命令
+        if (this.mathPatterns.mathCommands.test(text)) {
+            mathScore += 5
+        }
+        
+        // 根据评分确定置信度
+        if (mathScore >= 15 && confidence !== 'high') {
+            confidence = 'high'
+        } else if (mathScore >= 8 && confidence === 'low') {
+            confidence = 'medium'
+        }
+        
+        // 如果评分超过阈值，认为包含数学内容
+        const hasMath = mathScore >= 8 || matches.length > 0
+        
+        return {
+            hasMath,
+            confidence,
+            mathScore,
+            matches: [...new Set(matches)]
+        }
+    }
+
+    /**
+     * 将纯文本数学表达式转换为 LaTeX 格式
+     * 支持全部类型的公式
+     * @param {string} text - 原始文本
+     * @returns {string} 转换后的文本
+     */
+    convertToLatex(text) {
+        if (!text) return text
+        if (/\$[\s\S]+?\$/.test(text)) return text
+        
+        let result = text
+        result = result.replace(/\[([^\[\]]+)\]\/\[([^\[\]]+)\]/g, '\\frac{$1}{$2}')
+        result = result.replace(/\[([^\[\]]+)\]\/([a-zA-Z0-9^{}]+)/g, '\\frac{$1}{$2}')
+        result = result.replace(/([a-zA-Z0-9^{}]+)\/\[([^\[\]]+)\]/g, '\\frac{$1}{$2}')
+        // (a)/(b) 或 (a)/b
+        result = result.replace(/\(([^()]+)\)\/\(([^()]+)\)/g, '\\frac{$1}{$2}')
+        result = result.replace(/\(([^()]+)\)\/([a-zA-Z0-9^{}]+)/g, '\\frac{$1}{$2}')
+        // 简单分数 a/b
+        result = result.replace(/\b([a-zA-Z0-9]+)\/([a-zA-Z0-9^{}]+)\b/g, '\\frac{$1}{$2}')
+        result = result.replace(/\^\{([^}]+)\}/g, '^{$1}') // 保持已有格式
+        result = result.replace(/\^(\d+)/g, '^{$1}')       // x^2 -> x^{2}
+        result = result.replace(/\^([a-zA-Z])(?![a-zA-Z{])/g, '^{$1}') // x^n -> x^{n}
+        result = result.replace(/²/g, '^{2}')            // ² -> ^{2}
+        result = result.replace(/³/g, '^{3}')            // ³ -> ^{3}
+
+        result = result.replace(/_\{([^}]+)\}/g, '_{$1}')  // 保持已有格式
+        result = result.replace(/_(\d+)/g, '_{$1}')        // x_1 -> x_{1}
+        result = result.replace(/_([a-zA-Z])(?![a-zA-Z{])/g, '_{$1}') // x_n -> x_{n}
+        // Unicode下标
+        result = result.replace(/[₀-₉]/g, m => `_{${m.charCodeAt(0) - 0x2080}}`)
+        const greekMap = {
+            'α': '\\alpha', 'β': '\\beta', 'γ': '\\gamma', 'δ': '\\delta',
+            'ε': '\\epsilon', 'θ': '\\theta', 'λ': '\\lambda', 'μ': '\\mu',
+            'π': '\\pi', 'σ': '\\sigma', 'ω': '\\omega', 'ξ': '\\xi',
+            'η': '\\eta', 'ζ': '\\zeta', '∞': '\\infty'
+        }
+        for (const [g, l] of Object.entries(greekMap)) {
+            result = result.replace(new RegExp(g, 'g'), l)
+        }
+        result = result.replace(/→/g, '\\to')
+        result = result.replace(/->/g, '\\to')
+        result = result.replace(/±/g, '\\pm')
+        result = result.replace(/≈/g, '\\approx')
+        result = result.replace(/≠/g, '\\neq')
+        result = result.replace(/≤/g, '\\leq')
+        result = result.replace(/≥/g, '\\geq')
+        result = result.replace(/∈/g, '\\in')
+        result = result.replace(/×/g, '\\times')
+        result = result.replace(/·/g, '\\cdot')
+        result = result.replace(/√/g, '\\sqrt')
+        result = result.replace(/∫/g, '\\int')
+        result = result.replace(/∑/g, '\\sum')
+        result = result.replace(/∏/g, '\\prod')
+        result = result.replace(/∂/g, '\\partial')
+        result = result.replace(/\b(sin|cos|tan|cot|sec|csc|ln|log|exp|lim|max|min|sup|inf)(?![a-zA-Z\\])/gi, '\\$1')
+        const mathPattern = /\\[a-zA-Z]+|\^{|_{/
+        if (!mathPattern.test(result)) return result
+        
+        // 按行处理
+        return result.split('\n').map(line => {
+            // 纯中文行跳过
+            if (/^[\u4e00-\u9fa5，。：！？、\s~\-（）]+$/.test(line)) return line
+            if (!mathPattern.test(line)) return line
+            let processed = ''
+            let i = 0
+            
+            while (i < line.length) {
+                // 检查是否是数学表达式开始
+                const remaining = line.slice(i)
+                
+                // 匹配: \command 或 字母数字后跟^{或_{
+                const mathStart = remaining.match(/^([a-zA-Z0-9]*)(\\[a-zA-Z]+|\^{|_{)/)
+                
+                if (mathStart) {
+                    // 找到数学表达式开始
+                    let mathExpr = mathStart[1] // 前缀字母/数字
+                    let j = mathStart[1].length
+                    let braceDepth = 0
+                    
+                    // 继续扫描直到表达式结束
+                    while (j < remaining.length) {
+                        const ch = remaining[j]
+                        
+                        if (ch === '{') braceDepth++
+                        else if (ch === '}') braceDepth--
+                        
+                        // 检查是否到达表达式结尾
+                        if (braceDepth === 0) {
+                            const next = remaining[j + 1]
+                            // 如果下一个字符是中文或空格或特殊符号，表达式结束
+                            if (!next || /[\u4e00-\u9fa5，。：；]/.test(next)) {
+                                mathExpr += remaining.slice(mathStart[1].length, j + 1)
+                                break
+                            }
+                            // 如果不是数学相关字符，结束
+                            if (!/[a-zA-Z0-9_^{}\\+\-=*/(.)\[\]\s]/.test(next)) {
+                                mathExpr += remaining.slice(mathStart[1].length, j + 1)
+                                break
+                            }
+                        }
+                        j++
+                    }
+                    
+                    // 如果j到达末尾
+                    if (j >= remaining.length) {
+                        mathExpr += remaining.slice(mathStart[1].length)
+                        j = remaining.length
+                    }
+                    
+                    // 包裹数学表达式
+                    if (mathExpr && /\\|\^{|_{/.test(mathExpr)) {
+                        processed += `$${mathExpr.trim()}$`
+                    } else {
+                        processed += mathExpr
+                    }
+                    i += j
+                } else {
+                    // 不是数学表达式，添加当前字符
+                    processed += line[i]
+                    i++
+                }
+            }
+            
+            return processed
+        }).join('\n')
+    }
+
+    /**
+     * 渲染包含数学公式的文本为图片
+     * @param {string} text - 包含数学公式的文本
+     * @param {Object} options - 渲染选项
+     * @returns {Promise<Buffer>} 图片Buffer
+     */
+    async renderMathContent(text, options = {}) {
+        const {
+            theme = 'light',
+            width = 800,
+            showTimestamp = false,
+            title = ''
+        } = options
+        const processedText = this.convertToLatex(text)
+        return this.renderMarkdownToImage({
+            markdown: processedText,
+            title,
+            subtitle: '',
+            icon: '📐',
+            theme,
+            width,
+            showTimestamp
+        })
     }
 
     /**
@@ -255,18 +563,50 @@ class RenderService {
         // 检测是否包含数学公式
         const hasMath = expressions.length > 0
 
+        // KaTeX 样式优化 - 高亮显示
+        const katexStyles = `
+            /* 行内公式样式 */
+            .katex {
+                font-size: 1.15em !important;
+                color: #1a5276;
+                background: linear-gradient(135deg, rgba(52,152,219,0.08) 0%, rgba(155,89,182,0.08) 100%);
+                padding: 0.15em 0.4em;
+                border-radius: 4px;
+                border: 1px solid rgba(52,152,219,0.2);
+            }
+            /* 块级公式样式 */
+            .katex-display {
+                margin: 1em 0 !important;
+                padding: 0.8em 1em;
+                background: linear-gradient(135deg, #f8f9fa 0%, #e8f4fc 100%);
+                border-radius: 8px;
+                border-left: 4px solid #3498db;
+                overflow-x: auto;
+                overflow-y: hidden;
+                text-align: center;
+            }
+            .katex-display > .katex {
+                background: none;
+                border: none;
+                padding: 0;
+                font-size: 1.25em !important;
+                color: #2c3e50;
+            }
+            /* 公式内元素颜色 */
+            .katex .mord.text { color: #27ae60; }
+            .katex .mbin { color: #e74c3c; }
+            .katex .mrel { color: #9b59b6; }
+        `
+
         const styledHtml = `
             <!DOCTYPE html>
             <html>
             <head>
                 <meta charset="UTF-8">
-                ${hasMath ? `
-                <!-- KaTeX CSS -->
-                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-                ` : ''}
+                ${hasMath ? `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">` : ''}
                 <style>
                     ${styles}
-                    ${hasMath ? `.katex { font-size: 1.1em; }` : ''}
+                    ${hasMath ? katexStyles : ''}
                 </style>
             </head>
             <body>
@@ -285,7 +625,6 @@ class RenderService {
                     ${showTimestamp ? `<div class="timestamp">生成时间：${timestamp}</div>` : ''}
                 </div>
                 ${hasMath ? `
-                <!-- KaTeX JS -->
                 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
                 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
                 <script>
@@ -293,10 +632,14 @@ class RenderService {
                         renderMathInElement(document.body, {
                             delimiters: [
                                 {left: '$$', right: '$$', display: true},
-                                {left: '$', right: '$', display: false}
+                                {left: '$', right: '$', display: false},
+                                {left: '\\\\[', right: '\\\\]', display: true},
+                                {left: '\\\\(', right: '\\\\)', display: false}
                             ],
-                            throwOnError: false
+                            throwOnError: false,
+                            trust: true
                         });
+                        window.katexRendered = true;
                     });
                 </script>
                 ` : ''}
@@ -310,6 +653,17 @@ class RenderService {
             const page = await browser.newPage()
             await page.setViewport({ width, height: 600 })
             await page.setContent(styledHtml, { waitUntil: 'networkidle0', timeout: 30000 })
+            
+            // 等待 KaTeX 渲染完成
+            if (hasMath) {
+                try {
+                    await page.waitForFunction(() => window.katexRendered === true, { timeout: 5000 })
+                } catch {
+                    // 超时继续
+                }
+                await new Promise(r => setTimeout(r, 200))
+            }
+            
             const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
             await page.close()
             return imageBuffer
