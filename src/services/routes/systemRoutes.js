@@ -236,4 +236,133 @@ router.post('/stats/tool-calls/clear', async (req, res) => {
     }
 })
 
+// DELETE /system/release_port - 释放端口（用于热重载）
+router.delete('/system/release_port', async (req, res) => {
+    try {
+        const { getWebServer } = await import('../webServer.js')
+        const webServer = getWebServer()
+        if (webServer && webServer.server && !webServer.sharedPort) {
+            webServer.server.close()
+            res.json(ChaiteResponse.ok({ success: true, message: '端口已释放' }))
+        } else {
+            res.json(ChaiteResponse.ok({ success: false, message: '无需释放或共享端口模式' }))
+        }
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// GET /system/version - 获取版本信息
+router.get('/system/version', async (req, res) => {
+    try {
+        const { exec } = await import('child_process')
+        const { promisify } = await import('util')
+        const execAsync = promisify(exec)
+        const path = await import('path')
+        const { fileURLToPath } = await import('url')
+        
+        const __dirname = path.dirname(fileURLToPath(import.meta.url))
+        const pluginPath = path.resolve(__dirname, '../../..')
+        
+        let commitId = 'unknown'
+        let commitTime = 'unknown'
+        let branch = 'unknown'
+        
+        try {
+            const { stdout: id } = await execAsync(`git -C "${pluginPath}" rev-parse --short HEAD`)
+            commitId = id.trim()
+            const { stdout: time } = await execAsync(`git -C "${pluginPath}" log -1 --format="%ci"`)
+            commitTime = time.trim()
+            const { stdout: br } = await execAsync(`git -C "${pluginPath}" rev-parse --abbrev-ref HEAD`)
+            branch = br.trim()
+        } catch {}
+        
+        res.json(ChaiteResponse.ok({
+            version: '1.0.0',
+            commitId,
+            commitTime,
+            branch,
+            nodejs: process.version,
+            platform: process.platform
+        }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// GET /system/server-mode - 获取服务器模式信息
+router.get('/system/server-mode', async (req, res) => {
+    try {
+        const { getWebServer } = await import('../webServer.js')
+        const config = (await import('../../../config/config.js')).default
+        const webServer = getWebServer()
+        
+        const isTRSS = !!(global.Bot?.express && global.Bot?.server)
+        const sharePortConfig = config.get('web.sharePort') !== false
+        
+        res.json(ChaiteResponse.ok({
+            isTRSS,
+            sharePortEnabled: sharePortConfig,
+            currentMode: webServer?.sharedPort ? 'shared' : 'standalone',
+            port: webServer?.port,
+            canRestart: typeof Bot?.restart === 'function'
+        }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// PUT /system/server-mode - 设置共享端口模式
+router.put('/system/server-mode', async (req, res) => {
+    try {
+        const { sharePort } = req.body
+        const config = (await import('../../../config/config.js')).default
+        
+        if (typeof sharePort !== 'boolean') {
+            return res.status(400).json(ChaiteResponse.fail(null, 'sharePort 必须是布尔值'))
+        }
+        
+        config.set('web.sharePort', sharePort)
+        await config.save()
+        
+        res.json(ChaiteResponse.ok({ 
+            success: true, 
+            message: '配置已保存，重启后生效',
+            needRestart: true
+        }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// POST /system/restart - 重启服务
+router.post('/system/restart', async (req, res) => {
+    try {
+        const { type = 'reload' } = req.body || {}
+        res.json(ChaiteResponse.ok({ success: true, message: '正在重启...' }))
+        
+        // 延迟执行重启
+        setTimeout(async () => {
+            try {
+                if (type === 'full') {
+                    // 完整重启Bot
+                    if (typeof Bot?.restart === 'function') {
+                        await Bot.restart()
+                    } else {
+                        process.exit(0)
+                    }
+                } else {
+                    // 仅重载WebServer
+                    const { reloadWebServer } = await import('../webServer.js')
+                    await reloadWebServer()
+                }
+            } catch (e) {
+                console.error('[System] 重启失败:', e)
+            }
+        }, 100)
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
 export default router

@@ -82,7 +82,8 @@ router.get('/advanced', (req, res) => {
             proxy: config.get('proxy'),
             qqBotProxy: config.get('qqBotProxy'),
             web: config.get('web'),
-            redis: config.get('redis')
+            redis: config.get('redis'),
+            update: config.get('update')
         }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -92,15 +93,15 @@ router.get('/advanced', (req, res) => {
 // PUT /config/advanced - 更新高级配置
 router.put('/advanced', async (req, res) => {
     try {
-        const { llm, context, tools, proxy, qqBotProxy, web, redis } = req.body
+        const { llm, context, tools, proxy, qqBotProxy, web, redis, update } = req.body
         if (llm) config.set('llm', { ...config.get('llm'), ...llm })
         if (context) config.set('context', { ...config.get('context'), ...context })
         if (tools) config.set('tools', { ...config.get('tools'), ...tools })
         if (proxy) config.set('proxy', { ...config.get('proxy'), ...proxy })
         if (qqBotProxy) config.set('qqBotProxy', { ...config.get('qqBotProxy'), ...qqBotProxy })
-        // 系统设置: web 和 redis
         if (web) config.set('web', { ...config.get('web'), ...web })
         if (redis) config.set('redis', { ...config.get('redis'), ...redis })
+        if (update) config.set('update', { ...config.get('update'), ...update })
         chatLogger.debug('[ConfigRoutes] 高级配置已保存')
         res.json(ChaiteResponse.ok({ success: true }))
     } catch (error) {
