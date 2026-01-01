@@ -23,16 +23,29 @@ import { Save, Loader2, Plus, X, MessageSquare, Users, User, Check } from 'lucid
 interface TriggerConfig {
   trigger: {
     prefixes: string[]
+    keywords?: string[]
+    collectGroupMsg?: boolean
+    blacklistUsers?: string[]
+    whitelistUsers?: string[]
+    blacklistGroups?: string[]
+    whitelistGroups?: string[]
     private: {
       enabled: boolean
       mode: 'always' | 'prefix' | 'at'
+      [key: string]: unknown
     }
     group: {
       enabled: boolean
       at: boolean
       prefix: boolean
+      keyword?: boolean
+      random?: boolean
+      randomRate?: number
+      [key: string]: unknown
     }
+    [key: string]: unknown
   }
+  [key: string]: unknown
 }
 
 export default function TriggerPage() {
@@ -73,7 +86,26 @@ export default function TriggerPage() {
     const fetchConfig = async () => {
       try {
         const res = await configApi.get() as { data: TriggerConfig }
-        setConfig(res.data)
+        // 保留完整配置，确保不丢失其他字段
+        const data = res.data || {} as TriggerConfig
+        setConfig({
+          ...data,
+          trigger: {
+            ...data.trigger,
+            prefixes: data.trigger?.prefixes || [],
+            private: {
+              ...data.trigger?.private,
+              enabled: data.trigger?.private?.enabled ?? true,
+              mode: data.trigger?.private?.mode || 'prefix'
+            },
+            group: {
+              ...data.trigger?.group,
+              enabled: data.trigger?.group?.enabled ?? true,
+              at: data.trigger?.group?.at ?? true,
+              prefix: data.trigger?.group?.prefix ?? true
+            }
+          }
+        })
         setTimeout(() => { isInitialLoad.current = false }, 100)
       } catch (error) {
         toast.error('加载配置失败')
