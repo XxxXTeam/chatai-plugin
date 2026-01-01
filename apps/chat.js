@@ -11,6 +11,8 @@ import {
     isReplyToBotMessage,
     getBotIds
 } from '../src/utils/messageDedup.js'
+import { renderService } from '../src/services/media/RenderService.js'
+import { segment } from 'icqq'
 
 export {
     recordSentMessage,
@@ -701,7 +703,41 @@ export class Chat extends plugin {
       // 记录发送的消息（用于防止自身消息循环）
       recordSentMessage(finalReply)
       
-      const replyResult = await this.reply(finalReply, quoteReply)
+      // 检测是否包含数学公式，如果包含则渲染为图片
+      const mathRenderEnabled = config.get('render.mathFormula') !== false
+      let replyResult
+      
+      if (mathRenderEnabled) {
+        const mathDetection = renderService.detectMathFormulas(finalReply)
+        
+        if (mathDetection.hasMath && mathDetection.confidence !== 'low') {
+          try {
+            logger.debug(`[AI-Chat] 检测到数学公式 (score: ${mathDetection.mathScore}, confidence: ${mathDetection.confidence})，渲染为图片`)
+            
+            // 渲染为图片
+            const imageBuffer = await renderService.renderMathContent(finalReply, {
+              theme: config.get('render.theme') || 'light',
+              width: config.get('render.width') || 800,
+              showTimestamp: false
+            })
+            
+            // 发送图片
+            const imgMsg = segment.image(imageBuffer)
+            replyResult = await this.reply(imgMsg, quoteReply)
+            logger.info(`[AI-Chat] 数学公式已渲染为图片发送`)
+          } catch (renderErr) {
+            logger.warn(`[AI-Chat] 数学公式渲染失败，回退到文本发送:`, renderErr.message)
+            // 渲染失败时回退到文本发送
+            replyResult = await this.reply(finalReply, quoteReply)
+          }
+        } else {
+          // 无数学公式，正常发送文本
+          replyResult = await this.reply(finalReply, quoteReply)
+        }
+      } else {
+        // 数学公式渲染已禁用，直接发送文本
+        replyResult = await this.reply(finalReply, quoteReply)
+      }
       
       // 自动撤回处理
       this.handleAutoRecall(replyResult, false)

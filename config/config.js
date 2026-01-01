@@ -263,6 +263,12 @@ class Config {
                 showThinkingContent: true,  // 显示思考内容
                 useForwardMsg: true,        // 思考内容使用合并转发
             },
+            // 渲染配置
+            render: {
+                mathFormula: true,          // 启用数学公式自动渲染为图片
+                theme: 'light',             // 渲染主题: 'light' | 'dark'
+                width: 800,                 // 渲染宽度
+            },
             // 高级功能
             features: {
                 groupSummary: {

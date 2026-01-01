@@ -436,9 +436,18 @@ export class ChatService {
                 logger.debug(`[ChatService] 场景=调度无需执行工具，模型: ${llmModel}${groupChatModel ? ' (群组配置)' : ''}，不传工具`)
             } else {
                 llmModel = groupChatModel || LlmService.selectModel({})
-                actualEnableTools = toolsAllowed
-                modelScenario = 'chat'
-                logger.debug(`[ChatService] 场景=普通对话，模型: ${llmModel}${groupChatModel ? ' (群组配置)' : ''}，传工具=${actualEnableTools}`)
+                const toolModelConfigured = !!groupToolModel || !!LlmService.getModel('tool', false)
+                if (toolModelConfigured) {
+                    // 工具模型已配置，对话模型不需要工具
+                    actualEnableTools = false
+                    modelScenario = 'chat'
+                    logger.debug(`[ChatService] 场景=普通对话，模型: ${llmModel}`)
+                } else {
+                    // 工具模型未配置，对话模型需要处理工具
+                    actualEnableTools = toolsAllowed
+                    modelScenario = 'chat'
+                    logger.debug(`[ChatService] 场景=普通对话，模型: ${llmModel}，传工具=${actualEnableTools}`)
+                }
             }
         } else {
             if (toolsAllowed) {
@@ -1866,73 +1875,127 @@ export class ChatService {
             const userId = event?.user_id ? String(event.user_id) : null
             const cleanUserId = userId?.includes('_') ? userId.split('_').pop() : userId
             
+            // 构建占位符上下文
+            const promptContext = {
+                user_name: event?.sender?.card || event?.sender?.nickname || '用户',
+                user_id: event?.user_id?.toString() || userId || '',
+                group_name: event?.group_name || '',
+                group_id: groupId || '',
+                bot_name: event?.bot?.nickname || 'AI助手',
+                bot_id: event?.self_id?.toString() || ''
+            }
+            
+            // 初始化预设管理器
+            await presetManager.init()
+            
             if (groupId || userId) {
                 const sm = await ensureScopeManager()
                 const effectiveSettings = await sm.getEffectiveSettings(groupId, userId, { isPrivate: !groupId })
+                
+                // 优先级：独立人设 > 作用域预设 > 全局默认预设
                 if (effectiveSettings?.hasIndependentPrompt) {
                     systemPrompt = effectiveSettings.systemPrompt || ''
-                } else if (effectiveSettings?.presetId) {
-                    await presetManager.init()
-                    const preset = presetManager.get(effectiveSettings.presetId)
+                    logger.debug(`[ChatService] 多任务: 使用独立人设`)
+                } else {
+                    // 获取预设ID：作用域配置 > 全局默认
+                    const presetId = effectiveSettings?.presetId || config.get('llm.defaultChatPresetId') || 'default'
+                    const preset = presetManager.get(presetId)
                     if (preset?.systemPrompt) {
                         systemPrompt = preset.systemPrompt
+                        logger.debug(`[ChatService] 多任务: 使用预设 ${presetId}`)
+                    } else {
+                        // 使用预设管理器构建默认提示词
+                        systemPrompt = presetManager.buildSystemPrompt(presetId, promptContext)
+                        logger.debug(`[ChatService] 多任务: 使用默认预设构建`)
                     }
                 }
-                
-                // 对人设进行占位符替换
-                if (systemPrompt) {
-                    const promptContext = {
-                        user_name: event?.sender?.card || event?.sender?.nickname || '用户',
-                        user_id: event?.user_id?.toString() || userId || '',
-                        group_name: event?.group_name || '',
-                        group_id: groupId || '',
-                        bot_name: event?.bot?.nickname || 'AI助手',
-                        bot_id: event?.self_id?.toString() || ''
+            } else {
+                // 无用户/群组信息时，使用默认预设
+                const defaultPresetId = config.get('llm.defaultChatPresetId') || 'default'
+                systemPrompt = presetManager.buildSystemPrompt(defaultPresetId, promptContext)
+            }
+            
+            // 对人设进行占位符替换
+            if (systemPrompt) {
+                systemPrompt = presetManager.replaceVariables(systemPrompt, promptContext)
+            }
+            
+            // 添加记忆上下文
+            if (config.get('memory.enabled')) {
+                try {
+                    await memoryManager.init()
+                    // 用户记忆
+                    const memoryContext = await memoryManager.getMemoryContext(userId, originalMessage || '', {
+                        event,
+                        groupId,
+                        includeProfile: true
+                    })
+                    if (memoryContext) {
+                        systemPrompt += memoryContext
+                        logger.debug(`[ChatService] 多任务: 已添加用户记忆 (${memoryContext.length} 字符)`)
                     }
-                    systemPrompt = presetManager.replaceVariables(systemPrompt, promptContext)
-                    logger.debug(`[ChatService] 多任务执行: 已获取人设 (${systemPrompt.length} 字符)`)
-                }
-                
-                // 添加记忆上下文到systemPrompt
-                if (config.get('memory.enabled')) {
-                    try {
-                        await memoryManager.init()
-                        // 用户记忆
-                        const memoryContext = await memoryManager.getMemoryContext(userId, originalMessage || '', {
-                            event,
-                            groupId,
-                            includeProfile: true
-                        })
-                        if (memoryContext) {
-                            systemPrompt += memoryContext
-                            logger.debug(`[ChatService] 多任务执行: 已添加用户记忆 (${memoryContext.length} 字符)`)
-                        }
-                        // 群聊记忆
-                        if (groupId && config.get('memory.groupContext.enabled')) {
-                            const nickname = event?.sender?.card || event?.sender?.nickname
-                            const groupMemory = await memoryManager.getGroupMemoryContext(groupId, cleanUserId, { nickname })
-                            if (groupMemory) {
-                                const parts = []
-                                if (groupMemory.userInfo?.length > 0) {
-                                    parts.push(`群成员信息：${groupMemory.userInfo.join('；')}`)
-                                }
-                                if (groupMemory.topics?.length > 0) {
-                                    parts.push(`最近话题：${groupMemory.topics.join('；')}`)
-                                }
-                                if (groupMemory.relations?.length > 0) {
-                                    parts.push(`群友关系：${groupMemory.relations.join('；')}`)
-                                }
-                                if (parts.length > 0) {
-                                    systemPrompt += `\n【群聊记忆】\n${parts.join('\n')}\n`
-                                    logger.debug(`[ChatService] 多任务执行: 已添加群聊记忆`)
-                                }
+                    // 群聊记忆
+                    if (groupId && config.get('memory.groupContext.enabled')) {
+                        const nickname = event?.sender?.card || event?.sender?.nickname
+                        const groupMemory = await memoryManager.getGroupMemoryContext(groupId, cleanUserId, { nickname })
+                        if (groupMemory) {
+                            const parts = []
+                            if (groupMemory.userInfo?.length > 0) {
+                                parts.push(`群成员信息：${groupMemory.userInfo.join('；')}`)
+                            }
+                            if (groupMemory.topics?.length > 0) {
+                                parts.push(`最近话题：${groupMemory.topics.join('；')}`)
+                            }
+                            if (groupMemory.relations?.length > 0) {
+                                parts.push(`群友关系：${groupMemory.relations.join('；')}`)
+                            }
+                            if (parts.length > 0) {
+                                systemPrompt += `\n【群聊记忆】\n${parts.join('\n')}\n`
+                                logger.debug(`[ChatService] 多任务: 已添加群聊记忆`)
                             }
                         }
-                    } catch (memErr) {
-                        logger.warn(`[ChatService] 多任务执行: 获取记忆失败:`, memErr.message)
                     }
+                } catch (memErr) {
+                    logger.warn(`[ChatService] 多任务: 获取记忆失败:`, memErr.message)
                 }
             }
+            
+            // 添加知识库上下文
+            try {
+                const { knowledgeService } = await import('../storage/KnowledgeService.js')
+                await knowledgeService.init()
+                const sm = await ensureScopeManager()
+                const effectiveSettings = await sm.getEffectiveSettings(groupId, userId, { isPrivate: !groupId })
+                const knowledgePresetId = effectiveSettings?.presetId || config.get('llm.defaultChatPresetId') || 'default'
+                const knowledgePrompt = knowledgeService.buildKnowledgePrompt(knowledgePresetId, {
+                    maxLength: config.get('knowledge.maxLength') || 15000,
+                    includeTriples: config.get('knowledge.includeTriples') !== false
+                })
+                if (knowledgePrompt) {
+                    systemPrompt += '\n\n' + knowledgePrompt
+                    logger.debug(`[ChatService] 多任务: 已添加知识库 (${knowledgePrompt.length} 字符)`)
+                }
+            } catch (knErr) {
+                logger.debug('[ChatService] 多任务: 知识库未加载:', knErr.message)
+            }
+            
+            // 添加全局系统提示词
+            const globalSystemPrompt = config.get('context.globalSystemPrompt')
+            const globalPromptMode = config.get('context.globalPromptMode') || 'append'
+            if (globalSystemPrompt && typeof globalSystemPrompt === 'string' && globalSystemPrompt.trim()) {
+                const globalPromptText = globalSystemPrompt.trim()
+                if (globalPromptMode === 'prepend') {
+                    systemPrompt = globalPromptText + '\n\n' + systemPrompt
+                } else if (globalPromptMode === 'override') {
+                    systemPrompt = globalPromptText
+                } else {
+                    systemPrompt += '\n\n' + globalPromptText
+                }
+                logger.debug(`[ChatService] 多任务: 已添加全局提示词 (模式: ${globalPromptMode})`)
+            }
+            
+            logger.debug(`[ChatService] 多任务执行: 完整人设已构建 (${systemPrompt.length} 字符)`)
+            
         } catch (err) {
             logger.warn(`[ChatService] 获取人设失败:`, err.message)
         }

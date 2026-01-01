@@ -4,6 +4,7 @@ import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMe
 import { isDebugEnabled } from './Commands.js'
 import { cacheGroupMessage } from './GroupEvents.js'
 import { emojiThiefService } from './EmojiThief.js'
+import { renderService } from '../src/services/media/RenderService.js'
 
 // 懒加载服务缓存
 let _chatService = null
@@ -639,7 +640,38 @@ export class ChatListener extends plugin {
                     // 如果没有使用官方Bot，使用IC发送
                     if (!usedOfficialBot) {
                         const quoteReply = config.get('basic.quoteReply') === true
-                        await this.reply(replyContent, quoteReply)
+                        
+                        // 检测是否包含数学公式，如果包含则渲染为图片
+                        const mathRenderEnabled = config.get('render.mathFormula') !== false
+                        
+                        if (mathRenderEnabled && replyTextContent) {
+                            const mathDetection = renderService.detectMathFormulas(replyTextContent)
+                            
+                            if (mathDetection.hasMath && mathDetection.confidence !== 'low') {
+                                try {
+                                    logger.debug(`[ChatListener] 检测到数学公式 (score: ${mathDetection.mathScore}, confidence: ${mathDetection.confidence})，渲染为图片`)
+                                    
+                                    // 渲染为图片
+                                    const imageBuffer = await renderService.renderMathContent(replyTextContent, {
+                                        theme: config.get('render.theme') || 'light',
+                                        width: config.get('render.width') || 800,
+                                        showTimestamp: false
+                                    })
+                                    
+                                    // 发送图片
+                                    const imgMsg = segment.image(imageBuffer)
+                                    await this.reply(imgMsg, quoteReply)
+                                    logger.info(`[ChatListener] 数学公式已渲染为图片发送`)
+                                } catch (renderErr) {
+                                    logger.warn(`[ChatListener] 数学公式渲染失败，回退到文本:`, renderErr.message)
+                                    await this.reply(replyContent, quoteReply)
+                                }
+                            } else {
+                                await this.reply(replyContent, quoteReply)
+                            }
+                        } else {
+                            await this.reply(replyContent, quoteReply)
+                        }
                     }
                     
                     // 表情包小偷 - 对话触发模式
