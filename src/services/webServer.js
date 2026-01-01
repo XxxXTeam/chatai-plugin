@@ -111,6 +111,11 @@ class RequestSignatureValidator {
         
         // 签名验证 - 使用简单字符串比较
         if (signature !== expectedSignature) {
+            chatLogger.warn(`[Auth] 签名不匹配:`)
+            chatLogger.warn(`  收到: ${signature}`)
+            chatLogger.warn(`  期望: ${expectedSignature}`)
+            chatLogger.warn(`  路径: ${fullPath}, 方法: ${req.method}`)
+            chatLogger.warn(`  bodyHash: ${bodyHash}, nonce: ${nonce}`)
             return { valid: false, error: 'Invalid signature' }
         }
         
@@ -227,6 +232,7 @@ class WebServer {
         const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : cookieToken
 
         if (!token) {
+            chatLogger.warn(`[Auth] 无token: ${req.method} ${req.originalUrl}`)
             return res.status(401).json(ChaiteResponse.fail(null, 'No token provided'))
         }
 
@@ -235,6 +241,7 @@ class WebServer {
             
             const clientFingerprint = req.headers['x-client-fingerprint']
             if (clientFingerprint && !fingerprintValidator.validate(token, clientFingerprint)) {
+                chatLogger.warn(`[Auth] 指纹不匹配: ${req.method} ${req.originalUrl}`)
                 return res.status(401).json(ChaiteResponse.fail(null, 'Invalid client fingerprint'))
             }
 
@@ -247,11 +254,11 @@ class WebServer {
                     return res.status(401).json(ChaiteResponse.fail(null, signatureResult.error))
                 }
                 if (nonce && !requestIdValidator.validate(nonce)) {
-                    return res.status(401).json(ChaiteResponse.fail(null, 'Request ID already used'))
                 }
             }
             next()
         } catch (error) {
+            chatLogger.warn(`[Auth] JWT验证失败: ${error.name} - ${error.message} - ${req.method} ${req.originalUrl}`)
             if (error.name === 'TokenExpiredError') {
                 return res.status(401).json(ChaiteResponse.fail(null, 'Token expired'))
             }
