@@ -67,28 +67,38 @@ export class ToolGroupManager {
     buildDispatchPrompt() {
         const summary = this.getGroupSummary()
         
-        let prompt = `请分析用户的请求，生成任务执行计划。支持多步骤任务，任务可以串行或并行执行。
+        let prompt = `你是一个智能任务调度器。请分析用户的请求，判断意图并生成任务执行计划。
+
+## 重要原则：
+1. **准确识别意图**：仔细分析用户真正想要什么
+2. **优先使用工具**：如果请求涉及查询信息、执行操作，优先选择tool类型
+3. **多步骤任务**：复杂请求拆分为多个步骤，合理设置依赖关系
+4. **避免误判**：普通闲聊用chat，但涉及具体操作/查询的不要用chat
 
 ## 任务类型：
 
-1. **draw（绘图生成）** - 生成/绘制/画图片
+1. **tool（工具调用）** - 查询信息或执行操作（最常用）
+   触发词："查"、"看"、"获取"、"发送"、"设置"、"搜"、"天气"、"时间"、"消息"等
+   示例："查天气"、"现在几点"、"发消息给xxx"、"获取群成员列表"
+   需要: toolGroups（工具组索引数组）
+
+2. **draw（绘图生成）** - 明确要求生成/绘制图片
+   触发词："画"、"绘制"、"生成图片"、"画一个/张"
    示例："帮我画一只猫"、"生成一张风景图"
    需要: drawPrompt（优化后的英文绘图提示词）
 
-2. **image_understand（图像理解）** - 分析/理解/描述图片内容
+3. **image_understand（图像理解）** - 分析用户发送的图片
+   触发词："这张图"、"图片里"、"看看这个"、"识别"、"分析图片"
    示例："这张图片里有什么"、"描述一下这个图"
    需要: prompt（分析指令）
 
-3. **tool（工具调用）** - 执行具体操作
-   示例："查天气"、"发消息"、"查时间"
-   需要: toolGroups（工具组索引）
-
-4. **search（联网搜索）** - 查询最新信息
-   示例："搜索最新新闻"、"查一下xxx"
+4. **search（联网搜索）** - 需要实时网络信息
+   触发词："搜索"、"最新"、"新闻"、"实时"
+   示例："搜索最新新闻"、"查一下xxx最新消息"
    需要: query（搜索关键词）
 
-5. **chat（普通对话）** - 闲聊、问答、创作文字
-   示例："你好"、"写一首诗"
+5. **chat（普通对话）** - 纯闲聊、问答、创作文字（无需工具）
+   示例："你好"、"写一首诗"、"解释一下xxx概念"
 
 `
         if (summary.length > 0) {
@@ -103,15 +113,15 @@ export class ToolGroupManager {
         prompt += `
 ## 返回格式（JSON）：
 {
-    "analysis": "简要分析用户意图",
+    "analysis": "简要分析用户意图（一句话）",
     "tasks": [
         {
             "type": "任务类型",
             "priority": 1,
             "params": {
                 "prompt": "任务提示词",
-                "drawPrompt": "绘图提示词(type=draw时)",
-                "toolGroups": [工具组索引(type=tool时)],
+                "drawPrompt": "绘图提示词(type=draw时,用英文)",
+                "toolGroups": [工具组索引数组(type=tool时)],
                 "query": "搜索关键词(type=search时)"
             },
             "dependsOn": null
@@ -120,19 +130,34 @@ export class ToolGroupManager {
     "executionMode": "sequential|parallel"
 }
 
+## 关键判断规则：
+- 涉及"时间/日期/几点" → tool，使用时间工具组
+- 涉及"天气/温度" → tool，使用天气工具组  
+- 涉及"发消息/艾特/@" → tool，使用消息工具组
+- 涉及"群成员/群信息" → tool，使用群管理工具组
+- 明确说"画/绘制/生成图片" → draw
+- 有图片且问"这是什么/图里有什么" → image_understand
+- 纯聊天/问答/写作 → chat
+
 ## 示例：
 
+用户说"现在几点"
+{"analysis":"查询当前时间","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[0]}}],"executionMode":"sequential"}
+
 用户说"帮我画一只可爱的小猫"
-{"analysis":"用户需要生成猫的图片","tasks":[{"type":"draw","priority":1,"params":{"drawPrompt":"a cute little cat, adorable, fluffy fur, big eyes, high quality, detailed"}}],"executionMode":"sequential"}
+{"analysis":"生成猫咪图片","tasks":[{"type":"draw","priority":1,"params":{"drawPrompt":"a cute little cat, adorable, fluffy fur, big eyes, high quality, detailed"}}],"executionMode":"sequential"}
+
+用户说"查下北京天气，再看看现在几点"
+{"analysis":"查天气和时间，可并行","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[14]}},{"type":"tool","priority":1,"params":{"toolGroups":[0]}}],"executionMode":"parallel"}
 
 用户说"这张图片里有什么？然后帮我画一张类似的"
-{"analysis":"先理解图片内容，再根据内容生成类似图片","tasks":[{"type":"image_understand","priority":1,"params":{"prompt":"详细描述这张图片的内容、风格、主题"}},{"type":"draw","priority":2,"params":{"drawPrompt":"根据上一步的描述生成"},"dependsOn":1}],"executionMode":"sequential"}
+{"analysis":"先理解图片，再生成类似图片","tasks":[{"type":"image_understand","priority":1,"params":{"prompt":"详细描述这张图片的内容、风格、主题"}},{"type":"draw","priority":2,"params":{"drawPrompt":"based on previous description"},"dependsOn":1}],"executionMode":"sequential"}
 
-用户说"现在几点了，顺便查下北京天气"
-{"analysis":"用户需要查时间和天气，可以并行执行","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[0]}},{"type":"tool","priority":1,"params":{"toolGroups":[14]}}],"executionMode":"parallel"}
-
-用户说"你好"
+用户说"你好呀"
 {"analysis":"简单问候","tasks":[{"type":"chat","priority":1,"params":{}}],"executionMode":"sequential"}
+
+用户说"写一首关于春天的诗"
+{"analysis":"文字创作","tasks":[{"type":"chat","priority":1,"params":{}}],"executionMode":"sequential"}
 
 只返回JSON，不要其他内容。`
         return prompt
@@ -155,11 +180,21 @@ export class ToolGroupManager {
             return defaultResult
         }
         
+        // 清理响应文本
+        let cleanResponse = response.trim()
+        // 移除可能的 markdown 代码块标记
+        cleanResponse = cleanResponse.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
+        
         try {
-            // 提取 JSON 对象
-            const jsonMatch = response.match(/\{[\s\S]*\}/)
+            // 提取 JSON 对象（贪婪匹配最外层的大括号）
+            const jsonMatch = cleanResponse.match(/\{[\s\S]*\}/)
             if (jsonMatch) {
-                const parsed = JSON.parse(jsonMatch[0])
+                let jsonStr = jsonMatch[0]
+                
+                // 尝试修复常见JSON格式问题
+                jsonStr = jsonStr.replace(/,\s*([\]}])/g, '$1')  // 移除尾随逗号
+                
+                const parsed = JSON.parse(jsonStr)
                 
                 const analysis = parsed.analysis || ''
                 const executionMode = ['sequential', 'parallel'].includes(parsed.executionMode) 
@@ -173,10 +208,28 @@ export class ToolGroupManager {
                         const type = ['draw', 'image_understand', 'tool', 'search', 'chat'].includes(t.type) 
                             ? t.type 
                             : 'chat'
+                        
+                        // 验证并修正工具组索引
+                        let params = t.params || {}
+                        if (type === 'tool' && Array.isArray(params.toolGroups)) {
+                            params.toolGroups = params.toolGroups.filter(i => 
+                                typeof i === 'number' && this.groups.has(i)
+                            )
+                            // 如果工具组为空，降级为chat
+                            if (params.toolGroups.length === 0) {
+                                return {
+                                    type: 'chat',
+                                    priority: t.priority || idx + 1,
+                                    params: {},
+                                    dependsOn: t.dependsOn || null
+                                }
+                            }
+                        }
+                        
                         return {
                             type,
                             priority: t.priority || idx + 1,
-                            params: t.params || {},
+                            params,
                             dependsOn: t.dependsOn || null
                         }
                     })
@@ -184,21 +237,35 @@ export class ToolGroupManager {
                     tasks = [{ type: 'chat', priority: 1, params: {} }]
                 }
                 
+                // 过滤无效任务
+                tasks = tasks.filter(t => {
+                    if (t.type === 'tool') {
+                        return Array.isArray(t.params?.toolGroups) && t.params.toolGroups.length > 0
+                    }
+                    return true
+                })
+                
+                if (tasks.length === 0) {
+                    tasks = [{ type: 'chat', priority: 1, params: {} }]
+                }
+                
                 // 提取所有工具组索引（用于兼容）
                 const toolGroups = tasks
                     .filter(t => t.type === 'tool' && Array.isArray(t.params?.toolGroups))
                     .flatMap(t => t.params.toolGroups)
-                    .filter(i => typeof i === 'number' && this.groups.has(i))
+                
+                logger.debug(`[ToolGroupManager] 解析调度结果: 分析="${analysis}", 任务数=${tasks.length}, 工具组=[${toolGroups.join(',')}]`)
                 
                 return { analysis, tasks, executionMode, toolGroups }
             }
-        } catch {
-            // JSON解析失败，尝试旧格式兼容
+        } catch (parseErr) {
+            logger.debug(`[ToolGroupManager] JSON解析失败: ${parseErr.message}, 响应: ${cleanResponse.substring(0, 200)}`)
         }
         
         // 兼容旧格式：纯数组
         const indexes = this.parseDispatchResponse(response)
         if (indexes.length > 0) {
+            logger.debug(`[ToolGroupManager] 使用旧格式解析，工具组=[${indexes.join(',')}]`)
             return { 
                 analysis: '', 
                 tasks: [{ type: 'tool', priority: 1, params: { toolGroups: indexes } }], 

@@ -6,7 +6,7 @@
 import { basicTools } from './basic.js'
 import { userTools } from './user.js'
 import { groupTools } from './group.js'
-import { messageTools } from './message.js'
+import { messageTools, forwardDataTools } from './message.js'
 import { adminTools } from './admin.js'
 import { fileTools } from './file.js'
 import { webTools } from './web.js'
@@ -45,9 +45,9 @@ export const toolCategories = {
     },
     message: {
         name: '消息操作',
-        description: '发送消息、@用户、获取聊天记录等',
+        description: '发送消息、@用户、获取聊天记录、转发消息解析等',
         icon: 'MessageSquare',
-        tools: messageTools
+        tools: [...messageTools, ...forwardDataTools]
     },
     admin: {
         name: '群管理',

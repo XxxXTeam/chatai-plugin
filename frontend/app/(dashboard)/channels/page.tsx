@@ -80,7 +80,7 @@ interface ChannelPresetCategory {
 }
 
 const PRESET_CATEGORIES: ChannelPresetCategory[] = [
-  { name: '内置免费API', icon: '🆓', presets: ['free-glm', 'free-xiaomi', 'free-gemini', 'free-grok', 'free-api', 'free-gemini2'] },
+  { name: '内置免费API', icon: '🆓', presets: ['free-glm', 'free-xiaomi', 'free-gemini', 'free-grok', 'free-api', 'free-gemini2', 'free-opencode'] },
   { name: '国际厂商', icon: '🌍', presets: ['openai', 'gemini', 'claude', 'grok', 'mistral', 'cohere', 'groq'] },
   { name: '国内厂商', icon: '🇨🇳', presets: ['deepseek', 'zhipu', 'qwen', 'baichuan', 'minimax', 'moonshot', 'yi', 'doubao', 'spark', 'hunyuan', 'baidu'] },
   { name: '中转服务', icon: '🔄', presets: ['openrouter', 'siliconflow', 'together', 'fireworks', 'novita'] },
@@ -135,6 +135,14 @@ const CHANNEL_PRESETS: Record<string, ChannelPreset> = {
     apiKey: 'sk-3d2f9b84e7f510b1a08f7b3d6c9a6a7f17fbbad5624ea29f22d9c742bf39c863',
     models: '',
     description: '免费Gemini对话接口',
+  },
+    'free-opencode': {
+    name: '免费opencode',
+    adapterType: 'openai',
+    baseUrl: 'https://opencode.ai/zen/v1',
+    apiKey: 'sk-MiJEspoHHYVl6Wx63pCzRSGU596rJRao70PgAYNkBNfnNQTAqHomGaQejmWeLwAz',
+    models: 'glm-4.7-free, grok-code, big-pickle, gpt-5-nano',
+    description: '免费opencode对话接口',
   },
   // ========== 国际厂商 ==========
   'openai': {
@@ -782,6 +790,7 @@ export default function ChannelsPage() {
                             'free-gemini2': { type: 'success', message: '免费Gemini对话API' },
                             'free-gemini': { type: 'info', message: '免费Gemini - 需手动获取API Key', url: preset.authUrl },
                             'free-grok': { type: 'info', message: '免费Grok - 需在 x.ai 获取API Key' },
+                            'free-opencode': { type: 'success', message: '免费opencode' },
                             'openai': { type: 'info', message: 'OpenAI - 请填入API Key（sk-xxx），可在 platform.openai.com 获取' },
                             'gemini': { type: 'info', message: 'Gemini - 请填入API Key，可在 aistudio.google.com 获取' },
                             'claude': { type: 'info', message: 'Claude - 请填入API Key，可在 console.anthropic.com 获取' },

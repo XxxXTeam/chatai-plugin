@@ -265,9 +265,11 @@ export class ScopeManager {
    */
   async setUserPrompt(userId, prompt) {
     const existingSettings = await this.getUserSettings(userId) || {}
+    const existingInnerSettings = existingSettings.settings || {}
     return await this.setUserSettings(userId, {
-      ...existingSettings,
-      systemPrompt: prompt
+      ...existingInnerSettings,  // 保留模型等配置
+      presetId: existingSettings.presetId,  // 保留预设ID
+      systemPrompt: prompt  // 仅更新人设
     })
   }
 
@@ -282,16 +284,21 @@ export class ScopeManager {
   }
 
   /**
-   * 设置群组Prompt
+   * 设置群组Prompt（仅更新人设，保留其他配置如模型等）
    * @param {string} groupId 群组ID
    * @param {string} prompt Prompt文本
    * @returns {Promise<boolean>} 是否成功
    */
   async setGroupPrompt(groupId, prompt) {
     const existingSettings = await this.getGroupSettings(groupId) || {}
+    // 保留现有的 settings 中的其他配置（如 modelId、功能开关等）
+    const existingInnerSettings = existingSettings.settings || {}
     return await this.setGroupSettings(groupId, {
-      ...existingSettings,
-      systemPrompt: prompt
+      ...existingInnerSettings,  // 保留模型等配置
+      presetId: existingSettings.presetId,  // 保留预设ID
+      knowledgeIds: existingSettings.knowledgeIds,  // 保留知识库
+      inheritFrom: existingSettings.inheritFrom,  // 保留继承配置
+      systemPrompt: prompt  // 仅更新人设
     })
   }
 
@@ -510,7 +517,7 @@ export class ScopeManager {
   }
 
   /**
-   * 设置群用户组合Prompt
+   * 设置群用户组合Prompt（仅更新人设，保留其他配置如模型等）
    * @param {string} groupId 群组ID
    * @param {string} userId 用户ID
    * @param {string} prompt Prompt文本
@@ -518,9 +525,12 @@ export class ScopeManager {
    */
   async setGroupUserPrompt(groupId, userId, prompt) {
     const existingSettings = await this.getGroupUserSettings(groupId, userId) || {}
+    // 保留现有的 settings 中的其他配置
+    const existingInnerSettings = existingSettings.settings || {}
     return await this.setGroupUserSettings(groupId, userId, {
-      ...existingSettings,
-      systemPrompt: prompt
+      ...existingInnerSettings,  // 保留模型等配置
+      presetId: existingSettings.presetId,  // 保留预设ID
+      systemPrompt: prompt  // 仅更新人设
     })
   }
 
@@ -725,16 +735,19 @@ export class ScopeManager {
   }
 
   /**
-   * 设置私聊Prompt
+   * 设置私聊Prompt（仅更新人设，保留其他配置如模型等）
    * @param {string} userId 用户ID
    * @param {string} prompt Prompt文本
    * @returns {Promise<boolean>} 是否成功
    */
   async setPrivatePrompt(userId, prompt) {
     const existingSettings = await this.getPrivateSettings(userId) || {}
+    // 保留现有的 settings 中的其他配置
+    const existingInnerSettings = existingSettings.settings || {}
     return await this.setPrivateSettings(userId, {
-      ...existingSettings,
-      systemPrompt: prompt
+      ...existingInnerSettings,  // 保留模型等配置
+      presetId: existingSettings.presetId,  // 保留预设ID
+      systemPrompt: prompt  // 仅更新人设
     })
   }
 

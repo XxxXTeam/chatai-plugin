@@ -130,9 +130,33 @@ class EmojiThiefService {
             let emojiType = null
             
             // 检查是否是表情包类型的图片
-            if (item.type === 'image' && (item.sub_type === 1 || item.emoji_id)) {
-                emojiUrl = item.url
-                emojiType = 'image'
+            if (item.type === 'image') {
+                // 严格过滤：必须是表情包类型（sub_type=1 或有 emoji_id）
+                // 排除头像和普通图片
+                const isEmoji = item.sub_type === 1 || item.emoji_id || item.asface
+                
+                // 排除可能是头像的图片
+                const url = item.url || ''
+                const isAvatar = url.includes('/avatar/') || 
+                                 url.includes('q.qlogo.cn') || 
+                                 url.includes('qlogo.cn') ||
+                                 url.includes('/head/') ||
+                                 url.includes('face_') ||
+                                 url.includes('/0/0-') ||  // QQ头像URL特征
+                                 (item.width && item.height && item.width === item.height && item.width <= 140)  // 小正方形图片可能是头像
+                
+                // 排除过小或过大的图片（表情包通常在特定尺寸范围内）
+                const width = item.width || 0
+                const height = item.height || 0
+                const isSizeInvalid = (width > 0 && height > 0) && (
+                    (width < 50 && height < 50) ||   // 太小，可能是表情符号
+                    (width > 800 || height > 800)    // 太大，不是表情包
+                )
+                
+                if (isEmoji && !isAvatar && !isSizeInvalid && url) {
+                    emojiUrl = url
+                    emojiType = 'image'
+                }
             }
             // 支持 bface 原创表情
             else if (item.type === 'bface' && item.file) {
@@ -142,8 +166,21 @@ class EmojiThiefService {
                     logger.debug(`[EmojiThief] 发现bface表情: ${item.text || '未知'}, url=${emojiUrl}`)
                 }
             }
+            // 支持 mface 商城表情
+            else if (item.type === 'mface' && item.url) {
+                emojiUrl = item.url
+                emojiType = 'mface'
+                logger.debug(`[EmojiThief] 发现mface商城表情`)
+            }
             
             if (!emojiUrl) continue
+            
+            // 预先检查URL是否已存在（基于URL的快速去重，避免重复下载）
+            const urlHash = crypto.createHash('md5').update(emojiUrl).digest('hex').substring(0, 16)
+            if (md5Db.has(urlHash) || md5Db.has(`url:${urlHash}`)) {
+                logger.debug(`[EmojiThief] 跳过重复URL: ${emojiUrl.substring(0, 50)}...`)
+                continue
+            }
             
             try {
                 // 根据偷取概率决定是否偷取
@@ -158,12 +195,26 @@ class EmojiThiefService {
                 
                 const response = await axios.get(emojiUrl, { 
                     responseType: 'arraybuffer', 
-                    timeout: 10000 
+                    timeout: 10000,
+                    validateStatus: status => status === 200  // 只接受200状态码
                 })
                 const buffer = response.data
+                
+                // 检查下载的内容是否有效
+                if (!buffer || buffer.length < 100) {
+                    logger.debug(`[EmojiThief] 跳过无效数据: ${emojiUrl.substring(0, 50)}...`)
+                    continue
+                }
+                
                 const hash = crypto.createHash('md5').update(buffer).digest('hex')
                 
-                if (md5Db.has(hash)) continue
+                // 检查内容hash是否已存在
+                if (md5Db.has(hash)) {
+                    // 记录URL hash以便下次快速跳过
+                    md5Db.add(`url:${urlHash}`)
+                    logger.debug(`[EmojiThief] 跳过重复内容: ${hash}`)
+                    continue
+                }
                 
                 // 判断文件类型
                 const ext = this.detectImageType(buffer) || 'gif'
@@ -172,6 +223,7 @@ class EmojiThiefService {
                 
                 await fsp.writeFile(filePath, buffer)
                 md5Db.add(hash)
+                md5Db.add(`url:${urlHash}`)  // 同时记录URL hash
                 hasNewEmoji = true
                 collectedCount++
                 

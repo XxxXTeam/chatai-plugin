@@ -1338,7 +1338,7 @@ export class ChannelManager {
     /**
      * 记录渠道使用
      * @param {string} channelId 
-     * @param {Object} usage { tokens, success, duration }
+     * @param {Object} usage { tokens, success, duration, model, keyIndex, switched, previousChannelId }
      */
     recordUsage(channelId, usage = {}) {
         let stats = this.channelStats.get(channelId)
@@ -1349,40 +1349,213 @@ export class ChannelManager {
                 failedCalls: 0,
                 totalTokens: 0,
                 totalDuration: 0,
-                lastUsed: null
+                avgDuration: 0,
+                lastUsed: null,
+                // 新增统计项
+                modelUsage: {},       // 按模型统计
+                keyUsage: {},         // 按Key统计
+                switchCount: 0,       // 切换次数
+                errorTypes: {},       // 错误类型统计
+                hourlyStats: {},      // 按小时统计
+                dailyStats: {}        // 按日统计
             }
             this.channelStats.set(channelId, stats)
         }
+
+        const now = Date.now()
+        const hour = new Date().getHours()
+        const day = new Date().toISOString().split('T')[0]
 
         stats.totalCalls++
         if (usage.success !== false) {
             stats.successCalls++
         } else {
             stats.failedCalls++
+            // 记录错误类型
+            if (usage.errorType) {
+                stats.errorTypes[usage.errorType] = (stats.errorTypes[usage.errorType] || 0) + 1
+            }
         }
         if (usage.tokens) {
             stats.totalTokens += usage.tokens
         }
         if (usage.duration) {
             stats.totalDuration += usage.duration
+            stats.avgDuration = Math.round(stats.totalDuration / stats.totalCalls)
         }
-        stats.lastUsed = Date.now()
+        stats.lastUsed = now
+
+        // 按模型统计
+        if (usage.model) {
+            if (!stats.modelUsage[usage.model]) {
+                stats.modelUsage[usage.model] = { calls: 0, tokens: 0, success: 0, failed: 0 }
+            }
+            stats.modelUsage[usage.model].calls++
+            if (usage.tokens) stats.modelUsage[usage.model].tokens += usage.tokens
+            if (usage.success !== false) {
+                stats.modelUsage[usage.model].success++
+            } else {
+                stats.modelUsage[usage.model].failed++
+            }
+        }
+
+        // 按Key统计
+        if (usage.keyIndex !== undefined && usage.keyIndex >= 0) {
+            const keyId = `key_${usage.keyIndex}`
+            if (!stats.keyUsage[keyId]) {
+                stats.keyUsage[keyId] = { calls: 0, success: 0, failed: 0, errors: 0 }
+            }
+            stats.keyUsage[keyId].calls++
+            if (usage.success !== false) {
+                stats.keyUsage[keyId].success++
+            } else {
+                stats.keyUsage[keyId].failed++
+            }
+        }
+
+        // 记录渠道切换
+        if (usage.switched) {
+            stats.switchCount++
+        }
+
+        // 按小时统计（保留最近24小时）
+        if (!stats.hourlyStats[hour]) {
+            stats.hourlyStats[hour] = { calls: 0, success: 0, tokens: 0 }
+        }
+        stats.hourlyStats[hour].calls++
+        if (usage.success !== false) stats.hourlyStats[hour].success++
+        if (usage.tokens) stats.hourlyStats[hour].tokens += usage.tokens
+
+        // 按日统计（保留最近7天）
+        if (!stats.dailyStats[day]) {
+            stats.dailyStats[day] = { calls: 0, success: 0, tokens: 0 }
+            // 清理旧数据（保留7天）
+            const days = Object.keys(stats.dailyStats).sort()
+            if (days.length > 7) {
+                delete stats.dailyStats[days[0]]
+            }
+        }
+        stats.dailyStats[day].calls++
+        if (usage.success !== false) stats.dailyStats[day].success++
+        if (usage.tokens) stats.dailyStats[day].tokens += usage.tokens
     }
 
     /**
      * 获取渠道统计
      * @param {string} channelId 
+     * @returns {Object|null}
      */
     getStats(channelId) {
         if (channelId) {
-            return this.channelStats.get(channelId) || null
+            const stats = this.channelStats.get(channelId)
+            if (!stats) return null
+            
+            // 计算成功率
+            const successRate = stats.totalCalls > 0 
+                ? Math.round((stats.successCalls / stats.totalCalls) * 100) 
+                : 0
+            
+            return {
+                ...stats,
+                successRate,
+                avgTokensPerCall: stats.totalCalls > 0 ? Math.round(stats.totalTokens / stats.totalCalls) : 0
+            }
         }
-        // 返回所有统计
+        // 返回所有统计（带计算字段）
         const allStats = {}
         for (const [id, stats] of this.channelStats) {
-            allStats[id] = stats
+            const successRate = stats.totalCalls > 0 
+                ? Math.round((stats.successCalls / stats.totalCalls) * 100) 
+                : 0
+            allStats[id] = {
+                ...stats,
+                successRate,
+                avgTokensPerCall: stats.totalCalls > 0 ? Math.round(stats.totalTokens / stats.totalCalls) : 0
+            }
         }
         return allStats
+    }
+
+    /**
+     * 获取渠道负载均衡统计摘要
+     * @returns {Object}
+     */
+    getLoadBalanceSummary() {
+        const channels = Array.from(this.channels.values())
+        const stats = this.getStats()
+        
+        const summary = {
+            totalChannels: channels.length,
+            enabledChannels: channels.filter(ch => ch.enabled !== false).length,
+            healthyChannels: channels.filter(ch => ch.status !== 'error' && ch.status !== 'disabled').length,
+            totalCalls: 0,
+            totalSuccess: 0,
+            totalFailed: 0,
+            totalTokens: 0,
+            totalSwitches: 0,
+            avgSuccessRate: 0,
+            channelBreakdown: [],
+            topModels: [],
+            errorSummary: {}
+        }
+
+        // 聚合统计
+        for (const ch of channels) {
+            const chStats = stats[ch.id] || {}
+            summary.totalCalls += chStats.totalCalls || 0
+            summary.totalSuccess += chStats.successCalls || 0
+            summary.totalFailed += chStats.failedCalls || 0
+            summary.totalTokens += chStats.totalTokens || 0
+            summary.totalSwitches += chStats.switchCount || 0
+
+            // 错误类型聚合
+            if (chStats.errorTypes) {
+                for (const [type, count] of Object.entries(chStats.errorTypes)) {
+                    summary.errorSummary[type] = (summary.errorSummary[type] || 0) + count
+                }
+            }
+
+            // 渠道详情
+            summary.channelBreakdown.push({
+                id: ch.id,
+                name: ch.name,
+                status: ch.status || 'idle',
+                calls: chStats.totalCalls || 0,
+                successRate: chStats.successRate || 0,
+                tokens: chStats.totalTokens || 0,
+                avgDuration: chStats.avgDuration || 0,
+                errorCount: ch.errorCount || 0
+            })
+        }
+
+        // 计算平均成功率
+        summary.avgSuccessRate = summary.totalCalls > 0 
+            ? Math.round((summary.totalSuccess / summary.totalCalls) * 100) 
+            : 0
+
+        // 按调用量排序
+        summary.channelBreakdown.sort((a, b) => b.calls - a.calls)
+
+        // 聚合模型使用统计
+        const modelStats = new Map()
+        for (const chStats of Object.values(stats)) {
+            if (chStats.modelUsage) {
+                for (const [model, mStats] of Object.entries(chStats.modelUsage)) {
+                    if (!modelStats.has(model)) {
+                        modelStats.set(model, { calls: 0, tokens: 0 })
+                    }
+                    const existing = modelStats.get(model)
+                    existing.calls += mStats.calls || 0
+                    existing.tokens += mStats.tokens || 0
+                }
+            }
+        }
+        summary.topModels = Array.from(modelStats.entries())
+            .map(([model, s]) => ({ model, ...s }))
+            .sort((a, b) => b.calls - a.calls)
+            .slice(0, 10)
+
+        return summary
     }
 
     /**
@@ -1391,20 +1564,26 @@ export class ChannelManager {
     getAllWithStats() {
         return Array.from(this.channels.values()).map(ch => ({
             ...ch,
-            stats: this.channelStats.get(ch.id) || {
+            stats: this.getStats(ch.id) || {
                 totalCalls: 0,
                 successCalls: 0,
                 failedCalls: 0,
-                totalTokens: 0
+                totalTokens: 0,
+                successRate: 0
             }
         }))
     }
 
     /**
      * 清空统计
+     * @param {string} [channelId] - 指定渠道ID，不传则清空所有
      */
-    clearStats() {
-        this.channelStats.clear()
+    clearStats(channelId) {
+        if (channelId) {
+            this.channelStats.delete(channelId)
+        } else {
+            this.channelStats.clear()
+        }
     }
 }
 
