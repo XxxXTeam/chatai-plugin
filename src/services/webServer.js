@@ -3,6 +3,7 @@ import cookieParser from 'cookie-parser'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 import crypto from 'node:crypto'
 import jwt from 'jsonwebtoken'
@@ -17,9 +18,34 @@ function isTRSSEnvironment() {
     return !!(global.Bot?.express && global.Bot?.server)
 }
 
+const isIPv4Address = (ip) => net.isIP(ip) === 4
+const isIPv6Address = (ip) => net.isIP(ip) === 6
+
+async function fetchPublicIp(endpoint, validator) {
+    try {
+        const https = await import('node:https')
+        return await new Promise((resolve) => {
+            const timeout = setTimeout(() => resolve(null), 5000)
+            const request = https.get(endpoint, { timeout: 3000 }, (res) => {
+                let data = ''
+                res.on('data', (chunk) => data += chunk)
+                res.on('end', () => {
+                    clearTimeout(timeout)
+                    const ip = data.trim()
+                    resolve(validator(ip) ? ip : null)
+                })
+            })
+            request.on('error', () => { clearTimeout(timeout); resolve(null) })
+            request.on('timeout', () => { clearTimeout(timeout); request.destroy(); resolve(null) })
+        })
+    } catch {
+        return null
+    }
+}
+
 // 获取本地和公网地址
 async function getServerAddresses(port) {
-    const addresses = { local: [], localIPv6: [], public: null }
+    const addresses = { local: [], localIPv6: [], public: null, publicIPv6: null }
     
     try {
         const os = await import('node:os')
@@ -39,22 +65,12 @@ async function getServerAddresses(port) {
         addresses.local = [`http://127.0.0.1:${port}`]
     }
     
-    // 获取公网IP
+    // 获取公网IP（包含 IPv4 与 IPv6）
     try {
-        const https = await import('node:https')
-        const publicIP = await new Promise((resolve) => {
-            const timeout = setTimeout(() => resolve(null), 5000)
-            https.get('https://api.ipify.org', { timeout: 3000 }, (res) => {
-                let data = ''
-                res.on('data', chunk => data += chunk)
-                res.on('end', () => {
-                    clearTimeout(timeout)
-                    const ip = data.trim()
-                    resolve(/^\d+\.\d+\.\d+\.\d+$/.test(ip) ? ip : null)
-                })
-            }).on('error', () => { clearTimeout(timeout); resolve(null) })
-        })
-        if (publicIP) addresses.public = `http://${publicIP}:${port}`
+        const publicIPv4 = await fetchPublicIp('https://api.ipify.org', isIPv4Address)
+        if (publicIPv4) addresses.public = `http://${publicIPv4}:${port}`
+        const publicIPv6 = await fetchPublicIp('https://api64.ipify.org', isIPv6Address)
+        if (publicIPv6) addresses.publicIPv6 = `http://[${publicIPv6}]:${port}`
     } catch {}
     
     return addresses
@@ -464,27 +480,35 @@ window.location.href = '/';
     getLoginInfo(permanent = false) {
         const token = authHandler.generateToken(5 * 60, permanent)
         const mountPath = ''
-        const localUrls = (this.addresses?.local || [`http://127.0.0.1:${this.port}`]).map(addr => 
-            `${addr}${mountPath}/login/token?token=${token}`
-        )
+        const baseLocalAddrs = this.addresses?.local || [`http://127.0.0.1:${this.port}`]
+        const localUrls = baseLocalAddrs.map(addr => `${addr}${mountPath}/login/token?token=${token}`)
+        const localIPv6Urls = (this.addresses?.localIPv6 || []).map(addr => `${addr}${mountPath}/login/token?token=${token}`)
         const loginLinks = config.get('web.loginLinks') || []
         const customUrls = loginLinks.map(link => ({
             label: link.label,
             url: `${link.baseUrl.replace(/\/$/, '')}${mountPath}/login/token?token=${token}`
         }))
         
-        let publicUrl = null
         const configPublicUrl = config.get('web.publicUrl')
+        const publicIPv6Base = this.addresses?.publicIPv6 || null
+        let publicUrl = null
         if (configPublicUrl) {
             publicUrl = `${configPublicUrl.replace(/\/$/, '')}${mountPath}/login/token?token=${token}`
         } else if (this.addresses?.public) {
             publicUrl = `${this.addresses.public}${mountPath}/login/token?token=${token}`
+        } else if (publicIPv6Base) {
+            publicUrl = `${publicIPv6Base}${mountPath}/login/token?token=${token}`
         }
-        
+
+        const publicIPv6Url = publicIPv6Base ? `${publicIPv6Base}${mountPath}/login/token?token=${token}` : null
+        const primaryLocalUrl = localUrls[0] || localIPv6Urls[0] || `http://127.0.0.1:${this.port}${mountPath}/login/token?token=${token}`
+
         return {
-            localUrl: localUrls[0],
+            localUrl: primaryLocalUrl,
             localUrls,
+            localIPv6Urls,
             publicUrl,
+            publicIPv6Url,
             customUrls: customUrls.length > 0 ? customUrls : null,
             validity: permanent ? '永久有效' : '5分钟内有效',
             isPermanent: permanent,
@@ -596,12 +620,26 @@ window.location.href = '/';
                 items.push({ label: '  ➜', value: addr, color: colors.cyan })
             }
         }
+        if (this.addresses.localIPv6?.length > 0) {
+            items.push({ label: '本地地址（IPv6）', value: '', color: colors.yellow })
+            for (const addr of this.addresses.localIPv6) {
+                items.push({ label: '  ➜', value: addr, color: colors.cyan })
+            }
+        }
         if (this.addresses.public) {
             items.push({ label: '公网地址', value: '', color: colors.green })
             items.push({ label: '  ➜', value: this.addresses.public, color: colors.green })
         }
+        if (this.addresses.publicIPv6) {
+            items.push({ label: '公网地址（IPv6）', value: '', color: colors.green })
+            items.push({ label: '  ➜', value: this.addresses.publicIPv6, color: colors.green })
+        }
         
         chatLogger.successBanner(`ChatAI Panel v1.0.0 启动成功 ${startTime}ms`, items)
+    }
+
+    getAddresses() {
+        return this.addresses || { local: [], localIPv6: [], public: null, publicIPv6: null }
     }
 
     stop() {
