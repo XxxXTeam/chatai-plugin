@@ -626,10 +626,13 @@ ${dialogText}${truncatedNote}`
             try {
                 const result = await chatService.sendMessage({
                     userId: `summary_${e.group_id}`,
-                    groupId: e.group_id ? String(e.group_id) : null,
+                    groupId: null,  // 不传群ID，避免继承群人设
                     message: summaryPrompt,
                     model: groupSummaryModel || undefined,  // 使用群组独立模型
-                    mode: 'chat'
+                    mode: 'chat',
+                    skipHistory: true,  // 跳过历史记录
+                    disableTools: true,  // 禁用工具
+                    prefixPersona: null  // 明确不使用人设
                 })
 
                 if (result.response && Array.isArray(result.response)) {
@@ -731,9 +734,12 @@ ${userMessages.slice(-analyzeCount).map(m => {
 
             const result = await chatService.sendMessage({
                 userId: `portrait_${userId}`,
-                groupId: e.group_id ? String(e.group_id) : null,
+                groupId: null,  // 不传群ID，避免继承群人设
                 message: portraitPrompt,
-                mode: 'chat'
+                mode: 'chat',
+                skipHistory: true,  // 跳过历史记录
+                disableTools: true,  // 禁用工具
+                prefixPersona: null  // 明确不使用人设
             })
 
             let portraitText = ''
@@ -1085,9 +1091,12 @@ ${rawChatHistory}`
 
             const result = await chatService.sendMessage({
                 userId: `profile_${targetUserId}`,
-                groupId: e.group_id ? String(e.group_id) : null,
+                groupId: null,  // 不传群ID，避免继承群人设
                 message: aiPrompt,
-                mode: 'chat'
+                mode: 'chat',
+                skipHistory: true,  // 跳过历史记录
+                disableTools: true,  // 禁用工具
+                prefixPersona: null  // 明确不使用人设
             })
 
             let profileText = ''

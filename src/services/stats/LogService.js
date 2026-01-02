@@ -7,14 +7,18 @@ const __dirname = path.dirname(__filename)
 
 /**
  * 日志服务 - 保存错误日志到文件
+ * 支持多种日志类型：error, warn, api, tool, channel, debug
  */
 class LogService {
     constructor() {
-        // 插件根目录下的 logs 文件夹（从 src/services/stats/ 向上三级到插件根目录）
         this.logDir = path.join(__dirname, '../../../logs')
         this.maxLogFiles = 30 // 最多保留30天的日志
         this.maxFileSize = 10 * 1024 * 1024 // 单个文件最大10MB
         this.initialized = false
+        this.buffer = new Map()
+        this.bufferFlushInterval = 5000 // 5秒刷新一次
+        this.bufferMaxSize = 50 // 每种类型最多缓存50条
+        this.flushTimer = null
     }
 
     /**
@@ -28,9 +32,44 @@ class LogService {
             }
             this.initialized = true
             this.cleanOldLogs()
+            // 启动缓冲区定时刷新
+            this.startFlushTimer()
         } catch (err) {
             console.error('[LogService] 初始化日志目录失败:', err.message)
         }
+    }
+
+    /**
+     * 启动缓冲区刷新定时器
+     */
+    startFlushTimer() {
+        if (this.flushTimer) return
+        this.flushTimer = setInterval(() => {
+            this.flushBuffer()
+        }, this.bufferFlushInterval)
+        // 允许进程正常退出
+        if (this.flushTimer.unref) {
+            this.flushTimer.unref()
+        }
+    }
+
+    /**
+     * 刷新缓冲区到文件
+     */
+    flushBuffer() {
+        for (const [type, entries] of this.buffer) {
+            if (entries.length === 0) continue
+            
+            const filePath = this.getLogFilePath(type)
+            const content = entries.map(e => JSON.stringify(e) + '\n').join('')
+            
+            try {
+                fs.appendFileSync(filePath, content, 'utf8')
+            } catch (err) {
+                console.error(`[LogService] 刷新 ${type} 日志失败:`, err.message)
+            }
+        }
+        this.buffer.clear()
     }
 
     /**
@@ -302,6 +341,187 @@ class LogService {
             }
         }
         return sanitized
+    }
+
+    /**
+     * 记录工具调用日志
+     * @param {string} toolName - 工具名称
+     * @param {Object} args - 调用参数
+     * @param {Object} result - 执行结果
+     * @param {Object} context - 上下文信息
+     */
+    toolCall(toolName, args, result, context = {}) {
+        const data = {
+            tool: toolName,
+            args: this.sanitizeArgs(args),
+            result: typeof result === 'string' 
+                ? result.substring(0, 500) 
+                : JSON.stringify(result).substring(0, 500),
+            duration: context.duration || 0,
+            success: context.success !== false,
+            userId: context.userId,
+            groupId: context.groupId
+        }
+        
+        this.write('tool', `[${toolName}] ${context.success !== false ? '成功' : '失败'}`, data)
+    }
+
+    /**
+     * 记录渠道操作日志
+     * @param {string} action - 操作类型 (select, switch, error, success)
+     * @param {Object} details - 详情
+     */
+    channel(action, details = {}) {
+        const data = {
+            action,
+            channelId: details.channelId,
+            channelName: details.channelName,
+            model: details.model,
+            keyIndex: details.keyIndex,
+            duration: details.duration,
+            success: details.success,
+            error: details.error,
+            previousChannel: details.previousChannel
+        }
+        
+        this.write('channel', `[${action}] ${details.channelName || details.channelId || ''}`, data)
+    }
+
+    /**
+     * 记录调度日志
+     * @param {string} phase - 阶段 (dispatch, parse, execute)
+     * @param {Object} details - 详情
+     */
+    dispatch(phase, details = {}) {
+        const data = {
+            phase,
+            model: details.model,
+            tasks: details.tasks,
+            toolGroups: details.toolGroups,
+            analysis: details.analysis,
+            executionMode: details.executionMode,
+            duration: details.duration,
+            error: details.error
+        }
+        
+        this.write('dispatch', `[${phase}] ${details.analysis || ''}`, data)
+    }
+
+    /**
+     * 记录对话日志
+     * @param {string} conversationId - 对话ID
+     * @param {Object} details - 详情
+     */
+    conversation(conversationId, details = {}) {
+        const data = {
+            conversationId,
+            userId: details.userId,
+            groupId: details.groupId,
+            model: details.model,
+            inputTokens: details.inputTokens,
+            outputTokens: details.outputTokens,
+            duration: details.duration,
+            toolCalls: details.toolCalls,
+            success: details.success !== false
+        }
+        
+        this.write('conversation', `[${conversationId}]`, data)
+    }
+
+    /**
+     * 清理参数中的敏感信息
+     * @param {Object} args 
+     * @returns {Object}
+     */
+    sanitizeArgs(args) {
+        if (!args || typeof args !== 'object') return args
+        const sanitized = { ...args }
+        const sensitiveKeys = ['password', 'token', 'secret', 'key', 'apiKey', 'api_key']
+        for (const key of Object.keys(sanitized)) {
+            if (sensitiveKeys.some(sk => key.toLowerCase().includes(sk.toLowerCase()))) {
+                sanitized[key] = '[REDACTED]'
+            }
+        }
+        return sanitized
+    }
+
+    /**
+     * 获取日志统计摘要
+     * @returns {Object}
+     */
+    getLogSummary() {
+        this.init()
+        
+        const summary = {
+            totalFiles: 0,
+            totalSize: 0,
+            recentErrors: 0,
+            byType: {}
+        }
+        
+        try {
+            const files = fs.readdirSync(this.logDir)
+            const today = new Date().toISOString().split('T')[0]
+            
+            for (const file of files) {
+                if (!file.endsWith('.log')) continue
+                
+                const filePath = path.join(this.logDir, file)
+                const stats = fs.statSync(filePath)
+                
+                summary.totalFiles++
+                summary.totalSize += stats.size
+                
+                // 提取日志类型
+                const typeMatch = file.match(/^([^-]+)-/)
+                if (typeMatch) {
+                    const type = typeMatch[1]
+                    if (!summary.byType[type]) {
+                        summary.byType[type] = { files: 0, size: 0 }
+                    }
+                    summary.byType[type].files++
+                    summary.byType[type].size += stats.size
+                }
+                
+                // 统计今日错误
+                if (file.includes('error') && file.includes(today)) {
+                    const content = fs.readFileSync(filePath, 'utf8')
+                    summary.recentErrors = content.split('\n').filter(Boolean).length
+                }
+            }
+            
+            // 格式化大小
+            summary.totalSizeFormatted = this.formatSize(summary.totalSize)
+            for (const type of Object.keys(summary.byType)) {
+                summary.byType[type].sizeFormatted = this.formatSize(summary.byType[type].size)
+            }
+        } catch (err) {
+            console.error('[LogService] 获取日志摘要失败:', err.message)
+        }
+        
+        return summary
+    }
+
+    /**
+     * 格式化文件大小
+     * @param {number} bytes 
+     * @returns {string}
+     */
+    formatSize(bytes) {
+        if (bytes < 1024) return `${bytes}B`
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
+        return `${(bytes / 1024 / 1024).toFixed(1)}MB`
+    }
+
+    /**
+     * 关闭日志服务（刷新缓冲区）
+     */
+    close() {
+        if (this.flushTimer) {
+            clearInterval(this.flushTimer)
+            this.flushTimer = null
+        }
+        this.flushBuffer()
     }
 }
 

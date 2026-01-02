@@ -17,11 +17,11 @@ export class bym extends plugin {
         super({
             name: 'AI-伪人模式',
             dsc: 'AI伪人模式',
-            event: 'message',
+            event: 'message.group',  // 仅群聊消息，避免私聊和其他事件触发
             priority: 6000,
             rule: [
                 {
-                    reg: '^[^#].*',  // 匹配非命令消息
+                    reg: '',  // 匹配所有群聊消息，由内部逻辑判断
                     fnc: 'bym',
                     log: false
                 }
@@ -80,7 +80,18 @@ export class bym extends plugin {
         if (!enabled) {
             return false
         }
-        if (e.atBot && !isReplyToBotMessage(e)) {
+        
+        // 跳过@机器人的消息（应由chat.js处理）
+        if (e.atBot) {
+            return false
+        }
+        
+        // 跳过以命令前缀开头的消息
+        const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
+        const triggerPrefixes = config.get('trigger.prefixes') || []
+        const allPrefixes = [cmdPrefix, '#', ...triggerPrefixes].filter(Boolean)
+        const rawMsg = (e.msg || '').trim()
+        if (allPrefixes.some(p => rawMsg.startsWith(p))) {
             return false
         }
         const processImage = config.get('bym.processImage') !== false // 默认处理图片
@@ -315,12 +326,10 @@ export class bym extends plugin {
                 }
             }
 
-            // 构建消息内容（支持图片）
-            const messageContent = [{ type: 'text', text: messageText || '[图片消息]' }]
-            
-            // 如果启用图片处理且消息包含图片，添加图片到内容中
+            // 提取图片URL（移到外部以便后续使用）
+            let imageUrls = []
             if (processImage && hasImage) {
-                const imageUrls = e.img || []
+                imageUrls = [...(e.img || [])]
                 // 也从 message 中提取图片
                 if (e.message) {
                     for (const m of e.message) {
@@ -333,18 +342,13 @@ export class bym extends plugin {
                     }
                 }
                 
-                // 添加图片到消息内容
-                for (const imgUrl of imageUrls.slice(0, 3)) { // 限制最多3张图片
-                    messageContent.push({
-                        type: 'image_url',
-                        image_url: { url: imgUrl }
-                    })
-                }
-                
                 if (imageUrls.length > 0) {
                     logger.info(`[BYM] 处理图片消息: ${imageUrls.length} 张图片`)
                 }
             }
+            
+            // 构建消息内容（支持图片）- 仅用于日志
+            const messageContent = [{ type: 'text', text: messageText || '[图片消息]' }]
             
             const userMessage = {
                 role: 'user',
@@ -371,19 +375,34 @@ export class bym extends plugin {
 
             const bymStartTime = Date.now()
             
-            // 构建正确的 conversationId，与 ChatService 保持一致
-            // 群聊使用 group:groupId，私聊使用 user:userId
+            // 使用 chatService 来确保上下文正确传递和保存
             const groupId = e.group_id ? String(e.group_id) : null
             const userId = String(e.user_id || e.sender?.user_id)
-            const bymConversationId = groupId ? `group:${groupId}` : `user:${userId}`
             
-            const response = await client.sendMessage(userMessage, {
+            // 构建用户ID：群聊使用 groupId_userId，私聊使用 userId
+            const fullUserId = groupId ? `${groupId}_${userId}` : userId
+            
+            // 使用 chatService.sendMessage 来正确处理上下文
+            const { chatService } = await import('../src/services/llm/ChatService.js')
+            
+            const chatResult = await chatService.sendMessage({
+                userId: fullUserId,
+                groupId: groupId,
+                message: messageText,
+                images: processImage && imageUrls.length > 0 ? imageUrls.slice(0, 3).map(url => ({ type: 'image_url', image_url: { url } })) : [],
+                mode: 'bym',  // 标记为伪人模式
                 model: bymModel,
-                conversationId: bymConversationId, // 使用与普通聊天相同的会话ID，共享上下文
-                systemOverride: systemPrompt,
+                prefixPersona: systemPrompt,  // 使用伪人系统提示
+                event: e,
+                disableTools: true,  // 伪人模式不使用工具（ChatService参数名）
                 temperature: bymTemperature,
-                maxToken: bymMaxTokens,
+                maxTokens: bymMaxTokens
             })
+            
+            const response = {
+                contents: chatResult.response || [],
+                usage: chatResult.usage
+            }
 
             const replyText = response.contents
                 .filter(c => c.type === 'text')

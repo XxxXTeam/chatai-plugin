@@ -127,7 +127,9 @@ export class ChatService {
             debugMode = false,  // 调试模式
             prefixPersona = null,  // 前缀人格（独立于普通人设）
             disableTools = false,  // 禁用工具调用（用于防止递归）
-            skipHistory = false  // 跳过历史记录（用于事件响应等场景）
+            skipHistory = false,  // 跳过历史记录（用于事件响应等场景）
+            temperature: overrideTemperature,  // 覆盖温度参数
+            maxTokens: overrideMaxTokens       // 覆盖最大token参数
         } = options
 
         // 调试信息收集
@@ -158,20 +160,34 @@ export class ChatService {
         // 提取纯userId（不带群号前缀）
         const pureUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
         const cleanUserId = pureUserId?.includes('_') ? pureUserId.split('_').pop() : pureUserId
-        let forceIsolation = false
-        if (groupId) {
-            const sm = await ensureScopeManager()
-            const groupUserSettings = await sm.getGroupUserSettings(String(groupId), cleanUserId)
-            const userSettings = await sm.getUserSettings(cleanUserId)
-            if (groupUserSettings?.systemPrompt || userSettings?.systemPrompt) {
-                forceIsolation = true
-            }
-        }
+        
+        // 群聊始终使用共享上下文，确保所有用户能看到彼此的对话
+        // 用户独立人设通过 systemPrompt 实现，而非隔离历史记录
         let conversationId
-        if (forceIsolation && groupId) {
-            conversationId = `group:${groupId}:user:${cleanUserId}`
+        if (groupId) {
+            // 群聊：始终使用共享的群组上下文 group:${groupId}
+            // 这样所有用户的消息都在同一历史中，AI可以看到完整对话
+            conversationId = `group:${groupId}`
+            logger.debug(`[ChatService] 群聊共享上下文: ${conversationId}`)
         } else {
-            conversationId = contextManager.getConversationId(cleanUserId, groupId)
+            // 私聊：使用用户独立上下文
+            conversationId = contextManager.getConversationId(cleanUserId, null)
+        }
+        
+        // 检查用户是否有独立人设（用于后续 systemPrompt 构建，不影响历史共享）
+        let hasIndependentPersona = false
+        if (groupId) {
+            try {
+                const sm = await ensureScopeManager()
+                const groupUserSettings = await sm.getGroupUserSettings(String(groupId), cleanUserId)
+                const userSettings = await sm.getUserSettings(cleanUserId)
+                if (groupUserSettings?.systemPrompt || userSettings?.systemPrompt) {
+                    hasIndependentPersona = true
+                    logger.debug(`[ChatService] 用户 ${cleanUserId} 有独立人设，但历史仍共享`)
+                }
+            } catch (e) {
+                logger.debug(`[ChatService] 检查独立人设失败: ${e.message}`)
+            }
         }
 
         // 构建消息内容
@@ -830,12 +846,14 @@ export class ChatService {
         let lastError = null
         const requestStartTime = Date.now()
         
-        // 参数优先级：预设 > 渠道 > 默认值（移到外层，确保 finally 可访问）
+        // 参数优先级：调用方覆盖 > 预设 > 渠道 > 默认值（移到外层，确保 finally 可访问）
         const presetParams = currentPreset?.modelParams || {}
+        const baseMaxToken = presetParams.max_tokens || presetParams.maxTokens || channelLlm.maxTokens || 4000
+        const baseTemperature = presetParams.temperature ?? channelLlm.temperature ?? 0.7
         const requestOptions = {
             model: llmModel,
-            maxToken: presetParams.max_tokens || presetParams.maxTokens || channelLlm.maxTokens || 4000,
-            temperature: presetParams.temperature ?? channelLlm.temperature ?? 0.7,
+            maxToken: overrideMaxTokens ?? baseMaxToken,
+            temperature: overrideTemperature ?? baseTemperature,
             topP: presetParams.top_p ?? presetParams.topP ?? channelLlm.topP,
             conversationId,
             systemOverride: systemPrompt,
@@ -843,7 +861,8 @@ export class ChatService {
             // 跳过历史时，同时禁用客户端的历史读取
             disableHistoryRead: skipHistory,
         }
-        logger.debug(`[ChatService] 请求参数: temperature=${requestOptions.temperature}, maxToken=${requestOptions.maxToken}, 来源: ${presetParams.temperature !== undefined ? '预设' : (channelLlm.temperature !== undefined ? '渠道' : '默认')}`)
+        const tempSource = overrideTemperature !== undefined ? '调用方' : (presetParams.temperature !== undefined ? '预设' : (channelLlm.temperature !== undefined ? '渠道' : '默认'))
+        logger.debug(`[ChatService] 请求参数: temperature=${requestOptions.temperature}, maxToken=${requestOptions.maxToken}, 来源: ${tempSource}`)
         
         try {
             if (event && event.reply) {
@@ -2193,6 +2212,19 @@ export class ChatService {
             
             logger.info(`[ChatService] 图像理解任务: model=${imageModel}, 图片数=${images.length}`)
             
+            // 获取对话历史以保持上下文连贯和人设一致
+            let history = []
+            if (conversationId) {
+                try {
+                    history = await contextManager.getContextHistory(conversationId, 10)
+                    if (history.length > 0) {
+                        logger.debug(`[ChatService] 图像任务加载历史: ${history.length} 条`)
+                    }
+                } catch (e) {
+                    logger.debug(`[ChatService] 图像任务获取历史失败: ${e.message}`)
+                }
+            }
+            
             // 准备图片
             const imageUrls = images.map(img => typeof img === 'string' ? img : (img.url || img.file || img)).filter(Boolean)
             
@@ -2233,7 +2265,9 @@ export class ChatService {
                 model: imageModel,
                 maxToken: 2048,
                 temperature: 0.7,
-                systemOverride: systemPrompt || undefined
+                systemOverride: systemPrompt || undefined,
+                messages: history,  // 传递历史上下文
+                conversationId
             })
             
             const responseText = response.contents
@@ -2292,6 +2326,19 @@ export class ChatService {
             
             logger.info(`[ChatService] 工具调用任务: model=${toolModel}, 工具数=${tools.length}`)
             
+            // 获取对话历史以保持上下文连贯
+            let history = []
+            if (conversationId) {
+                try {
+                    history = await contextManager.getContextHistory(conversationId, 10)
+                    if (history.length > 0) {
+                        logger.debug(`[ChatService] 工具任务加载历史: ${history.length} 条`)
+                    }
+                } catch (e) {
+                    logger.debug(`[ChatService] 工具任务获取历史失败: ${e.message}`)
+                }
+            }
+            
             // 调用工具模型
             await channelManager.init()
             const channel = channelManager.getBestChannel(toolModel)
@@ -2328,7 +2375,9 @@ export class ChatService {
                 model: toolModel,
                 maxToken: 2048,
                 temperature: 0.7,
-                systemOverride: systemPrompt || undefined
+                systemOverride: systemPrompt || undefined,
+                messages: history,  // 传递历史上下文
+                conversationId
             })
             
             const responseText = response.contents
@@ -2375,6 +2424,19 @@ export class ChatService {
             
             logger.info(`[ChatService] 搜索任务: model=${searchModel}, query="${query.substring(0, 50)}..."`)
             
+            // 获取对话历史以保持上下文连贯
+            let history = []
+            if (conversationId) {
+                try {
+                    history = await contextManager.getContextHistory(conversationId, 8)
+                    if (history.length > 0) {
+                        logger.debug(`[ChatService] 搜索任务加载历史: ${history.length} 条`)
+                    }
+                } catch (e) {
+                    logger.debug(`[ChatService] 搜索任务获取历史失败: ${e.message}`)
+                }
+            }
+            
             // 使用搜索工具组
             const searchTools = await this.getToolsForGroups([10], { applyConfig: true }) // 假设搜索工具组索引为10
             
@@ -2405,7 +2467,9 @@ export class ChatService {
                 model: searchModel,
                 maxToken: 2048,
                 temperature: 0.7,
-                systemOverride: systemPrompt || undefined
+                systemOverride: systemPrompt || undefined,
+                messages: history,  // 传递历史上下文
+                conversationId
             })
             
             const responseText = response.contents
@@ -2451,6 +2515,19 @@ export class ChatService {
             
             logger.info(`[ChatService] 对话任务: model=${chatModel}`)
             
+            // 获取对话历史以保持上下文连贯和人设一致
+            let history = []
+            if (conversationId) {
+                try {
+                    history = await contextManager.getContextHistory(conversationId, 15)
+                    if (history.length > 0) {
+                        logger.debug(`[ChatService] 对话任务加载历史: ${history.length} 条`)
+                    }
+                } catch (e) {
+                    logger.debug(`[ChatService] 对话任务获取历史失败: ${e.message}`)
+                }
+            }
+            
             await channelManager.init()
             const channel = channelManager.getBestChannel(chatModel)
             
@@ -2484,7 +2561,9 @@ export class ChatService {
                 model: chatModel,
                 maxToken: 2048,
                 temperature: 0.9,
-                systemOverride: systemPrompt || undefined
+                systemOverride: systemPrompt || undefined,
+                messages: history,  // 传递历史上下文
+                conversationId
             })
             
             const responseText = response.contents

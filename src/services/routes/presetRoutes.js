@@ -8,6 +8,8 @@ import { asyncHandler } from '../middleware/routeFactory.js'
 import { presetManager } from '../preset/PresetManager.js'
 import config from '../../../config/config.js'
 
+const logger = global.logger || console
+
 // ChaiteResponse helper
 class ChaiteResponse {
     constructor(code, data, message) {
@@ -116,6 +118,38 @@ export function createPresetRoutes(authMiddleware) {
         await ensureInit()
         const prompt = presetManager.buildSystemPrompt(req.params.id)
         res.json(ChaiteResponse.ok({ prompt }))
+    }))
+
+    // POST /api/preset/from-builtin/:builtinId - 从内置预设创建新预设
+    router.post('/from-builtin/:builtinId', ...auth, asyncHandler(async (req, res) => {
+        await ensureInit()
+        const builtinId = req.params.builtinId
+        const overrides = req.body || {}
+        
+        // 获取内置预设
+        const builtinPreset = presetManager.getBuiltin(builtinId)
+        if (!builtinPreset) {
+            return res.status(404).json(ChaiteResponse.fail(null, `内置预设 ${builtinId} 不存在`))
+        }
+        
+        // 生成新的预设ID（避免与内置预设冲突）
+        const newId = overrides.id || `custom_${builtinId}_${Date.now()}`
+        
+        // 合并内置预设和覆盖配置
+        const newPreset = {
+            ...builtinPreset,
+            ...overrides,
+            id: newId,
+            isBuiltin: false,  // 标记为非内置
+            createdFrom: builtinId,  // 记录来源
+            createdAt: Date.now()
+        }
+        
+        // 创建新预设
+        const created = await presetManager.create(newPreset)
+        
+        logger.info(`[PresetRoutes] 从内置预设 ${builtinId} 创建新预设 ${newId}`)
+        res.status(201).json(ChaiteResponse.ok(created))
     }))
 
     return router
