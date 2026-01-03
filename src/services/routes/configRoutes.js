@@ -55,16 +55,33 @@ function deepMerge(target, source) {
 router.post('/', async (req, res) => {
     try {
         const updates = req.body
+        // 先在内存中合并所有更新，最后一次性保存
         for (const [key, value] of Object.entries(updates)) {
             if (value && typeof value === 'object' && !Array.isArray(value)) {
                 // 深度合并对象
                 const existing = config.get(key) || {}
                 const merged = deepMerge({ ...existing }, value)
-                config.set(key, merged)
+                // 直接修改内存配置，不立即保存
+                const keys = key.split('.')
+                let obj = config.config
+                for (let i = 0; i < keys.length - 1; i++) {
+                    if (!obj[keys[i]]) obj[keys[i]] = {}
+                    obj = obj[keys[i]]
+                }
+                obj[keys[keys.length - 1]] = merged
             } else {
-                config.set(key, value)
+                // 直接修改内存配置，不立即保存
+                const keys = key.split('.')
+                let obj = config.config
+                for (let i = 0; i < keys.length - 1; i++) {
+                    if (!obj[keys[i]]) obj[keys[i]] = {}
+                    obj = obj[keys[i]]
+                }
+                obj[keys[keys.length - 1]] = value
             }
         }
+        // 所有更新完成后，一次性保存到文件
+        config.save()
         chatLogger.debug('[WebServer] 配置已保存')
         res.json(ChaiteResponse.ok({ success: true }))
     } catch (error) {

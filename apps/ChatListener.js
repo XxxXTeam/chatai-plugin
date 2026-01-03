@@ -266,26 +266,32 @@ export class ChatListener extends plugin {
      */
     checkAccess(cfg) {
         const e = this.e
-        const userId = e.user_id?.toString()
-        const groupId = e.group_id?.toString()
+        const userId = String(e.user_id || '')
+        const groupId = String(e.group_id || '')
+
+        // 辅助函数：将数组元素全部转为字符串后检查是否包含
+        const includesAsString = (arr, val) => {
+            if (!Array.isArray(arr) || !val) return false
+            return arr.some(item => String(item) === val)
+        }
 
         // 检查用户黑名单
-        if (cfg.blacklistUsers?.includes(userId)) {
+        if (includesAsString(cfg.blacklistUsers, userId)) {
             return false
         }
 
         // 检查用户白名单（如果设置了白名单，必须在白名单内）
-        if (cfg.whitelistUsers?.length > 0 && !cfg.whitelistUsers.includes(userId)) {
+        if (cfg.whitelistUsers?.length > 0 && !includesAsString(cfg.whitelistUsers, userId)) {
             return false
         }
 
         // 检查群组黑名单
-        if (e.isGroup && cfg.blacklistGroups?.includes(groupId)) {
+        if (e.isGroup && includesAsString(cfg.blacklistGroups, groupId)) {
             return false
         }
 
         // 检查群组白名单
-        if (e.isGroup && cfg.whitelistGroups?.length > 0 && !cfg.whitelistGroups.includes(groupId)) {
+        if (e.isGroup && cfg.whitelistGroups?.length > 0 && !includesAsString(cfg.whitelistGroups, groupId)) {
             return false
         }
 

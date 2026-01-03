@@ -262,24 +262,6 @@ class WebServer {
 
         try {
             jwt.verify(token, authKey, { algorithms: ['HS256'], issuer: 'chatai-panel', audience: 'chatai-client' })
-            
-            const clientFingerprint = req.headers['x-client-fingerprint']
-            if (clientFingerprint && !fingerprintValidator.validate(token, clientFingerprint)) {
-                chatLogger.warn(`[Auth] 指纹不匹配: ${req.method} ${req.originalUrl}`)
-                return res.status(401).json(ChaiteResponse.fail(null, 'Invalid client fingerprint'))
-            }
-
-            const nonce = req.headers['x-nonce']
-            const isSensitiveOperation = req.method !== 'GET'
-            if (isSensitiveOperation) {
-                const signatureResult = RequestSignatureValidator.validate(req)
-                if (!signatureResult.valid) {
-                    chatLogger.warn(`[Auth] 签名验证失败: ${signatureResult.error} - ${req.method} ${req.originalUrl}`)
-                    return res.status(401).json(ChaiteResponse.fail(null, signatureResult.error))
-                }
-                if (nonce && !requestIdValidator.validate(nonce)) {
-                }
-            }
             next()
         } catch (error) {
             chatLogger.warn(`[Auth] JWT验证失败: ${error.name} - ${error.message} - ${req.method} ${req.originalUrl}`)
@@ -298,8 +280,6 @@ class WebServer {
         this.app.get('/login/token', async (req, res) => {
             const { token } = req.query
             if (!token) return res.redirect('/login/')
-            
-            // 验证但不立即消耗token，允许重试（token会在5分钟后自动过期）
             const success = authHandler.validateToken(token, false)
             if (success) {
                 const jwtToken = jwt.sign({

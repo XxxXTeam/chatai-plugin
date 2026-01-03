@@ -124,7 +124,7 @@ class Config {
                 // 关键词预设映射：{ "关键词": "预设ID" }
                 presetMap: {},
                 // 仅伪人模式可用的功能
-                exclusiveFeatures: ['groupSummary', 'userPortrait']
+                exclusiveFeatures: ['groupSummary', 'userPortrait'],
             },
             // 工具调用配置
             tools: {
@@ -430,6 +430,11 @@ class Config {
             },
             streaming: {
                 enabled: true,
+            },
+            // IP探针配置
+            probe: {
+                serverUrl: 'http://127.0.0.1:9527',  // 探针服务器地址
+                secretKey: 'your-secret-key-change-me',  // API密钥，需与服务端一致
             },
             // AI触发配置
             trigger: {

@@ -64,8 +64,9 @@ async function getAIResponse(eventDesc, options = {}) {
             userId: String(userId),
             groupId: groupId ? String(groupId) : null,
             message: eventDesc,
-            mode: 'roleplay',
-            skipHistory: true
+            mode: 'chat',  
+            skipHistory: true,
+            disableTools: true  
         })
         let reply = result.response
             ?.filter(c => c.type === 'text')

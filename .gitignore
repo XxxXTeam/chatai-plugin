@@ -35,3 +35,7 @@ src/services/qqbot/QQBotMessageHandler.js
 src/services/qqbot/*
 src/services/qqbot/QQBotSender.js
 src/services/webServer.old.js
+agent/*
+apps/Probe.js
+src/services/probe/ProbeService.js
+apps/Probe.js.bak

@@ -285,7 +285,9 @@ export class ChatService {
             ...(groupId && { group_id: groupId })
         }
         // 如果 skipHistory 为 true，跳过历史记录（用于事件响应等不需要上下文的场景）
-        let history = skipHistory ? [] : await contextManager.getContextHistory(conversationId, 20)
+        // 增加历史记录数量以改善上下文理解，从20条增加到30条
+        const historyLimit = config.get('context.autoContext.maxHistoryMessages') || 30
+        let history = skipHistory ? [] : await contextManager.getContextHistory(conversationId, historyLimit)
         
         // 获取默认预设配置
         await presetManager.init()
@@ -343,7 +345,8 @@ export class ChatService {
         
         if (scopePresetId && !presetId && !preset) {
             logger.debug(`[ChatService] 使用群组/用户配置的预设: ${effectivePresetIdForModel}`)
-        }const presetEnableTools = currentPreset?.tools?.enableBuiltinTools !== false && currentPreset?.enableTools !== false
+        }
+        const presetEnableTools = currentPreset?.tools?.enableBuiltinTools !== false && currentPreset?.enableTools !== false
         // 检查群组工具配置（scopeFeatures.toolsEnabled: true/false/undefined）
         let scopeToolsEnabled = true
         if (scopeFeatures.toolsEnabled !== undefined) {
@@ -354,22 +357,18 @@ export class ChatService {
         }
         const toolsAllowed = !disableTools && presetEnableTools && scopeToolsEnabled
         const hasImages = images.length > 0
-        
-        // 初始化工具组（如果启用）
         let selectedToolGroupIndexes = []
         let toolsFromGroups = []
         let dispatchInfo = null
-        
-        // 如果启用工具且启用工具组调度，且调度模型已配置
         const dispatchModelConfigured = !!LlmService.getDispatchModel()
-        const shouldDispatch = toolsAllowed && this.shouldUseToolGroupDispatch({ preset: currentPreset, disableTools }) && dispatchModelConfigured
+        const shouldDispatch = toolsAllowed && !hasImages && this.shouldUseToolGroupDispatch({ preset: currentPreset, disableTools }) && dispatchModelConfigured
         
         // 获取群组调度模型配置（提前获取用于判断）
         const groupDispatchModelForDispatch = scopeFeatures.dispatchModel || null
         
         if (shouldDispatch) {
             try { 
-                dispatchInfo = await this.dispatchToolGroups(message, { event, debugMode, groupDispatchModel: groupDispatchModelForDispatch })
+                dispatchInfo = await this.dispatchToolGroups(message, { event, debugMode, groupDispatchModel: groupDispatchModelForDispatch, conversationId })
                 selectedToolGroupIndexes = dispatchInfo.indexes
                 
                 // 检查是否有特殊任务需要处理（非纯chat任务）
@@ -659,7 +658,8 @@ export class ChatService {
             }
         }
         let prefixPresetId = null
-        if (prefixPersona) {
+        // skipPersona 模式下也跳过 prefixPersona 处理
+        if (prefixPersona && !skipPersona) {
             logger.debug(`[ChatService] 收到前缀人格参数: "${prefixPersona}" (长度: ${prefixPersona?.length || 0})`)
             const prefixPreset = presetManager.get(prefixPersona)
             
@@ -693,8 +693,7 @@ export class ChatService {
             }
             logger.debug(`[ChatService] 前缀人格应用后systemPrompt长度: ${systemPrompt.length}`)
         }
-        // 记忆上下文：即使是新会话也应该加载已有记忆（只是不携带历史消息）
-        if (config.get('memory.enabled')) {
+        if (config.get('memory.enabled') && !skipPersona) {
             try {
                 await memoryManager.init()
                 const memoryContext = await memoryManager.getMemoryContext(userId, message || '', {
@@ -1512,7 +1511,7 @@ export class ChatService {
      * @returns {Promise<{indexes: number[], dispatchResponse: string, tasks: Array, executionMode: string, analysis: string}>}
      */
     async dispatchToolGroups(message, options = {}) {
-        const { event, debugMode, groupDispatchModel } = options
+        const { event, debugMode, groupDispatchModel, conversationId } = options
         const defaultReturn = { indexes: [], dispatchResponse: '', tasks: [{ type: 'chat', priority: 1, params: {} }], executionMode: 'sequential', analysis: '' }
         
         // 初始化工具组管理器
@@ -1531,6 +1530,28 @@ export class ChatService {
         
         if (!dispatchPrompt) {
             return defaultReturn
+        }
+        
+        // 获取上下文历史，帮助调度模型理解用户意图
+        let contextSummary = ''
+        if (conversationId) {
+            try {
+                const history = await contextManager.getContextHistory(conversationId, 10)
+                if (history.length > 0) {
+                    // 提取最近几条消息作为上下文摘要
+                    const recentMessages = history.slice(-5).map(msg => {
+                        const role = msg.role === 'user' ? '用户' : 'AI'
+                        const text = Array.isArray(msg.content) 
+                            ? msg.content.filter(c => c.type === 'text').map(c => c.text).join('').substring(0, 100)
+                            : String(msg.content).substring(0, 100)
+                        return `${role}: ${text}`
+                    }).join('\n')
+                    contextSummary = `\n\n【最近对话上下文】\n${recentMessages}\n`
+                    logger.debug(`[ChatService] 调度携带上下文: ${history.length} 条历史`)
+                }
+            } catch (e) {
+                logger.debug(`[ChatService] 获取调度上下文失败: ${e.message}`)
+            }
         }
         
         try {
@@ -1552,11 +1573,11 @@ export class ChatService {
             
             const client = await LlmService.createClient(clientOptions)
             
-            // 发送调度请求（带重试）
+            // 发送调度请求（带重试）- 包含上下文
             const dispatchMessage = {
                 role: 'user',
                 content: [
-                    { type: 'text', text: `${dispatchPrompt}\n\n用户请求：${message}` }
+                    { type: 'text', text: `${dispatchPrompt}${contextSummary}\n\n用户当前请求：${message}` }
                 ]
             }
             
@@ -2232,7 +2253,7 @@ export class ChatService {
             let history = []
             if (conversationId) {
                 try {
-                    history = await contextManager.getContextHistory(conversationId, 10)
+                    history = await contextManager.getContextHistory(conversationId, 20)
                     if (history.length > 0) {
                         logger.debug(`[ChatService] 图像任务加载历史: ${history.length} 条`)
                     }
@@ -2346,7 +2367,7 @@ export class ChatService {
             let history = []
             if (conversationId) {
                 try {
-                    history = await contextManager.getContextHistory(conversationId, 10)
+                    history = await contextManager.getContextHistory(conversationId, 20)
                     if (history.length > 0) {
                         logger.debug(`[ChatService] 工具任务加载历史: ${history.length} 条`)
                     }
@@ -2444,7 +2465,7 @@ export class ChatService {
             let history = []
             if (conversationId) {
                 try {
-                    history = await contextManager.getContextHistory(conversationId, 8)
+                    history = await contextManager.getContextHistory(conversationId, 15)
                     if (history.length > 0) {
                         logger.debug(`[ChatService] 搜索任务加载历史: ${history.length} 条`)
                     }
@@ -2535,7 +2556,7 @@ export class ChatService {
             let history = []
             if (conversationId) {
                 try {
-                    history = await contextManager.getContextHistory(conversationId, 15)
+                    history = await contextManager.getContextHistory(conversationId, 25)
                     if (history.length > 0) {
                         logger.debug(`[ChatService] 对话任务加载历史: ${history.length} 条`)
                     }
