@@ -796,6 +796,8 @@ async function parseReplyMessage(e, options) {
     let text = ''
     const parseLog = [] // 解析日志
 
+    const isNapCatPlatform = NapCatMessageUtils.isNapCat(e)
+
     try {
         let replyData = null
         let replySenderId = null
@@ -835,6 +837,20 @@ async function parseReplyMessage(e, options) {
             if (seq || msgId) {
                 // 群聊
                 if (e.isGroup || e.group_id) {
+                    // NapCat 专用：优先使用 sendApi 获取全量数据
+                    if (!replyData && isNapCatPlatform && msgId) {
+                        try {
+                            parseLog.push(`[Reply] NapCat getFullMessage(${msgId})`)
+                            const napCatMsg = await NapCatMessageUtils.getFullMessage(e, msgId)
+                            if (napCatMsg) {
+                                replyData = napCatMsg
+                                parseLog.push(`[Reply] NapCat getFullMessage 成功`)
+                            }
+                        } catch (err) {
+                            parseLog.push(`[Reply] NapCat getFullMessage 失败: ${err.message}`)
+                        }
+                    }
+
                     // NC/NapCat: 优先使用 bot.getMsg (message_id)
                     if (!replyData && e.bot?.getMsg && msgId) {
                         try {

@@ -112,11 +112,48 @@ export class MessageInspector extends plugin {
             targetSeq = parseInt(match[1])
         }
         
+        // 调试：打印引用相关字段
+        logger.debug(`[MessageInspector] Reply debug: source=${JSON.stringify(e.source)}, reply_id=${e.reply_id}, message_type=${typeof e.message}, message_len=${Array.isArray(e.message) ? e.message.length : 'N/A'}`)
+        if (Array.isArray(e.message)) {
+            logger.debug(`[MessageInspector] e.message segments: ${JSON.stringify(e.message.map(s => ({ type: s.type, id: s.data?.id || s.id })))}`)
+        }
+        
         // 从引用消息中获取
         if (!targetSeq && e.source) {
             targetSeq = e.source.seq
             targetMsgId = e.source.message_id || e.source.id
+            logger.debug(`[MessageInspector] Got from e.source: seq=${targetSeq}, msgId=${targetMsgId}`)
         }
+        
+        // NapCat/OneBot: 从 e.reply_id 获取
+        if (!targetSeq && !targetMsgId && e.reply_id) {
+            targetMsgId = e.reply_id
+            logger.debug(`[MessageInspector] Got from e.reply_id: ${targetMsgId}`)
+        }
+        
+        // NapCat/OneBot: 从消息数组中提取 reply 段的 id
+        if (!targetSeq && !targetMsgId) {
+            // 尝试多个可能的消息数组位置
+            const msgArrays = [
+                e.message,
+                e.original_msg?.message,
+                e.raw_message_json
+            ].filter(Boolean)
+            
+            for (const msgArray of msgArrays) {
+                if (!Array.isArray(msgArray)) continue
+                for (const seg of msgArray) {
+                    if (seg.type === 'reply' && (seg.data?.id || seg.id)) {
+                        targetMsgId = seg.data?.id || seg.id
+                        logger.debug(`[MessageInspector] Got from message array: ${targetMsgId}`)
+                        break
+                    }
+                }
+                if (targetMsgId) break
+            }
+        }
+        
+        logger.debug(`[MessageInspector] Final: targetSeq=${targetSeq}, targetMsgId=${targetMsgId}, getPrevious=${!targetSeq && !targetMsgId}`)
         
         // 没有指定seq也没有引用，则获取上一条消息
         if (!targetSeq && !targetMsgId) {
