@@ -62,17 +62,43 @@ class RenderService {
      */
     detectMathFormulas(text) {
         if (!text || typeof text !== 'string') {
-            return { hasMath: false, confidence: 'low', matches: [] }
+            return { hasMath: false, confidence: 'low', matches: [], mathScore: 0 }
         }
         
         const matches = []
         let confidence = 'low'
-        let mathScore = 0  
+        let mathScore = 0
+        
+        // 排除普通文本中的数字和常见格式
+        // 如：日期、时间、版本号、货币、百分比等
+        const excludePatterns = [
+            /\d{4}[-/]\d{1,2}[-/]\d{1,2}/g,  // 日期
+            /\d{1,2}:\d{2}(:\d{2})?/g,        // 时间
+            /v?\d+\.\d+(\.\d+)?/gi,           // 版本号
+            /[¥$€£]\s*\d+/g,                  // 货币
+            /\d+%/g,                           // 百分比
+            /\d+\s*(个|条|篇|次|人|天|小时|分钟|秒)/g,  // 中文计数
+        ]
+        
+        let cleanText = text
+        for (const pattern of excludePatterns) {
+            cleanText = cleanText.replace(pattern, ' ')
+        }
+        
+        // 只检测明确的 LaTeX 语法
         const blockMatches = text.match(this.mathPatterns.blockLatex) || []
         if (blockMatches.length > 0) {
-            matches.push(...blockMatches)
-            confidence = 'high'
-            mathScore += blockMatches.length * 10
+            // 验证块级公式内容确实包含数学元素
+            const validBlocks = blockMatches.filter(m => 
+                this.mathPatterns.mathCommands.test(m) || 
+                /[+\-*/=<>^_{}\\]/.test(m) ||
+                /[α-ωΑ-Ω∑∏∞∂√±≈≠≤≥∈∉]/.test(m)
+            )
+            if (validBlocks.length > 0) {
+                matches.push(...validBlocks)
+                confidence = 'high'
+                mathScore += validBlocks.length * 10
+            }
         }
         
         // 检测 \[...\] 块级公式
@@ -91,13 +117,20 @@ class RenderService {
             mathScore += envMatches.length * 10
         }
         
-        // 检测行内 LaTeX 公式 $...$
+        // 检测行内 LaTeX 公式 $...$ - 更严格的验证
         const inlineMatches = text.match(this.mathPatterns.inlineLatex) || []
         if (inlineMatches.length > 0) {
             const validInline = inlineMatches.filter(m => {
-                return this.mathPatterns.mathCommands.test(m) || 
-                       /[+\-*/=<>^_{}\\]/.test(m) ||
-                       /\d+[a-zA-Z]|[a-zA-Z]\d+/.test(m)
+                // 必须包含 LaTeX 命令或明确的数学运算符
+                const hasLatexCmd = this.mathPatterns.mathCommands.test(m)
+                const hasMathOps = /[+\-*/=<>^_{}\\]/.test(m) && m.length > 3
+                const hasVarNum = /[a-zA-Z][²³⁰-ⁿ]|\d+[a-zA-Z]/.test(m)
+                const hasGreek = /[α-ωΑ-Ω]/.test(m)
+                // 排除纯数字和简单文本
+                const isPureNumber = /^\$\s*\d+(\.\d+)?\s*\$$/.test(m)
+                const isSimpleText = /^\$\s*[a-zA-Z]+\s*\$$/.test(m) && m.length < 8
+                
+                return (hasLatexCmd || hasMathOps || hasVarNum || hasGreek) && !isPureNumber && !isSimpleText
             })
             if (validInline.length > 0) {
                 matches.push(...validInline)
@@ -113,59 +146,55 @@ class RenderService {
             if (confidence !== 'high') confidence = 'medium'
             mathScore += bracketInlineMatches.length * 5
         }
-        const funcMatches = text.match(this.mathPatterns.functionNotation) || []
-        mathScore += funcMatches.length * 3
         
-        // 检测极限表示 lim(x→...)
-        const limitMatches = text.match(this.mathPatterns.limitNotation) || []
-        mathScore += limitMatches.length * 5
-        
-        // 检测下标/上标 Unicode
-        const subSupMatches = text.match(this.mathPatterns.subscriptSuperscript) || []
-        mathScore += subSupMatches.length * 2
-        
-        // 检测导数表示
-        const derivMatches = text.match(this.mathPatterns.derivativeNotation) || []
-        mathScore += derivMatches.length * 3
+        // 以下检测只在明确的数学上下文中才加分
+        // 检测LaTeX数学命令 - 这是最可靠的指标
+        if (this.mathPatterns.mathCommands.test(text)) {
+            mathScore += 8
+            if (confidence === 'low') confidence = 'medium'
+        }
         
         // 检测积分符号
         const integralMatches = text.match(this.mathPatterns.integralSymbol) || []
         mathScore += integralMatches.length * 5
         
-        // 检测数学符号 (∑, ∞, ∂ 等)
+        // 检测数学符号 (∑, ∞, ∂ 等) - 只有这些才明确是数学
         const symbolMatches = text.match(this.mathPatterns.mathSymbols) || []
-        mathScore += symbolMatches.length * 3
-        
-        // 检测三角函数 sinx, cosx
-        const trigMatches = text.match(this.mathPatterns.trigFunctions) || []
-        mathScore += trigMatches.length * 2
+        mathScore += symbolMatches.length * 4
         
         // 检测希腊字母
         const greekMatches = text.match(this.mathPatterns.greekLetters) || []
-        mathScore += greekMatches.length * 1
+        mathScore += greekMatches.length * 3
         
-        // 检测数学区间表示 [a,b]
-        const intervalMatches = text.match(this.mathPatterns.intervalNotation) || []
-        mathScore += intervalMatches.length * 2
+        // 检测下标上标 (₀-₉, ²³等)
+        const subSupMatches = text.match(this.mathPatterns.subscriptSuperscript) || []
+        mathScore += subSupMatches.length * 2
         
-        // 检测数学表达式模式 x², x^2
+        // 检测极限表示 lim(x→...)
+        const limitMatches = text.match(this.mathPatterns.limitNotation) || []
+        mathScore += limitMatches.length * 5
+        
+        // 检测函数表示 f(x), g(x)
+        const funcMatches = text.match(this.mathPatterns.functionNotation) || []
+        mathScore += funcMatches.length * 2
+        
+        // 检测三角函数 sin, cos, tan 等跟着变量
+        const trigMatches = text.match(this.mathPatterns.trigFunctions) || []
+        mathScore += trigMatches.length * 3
+        
+        // 检测数学表达式模式（分数、幂等）
         const exprMatches = text.match(this.mathPatterns.mathExprPattern) || []
-        mathScore += exprMatches.length * 2
+        mathScore += exprMatches.length * 3
         
-        // 检测LaTeX数学命令
-        if (this.mathPatterns.mathCommands.test(text)) {
-            mathScore += 5
-        }
-        
-        // 根据评分确定置信度
-        if (mathScore >= 15 && confidence !== 'high') {
+        // 提高阈值，避免误判
+        if (mathScore >= 20 && confidence !== 'high') {
             confidence = 'high'
-        } else if (mathScore >= 8 && confidence === 'low') {
+        } else if (mathScore >= 12 && confidence === 'low') {
             confidence = 'medium'
         }
         
-        // 如果评分超过阈值，认为包含数学内容
-        const hasMath = mathScore >= 8 || matches.length > 0
+        // 提高判定阈值
+        const hasMath = (mathScore >= 12 && matches.length > 0) || mathScore >= 20
         
         return {
             hasMath,
@@ -222,14 +251,16 @@ class RenderService {
         result = result.replace(/≤/g, '\\leq')
         result = result.replace(/≥/g, '\\geq')
         result = result.replace(/∈/g, '\\in')
-        result = result.replace(/×/g, '\\times')
-        result = result.replace(/·/g, '\\cdot')
-        result = result.replace(/√/g, '\\sqrt')
-        result = result.replace(/∫/g, '\\int')
-        result = result.replace(/∑/g, '\\sum')
-        result = result.replace(/∏/g, '\\prod')
-        result = result.replace(/∂/g, '\\partial')
-        result = result.replace(/\b(sin|cos|tan|cot|sec|csc|ln|log|exp|lim|max|min|sup|inf)(?![a-zA-Z\\])/gi, '\\$1')
+        result = result.replace(/×/g, '\\times ')
+        result = result.replace(/·/g, '\\cdot ')
+        result = result.replace(/√/g, '\\sqrt ')
+        result = result.replace(/∫/g, '\\int ')
+        result = result.replace(/∑/g, '\\sum ')
+        result = result.replace(/∏/g, '\\prod ')
+        result = result.replace(/∂/g, '\\partial ')
+        result = result.replace(/\b(sin|cos|tan|cot|sec|csc|ln|log|exp|lim|max|min|sup|inf)(?![a-zA-Z\\])/gi, '\\$1 ')
+        // 修复LaTeX命令后紧跟字母的问题，如 \cdotx -> \cdot x
+        result = result.replace(/\\(cdot|times|to|pm|approx|neq|leq|geq|in|partial|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|sigma|omega|xi|eta|zeta|infty)([a-zA-Z])/g, '\\$1 $2')
         const mathPattern = /\\[a-zA-Z]+|\^{|_{/
         if (!mathPattern.test(result)) return result
         
@@ -277,8 +308,6 @@ class RenderService {
                         }
                         j++
                     }
-                    
-                    // 如果j到达末尾
                     if (j >= remaining.length) {
                         mathExpr += remaining.slice(mathStart[1].length)
                         j = remaining.length
@@ -674,38 +703,668 @@ class RenderService {
     }
 
     /**
-     * 渲染群聊总结
      * @param {string} markdown - 总结内容
      * @param {Object} options - 选项
      * @returns {Promise<Buffer>}
      */
     async renderGroupSummary(markdown, options = {}) {
-        return this.renderMarkdownToImage({
-            markdown,
-            title: options.title || '群聊内容总结',
-            subtitle: options.subtitle || `基于最近 ${options.messageCount || '?'} 条消息`,
-            icon: '💬',
-            theme: options.theme || 'light',
-            ...options
-        })
+        const {
+            title = '群聊内容总结',
+            subtitle = '',
+            messageCount = 0,
+            participantCount = 0,
+            topUsers = [],
+            hourlyActivity = [],
+            theme = 'light',
+            width = 520
+        } = options
+
+        const cleanedMd = this.cleanMarkdown(markdown)
+        const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
+        let html = marked(protectedMd)
+        html = this.restoreMathExpressions(html, expressions)
+        
+        const now = new Date()
+        const dateStr = now.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+        const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+        const activityData = hourlyActivity.length === 24 ? hourlyActivity : Array(24).fill(0)
+        const maxActivity = Math.max(...activityData, 1)
+        const activityBars = activityData.map((v, i) => {
+            const height = maxActivity > 0 ? Math.max(2, Math.round((v / maxActivity) * 50)) : 2
+            const color = v > 0 ? '#FFB347' : '#FFE8D8'
+            return `<div class="bar" style="height:${height}px;background:${color}"></div>`
+        }).join('')
+        const userCardsHtml = topUsers.length > 0 ? topUsers.map((u, i) => {
+            const gradients = [
+                'linear-gradient(135deg, #FF6B6B 0%, #FF8E8E 100%)',
+                'linear-gradient(135deg, #4ECDC4 0%, #6EE7DF 100%)',
+                'linear-gradient(135deg, #A78BFA 0%, #C4B5FD 100%)',
+                'linear-gradient(135deg, #F59E0B 0%, #FBBF24 100%)',
+                'linear-gradient(135deg, #10B981 0%, #34D399 100%)'
+            ]
+            const bgGradient = gradients[i % gradients.length]
+            const initial = (u.name || '?').charAt(0).toUpperCase()
+            const rankBadge = i === 0 ? '👑' : (i === 1 ? '🥈' : (i === 2 ? '🥉' : `#${i+1}`))
+            // 使用真实头像URL，如果没有则显示首字母
+            const avatarContent = u.avatar 
+                ? `<img src="${u.avatar}" class="avatar-img" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
+                : ''
+            const fallbackContent = `<div class="avatar-fallback" style="background:${bgGradient};display:${u.avatar ? 'none' : 'flex'}">${initial}</div>`
+            return `
+                <div class="user-card">
+                    <div class="user-rank">${rankBadge}</div>
+                    <div class="user-avatar">
+                        ${avatarContent}
+                        ${fallbackContent}
+                    </div>
+                    <div class="user-name">${u.name || '用户'}</div>
+                    <div class="user-count">${u.count} 条</div>
+                </div>`
+        }).join('') : ''
+
+        const beautifulHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: linear-gradient(180deg, #FFF8F5 0%, #FFFAF8 100%);
+            min-height: 100vh;
+            padding: 15px;
+        }
+        .container {
+            max-width: ${width}px;
+            margin: 0 auto;
+            background: #FFFCFA;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 2px 12px rgba(255, 180, 150, 0.12);
+            border: 1px solid rgba(255, 210, 180, 0.25);
+        }
+        /* 顶部头部 - 渐变粉橙色 */
+        .header {
+            background: linear-gradient(135deg, #FFEEE6 0%, #FFE0D0 50%, #FFD4C0 100%);
+            padding: 20px;
+            position: relative;
+            min-height: 100px;
+        }
+        .header-main {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+        .header-left { flex: 1; }
+        .header-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #C75000;
+            margin-bottom: 6px;
+            line-height: 1.4;
+        }
+        .header-desc {
+            font-size: 11px;
+            color: #D07030;
+        }
+        .header-right {
+            text-align: right;
+            padding-left: 15px;
+        }
+        .header-date {
+            font-size: 10px;
+            color: #C08060;
+        }
+        .header-time {
+            font-size: 20px;
+            font-weight: 700;
+            color: #D06020;
+        }
+        /* 统计栏 */
+        .stats-row {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            padding: 12px 20px;
+            background: #FFF9F5;
+            border-bottom: 1px solid rgba(255, 200, 170, 0.15);
+        }
+        .stat-box {
+            text-align: center;
+        }
+        .stat-num {
+            font-size: 18px;
+            font-weight: 700;
+            color: #E07020;
+        }
+        .stat-txt {
+            font-size: 10px;
+            color: #B08060;
+            margin-top: 2px;
+        }
+        /* 活动图表 */
+        .chart-section {
+            padding: 15px 20px;
+            background: #FFFBF8;
+            border-bottom: 1px solid rgba(255, 200, 170, 0.15);
+        }
+        .chart-title {
+            font-size: 11px;
+            color: #A07050;
+            margin-bottom: 10px;
+        }
+        .chart-bars {
+            display: flex;
+            align-items: flex-end;
+            gap: 2px;
+            height: 65px;
+            padding: 0 5px;
+        }
+        .bar {
+            flex: 1;
+            min-width: 8px;
+            border-radius: 2px 2px 0 0;
+            transition: height 0.3s;
+        }
+        .chart-labels {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 5px;
+            padding: 0 5px;
+        }
+        .chart-labels span {
+            font-size: 9px;
+            color: #B0A090;
+        }
+        /* 活跃用户区域 */
+        .users-section {
+            padding: 16px 20px;
+            background: linear-gradient(180deg, #FFF9F5 0%, #FFFBF8 100%);
+            border-bottom: 1px solid rgba(255, 200, 170, 0.15);
+        }
+        .users-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #C06030;
+            margin-bottom: 14px;
+        }
+        .users-grid {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .user-card {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: #FFF;
+            padding: 12px 8px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(200,150,100,0.08);
+            border: 1px solid rgba(255,200,170,0.15);
+            position: relative;
+        }
+        .user-rank {
+            position: absolute;
+            top: -6px;
+            right: -4px;
+            font-size: 14px;
+        }
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            margin-bottom: 6px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+            overflow: hidden;
+            position: relative;
+        }
+        .user-avatar .avatar-img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 50%;
+        }
+        .user-avatar .avatar-fallback {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            align-items: center;
+            justify-content: center;
+            color: #FFF;
+            font-size: 16px;
+            font-weight: 700;
+        }
+        .user-name {
+            font-size: 10px;
+            font-weight: 600;
+            color: #605040;
+            max-width: 70px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            text-align: center;
+            margin-bottom: 2px;
+        }
+        .user-count {
+            font-size: 9px;
+            color: #A09080;
+            background: #FFF5F0;
+            padding: 2px 6px;
+            border-radius: 8px;
+        }
+        /* 内容区 */
+        .content {
+            padding: 18px 20px;
+        }
+        .section {
+            margin-bottom: 16px;
+        }
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+        .section-icon {
+            font-size: 14px;
+        }
+        .section-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #C06020;
+        }
+        .content h1, .content h2 {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #C06020;
+            margin: 16px 0 10px 0;
+            padding-bottom: 6px;
+            border-bottom: 1px dashed #FFE0D0;
+        }
+        .content h1:first-child, .content h2:first-child { margin-top: 0; }
+        .content h3 {
+            font-size: 12px;
+            font-weight: 600;
+            color: #D08040;
+            margin: 12px 0 6px 0;
+        }
+        .content p {
+            font-size: 12px;
+            color: #605040;
+            line-height: 1.7;
+            margin: 8px 0;
+        }
+        .content ul, .content ol {
+            padding-left: 16px;
+            margin: 8px 0;
+        }
+        .content li {
+            font-size: 12px;
+            color: #605040;
+            line-height: 1.7;
+            margin: 4px 0;
+        }
+        .content strong {
+            color: #D06020;
+            font-weight: 600;
+        }
+        .content blockquote {
+            background: #FFF5F0;
+            border-left: 3px solid #FFB080;
+            padding: 10px 12px;
+            margin: 10px 0;
+            border-radius: 0 8px 8px 0;
+            font-size: 11px;
+            color: #906050;
+        }
+        .content code {
+            background: #FFF0E8;
+            padding: 1px 4px;
+            border-radius: 3px;
+            font-size: 11px;
+            color: #C06030;
+        }
+        .content hr {
+            border: none;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, #FFE0D0, transparent);
+            margin: 14px 0;
+        }
+        /* 底部 */
+        .footer {
+            padding: 12px 20px;
+            background: linear-gradient(90deg, #FFF8F4 0%, #FFFAF6 100%);
+            border-top: 1px solid rgba(255, 200, 170, 0.15);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .footer-left {
+            font-size: 10px;
+            color: #B09080;
+        }
+        .footer-right {
+            font-size: 10px;
+            color: #C0A090;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="header-main">
+                <div class="header-left">
+                    <div class="header-title">📊 ${title}</div>
+                    <div class="header-desc">${subtitle || `基于 ${messageCount} 条消息`}</div>
+                </div>
+                <div class="header-right">
+                    <div class="header-date">📅 ${dateStr}</div>
+                    <div class="header-time">${timeStr}</div>
+                </div>
+            </div>
+        </div>
+        <div class="stats-row">
+            <div class="stat-box">
+                <div class="stat-num">${messageCount || '-'}</div>
+                <div class="stat-txt">消息数</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-num">${participantCount || '-'}</div>
+                <div class="stat-txt">参与者</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-num">🔥</div>
+                <div class="stat-txt">活跃</div>
+            </div>
+        </div>
+        <div class="chart-section">
+            <div class="chart-title">📈 24小时活跃度</div>
+            <div class="chart-bars">${activityBars}</div>
+            <div class="chart-labels">
+                <span>0时</span>
+                <span>6时</span>
+                <span>12时</span>
+                <span>18时</span>
+                <span>24时</span>
+            </div>
+        </div>
+        ${userCardsHtml ? `
+        <div class="users-section">
+            <div class="users-title">👥 活跃成员 TOP${topUsers.length}</div>
+            <div class="users-grid">${userCardsHtml}</div>
+        </div>` : ''}
+        <div class="content">
+            ${html}
+        </div>
+        <div class="footer">
+            <div class="footer-left">✨ AI 智能生成</div>
+            <div class="footer-right">${now.toLocaleString('zh-CN')}</div>
+        </div>
+    </div>
+</body>
+</html>`
+
+        let browser = null
+        try {
+            browser = await this.getBrowser()
+            const page = await browser.newPage()
+            await page.setViewport({ width: width + 30, height: 800 })
+            await page.setContent(beautifulHtml, { waitUntil: 'networkidle0', timeout: 30000 })
+            // 等待头像图片加载完成
+            if (topUsers.some(u => u.avatar)) {
+                try {
+                    await page.waitForSelector('.avatar-img', { timeout: 5000 })
+                    await new Promise(r => setTimeout(r, 500))
+                } catch (e) {
+                    // 图片加载超时，继续使用降级显示
+                }
+            }
+            const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
+            await page.close()
+            return imageBuffer
+        } catch (error) {
+            logService.error('[RenderService] 渲染群聊总结失败', error)
+            throw error
+        }
     }
 
     /**
-     * 渲染用户画像
+     * 渲染用户画像 - 美化版本
      * @param {string} markdown - 画像内容
      * @param {string} nickname - 用户昵称
      * @param {Object} options - 选项
      * @returns {Promise<Buffer>}
      */
     async renderUserProfile(markdown, nickname, options = {}) {
-        return this.renderMarkdownToImage({
-            markdown,
-            title: `用户画像分析`,
-            subtitle: nickname,
-            icon: '👤',
-            theme: options.theme || 'light',
-            ...options
-        })
+        const { messageCount = 0, width = 480, userId = null } = options
+        
+        const cleanedMd = this.cleanMarkdown(markdown)
+        const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
+        let html = marked(protectedMd)
+        html = this.restoreMathExpressions(html, expressions)
+        
+        const now = new Date()
+        const dateStr = now.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+        const initial = (nickname || '?').charAt(0).toUpperCase()
+        // 生成真实头像URL
+        const avatarUrl = userId ? `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=0` : null
+        
+        const profileHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: linear-gradient(180deg, #E8F4FD 0%, #F0F7FF 100%);
+            min-height: 100vh;
+            padding: 15px;
+        }
+        .container {
+            max-width: ${width}px;
+            margin: 0 auto;
+            background: #FAFCFF;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 2px 12px rgba(100, 150, 200, 0.12);
+            border: 1px solid rgba(150, 180, 220, 0.2);
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 24px 20px;
+            text-align: center;
+            position: relative;
+        }
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+            opacity: 0.3;
+        }
+        .avatar {
+            width: 72px;
+            height: 72px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #fff 0%, #f0f0f0 100%);
+            margin: 0 auto 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            position: relative;
+            z-index: 1;
+            overflow: hidden;
+        }
+        .avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .avatar-fallback {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            font-weight: 700;
+            color: #667eea;
+        }
+        .nickname {
+            font-size: 18px;
+            font-weight: 700;
+            color: #FFF;
+            margin-bottom: 4px;
+            position: relative;
+            z-index: 1;
+        }
+        .subtitle {
+            font-size: 11px;
+            color: rgba(255,255,255,0.8);
+            position: relative;
+            z-index: 1;
+        }
+        .stats-bar {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            padding: 14px 20px;
+            background: #F5F8FF;
+            border-bottom: 1px solid rgba(150,180,220,0.15);
+        }
+        .stat-item { text-align: center; }
+        .stat-value {
+            font-size: 16px;
+            font-weight: 700;
+            color: #667eea;
+        }
+        .stat-label {
+            font-size: 10px;
+            color: #8090A0;
+            margin-top: 2px;
+        }
+        .content {
+            padding: 18px 20px;
+        }
+        .content h1, .content h2 {
+            font-size: 13px;
+            font-weight: 600;
+            color: #5060A0;
+            margin: 16px 0 10px 0;
+            padding-bottom: 6px;
+            border-bottom: 1px dashed #E0E8F0;
+        }
+        .content h1:first-child, .content h2:first-child { margin-top: 0; }
+        .content h3 {
+            font-size: 12px;
+            font-weight: 600;
+            color: #6070B0;
+            margin: 12px 0 6px 0;
+        }
+        .content p {
+            font-size: 12px;
+            color: #505060;
+            line-height: 1.7;
+            margin: 8px 0;
+        }
+        .content ul, .content ol {
+            padding-left: 16px;
+            margin: 8px 0;
+        }
+        .content li {
+            font-size: 12px;
+            color: #505060;
+            line-height: 1.7;
+            margin: 4px 0;
+        }
+        .content strong { color: #667eea; font-weight: 600; }
+        .content blockquote {
+            background: #F0F4FF;
+            border-left: 3px solid #667eea;
+            padding: 10px 12px;
+            margin: 10px 0;
+            border-radius: 0 8px 8px 0;
+            font-size: 11px;
+            color: #6070A0;
+        }
+        .content code {
+            background: #EEF2FF;
+            padding: 1px 4px;
+            border-radius: 3px;
+            font-size: 11px;
+            color: #667eea;
+        }
+        .footer {
+            padding: 12px 20px;
+            background: #F5F8FF;
+            border-top: 1px solid rgba(150,180,220,0.15);
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            color: #8090A0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="avatar">${avatarUrl ? `<img src="${avatarUrl}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="avatar-fallback" style="display:none">${initial}</div>` : `<div class="avatar-fallback">${initial}</div>`}</div>
+            <div class="nickname">${nickname || '用户'}</div>
+            <div class="subtitle">👤 用户画像分析</div>
+        </div>
+        <div class="stats-bar">
+            <div class="stat-item">
+                <div class="stat-value">${messageCount || '-'}</div>
+                <div class="stat-label">发言数</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value">📊</div>
+                <div class="stat-label">AI分析</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value">📅</div>
+                <div class="stat-label">${dateStr}</div>
+            </div>
+        </div>
+        <div class="content">
+            ${html}
+        </div>
+        <div class="footer">
+            <span>✨ AI 智能生成</span>
+            <span>${now.toLocaleString('zh-CN')}</span>
+        </div>
+    </div>
+</body>
+</html>`
+
+        let browser = null
+        try {
+            browser = await this.getBrowser()
+            const page = await browser.newPage()
+            await page.setViewport({ width: width + 30, height: 800 })
+            await page.setContent(profileHtml, { waitUntil: 'networkidle0', timeout: 30000 })
+            // 等待头像图片加载完成
+            if (avatarUrl) {
+                try {
+                    await page.waitForSelector('.avatar img', { timeout: 5000 })
+                    await new Promise(r => setTimeout(r, 500))
+                } catch (e) {
+                    // 图片加载超时，继续使用降级显示
+                }
+            }
+            const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
+            await page.close()
+            return imageBuffer
+        } catch (error) {
+            logService.error('[RenderService] 渲染用户画像失败', error)
+            throw error
+        }
     }
 
     /**

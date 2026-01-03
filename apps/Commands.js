@@ -605,19 +605,63 @@ export class AICommands extends plugin {
             // 统计参与者
             const participants = new Set(recentMessages.map(m => m.nickname || m.userId || '用户'))
             
+            // 预先统计用户活跃度数据
+            const userStats = {}
+            const hourlyActivity = Array(24).fill(0)
+            
+            for (const msg of recentMessages) {
+                const name = msg.nickname || msg.userId || '用户'
+                const odId = msg.userId || null
+                if (!userStats[name]) {
+                    userStats[name] = { name, odId, count: 0, lastMsg: '' }
+                }
+                userStats[name].count++
+                if (msg.content) {
+                    userStats[name].lastMsg = msg.content.substring(0, 30)
+                }
+                // 统计小时分布
+                if (msg.timestamp) {
+                    const hour = new Date(msg.timestamp).getHours()
+                    hourlyActivity[hour]++
+                }
+            }
+            
+            // 获取活跃用户TOP5，包含QQ号用于获取头像
+            const topUsers = Object.values(userStats)
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 5)
+                .map(u => ({ 
+                    name: u.name, 
+                    count: u.count,
+                    odId: u.odId,
+                    avatar: u.odId ? `https://q1.qlogo.cn/g?b=qq&nk=${u.odId}&s=0` : null
+                }))
+            
             const summaryPrompt = `请根据以下群聊记录，对群聊内容进行全面的总结分析。请从以下几个维度进行分析，并以清晰、有条理的Markdown格式呈现你的结论：
 
-1. **热门话题**：群友们最近在讨论什么话题？有哪些热点事件或共同关注的内容？
+## 分析维度
 
-2. **活跃成员**：哪些成员发言最多？他们主要在讨论什么？
+1. **🔥 热门话题**：群友们最近在讨论什么话题？有哪些热点事件或共同关注的内容？按热度排序列出主要话题。
 
-3. **群聊氛围**：群聊的整体氛围如何？（例如：轻松愉快、严肃认真、热烈讨论等）
+2. **👥 活跃成员**：哪些成员发言最多？简要描述他们的发言特点和主要讨论内容。
 
-4. **关键信息**：有没有重要的通知、决定或值得关注的信息？
+3. **💬 群聊氛围**：群聊的整体氛围如何？（例如：轻松愉快、严肃认真、热烈讨论等）
 
-5. **互动情况**：群友之间的互动如何？有哪些有趣的对话或互动？
+4. **📌 关键信息**：有没有重要的通知、决定或值得关注的信息？包括但不限于：活动安排、重要公告、问题讨论结论等。
 
-以下是最近的群聊记录（共1000条消息）：
+5. **🎯 话题趋势**：群聊话题有什么变化趋势？哪些话题正在升温，哪些已经结束？
+
+6. **💡 精彩瞬间**：有哪些有趣的对话、金句或值得记录的互动？
+
+## 注意事项
+- 请保持客观中立，如实反映群聊内容
+- 对于敏感话题请谨慎处理
+- 总结要简洁明了，突出重点
+
+---
+
+以下是最近的群聊记录（共 ${recentMessages.length} 条消息，${participants.size} 位参与者）：
+
 ${dialogText}${truncatedNote}`
 
             // 获取群组独立的总结模型配置
@@ -656,8 +700,11 @@ ${dialogText}${truncatedNote}`
                     // 渲染为图片
                     const imageBuffer = await renderService.renderGroupSummary(summaryText, {
                         title: '群聊内容总结',
-                        subtitle: `基于 ${messages.length} 条消息 · ${shortModel} · ${dataSource}`,
-                        messageCount: messages.length
+                        subtitle: `${shortModel} · ${dataSource}`,
+                        messageCount: messages.length,
+                        participantCount: participants.size,
+                        topUsers,
+                        hourlyActivity
                     })
                     await this.reply(segment.image(imageBuffer))
                 } catch (renderErr) {
@@ -756,7 +803,9 @@ ${userMessages.slice(-analyzeCount).map(m => {
                     const analyzedCount = Math.min(userMessages.length, analyzeCount)
                     const imageBuffer = await renderService.renderUserProfile(portraitText, nickname, {
                         title: '用户画像分析',
-                        subtitle: `基于 ${analyzedCount} 条发言记录 · ${shortModel}`
+                        subtitle: `基于 ${analyzedCount} 条发言记录 · ${shortModel}`,
+                        userId: userId,
+                        messageCount: analyzedCount
                     })
                     await this.reply(segment.image(imageBuffer))
                 } catch (renderErr) {
@@ -1111,7 +1160,9 @@ ${rawChatHistory}`
                 try {
                     const imageBuffer = await renderService.renderUserProfile(profileText, targetNickname, {
                         title: '用户画像分析',
-                        subtitle: `基于 ${userMessages.length} 条发言记录 · ${shortModel}`
+                        subtitle: `基于 ${userMessages.length} 条发言记录 · ${shortModel}`,
+                        userId: targetUserId,
+                        messageCount: userMessages.length
                     })
                     await this.reply(segment.image(imageBuffer))
                 } catch (renderErr) {

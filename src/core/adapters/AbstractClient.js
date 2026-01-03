@@ -387,8 +387,8 @@ export function parseXmlToolCalls(text) {
                 } else {
                     if (!Array.isArray(parsed)) parsed = [parsed]
                     for (const item of parsed) {
-                        const funcName = item.function?.name || item.name
-                        const funcArgs = item.function?.arguments || item.arguments
+                        const funcName = item.function?.name || item.name || item.tool_name
+                        const funcArgs = item.function?.arguments || item.arguments || item.tool_params || item.params
                         if (funcName && (funcArgs !== undefined || Object.keys(item).length > 1)) {
                             toolCalls.push({
                                 id: item.id || generateToolId('block'),
@@ -502,8 +502,8 @@ export function parseXmlToolCalls(text) {
                     if (Array.isArray(parsed)) {
                         let foundTools = false
                         for (const item of parsed) {
-                            const funcName = item.function?.name || item.name
-                            const funcArgs = item.function?.arguments || item.arguments
+                            const funcName = item.function?.name || item.name || item.tool_name
+                            const funcArgs = item.function?.arguments || item.arguments || item.tool_params || item.params
                             if (funcName) {
                                 toolCalls.push({
                                     id: item.id || generateToolId('array'),

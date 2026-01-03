@@ -34,22 +34,21 @@ export class bym extends plugin {
      */
     async bym() {
         const e = this.e
-        
-        // 防护：忽略自身消息
         if (isSelfMessage(e)) {
             return false
         }
-        
-        // 防止重复触发
+        if (e.post_type === 'notice' || e.notice_type || e.sub_type === 'reaction' || 
+            e.sub_type === 'emoji_like' || e.sub_type === 'msg_emoji_like') {
+            return false
+        }
+        if (!e.msg && (!e.message || e.message.length === 0)) {
+            return false
+        }
         if (isMessageProcessed(e)) {
             return false
         }
-        
-        // 检查是否启用（支持群组独立配置）
         const globalEnabled = config.get('bym.enable')
         let enabled = globalEnabled
-        
-        // 群组独立伪人配置
         let groupBymConfig = null
         
         // 检查群组独立设置
@@ -80,15 +79,39 @@ export class bym extends plugin {
         if (!enabled) {
             return false
         }
+        const triggerCfg = config.get('trigger') || {}
+        const blacklistUsers = triggerCfg.blacklistUsers || []
+        const whitelistUsers = triggerCfg.whitelistUsers || []
+        const blacklistGroups = triggerCfg.blacklistGroups || []
+        const whitelistGroups = triggerCfg.whitelistGroups || []
         
-        // 跳过@机器人的消息（应由chat.js处理）
-        if (e.atBot) {
+        const userId = String(e.user_id || e.sender?.user_id || '')
+        const groupId = e.group_id ? String(e.group_id) : ''
+        if (blacklistUsers.length > 0 && blacklistUsers.map(String).includes(userId)) {
+            logger.debug(`[BYM] 用户在黑名单中: ${userId}`)
+            return false
+        }
+        // 检查用户白名单（如果配置了白名单，则只允许白名单用户）
+        if (whitelistUsers.length > 0 && !whitelistUsers.map(String).includes(userId)) {
+            logger.debug(`[BYM] 用户不在白名单中: ${userId}`)
+            return false
+        }
+        // 检查群组黑名单
+        if (groupId && blacklistGroups.length > 0 && blacklistGroups.map(String).includes(groupId)) {
+            logger.debug(`[BYM] 群组在黑名单中: ${groupId}`)
+            return false
+        }
+        // 检查群组白名单（如果配置了白名单，则只允许白名单群组）
+        if (groupId && whitelistGroups.length > 0 && !whitelistGroups.map(String).includes(groupId)) {
+            logger.debug(`[BYM] 群组不在白名单中: ${groupId}`)
             return false
         }
         
-        // 跳过以命令前缀开头的消息
+        if (e.atBot) {
+            return false
+        }
         const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
-        const triggerPrefixes = config.get('trigger.prefixes') || []
+        const triggerPrefixes = triggerCfg.prefixes || []
         const allPrefixes = [cmdPrefix, '#', ...triggerPrefixes].filter(Boolean)
         const rawMsg = (e.msg || '').trim()
         if (allPrefixes.some(p => rawMsg.startsWith(p))) {
@@ -101,48 +124,61 @@ export class bym extends plugin {
             logger.debug('[BYM] 跳过: 消息包含图片且未启用图片处理')
             return false
         }
-        // 优先使用群组独立概率配置
-        let probabilityRaw = groupBymConfig?.bymProbability !== undefined 
-            ? groupBymConfig.bymProbability 
-            : config.get('bym.probability')
-        let probability = probabilityRaw
-        logger.debug(`[BYM] probability原始值: ${probabilityRaw}, 类型: ${typeof probabilityRaw}, 来源: ${groupBymConfig?.bymProbability !== undefined ? '群组配置' : '全局配置'}`)
         
-        if (probability === undefined || probability === null || isNaN(Number(probability))) {
-            probability = 0.02 // 默认2%
-        } else {
-            probability = Number(probability)
-            // 如果概率值大于1，认为是百分比格式（如15表示15%），转换为小数
-            if (probability > 1) {
-                probability = probability / 100
-                logger.debug(`[BYM] 检测到百分比格式，已转换: ${probabilityRaw} -> ${probability}`)
+        // 继承群组的关键词配置（不使用独立的bym.nicknames）
+        const globalKeywords = triggerCfg.keywords || []
+        const allKeywords = [...new Set(globalKeywords)].filter(n => n && n.trim())
+        
+        let forceTriggered = false
+        let matchedKeyword = ''
+        if (allKeywords.length > 0 && rawMsg) {
+            for (const keyword of allKeywords) {
+                // 支持关键词在消息任意位置（如 "xx小喵xx" 匹配 "小喵"）
+                if (rawMsg.includes(keyword)) {
+                    forceTriggered = true
+                    matchedKeyword = keyword
+                    logger.info(`[BYM] 关键词触发: 匹配到 "${keyword}" 在消息 "${rawMsg.substring(0, 30)}..."`)
+                    break
+                }
             }
         }
-        probability = Math.max(0, Math.min(1, probability)) // 确保在0-1范围内
-        
-        // 如果概率为0，直接不触发
-        if (probability === 0) {
-            logger.debug('[BYM] 概率为0，不触发')
-            return false
+        if (!forceTriggered) {
+            let probabilityRaw = groupBymConfig?.bymProbability !== undefined 
+                ? groupBymConfig.bymProbability 
+                : config.get('bym.probability')
+            let probability = probabilityRaw
+            logger.debug(`[BYM] probability原始值: ${probabilityRaw}, 类型: ${typeof probabilityRaw}, 来源: ${groupBymConfig?.bymProbability !== undefined ? '群组配置' : '全局配置'}`)
+            
+            if (probability === undefined || probability === null || isNaN(Number(probability))) {
+                probability = 0.02 
+            } else {
+                probability = Number(probability)
+                if (probability > 1) {
+                    probability = probability / 100
+                    logger.debug(`[BYM] 检测到百分比格式，已转换: ${probabilityRaw} -> ${probability}`)
+                }
+            }
+            probability = Math.max(0, Math.min(1, probability)) 
+            if (probability === 0) {
+                logger.debug('[BYM] 概率为0，不触发')
+                return false
+            }
+            
+            const randomValue = Math.random()
+            logger.debug(`[BYM] 触发判定: random=${randomValue.toFixed(4)}, probability=${probability}`)
+            
+            if (randomValue > probability) {
+                return false
+            }
+            logger.info(`[BYM] 概率触发成功: random=${randomValue.toFixed(4)} <= probability=${probability}`)
+        } else {
+            logger.info(`[BYM] 关键词触发: "${matchedKeyword}"`)
         }
-        
-        const randomValue = Math.random()
-        logger.debug(`[BYM] 触发判定: random=${randomValue.toFixed(4)}, probability=${probability}`)
-        
-        if (randomValue > probability) {
-            return false
-        }
-        
-        logger.info(`[BYM] 触发成功: random=${randomValue.toFixed(4)} <= probability=${probability}`)
 
         try {
-            // 标记消息已处理
             markMessageProcessed(e)
-            
             logger.info('[BYM] 伪人模式触发')
             const { LlmService } = await import('../src/services/llm/LlmService.js')
-            
-            // 获取伪人模型：优先群组配置 > 全局配置 > 默认模型
             const groupBymModel = groupBymConfig?.bymModel
             const configBymModel = config.get('bym.model')
             const bymModel = (groupBymModel && typeof groupBymModel === 'string' && groupBymModel.trim())
@@ -154,8 +190,6 @@ export class bym extends plugin {
             if (groupBymModel && groupBymModel.trim()) {
                 logger.debug(`[BYM] 使用群组独立模型: ${bymModel}`)
             }
-            
-            // 使用getChatClient获取客户端，它会自动处理渠道选择
             const client = await LlmService.getChatClient({ 
                 enableTools: false,
                 model: bymModel
@@ -173,9 +207,7 @@ export class bym extends plugin {
             }
             let systemPrompt = ''
             let scopePresetId = null
-            const inheritPersonality = config.get('bym.inheritPersonality') !== false // 默认启用继承
-            
-            // 1. 尝试获取群组完整配置（包含继承和知识库）
+            const inheritPersonality = config.get('bym.inheritPersonality') !== false
             if (inheritPersonality) {
                 try {
                     if (!databaseService.initialized) {
