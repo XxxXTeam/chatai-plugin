@@ -62,6 +62,7 @@ export class ChatService {
      * @param {boolean} [options.debugMode=false] - 调试模式
      * @param {string} [options.prefixPersona] - 前缀人格（独立于普通人设）
      * @param {boolean} [options.disableTools=false] - 禁用工具调用
+     * @param {boolean} [options.skipPersona=false] - 跳过人设获取（用于总结等场景）
      * @returns {Promise<{response: Array, usage: Object, debugInfo?: Object}>} 响应结果
      * @throws {Error} 当 userId 未提供或模型未配置时抛出错误
      */
@@ -128,6 +129,7 @@ export class ChatService {
             prefixPersona = null,  // 前缀人格（独立于普通人设）
             disableTools = false,  // 禁用工具调用（用于防止递归）
             skipHistory = false,  // 跳过历史记录（用于事件响应等场景）
+            skipPersona = false,  // 跳过人设获取（用于总结等场景）
             temperature: overrideTemperature,  // 覆盖温度参数
             maxTokens: overrideMaxTokens       // 覆盖最大token参数
         } = options
@@ -611,36 +613,50 @@ export class ChatService {
         const sm = await ensureScopeManager()
         let systemPrompt = defaultPrompt
         
-        try {
-            const scopeGroupId = groupId?.toString() || null
-            const scopeUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
-            const pureUserId = scopeUserId.includes('_') ? scopeUserId.split('_').pop() : scopeUserId
-            const independentResult = await sm.getIndependentPrompt(scopeGroupId, pureUserId, defaultPrompt)
-            systemPrompt = independentResult.prompt
-            if (independentResult.isIndependent) {
-                // 支持空人设：当用户设置为空字符串时，使用空系统提示词
-                if (systemPrompt === '') {
-                    logger.debug(`[ChatService] 使用空人设 (来源: ${independentResult.source})`)
-                } else {
-                    logger.debug(`[ChatService] 使用独立人设 (来源: ${independentResult.source})`)
-                }
-            }
-            // 收集 scope 调试信息
+        // skipPersona 模式：跳过人设获取，使用空的 systemPrompt（用于总结等场景）
+        if (skipPersona) {
+            systemPrompt = ''
+            logger.debug(`[ChatService] skipPersona=true，跳过人设获取，使用空 systemPrompt`)
             if (debugInfo) {
                 debugInfo.scope = {
-                    groupId: scopeGroupId,
-                    userId: pureUserId,
-                    isIndependent: independentResult.isIndependent,
-                    promptSource: independentResult.source,
-                    presetSource: scopePresetSource || 'default',
-                    presetId: scopePresetId || effectivePresetId,
-                    forceIsolation,
-                    conversationId,
-                    hasPrefixPersona: !!prefixPersona
+                    skipPersona: true,
+                    promptSource: 'none',
+                    presetSource: 'skipped',
+                    presetId: null
                 }
             }
-        } catch (e) { 
-            logger.warn(`[ChatService] 获取独立人设失败:`, e.message) 
+        } else {
+            try {
+                const scopeGroupId = groupId?.toString() || null
+                const scopeUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
+                const pureUserId = scopeUserId.includes('_') ? scopeUserId.split('_').pop() : scopeUserId
+                const independentResult = await sm.getIndependentPrompt(scopeGroupId, pureUserId, defaultPrompt)
+                systemPrompt = independentResult.prompt
+                if (independentResult.isIndependent) {
+                    // 支持空人设：当用户设置为空字符串时，使用空系统提示词
+                    if (systemPrompt === '') {
+                        logger.debug(`[ChatService] 使用空人设 (来源: ${independentResult.source})`)
+                    } else {
+                        logger.debug(`[ChatService] 使用独立人设 (来源: ${independentResult.source})`)
+                    }
+                }
+                // 收集 scope 调试信息
+                if (debugInfo) {
+                    debugInfo.scope = {
+                        groupId: scopeGroupId,
+                        userId: pureUserId,
+                        isIndependent: independentResult.isIndependent,
+                        promptSource: independentResult.source,
+                        presetSource: scopePresetSource || 'default',
+                        presetId: scopePresetId || effectivePresetId,
+                        forceIsolation,
+                        conversationId,
+                        hasPrefixPersona: !!prefixPersona
+                    }
+                }
+            } catch (e) { 
+                logger.warn(`[ChatService] 获取独立人设失败:`, e.message) 
+            }
         }
         let prefixPresetId = null
         if (prefixPersona) {
