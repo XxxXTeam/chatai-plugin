@@ -632,7 +632,7 @@ ${dialogText}${truncatedNote}`
                     mode: 'chat',
                     skipHistory: true,  // 跳过历史记录
                     disableTools: true,  // 禁用工具
-                    prefixPersona: null  // 明确不使用人设
+                    skipPersona: true  // 跳过人设获取，不使用任何人设风格
                 })
 
                 if (result.response && Array.isArray(result.response)) {
@@ -739,7 +739,7 @@ ${userMessages.slice(-analyzeCount).map(m => {
                 mode: 'chat',
                 skipHistory: true,  // 跳过历史记录
                 disableTools: true,  // 禁用工具
-                prefixPersona: null  // 明确不使用人设
+                skipPersona: true  // 跳过人设获取，不使用任何人设风格
             })
 
             let portraitText = ''

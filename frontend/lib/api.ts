@@ -45,6 +45,9 @@ function getFingerprint(): string {
   }
   return cachedFingerprint || ''
 }
+/**
+ * SHA-256 实现 - 使用 TextEncoder 确保跨浏览器 UTF-8 编码一致性
+ */
 function sha256(message: string): string {
   const K = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -65,18 +68,45 @@ function sha256(message: string): string {
   const gamma0 = (x: number) => rotr(7, x) ^ rotr(18, x) ^ (x >>> 3)
   const gamma1 = (x: number) => rotr(17, x) ^ rotr(19, x) ^ (x >>> 10)
   
-  const bytes: number[] = []
-  for (let i = 0; i < message.length; i++) {
-    const c = message.charCodeAt(i)
-    if (c < 128) bytes.push(c)
-    else if (c < 2048) bytes.push((c >> 6) | 192, (c & 63) | 128)
-    else bytes.push((c >> 12) | 224, ((c >> 6) & 63) | 128, (c & 63) | 128)
+  // 使用 TextEncoder 确保跨浏览器 UTF-8 编码一致性
+  let msgBytes: Uint8Array
+  if (typeof TextEncoder !== 'undefined') {
+    msgBytes = new TextEncoder().encode(message)
+  } else {
+    // 后备方案：手动 UTF-8 编码（兼容旧浏览器）
+    const tempBytes: number[] = []
+    for (let i = 0; i < message.length; i++) {
+      let c = message.charCodeAt(i)
+      // 处理 surrogate pairs（emoji 等 BMP 外字符）
+      if (c >= 0xD800 && c <= 0xDBFF && i + 1 < message.length) {
+        const next = message.charCodeAt(i + 1)
+        if (next >= 0xDC00 && next <= 0xDFFF) {
+          c = ((c - 0xD800) << 10) + (next - 0xDC00) + 0x10000
+          i++
+        }
+      }
+      if (c < 0x80) {
+        tempBytes.push(c)
+      } else if (c < 0x800) {
+        tempBytes.push((c >> 6) | 0xC0, (c & 0x3F) | 0x80)
+      } else if (c < 0x10000) {
+        tempBytes.push((c >> 12) | 0xE0, ((c >> 6) & 0x3F) | 0x80, (c & 0x3F) | 0x80)
+      } else {
+        tempBytes.push((c >> 18) | 0xF0, ((c >> 12) & 0x3F) | 0x80, ((c >> 6) & 0x3F) | 0x80, (c & 0x3F) | 0x80)
+      }
+    }
+    msgBytes = new Uint8Array(tempBytes)
   }
   
+  // 转换为可变数组进行填充
+  const bytes: number[] = Array.from(msgBytes)
   const bitLen = bytes.length * 8
   bytes.push(0x80)
   while ((bytes.length % 64) !== 56) bytes.push(0)
-  for (let i = 7; i >= 0; i--) bytes.push((bitLen / Math.pow(2, i * 8)) & 0xff)
+  // 使用位运算避免浮点数精度问题
+  for (let i = 7; i >= 0; i--) {
+    bytes.push((bitLen >>> (i * 8)) & 0xff)
+  }
   
   let [h0, h1, h2, h3, h4, h5, h6, h7] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
@@ -86,8 +116,8 @@ function sha256(message: string): string {
   for (let i = 0; i < bytes.length; i += 64) {
     const w: number[] = []
     for (let j = 0; j < 16; j++) {
-      w[j] = (bytes[i + j * 4] << 24) | (bytes[i + j * 4 + 1] << 16) |
-             (bytes[i + j * 4 + 2] << 8) | bytes[i + j * 4 + 3]
+      w[j] = ((bytes[i + j * 4] << 24) | (bytes[i + j * 4 + 1] << 16) |
+             (bytes[i + j * 4 + 2] << 8) | bytes[i + j * 4 + 3]) >>> 0
     }
     for (let j = 16; j < 64; j++) {
       w[j] = (gamma1(w[j - 2]) + w[j - 7] + gamma0(w[j - 15]) + w[j - 16]) >>> 0
@@ -143,7 +173,9 @@ api.interceptors.request.use((config) => {
     if (config.method !== 'get') {
       const timestamp = Date.now().toString()
       const nonce = generateNonce()
-      const path = config.url?.startsWith('/') ? config.url : `/${config.url || ''}`
+      // 去掉查询参数，确保和后端一致
+      const rawPath = config.url?.startsWith('/') ? config.url : `/${config.url || ''}`
+      const path = rawPath.split('?')[0]
       const bodyHash = config.data ? calculateBodyHash(config.data) : ''
       const signature = generateSignature(
         config.method?.toUpperCase() || 'GET',
@@ -499,10 +531,12 @@ export function getFetchHeaders(method: string, path: string, body?: unknown): R
     if (method.toUpperCase() !== 'GET') {
       const timestamp = Date.now().toString()
       const nonce = generateNonce()
+      // 去掉查询参数，确保和后端一致
+      const cleanPath = path.split('?')[0]
       const bodyHash = body ? calculateBodyHash(body) : ''
       const signature = generateSignature(
         method.toUpperCase(),
-        path,
+        cleanPath,
         timestamp,
         bodyHash,
         nonce
