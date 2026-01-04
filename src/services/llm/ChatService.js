@@ -16,7 +16,7 @@ import { mcpManager } from '../../mcp/McpManager.js'
 import { getScopeManager } from '../scope/ScopeManager.js'
 import { databaseService } from '../storage/DatabaseService.js'
 import { statsService } from '../stats/StatsService.js'
-import { toolGroupManager } from '../tools/ToolGroupManager.js'
+import { taskOrchestrator, TaskType } from './TaskOrchestrator.js'
 
 let scopeManager = null
 const ensureScopeManager = async () => {
@@ -357,19 +357,23 @@ export class ChatService {
         }
         const toolsAllowed = !disableTools && presetEnableTools && scopeToolsEnabled
         const hasImages = images.length > 0
-        let selectedToolGroupIndexes = []
-        let toolsFromGroups = []
         let dispatchInfo = null
+        let allTools = []
         const dispatchDisabled = config.get('tools.dispatchFirst') === false
         const shouldDispatch = !dispatchDisabled && !disableTools
         
-        // 获取群组调度模型配置（提前获取用于判断）
+        // 获取群组调度模型配置
         const groupDispatchModelForDispatch = scopeFeatures.dispatchModel || null
         
         if (shouldDispatch) {
             try { 
-                dispatchInfo = await this.dispatchToolGroups(message, { event, debugMode, groupDispatchModel: groupDispatchModelForDispatch, conversationId })
-                selectedToolGroupIndexes = dispatchInfo.indexes
+                // 使用新的任务编排器分析意图
+                dispatchInfo = await taskOrchestrator.analyze(message, { 
+                    hasImages: images.length > 0,
+                    event, 
+                    conversationId,
+                    groupDispatchModel: groupDispatchModelForDispatch 
+                })
                 
                 // 检查是否有特殊任务需要处理（非纯chat任务）
                 const specialTasks = dispatchInfo.tasks?.filter(t => t.type !== 'chat') || []
@@ -387,25 +391,22 @@ export class ChatService {
                     })
                 }
                 
-                if (selectedToolGroupIndexes.length > 0) {
-                    toolsFromGroups = await this.getToolsForGroups(selectedToolGroupIndexes, { applyConfig: true })
-                    logger.debug(`[ChatService] 调度完成: 工具组=[${selectedToolGroupIndexes.join(',')}], 工具数=${toolsFromGroups.length}`)
-                } else if (dispatchInfo.tasks?.some(t => t.type === 'tool')) {
-                    // 调度判断为tool但没有具体工具组，使用全量工具
-                    await toolGroupManager.init()
-                    selectedToolGroupIndexes = toolGroupManager.getAllGroupIndexes()
-                    toolsFromGroups = await this.getToolsForGroups(selectedToolGroupIndexes, { applyConfig: true })
-                    logger.debug(`[ChatService] 调度为tool但无工具组，使用全量: ${toolsFromGroups.length}个`)
+                // 如果是工具任务，获取全量工具
+                if (dispatchInfo.tasks?.some(t => t.type === 'tool')) {
+                    await mcpManager.init()
+                    allTools = mcpManager.getTools({ applyConfig: true })
+                    logger.debug(`[ChatService] 工具任务，加载全量工具: ${allTools.length}个`)
                 } else {
                     logger.debug(`[ChatService] 调度结果: 场景=${dispatchInfo.tasks?.[0]?.type || 'chat'}`)
                 }
             } catch (err) {
-                logger.warn(`[ChatService] 调度失败: ${err.message}，使用工具意图检测`)
-                await toolGroupManager.init()
-                if (toolGroupManager.detectToolIntent(message)) {
-                    selectedToolGroupIndexes = toolGroupManager.getAllGroupIndexes()
-                    toolsFromGroups = await this.getToolsForGroups(selectedToolGroupIndexes, { applyConfig: true })
-                    logger.info(`[ChatService] 检测到工具意图，使用全量工具: ${toolsFromGroups.length}个`)
+                logger.warn(`[ChatService] 调度失败: ${err.message}，使用意图检测回退`)
+                // 回退到意图检测
+                dispatchInfo = taskOrchestrator.detectIntentFallback(message, { hasImages: images.length > 0 })
+                if (dispatchInfo.tasks?.[0]?.type === 'tool') {
+                    await mcpManager.init()
+                    allTools = mcpManager.getTools({ applyConfig: true })
+                    logger.info(`[ChatService] 意图检测为工具，加载全量工具: ${allTools.length}个`)
                 }
             }
         } else {
@@ -429,12 +430,12 @@ export class ChatService {
         const dispatchScenario = dispatchInfo?.tasks?.[0]?.type || 'chat'
         
         if (!llmModel) {
-            if (toolsFromGroups.length > 0) {
+            if (allTools.length > 0) {
                 llmModel = groupToolModel || LlmService.getToolModel() || groupChatModel || LlmService.getChatModel() || defaultModel
                 modelScenario = 'tool'
                 actualEnableTools = true
-                actualTools = toolsFromGroups
-                logger.info(`[ChatService] 场景=tool，模型: ${llmModel}，工具数: ${toolsFromGroups.length}`)
+                actualTools = allTools
+                logger.info(`[ChatService] 场景=tool，模型: ${llmModel}，工具数: ${allTools.length}`)
             } else if (hasImages) {
                 // 图像场景
                 llmModel = groupImageModel || LlmService.getImageModel() || groupChatModel || LlmService.getChatModel() || defaultModel
@@ -449,10 +450,10 @@ export class ChatService {
                 logger.info(`[ChatService] 场景=${modelScenario}，模型: ${llmModel}`)
             }
         } else {
-            modelScenario = toolsFromGroups.length > 0 ? 'tool' : 'chat'
-            actualEnableTools = toolsFromGroups.length > 0
-            if (toolsFromGroups.length > 0) {
-                actualTools = toolsFromGroups
+            modelScenario = allTools.length > 0 ? 'tool' : 'chat'
+            actualEnableTools = allTools.length > 0
+            if (allTools.length > 0) {
+                actualTools = allTools
             }
         }
         if (!model && currentPreset?.model && currentPreset.model.trim()) {
@@ -815,12 +816,10 @@ export class ChatService {
 消息中的 [提及用户 QQ:xxx ...] 表示被@的用户，包含其QQ号、群名片、昵称等信息。`
             
             if (!groupContextSharingEnabled) {
+                validHistory = []
                 logger.debug(`[ChatService] 群上下文传递已禁用，不携带群聊历史`)
             }
         }
-        
-        // 支持禁用系统提示词：当预设设置 disableSystemPrompt 为 true 时，完全不发送 system 消息
-        // 支持空人设：当 systemPrompt 为空时，也不添加系统消息
         let messages = []
         const shouldDisableSystemPrompt = currentPreset?.disableSystemPrompt === true
         if (!shouldDisableSystemPrompt && systemPrompt && systemPrompt.trim()) {
@@ -829,7 +828,6 @@ export class ChatService {
             logger.debug(`[ChatService] 预设已禁用系统提示词，不发送 system 消息`)
         }
         messages.push(...validHistory, userMessage)
-
         const hasTools = client.tools && client.tools.length > 0
         const useStreaming = stream || channelStreaming.enabled === true
         logger.debug(`[ChatService] Request: model=${llmModel}, stream=${useStreaming}, tools=${hasTools ? client.tools.length : 0}, channelStreaming=${JSON.stringify(channelStreaming)}`)
@@ -838,8 +836,6 @@ export class ChatService {
         let allToolLogs = []
         let lastError = null
         const requestStartTime = Date.now()
-        
-        // 参数优先级：调用方覆盖 > 预设 > 渠道 > 默认值（移到外层，确保 finally 可访问）
         const presetParams = currentPreset?.modelParams || {}
         const baseMaxToken = presetParams.max_tokens || presetParams.maxTokens || channelLlm.maxTokens || 4000
         const baseTemperature = presetParams.temperature ?? channelLlm.temperature ?? 0.7
@@ -851,7 +847,6 @@ export class ChatService {
             conversationId,
             systemOverride: systemPrompt,
             stream: useStreaming,
-            // 跳过历史时，同时禁用客户端的历史读取
             disableHistoryRead: skipHistory,
         }
         const tempSource = overrideTemperature !== undefined ? '调用方' : (presetParams.temperature !== undefined ? '预设' : (channelLlm.temperature !== undefined ? '渠道' : '默认'))
@@ -1484,152 +1479,16 @@ export class ChatService {
     }
 
     /**
-     * @param {string} message - 用户消息
-     * @param {Object} options - 选项
-     * @returns {Promise<{indexes: number[], dispatchResponse: string, tasks: Array, executionMode: string, analysis: string}>}
-     */
-    async dispatchToolGroups(message, options = {}) {
-        const { event, debugMode, groupDispatchModel, conversationId } = options
-        const defaultReturn = { indexes: [], dispatchResponse: '', tasks: [{ type: 'chat', priority: 1, params: {} }], executionMode: 'sequential', analysis: '' }
-        
-        // 初始化工具组管理器
-        await toolGroupManager.init()
-        
-        // 获取调度模型（优先群组配置 > 调度模型 > 默认模型）
-        const dispatchModel = groupDispatchModel || LlmService.getDispatchModel() || LlmService.getDefaultModel()
-        
-        if (!dispatchModel) {
-            logger.warn('[ChatService] 无可用模型进行调度')
-            return defaultReturn
-        }
-        
-        logger.debug(`[ChatService] 使用调度模型: ${dispatchModel}`)
-        
-        // 构建调度提示词
-        const dispatchPrompt = toolGroupManager.buildDispatchPrompt()
-        
-        if (!dispatchPrompt) {
-            return defaultReturn
-        }
-        
-        // 获取上下文历史，帮助调度模型理解用户意图
-        let contextSummary = ''
-        if (conversationId) {
-            try {
-                const history = await contextManager.getContextHistory(conversationId, 10)
-                if (history.length > 0) {
-                    // 提取最近几条消息作为上下文摘要
-                    const recentMessages = history.slice(-5).map(msg => {
-                        const role = msg.role === 'user' ? '用户' : 'AI'
-                        const text = Array.isArray(msg.content) 
-                            ? msg.content.filter(c => c.type === 'text').map(c => c.text).join('').substring(0, 100)
-                            : String(msg.content).substring(0, 100)
-                        return `${role}: ${text}`
-                    }).join('\n')
-                    contextSummary = `\n\n【最近对话上下文】\n${recentMessages}\n`
-                    logger.debug(`[ChatService] 调度携带上下文: ${history.length} 条历史`)
-                }
-            } catch (e) {
-                logger.debug(`[ChatService] 获取调度上下文失败: ${e.message}`)
-            }
-        }
-        
-        try {
-            // 创建调度客户端（无工具，快速响应）
-            await channelManager.init()
-            const channel = channelManager.getBestChannel(dispatchModel)
-            
-            if (!channel) {
-                logger.warn('[ChatService] 未找到支持调度模型的渠道')
-                return defaultReturn
-            }
-            
-            const clientOptions = {
-                enableTools: false,  // 调度阶段不启用工具
-                adapterType: channel.adapterType,
-                baseUrl: channel.baseUrl,
-                apiKey: channelManager.getChannelKey(channel).key
-            }
-            
-            const client = await LlmService.createClient(clientOptions)
-            
-            // 发送调度请求（带重试）- 包含上下文
-            const dispatchMessage = {
-                role: 'user',
-                content: [
-                    { type: 'text', text: `${dispatchPrompt}${contextSummary}\n\n用户当前请求：${message}` }
-                ]
-            }
-            
-            let response = null
-            let lastError = null
-            const maxRetries = 2
-            
-            for (let attempt = 0; attempt <= maxRetries; attempt++) {
-                try {
-                    response = await client.sendMessage(dispatchMessage, {
-                        model: dispatchModel,
-                        maxToken: 512,
-                        temperature: 0.3 + (attempt * 0.2)  // 重试时稍微提高温度
-                    })
-                    
-                    // 检查响应是否有效
-                    if (response?.contents?.length > 0) {
-                        break
-                    }
-                    
-                    logger.warn(`[ChatService] 调度响应为空，尝试重试 (${attempt + 1}/${maxRetries + 1})`)
-                    lastError = new Error('调度模型返回空响应')
-                } catch (err) {
-                    lastError = err
-                    if (attempt < maxRetries) {
-                        logger.warn(`[ChatService] 调度请求失败，重试中: ${err.message}`)
-                        await new Promise(r => setTimeout(r, 500 * (attempt + 1)))
-                    }
-                }
-            }
-            
-            if (!response?.contents?.length) {
-                throw lastError || new Error('调度模型未返回有效响应')
-            }
-            
-            // 解析响应
-            const responseText = response.contents
-                ?.filter(c => c.type === 'text')
-                ?.map(c => c.text)
-                ?.join('') || ''
-            
-            // 使用增强版解析（支持多任务）
-            const parsed = toolGroupManager.parseDispatchResponseV2(responseText)
-            
-            const taskTypes = parsed.tasks.map(t => t.type).join(',')
-            logger.info(`[ChatService] 调度结果: 模型=${dispatchModel}, 分析="${parsed.analysis}", 任务=[${taskTypes}], 执行模式=${parsed.executionMode}`)
-            
-            return { 
-                indexes: parsed.toolGroups, 
-                dispatchResponse: responseText,
-                tasks: parsed.tasks,
-                executionMode: parsed.executionMode,
-                analysis: parsed.analysis
-            }
-            
-        } catch (error) {
-            logger.error('[ChatService] 工具组调度失败:', error.message)
-            return defaultReturn
-        }
-    }
-
-    /**
      * 根据场景选择合适的模型
      * 
      * 模型分离原则：
      * - 对话模型(chat)：普通聊天，不传递工具
-     * - 工具模型(tool)：执行工具调用
-     * - 调度模型(dispatch)：分析需要哪些工具组
+     * - 工具模型(tool)：执行工具调用（传递全量工具，模型自主选择）
+     * - 调度模型(dispatch)：分析用户意图，拆分任务
      * - 图像模型(image)：图像理解和生成
      * 
      * @param {Object} options - 选择参数
-     * @returns {Object} { model, enableTools, isDispatchPhase }
+     * @returns {Object} { model, enableTools, scenario }
      */
     selectModelForScenario(options = {}) {
         const {
@@ -1645,17 +1504,15 @@ export class ChatService {
             return {
                 model: LlmService.selectModel({ isDispatch: true }),
                 enableTools: false,
-                isDispatchPhase: true,
                 scenario: 'dispatch'
             }
         }
         
-        // 2. 工具调用阶段 - 使用工具模型
+        // 2. 工具调用阶段 - 使用工具模型（传递全量工具）
         if (needsTools) {
             return {
                 model: LlmService.selectModel({ needsTools: true }),
                 enableTools: true,
-                isDispatchPhase: false,
                 scenario: 'tool'
             }
         }
@@ -1665,7 +1522,6 @@ export class ChatService {
             return {
                 model: LlmService.selectModel({ hasImages: true }),
                 enableTools: preset?.tools?.enableBuiltinTools !== false,
-                isDispatchPhase: false,
                 scenario: 'image'
             }
         }
@@ -1675,63 +1531,30 @@ export class ChatService {
             return {
                 model: LlmService.selectModel({ isRoleplay: true }),
                 enableTools: false,
-                isDispatchPhase: false,
                 scenario: 'roleplay'
             }
         }
         
         // 5. 普通对话 - 使用对话模型
-        // 根据预设配置决定是否启用工具
         const enableTools = preset?.tools?.enableBuiltinTools !== false
         
         return {
             model: LlmService.selectModel({}),
             enableTools,
-            isDispatchPhase: false,
             scenario: 'chat'
         }
     }
 
     /**
-     * 根据工具组索引获取工具并创建客户端
-     * 
-     * @param {number[]} groupIndexes - 工具组索引
+     * 获取全量工具
      * @param {Object} options - 选项
      * @returns {Promise<Array>} 工具列表
      */
-    async getToolsForGroups(groupIndexes, options = {}) {
-        if (!groupIndexes || groupIndexes.length === 0) {
-            return []
-        }
-        
-        await toolGroupManager.init()
-        const tools = await toolGroupManager.getToolsByGroupIndexes(groupIndexes, options)
-        
-        logger.debug(`[ChatService] 获取工具组 [${groupIndexes.join(',')}] 的工具，共 ${tools.length} 个`)
-        
+    async getAllTools(options = {}) {
+        await mcpManager.init()
+        const tools = mcpManager.getTools({ applyConfig: true, ...options })
+        logger.debug(`[ChatService] 获取全量工具: ${tools.length} 个`)
         return tools
-    }
-
-    /**
-     * 检查是否应该使用工具组调度模式
-     * 
-     * @param {Object} options - 选项
-     * @returns {boolean}
-     */
-    shouldUseToolGroupDispatch(options = {}) {
-        const { preset, disableTools } = options
-        
-        // 如果禁用工具，不使用调度
-        if (disableTools) return false
-        
-        // 如果预设禁用工具，不使用调度
-        if (preset?.tools?.enableBuiltinTools === false) return false
-        
-        // 检查配置
-        const useToolGroups = config.get('tools.useToolGroups')
-        const dispatchFirst = config.get('tools.dispatchFirst')
-        
-        return useToolGroups === true && dispatchFirst === true
     }
 
     /**
@@ -2165,17 +1988,17 @@ export class ChatService {
                 }
                 
                 case 'tool': {
-                    // 工具调用任务 - 使用工具模型
-                    const toolGroups = params.toolGroups || []
+                    // 工具调用任务 - 使用工具模型（传递全量工具，模型自主选择）
                     return await this.handleToolTask({
-                        toolGroups,
                         originalMessage,
+                        taskPrompt: task.prompt,  // 任务编排器生成的提示词
                         event,
                         images,
                         conversationId,
                         scopeFeatures,
                         toolsAllowed,
-                        systemPrompt
+                        systemPrompt,
+                        previousResult
                     })
                 }
                 
@@ -2320,14 +2143,16 @@ export class ChatService {
 
     /**
      * 处理工具调用任务
+     * 模型自主选择需要的工具（传递全量工具）
      */
     async handleToolTask(options = {}) {
-        const { toolGroups, originalMessage, event, images = [], conversationId, scopeFeatures = {}, toolsAllowed, systemPrompt } = options
+        const { originalMessage, event, images = [], conversationId, scopeFeatures = {}, toolsAllowed, systemPrompt, previousResult, taskPrompt } = options
         const startTime = Date.now()
         
         try {
-            // 获取工具
-            const tools = await this.getToolsForGroups(toolGroups, { applyConfig: true })
+            // 获取全量工具，让模型自主选择
+            await mcpManager.init()
+            const tools = mcpManager.getTools({ applyConfig: true })
             
             if (tools.length === 0) {
                 return {
@@ -2378,8 +2203,15 @@ export class ChatService {
                 event
             })
             
-            // 准备消息内容
-            const content = [{ type: 'text', text: originalMessage }]
+            // 准备消息内容 - 使用任务提示词或原始消息
+            let messageText = taskPrompt || originalMessage
+            
+            // 如果有上一步结果，添加到消息中
+            if (previousResult?.contents?.[0]?.text) {
+                messageText = `${messageText}\n\n[上一步结果]: ${previousResult.contents[0].text}`
+            }
+            
+            const content = [{ type: 'text', text: messageText }]
             const imageUrls = images.map(img => typeof img === 'string' ? img : (img.url || img.file || img)).filter(Boolean)
             if (imageUrls.length > 0) {
                 content.push(...imageUrls.map(url => ({ type: 'image_url', image_url: { url } })))
@@ -2454,8 +2286,9 @@ export class ChatService {
                 }
             }
             
-            // 使用搜索工具组
-            const searchTools = await this.getToolsForGroups([10], { applyConfig: true }) // 假设搜索工具组索引为10
+            // 获取全量工具（搜索任务可能需要多种工具配合）
+            await mcpManager.init()
+            const searchTools = mcpManager.getTools({ applyConfig: true })
             
             await channelManager.init()
             const channel = channelManager.getBestChannel(searchModel)

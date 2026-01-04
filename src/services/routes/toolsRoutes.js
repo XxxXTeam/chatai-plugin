@@ -306,6 +306,31 @@ router.post('/refresh', async (req, res) => {
     }
 })
 
+// POST /test - 测试工具
+router.post('/test', async (req, res) => {
+    try {
+        const { toolName, arguments: args } = req.body
+        if (!toolName) {
+            return res.status(400).json(ChaiteResponse.fail(null, 'toolName is required'))
+        }
+        
+        await mcpManager.init()
+        const startTime = Date.now()
+        const result = await mcpManager.callTool(toolName, args || {})
+        const duration = Date.now() - startTime
+        
+        res.json(ChaiteResponse.ok({
+            toolName,
+            arguments: args || {},
+            result,
+            duration,
+            success: !result?.error
+        }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
 // ==================== 工具调用日志 ====================
 // GET /logs - 获取工具调用日志
 router.get('/logs', async (req, res) => {

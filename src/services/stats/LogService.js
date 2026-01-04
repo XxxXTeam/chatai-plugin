@@ -158,6 +158,32 @@ class LogService {
     }
 
     /**
+     * 记录信息日志
+     * @param {string} message - 信息消息
+     * @param {Object} data - 附加数据
+     */
+    info(message, data = null) {
+        // 仅输出到控制台，不写入文件
+        if (typeof logger !== 'undefined') {
+            logger.info(`[ChatAI] ${message}`)
+        } else {
+            console.log(`[ChatAI] ${message}`)
+        }
+    }
+
+    /**
+     * 记录调试日志
+     * @param {string} message - 调试消息
+     * @param {Object} data - 附加数据
+     */
+    debug(message, data = null) {
+        // 仅输出到控制台，不写入文件
+        if (typeof logger !== 'undefined') {
+            logger.debug?.(`[ChatAI] ${message}`) || logger.info?.(`[ChatAI] ${message}`)
+        }
+    }
+
+    /**
      * 记录警告日志
      * @param {string} message - 警告消息
      * @param {Error|Object} error - 错误对象

@@ -21,6 +21,126 @@ router.get('/health', (req, res) => {
     res.json(health)
 })
 
+// GET /version - 获取版本信息
+router.get('/version', async (req, res) => {
+    try {
+        const { execSync } = await import('node:child_process')
+        const { fileURLToPath } = await import('node:url')
+        const path = await import('node:path')
+        
+        const __filename = fileURLToPath(import.meta.url)
+        const pluginPath = path.resolve(path.dirname(__filename), '../../..')
+        
+        // 获取所有远程仓库信息
+        let remotes = []
+        try {
+            const remotesOutput = execSync(`git -C "${pluginPath}" remote -v`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+            for (const line of remotesOutput.split('\n')) {
+                const match = line.match(/^(\S+)\s+(\S+)\s+\(fetch\)/)
+                if (match) {
+                    remotes.push({ name: match[1], url: match[2] })
+                }
+            }
+        } catch {}
+        
+        // 查找 chatgpt-plugin (内测) 和 chatai-plugin (公开) 的远程
+        const betaRemote = remotes.find(r => r.url.includes('chatgpt-plugin'))
+        const publicRemote = remotes.find(r => r.url.includes('chatai-plugin'))
+        
+        // 获取提交信息
+        let commitId = ''
+        let branch = ''
+        let commitTime = ''
+        
+        try {
+            commitId = execSync(`git -C "${pluginPath}" rev-parse --short HEAD`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+        } catch {}
+        try {
+            branch = execSync(`git -C "${pluginPath}" rev-parse --abbrev-ref HEAD`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+        } catch {}
+        try {
+            commitTime = execSync(`git -C "${pluginPath}" log -1 --format="%ci"`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+        } catch {}
+        
+        // 判断版本类型
+        let type = 'unknown'
+        let typeName = '本地版'
+        let repoName = '本地仓库'
+        let remoteUrl = ''
+        
+        // 检查当前分支的上游追踪
+        let upstream = ''
+        try {
+            upstream = execSync(`git -C "${pluginPath}" rev-parse --abbrev-ref @{upstream}`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+        } catch {}
+        
+        // 根据上游追踪判断版本类型
+        if (upstream) {
+            if (upstream.startsWith('gpt/') || upstream.includes('chatgpt')) {
+                type = 'beta'
+                typeName = '内测版'
+                repoName = 'chatgpt-plugin'
+                remoteUrl = betaRemote?.url || ''
+            } else if (upstream.startsWith('chatai/') || upstream.includes('chatai')) {
+                type = 'public'
+                typeName = '公开版'
+                repoName = 'chatai-plugin'
+                remoteUrl = publicRemote?.url || ''
+            }
+        }
+        
+        // 如果没有上游追踪，根据分支名和可用远程判断
+        if (type === 'unknown') {
+            if (/^(v3|dev|beta|test|alpha|canary|next)$/i.test(branch) && betaRemote) {
+                type = 'beta'
+                typeName = '内测版'
+                repoName = 'chatgpt-plugin'
+                remoteUrl = betaRemote.url
+            } else if (/^(main|master|stable|release)$/i.test(branch) && publicRemote) {
+                type = 'public'
+                typeName = '公开版'
+                repoName = 'chatai-plugin'
+                remoteUrl = publicRemote.url
+            } else if (betaRemote && !publicRemote) {
+                type = 'beta'
+                typeName = '内测版'
+                repoName = 'chatgpt-plugin'
+                remoteUrl = betaRemote.url
+            } else if (publicRemote && !betaRemote) {
+                type = 'public'
+                typeName = '公开版'
+                repoName = 'chatai-plugin'
+                remoteUrl = publicRemote.url
+            } else if (betaRemote && publicRemote) {
+                if (/^(v3|dev|beta|test|alpha)$/i.test(branch)) {
+                    type = 'beta'
+                    typeName = '内测版'
+                    repoName = 'chatgpt-plugin'
+                    remoteUrl = betaRemote.url
+                } else {
+                    type = 'public'
+                    typeName = '公开版'
+                    repoName = 'chatai-plugin'
+                    remoteUrl = publicRemote.url
+                }
+            }
+        }
+        
+        res.json(ChaiteResponse.ok({
+            type,
+            typeName,
+            repoName,
+            remoteUrl,
+            commitId: commitId || 'unknown',
+            branch: branch || 'unknown',
+            commitTime,
+            shortTime: commitTime ? commitTime.split(' ').slice(0, 2).join(' ') : ''
+        }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
 // GET /metrics - 性能指标
 router.get('/metrics', async (req, res) => {
     try {

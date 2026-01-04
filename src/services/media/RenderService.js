@@ -1,4 +1,3 @@
-import puppeteer from 'puppeteer'
 import { marked } from 'marked'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -7,6 +6,32 @@ import { logService } from '../stats/LogService.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+// 插件根目录
+const PLUGIN_ROOT = path.join(__dirname, '../../../')
+
+// 加载 puppeteer
+let puppeteer = null
+try {
+    puppeteer = (await import('puppeteer')).default
+} catch (e) {
+    logService.warn('[RenderService] Puppeteer 加载失败，图片渲染将不可用')
+}
+
+// 加载 canvas（可选，可加速渲染）
+let canvasModule = null
+try {
+    canvasModule = await import('@napi-rs/canvas')
+    logService.info('[RenderService] Canvas 模块加载成功，启用快速渲染')
+} catch (e) {
+    if (e.code === 'ERR_MODULE_NOT_FOUND') {
+        logService.info('[RenderService] Canvas 未安装，使用 Puppeteer 渲染')
+        logService.info('[RenderService] 提示: pnpm add @napi-rs/canvas 可加速10倍渲染')
+    } else {
+        logService.warn('[RenderService] Canvas 加载失败: ' + e.message)
+        logService.warn('[RenderService] 解决方案: pnpm rebuild @napi-rs/canvas')
+    }
+}
 
 /**
  * Markdown渲染服务 - 将Markdown转换为图片
@@ -17,6 +42,8 @@ class RenderService {
         this.browser = null
         this.defaultTheme = 'light'
         this.templateDir = path.join(__dirname, '../../resources/templates')
+        this.useCanvas = !!canvasModule
+        this.fontLoaded = false
         
         // 数学公式检测正则表达式
         this.mathPatterns = {
@@ -378,10 +405,272 @@ class RenderService {
             try {
                 await this.browser.close()
             } catch (e) {
-                logger.warn('[RenderService] 关闭浏览器失败:', e.message)
+                logService.warn('[RenderService] 关闭浏览器失败:', e.message)
             }
             this.browser = null
         }
+    }
+
+    /**
+     * 加载字体（Canvas渲染需要）
+     */
+    async loadFonts() {
+        if (!canvasModule || this.fontLoaded) return
+        try {
+            const { GlobalFonts } = canvasModule
+            
+            // 优先使用插件自带字体
+            const pluginFontDir = path.join(PLUGIN_ROOT, 'data/font')
+            const pluginFonts = [
+                { path: path.join(pluginFontDir, 'LXGWNeoXiHeiScreen.ttf'), name: 'LXGW' },
+                { path: path.join(pluginFontDir, 'InconsolataNerdFontPropo-Bold.ttf'), name: 'Inconsolata' }
+            ]
+            
+            for (const font of pluginFonts) {
+                if (fs.existsSync(font.path)) {
+                    try {
+                        GlobalFonts.registerFromPath(font.path, font.name)
+                        logService.debug(`[RenderService] 已加载字体: ${font.name}`)
+                        this.fontLoaded = true
+                    } catch (e) {
+                        logService.warn(`[RenderService] 加载字体 ${font.name} 失败:`, e.message)
+                    }
+                }
+            }
+            
+            // 回退到系统字体
+            if (!this.fontLoaded) {
+                const systemFontPaths = [
+                    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+                    '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+                    '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
+                    '/System/Library/Fonts/PingFang.ttc',
+                    'C:\\Windows\\Fonts\\msyh.ttc'
+                ]
+                for (const fontPath of systemFontPaths) {
+                    if (fs.existsSync(fontPath)) {
+                        GlobalFonts.registerFromPath(fontPath, 'SystemCJK')
+                        logService.debug(`[RenderService] 已加载系统字体: ${fontPath}`)
+                        this.fontLoaded = true
+                        break
+                    }
+                }
+            }
+            
+            if (!this.fontLoaded) {
+                logService.warn('[RenderService] 未找到中文字体，请将字体文件放入 data/font 目录')
+            }
+        } catch (e) {
+            logService.warn('[RenderService] 加载字体失败:', e.message)
+        }
+    }
+
+    /**
+     * Canvas快速渲染 - 用于简单文本场景
+     * @param {Object} options - 渲染选项
+     * @returns {Promise<Buffer>}
+     */
+    async renderWithCanvas(options) {
+        if (!canvasModule) {
+            throw new Error('Canvas模块未加载')
+        }
+        
+        await this.loadFonts()
+        
+        const {
+            lines = [],
+            width = 520,
+            padding = 20,
+            lineHeight = 1.6,
+            fontSize = 14,
+            fontFamily = 'LXGW, SystemCJK, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif',
+            bgColor = '#FFFCFA',
+            textColor = '#4A4035',
+            titleColor = '#B85520',
+            accentColor = '#FFB080',
+            headerBg = null,
+            headerHeight = 0,
+            footerText = '',
+            title = '',
+            subtitle = ''
+        } = options
+
+        const { createCanvas } = canvasModule
+        
+        // 计算内容高度
+        const contentPadding = padding * 2
+        let totalHeight = contentPadding + headerHeight
+        const lineHeightPx = fontSize * lineHeight
+        
+        // 预计算每行高度
+        const parsedLines = lines.map(line => {
+            const isTitle = line.startsWith('# ') || line.startsWith('## ')
+            const isSubtitle = line.startsWith('### ')
+            const isList = line.startsWith('- ') || line.startsWith('• ') || /^\d+\.\s/.test(line)
+            const isQuote = line.startsWith('> ')
+            const isEmpty = !line.trim()
+            
+            let height = lineHeightPx
+            if (isTitle) height = fontSize * 1.8 * lineHeight
+            else if (isSubtitle) height = fontSize * 1.4 * lineHeight
+            else if (isEmpty) height = lineHeightPx * 0.5
+            
+            return { text: line, height, isTitle, isSubtitle, isList, isQuote, isEmpty }
+        })
+        
+        totalHeight += parsedLines.reduce((sum, l) => sum + l.height, 0)
+        totalHeight += 40 // footer
+        
+        // 创建 Canvas
+        const canvas = createCanvas(width, Math.max(totalHeight, 200))
+        const ctx = canvas.getContext('2d')
+        
+        // 绘制背景
+        ctx.fillStyle = bgColor
+        ctx.fillRect(0, 0, width, totalHeight)
+        
+        // 绘制头部（如果有）
+        if (headerBg && headerHeight > 0) {
+            const gradient = ctx.createLinearGradient(0, 0, width, headerHeight)
+            gradient.addColorStop(0, '#FFEEE6')
+            gradient.addColorStop(0.5, '#FFE0D0')
+            gradient.addColorStop(1, '#FFD4C0')
+            ctx.fillStyle = gradient
+            ctx.fillRect(0, 0, width, headerHeight)
+            
+            // 绘制标题
+            if (title) {
+                ctx.font = `bold ${fontSize * 1.2}px ${fontFamily}`
+                ctx.fillStyle = '#C75000'
+                ctx.fillText(title, padding, padding + fontSize * 1.2)
+            }
+            if (subtitle) {
+                ctx.font = `${fontSize * 0.85}px ${fontFamily}`
+                ctx.fillStyle = '#D07030'
+                ctx.fillText(subtitle, padding, padding + fontSize * 1.2 + fontSize)
+            }
+        }
+        
+        // 绘制内容
+        let y = headerHeight + padding + fontSize
+        
+        for (const line of parsedLines) {
+            if (line.isEmpty) {
+                y += line.height
+                continue
+            }
+            
+            let text = line.text
+            let x = padding
+            
+            // 标题样式
+            if (line.isTitle) {
+                text = text.replace(/^#{1,2}\s*/, '')
+                ctx.font = `600 ${fontSize * 1.3}px ${fontFamily}`
+                ctx.fillStyle = titleColor
+                
+                // 绘制左侧装饰条
+                const gradient = ctx.createLinearGradient(x, y - fontSize, x, y + 4)
+                gradient.addColorStop(0, '#FF8C42')
+                gradient.addColorStop(1, '#FFB080')
+                ctx.fillStyle = gradient
+                ctx.fillRect(x, y - fontSize * 0.9, 4, fontSize * 1.1)
+                x += 12
+                
+                ctx.fillStyle = titleColor
+                ctx.fillText(text, x, y)
+            } else if (line.isSubtitle) {
+                text = text.replace(/^###\s*/, '')
+                ctx.font = `600 ${fontSize * 1.1}px ${fontFamily}`
+                ctx.fillStyle = '#C06830'
+                
+                // 左侧边框
+                ctx.fillStyle = accentColor
+                ctx.fillRect(x, y - fontSize * 0.8, 3, fontSize)
+                x += 10
+                
+                ctx.fillStyle = '#C06830'
+                ctx.fillText(text, x, y)
+            } else if (line.isList) {
+                // 列表项
+                text = text.replace(/^[-•]\s*/, '').replace(/^\d+\.\s*/, '')
+                ctx.font = `${fontSize}px ${fontFamily}`
+                
+                // 绘制列表标记
+                ctx.fillStyle = accentColor
+                ctx.fillText('◆', x + 4, y)
+                x += 20
+                
+                ctx.fillStyle = textColor
+                ctx.fillText(text, x, y)
+            } else if (line.isQuote) {
+                text = text.replace(/^>\s*/, '')
+                
+                // 引用块背景
+                ctx.fillStyle = '#FFF8F2'
+                ctx.fillRect(x, y - fontSize * 0.9, width - padding * 2, fontSize * 1.4)
+                
+                // 左侧边框
+                ctx.fillStyle = '#FF9060'
+                ctx.fillRect(x, y - fontSize * 0.9, 4, fontSize * 1.4)
+                
+                ctx.font = `${fontSize * 0.95}px ${fontFamily}`
+                ctx.fillStyle = '#7A5545'
+                ctx.fillText(text, x + 12, y)
+            } else {
+                // 普通文本
+                ctx.font = `${fontSize}px ${fontFamily}`
+                ctx.fillStyle = textColor
+                
+                // 处理加粗文本
+                const boldParts = text.split(/\*\*([^*]+)\*\*/g)
+                let currentX = x
+                for (let i = 0; i < boldParts.length; i++) {
+                    if (i % 2 === 1) {
+                        // 加粗部分
+                        ctx.font = `600 ${fontSize}px ${fontFamily}`
+                        ctx.fillStyle = '#C85520'
+                    } else {
+                        ctx.font = `${fontSize}px ${fontFamily}`
+                        ctx.fillStyle = textColor
+                    }
+                    ctx.fillText(boldParts[i], currentX, y)
+                    currentX += ctx.measureText(boldParts[i]).width
+                }
+            }
+            
+            y += line.height
+        }
+        
+        // 绘制底部
+        if (footerText) {
+            const footerY = totalHeight - 15
+            ctx.font = `${fontSize * 0.75}px ${fontFamily}`
+            ctx.fillStyle = '#B09080'
+            ctx.fillText(footerText, padding, footerY)
+            
+            const timestamp = new Date().toLocaleString('zh-CN')
+            const timestampWidth = ctx.measureText(timestamp).width
+            ctx.fillStyle = '#C0A090'
+            ctx.fillText(timestamp, width - padding - timestampWidth, footerY)
+        }
+        
+        return canvas.toBuffer('image/png')
+    }
+
+    /**
+     * 解析 Markdown 为简单行数组（用于 Canvas 渲染）
+     * @param {string} markdown
+     * @returns {string[]}
+     */
+    parseMarkdownToLines(markdown) {
+        if (!markdown) return []
+        const clean = this.cleanMarkdown(markdown)
+        return clean.split('\n').filter(line => {
+            // 过滤掉分隔线
+            if (/^[-=*]{3,}$/.test(line.trim())) return false
+            return true
+        })
     }
 
     /**
@@ -680,7 +969,7 @@ class RenderService {
         try {
             browser = await this.getBrowser()
             const page = await browser.newPage()
-            await page.setViewport({ width, height: 600 })
+            await page.setViewport({ width, height: 600, deviceScaleFactor: 2 })
             await page.setContent(styledHtml, { waitUntil: 'networkidle0', timeout: 30000 })
             
             // 等待 KaTeX 渲染完成
@@ -716,8 +1005,31 @@ class RenderService {
             topUsers = [],
             hourlyActivity = [],
             theme = 'light',
-            width = 520
+            width = 520,
+            fastMode = true  // 优先使用Canvas快速渲染
         } = options
+
+        // 快速模式：使用 Canvas 渲染（无头像、无图表，但速度快10倍+）
+        if (fastMode && this.useCanvas && topUsers.length === 0 && hourlyActivity.every(v => v === 0)) {
+            try {
+                const lines = this.parseMarkdownToLines(markdown)
+                const statsLine = `📊 消息数: ${messageCount}  |  👥 参与者: ${participantCount}`
+                return await this.renderWithCanvas({
+                    lines: [statsLine, '', ...lines],
+                    width,
+                    title: `📊 ${title}`,
+                    subtitle: subtitle || `基于 ${messageCount} 条消息`,
+                    headerBg: true,
+                    headerHeight: 60,
+                    footerText: '✨ AI 智能生成',
+                    bgColor: '#FFFCFA',
+                    titleColor: '#B85520',
+                    accentColor: '#FFB080'
+                })
+            } catch (e) {
+                logService.warn('[RenderService] Canvas渲染失败，回退到Puppeteer:', e.message)
+            }
+        }
 
         const cleanedMd = this.cleanMarkdown(markdown)
         const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
@@ -768,12 +1080,16 @@ class RenderService {
 <head>
     <meta charset="UTF-8">
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap');
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+            font-family: "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
             background: linear-gradient(180deg, #FFF8F5 0%, #FFFAF8 100%);
             min-height: 100vh;
             padding: 15px;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            text-rendering: optimizeLegibility;
         }
         .container {
             max-width: ${width}px;
@@ -979,63 +1295,162 @@ class RenderService {
         .content h1, .content h2 {
             display: flex;
             align-items: center;
-            gap: 6px;
-            font-size: 13px;
+            gap: 8px;
+            font-size: 14px;
             font-weight: 600;
-            color: #C06020;
-            margin: 16px 0 10px 0;
-            padding-bottom: 6px;
-            border-bottom: 1px dashed #FFE0D0;
+            color: #B85520;
+            margin: 18px 0 12px 0;
+            padding-bottom: 8px;
+            border-bottom: 2px solid transparent;
+            background: linear-gradient(90deg, #FFE8DC, transparent) border-box;
+            border-image: linear-gradient(90deg, #FFB080, transparent) 1;
+            letter-spacing: 0.5px;
+        }
+        .content h1::before, .content h2::before {
+            content: '';
+            width: 4px;
+            height: 16px;
+            background: linear-gradient(180deg, #FF8C42, #FFB080);
+            border-radius: 2px;
+            flex-shrink: 0;
         }
         .content h1:first-child, .content h2:first-child { margin-top: 0; }
         .content h3 {
+            font-size: 13px;
+            font-weight: 600;
+            color: #C06830;
+            margin: 14px 0 8px 0;
+            padding-left: 10px;
+            border-left: 3px solid #FFB080;
+        }
+        .content h4 {
             font-size: 12px;
             font-weight: 600;
-            color: #D08040;
+            color: #D07840;
             margin: 12px 0 6px 0;
         }
         .content p {
-            font-size: 12px;
-            color: #605040;
-            line-height: 1.7;
-            margin: 8px 0;
+            font-size: 12.5px;
+            color: #4A4035;
+            line-height: 1.85;
+            margin: 10px 0;
+            text-align: justify;
+            letter-spacing: 0.3px;
         }
         .content ul, .content ol {
-            padding-left: 16px;
-            margin: 8px 0;
+            padding-left: 20px;
+            margin: 10px 0;
         }
-        .content li {
-            font-size: 12px;
-            color: #605040;
-            line-height: 1.7;
-            margin: 4px 0;
+        .content ul { list-style-type: none; }
+        .content ul li::before {
+            content: '◆';
+            color: #FFB080;
+            font-size: 8px;
+            margin-right: 8px;
+            vertical-align: middle;
         }
-        .content strong {
-            color: #D06020;
+        .content ol { list-style-type: decimal; }
+        .content ol li::marker {
+            color: #E07030;
             font-weight: 600;
         }
+        .content li {
+            font-size: 12.5px;
+            color: #4A4035;
+            line-height: 1.85;
+            margin: 6px 0;
+            padding-left: 2px;
+        }
+        .content strong {
+            color: #C85520;
+            font-weight: 600;
+            background: linear-gradient(180deg, transparent 60%, rgba(255,176,128,0.3) 60%);
+            padding: 0 2px;
+        }
+        .content em {
+            color: #B06030;
+            font-style: italic;
+        }
         .content blockquote {
-            background: #FFF5F0;
-            border-left: 3px solid #FFB080;
-            padding: 10px 12px;
-            margin: 10px 0;
-            border-radius: 0 8px 8px 0;
-            font-size: 11px;
-            color: #906050;
+            background: linear-gradient(135deg, #FFF8F2 0%, #FFEFE6 100%);
+            border-left: 4px solid #FF9060;
+            padding: 12px 16px;
+            margin: 14px 0;
+            border-radius: 0 10px 10px 0;
+            font-size: 12px;
+            color: #7A5545;
+            box-shadow: 0 2px 8px rgba(255,144,96,0.1);
+            position: relative;
+        }
+        .content blockquote::before {
+            content: '"';
+            position: absolute;
+            top: 6px;
+            left: 8px;
+            font-size: 24px;
+            color: #FFB080;
+            opacity: 0.5;
+            font-family: Georgia, serif;
         }
         .content code {
-            background: #FFF0E8;
-            padding: 1px 4px;
-            border-radius: 3px;
+            background: linear-gradient(135deg, #FFF5ED 0%, #FFE8DC 100%);
+            padding: 2px 6px;
+            border-radius: 4px;
             font-size: 11px;
-            color: #C06030;
+            color: #B85520;
+            font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+            border: 1px solid rgba(255,140,66,0.2);
+        }
+        .content pre {
+            background: linear-gradient(135deg, #FFF8F2 0%, #FFEFE6 100%);
+            padding: 14px 16px;
+            border-radius: 8px;
+            margin: 12px 0;
+            overflow-x: auto;
+            border: 1px solid rgba(255,140,66,0.15);
+        }
+        .content pre code {
+            background: none;
+            border: none;
+            padding: 0;
+            font-size: 11px;
         }
         .content hr {
             border: none;
-            height: 1px;
-            background: linear-gradient(90deg, transparent, #FFE0D0, transparent);
-            margin: 14px 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #FFD0B0, #FFB080, #FFD0B0, transparent);
+            margin: 18px 0;
+            border-radius: 1px;
         }
+        .content a {
+            color: #D06020;
+            text-decoration: none;
+            border-bottom: 1px dashed #FFB080;
+            transition: all 0.2s ease;
+        }
+        .content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 12px 0;
+            font-size: 12px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(200,100,50,0.08);
+        }
+        .content th {
+            background: linear-gradient(135deg, #FFE8DC 0%, #FFD8C8 100%);
+            color: #A05020;
+            font-weight: 600;
+            padding: 10px 12px;
+            text-align: left;
+        }
+        .content td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #FFEEE4;
+            color: #5A4A40;
+        }
+        .content tr:last-child td { border-bottom: none; }
+        .content tr:nth-child(even) { background: #FFFAF6; }
         /* 底部 */
         .footer {
             padding: 12px 20px;
@@ -1114,7 +1529,7 @@ class RenderService {
         try {
             browser = await this.getBrowser()
             const page = await browser.newPage()
-            await page.setViewport({ width: width + 30, height: 800 })
+            await page.setViewport({ width: width + 30, height: 800, deviceScaleFactor: 2 })
             await page.setContent(beautifulHtml, { waitUntil: 'networkidle0', timeout: 30000 })
             // 等待头像图片加载完成
             if (topUsers.some(u => u.avatar)) {
@@ -1122,7 +1537,6 @@ class RenderService {
                     await page.waitForSelector('.avatar-img', { timeout: 5000 })
                     await new Promise(r => setTimeout(r, 500))
                 } catch (e) {
-                    // 图片加载超时，继续使用降级显示
                 }
             }
             const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
@@ -1142,7 +1556,30 @@ class RenderService {
      * @returns {Promise<Buffer>}
      */
     async renderUserProfile(markdown, nickname, options = {}) {
-        const { messageCount = 0, width = 480, userId = null } = options
+        const { messageCount = 0, width = 480, userId = null, fastMode = true } = options
+        
+        // 快速模式：使用 Canvas 渲染（无头像，但速度快10倍+）
+        if (fastMode && this.useCanvas) {
+            try {
+                const lines = this.parseMarkdownToLines(markdown)
+                const statsLine = `📈 发言数: ${messageCount}  |  📅 ${new Date().toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}`
+                return await this.renderWithCanvas({
+                    lines: [statsLine, '', ...lines],
+                    width,
+                    title: `👤 ${nickname || '用户'}`,
+                    subtitle: '用户画像分析',
+                    headerBg: true,
+                    headerHeight: 60,
+                    footerText: '✨ AI 智能生成',
+                    bgColor: '#FAFCFF',
+                    textColor: '#3A3A4A',
+                    titleColor: '#4A5690',
+                    accentColor: '#8B9FE8'
+                })
+            } catch (e) {
+                logService.warn('[RenderService] Canvas渲染失败，回退到Puppeteer:', e.message)
+            }
+        }
         
         const cleanedMd = this.cleanMarkdown(markdown)
         const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
@@ -1161,12 +1598,16 @@ class RenderService {
 <head>
     <meta charset="UTF-8">
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap');
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+            font-family: "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
             background: linear-gradient(180deg, #E8F4FD 0%, #F0F7FF 100%);
             min-height: 100vh;
             padding: 15px;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            text-rendering: optimizeLegibility;
         }
         .container {
             max-width: ${width}px;
@@ -1253,53 +1694,164 @@ class RenderService {
             padding: 18px 20px;
         }
         .content h1, .content h2 {
-            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
             font-weight: 600;
-            color: #5060A0;
-            margin: 16px 0 10px 0;
-            padding-bottom: 6px;
-            border-bottom: 1px dashed #E0E8F0;
+            color: #4A5690;
+            margin: 18px 0 12px 0;
+            padding-bottom: 8px;
+            border-bottom: 2px solid transparent;
+            background: linear-gradient(90deg, #E8EDFF, transparent) border-box;
+            border-image: linear-gradient(90deg, #8B9FE8, transparent) 1;
+            letter-spacing: 0.5px;
+        }
+        .content h1::before, .content h2::before {
+            content: '';
+            width: 4px;
+            height: 16px;
+            background: linear-gradient(180deg, #667eea, #8B9FE8);
+            border-radius: 2px;
+            flex-shrink: 0;
         }
         .content h1:first-child, .content h2:first-child { margin-top: 0; }
         .content h3 {
+            font-size: 13px;
+            font-weight: 600;
+            color: #5A6AA0;
+            margin: 14px 0 8px 0;
+            padding-left: 10px;
+            border-left: 3px solid #8B9FE8;
+        }
+        .content h4 {
             font-size: 12px;
             font-weight: 600;
-            color: #6070B0;
+            color: #6A7AB0;
             margin: 12px 0 6px 0;
         }
         .content p {
-            font-size: 12px;
-            color: #505060;
-            line-height: 1.7;
-            margin: 8px 0;
+            font-size: 12.5px;
+            color: #3A3A4A;
+            line-height: 1.85;
+            margin: 10px 0;
+            text-align: justify;
+            letter-spacing: 0.3px;
         }
         .content ul, .content ol {
-            padding-left: 16px;
-            margin: 8px 0;
+            padding-left: 20px;
+            margin: 10px 0;
+        }
+        .content ul { list-style-type: none; }
+        .content ul li::before {
+            content: '◆';
+            color: #8B9FE8;
+            font-size: 8px;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        .content ol { list-style-type: decimal; }
+        .content ol li::marker {
+            color: #667eea;
+            font-weight: 600;
         }
         .content li {
-            font-size: 12px;
-            color: #505060;
-            line-height: 1.7;
-            margin: 4px 0;
+            font-size: 12.5px;
+            color: #3A3A4A;
+            line-height: 1.85;
+            margin: 6px 0;
+            padding-left: 2px;
         }
-        .content strong { color: #667eea; font-weight: 600; }
+        .content strong {
+            color: #5A6ACA;
+            font-weight: 600;
+            background: linear-gradient(180deg, transparent 60%, rgba(139,159,232,0.25) 60%);
+            padding: 0 2px;
+        }
+        .content em {
+            color: #6A7AB0;
+            font-style: italic;
+        }
         .content blockquote {
-            background: #F0F4FF;
-            border-left: 3px solid #667eea;
-            padding: 10px 12px;
-            margin: 10px 0;
-            border-radius: 0 8px 8px 0;
-            font-size: 11px;
-            color: #6070A0;
+            background: linear-gradient(135deg, #F5F7FF 0%, #EEF2FF 100%);
+            border-left: 4px solid #667eea;
+            padding: 12px 16px;
+            margin: 14px 0;
+            border-radius: 0 10px 10px 0;
+            font-size: 12px;
+            color: #5A6AA0;
+            box-shadow: 0 2px 8px rgba(102,126,234,0.1);
+            position: relative;
+        }
+        .content blockquote::before {
+            content: '"';
+            position: absolute;
+            top: 6px;
+            left: 8px;
+            font-size: 24px;
+            color: #8B9FE8;
+            opacity: 0.5;
+            font-family: Georgia, serif;
         }
         .content code {
-            background: #EEF2FF;
-            padding: 1px 4px;
-            border-radius: 3px;
+            background: linear-gradient(135deg, #F0F4FF 0%, #E8EDFF 100%);
+            padding: 2px 6px;
+            border-radius: 4px;
             font-size: 11px;
-            color: #667eea;
+            color: #5A6ACA;
+            font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+            border: 1px solid rgba(102,126,234,0.2);
         }
+        .content pre {
+            background: linear-gradient(135deg, #F5F7FF 0%, #EEF2FF 100%);
+            padding: 14px 16px;
+            border-radius: 8px;
+            margin: 12px 0;
+            overflow-x: auto;
+            border: 1px solid rgba(102,126,234,0.15);
+        }
+        .content pre code {
+            background: none;
+            border: none;
+            padding: 0;
+            font-size: 11px;
+        }
+        .content hr {
+            border: none;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #C0D0F0, #8B9FE8, #C0D0F0, transparent);
+            margin: 18px 0;
+            border-radius: 1px;
+        }
+        .content a {
+            color: #667eea;
+            text-decoration: none;
+            border-bottom: 1px dashed #8B9FE8;
+            transition: all 0.2s ease;
+        }
+        .content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 12px 0;
+            font-size: 12px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(102,126,234,0.08);
+        }
+        .content th {
+            background: linear-gradient(135deg, #E8EDFF 0%, #D8E0FF 100%);
+            color: #4A5690;
+            font-weight: 600;
+            padding: 10px 12px;
+            text-align: left;
+        }
+        .content td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #EEF2FF;
+            color: #4A4A5A;
+        }
+        .content tr:last-child td { border-bottom: none; }
+        .content tr:nth-child(even) { background: #FAFBFF; }
         .footer {
             padding: 12px 20px;
             background: #F5F8FF;
@@ -1347,7 +1899,7 @@ class RenderService {
         try {
             browser = await this.getBrowser()
             const page = await browser.newPage()
-            await page.setViewport({ width: width + 30, height: 800 })
+            await page.setViewport({ width: width + 30, height: 800, deviceScaleFactor: 2 })
             await page.setContent(profileHtml, { waitUntil: 'networkidle0', timeout: 30000 })
             // 等待头像图片加载完成
             if (avatarUrl) {
@@ -1673,7 +2225,7 @@ class RenderService {
         try {
             browser = await this.getBrowser()
             const page = await browser.newPage()
-            await page.setViewport({ width, height })
+            await page.setViewport({ width, height, deviceScaleFactor: 2 })
             await page.setContent(wordCloudHtml, { waitUntil: 'networkidle0', timeout: 30000 })
             // 等待词云布局完成
             await page.waitForFunction(() => {

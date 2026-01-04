@@ -24,8 +24,146 @@ const UPDATE_STATUS = {
     HAS_UPDATE: 'HAS_UPDATE',
 }
 
+// 版本类型
+const VERSION_TYPE = {
+    BETA: 'beta',      // 内测版本 (chatgpt-plugin)
+    PUBLIC: 'public',  // 公开版本 (chatai-plugin)
+    UNKNOWN: 'unknown'
+}
+
+// 版本信息缓存
+let versionInfo = null
+
+/**
+ * 获取版本信息
+ */
+async function getVersionInfo() {
+    if (versionInfo) return versionInfo
+    
+    try {
+        // 获取所有远程仓库信息
+        let remotes = []
+        try {
+            const remotesOutput = execSync(`git -C "${pluginPath}" remote -v`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+            // 解析远程仓库列表
+            for (const line of remotesOutput.split('\n')) {
+                const match = line.match(/^(\S+)\s+(\S+)\s+\(fetch\)/)
+                if (match) {
+                    remotes.push({ name: match[1], url: match[2] })
+                }
+            }
+        } catch {}
+        const betaRemote = remotes.find(r => r.url.includes('chatgpt-plugin'))
+        const publicRemote = remotes.find(r => r.url.includes('chatai-plugin'))
+        let commitId = ''
+        let branch = ''
+        let commitTime = ''
+        
+        try {
+            commitId = execSync(`git -C "${pluginPath}" rev-parse --short HEAD`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+        } catch {}
+        
+        try {
+            branch = execSync(`git -C "${pluginPath}" rev-parse --abbrev-ref HEAD`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+        } catch {}
+        
+        try {
+            commitTime = execSync(`git -C "${pluginPath}" log -1 --format="%ci"`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+        } catch {}
+        let type = VERSION_TYPE.UNKNOWN
+        let repoName = ''
+        let remoteUrl = ''
+        let upstream = ''
+        try {
+            upstream = execSync(`git -C "${pluginPath}" rev-parse --abbrev-ref @{upstream}`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+        } catch {}
+        
+        // 根据上游追踪判断版本类型
+        if (upstream) {
+            if (upstream.startsWith('gpt/') || upstream.includes('chatgpt')) {
+                type = VERSION_TYPE.BETA
+                repoName = 'chatgpt-plugin'
+                remoteUrl = betaRemote?.url || ''
+            } else if (upstream.startsWith('chatai/') || upstream.includes('chatai')) {
+                type = VERSION_TYPE.PUBLIC
+                repoName = 'chatai-plugin'
+                remoteUrl = publicRemote?.url || ''
+            }
+        }
+        if (type === VERSION_TYPE.UNKNOWN) {
+            if (/^(v3|dev|beta|test|alpha|canary|next)$/i.test(branch) && betaRemote) {
+                type = VERSION_TYPE.BETA
+                repoName = 'chatgpt-plugin'
+                remoteUrl = betaRemote.url
+            }
+            else if (/^(main|master|stable|release)$/i.test(branch) && publicRemote) {
+                type = VERSION_TYPE.PUBLIC
+                repoName = 'chatai-plugin'
+                remoteUrl = publicRemote.url
+            }
+            else if (betaRemote && !publicRemote) {
+                type = VERSION_TYPE.BETA
+                repoName = 'chatgpt-plugin'
+                remoteUrl = betaRemote.url
+            }
+            else if (publicRemote && !betaRemote) {
+                type = VERSION_TYPE.PUBLIC
+                repoName = 'chatai-plugin'
+                remoteUrl = publicRemote.url
+            }
+            else if (betaRemote && publicRemote) {
+                if (/^(v3|dev|beta|test|alpha)$/i.test(branch)) {
+                    type = VERSION_TYPE.BETA
+                    repoName = 'chatgpt-plugin'
+                    remoteUrl = betaRemote.url
+                } else {
+                    type = VERSION_TYPE.PUBLIC
+                    repoName = 'chatai-plugin'
+                    remoteUrl = publicRemote.url
+                }
+            }
+        }
+        
+        versionInfo = {
+            type,
+            typeName: type === VERSION_TYPE.BETA ? '内测版' : type === VERSION_TYPE.PUBLIC ? '公开版' : '本地版',
+            repoName: repoName || '本地仓库',
+            remoteUrl,
+            commitId: commitId || 'unknown',
+            branch: branch || 'unknown',
+            commitTime,
+            shortTime: commitTime ? commitTime.split(' ').slice(0, 2).join(' ') : ''
+        }
+        
+        if (commitId) {
+            chatLogger.info(`[ChatAI] 版本信息: ${versionInfo.typeName} (${versionInfo.repoName}) | ${branch}@${commitId}${versionInfo.shortTime ? ' | ' + versionInfo.shortTime : ''}`)
+        }
+        
+        return versionInfo
+    } catch (e) {
+        chatLogger.debug('[ChatAI] 获取版本信息失败:', e.message)
+        versionInfo = {
+            type: VERSION_TYPE.UNKNOWN,
+            typeName: '本地版',
+            repoName: '本地仓库',
+            remoteUrl: '',
+            commitId: 'unknown',
+            branch: 'unknown',
+            commitTime: '',
+            shortTime: ''
+        }
+        return versionInfo
+    }
+}
+
+// 启动时获取版本信息
+getVersionInfo()
+
 // 是否已检查过更新
-let isChecked = false 
+let isChecked = false
+
+// 导出版本信息供其他模块使用
+export { getVersionInfo, VERSION_TYPE } 
 
 /**
  * 插件更新
@@ -76,10 +214,16 @@ export class update extends plugin {
      */
     async getVersion() {
         try {
-            const commitId = await this.getcommitId()
-            const time = await this.getTime()
-            const branch = await this.getBranch()
-            await this.reply(`[ChatAI] 版本信息\n分支: ${branch}\n提交: ${commitId}\n时间: ${time}`)
+            const info = await getVersionInfo()
+            const lines = [
+                `[ChatAI] 版本信息`,
+                `版本: ${info.typeName}`,
+                `仓库: ${info.repoName || '未知'}`,
+                `分支: ${info.branch}`,
+                `提交: ${info.commitId}`,
+                `时间: ${info.shortTime}`
+            ]
+            await this.reply(lines.join('\n'))
         } catch (e) {
             await this.reply(`[ChatAI] 获取版本信息失败: ${e.message}`)
         }
@@ -198,22 +342,23 @@ export class update extends plugin {
                 }
 
                 // 检查是否需要重启
-                const needRestart = await this.checkNeedRestart()
+                const { needRestart, changedCoreFiles } = await this.checkNeedRestart()
                 if (needRestart) {
+                    const fileList = changedCoreFiles?.slice(0, 3).join(', ') || ''
+                    const moreCount = changedCoreFiles?.length > 3 ? ` 等${changedCoreFiles.length}个文件` : ''
                     if (config.get('update.autoRestart')) {
-                        await this.reply('更新完成，即将自动重启...')
+                        await this.reply(`更新完成，核心文件已变更(${fileList}${moreCount})，即将自动重启...`)
                         setTimeout(() => this.doRestart(), 2000)
                     } else {
-                        await this.reply('更新完成，请发送 #重启 使更新生效')
+                        await this.reply(`更新完成，核心文件已变更(${fileList}${moreCount})，请发送 #重启 使更新生效`)
                     }
                 } else {
-                    // 尝试热重载
-                    await this.reply('更新完成，正在尝试热重载...')
+                    // 非核心文件变更，尝试热重载
                     const reloaded = await this.doHotReload()
                     if (reloaded) {
-                        await this.reply('热重载成功，无需重启')
+                        await this.reply('更新完成，已热重载生效')
                     } else {
-                        await this.reply('热重载失败，请发送 #重启 使更新生效')
+                        await this.reply('更新完成，无需重启')
                     }
                 }
             }
@@ -286,30 +431,98 @@ export class update extends plugin {
     
     /**
      * 检查是否需要重启（而非热重载）
+     * @returns {{needRestart: boolean, changedCoreFiles: string[]}}
      */
     async checkNeedRestart() {
         try {
             const { stdout } = await this.execSync(
-                `git -C "${pluginPath}" diff HEAD~1 --name-only`
+                `git -C "${pluginPath}" diff ${this.oldCommitId}..HEAD --name-only`
             )
-            const changedFiles = stdout.trim().split('\n')
+            const changedFiles = stdout.trim().split('\n').filter(f => f)
             
-            // 这些文件变更需要重启
-            const restartFiles = ['package.json', 'index.js']
-            return changedFiles.some(f => restartFiles.includes(f))
-        } catch {
-            return true // 出错时默认需要重启
+            if (changedFiles.length === 0) {
+                return { needRestart: false, changedCoreFiles: [] }
+            }
+            
+            // 这些文件/目录变更需要重启
+            const restartPatterns = [
+                'package.json',
+                'index.js',
+                /^src\//,      // src目录下的文件
+                /^apps\//,     // apps目录下的文件
+                /^config\/config\.js$/  // 核心配置文件
+            ]
+            
+            const changedCoreFiles = changedFiles.filter(file => {
+                return restartPatterns.some(pattern => {
+                    if (typeof pattern === 'string') {
+                        return file === pattern
+                    }
+                    return pattern.test(file)
+                })
+            })
+            
+            const needRestart = changedCoreFiles.length > 0
+            
+            if (needRestart) {
+                chatLogger.info(`[Update] 检测到核心文件变更，需要重启: ${changedCoreFiles.slice(0, 5).join(', ')}${changedCoreFiles.length > 5 ? '...' : ''}`)
+            } else {
+                chatLogger.info(`[Update] 仅非核心文件变更，无需重启: ${changedFiles.slice(0, 3).join(', ')}`)
+            }
+            
+            return { needRestart, changedCoreFiles }
+        } catch (e) {
+            chatLogger.warn('[Update] 检查重启需求失败:', e.message)
+            return { needRestart: true, changedCoreFiles: ['unknown'] } // 出错时默认需要重启
         }
     }
     
     /**
      * 热重载（不重启云崽）
+     * 仅适用于非核心文件变更（如前端资源、配置等）
      */
     async doHotReload() {
         try {
-            const { reloadWebServer } = await import('../src/services/webServer.js')
-            await reloadWebServer()
-            return true
+            // 获取变更的文件列表
+            const { stdout } = await this.execSync(
+                `git -C "${pluginPath}" diff ${this.oldCommitId}..HEAD --name-only`
+            )
+            const changedFiles = stdout.trim().split('\n').filter(f => f)
+            
+            let reloaded = false
+            
+            // 重载 web 服务器（前端资源变更）
+            if (changedFiles.some(f => f.startsWith('web/') || f.startsWith('resources/'))) {
+                try {
+                    const { reloadWebServer } = await import('../src/services/webServer.js')
+                    await reloadWebServer()
+                    chatLogger.info('[Update] Web服务器已热重载')
+                    reloaded = true
+                } catch (e) {
+                    chatLogger.warn('[Update] Web服务器热重载失败:', e.message)
+                }
+            }
+            
+            // 重载配置（非核心配置变更）
+            if (changedFiles.some(f => f.startsWith('config/') && f !== 'config/config.js')) {
+                try {
+                    // 清除配置缓存
+                    const configPath = path.resolve(pluginPath, 'config/config.js')
+                    delete require.cache[require.resolve(configPath)]
+                    chatLogger.info('[Update] 配置缓存已清除')
+                    reloaded = true
+                } catch (e) {
+                    chatLogger.warn('[Update] 配置热重载失败:', e.message)
+                }
+            }
+            
+            // 如果有 apps/ 或 src/ 变更，提示需要重启
+            if (changedFiles.some(f => f.startsWith('apps/') || f.startsWith('src/'))) {
+                chatLogger.warn('[Update] 检测到 apps/ 或 src/ 变更，建议重启以生效')
+                return false
+            }
+            
+            return reloaded
         } catch (e) {
             chatLogger.warn('[Update] 热重载失败:', e.message)
             return false
