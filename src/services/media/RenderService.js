@@ -18,7 +18,6 @@ try {
     logService.warn('[RenderService] Puppeteer 加载失败，图片渲染将不可用')
 }
 
-// 加载 canvas（可选，可加速渲染）
 let canvasModule = null
 try {
     canvasModule = await import('@napi-rs/canvas')
@@ -685,6 +684,13 @@ class RenderService {
         clean = clean.replace(/^```(?:markdown|md)?\s*\n?/i, '')
         // 移除结尾的 ``` 标记
         clean = clean.replace(/\n?```\s*$/i, '')
+        // 移除无法渲染的 Emoji 字符（保留基本标点和中文）
+        clean = clean.replace(/[\u{1F300}-\u{1F9FF}]/gu, '')  // 常见 Emoji
+        clean = clean.replace(/[\u{2600}-\u{26FF}]/gu, '')    // 杂项符号
+        clean = clean.replace(/[\u{2700}-\u{27BF}]/gu, '')    // 装饰符号
+        clean = clean.replace(/[\u{1F600}-\u{1F64F}]/gu, '')  // 表情符号
+        clean = clean.replace(/[\u{1F680}-\u{1F6FF}]/gu, '')  // 交通和地图符号
+        clean = clean.replace(/[\u{1F1E0}-\u{1F1FF}]/gu, '')  // 国旗
         return clean.trim()
     }
 
@@ -1080,10 +1086,9 @@ class RenderService {
 <head>
     <meta charset="UTF-8">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap');
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+            font-family: "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "WenQuanYi Micro Hei", sans-serif, "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji";
             background: linear-gradient(180deg, #FFF8F5 0%, #FFFAF8 100%);
             min-height: 100vh;
             padding: 15px;
@@ -1598,10 +1603,9 @@ class RenderService {
 <head>
     <meta charset="UTF-8">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap');
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+            font-family: "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "WenQuanYi Micro Hei", sans-serif, "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji";
             background: linear-gradient(180deg, #E8F4FD 0%, #F0F7FF 100%);
             min-height: 100vh;
             padding: 15px;
@@ -1646,6 +1650,10 @@ class RenderService {
             width: 100%;
             height: 100%;
             object-fit: cover;
+            border-radius: 50%;
+        }
+        .avatar img[data-failed="true"] {
+            display: none !important;
         }
         .avatar-fallback {
             width: 100%;
@@ -1656,6 +1664,11 @@ class RenderService {
             font-size: 28px;
             font-weight: 700;
             color: #667eea;
+            background: linear-gradient(135deg, #f0f4ff 0%, #e8eeff 100%);
+            border-radius: 50%;
+        }
+        .avatar-fallback.show {
+            display: flex !important;
         }
         .nickname {
             font-size: 18px;
@@ -1866,7 +1879,7 @@ class RenderService {
 <body>
     <div class="container">
         <div class="header">
-            <div class="avatar">${avatarUrl ? `<img src="${avatarUrl}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="avatar-fallback" style="display:none">${initial}</div>` : `<div class="avatar-fallback">${initial}</div>`}</div>
+            <div class="avatar">${avatarUrl ? `<img src="${avatarUrl}" onerror="this.setAttribute('data-failed','true');this.nextElementSibling.classList.add('show')"><div class="avatar-fallback">${initial}</div>` : `<div class="avatar-fallback show">${initial}</div>`}</div>
             <div class="nickname">${nickname || '用户'}</div>
             <div class="subtitle">👤 用户画像分析</div>
         </div>

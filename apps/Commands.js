@@ -667,8 +667,9 @@ ${dialogText}${truncatedNote}`
             // 获取群组独立的总结模型配置
             const groupSummaryModel = await getGroupFeatureModel(e.group_id, 'summaryModel')
             let summaryText = ''
+            let result = null
             try {
-                const result = await chatService.sendMessage({
+                result = await chatService.sendMessage({
                     userId: `summary_${e.group_id}`,
                     groupId: null,  // 不传群ID，避免继承群人设
                     message: summaryPrompt,
@@ -693,9 +694,9 @@ ${dialogText}${truncatedNote}`
 
             if (summaryText) {
                 try {
-                    // 获取模型信息
-                    const modelName = config.get('llm.defaultModel') || '默认模型'
-                    const shortModel = modelName.split('/').pop()
+                    // 获取实际使用的模型信息
+                    const actualModel = result?.model || groupSummaryModel || config.get('llm.defaultModel') || '默认模型'
+                    const shortModel = actualModel.split('/').pop()
                     
                     // 渲染为图片
                     const imageBuffer = await renderService.renderGroupSummary(summaryText, {
@@ -708,11 +709,10 @@ ${dialogText}${truncatedNote}`
                     })
                     await this.reply(segment.image(imageBuffer))
                 } catch (renderErr) {
-                    // 回退到文本
-                    const modelName = config.get('llm.defaultModel') || '默认模型'
-                    const shortModel = modelName.split('/').pop()
+                    const fallbackModel = result?.model || groupSummaryModel || config.get('llm.defaultModel') || '默认模型'
+                    const fallbackShortModel = fallbackModel.split('/').pop()
                     logger.warn('[AI-Commands] 渲染图片失败:', renderErr.message)
-                    await this.reply(`📊 群聊总结 (${messages.length}条消息 · ${shortModel})\n\n${summaryText}`, true)
+                    await this.reply(`📊 群聊总结 (${messages.length}条消息 · ${fallbackShortModel})\n\n${summaryText}`, true)
                 }
             } else {
                 await this.reply('总结生成失败', true)
