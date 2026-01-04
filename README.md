@@ -57,6 +57,7 @@ git clone --depth=1 https://github.com/XxxXTeam/chatai-plugin.git ./plugins/chat
 在 **Yunzai 根目录** 下执行：
 
 ```bash
+
 pnpm install
 pnpm approve-builds
 ```
