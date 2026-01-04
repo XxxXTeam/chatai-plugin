@@ -67,113 +67,103 @@ export class ToolGroupManager {
     buildDispatchPrompt() {
         const summary = this.getGroupSummary()
         
-        let prompt = `你是一个智能任务调度器。请分析用户的请求，判断意图并生成任务执行计划。
+        let prompt = `你是智能任务调度器。分析用户请求，拆分为一个或多个任务。
 
-## 重要原则：
-1. **准确识别意图**：仔细分析用户真正想要什么
-2. **优先使用工具**：如果请求涉及查询信息、执行操作，优先选择tool类型
-3. **多步骤任务**：复杂请求拆分为多个步骤，合理设置依赖关系
-4. **避免误判**：普通闲聊用chat，但涉及具体操作/查询的不要用chat
+## 核心原则：
+1. **多任务拆分**：复杂请求拆分为多个独立任务，按执行顺序排列
+2. **依赖关系**：后续任务依赖前置任务结果时，设置dependsOn
+3. **默认用工具**：涉及查询/操作的请求用tool，纯闲聊用chat
 
 ## 任务类型：
-
-1. **tool（工具调用）** - 查询信息或执行操作（最常用）
-   触发词："查"、"看"、"获取"、"发送"、"设置"、"搜"、"天气"、"时间"、"消息"等
-   示例："查天气"、"现在几点"、"发消息给xxx"、"获取群成员列表"
-   需要: toolGroups（工具组索引数组）
-
-2. **draw（绘图生成）** - 明确要求生成/绘制图片
-   触发词："画"、"绘制"、"生成图片"、"画一个/张"
-   示例："帮我画一只猫"、"生成一张风景图"
-   需要: drawPrompt（优化后的英文绘图提示词）
-
-3. **image_understand（图像理解）** - 分析用户发送的图片
-   触发词："这张图"、"图片里"、"看看这个"、"识别"、"分析图片"
-   示例："这张图片里有什么"、"描述一下这个图"
-   需要: prompt（分析指令）
-
-4. **search（联网搜索）** - 需要实时网络信息
-   触发词："搜索"、"最新"、"新闻"、"实时"
-   示例："搜索最新新闻"、"查一下xxx最新消息"
-   需要: query（搜索关键词）
-
-5. **chat（普通对话）** - 纯闲聊、问答、创作文字（无需工具）
-   示例："你好"、"写一首诗"、"解释一下xxx概念"
+- **tool** - 查询/操作（关键词：查、找、获取、发送、时间、天气、群、成员...）
+- **draw** - 绘图（关键词：画、绘制、生成图片...）
+- **image_understand** - 理解图片内容
+- **search** - 联网搜索（关键词：搜索、最新、新闻...）
+- **chat** - 纯闲聊/问候/创作
 
 `
         if (summary.length > 0) {
-            prompt += `## 可用工具组：
-`
+            prompt += `## 可用工具组：\n`
             for (const group of summary) {
                 const displayName = group.displayName || group.name
-                prompt += `- [${group.index}] ${displayName}: ${group.description} (${group.toolCount}个工具)\n`
+                prompt += `[${group.index}] ${displayName}: ${group.description}\n`
             }
         }
         
         prompt += `
 ## 返回格式（JSON）：
 {
-    "analysis": "简要分析用户意图（一句话）",
-    "tasks": [
-        {
-            "type": "任务类型",
-            "priority": 1,
-            "params": {
-                "prompt": "任务提示词",
-                "drawPrompt": "绘图提示词(type=draw时,用英文)",
-                "toolGroups": [工具组索引数组(type=tool时)],
-                "query": "搜索关键词(type=search时)"
-            },
-            "dependsOn": null
-        }
-    ],
-    "executionMode": "sequential|parallel"
+  "analysis": "意图分析",
+  "tasks": [
+    {"type": "tool", "priority": 1, "params": {"toolGroups": [索引]}},
+    {"type": "draw", "priority": 2, "params": {"drawPrompt": "英文提示词"}, "dependsOn": 1}
+  ],
+  "executionMode": "sequential"
 }
 
-## 关键判断规则：
-- 涉及"时间/日期/几点" → tool，使用时间工具组
-- 涉及"天气/温度" → tool，使用天气工具组  
-- 涉及"发消息/艾特/@" → tool，使用消息工具组
-- 涉及"群成员/群信息" → tool，使用群管理工具组
-- 明确说"画/绘制/生成图片" → draw
-- 有图片且问"这是什么/图里有什么" → image_understand
-- 纯聊天/问答/写作 → chat
+## 多任务示例：
 
-## 示例：
+用户："帮我查群成员，然后画一张他们的合照"
+{"analysis":"先查群成员，再绘图","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[群管理工具组索引]}},{"type":"draw","priority":2,"params":{"drawPrompt":"group photo of people"},"dependsOn":1}],"executionMode":"sequential"}
 
-用户说"现在几点"
-{"analysis":"查询当前时间","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[0]}}],"executionMode":"sequential"}
+用户："查天气和时间"
+{"analysis":"并行查询","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[天气工具组]}},{"type":"tool","priority":1,"params":{"toolGroups":[时间工具组]}}],"executionMode":"parallel"}
 
-用户说"帮我画一只可爱的小猫"
-{"analysis":"生成猫咪图片","tasks":[{"type":"draw","priority":1,"params":{"drawPrompt":"a cute little cat, adorable, fluffy fur, big eyes, high quality, detailed"}}],"executionMode":"sequential"}
+用户："你好"
+{"analysis":"问候","tasks":[{"type":"chat","priority":1,"params":{}}],"executionMode":"sequential"}
 
-用户说"查下北京天气，再看看现在几点"
-{"analysis":"查天气和时间，可并行","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[14]}},{"type":"tool","priority":1,"params":{"toolGroups":[0]}}],"executionMode":"parallel"}
-
-用户说"这张图片里有什么？然后帮我画一张类似的"
-{"analysis":"先理解图片，再生成类似图片","tasks":[{"type":"image_understand","priority":1,"params":{"prompt":"详细描述这张图片的内容、风格、主题"}},{"type":"draw","priority":2,"params":{"drawPrompt":"based on previous description"},"dependsOn":1}],"executionMode":"sequential"}
-
-用户说"你好呀"
-{"analysis":"简单问候","tasks":[{"type":"chat","priority":1,"params":{}}],"executionMode":"sequential"}
-
-用户说"写一首关于春天的诗"
-{"analysis":"文字创作","tasks":[{"type":"chat","priority":1,"params":{}}],"executionMode":"sequential"}
-
-只返回JSON，不要其他内容。`
+只返回JSON。`
         return prompt
+    }
+
+    /**
+     * 检测消息是否可能需要工具（用于调度失败时的智能回退）
+     * @param {string} message - 用户消息
+     * @returns {boolean}
+     */
+    detectToolIntent(message) {
+        if (!message || typeof message !== 'string') return false
+        const msg = message.toLowerCase()
+        
+        // 明确需要工具的关键词
+        const toolKeywords = [
+            // 时间相关
+            '几点', '时间', '日期', '今天', '明天', '昨天', '星期', '周几',
+            // 天气相关
+            '天气', '温度', '气温', '下雨', '下雪', '晴天', '阴天',
+            // 消息相关
+            '发消息', '发送', '艾特', '@', '私聊', '群发',
+            // 群管理
+            '群成员', '群信息', '群列表', '踢人', '禁言', '解禁',
+            // 查询操作
+            '查', '搜', '获取', '看看', '帮我', '告诉我',
+            // 文件操作
+            '文件', '图片', '下载', '上传',
+            // 系统操作
+            '执行', '运行', '设置', '配置'
+        ]
+        
+        for (const kw of toolKeywords) {
+            if (msg.includes(kw)) return true
+        }
+        
+        return false
     }
 
     /**
      * 解析调度响应（增强版V2，支持多任务）
      * @param {string} response - 调度模型响应
+     * @param {string} [originalMessage] - 原始用户消息（用于智能回退）
      * @returns {{analysis: string, tasks: Array, executionMode: string, toolGroups: number[]}}
      */
-    parseDispatchResponseV2(response) {
+    parseDispatchResponseV2(response, originalMessage = '') {
+        // 智能默认：如果检测到工具意图，默认使用全量工具而非chat
+        const hasToolIntent = this.detectToolIntent(originalMessage)
         const defaultResult = { 
             analysis: '', 
-            tasks: [{ type: 'chat', priority: 1, params: {} }], 
+            tasks: [{ type: hasToolIntent ? 'tool' : 'chat', priority: 1, params: hasToolIntent ? { toolGroups: this.getAllGroupIndexes() } : {} }], 
             executionMode: 'sequential',
-            toolGroups: []
+            toolGroups: hasToolIntent ? this.getAllGroupIndexes() : []
         }
         
         if (!response || typeof response !== 'string') {
@@ -325,6 +315,16 @@ export class ToolGroupManager {
      */
     getAllGroups() {
         return Array.from(this.groups.values())
+    }
+
+    /**
+     * 获取所有启用的工具组索引
+     * @returns {number[]}
+     */
+    getAllGroupIndexes() {
+        return Array.from(this.groups.entries())
+            .filter(([_, g]) => g.enabled)
+            .map(([idx, _]) => idx)
     }
 
     /**

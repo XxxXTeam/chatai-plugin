@@ -360,8 +360,8 @@ export class ChatService {
         let selectedToolGroupIndexes = []
         let toolsFromGroups = []
         let dispatchInfo = null
-        const dispatchModelConfigured = !!LlmService.getDispatchModel()
-        const shouldDispatch = toolsAllowed && !hasImages && this.shouldUseToolGroupDispatch({ preset: currentPreset, disableTools }) && dispatchModelConfigured
+        const dispatchDisabled = config.get('tools.dispatchFirst') === false
+        const shouldDispatch = !dispatchDisabled && !disableTools
         
         // 获取群组调度模型配置（提前获取用于判断）
         const groupDispatchModelForDispatch = scopeFeatures.dispatchModel || null
@@ -388,18 +388,28 @@ export class ChatService {
                 }
                 
                 if (selectedToolGroupIndexes.length > 0) {
-                    // 根据选中的索引获取完整工具列表
                     toolsFromGroups = await this.getToolsForGroups(selectedToolGroupIndexes, { applyConfig: true })
-                    logger.debug(`[ChatService] 工具组调度完成: 选中索引=${JSON.stringify(selectedToolGroupIndexes)}, 工具数=${toolsFromGroups.length}`)
+                    logger.debug(`[ChatService] 调度完成: 工具组=[${selectedToolGroupIndexes.join(',')}], 工具数=${toolsFromGroups.length}`)
+                } else if (dispatchInfo.tasks?.some(t => t.type === 'tool')) {
+                    // 调度判断为tool但没有具体工具组，使用全量工具
+                    await toolGroupManager.init()
+                    selectedToolGroupIndexes = toolGroupManager.getAllGroupIndexes()
+                    toolsFromGroups = await this.getToolsForGroups(selectedToolGroupIndexes, { applyConfig: true })
+                    logger.debug(`[ChatService] 调度为tool但无工具组，使用全量: ${toolsFromGroups.length}个`)
                 } else {
-                    logger.debug(`[ChatService] 工具组调度: 无需工具`)
+                    logger.debug(`[ChatService] 调度结果: 场景=${dispatchInfo.tasks?.[0]?.type || 'chat'}`)
                 }
             } catch (err) {
-                logger.warn(`[ChatService] 工具组调度失败: ${err.message}，回退到普通模式`)
+                logger.warn(`[ChatService] 调度失败: ${err.message}，使用工具意图检测`)
+                await toolGroupManager.init()
+                if (toolGroupManager.detectToolIntent(message)) {
+                    selectedToolGroupIndexes = toolGroupManager.getAllGroupIndexes()
+                    toolsFromGroups = await this.getToolsForGroups(selectedToolGroupIndexes, { applyConfig: true })
+                    logger.info(`[ChatService] 检测到工具意图，使用全量工具: ${toolsFromGroups.length}个`)
+                }
             }
-        } else if (toolsAllowed && this.shouldUseToolGroupDispatch({ preset: currentPreset, disableTools })) {
-            // 启用了工具组调度但调度模型未配置，跳过调度，使用全量工具
-            logger.debug(`[ChatService] 调度模型未配置，跳过调度阶段，使用全量工具模式`)
+        } else {
+            logger.debug(`[ChatService] 调度已禁用`)
         }
         
         let llmModel = model
@@ -415,66 +425,34 @@ export class ChatService {
         const groupDrawModel = scopeFeatures.drawModel || null
         const groupSearchModel = scopeFeatures.searchModel || null
         const groupRoleplayModel = scopeFeatures.roleplayModel || null
-        
-        // 检查工具模型是否已配置（优先群组配置，其次全局配置）
-        const toolModelConfigured = !!groupToolModel || !!LlmService.getModel(LlmService.ModelType.TOOL, false)
+        const defaultModel = LlmService.getDefaultModel()
+        const dispatchScenario = dispatchInfo?.tasks?.[0]?.type || 'chat'
         
         if (!llmModel) {
-            if (hasImages) {
-                llmModel = groupImageModel || groupChatModel || LlmService.selectModel({ hasImages: true })
-                actualEnableTools = toolsAllowed
-                modelScenario = 'image'
-                // 如果有工具组选中，仍然可以传递工具
-                if (selectedToolGroupIndexes.length > 0 && toolsFromGroups.length > 0) {
-                    actualTools = toolsFromGroups
-                    logger.info(`[ChatService] 场景=图像处理+工具，模型: ${llmModel}${groupImageModel ? ' (群组图像模型)' : ''}，工具数: ${toolsFromGroups.length}`)
-                } else {
-                    logger.info(`[ChatService] 场景=图像处理，模型: ${llmModel}${groupImageModel ? ' (群组图像模型)' : groupChatModel ? ' (群组对话模型)' : ''}`)
-                }
-            } else if (selectedToolGroupIndexes.length > 0 && toolsFromGroups.length > 0) {
-                // 调度选中了工具组
-                if (toolModelConfigured) {
-                    // 工具模型已配置 -> 优先使用群组工具模型，其次全局工具模型
-                    llmModel = groupToolModel || LlmService.selectModel({ needsTools: true })
-                    modelScenario = 'tool'
-                    logger.info(`[ChatService] 场景=工具调用，模型: ${llmModel}${groupToolModel ? ' (群组配置)' : ''}，工具数: ${toolsFromGroups.length}`)
-                } else {
-                    // 工具模型未配置 -> 使用对话模型 + 选中的工具
-                    llmModel = groupChatModel || LlmService.selectModel({})
-                    modelScenario = 'chat'
-                    logger.info(`[ChatService] 场景=工具调用（无工具模型），模型: ${llmModel}${groupChatModel ? ' (群组配置)' : ''}，工具数: ${toolsFromGroups.length}`)
-                }
+            if (toolsFromGroups.length > 0) {
+                llmModel = groupToolModel || LlmService.getToolModel() || groupChatModel || LlmService.getChatModel() || defaultModel
+                modelScenario = 'tool'
                 actualEnableTools = true
                 actualTools = toolsFromGroups
-            } else if (shouldDispatch && selectedToolGroupIndexes.length === 0) {
-                llmModel = groupChatModel || LlmService.selectModel({})
-                actualEnableTools = false  
-                modelScenario = 'chat'
-                logger.debug(`[ChatService] 场景=调度无需执行工具，模型: ${llmModel}${groupChatModel ? ' (群组配置)' : ''}，不传工具`)
+                logger.info(`[ChatService] 场景=tool，模型: ${llmModel}，工具数: ${toolsFromGroups.length}`)
+            } else if (hasImages) {
+                // 图像场景
+                llmModel = groupImageModel || LlmService.getImageModel() || groupChatModel || LlmService.getChatModel() || defaultModel
+                modelScenario = 'image'
+                actualEnableTools = false
+                logger.info(`[ChatService] 场景=image，模型: ${llmModel}`)
             } else {
-                llmModel = groupChatModel || LlmService.selectModel({})
-                const toolModelConfigured = !!groupToolModel || !!LlmService.getModel('tool', false)
-                if (toolModelConfigured) {
-                    // 工具模型已配置，对话模型不需要工具
-                    actualEnableTools = false
-                    modelScenario = 'chat'
-                    logger.debug(`[ChatService] 场景=普通对话，模型: ${llmModel}`)
-                } else {
-                    // 工具模型未配置，对话模型需要处理工具
-                    actualEnableTools = toolsAllowed
-                    modelScenario = 'chat'
-                    logger.debug(`[ChatService] 场景=普通对话，模型: ${llmModel}，传工具=${actualEnableTools}`)
-                }
+                // 对话场景
+                llmModel = groupChatModel || LlmService.getChatModel() || defaultModel
+                modelScenario = dispatchScenario
+                actualEnableTools = false
+                logger.info(`[ChatService] 场景=${modelScenario}，模型: ${llmModel}`)
             }
         } else {
-            if (toolsAllowed) {
-                actualEnableTools = true
-                if (toolsFromGroups.length > 0) {
-                    actualTools = toolsFromGroups
-                }
-                modelScenario = 'tool'
-            } else {
-                modelScenario = 'chat'
+            modelScenario = toolsFromGroups.length > 0 ? 'tool' : 'chat'
+            actualEnableTools = toolsFromGroups.length > 0
+            if (toolsFromGroups.length > 0) {
+                actualTools = toolsFromGroups
             }
         }
         if (!model && currentPreset?.model && currentPreset.model.trim()) {
@@ -1517,13 +1495,15 @@ export class ChatService {
         // 初始化工具组管理器
         await toolGroupManager.init()
         
-        // 获取调度模型（优先群组配置）
-        const dispatchModel = groupDispatchModel || LlmService.selectModel({ isDispatch: true })
+        // 获取调度模型（优先群组配置 > 调度模型 > 默认模型）
+        const dispatchModel = groupDispatchModel || LlmService.getDispatchModel() || LlmService.getDefaultModel()
         
         if (!dispatchModel) {
-            logger.warn('[ChatService] 未配置调度模型，跳过工具组调度')
+            logger.warn('[ChatService] 无可用模型进行调度')
             return defaultReturn
         }
+        
+        logger.debug(`[ChatService] 使用调度模型: ${dispatchModel}`)
         
         // 构建调度提示词
         const dispatchPrompt = toolGroupManager.buildDispatchPrompt()
