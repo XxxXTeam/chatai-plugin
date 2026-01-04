@@ -29,50 +29,105 @@ export const extraTools = [
             const { city, lang = 'zh' } = args
             if (!city) return { error: '请提供城市名称' }
 
-            try {
-                const url = `https://wttr.in/${encodeURIComponent(city)}?format=j1&lang=${lang}`
-                const response = await fetch(url, {
-                    headers: { 'User-Agent': 'ChatBot/1.0' }
-                })
-
-                if (!response.ok) {
-                    return { error: `天气查询失败: HTTP ${response.status}` }
+            // 尝试多个天气API
+            const apis = [
+                {
+                    name: 'wttr.in',
+                    url: `https://wttr.in/${encodeURIComponent(city)}?format=j1&lang=${lang}`,
+                    parse: (data) => {
+                        if (!data.current_condition?.[0]) {
+                            throw new Error('无法获取该城市的天气信息')
+                        }
+                        const current = data.current_condition[0]
+                        const location = data.nearest_area?.[0]
+                        const forecast = data.weather?.slice(0, 3) || []
+                        return {
+                            success: true,
+                            location: {
+                                city: location?.areaName?.[0]?.value || city,
+                                region: location?.region?.[0]?.value || '',
+                                country: location?.country?.[0]?.value || ''
+                            },
+                            current: {
+                                temperature: `${current.temp_C}°C`,
+                                feels_like: `${current.FeelsLikeC}°C`,
+                                humidity: `${current.humidity}%`,
+                                weather: current.lang_zh?.[0]?.value || current.weatherDesc?.[0]?.value || '未知',
+                                wind: `${current.winddir16Point} ${current.windspeedKmph}km/h`,
+                                visibility: `${current.visibility}km`,
+                                uv_index: current.uvIndex
+                            },
+                            forecast: forecast.map(day => ({
+                                date: day.date,
+                                max_temp: `${day.maxtempC}°C`,
+                                min_temp: `${day.mintempC}°C`
+                            }))
+                        }
+                    }
+                },
+                {
+                    name: 'open-meteo',
+                    // 备用API：使用地理编码+天气查询
+                    url: `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=zh`,
+                    parse: async (geoData) => {
+                        if (!geoData.results?.[0]) {
+                            throw new Error('找不到该城市')
+                        }
+                        const { latitude, longitude, name, country } = geoData.results[0]
+                        const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&timezone=auto`
+                        const weatherResp = await fetch(weatherUrl, { 
+                            signal: AbortSignal.timeout(10000),
+                            headers: { 'User-Agent': 'ChatBot/1.0' }
+                        })
+                        if (!weatherResp.ok) throw new Error('天气API请求失败')
+                        const weatherData = await weatherResp.json()
+                        const current = weatherData.current
+                        const weatherCodes = {
+                            0: '晴天', 1: '基本晴朗', 2: '多云', 3: '阴天',
+                            45: '雾', 48: '雾凇', 51: '小毛毛雨', 53: '毛毛雨',
+                            61: '小雨', 63: '中雨', 65: '大雨', 71: '小雪', 73: '中雪', 75: '大雪',
+                            95: '雷暴', 96: '冰雹雷暴'
+                        }
+                        return {
+                            success: true,
+                            location: { city: name, country },
+                            current: {
+                                temperature: `${current.temperature_2m}°C`,
+                                humidity: `${current.relative_humidity_2m}%`,
+                                weather: weatherCodes[current.weather_code] || '未知',
+                                wind: `${current.wind_speed_10m}km/h`
+                            }
+                        }
+                    }
                 }
+            ]
 
-                const data = await response.json()
-                if (!data.current_condition?.[0]) {
-                    return { error: '无法获取该城市的天气信息' }
+            let lastError = null
+            for (const api of apis) {
+                try {
+                    const controller = new AbortController()
+                    const timeoutId = setTimeout(() => controller.abort(), 15000)
+                    
+                    const response = await fetch(api.url, {
+                        headers: { 'User-Agent': 'ChatBot/1.0' },
+                        signal: controller.signal
+                    })
+                    clearTimeout(timeoutId)
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`)
+                    }
+
+                    const data = await response.json()
+                    const result = await api.parse(data)
+                    return result
+                } catch (error) {
+                    lastError = error
+                    // 继续尝试下一个API
                 }
-
-                const current = data.current_condition[0]
-                const location = data.nearest_area?.[0]
-                const forecast = data.weather?.slice(0, 3) || []
-
-                return {
-                    success: true,
-                    location: {
-                        city: location?.areaName?.[0]?.value || city,
-                        region: location?.region?.[0]?.value || '',
-                        country: location?.country?.[0]?.value || ''
-                    },
-                    current: {
-                        temperature: `${current.temp_C}°C`,
-                        feels_like: `${current.FeelsLikeC}°C`,
-                        humidity: `${current.humidity}%`,
-                        weather: current.lang_zh?.[0]?.value || current.weatherDesc?.[0]?.value || '未知',
-                        wind: `${current.winddir16Point} ${current.windspeedKmph}km/h`,
-                        visibility: `${current.visibility}km`,
-                        uv_index: current.uvIndex
-                    },
-                    forecast: forecast.map(day => ({
-                        date: day.date,
-                        max_temp: `${day.maxtempC}°C`,
-                        min_temp: `${day.mintempC}°C`
-                    }))
-                }
-            } catch (error) {
-                return { error: `获取天气失败: ${error.message}` }
             }
+
+            return { error: `获取天气失败: ${lastError?.message || '所有API都不可用'}` }
         }
     },
     {

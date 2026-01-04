@@ -42,12 +42,10 @@ initTasks.push((async () => {
   webServerPort = result?.port || config.get('webServer.port') || 3000
   return { name: 'WebServer', status: 'ok', port: webServerPort }
 })())
-// MCP工具异步初始化
 initTasks.push((async () => {
   try {
     const { mcpManager } = await import('./src/mcp/McpManager.js')
     await mcpManager.init()
-    // 使用 tools Map 的 size 获取总工具数
     const toolCount = mcpManager.tools?.size || mcpManager.getTools({ applyConfig: false }).length || 0
     return { name: 'MCP', status: 'ok', toolCount }
   } catch (err) {
@@ -79,12 +77,8 @@ if (fs.existsSync(appsDir)) {
 }
 const initResults = await Promise.allSettled(initTasks)
 const loadTime = Date.now() - startTime
-
-// 从结果中提取MCP工具数量
 const mcpResult = initResults.find(r => r.status === 'fulfilled' && r.value?.name === 'MCP')
 const mcpToolCount = mcpResult?.value?.toolCount || 0
-
-// 从结果中提取Web服务端口
 const webResult = initResults.find(r => r.status === 'fulfilled' && r.value?.name === 'WebServer')
 const finalWebPort = webResult?.value?.port || webServerPort || config.get('webServer.port') || 3000
 

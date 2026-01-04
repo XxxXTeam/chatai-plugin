@@ -28,13 +28,17 @@ import { RefreshCw, History, CheckCircle, XCircle, Clock, Loader2, Trash2, Searc
 interface ToolLog {
   id?: string
   toolName: string
-  arguments: Record<string, unknown>
-  result: unknown
+  arguments?: Record<string, unknown>
+  request?: Record<string, unknown>  // 后端可能返回 request 或 arguments
+  result?: unknown
+  response?: unknown  // 后端可能返回 response 或 result
   timestamp: number
   duration: number
   success: boolean
   userId?: string
+  groupId?: string
   error?: string
+  source?: string
 }
 
 export default function HistoryPage() {
@@ -312,13 +316,13 @@ export default function HistoryPage() {
               <div>
                 <h4 className="font-medium mb-2">参数</h4>
                 <pre className="bg-muted p-3 rounded-lg text-sm overflow-x-auto overflow-y-auto max-h-[200px] whitespace-pre-wrap break-all">
-                  {formatJson(selectedLog?.arguments)}
+                  {formatJson(selectedLog?.arguments || selectedLog?.request || {})}
                 </pre>
               </div>
               <div>
                 <h4 className="font-medium mb-2">结果</h4>
                 <pre className="bg-muted p-3 rounded-lg text-sm overflow-x-auto overflow-y-auto max-h-[300px] whitespace-pre-wrap break-all">
-                  {formatJson(selectedLog?.result)}
+                  {formatJson(selectedLog?.result || selectedLog?.response || {})}
                 </pre>
               </div>
               {selectedLog?.error && (
