@@ -158,6 +158,19 @@ export default function GroupsPage() {
     summaryEnabled: 'inherit' as 'inherit' | 'on' | 'off',
     summaryModel: '',  // 总结功能独立模型
     eventEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    // 事件处理扩展配置
+    welcomeEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    welcomeMessage: '',
+    welcomePrompt: '',
+    goodbyeEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    goodbyePrompt: '',
+    pokeEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    pokeBack: false,
+    // 定时总结配置
+    summaryPushEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    summaryPushIntervalType: 'day' as 'day' | 'hour',
+    summaryPushIntervalValue: 1,
+    summaryPushHour: 22,
     customPrefix: '',
     knowledgeIds: [] as string[],
     inheritFrom: [] as string[],
@@ -231,6 +244,17 @@ export default function GroupsPage() {
       summaryEnabled: 'inherit',
       summaryModel: '',
       eventEnabled: 'inherit',
+      welcomeEnabled: 'inherit',
+      welcomeMessage: '',
+      welcomePrompt: '',
+      goodbyeEnabled: 'inherit',
+      goodbyePrompt: '',
+      pokeEnabled: 'inherit',
+      pokeBack: false,
+      summaryPushEnabled: 'inherit',
+      summaryPushIntervalType: 'day',
+      summaryPushIntervalValue: 1,
+      summaryPushHour: 22,
       customPrefix: '',
       knowledgeIds: [],
       inheritFrom: [],
@@ -279,6 +303,17 @@ export default function GroupsPage() {
         summaryEnabled: settings.summaryEnabled === undefined ? 'inherit' : settings.summaryEnabled ? 'on' : 'off',
         summaryModel: settings.summaryModel || '',
         eventEnabled: settings.eventEnabled === undefined ? 'inherit' : settings.eventEnabled ? 'on' : 'off',
+        welcomeEnabled: settings.welcomeEnabled === undefined ? 'inherit' : settings.welcomeEnabled ? 'on' : 'off',
+        welcomeMessage: settings.welcomeMessage || '',
+        welcomePrompt: settings.welcomePrompt || '',
+        goodbyeEnabled: settings.goodbyeEnabled === undefined ? 'inherit' : settings.goodbyeEnabled ? 'on' : 'off',
+        goodbyePrompt: settings.goodbyePrompt || '',
+        pokeEnabled: settings.pokeEnabled === undefined ? 'inherit' : settings.pokeEnabled ? 'on' : 'off',
+        pokeBack: settings.pokeBack ?? false,
+        summaryPushEnabled: settings.summaryPushEnabled === undefined ? 'inherit' : settings.summaryPushEnabled ? 'on' : 'off',
+        summaryPushIntervalType: settings.summaryPushIntervalType || 'day',
+        summaryPushIntervalValue: settings.summaryPushIntervalValue ?? 1,
+        summaryPushHour: settings.summaryPushHour ?? 22,
         customPrefix: settings.customPrefix || '',
         knowledgeIds: group.knowledgeIds || [],
         inheritFrom: group.inheritFrom || [],
@@ -330,6 +365,17 @@ export default function GroupsPage() {
         summaryEnabled: form.summaryEnabled === 'inherit' ? undefined : form.summaryEnabled === 'on',
         summaryModel: form.summaryModel || undefined,
         eventEnabled: form.eventEnabled === 'inherit' ? undefined : form.eventEnabled === 'on',
+        welcomeEnabled: form.welcomeEnabled === 'inherit' ? undefined : form.welcomeEnabled === 'on',
+        welcomeMessage: form.welcomeMessage || undefined,
+        welcomePrompt: form.welcomePrompt || undefined,
+        goodbyeEnabled: form.goodbyeEnabled === 'inherit' ? undefined : form.goodbyeEnabled === 'on',
+        goodbyePrompt: form.goodbyePrompt || undefined,
+        pokeEnabled: form.pokeEnabled === 'inherit' ? undefined : form.pokeEnabled === 'on',
+        pokeBack: form.pokeBack,
+        summaryPushEnabled: form.summaryPushEnabled === 'inherit' ? undefined : form.summaryPushEnabled === 'on',
+        summaryPushIntervalType: form.summaryPushIntervalType,
+        summaryPushIntervalValue: form.summaryPushIntervalValue,
+        summaryPushHour: form.summaryPushHour,
         customPrefix: form.customPrefix || undefined,
         knowledgeIds: form.knowledgeIds.length > 0 ? form.knowledgeIds : undefined,
         inheritFrom: form.inheritFrom.length > 0 ? form.inheritFrom : undefined,
@@ -1094,6 +1140,120 @@ export default function GroupsPage() {
               </SelectContent>
             </Select>
           </div>
+        </div>
+
+        {/* 事件处理扩展配置 */}
+        <div className="space-y-3 pt-2">
+          <div className="flex items-center gap-2">
+            <PartyPopper className="h-4 w-4 text-muted-foreground" />
+            <Label>事件处理扩展</Label>
+          </div>
+          <p className="text-xs text-muted-foreground">配置入群欢迎、退群通知等事件响应</p>
+          
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label className="text-sm">入群欢迎</Label>
+              <Select value={form.welcomeEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, welcomeEnabled: v })}>
+                <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="inherit">继承</SelectItem>
+                  <SelectItem value="on">开启</SelectItem>
+                  <SelectItem value="off">关闭</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {form.welcomeEnabled === 'on' && (
+              <>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">欢迎语</Label>
+                  <Input value={form.welcomeMessage} onChange={(e) => setForm({ ...form, welcomeMessage: e.target.value })} placeholder="留空使用AI生成" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">自定义提示词</Label>
+                  <Textarea value={form.welcomePrompt} onChange={(e) => setForm({ ...form, welcomePrompt: e.target.value })} placeholder="[事件通知] {nickname} 加入了群聊..." rows={2} />
+                </div>
+              </>
+            )}
+
+            <div className="flex items-center justify-between">
+              <Label className="text-sm">退群通知</Label>
+              <Select value={form.goodbyeEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, goodbyeEnabled: v })}>
+                <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="inherit">继承</SelectItem>
+                  <SelectItem value="on">开启</SelectItem>
+                  <SelectItem value="off">关闭</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {form.goodbyeEnabled === 'on' && (
+              <div className="space-y-1.5">
+                <Label className="text-xs">自定义提示词</Label>
+                <Textarea value={form.goodbyePrompt} onChange={(e) => setForm({ ...form, goodbyePrompt: e.target.value })} placeholder="[事件通知] {nickname} {action}了群聊..." rows={2} />
+              </div>
+            )}
+
+            <div className="flex items-center justify-between">
+              <Label className="text-sm">戳一戳响应</Label>
+              <Select value={form.pokeEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, pokeEnabled: v })}>
+                <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="inherit">继承</SelectItem>
+                  <SelectItem value="on">开启</SelectItem>
+                  <SelectItem value="off">关闭</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {form.pokeEnabled === 'on' && (
+              <div className="flex items-center justify-between">
+                <Label className="text-xs">自动回戳</Label>
+                <Switch checked={form.pokeBack} onCheckedChange={(v) => setForm({ ...form, pokeBack: v })} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 定时总结推送配置 */}
+        <div className="space-y-3 pt-2">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="h-4 w-4 text-muted-foreground" />
+            <Label>定时总结推送</Label>
+          </div>
+          <p className="text-xs text-muted-foreground">配置自动推送群聊总结</p>
+          
+          <div className="flex items-center justify-between">
+            <Label className="text-sm">启用定时推送</Label>
+            <Select value={form.summaryPushEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, summaryPushEnabled: v })}>
+              <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="inherit">继承</SelectItem>
+                <SelectItem value="on">开启</SelectItem>
+                <SelectItem value="off">关闭</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {form.summaryPushEnabled === 'on' && (
+            <div className="grid grid-cols-3 gap-2">
+              <div className="space-y-1">
+                <Label className="text-xs">间隔类型</Label>
+                <Select value={form.summaryPushIntervalType} onValueChange={(v: 'day' | 'hour') => setForm({ ...form, summaryPushIntervalType: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="day">天</SelectItem>
+                    <SelectItem value="hour">小时</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">间隔值</Label>
+                <Input type="number" min={1} value={form.summaryPushIntervalValue} onChange={(e) => setForm({ ...form, summaryPushIntervalValue: parseInt(e.target.value) || 1 })} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">推送时间</Label>
+                <Input type="number" min={0} max={23} value={form.summaryPushHour} onChange={(e) => setForm({ ...form, summaryPushHour: parseInt(e.target.value) || 0 })} />
+              </div>
+            </div>
+          )}
         </div>
       </TabsContent>
     </Tabs>

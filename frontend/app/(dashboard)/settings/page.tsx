@@ -1482,6 +1482,128 @@ export default function SettingsPage() {
               )}
             </CardContent>
           </Card>
+
+          <Card>
+            <CardHeader><CardTitle>定时总结推送</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div><Label>全局启用</Label><p className="text-sm text-muted-foreground">启用定时群聊总结推送功能</p></div>
+                <Switch checked={(config.memory as { summaryPush?: { enabled?: boolean } })?.summaryPush?.enabled ?? false} onCheckedChange={(v) => updateConfig('memory.summaryPush.enabled', v)} />
+              </div>
+              {(config.memory as { summaryPush?: { enabled?: boolean } })?.summaryPush?.enabled && (
+                <>
+                  <div className="grid gap-2">
+                    <Label>检查间隔（分钟）</Label>
+                    <Input type="number" value={(config.memory as { summaryPush?: { checkInterval?: number } })?.summaryPush?.checkInterval || 60} onChange={(e) => updateConfig('memory.summaryPush.checkInterval', parseInt(e.target.value))} />
+                    <p className="text-xs text-muted-foreground">检查是否需要推送的间隔时间</p>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>默认推送间隔（小时）</Label>
+                    <Input type="number" value={(config.memory as { summaryPush?: { defaultInterval?: number } })?.summaryPush?.defaultInterval || 24} onChange={(e) => updateConfig('memory.summaryPush.defaultInterval', parseInt(e.target.value))} />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>默认推送时间（小时，0-23）</Label>
+                    <Input type="number" min={0} max={23} value={(config.memory as { summaryPush?: { defaultPushHour?: number } })?.summaryPush?.defaultPushHour ?? 22} onChange={(e) => updateConfig('memory.summaryPush.defaultPushHour', parseInt(e.target.value))} />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>默认最大消息数</Label>
+                    <Input type="number" value={(config.memory as { summaryPush?: { maxMessages?: number } })?.summaryPush?.maxMessages || 300} onChange={(e) => updateConfig('memory.summaryPush.maxMessages', parseInt(e.target.value))} />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div><Label>使用LLM生成总结</Label><p className="text-sm text-muted-foreground">调用AI模型生成智能总结</p></div>
+                    <Switch checked={(config.memory as { summaryPush?: { useLLM?: boolean } })?.summaryPush?.useLLM ?? true} onCheckedChange={(v) => updateConfig('memory.summaryPush.useLLM', v)} />
+                  </div>
+                </>
+              )}
+              <p className="text-xs text-muted-foreground">群组独立配置请在「群组管理」中设置</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>表情包小偷</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div><Label>全局启用</Label><p className="text-sm text-muted-foreground">所有群默认开启表情包收集</p></div>
+                <Switch checked={(config.features as { emojiThief?: { globalEnabled?: boolean } })?.emojiThief?.globalEnabled ?? false} onCheckedChange={(v) => updateConfig('features.emojiThief.globalEnabled', v)} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div><Label>群独立文件夹</Label><p className="text-sm text-muted-foreground">每个群的表情存储到独立文件夹</p></div>
+                <Switch checked={(config.features as { emojiThief?: { separateFolder?: boolean } })?.emojiThief?.separateFolder ?? false} onCheckedChange={(v) => updateConfig('features.emojiThief.separateFolder', v)} />
+              </div>
+              <div className="grid gap-2">
+                <Label>每群最大表情数</Label>
+                <Input type="number" value={(config.features as { emojiThief?: { maxCount?: number } })?.emojiThief?.maxCount || 1000} onChange={(e) => updateConfig('features.emojiThief.maxCount', parseInt(e.target.value))} />
+              </div>
+              <div className="grid gap-2">
+                <Label>收集概率 (0-1)</Label>
+                <Input type="number" step="0.1" min={0} max={1} value={(config.features as { emojiThief?: { stealRate?: number } })?.emojiThief?.stealRate ?? 1.0} onChange={(e) => updateConfig('features.emojiThief.stealRate', parseFloat(e.target.value))} />
+                <p className="text-xs text-muted-foreground">看到表情包时收集的概率</p>
+              </div>
+              <div className="grid gap-2">
+                <Label>触发模式</Label>
+                <Select value={(config.features as { emojiThief?: { triggerMode?: string } })?.emojiThief?.triggerMode || 'chat_random'} onValueChange={(v) => updateConfig('features.emojiThief.triggerMode', v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="off">仅收集（不发送）</SelectItem>
+                    <SelectItem value="random">随机触发</SelectItem>
+                    <SelectItem value="bym_follow">伪人跟随</SelectItem>
+                    <SelectItem value="bym_random">伪人随机</SelectItem>
+                    <SelectItem value="chat_follow">对话跟随</SelectItem>
+                    <SelectItem value="chat_random">对话随机</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>触发概率 (0-1)</Label>
+                <Input type="number" step="0.05" min={0} max={1} value={(config.features as { emojiThief?: { triggerRate?: number } })?.emojiThief?.triggerRate ?? 0.1} onChange={(e) => updateConfig('features.emojiThief.triggerRate', parseFloat(e.target.value))} />
+                <p className="text-xs text-muted-foreground">触发发送表情包的概率</p>
+              </div>
+              <p className="text-xs text-muted-foreground">群组独立配置请在「群组管理」中设置</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>触发黑白名单</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-2">
+                <Label>用户黑名单</Label>
+                <DynamicTags 
+                  value={config.trigger?.blacklistUsers || []} 
+                  onChange={(v) => updateConfig('trigger.blacklistUsers', v)} 
+                  placeholder="输入QQ号后回车"
+                />
+                <p className="text-xs text-muted-foreground">这些用户的消息将被忽略</p>
+              </div>
+              <div className="grid gap-2">
+                <Label>用户白名单</Label>
+                <DynamicTags 
+                  value={config.trigger?.whitelistUsers || []} 
+                  onChange={(v) => updateConfig('trigger.whitelistUsers', v)} 
+                  placeholder="输入QQ号后回车"
+                />
+                <p className="text-xs text-muted-foreground">留空表示不限制，有值时仅这些用户可触发</p>
+              </div>
+              <Separator />
+              <div className="grid gap-2">
+                <Label>群黑名单</Label>
+                <DynamicTags 
+                  value={config.trigger?.blacklistGroups || []} 
+                  onChange={(v) => updateConfig('trigger.blacklistGroups', v)} 
+                  placeholder="输入群号后回车"
+                />
+                <p className="text-xs text-muted-foreground">这些群的消息将被忽略</p>
+              </div>
+              <div className="grid gap-2">
+                <Label>群白名单</Label>
+                <DynamicTags 
+                  value={config.trigger?.whitelistGroups || []} 
+                  onChange={(v) => updateConfig('trigger.whitelistGroups', v)} 
+                  placeholder="输入群号后回车"
+                />
+                <p className="text-xs text-muted-foreground">留空表示不限制，有值时仅这些群可触发</p>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 

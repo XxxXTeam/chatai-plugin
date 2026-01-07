@@ -15,7 +15,7 @@ const execAsync = promisify(exec)
 export const shellTools = [
     {
         name: 'execute_command',
-        description: '执行 Shell 命令。这是一个危险操作，支持执行系统命令并返回输出结果。',
+        description: '执行 Shell 命令。这是一个危险操作，仅限主人使用，支持执行系统命令并返回输出结果。',
         inputSchema: {
             type: 'object',
             properties: {
@@ -33,14 +33,26 @@ export const shellTools = [
                 },
                 shell: {
                     type: 'string',
-                    description: '使用的 shell，默认 /bin/bash'
+                    description: '使用的 shell，默认系统shell'
                 }
             },
             required: ['command']
         },
         dangerous: true,
+        requireMaster: true,  // 标记需要主人权限
         handler: async (args, context) => {
-            const { command, cwd, timeout = 30000, shell = '/bin/bash' } = args
+            // 主人权限检查
+            if (!context?.isMaster) {
+                return {
+                    success: false,
+                    error: '权限不足：execute_command 仅限主人使用'
+                }
+            }
+            
+            const { command, cwd, timeout = 30000 } = args
+            // 根据系统选择默认shell
+            const defaultShell = process.platform === 'win32' ? 'cmd.exe' : '/bin/bash'
+            const shell = args.shell || defaultShell
             
             // 危险命令黑名单
             const dangerousPatterns = [
@@ -50,6 +62,8 @@ export const shellTools = [
                 />\s*\/dev\/sd/i,
                 /chmod\s+777\s+\//i,
                 /:(){ :|:& };:/,  // fork bomb
+                /format\s+[a-z]:/i,  // Windows format
+                /del\s+\/[fqs]\s+[a-z]:\\/i,  // Windows del
             ]
             
             for (const pattern of dangerousPatterns) {
