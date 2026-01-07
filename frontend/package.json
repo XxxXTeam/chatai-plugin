@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "export": "ANALYZE=true next build && rm -rf ../resources/web && cp -r out ../resources/web",
+    "export": "set \"ANALYZE=true\" && next build && powershell -NoProfile -Command \"Remove-Item ..\\resources\\web -Recurse -Force -ErrorAction SilentlyContinue; Copy-Item -Recurse -Force out ..\\resources\\web\"",
     "build:analyze": "ANALYZE=true next build"
   },
   "dependencies": {
