@@ -18,6 +18,13 @@ import { createRequire } from 'module'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
+// 缓存 Yunzai 主人配置
+let yunzaiCfg = null
+try {
+    yunzaiCfg = (await import('../../../lib/config/config.js')).default
+} catch (e) {
+}
+
 const require = createRequire(import.meta.url)
 const { exec, execSync } = require('child_process')
 const __filename = fileURLToPath(import.meta.url)
@@ -200,6 +207,34 @@ export class AICommands extends plugin {
                 }
             ]
         })
+    }
+
+    /**
+     * 检查是否是主人
+     * @param {string|number} userId - 用户ID
+     * @returns {boolean}
+     */
+    isMasterUser(userId) {
+        const masters = this.getMasterList()
+        return masters.includes(String(userId)) || masters.includes(Number(userId))
+    }
+
+    /**
+     * 获取主人 QQ 列表
+     * @returns {Array}
+     */
+    getMasterList() {
+        // 优先使用插件配置的主人列表
+        const pluginMasters = config.get('admin.masterQQ') || []
+        if (pluginMasters.length > 0) {
+            return pluginMasters
+        }
+        // 尝试从 Yunzai 配置获取
+        if (yunzaiCfg?.masterQQ?.length > 0) {
+            return yunzaiCfg.masterQQ
+        }
+        // 回退到 global.Bot 配置
+        return global.Bot?.config?.master || []
     }
     
     /**
@@ -539,7 +574,7 @@ export class AICommands extends plugin {
             await this.reply('此功能仅支持群聊使用', true)
             return true
         }
-        const isMaster = config.get('masters')?.includes(String(e.user_id))
+        const isMaster = this.isMasterUser(e.user_id)
         const isGroupAdmin = e.sender?.role === 'admin' || e.sender?.role === 'owner'
         if (!isMaster && !isGroupAdmin) {
             await this.reply('仅群管理员、群主或Bot主人可使用此功能', true)

@@ -174,6 +174,7 @@ export default function GroupsPage() {
     summaryPushIntervalType: 'day' as 'day' | 'hour',
     summaryPushIntervalValue: 1,
     summaryPushHour: 22,
+    summaryPushMessageCount: 100,
     customPrefix: '',
     knowledgeIds: [] as string[],
     inheritFrom: [] as string[],
@@ -258,6 +259,7 @@ export default function GroupsPage() {
       summaryPushIntervalType: 'day',
       summaryPushIntervalValue: 1,
       summaryPushHour: 22,
+      summaryPushMessageCount: 100,
       customPrefix: '',
       knowledgeIds: [],
       inheritFrom: [],
@@ -317,6 +319,7 @@ export default function GroupsPage() {
         summaryPushIntervalType: settings.summaryPushIntervalType || 'day',
         summaryPushIntervalValue: settings.summaryPushIntervalValue ?? 1,
         summaryPushHour: settings.summaryPushHour ?? 22,
+        summaryPushMessageCount: settings.summaryPushMessageCount ?? 100,
         customPrefix: settings.customPrefix || '',
         knowledgeIds: group.knowledgeIds || [],
         inheritFrom: group.inheritFrom || [],
@@ -379,6 +382,7 @@ export default function GroupsPage() {
         summaryPushIntervalType: form.summaryPushIntervalType,
         summaryPushIntervalValue: form.summaryPushIntervalValue,
         summaryPushHour: form.summaryPushHour,
+        summaryPushMessageCount: form.summaryPushMessageCount,
         customPrefix: form.customPrefix || undefined,
         knowledgeIds: form.knowledgeIds.length > 0 ? form.knowledgeIds : undefined,
         inheritFrom: form.inheritFrom.length > 0 ? form.inheritFrom : undefined,
@@ -863,7 +867,7 @@ export default function GroupsPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">偷取概率</Label>
+                <Label className="text-xs">偷取概率 (%)</Label>
                 <Input
                   type="number" min={1} max={100}
                   value={Math.round(form.emojiThiefStealRate * 100)}
@@ -871,6 +875,31 @@ export default function GroupsPage() {
                 />
               </div>
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">发送模式</Label>
+                <Select value={form.emojiThiefTriggerMode || 'off'} onValueChange={(v) => setForm({ ...form, emojiThiefTriggerMode: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="off">关闭</SelectItem>
+                    <SelectItem value="chat_follow">聊天触发</SelectItem>
+                    <SelectItem value="chat_random">聊天随机</SelectItem>
+                    <SelectItem value="bym_follow">伪人触发</SelectItem>
+                    <SelectItem value="bym_random">伪人随机</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">发送概率 (%)</Label>
+                <Input
+                  type="number" min={1} max={100}
+                  value={Math.round((form.emojiThiefTriggerRate ?? 0.05) * 100)}
+                  onChange={(e) => setForm({ ...form, emojiThiefTriggerRate: parseInt(e.target.value) / 100 })}
+                  disabled={form.emojiThiefTriggerMode === 'off' || form.emojiThiefTriggerMode === 'chat_follow' || form.emojiThiefTriggerMode === 'bym_follow'}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">触发模式100%发送，随机模式按概率发送</p>
           </div>
         )}
 
@@ -926,6 +955,12 @@ export default function GroupsPage() {
                   onChange={(e) => setForm({ ...form, summaryPushHour: parseInt(e.target.value) })} className="w-24" />
               </div>
             )}
+            <div className="space-y-1">
+              <Label className="text-xs">消息数量</Label>
+              <Input type="number" min={10} max={500} value={form.summaryPushMessageCount || 100}
+                onChange={(e) => setForm({ ...form, summaryPushMessageCount: parseInt(e.target.value) || 100 })} className="w-24" />
+            </div>
+            <p className="text-xs text-muted-foreground">每次总结获取指定数量的新消息，不会重复总结已处理的消息</p>
           </div>
         )}
 
