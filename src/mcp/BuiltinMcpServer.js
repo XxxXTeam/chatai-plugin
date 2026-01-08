@@ -6,7 +6,7 @@ const logger = chatLogger
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getBotFramework, isMaster as checkIsMaster } from '../utils/bot.js'
+import { detectFramework as getBotFramework, isMaster as checkIsMaster } from '../utils/platformAdapter.js'
 import config from '../../config/config.js'
 import { validateParams, paramError } from './tools/helpers.js'
 

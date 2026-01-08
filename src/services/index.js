@@ -1,6 +1,17 @@
 export { LlmService } from './llm/LlmService.js'
 export { ChatService, chatService } from './llm/ChatService.js'
-export { taskOrchestrator, TaskOrchestrator, TaskType, ExecutionMode } from './llm/TaskOrchestrator.js'
+export { 
+    ChatAgent, chatAgent, createChatAgent, quickChat, 
+    SkillsAgent, createSkillsAgent, 
+    getAllTools, executeTool, setToolContext, getToolContext, refreshBuiltinTools, 
+    getBuiltinToolsList, isDangerousTool, checkToolAvailable, getToolCallLimits, convertMcpTools,
+    icqqGroup, icqqFriend, callOneBotApi, getGroupMemberList, filterMembers,
+    randomSelectMembers, findMemberByName, formatMemberInfo, batchSendMessages,
+    validateParams, paramError, checkParams, sendMessage, sendForwardMessage,
+    parseRichContent, buildForwardNodes, detectProtocol, getBotInfo, 
+    normalizeSegment, normalizeSegments, getMasterList,
+    GroupAdapter, UserAdapter, MemberHelper, ParamHelper
+} from './agent/index.js'
 export { channelManager } from './llm/ChannelManager.js'
 export { contextManager } from './llm/ContextManager.js'
 export { presetManager } from './preset/PresetManager.js'
@@ -18,7 +29,6 @@ export { renderService } from './media/RenderService.js'
 export { proxyService } from './proxy/ProxyService.js'
 export { requestTemplateService } from './proxy/RequestTemplateService.js'
 export { toolFilterService } from './tools/ToolFilterService.js'
-export { workflowService, WorkflowService } from './workflow/WorkflowService.js'
 export * from './middleware/index.js'
 export * from './routes/index.js'
 export { qqBotProxyService, QQBotProxyService, QQBotInstance } from './qqbot/QQBotProxyService.js'

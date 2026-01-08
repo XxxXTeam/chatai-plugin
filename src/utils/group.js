@@ -1,7 +1,7 @@
 /**
  * 群组工具函数
  */
-import { getBotFramework } from './bot.js'
+import { detectFramework as getBotFramework } from './platformAdapter.js'
 import config from '../../config/config.js'
 import { formatTimeToBeiJing } from './common.js'
 import { cleanCQCode } from './messageParser.js'
