@@ -296,6 +296,16 @@ router.delete('/js/:name', async (req, res) => {
     }
 })
 
+// POST /js/reload - 重载JS工具
+router.post('/js/reload', async (req, res) => {
+    try {
+        await mcpManager.reloadJsTools()
+        res.json(ChaiteResponse.ok({ success: true, message: 'JS工具已重载' }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
 // POST /refresh - 刷新工具列表
 router.post('/refresh', async (req, res) => {
     try {

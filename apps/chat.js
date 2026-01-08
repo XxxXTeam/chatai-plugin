@@ -153,6 +153,15 @@ export class Chat extends plugin {
         // 检查访问权限
         if (!this.checkAccess(triggerCfg)) return false
         
+        // 检查群组独立黑白名单
+        if (e.isGroup && e.group_id) {
+            const groupAccess = await this.checkGroupAccess(e.group_id, e.user_id)
+            if (!groupAccess.allowed) {
+                logger.debug(`[Chat] 群组黑白名单拒绝: ${groupAccess.reason}`)
+                return false
+            }
+        }
+        
         // 获取群组独立配置
         if (e.isGroup && e.group_id) {
             const groupConfig = await getGroupTriggerConfig(e.group_id)
@@ -244,6 +253,40 @@ export class Chat extends plugin {
         if (e.isGroup && includesAsString(cfg.blacklistGroups, groupId)) return false
         if (e.isGroup && cfg.whitelistGroups?.length > 0 && !includesAsString(cfg.whitelistGroups, groupId)) return false
         return true
+    }
+
+    /**
+     * 检查群组独立黑白名单
+     * @param {string} groupId - 群组ID
+     * @param {string} userId - 用户ID
+     * @returns {Promise<{allowed: boolean, reason?: string}>}
+     */
+    async checkGroupAccess(groupId, userId) {
+        if (!groupId) return { allowed: true }
+        
+        try {
+            const scopeManager = await ensureScopeManager()
+            const groupSettings = await scopeManager.getGroupSettings(String(groupId))
+            const settings = groupSettings?.settings || {}
+            
+            const listMode = settings.listMode || 'none'
+            const blacklist = settings.blacklist || []
+            const whitelist = settings.whitelist || []
+            
+            // 黑名单模式
+            if (listMode === 'blacklist' && blacklist.includes(String(userId))) {
+                return { allowed: false, reason: '您已被加入本群黑名单，无法使用AI功能' }
+            }
+            
+            // 白名单模式
+            if (listMode === 'whitelist' && !whitelist.includes(String(userId))) {
+                return { allowed: false, reason: '本群已启用白名单模式，您不在白名单中' }
+            }
+        } catch (err) {
+            logger.debug('[Chat] 检查群组黑白名单失败:', err.message)
+        }
+        
+        return { allowed: true }
     }
 
     /**

@@ -75,6 +75,7 @@ class DatabaseService {
      * 保存记忆
      */
     saveMemory(userId, content, options = {}) {
+        this.ensureInit()
         const stmt = this.db.prepare(`
             INSERT INTO memories (user_id, content, source, importance, timestamp, metadata)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -94,6 +95,7 @@ class DatabaseService {
      * 获取用户的所有记忆
      */
     getMemories(userId, limit = 100) {
+        this.ensureInit()
         const stmt = this.db.prepare(`
             SELECT * FROM memories 
             WHERE user_id = ? 
@@ -161,6 +163,7 @@ class DatabaseService {
      * 删除记忆
      */
     deleteMemory(memoryId) {
+        this.ensureInit()
         const stmt = this.db.prepare('DELETE FROM memories WHERE id = ?')
         return stmt.run(memoryId).changes > 0
     }
@@ -169,6 +172,7 @@ class DatabaseService {
      * 清空用户所有记忆
      */
     clearMemories(userId) {
+        this.ensureInit()
         const stmt = this.db.prepare('DELETE FROM memories WHERE user_id = ?')
         return stmt.run(userId).changes
     }
@@ -221,9 +225,19 @@ class DatabaseService {
     }
 
     /**
+     * 确保数据库已初始化
+     */
+    ensureInit() {
+        if (!this.db) {
+            this.init()
+        }
+    }
+
+    /**
      * 获取所有有记忆的用户
      */
     getMemoryUsers() {
+        this.ensureInit()
         const stmt = this.db.prepare(`
             SELECT user_id, COUNT(*) as count, MAX(timestamp) as last_update
             FROM memories
@@ -420,6 +434,7 @@ class DatabaseService {
      * @returns {Array<{id: string, userId: string, messageCount: number, updatedAt: number, lastMessage: string}>}
      */
     getConversations() {
+        this.ensureInit()
         const stmt = this.db.prepare(`
             SELECT 
                 m.conversation_id,
@@ -533,6 +548,7 @@ class DatabaseService {
      * 获取数据库统计信息
      */
     getStats() {
+        this.ensureInit()
         const conversations = this.db.prepare('SELECT COUNT(DISTINCT conversation_id) as count FROM messages').get()
         const messages = this.db.prepare('SELECT COUNT(*) as count FROM messages').get()
         const oldest = this.db.prepare('SELECT MIN(timestamp) as ts FROM messages').get()

@@ -802,49 +802,32 @@ async function parseReplyMessage(e, options) {
         let replyData = null
         let replySenderId = null
         let replySenderName = null
-
-        parseLog.push(`[Reply] 开始解析引用消息, hasSource=${!!e.source}, hasGetReply=${typeof e.getReply === 'function'}`)
-
-        // 方式1: 使用 e.getReply() (TRSS/部分平台)
         if (e.getReply && typeof e.getReply === 'function') {
             try {
-                parseLog.push(`[Reply] 尝试 e.getReply()`)
                 const reply = await e.getReply()
                 if (reply) {
                     replyData = reply
-                    // 兼容 NC 格式: reply.data 或直接 reply
                     const replyInfo = reply.data || reply
                     replySenderId = replyInfo.user_id || replyInfo.sender?.user_id || reply.user_id
                     replySenderName = replyInfo.sender?.card || replyInfo.sender?.nickname || 
                                       replyInfo.nickname || reply.nickname
-                    parseLog.push(`[Reply] e.getReply() 成功, sender=${replySenderId}`)
                 }
             } catch (err) {
-                parseLog.push(`[Reply] e.getReply() 失败: ${err.message}`)
             }
         }
-        
-        // 方式2: 从 e.source 获取并通过 API 拉取完整消息
         if (!replyData && e.source) {
-            parseLog.push(`[Reply] 尝试从 e.source 获取, seq=${e.source.seq}, message_id=${e.source.message_id}`)
-            
-            // NC/NapCat 使用 message_id, icqq 使用 seq
             const msgId = e.source.message_id || e.source.id
             const seq = e.isGroup 
                 ? (e.source.seq || msgId || e.reply_id) 
                 : (e.source.time || e.source.seq)
             
             if (seq || msgId) {
-                // 群聊
                 if (e.isGroup || e.group_id) {
-                    // NapCat 专用：优先使用 sendApi 获取全量数据
                     if (!replyData && isNapCatPlatform && msgId) {
                         try {
-                            parseLog.push(`[Reply] NapCat getFullMessage(${msgId})`)
                             const napCatMsg = await NapCatMessageUtils.getFullMessage(e, msgId)
                             if (napCatMsg) {
                                 replyData = napCatMsg
-                                parseLog.push(`[Reply] NapCat getFullMessage 成功`)
                             }
                         } catch (err) {
                             parseLog.push(`[Reply] NapCat getFullMessage 失败: ${err.message}`)
@@ -861,34 +844,23 @@ async function parseReplyMessage(e, options) {
                             parseLog.push(`[Reply] bot.getMsg(message_id) 失败: ${err.message}`)
                         }
                     }
-                    
-                    // NC/NapCat: 尝试 get_msg API (OneBot标准)
                     if (!replyData && e.bot?.sendApi && msgId) {
                         try {
-                            parseLog.push(`[Reply] 尝试 sendApi get_msg(${msgId})`)
                             replyData = await e.bot.sendApi('get_msg', { message_id: msgId })
                             if (replyData?.data) replyData = replyData.data
-                            if (replyData) parseLog.push(`[Reply] sendApi get_msg 成功`)
                         } catch (err) {
-                            parseLog.push(`[Reply] sendApi get_msg 失败: ${err.message}`)
                         }
                     }
-                    
-                    // icqq: group.getMsg
                     if (!replyData && e.group?.getMsg) {
                         try {
-                            parseLog.push(`[Reply] 尝试 group.getMsg(${seq})`)
                             replyData = await e.group.getMsg(seq)
                             if (replyData) parseLog.push(`[Reply] group.getMsg 成功`)
                         } catch (err) {
                             parseLog.push(`[Reply] group.getMsg 失败: ${err.message}`)
                         }
                     }
-                    
-                    // 回退: group.getChatHistory
                     if (!replyData && e.group?.getChatHistory && seq) {
                         try {
-                            parseLog.push(`[Reply] 尝试 group.getChatHistory(${seq})`)
                             const history = await e.group.getChatHistory(seq, 1)
                             replyData = history?.pop?.() || history?.[0]
                             if (replyData) parseLog.push(`[Reply] group.getChatHistory 成功`)

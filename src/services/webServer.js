@@ -88,12 +88,14 @@ import {
     memoryRoutes,
     channelRoutes,
     testPanelRoutes,
+    groupAdminRoutes,
     createConversationRoutes,
     createContextRoutes,
     createPresetRoutes,
     createPresetsConfigRoutes,
     ChaiteResponse
 } from './routes/index.js'
+import { schedulerService } from './scheduler/SchedulerService.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -442,6 +444,7 @@ window.location.href = '/';
         this.app.use('/api/logs', auth, logsRoutes)
         this.app.use('/api/placeholders', auth, logsRoutes)
         this.app.use('/api/memory', auth, memoryRoutes)
+        this.app.use('/api/group-admin', groupAdminRoutes)  
         this.app.use('/api', auth, systemRoutes)
         this.app.use('/api/conversations', createConversationRoutes(auth))
         this.app.use('/api/context', createContextRoutes(auth))
@@ -509,6 +512,12 @@ window.location.href = '/';
         
         this.addresses = await getServerAddresses(this.port)
         this.printStartupBanner()
+        
+        // 启动周期任务调度服务
+        schedulerService.init().catch(err => {
+            chatLogger.warn('[WebServer] 调度服务启动失败:', err.message)
+        })
+        
         return { port: this.port }
     }
     

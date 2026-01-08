@@ -12,6 +12,8 @@ import { presetManager } from '../src/services/preset/PresetManager.js'
 import { usageStats } from '../src/services/stats/UsageStats.js'
 import { LlmService } from '../src/services/llm/LlmService.js'
 import { getScopeManager } from '../src/services/scope/ScopeManager.js'
+import { generateGroupAdminLoginCode } from '../src/services/routes/groupAdminRoutes.js'
+import { getWebServer } from '../src/services/webServer.js'
 
 // Debug模式状态管理（运行时内存，重启后重置）
 const debugSessions = new Map()  // key: groupId或`private_${userId}`, value: boolean
@@ -163,6 +165,10 @@ export class AICommands extends plugin {
                 {
                     reg: '^#(今日词云|词云|群词云)$',
                     fnc: 'todayWordCloud'
+                },
+                {
+                    reg: '^#(群管理面板|群管理入口|群设置面板)$',
+                    fnc: 'groupAdminPanel'
                 }
             ]
         })
@@ -493,6 +499,110 @@ export class AICommands extends plugin {
      */
     async clearHistory() {
         return this.endConversation()
+    }
+
+    /**
+     * #群管理面板 / #群管理入口 / #群设置面板
+     */
+    async groupAdminPanel() {
+        const e = this.e
+        
+        if (!e.group_id) {
+            await this.reply('此功能仅支持群聊使用', true)
+            return true
+        }
+        const isMaster = config.get('masters')?.includes(String(e.user_id))
+        const isGroupAdmin = e.sender?.role === 'admin' || e.sender?.role === 'owner'
+        if (!isMaster && !isGroupAdmin) {
+            await this.reply('仅群管理员、群主或Bot主人可使用此功能', true)
+            return true
+        }
+        
+        try {
+            // 生成一次性登录码（5分钟有效，使用后失效）
+            const { code } = generateGroupAdminLoginCode(e.group_id, e.user_id)
+            
+            // 获取所有可用地址
+            const webServer = getWebServer()
+            const addresses = webServer.getAddresses()
+            const loginLinks = config.get('web.loginLinks') || []
+            const publicUrl = config.get('web.publicUrl')
+            
+            // 构建所有登录URL
+            const urls = []
+            
+            // 本地地址
+            if (addresses.local?.length > 0) {
+                for (const addr of addresses.local) {
+                    urls.push({ label: '本地', url: `${addr}/group-admin?code=${code}` })
+                }
+            }
+            
+            // IPv6本地地址
+            if (addresses.localIPv6?.length > 0) {
+                for (const addr of addresses.localIPv6) {
+                    urls.push({ label: 'IPv6', url: `${addr}/group-admin?code=${code}` })
+                }
+            }
+            
+            // 公网地址
+            if (publicUrl) {
+                urls.push({ label: '公网', url: `${publicUrl.replace(/\/$/, '')}/group-admin?code=${code}` })
+            } else if (addresses.public) {
+                urls.push({ label: '公网', url: `${addresses.public}/group-admin?code=${code}` })
+            }
+            
+            // 自定义链接
+            for (const link of loginLinks) {
+                if (link.url) {
+                    urls.push({ label: link.label || '自定义', url: `${link.url.replace(/\/$/, '')}/group-admin?code=${code}` })
+                }
+            }
+            
+            // 构建消息
+            const msgLines = [
+                `🔧 群管理面板`,
+                `━━━━━━━━━━━━`,
+                `📍 群号: ${e.group_id}`,
+                `👤 管理员: ${e.sender?.nickname || e.user_id}`,
+                ``
+            ]
+            
+            if (urls.length > 0) {
+                msgLines.push(`🔗 可用登录地址:`)
+                for (const { label, url } of urls) {
+                    msgLines.push(`[${label}] ${url}`)
+                }
+            }
+            
+            msgLines.push(``)
+            msgLines.push(`🔑 手动登录码: ${code}`)
+            msgLines.push(`⏰ 登录码5分钟内有效，使用后失效`)
+            msgLines.push(`💡 登录后24小时内无需再次验证`)
+            
+            const msg = msgLines.join('\n')
+            
+            // 尝试私聊发送（更安全）
+            try {
+                if (e.friend || global.Bot?.pickFriend) {
+                    const friend = e.friend || global.Bot.pickFriend(e.user_id)
+                    if (friend?.sendMsg) {
+                        await friend.sendMsg(msg)
+                        await this.reply('✅ 管理面板链接已私聊发送，请查收', true)
+                        return true
+                    }
+                }
+            } catch (err) {
+                logger.debug('[Commands] 私聊发送失败:', err.message)
+            }
+            
+            // 私聊失败则在群里发送（带撤回提示）
+            await this.reply(msg + '\n\n⚠️ 建议30秒内复制链接后撤回本消息', true)
+        } catch (error) {
+            logger.error('[AI-Commands] Group admin panel error:', error)
+            await this.reply('生成管理面板失败: ' + error.message, true)
+        }
+        return true
     }
 
     /**

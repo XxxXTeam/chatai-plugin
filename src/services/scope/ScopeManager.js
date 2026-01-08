@@ -202,7 +202,7 @@ export class ScopeManager {
   }
 
   /**
-   * 设置群组配置
+   * 设置群组配置（自动合并现有配置）
    * @param {string} groupId 群组ID
    * @param {Object} settings 配置
    * @returns {Promise<boolean>} 是否成功
@@ -212,6 +212,11 @@ export class ScopeManager {
     
     try {
       const now = Date.now()
+      
+      // 获取现有配置进行合并
+      const existing = await this.getGroupSettings(groupId)
+      const existingSettings = existing?.settings || {}
+      
       const { systemPrompt, presetId, knowledgeIds, inheritFrom, ...otherSettings } = settings
       let finalOtherSettings = { ...otherSettings }
       if (otherSettings.settings && typeof otherSettings.settings === 'object') {
@@ -219,21 +224,28 @@ export class ScopeManager {
         finalOtherSettings = { ...rest, ...nestedSettings }
       }
       
+      // 合并现有设置与新设置（新设置优先）
+      const mergedSettings = { ...existingSettings, ...finalOtherSettings }
+      
       const stmt = this.db.db.prepare(`
         INSERT OR REPLACE INTO group_scopes 
         (groupId, systemPrompt, presetId, knowledgeIds, inheritFrom, settings, createdAt, updatedAt)
         VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT createdAt FROM group_scopes WHERE groupId = ?), ?), ?)
       `)
       
-      // 支持空人设：区分 undefined 和 空字符串
-      const finalPrompt = systemPrompt === undefined ? null : systemPrompt
+      // 支持空人设：区分 undefined 和 空字符串；保留现有值如果未提供新值
+      const finalPrompt = systemPrompt === undefined ? (existing?.systemPrompt ?? null) : systemPrompt
+      const finalPresetId = presetId === undefined ? (existing?.presetId ?? null) : (presetId || null)
+      const finalKnowledgeIds = knowledgeIds === undefined ? (existing?.knowledgeIds ?? null) : knowledgeIds
+      const finalInheritFrom = inheritFrom === undefined ? (existing?.inheritFrom ?? null) : inheritFrom
+      
       stmt.run(
         groupId,
         finalPrompt,
-        presetId || null,
-        knowledgeIds ? JSON.stringify(knowledgeIds) : null,
-        inheritFrom ? JSON.stringify(inheritFrom) : null,
-        JSON.stringify(finalOtherSettings),
+        finalPresetId,
+        finalKnowledgeIds ? JSON.stringify(finalKnowledgeIds) : null,
+        finalInheritFrom ? JSON.stringify(finalInheritFrom) : null,
+        JSON.stringify(mergedSettings),
         groupId,
         now,
         now

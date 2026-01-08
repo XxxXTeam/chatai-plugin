@@ -39,7 +39,8 @@ import { toast } from 'sonner'
 import { 
   Plus, Trash2, Loader2, Users, RefreshCw, Settings, FileText, Bot, 
   ChevronDown, BookOpen, GitBranch, X, Search, Power, PowerOff,
-  Sparkles, Image, MessageSquare, PartyPopper, Palette, Zap, MoreHorizontal
+  Sparkles, Image, MessageSquare, PartyPopper, Palette, Zap, MoreHorizontal,
+  UserPlus, UserMinus, Hand, Clock, Brain
 } from 'lucide-react'
 import { ModelSelector } from '@/components/ModelSelector'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -82,6 +83,8 @@ interface Channel {
 interface Preset {
   id: string
   name: string
+  description?: string
+  systemPromptPreview?: string
 }
 
 // 快速切换状态的辅助函数
@@ -526,10 +529,20 @@ export default function GroupsPage() {
               <SelectContent>
                 <SelectItem value="__default__">使用默认预设</SelectItem>
                 {presets.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                  <SelectItem key={p.id} value={p.id}>
+                    <div className="flex flex-col">
+                      <span>{p.name}</span>
+                      {p.description && <span className="text-xs text-muted-foreground">{p.description}</span>}
+                    </div>
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {form.presetId && form.presetId !== '__default__' && (
+              <p className="text-xs text-muted-foreground">
+                {presets.find(p => p.id === form.presetId)?.systemPromptPreview || ''}
+              </p>
+            )}
           </div>
           <div className="space-y-2">
             <Label>触发模式</Label>
@@ -719,6 +732,92 @@ export default function GroupsPage() {
           </Select>
         </div>
 
+        {/* 事件处理详细配置 */}
+        {form.eventEnabled !== 'off' && (
+          <div className="ml-4 pl-4 border-l-2 border-muted space-y-4 animate-fade-in">
+            {/* 入群欢迎 */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <UserPlus className="h-4 w-4 text-green-500" />
+                  <Label className="text-sm font-medium">入群欢迎</Label>
+                </div>
+                <Select value={form.welcomeEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, welcomeEnabled: v })}>
+                  <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="inherit">继承</SelectItem>
+                    <SelectItem value="on">开启</SelectItem>
+                    <SelectItem value="off">关闭</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {form.welcomeEnabled === 'on' && (
+                <div className="space-y-2 pl-6">
+                  <div className="space-y-1">
+                    <Label className="text-xs">固定欢迎语</Label>
+                    <Textarea value={form.welcomeMessage} placeholder="留空则使用AI生成，支持 {nickname} {at} 变量"
+                      onChange={(e) => setForm({ ...form, welcomeMessage: e.target.value })} rows={2} className="text-sm" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">AI欢迎提示词</Label>
+                    <Textarea value={form.welcomePrompt} placeholder="为新成员生成欢迎消息时的提示..."
+                      onChange={(e) => setForm({ ...form, welcomePrompt: e.target.value })} rows={2} className="text-sm" />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* 退群提醒 */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <UserMinus className="h-4 w-4 text-red-500" />
+                  <Label className="text-sm font-medium">退群提醒</Label>
+                </div>
+                <Select value={form.goodbyeEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, goodbyeEnabled: v })}>
+                  <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="inherit">继承</SelectItem>
+                    <SelectItem value="on">开启</SelectItem>
+                    <SelectItem value="off">关闭</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {form.goodbyeEnabled === 'on' && (
+                <div className="space-y-1 pl-6">
+                  <Label className="text-xs">AI告别提示词</Label>
+                  <Textarea value={form.goodbyePrompt} placeholder="为离开成员生成告别消息时的提示..."
+                    onChange={(e) => setForm({ ...form, goodbyePrompt: e.target.value })} rows={2} className="text-sm" />
+                </div>
+              )}
+            </div>
+
+            {/* 戳一戳 */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Hand className="h-4 w-4 text-blue-500" />
+                  <Label className="text-sm font-medium">戳一戳回复</Label>
+                </div>
+                <Select value={form.pokeEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, pokeEnabled: v })}>
+                  <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="inherit">继承</SelectItem>
+                    <SelectItem value="on">开启</SelectItem>
+                    <SelectItem value="off">关闭</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {form.pokeEnabled === 'on' && (
+                <div className="flex items-center gap-2 pl-6">
+                  <Switch checked={form.pokeBack} onCheckedChange={(v) => setForm({ ...form, pokeBack: v })} />
+                  <Label className="text-xs">戳回去（而非文字回复）</Label>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* 表情小偷 */}
         <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
           <div className="flex items-center gap-3">
@@ -775,6 +874,61 @@ export default function GroupsPage() {
           </div>
         )}
 
+        {/* 定时总结推送 */}
+        <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-md bg-muted">
+              <Clock className="h-4 w-4 text-muted-foreground" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">定时总结推送</p>
+              <p className="text-xs text-muted-foreground">定期推送群聊总结报告</p>
+            </div>
+          </div>
+          <Select
+            value={form.summaryPushEnabled}
+            onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, summaryPushEnabled: v })}
+          >
+            <SelectTrigger className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="inherit">继承</SelectItem>
+              <SelectItem value="on">开启</SelectItem>
+              <SelectItem value="off">关闭</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {form.summaryPushEnabled === 'on' && (
+          <div className="ml-4 pl-4 border-l-2 border-muted space-y-3 animate-fade-in">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">间隔类型</Label>
+                <Select value={form.summaryPushIntervalType} onValueChange={(v: 'day' | 'hour') => setForm({ ...form, summaryPushIntervalType: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="day">按天</SelectItem>
+                    <SelectItem value="hour">按小时</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">间隔值</Label>
+                <Input type="number" min={1} value={form.summaryPushIntervalValue}
+                  onChange={(e) => setForm({ ...form, summaryPushIntervalValue: parseInt(e.target.value) || 1 })} />
+              </div>
+            </div>
+            {form.summaryPushIntervalType === 'day' && (
+              <div className="space-y-1">
+                <Label className="text-xs">推送时间 (0-23点)</Label>
+                <Input type="number" min={0} max={23} value={form.summaryPushHour}
+                  onChange={(e) => setForm({ ...form, summaryPushHour: parseInt(e.target.value) })} className="w-24" />
+              </div>
+            )}
+          </div>
+        )}
+
       </TabsContent>
 
       <TabsContent value="bym" className="space-y-4 mt-0">
@@ -815,10 +969,20 @@ export default function GroupsPage() {
                   <SelectItem value="__default__">使用默认预设</SelectItem>
                   <SelectItem value="__custom__">自定义提示词</SelectItem>
                   {presets.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                    <SelectItem key={p.id} value={p.id}>
+                      <div className="flex flex-col">
+                        <span>{p.name}</span>
+                        {p.description && <span className="text-xs text-muted-foreground">{p.description}</span>}
+                      </div>
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {form.bymPresetId && form.bymPresetId !== '__default__' && form.bymPresetId !== '__custom__' && (
+                <p className="text-xs text-muted-foreground">
+                  {presets.find(p => p.id === form.bymPresetId)?.systemPromptPreview || ''}
+                </p>
+              )}
             </div>
 
             {form.bymPresetId === '__custom__' && (

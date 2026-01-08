@@ -20,18 +20,22 @@ import {
 import { toast } from 'sonner'
 import {
   AlertCircle, Loader2, Save, Settings, Zap, Sparkles, BookOpen,
-  RefreshCw, Power, X, Image, MessageSquare, PartyPopper, Palette, Bot, Users, Clock
+  RefreshCw, Power, X, Image, MessageSquare, PartyPopper, Palette, Bot, Users, Clock,
+  Hand, UserPlus, UserMinus, Brain, Cpu, Smile, Hash, ToggleLeft
 } from 'lucide-react'
 
 interface Channel {
   id: string
   name: string
-  provider: string
+  provider?: string
+  models?: string[]
 }
 
 interface Preset {
   id: string
   name: string
+  description?: string
+  systemPromptPreview?: string
 }
 
 interface GroupConfig {
@@ -46,11 +50,20 @@ interface GroupConfig {
   imageGenEnabled?: boolean | string
   summaryEnabled?: boolean | string
   eventHandler?: boolean | string
+  welcomeEnabled?: boolean | string
+  welcomeMessage?: string
+  welcomePrompt?: string
+  goodbyeEnabled?: boolean | string
+  goodbyePrompt?: string
+  pokeEnabled?: boolean | string
+  pokeBack?: boolean
   emojiThief: {
     enabled: boolean
     independent: boolean
     maxCount: number
     probability: number
+    triggerRate?: number
+    triggerMode?: string
   }
   bym: {
     enabled?: boolean | string
@@ -80,9 +93,12 @@ interface GroupConfig {
     intervalType: 'day' | 'hour'
     intervalValue: number
     pushHour?: number
+    messageCount?: number
   }
+  knowledgeIds?: string[]
   presets: Preset[]
   channels: Channel[]
+  knowledgeBases?: { id: string, name: string }[]
 }
 
 export default function GroupAdminPage() {
@@ -112,6 +128,8 @@ export default function GroupAdminPage() {
     emojiThiefSeparateFolder: true,
     emojiThiefMaxCount: 500,
     emojiThiefStealRate: 1.0,
+    emojiThiefTriggerRate: 0.05,
+    emojiThiefTriggerMode: 'off' as 'off' | 'chat_follow' | 'chat_random' | 'bym_follow' | 'bym_random',
     // 伪人
     bymEnabled: 'inherit' as 'inherit' | 'on' | 'off',
     bymPresetId: '__default__',
@@ -138,28 +156,114 @@ export default function GroupAdminPage() {
     summaryPushIntervalType: 'day' as 'day' | 'hour',
     summaryPushIntervalValue: 1,
     summaryPushHour: 20,
+    summaryPushMessageCount: 100,
+    // 事件处理扩展
+    welcomeEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    welcomeMessage: '',
+    welcomePrompt: '',
+    goodbyeEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    goodbyePrompt: '',
+    pokeEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+    pokeBack: false,
+    // 知识库
+    knowledgeIds: [] as string[],
   })
 
+  const [knowledgeBases, setKnowledgeBases] = useState<{id: string, name: string}[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
   const [allModels, setAllModels] = useState<string[]>([])
+  
+  // 登录状态
+  const [needLogin, setNeedLogin] = useState(false)
+  const [loginCode, setLoginCode] = useState('')
+  const [loginLoading, setLoginLoading] = useState(false)
 
   useEffect(() => {
+    // 优先从URL获取登录码（从群命令生成的链接）
+    const urlParams = new URLSearchParams(window.location.search)
+    const urlCode = urlParams.get('code')
+    
+    if (urlCode) {
+      // 清除URL中的code参数
+      window.history.replaceState({}, '', '/group-admin')
+      // 自动使用登录码登录
+      handleLoginWithCode(urlCode)
+      return
+    }
+    
+    // 从localStorage获取已保存的会话信息
     const token = localStorage.getItem('group_admin_token')
-    const info = localStorage.getItem('group_admin_info')
-    if (!token || !info) {
-      setError('未找到群管理员认证信息，请重新获取链接')
+    if (!token) {
+      setNeedLogin(true)
       setLoading(false)
       return
     }
+    loadConfig(token)
+  }, [])
+  
+  const handleLoginWithCode = async (code: string) => {
+    setLoading(true)
     try {
-      const parsed = JSON.parse(info)
-      setGroupId(parsed.groupId)
-      loadConfig(token)
-    } catch {
-      setError('认证信息解析失败')
+      const res = await fetch('/api/group-admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code.toUpperCase() })
+      })
+      const data = await res.json()
+      
+      if (data.code === 0) {
+        localStorage.setItem('group_admin_token', data.data.token)
+        toast.success('登录成功')
+        loadConfig(data.data.token)
+      } else {
+        toast.error(data.message || '登录码无效或已过期')
+        setNeedLogin(true)
+        setLoading(false)
+      }
+    } catch (err) {
+      toast.error('登录失败，请检查网络')
+      setNeedLogin(true)
       setLoading(false)
     }
-  }, [])
+  }
+  
+  const handleLogin = async () => {
+    if (!loginCode.trim()) {
+      toast.error('请输入登录码')
+      return
+    }
+    
+    setLoginLoading(true)
+    try {
+      const res = await fetch('/api/group-admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: loginCode.trim().toUpperCase() })
+      })
+      const data = await res.json()
+      
+      if (data.code === 0) {
+        localStorage.setItem('group_admin_token', data.data.token)
+        setNeedLogin(false)
+        setLoginCode('')
+        toast.success('登录成功')
+        loadConfig(data.data.token)
+      } else {
+        toast.error(data.message || '登录失败')
+      }
+    } catch (err) {
+      toast.error('登录失败，请检查网络')
+    } finally {
+      setLoginLoading(false)
+    }
+  }
+  
+  const handleLogout = () => {
+    localStorage.removeItem('group_admin_token')
+    setNeedLogin(true)
+    setGroupId('')
+    toast.success('已退出登录')
+  }
 
   const getToken = () => localStorage.getItem('group_admin_token') || ''
 
@@ -169,7 +273,12 @@ export default function GroupAdminPage() {
         headers: { 'Authorization': `Bearer ${token || getToken()}` }
       })
       if (!res.ok) {
-        if (res.status === 401) { setError('认证已过期，请重新获取链接'); return }
+        if (res.status === 401) {
+          localStorage.removeItem('group_admin_token')
+          setNeedLogin(true)
+          setLoading(false)
+          return
+        }
         throw new Error('加载配置失败')
       }
       const data = await res.json()
@@ -178,10 +287,12 @@ export default function GroupAdminPage() {
         setGroupId(c.groupId)
         setPresets(c.presets || [])
         
-        // 提取所有模型
+        // 提取所有模型（从渠道的 models 数组中）
         const models = new Set<string>()
         c.channels?.forEach(ch => {
-          if (ch.name) models.add(ch.name)
+          if (ch.models && Array.isArray(ch.models)) {
+            ch.models.forEach(m => models.add(m))
+          }
         })
         setAllModels(Array.from(models).sort())
 
@@ -204,6 +315,8 @@ export default function GroupAdminPage() {
           emojiThiefSeparateFolder: c.emojiThief?.independent ?? true,
           emojiThiefMaxCount: c.emojiThief?.maxCount ?? 500,
           emojiThiefStealRate: (c.emojiThief?.probability ?? 100) / 100,
+          emojiThiefTriggerRate: (c.emojiThief?.triggerRate ?? 5) / 100,
+          emojiThiefTriggerMode: (c.emojiThief?.triggerMode || 'off') as 'off' | 'chat_follow' | 'chat_random' | 'bym_follow' | 'bym_random',
           bymEnabled: c.bym?.enabled === undefined ? 'inherit' : c.bym.enabled === 'true' || c.bym.enabled === true ? 'on' : 'off',
           bymPresetId: c.bym?.presetId || '__default__',
           bymPrompt: c.bym?.prompt || '',
@@ -226,7 +339,19 @@ export default function GroupAdminPage() {
           summaryPushIntervalType: c.summaryPush?.intervalType || 'day',
           summaryPushIntervalValue: c.summaryPush?.intervalValue || 1,
           summaryPushHour: c.summaryPush?.pushHour ?? 20,
+          summaryPushMessageCount: c.summaryPush?.messageCount || 100,
+          // 事件处理扩展
+          welcomeEnabled: c.welcomeEnabled === undefined ? 'inherit' : c.welcomeEnabled === true ? 'on' : 'off',
+          welcomeMessage: c.welcomeMessage || '',
+          welcomePrompt: c.welcomePrompt || '',
+          goodbyeEnabled: c.goodbyeEnabled === undefined ? 'inherit' : c.goodbyeEnabled === true ? 'on' : 'off',
+          goodbyePrompt: c.goodbyePrompt || '',
+          pokeEnabled: c.pokeEnabled === undefined ? 'inherit' : c.pokeEnabled === true ? 'on' : 'off',
+          pokeBack: c.pokeBack || false,
+          knowledgeIds: c.knowledgeIds || [],
         })
+        // 设置知识库列表
+        if (c.knowledgeBases) setKnowledgeBases(c.knowledgeBases)
       } else {
         throw new Error(data.message || '加载失败')
       }
@@ -259,6 +384,8 @@ export default function GroupAdminPage() {
             independent: form.emojiThiefSeparateFolder,
             maxCount: form.emojiThiefMaxCount,
             probability: Math.round(form.emojiThiefStealRate * 100),
+            triggerRate: Math.round(form.emojiThiefTriggerRate * 100),
+            triggerMode: form.emojiThiefTriggerMode,
           },
           bym: {
             enabled: form.bymEnabled === 'inherit' ? undefined : form.bymEnabled === 'on',
@@ -288,7 +415,17 @@ export default function GroupAdminPage() {
             intervalType: form.summaryPushIntervalType,
             intervalValue: form.summaryPushIntervalValue,
             pushHour: form.summaryPushHour,
+            messageCount: form.summaryPushMessageCount,
           },
+          // 事件处理扩展
+          welcomeEnabled: form.welcomeEnabled === 'inherit' ? undefined : form.welcomeEnabled === 'on',
+          welcomeMessage: form.welcomeMessage || undefined,
+          welcomePrompt: form.welcomePrompt || undefined,
+          goodbyeEnabled: form.goodbyeEnabled === 'inherit' ? undefined : form.goodbyeEnabled === 'on',
+          goodbyePrompt: form.goodbyePrompt || undefined,
+          pokeEnabled: form.pokeEnabled === 'inherit' ? undefined : form.pokeEnabled === 'on',
+          pokeBack: form.pokeBack,
+          knowledgeIds: form.knowledgeIds.length > 0 ? form.knowledgeIds : undefined,
         })
       })
       if (!res.ok) {
@@ -313,6 +450,43 @@ export default function GroupAdminPage() {
     )
   }
 
+  if (needLogin) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+        <Card className="w-full max-w-md mx-4">
+          <CardContent className="pt-6">
+            <div className="text-center mb-6">
+              <Settings className="h-12 w-12 text-blue-500 mx-auto" />
+              <h2 className="mt-4 text-xl font-semibold">群管理面板</h2>
+              <p className="mt-2 text-sm text-gray-500">请输入登录码登录</p>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="loginCode">登录码</Label>
+                <Input
+                  id="loginCode"
+                  placeholder="请输入6位登录码"
+                  value={loginCode}
+                  onChange={(e) => setLoginCode(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                  maxLength={6}
+                  className="text-center text-2xl tracking-widest font-mono"
+                />
+              </div>
+              <Button className="w-full" onClick={handleLogin} disabled={loginLoading}>
+                {loginLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                登录
+              </Button>
+              <p className="text-xs text-center text-gray-500">
+                在群内发送 <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">#群管理面板</code> 获取登录码
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
@@ -320,7 +494,7 @@ export default function GroupAdminPage() {
           <CardContent className="pt-6 text-center">
             <AlertCircle className="h-12 w-12 text-red-500 mx-auto" />
             <h2 className="mt-4 text-xl font-semibold">{error}</h2>
-            <p className="mt-2 text-sm text-gray-500">请在群内发送 #ai群管理面板 重新获取链接</p>
+            <p className="mt-2 text-sm text-gray-500">请在群内发送 #群管理面板 重新获取登录码</p>
           </CardContent>
         </Card>
       </div>
@@ -342,6 +516,9 @@ export default function GroupAdminPage() {
             <Button size="sm" onClick={saveConfig} disabled={saving}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Save className="h-4 w-4 mr-1" />}
               保存
+            </Button>
+            <Button variant="ghost" size="sm" onClick={handleLogout}>
+              退出
             </Button>
           </div>
         </div>
@@ -377,9 +554,21 @@ export default function GroupAdminPage() {
                         <SelectTrigger><SelectValue placeholder="使用默认预设" /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="__default__">使用默认预设</SelectItem>
-                          {presets.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                          {presets.map(p => (
+                            <SelectItem key={p.id} value={p.id}>
+                              <div className="flex flex-col">
+                                <span>{p.name}</span>
+                                {p.description && <span className="text-xs text-muted-foreground">{p.description}</span>}
+                              </div>
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
+                      {form.presetId && form.presetId !== '__default__' && (
+                        <p className="text-xs text-muted-foreground">
+                          {presets.find(p => p.id === form.presetId)?.systemPromptPreview || ''}
+                        </p>
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label>触发模式</Label>
@@ -437,6 +626,92 @@ export default function GroupAdminPage() {
 
                   <FeatureItem icon={<PartyPopper className="h-4 w-4" />} title="事件处理" desc="入群欢迎、退群提醒"
                     value={form.eventEnabled} onChange={v => setForm({...form, eventEnabled: v})} />
+                  
+                  {/* 事件处理详细配置 */}
+                  {form.eventEnabled !== 'off' && (
+                    <div className="ml-4 pl-4 border-l-2 border-muted space-y-4">
+                      {/* 入群欢迎 */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <UserPlus className="h-4 w-4 text-green-500" />
+                            <Label className="text-sm font-medium">入群欢迎</Label>
+                          </div>
+                          <Select value={form.welcomeEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({...form, welcomeEnabled: v})}>
+                            <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="inherit">继承</SelectItem>
+                              <SelectItem value="on">开启</SelectItem>
+                              <SelectItem value="off">关闭</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {form.welcomeEnabled === 'on' && (
+                          <div className="space-y-2 pl-6">
+                            <div className="space-y-1">
+                              <Label className="text-xs">固定欢迎语（不使用AI生成）</Label>
+                              <Textarea value={form.welcomeMessage} placeholder="留空则使用AI生成，支持 {nickname} {at} 变量"
+                                onChange={e => setForm({...form, welcomeMessage: e.target.value})} rows={2} className="text-sm" />
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs">AI欢迎提示词</Label>
+                              <Textarea value={form.welcomePrompt} placeholder="为新成员生成欢迎消息时的提示..."
+                                onChange={e => setForm({...form, welcomePrompt: e.target.value})} rows={2} className="text-sm" />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 退群提醒 */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <UserMinus className="h-4 w-4 text-red-500" />
+                            <Label className="text-sm font-medium">退群提醒</Label>
+                          </div>
+                          <Select value={form.goodbyeEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({...form, goodbyeEnabled: v})}>
+                            <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="inherit">继承</SelectItem>
+                              <SelectItem value="on">开启</SelectItem>
+                              <SelectItem value="off">关闭</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {form.goodbyeEnabled === 'on' && (
+                          <div className="space-y-1 pl-6">
+                            <Label className="text-xs">AI告别提示词</Label>
+                            <Textarea value={form.goodbyePrompt} placeholder="为离开成员生成告别消息时的提示..."
+                              onChange={e => setForm({...form, goodbyePrompt: e.target.value})} rows={2} className="text-sm" />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 戳一戳 */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Hand className="h-4 w-4 text-blue-500" />
+                            <Label className="text-sm font-medium">戳一戳回复</Label>
+                          </div>
+                          <Select value={form.pokeEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({...form, pokeEnabled: v})}>
+                            <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="inherit">继承</SelectItem>
+                              <SelectItem value="on">开启</SelectItem>
+                              <SelectItem value="off">关闭</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {form.pokeEnabled === 'on' && (
+                          <div className="flex items-center gap-2 pl-6">
+                            <Switch checked={form.pokeBack} onCheckedChange={v => setForm({...form, pokeBack: v})} />
+                            <Label className="text-xs">戳回去（而非文字回复）</Label>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   <FeatureItem icon={<Palette className="h-4 w-4" />} title="表情小偷" desc="收集并发送表情包"
                     value={form.emojiThiefEnabled} onChange={v => setForm({...form, emojiThiefEnabled: v})} />
@@ -458,6 +733,28 @@ export default function GroupAdminPage() {
                             onChange={e => setForm({...form, emojiThiefStealRate: parseInt(e.target.value) / 100})} />
                         </div>
                       </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <Label className="text-xs">发送模式</Label>
+                          <Select value={form.emojiThiefTriggerMode || 'off'} onValueChange={(v: 'off' | 'chat_follow' | 'chat_random' | 'bym_follow' | 'bym_random') => setForm({...form, emojiThiefTriggerMode: v})}>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="off">关闭</SelectItem>
+                              <SelectItem value="chat_follow">聊天触发</SelectItem>
+                              <SelectItem value="chat_random">聊天随机</SelectItem>
+                              <SelectItem value="bym_follow">伪人触发</SelectItem>
+                              <SelectItem value="bym_random">伪人随机</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">发送概率 (%)</Label>
+                          <Input type="number" min={1} max={100} value={Math.round((form.emojiThiefTriggerRate ?? 0.05) * 100)}
+                            onChange={e => setForm({...form, emojiThiefTriggerRate: parseInt(e.target.value) / 100})}
+                            disabled={form.emojiThiefTriggerMode === 'off' || form.emojiThiefTriggerMode === 'chat_follow' || form.emojiThiefTriggerMode === 'bym_follow'} />
+                        </div>
+                      </div>
+                      <p className="text-xs text-muted-foreground">触发模式100%发送，随机模式按概率发送</p>
                     </div>
                   )}
 
@@ -530,6 +827,12 @@ export default function GroupAdminPage() {
                               onChange={e => setForm({...form, summaryPushHour: parseInt(e.target.value)})} className="w-24" />
                           </div>
                         )}
+                        <div className="space-y-1">
+                          <Label className="text-xs">消息数量</Label>
+                          <Input type="number" min={10} max={500} value={form.summaryPushMessageCount}
+                            onChange={e => setForm({...form, summaryPushMessageCount: parseInt(e.target.value) || 100})} className="w-24" />
+                        </div>
+                        <p className="text-xs text-muted-foreground">每次总结获取指定数量的新消息，不会重复总结已处理的消息</p>
                       </div>
                     )}
                   </div>
@@ -549,9 +852,21 @@ export default function GroupAdminPage() {
                           <SelectContent>
                             <SelectItem value="__default__">使用默认预设</SelectItem>
                             <SelectItem value="__custom__">自定义提示词</SelectItem>
-                            {presets.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                            {presets.map(p => (
+                              <SelectItem key={p.id} value={p.id}>
+                                <div className="flex flex-col">
+                                  <span>{p.name}</span>
+                                  {p.description && <span className="text-xs text-muted-foreground">{p.description}</span>}
+                                </div>
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
+                        {form.bymPresetId && form.bymPresetId !== '__default__' && form.bymPresetId !== '__custom__' && (
+                          <p className="text-xs text-muted-foreground">
+                            {presets.find(p => p.id === form.bymPresetId)?.systemPromptPreview || ''}
+                          </p>
+                        )}
                       </div>
 
                       {form.bymPresetId === '__custom__' && (
@@ -655,6 +970,41 @@ export default function GroupAdminPage() {
                         onChange={v => setForm({...form, summaryModel: v})} />
                       <ModelConfigItem label="画像模型" desc="用户画像分析" value={form.profileModel} models={allModels}
                         onChange={v => setForm({...form, profileModel: v})} />
+                    </div>
+                  </div>
+
+                  {/* 知识库配置 */}
+                  {knowledgeBases.length > 0 && (
+                    <div className="space-y-3 border-t pt-4 mt-4">
+                      <div className="flex items-center gap-2">
+                        <Brain className="h-4 w-4 text-muted-foreground" />
+                        <Label>知识库</Label>
+                      </div>
+                      <p className="text-xs text-muted-foreground">为本群关联知识库，AI回复时可参考知识库内容</p>
+                      <div className="space-y-2">
+                        {knowledgeBases.map(kb => (
+                          <div key={kb.id} className="flex items-center gap-2 p-2 rounded border bg-card">
+                            <Switch
+                              checked={form.knowledgeIds.includes(kb.id)}
+                              onCheckedChange={checked => {
+                                if (checked) {
+                                  setForm({...form, knowledgeIds: [...form.knowledgeIds, kb.id]})
+                                } else {
+                                  setForm({...form, knowledgeIds: form.knowledgeIds.filter(id => id !== kb.id)})
+                                }
+                              }}
+                            />
+                            <span className="text-sm">{kb.name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 其他高级设置提示 */}
+                  <div className="border-t pt-4 mt-4">
+                    <div className="p-3 rounded-lg bg-muted/50 text-sm text-muted-foreground">
+                      <p>💡 更多高级设置（如MCP服务、工具组配置等）请在主管理面板中配置</p>
                     </div>
                   </div>
                 </TabsContent>

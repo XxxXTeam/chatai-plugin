@@ -154,6 +154,26 @@ class PermissionService {
             return { allowed: false, reason: 'command_blacklist' }
         }
 
+        // 检查群组独立黑白名单（如果提供了groupId和groupSettings）
+        if (options.groupId && options.groupSettings) {
+            const gs = options.groupSettings
+            const listMode = gs.listMode || 'none'
+            const blacklist = gs.blacklist || []
+            const whitelist = gs.whitelist || []
+            
+            // 黑名单模式：在黑名单中的用户被禁止
+            if (listMode === 'blacklist' && blacklist.includes(userIdStr)) {
+                return { allowed: false, reason: 'group_blacklist' }
+            }
+            
+            // 白名单模式：只有白名单中的用户允许
+            if (listMode === 'whitelist') {
+                if (!whitelist.includes(userIdStr)) {
+                    return { allowed: false, reason: 'group_whitelist_only' }
+                }
+            }
+        }
+
         // 检查全局白名单（无视权限限制，除主人功能外）
         if (permissions.globalWhitelist?.includes(userIdStr) && command.level !== 'master') {
             return { allowed: true, reason: 'global_whitelist' }
@@ -209,6 +229,8 @@ class PermissionService {
             'command_disabled': '此命令已被禁用',
             'global_blacklist': '您已被加入黑名单，无法使用此功能',
             'command_blacklist': '您已被禁止使用此命令',
+            'group_blacklist': '您已被加入本群黑名单，无法使用AI功能',
+            'group_whitelist_only': '本群已启用白名单模式，您不在白名单中',
             'not_in_whitelist': '此命令仅限白名单用户使用',
             'need_admin': '此命令需要群管理员或群主权限',
             'need_master': '此命令仅限主人使用',
