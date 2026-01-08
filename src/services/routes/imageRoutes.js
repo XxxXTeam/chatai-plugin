@@ -30,6 +30,8 @@ async function fetchRemotePresets(url) {
     }
 }
 
+const urlToFilename = (url) => url.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50)
+
 // 获取所有预设（包括远程缓存的）
 async function getAllPresets() {
     const builtinPresets = config.get('features.imageGen.builtinPresets') || []
@@ -39,7 +41,7 @@ async function getAllPresets() {
     const remotePresets = {}
     for (const source of sources) {
         if (!source.enabled) continue
-        const cacheFile = path.join(PRESET_CACHE_DIR, `${source.name.replace(/[^a-zA-Z0-9]/g, '_')}.json`)
+        const cacheFile = path.join(PRESET_CACHE_DIR, `${urlToFilename(source.url)}.json`)
         if (fs.existsSync(cacheFile)) {
             try {
                 remotePresets[source.name] = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'))
@@ -54,7 +56,6 @@ async function getAllPresets() {
 
 const router = express.Router()
 
-// GET /config - 获取图像生成配置
 router.get('/config', (req, res) => {
     try {
         const imageGenConfig = config.get('features.imageGen') || {}
@@ -80,8 +81,11 @@ router.get('/presets', async (req, res) => {
     try {
         const { builtinPresets, customPresets, remotePresets, sources } = await getAllPresets()
         
-        // 合并所有预设
-        const allPresets = [...builtinPresets, ...customPresets]
+        // 合并所有预设，并设置source字段
+        const allPresets = [
+            ...builtinPresets.map(p => ({ ...p, source: 'builtin' })),
+            ...customPresets.map(p => ({ ...p, source: 'custom' }))
+        ]
         for (const [sourceName, presets] of Object.entries(remotePresets)) {
             if (Array.isArray(presets)) {
                 allPresets.push(...presets.map(p => ({ ...p, source: sourceName })))
@@ -193,11 +197,12 @@ router.delete('/custom-presets/:index', async (req, res) => {
 router.put('/builtin-presets/:uid', async (req, res) => {
     try {
         const { uid } = req.params
+        console.log(`[ImageGen] 更新内置预设: uid=${uid}`)
         const presets = config.get('features.imageGen.builtinPresets') || []
         const index = presets.findIndex(p => p.uid === uid)
         
         if (index === -1) {
-            return res.status(404).json(ChaiteResponse.fail(null, 'Preset not found'))
+            return res.status(404).json(ChaiteResponse.fail(null, `预设不存在`))
         }
         
         const { keywords, prompt, needImage, splitGrid } = req.body
@@ -233,14 +238,25 @@ router.delete('/builtin-presets/:uid', async (req, res) => {
 })
 
 // ==================== 远程预设管理 ====================
+// 根据 source name 查找对应的缓存文件
+function findCacheFileBySourceName(sourceName) {
+    const sources = config.get('features.imageGen.presetSources') || []
+    const source = sources.find(s => s.name === sourceName)
+    if (!source || !source.url) return null
+    return path.join(PRESET_CACHE_DIR, `${urlToFilename(source.url)}.json`)
+}
+
 // PUT /remote-presets/:source/:uid - 更新远程预设（保存到本地覆盖）
 router.put('/remote-presets/:source/:uid', async (req, res) => {
     try {
         const { source, uid } = req.params
-        const cacheFile = path.join(PRESET_CACHE_DIR, `${source.replace(/[^a-zA-Z0-9]/g, '_')}.json`)
+        const decodedSource = decodeURIComponent(source)
+        const cacheFile = findCacheFileBySourceName(decodedSource)
         
-        if (!fs.existsSync(cacheFile)) {
-            return res.status(404).json(ChaiteResponse.fail(null, '来源不存在'))
+        console.log(`[ImageGen] 更新远程预设: source=${decodedSource}, uid=${uid}, file=${cacheFile}`)
+        
+        if (!cacheFile || !fs.existsSync(cacheFile)) {
+            return res.status(404).json(ChaiteResponse.fail(null, `来源 ${decodedSource} 的缓存文件不存在`))
         }
         
         const presets = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'))
@@ -250,7 +266,7 @@ router.put('/remote-presets/:source/:uid', async (req, res) => {
         
         const index = presets.findIndex(p => p.uid === uid)
         if (index === -1) {
-            return res.status(404).json(ChaiteResponse.fail(null, 'Preset not found'))
+            return res.status(404).json(ChaiteResponse.fail(null, `预设 ${uid} 不存在`))
         }
         
         const { keywords, prompt, needImage, splitGrid } = req.body
@@ -270,10 +286,11 @@ router.put('/remote-presets/:source/:uid', async (req, res) => {
 router.delete('/remote-presets/:source/:uid', async (req, res) => {
     try {
         const { source, uid } = req.params
-        const cacheFile = path.join(PRESET_CACHE_DIR, `${source.replace(/[^a-zA-Z0-9]/g, '_')}.json`)
+        const decodedSource = decodeURIComponent(source)
+        const cacheFile = findCacheFileBySourceName(decodedSource)
         
-        if (!fs.existsSync(cacheFile)) {
-            return res.status(404).json(ChaiteResponse.fail(null, '来源不存在'))
+        if (!cacheFile || !fs.existsSync(cacheFile)) {
+            return res.status(404).json(ChaiteResponse.fail(null, `来源 ${decodedSource} 的缓存文件不存在`))
         }
         
         const presets = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'))
@@ -283,7 +300,7 @@ router.delete('/remote-presets/:source/:uid', async (req, res) => {
         
         const index = presets.findIndex(p => p.uid === uid)
         if (index === -1) {
-            return res.status(404).json(ChaiteResponse.fail(null, 'Preset not found'))
+            return res.status(404).json(ChaiteResponse.fail(null, `预设 ${uid} 不存在`))
         }
         
         presets.splice(index, 1)
