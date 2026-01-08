@@ -1,6 +1,5 @@
 import config from '../config/config.js'
 import { cleanCQCode } from '../src/utils/messageParser.js'
-// 从核心模块导入去重函数
 import { isMessageProcessed, markMessageProcessed, isSelfMessage, isReplyToBotMessage } from '../src/utils/messageDedup.js'
 import { getScopeManager } from '../src/services/scope/ScopeManager.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'

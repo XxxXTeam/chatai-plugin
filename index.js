@@ -58,7 +58,7 @@ const apps = {}
 const loadStats = { success: 0, failed: 0, plugins: [], failedPlugins: [] }
 const appsDir = path.join(__dirname, 'apps')
 if (fs.existsSync(appsDir)) {
-  const files = fs.readdirSync(appsDir).filter(file => file.endsWith('.js'))
+  const files = fs.readdirSync(appsDir).filter(file => file.endsWith('.js') && file !== 'update.js')
   const loadedApps = await Promise.allSettled(files.map(file => import(`./apps/${file}`)))
 
   files.forEach((file, index) => {
