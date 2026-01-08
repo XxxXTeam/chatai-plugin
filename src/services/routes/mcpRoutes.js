@@ -19,8 +19,7 @@ router.get('/servers', async (req, res) => {
     }
 })
 
-// GET /server/:name - 获取单个MCP服务器
-router.get('/server/:name', async (req, res) => {
+router.get('/servers/:name', async (req, res) => {
     try {
         await mcpManager.init()
         const server = mcpManager.getServer(req.params.name)
@@ -31,8 +30,7 @@ router.get('/server/:name', async (req, res) => {
     }
 })
 
-// POST /server - 添加MCP服务器
-router.post('/server', async (req, res) => {
+router.post('/servers', async (req, res) => {
     try {
         const { name, command, args, env } = req.body
         if (!name || !command) {
@@ -53,8 +51,8 @@ router.post('/server', async (req, res) => {
     }
 })
 
-// PUT /server/:name - 更新MCP服务器
-router.put('/server/:name', async (req, res) => {
+// PUT /servers/:name - 更新MCP服务器
+router.put('/servers/:name', async (req, res) => {
     try {
         const mcpServers = config.get('mcpServers') || {}
         if (!mcpServers[req.params.name]) {
@@ -73,8 +71,8 @@ router.put('/server/:name', async (req, res) => {
     }
 })
 
-// DELETE /server/:name - 删除MCP服务器
-router.delete('/server/:name', async (req, res) => {
+// DELETE /servers/:name - 删除MCP服务器
+router.delete('/servers/:name', async (req, res) => {
     try {
         const mcpServers = config.get('mcpServers') || {}
         if (!mcpServers[req.params.name]) {
@@ -90,9 +88,10 @@ router.delete('/server/:name', async (req, res) => {
     }
 })
 
-// POST /server/:name/restart - 重启MCP服务器
-router.post('/server/:name/restart', async (req, res) => {
+// POST /servers/:name/reconnect - 重连MCP服务器
+router.post('/servers/:name/reconnect', async (req, res) => {
     try {
+        await mcpManager.init()
         await mcpManager.restartServer(req.params.name)
         res.json(ChaiteResponse.ok({ success: true }))
     } catch (error) {
@@ -100,12 +99,82 @@ router.post('/server/:name/restart', async (req, res) => {
     }
 })
 
-// GET /server/:name/tools - 获取服务器工具列表
-router.get('/server/:name/tools', async (req, res) => {
+// GET /servers/:name/tools - 获取服务器工具列表
+router.get('/servers/:name/tools', async (req, res) => {
     try {
         await mcpManager.init()
         const tools = await mcpManager.getServerTools(req.params.name)
         res.json(ChaiteResponse.ok(tools))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// POST /import - 导入MCP配置
+router.post('/import', async (req, res) => {
+    try {
+        const { mcpServers } = req.body
+        if (!mcpServers || typeof mcpServers !== 'object') {
+            return res.status(400).json(ChaiteResponse.fail(null, 'Invalid config format'))
+        }
+        
+        const existingServers = config.get('mcpServers') || {}
+        const mergedServers = { ...existingServers, ...mcpServers }
+        config.set('mcpServers', mergedServers)
+        
+        res.json(ChaiteResponse.ok({ success: true, count: Object.keys(mcpServers).length }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// GET /resources - 获取MCP资源
+router.get('/resources', async (req, res) => {
+    try {
+        await mcpManager.init()
+        const resources = await mcpManager.listResources()
+        res.json(ChaiteResponse.ok(resources))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// POST /resources/read - 读取MCP资源
+router.post('/resources/read', async (req, res) => {
+    try {
+        const { serverName, uri } = req.body
+        if (!serverName || !uri) {
+            return res.status(400).json(ChaiteResponse.fail(null, 'serverName and uri are required'))
+        }
+        await mcpManager.init()
+        const content = await mcpManager.readResource(serverName, uri)
+        res.json(ChaiteResponse.ok(content))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// GET /prompts - 获取MCP提示
+router.get('/prompts', async (req, res) => {
+    try {
+        await mcpManager.init()
+        const prompts = await mcpManager.listPrompts()
+        res.json(ChaiteResponse.ok(prompts))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// POST /prompts/get - 获取单个MCP提示
+router.post('/prompts/get', async (req, res) => {
+    try {
+        const { serverName, name, args } = req.body
+        if (!serverName || !name) {
+            return res.status(400).json(ChaiteResponse.fail(null, 'serverName and name are required'))
+        }
+        await mcpManager.init()
+        const prompt = await mcpManager.getPrompt(serverName, name, args)
+        res.json(ChaiteResponse.ok(prompt))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }

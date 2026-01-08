@@ -740,6 +740,14 @@ export const voiceTools = [
                 length_scale: {
                     type: 'number',
                     description: '语速控制（>0），默认1.2，数值越大语速越慢'
+                },
+                group_id: {
+                    type: 'string',
+                    description: '目标群号（可选，不填则回复当前会话）'
+                },
+                user_id: {
+                    type: 'string',
+                    description: '目标用户QQ号，用于私聊发送（可选）'
                 }
             },
             required: ['text']
@@ -754,12 +762,17 @@ export const voiceTools = [
                 }
 
                 const e = ctx.getEvent()
-                if (!e) {
+                const bot = ctx.getBot()
+                if (!e && !bot) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
 
+                // 确定发送目标
+                const targetGroupId = args.group_id ? parseInt(args.group_id) : null
+                const targetUserId = args.user_id ? parseInt(args.user_id) : null
+
                 // 发送emoji表情反馈（表示正在处理）
-                if (e.isGroup && typeof e.group?.setMsgEmojiLike === 'function') {
+                if (e?.isGroup && typeof e.group?.setMsgEmojiLike === 'function') {
                     try {
                         await e.group.setMsgEmojiLike(e.message_id, '124')
                     } catch (emojiErr) {
@@ -808,9 +821,22 @@ export const voiceTools = [
                     recordData = `base64://${base64}`
                     logger.debug(`[send_tts] 使用 base64 音频数据 (${base64.length} 字符)`)
                 } else if (audioData.name) {
-                    // 格式2: 服务器上的文件路径
-                    recordData = `https://mikusfan-vits-uma-genshin-honkai.hf.space/file=${audioData.name}`
-                    logger.debug(`[send_tts] 使用 URL 音频: ${recordData}`)
+                    // 格式2: 服务器上的文件路径 - 需要下载并转为base64
+                    // 远程URL无法被ICQQ直接转码为AMR，必须先下载
+                    const audioUrl = `https://mikusfan-vits-uma-genshin-honkai.hf.space/file=${audioData.name}`
+                    logger.debug(`[send_tts] 下载远程音频: ${audioUrl}`)
+                    try {
+                        const audioResponse = await axios.get(audioUrl, {
+                            responseType: 'arraybuffer',
+                            timeout: 15000
+                        })
+                        const base64Audio = Buffer.from(audioResponse.data).toString('base64')
+                        recordData = `base64://${base64Audio}`
+                        logger.debug(`[send_tts] 音频已转为 base64 (${base64Audio.length} 字符)`)
+                    } catch (downloadErr) {
+                        logger.error(`[send_tts] 下载音频失败: ${downloadErr.message}`)
+                        return { success: false, error: `下载音频失败: ${downloadErr.message}` }
+                    }
                 }
 
                 if (!recordData) {
@@ -820,7 +846,28 @@ export const voiceTools = [
 
                 // 发送语音消息
                 const recordSeg = { type: 'record', file: recordData }
-                const result = await e.reply(recordSeg)
+                let result
+                let targetInfo = ''
+
+                if (targetUserId && bot?.pickFriend) {
+                    // 发送到指定用户（私聊）
+                    const friend = bot.pickFriend(targetUserId)
+                    result = await friend.sendMsg(recordSeg)
+                    targetInfo = `私聊 ${targetUserId}`
+                } else if (targetGroupId && bot?.pickGroup) {
+                    // 发送到指定群
+                    const group = bot.pickGroup(targetGroupId)
+                    result = await group.sendMsg(recordSeg)
+                    targetInfo = `群 ${targetGroupId}`
+                } else if (e) {
+                    // 回复当前会话
+                    result = await e.reply(recordSeg)
+                    targetInfo = e.isGroup ? `当前群 ${e.group_id}` : `当前私聊 ${e.user_id}`
+                } else {
+                    return { success: false, error: '无法确定发送目标，请指定 group_id 或 user_id' }
+                }
+
+                logger.debug(`[send_tts] 发送目标: ${targetInfo}`)
 
                 // 检查发送结果
                 if (result?.message_id || result?.seq || result?.rand) {
@@ -833,8 +880,26 @@ export const voiceTools = [
                         speaker,
                         text: text.substring(0, 100)
                     }
-                } else if (result === true || (result && !result.error)) {
+                } else if (result === true) {
                     logger.info(`[send_tts] 语音发送成功`)
+                    return {
+                        success: true,
+                        completed: true,
+                        message: `VITS语音已发送 (角色: ${speaker})`,
+                        speaker,
+                        text: text.substring(0, 100)
+                    }
+                } else if (result?.error || result?.code < 0 || (result?.retcode !== undefined && result?.retcode !== 0)) {
+                    const errorMsg = result?.error || result?.message || '发送VITS语音失败'
+                    logger.warn(`[send_tts] 发送失败: ${errorMsg} (code: ${result?.code})`)
+                    return {
+                        success: false,
+                        error: errorMsg,
+                        debug: result
+                    }
+                } else if (result && !result.error && result.code === undefined) {
+                    // 只有在没有error且没有负code时才认为成功
+                    logger.info(`[send_tts] 语音发送成功 (无message_id)`)
                     return {
                         success: true,
                         completed: true,
