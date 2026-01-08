@@ -6,7 +6,7 @@ import { getScopeManager } from '../scope/ScopeManager.js'
 import { databaseService } from '../storage/DatabaseService.js'
 import { chatService } from '../llm/ChatService.js'
 import { renderService } from '../media/RenderService.js'
-import { getGroupChatHistory, getUserInfo } from '../../utils/platformAdapter.js'
+import { getUserInfo } from '../../utils/platformAdapter.js'
 import config from '../../../config/config.js'
 import { segment } from '../../utils/messageParser.js'
 
@@ -150,7 +150,7 @@ class SchedulerService {
     }
 
     /**
-     * 执行群聊总结推送 - 使用Bot API获取消息，按序列号跟踪避免重复
+     * 执行群聊总结推送 - 使用Bot API获取消息，循环获取最新消息
      */
     async executeSummaryPush(groupId, taskConfig) {
         chatLogger.info(`[SchedulerService] 开始生成群 ${groupId} 的定时总结`)
@@ -162,12 +162,10 @@ class SchedulerService {
             // 获取上次处理的消息序号
             const lastSeq = this.lastMessageSeq.get(groupId) || 0
             
-            // 从Bot API获取群聊历史（从上次序号之后开始）
+            // 使用与 Commands.js 相同的方式循环获取群聊历史
             let history = []
             try {
-                // 构造一个虚拟的e对象用于调用API
-                const e = { group_id: Number(groupId), bot: global.Bot }
-                history = await getGroupChatHistory(e, groupId, messageCount, lastSeq)
+                history = await this.fetchGroupHistory(groupId, messageCount, lastSeq)
             } catch (err) {
                 chatLogger.warn(`[SchedulerService] Bot API获取群 ${groupId} 历史失败:`, err.message)
                 return
@@ -320,10 +318,12 @@ ${dialogText}${truncatedNote}`
             if (summaryText) {
                 const actualModel = result?.model || taskConfig.summaryModel || config.get('llm.defaultModel') || '默认模型'
                 const shortModel = actualModel.split('/').pop()
+                // 根据间隔类型生成标题
+                const titleType = taskConfig.intervalType === 'hour' ? '小时总结' : '每日总结'
                 try {
                     const imageBuffer = await renderService.renderGroupSummary(summaryText, {
-                        title: '群聊内容总结',
-                        subtitle: `${shortModel} · Bot API`,
+                        title: `群聊${titleType}`,
+                        subtitle: `${shortModel} · 定时推送`,
                         messageCount: validMessages.length,
                         participantCount: participants.size,
                         topUsers,
@@ -340,6 +340,74 @@ ${dialogText}${truncatedNote}`
         } catch (error) {
             chatLogger.error(`[SchedulerService] 群 ${groupId} 总结推送失败:`, error)
             throw error
+        }
+    }
+
+    /**
+     * 循环获取群聊历史记录
+     * @param {string|number} groupId - 群ID
+     * @param {number} num - 需要的消息数量
+     * @param {number} afterSeq - 只获取此序号之后的消息（0表示获取最新）
+     * @returns {Promise<Array>}
+     */
+    async fetchGroupHistory(groupId, num, afterSeq = 0) {
+        // 获取group对象
+        let group = null
+        if (global.Bot) {
+            // 尝试多种方式获取group
+            for (const uin of Object.keys(global.Bot.uin || {})) {
+                const bot = global.Bot[uin]
+                if (bot?.pickGroup) {
+                    group = bot.pickGroup(Number(groupId))
+                    if (group?.getChatHistory) break
+                }
+            }
+            // 直接从Bot获取
+            if (!group && global.Bot.pickGroup) {
+                group = global.Bot.pickGroup(Number(groupId))
+            }
+        }
+        
+        if (!group || typeof group.getChatHistory !== 'function') {
+            chatLogger.warn(`[SchedulerService] 群 ${groupId} 无法获取getChatHistory方法`)
+            return []
+        }
+        
+        try {
+            let allChats = []
+            let seq = 0  // 从最新消息开始
+            let totalScanned = 0
+            const maxScanLimit = Math.min(num * 10, 5000)
+            
+            while (allChats.length < num && totalScanned < maxScanLimit) {
+                const chatHistory = await group.getChatHistory(seq, 20)
+                
+                if (!chatHistory || chatHistory.length === 0) break
+                
+                totalScanned += chatHistory.length
+                
+                const oldestSeq = chatHistory[0]?.seq || chatHistory[0]?.message_id || chatHistory[0]?.message_seq
+                if (seq === oldestSeq) break
+                seq = oldestSeq
+                const filteredChats = chatHistory.filter(chat => {
+                    if (afterSeq > 0) {
+                        const msgSeq = chat.seq || chat.message_seq || 0
+                        if (msgSeq <= afterSeq) return false
+                    }
+                    if (!chat.message || chat.message.length === 0) return false
+                    return chat.message.some(part => part.type === 'text' || part.type === 'at')
+                })
+                
+                if (filteredChats.length > 0) {
+                    allChats.unshift(...filteredChats.reverse())
+                }
+            }
+            
+            chatLogger.debug(`[SchedulerService] 群 ${groupId} 获取到 ${allChats.length} 条消息 (扫描 ${totalScanned} 条)`)
+            return allChats.slice(-num)
+        } catch (err) {
+            chatLogger.error(`[SchedulerService] 获取群 ${groupId} 聊天记录失败:`, err)
+            return []
         }
     }
 

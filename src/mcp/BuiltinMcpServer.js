@@ -234,6 +234,10 @@ export class BuiltinMcpServer {
         const enabledCategories = builtinConfig.enabledCategories
         const categories = []
         
+        if (!this.toolCategories) {
+            return categories
+        }
+        
         for (const [key, categoryConfig] of Object.entries(this.toolCategories)) {
             const isEnabled = enabledCategories ? enabledCategories.includes(key) : true
             

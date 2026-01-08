@@ -39,6 +39,109 @@ router.get('/builtin', async (req, res) => {
     }
 })
 
+// GET /builtin/config - 获取内置工具配置
+router.get('/builtin/config', async (req, res) => {
+    try {
+        const builtinConfig = config.get('builtinTools') || {}
+        res.json(ChaiteResponse.ok({
+            enabled: builtinConfig.enabled !== false,
+            enabledCategories: builtinConfig.enabledCategories || [],
+            allowedTools: builtinConfig.allowedTools || [],
+            disabledTools: builtinConfig.disabledTools || [],
+            allowDangerous: builtinConfig.allowDangerous || false,
+            dangerousTools: builtinConfig.dangerousTools || ['kick_member', 'mute_member', 'recall_message']
+        }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// PUT /builtin/config - 更新内置工具配置
+router.put('/builtin/config', async (req, res) => {
+    try {
+        const { enabled, enabledCategories, allowedTools, disabledTools, allowDangerous, dangerousTools } = req.body
+        const currentConfig = config.get('builtinTools') || {}
+        
+        const newConfig = {
+            ...currentConfig,
+            enabled: enabled !== undefined ? enabled : currentConfig.enabled,
+            enabledCategories: enabledCategories !== undefined ? enabledCategories : currentConfig.enabledCategories,
+            allowedTools: allowedTools !== undefined ? allowedTools : currentConfig.allowedTools,
+            disabledTools: disabledTools !== undefined ? disabledTools : currentConfig.disabledTools,
+            allowDangerous: allowDangerous !== undefined ? allowDangerous : currentConfig.allowDangerous,
+            dangerousTools: dangerousTools !== undefined ? dangerousTools : currentConfig.dangerousTools
+        }
+        
+        config.set('builtinTools', newConfig)
+        
+        // 重新加载内置工具
+        await builtinMcpServer.loadModularTools()
+        
+        res.json(ChaiteResponse.ok({ success: true, config: newConfig }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// GET /builtin/list - 获取内置工具列表
+router.get('/builtin/list', async (req, res) => {
+    try {
+        await mcpManager.init()
+        await builtinMcpServer.init()
+        const tools = builtinMcpServer.listTools()
+        res.json(ChaiteResponse.ok(tools))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// GET /builtin/categories - 获取内置工具类别
+router.get('/builtin/categories', async (req, res) => {
+    try {
+        await mcpManager.init()
+        await builtinMcpServer.init()
+        const categories = builtinMcpServer.getToolCategories() || []
+        res.json(ChaiteResponse.ok(categories))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// POST /builtin/category/toggle - 切换工具类别启用状态
+router.post('/builtin/category/toggle', async (req, res) => {
+    try {
+        await builtinMcpServer.init()
+        const { category, enabled } = req.body
+        const result = await builtinMcpServer.toggleCategory(category, enabled)
+        res.json(ChaiteResponse.ok(result))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// POST /builtin/tool/toggle - 切换单个工具启用状态
+router.post('/builtin/tool/toggle', async (req, res) => {
+    try {
+        await builtinMcpServer.init()
+        const { toolName, enabled } = req.body
+        const result = await builtinMcpServer.toggleTool(toolName, enabled)
+        res.json(ChaiteResponse.ok(result))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// POST /builtin/refresh - 刷新内置工具
+router.post('/builtin/refresh', async (req, res) => {
+    try {
+        await builtinMcpServer.loadModularTools()
+        const tools = builtinMcpServer.listTools()
+        res.json(ChaiteResponse.ok({ success: true, count: tools.length }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
 // GET /enabled - 获取启用的工具
 router.get('/enabled', async (req, res) => {
     try {

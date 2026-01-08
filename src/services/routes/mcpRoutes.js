@@ -92,7 +92,7 @@ router.delete('/servers/:name', async (req, res) => {
 router.post('/servers/:name/reconnect', async (req, res) => {
     try {
         await mcpManager.init()
-        await mcpManager.restartServer(req.params.name)
+        await mcpManager.reloadServer(req.params.name)
         res.json(ChaiteResponse.ok({ success: true }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
