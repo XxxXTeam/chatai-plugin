@@ -1,6 +1,6 @@
 'use client'
 
-import { Menu, LogOut, User } from 'lucide-react'
+import { Menu, LogOut, User, Search, Command } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -15,9 +15,10 @@ import { ThemeToggle } from '@/components/theme-toggle'
 
 interface HeaderProps {
   title?: string
+  onSearchClick?: () => void
 }
 
-export function Header({ title = 'ChatAi 管理面板' }: HeaderProps) {
+export function Header({ title = 'ChatAi 管理面板', onSearchClick }: HeaderProps) {
   const { toggleSidebar } = useUiStore()
   const { logout } = useAuthStore()
   const router = useRouter()
@@ -41,6 +42,34 @@ export function Header({ title = 'ChatAi 管理面板' }: HeaderProps) {
       <div className="flex-1">
         <h1 className="text-lg font-semibold md:text-xl tracking-tight text-foreground/80">{title}</h1>
       </div>
+
+      {/* 搜索按钮 */}
+      {onSearchClick && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onSearchClick}
+          className="hidden sm:flex items-center gap-2 h-9 px-3 text-muted-foreground hover:text-foreground bg-background/50 border-border/50"
+        >
+          <Search className="h-4 w-4" />
+          <span className="text-sm">搜索功能...</span>
+          <kbd className="ml-2 pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border border-border/50 bg-muted/50 px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+            <Command className="h-3 w-3" />K
+          </kbd>
+        </Button>
+      )}
+      
+      {/* 移动端搜索图标 */}
+      {onSearchClick && (
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onSearchClick}
+          className="sm:hidden"
+        >
+          <Search className="h-5 w-5" />
+        </Button>
+      )}
 
       <ThemeToggle />
 

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useMemo } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -51,6 +52,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { DeleteDialog } from '@/components/ui/delete-dialog'
 import { cn } from '@/lib/utils'
 
 interface GroupScope {
@@ -99,6 +101,7 @@ const triggerModeNames: Record<string, string> = {
 }
 
 export default function GroupsPage() {
+  const searchParams = useSearchParams()
   const [groups, setGroups] = useState<GroupScope[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
   const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDoc[]>([])
@@ -117,6 +120,19 @@ export default function GroupsPage() {
   const [isMobile, setIsMobile] = useState(false)
   const [formTab, setFormTab] = useState('basic')
   const [togglingGroup, setTogglingGroup] = useState<string | null>(null)
+  
+  // 处理URL参数
+  useEffect(() => {
+    const action = searchParams.get('action')
+    const tab = searchParams.get('tab')
+    if (action === 'add') {
+      resetForm()
+      setDialogOpen(true)
+    }
+    if (tab) {
+      setFormTab(tab)
+    }
+  }, [searchParams])
 
   // 检测移动端
   useEffect(() => {
@@ -1756,23 +1772,14 @@ export default function GroupsPage() {
       )}
 
       {/* 删除确认对话框 */}
-      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>确认删除</DialogTitle>
-            <DialogDescription>
-              确定要删除群 <strong>{deletingGroup?.groupName || deletingGroup?.groupId}</strong> 的配置吗？此操作不可撤销。
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>取消</Button>
-            <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
-              {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              删除
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        title="删除群组配置"
+        itemName={deletingGroup?.groupName || deletingGroup?.groupId}
+        onConfirm={handleDelete}
+        loading={deleting}
+      />
     </div>
   )
 }
