@@ -752,8 +752,8 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
+                const e = ctx.getEvent?.()
+                const bot = ctx.getBot?.() || e?.bot || global.Bot
                 
                 if (!bot) {
                     return { success: false, error: '无法获取Bot实例' }
@@ -875,8 +875,8 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
+                const e = ctx.getEvent?.()
+                const bot = ctx.getBot?.() || e?.bot || global.Bot
                 
                 if (!bot) {
                     return { success: false, error: '无法获取Bot实例' }
@@ -1389,8 +1389,9 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
+                const e = ctx.getEvent?.()
+                const bot = ctx.getBot?.() || e?.bot || global.Bot
+                const groupId = e?.group_id || e?.group?.group_id
                 
                 if (!bot) {
                     return { success: false, error: '无法获取Bot实例' }
@@ -1430,8 +1431,8 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
+                const e = ctx.getEvent?.()
+                const bot = ctx.getBot?.() || e?.bot || global.Bot
                 const groupId = parseInt(args.group_id)
                 
                 if (!bot) {
@@ -1491,16 +1492,67 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
+                const e = ctx.getEvent?.()
+                const bot = ctx.getBot?.() || e?.bot || global.Bot
+                const groupId = args.group_id || e?.group_id || e?.group?.group_id
+                const adapterInfo = ctx.getAdapter?.() || { adapter: 'unknown' }
                 
                 if (!bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
                 
+                // icqq 优先走群方法
+                if (groupId && bot.pickGroup) {
+                    const group = bot.pickGroup(parseInt(groupId))
+                    const support = {
+                        groupId,
+                        adapter: adapterInfo.adapter,
+                        hasSetEssence: typeof group?.setEssence === 'function',
+                        hasSetEssenceMsg: typeof group?.setEssenceMsg === 'function',
+                        hasSetEssenceMessage: typeof group?.setEssenceMessage === 'function',
+                        hasBotSetEssenceMsg: typeof bot?.setEssenceMsg === 'function',
+                        hasBotSetEssenceMessage: typeof bot?.setEssenceMessage === 'function'
+                    }
+                    if (group?.setEssence) {
+                        await group.setEssence(args.message_id)
+                        return { success: true, message_id: args.message_id, group_id: groupId }
+                    }
+                    if (group?.setEssenceMsg) {
+                        await group.setEssenceMsg(args.message_id)
+                        return { success: true, message_id: args.message_id, group_id: groupId }
+                    }
+                    if (group?.setEssenceMessage) {
+                        await group.setEssenceMessage(args.message_id)
+                        return { success: true, message_id: args.message_id, group_id: groupId, via: 'group.setEssenceMessage' }
+                    }
+                    // 尝试通用 OneBot API
+                    if (bot.sendApi) {
+                        const res = await bot.sendApi('set_essence_msg', { message_id: args.message_id, group_id: groupId })
+                        if (res === null || res === undefined || res?.status === 'failed') {
+                            // 继续 fallback
+                        } else {
+                            return { success: true, message_id: args.message_id, group_id: groupId, via: 'sendApi' }
+                        }
+                    }
+                    // 尝试 bot 级别 icqq 接口
+                    if (bot.setEssenceMsg) {
+                        await bot.setEssenceMsg(args.message_id)
+                        return { success: true, message_id: args.message_id, group_id: groupId, via: 'bot.setEssenceMsg' }
+                    }
+                    if (bot.setEssenceMessage) {
+                        await bot.setEssenceMessage(args.message_id)
+                        return { success: true, message_id: args.message_id, group_id: groupId, via: 'bot.setEssenceMessage' }
+                    }
+                    return {
+                        success: false,
+                        error: '当前协议不支持设置精华消息',
+                        debug: support
+                    }
+                }
+                
                 if (bot.sendApi) {
-                    await bot.sendApi('set_essence_msg', { message_id: args.message_id })
-                    return { success: true, message_id: args.message_id }
+                    await bot.sendApi('set_essence_msg', { message_id: args.message_id, group_id: groupId })
+                    return { success: true, message_id: args.message_id, group_id: groupId }
                 }
                 
                 if (bot.setEssenceMsg) {
@@ -1508,7 +1560,15 @@ export const messageTools = [
                     return { success: true, message_id: args.message_id }
                 }
                 
-                return { success: false, error: '当前协议不支持设置精华消息' }
+                return {
+                    success: false,
+                    error: '当前协议不支持设置精华消息',
+                    debug: {
+                        adapter: adapterInfo.adapter,
+                        groupId: groupId || null,
+                        hasBotSetEssenceMsg: typeof bot?.setEssenceMsg === 'function'
+                    }
+                }
             } catch (err) {
                 return { success: false, error: `设置精华消息失败: ${err.message}` }
             }
@@ -1527,8 +1587,8 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
+                const e = ctx.getEvent?.()
+                const bot = ctx.getBot?.() || e?.bot || global.Bot
                 
                 if (!bot) {
                     return { success: false, error: '无法获取Bot实例' }

@@ -76,9 +76,18 @@ class ToolContext {
     setContext(ctx) {
         if (ctx.bot) this.bot = ctx.bot
         if (ctx.event) this.event = ctx.event
-        // 每次设置上下文时更新适配器信息和主人判断
-        this._adapterInfo = null
-        // 更新主人判断
+        if (ctx.adapterInfo) {
+            this._adapterInfo = ctx.adapterInfo
+        } else if (ctx.adapter) {
+            this._adapterInfo = {
+                adapter: ctx.adapter,
+                isNT: ctx.isNT ?? false,
+                canAiVoice: ctx.canAiVoice ?? false
+            }
+        }
+        else {
+            this._adapterInfo = null
+        }
         const userId = this.event?.user_id
         this._isMaster = userId ? checkIsMaster(userId) : false
     }
@@ -663,9 +672,26 @@ export class BuiltinMcpServer {
         const ctx = this.createRequestContext(requestContext)
         
         // 检查危险工具拦截
-        const builtinConfig = config.get('tools.builtin') || {}
-        const dangerousTools = builtinConfig.dangerousTools || ['kick_member', 'mute_member', 'recall_message']
-        const disabledTools = builtinConfig.disabledTools || []
+        // 兼容多种配置路径（面板/手动配置），并提供默认值
+        const firstDefined = (...vals) => vals.find(v => v !== undefined)
+        const allowDangerous = firstDefined(
+            config.get('builtinTools.allowDangerous'),
+            config.get('bots.default.builtinTools.allowDangerous'),
+            config.get('tools.builtin.allowDangerous'),
+            false
+        )
+        const dangerousTools = firstDefined(
+            config.get('builtinTools.dangerousTools'),
+            config.get('bots.default.builtinTools.dangerousTools'),
+            config.get('tools.builtin.dangerousTools'),
+            ['kick_member', 'mute_member', 'recall_message']
+        ) || []
+        const disabledTools = firstDefined(
+            config.get('builtinTools.disabledTools'),
+            config.get('bots.default.builtinTools.disabledTools'),
+            config.get('tools.builtin.disabledTools'),
+            []
+        ) || []
         
         // 检查是否是被禁用的工具
         if (disabledTools.includes(name)) {
@@ -677,7 +703,7 @@ export class BuiltinMcpServer {
         }
         
         // 检查是否是危险工具且未允许危险操作
-        if (dangerousTools.includes(name) && !builtinConfig.allowDangerous) {
+        if (dangerousTools.includes(name) && !allowDangerous) {
             logger.warn(`[BuiltinMCP] 危险工具 ${name} 被拦截，需要在设置中开启"允许危险操作"`)
             return {
                 content: [{ type: 'text', text: `危险工具 "${name}" 已被拦截。此工具可能执行踢人、禁言、撤回等危险操作。如需使用，请在管理面板的"工具管理-高级设置"中开启"允许危险操作"选项。` }],
@@ -863,13 +889,20 @@ export class BuiltinMcpServer {
     createRequestContext(requestContext) {
         // 如果直接传入了 isMaster（如管理面板测试），创建简化上下文
         if (requestContext && requestContext.isMaster !== undefined && !requestContext.event) {
+            const adapterInfo = requestContext.adapterInfo || (requestContext.adapter ? {
+                adapter: requestContext.adapter,
+                isNT: requestContext.isNT ?? false,
+                canAiVoice: requestContext.canAiVoice ?? false
+            } : null)
             return {
                 getBot: () => global.Bot,
                 getEvent: () => null,
-                getAdapter: () => ({ adapter: 'unknown', isNT: false }),
-                isIcqq: () => false,
-                isNapCat: () => false,
-                isNT: () => false,
+                getAdapter: () => adapterInfo || { adapter: 'unknown', isNT: false, canAiVoice: false },
+                isIcqq: () => adapterInfo?.adapter === 'icqq',
+                isNapCat: () => adapterInfo?.adapter === 'napcat',
+                isNT: () => adapterInfo?.isNT || false,
+                bot: global.Bot,
+                event: null,
                 isMaster: requestContext.isMaster,
                 isAdminTest: requestContext.isAdminTest || false,
                 registerCallback: (id, cb) => toolContext.registerCallback(id, cb),
@@ -886,7 +919,11 @@ export class BuiltinMcpServer {
                 }
                 return Bot
             }
-            let _adapterInfo = null
+            let _adapterInfo = requestContext.adapterInfo || (requestContext.adapter ? {
+                adapter: requestContext.adapter,
+                isNT: requestContext.isNT ?? false,
+                canAiVoice: requestContext.canAiVoice ?? false
+            } : null)
             const getAdapter = () => {
                 if (_adapterInfo) return _adapterInfo
                 const bot = getBot()
@@ -909,6 +946,8 @@ export class BuiltinMcpServer {
                 isIcqq: () => getAdapter().adapter === 'icqq',
                 isNapCat: () => getAdapter().adapter === 'napcat',
                 isNT: () => getAdapter().isNT,
+                bot: getBot(),
+                event: requestContext.event,
                 isMaster: isMasterUser,  
                 registerCallback: (id, cb) => toolContext.registerCallback(id, cb),
                 executeCallback: (id, data) => toolContext.executeCallback(id, data)
