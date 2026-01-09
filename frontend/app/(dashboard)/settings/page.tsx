@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef, useCallback } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -243,6 +244,9 @@ const MODEL_CATEGORY_DESCRIPTIONS: Record<ModelCategory, string> = {
 }
 
 export default function SettingsPage() {
+  const searchParams = useSearchParams()
+  const defaultTab = searchParams.get('tab') || 'trigger'
+  const [activeTab, setActiveTab] = useState(defaultTab)
   const [config, setConfig] = useState<Config | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -256,6 +260,12 @@ export default function SettingsPage() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
   const isInitialLoad = useRef(true)
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  
+  // 当URL参数变化时更新tab
+  useEffect(() => {
+    const tab = searchParams.get('tab')
+    if (tab) setActiveTab(tab)
+  }, [searchParams])
   const debouncedSave = useCallback(async (configToSave: Config) => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current)
@@ -500,7 +510,7 @@ export default function SettingsPage() {
         }
       />
 
-      <Tabs defaultValue="trigger" className="w-full">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="w-full justify-start flex-wrap h-auto gap-1.5 bg-muted/50 p-1.5 rounded-xl mb-4">
           <TabsTrigger value="trigger" className="data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg px-3 py-1.5 text-sm transition-all">
             <Zap className="h-4 w-4 mr-1.5" />触发

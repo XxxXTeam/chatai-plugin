@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useMemo } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -38,6 +39,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { DeleteDialog } from '@/components/ui/delete-dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { api, channelsApi, presetsApi } from '@/lib/api'
@@ -78,6 +80,7 @@ interface Channel {
 const getStatusText = (enabled: boolean) => enabled ? '已启用' : '已禁用'
 
 export default function UsersPage() {
+  const searchParams = useSearchParams()
   const [users, setUsers] = useState<UserScope[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
   const [, setChannels] = useState<Channel[]>([])
@@ -94,6 +97,15 @@ export default function UsersPage() {
   const [togglingUser, setTogglingUser] = useState<string | null>(null)
   const [modelSelectorOpen, setModelSelectorOpen] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
+  
+  // 处理URL参数
+  useEffect(() => {
+    const action = searchParams.get('action')
+    if (action === 'add') {
+      resetForm()
+      setDialogOpen(true)
+    }
+  }, [searchParams])
 
   const [form, setForm] = useState({
     userId: '',
@@ -727,23 +739,14 @@ export default function UsersPage() {
       )}
 
       {/* 删除确认对话框 */}
-      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>确认删除</DialogTitle>
-            <DialogDescription>
-              确定要删除用户 <strong>{deletingUser?.nickname || deletingUser?.userId}</strong> 的配置吗？此操作不可撤销。
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>取消</Button>
-            <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
-              {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              删除
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        title="删除用户配置"
+        itemName={deletingUser?.nickname || deletingUser?.userId}
+        onConfirm={handleDelete}
+        loading={deleting}
+      />
     </div>
   )
 }

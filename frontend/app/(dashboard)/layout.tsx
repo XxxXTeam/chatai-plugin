@@ -5,6 +5,7 @@ import { Header } from '@/components/layout/Header'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { systemApi } from '@/lib/api'
+import { CommandPalette, useCommandPalette } from '@/components/ui/command-palette'
 
 export default function DashboardLayout({
   children,
@@ -14,6 +15,7 @@ export default function DashboardLayout({
   const router = useRouter()
   const [loading, setLoading] = useState(true)
   const [authenticated, setAuthenticated] = useState(false)
+  const { open: commandPaletteOpen, setOpen: setCommandPaletteOpen } = useCommandPalette()
 
   useEffect(() => {
     // 检查 URL 参数中的 auth_token（从后端重定向过来）
@@ -84,11 +86,17 @@ export default function DashboardLayout({
 
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
-        <Header />
+        <Header onSearchClick={() => setCommandPaletteOpen(true)} />
         <main className="flex-1 overflow-y-auto p-4 md:p-6">
           {children}
         </main>
       </div>
+      
+      {/* 全局命令面板 */}
+      <CommandPalette 
+        open={commandPaletteOpen} 
+        onOpenChange={setCommandPaletteOpen} 
+      />
     </div>
   )
 }
