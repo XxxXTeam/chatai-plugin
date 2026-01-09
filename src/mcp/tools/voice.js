@@ -1,10 +1,11 @@
 import axios from 'axios'
+import { randomUUID } from 'crypto'
 
 /**
  * 语音消息工具
  */
 
-const VITS_API_URL = 'https://mikusfan-vits-uma-genshin-honkai.hf.space/api/predict'
+const VITS_API_URL = 'https://mikusfan-vits-uma-genshin-honkai.hf.space/api/generate'
 
 /**
  * 检测Bot适配器类型
@@ -63,6 +64,11 @@ function detectLanguage(text = '') {
         return 'English'
     }
     return '中文'
+}
+
+function safePositiveNumber(value, fallback) {
+    const num = Number(value)
+    return Number.isFinite(num) && num > 0 ? num : fallback
 }
 
 export const voiceTools = [
@@ -784,9 +790,9 @@ export const voiceTools = [
                 const text = args.text.trim()
                 const speaker = (args.speaker || '派蒙').trim() || '派蒙'
                 const lang = args.lang || detectLanguage(text)
-                const noise_scale = args.noise_scale ?? 0.6
-                const noise_scale_w = args.noise_scale_w ?? 0.668
-                const length_scale = args.length_scale ?? 1.2
+                const noise_scale = safePositiveNumber(args.noise_scale, 0.6)
+                const noise_scale_w = safePositiveNumber(args.noise_scale_w, 0.668)
+                const length_scale = safePositiveNumber(args.length_scale, 1.0)
 
                 logger.info(`[send_tts] 开始生成: speaker=${speaker}, lang=${lang}, text="${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`)
 
@@ -794,7 +800,7 @@ export const voiceTools = [
                 const payload = {
                     fn_index: 0,
                     data: [text, lang, speaker, noise_scale, noise_scale_w, length_scale],
-                    session_hash: Math.random().toString(36).substring(2)
+                    session_hash: randomUUID()
                 }
 
                 const response = await axios.post(VITS_API_URL, payload, {
