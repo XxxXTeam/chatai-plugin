@@ -32,6 +32,15 @@ export const configApi = {
   update: <T extends object>(data: T) => api.post('/api/config', data as Record<string, unknown>),
   getAdvanced: () => api.get('/api/config/advanced'),
   updateAdvanced: <T extends object>(data: T) => api.put('/api/config/advanced', data as Record<string, unknown>),
+  // 触发器配置
+  getTriggers: () => api.get('/api/config/triggers'),
+  updateTriggers: <T extends object>(data: T) => api.put('/api/config/triggers', data as Record<string, unknown>),
+  // 上下文配置
+  getContext: () => api.get('/api/config/context'),
+  updateContext: <T extends object>(data: T) => api.put('/api/config/context', data as Record<string, unknown>),
+  // 登录链接配置
+  getLinks: () => api.get('/api/config/links'),
+  updateLinks: (data: { loginLinks?: string[]; publicUrl?: string }) => api.put('/api/config/links', data),
 }
 export const channelsApi = {
   list: (withStats = false) => api.get(`/api/channels/list?withStats=${withStats}`),
@@ -282,18 +291,43 @@ export const statsApi = {
   reset: () => api.post('/api/stats/reset'),
   getUnified: () => api.get('/api/stats/unified'),
   getToolCalls: () => api.get('/api/stats/tool-calls'),
-  getToolCallRecords: (filter?: { limit?: number; toolName?: string; success?: boolean; userId?: string; groupId?: string }) => {
+  getToolCallRecords: (filter?: { 
+    limit?: number; 
+    toolName?: string; 
+    success?: boolean; 
+    userId?: string; 
+    groupId?: string;
+    keyword?: string;
+    startTime?: number;
+    endTime?: number;
+  }) => {
     const params = new URLSearchParams()
     if (filter?.limit) params.set('limit', String(filter.limit))
     if (filter?.toolName) params.set('toolName', filter.toolName)
     if (filter?.success !== undefined) params.set('success', String(filter.success))
     if (filter?.userId) params.set('userId', filter.userId)
     if (filter?.groupId) params.set('groupId', filter.groupId)
+    if (filter?.keyword) params.set('keyword', filter.keyword)
+    if (filter?.startTime) params.set('startTime', String(filter.startTime))
+    if (filter?.endTime) params.set('endTime', String(filter.endTime))
     return api.get(`/api/stats/tool-calls/records?${params.toString()}`)
   },
   getToolCallRecord: (id: string) => api.get(`/api/stats/tool-calls/record/${id}`),
   getToolCallErrors: (limit = 50) => api.get(`/api/stats/tool-calls/errors?limit=${limit}`),
   clearToolCalls: () => api.post('/api/stats/tool-calls/clear'),
+  // API调用统计
+  getApiCalls: (params?: { page?: number; limit?: number; channelId?: string; success?: boolean; startTime?: number; endTime?: number }) => {
+    const searchParams = new URLSearchParams()
+    if (params?.page) searchParams.set('page', String(params.page))
+    if (params?.limit) searchParams.set('limit', String(params.limit))
+    if (params?.channelId) searchParams.set('channelId', params.channelId)
+    if (params?.success !== undefined) searchParams.set('success', String(params.success))
+    if (params?.startTime) searchParams.set('startTime', String(params.startTime))
+    if (params?.endTime) searchParams.set('endTime', String(params.endTime))
+    return api.get(`/api/stats/api-calls?${searchParams.toString()}`)
+  },
+  getChannelStats: () => api.get('/api/stats/channels'),
+  getModelStats: () => api.get('/api/stats/models'),
 }
 export const usageStatsApi = {
   get: () => api.get('/api/stats/usage'),
