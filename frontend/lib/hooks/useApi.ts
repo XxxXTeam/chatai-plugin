@@ -25,20 +25,132 @@ interface ApiError {
   errors?: Record<string, string>
 }
 
+// 错误码定义
+export enum ErrorCode {
+  // 通用错误 (0-999)
+  SUCCESS = 0,
+  UNKNOWN = -1,
+  NETWORK_ERROR = -2,
+  TIMEOUT = -3,
+  CANCELLED = -4,
+  
+  // 参数验证错误 (1000-1999)
+  VALIDATION_FAILED = 1001,
+  AUTH_REQUIRED = 1002,
+  AUTH_INVALID = 1003,
+  AUTH_EXPIRED = 1004,
+  PERMISSION_DENIED = 1005,
+  INVALID_FORMAT = 1006,
+  MISSING_FIELD = 1007,
+  FIELD_TOO_LONG = 1008,
+  FIELD_TOO_SHORT = 1009,
+  INVALID_VALUE = 1010,
+  
+  // 资源错误 (2000-2999)
+  NOT_FOUND = 2001,
+  ALREADY_EXISTS = 2002,
+  CONFLICT = 2003,
+  LOCKED = 2004,
+  DELETED = 2005,
+  
+  // 渠道错误 (3000-3999)
+  CHANNEL_ERROR = 3001,
+  CHANNEL_UNAVAILABLE = 3002,
+  CHANNEL_QUOTA_EXCEEDED = 3003,
+  CHANNEL_RATE_LIMITED = 3004,
+  CHANNEL_AUTH_FAILED = 3005,
+  MODEL_NOT_FOUND = 3006,
+  MODEL_UNAVAILABLE = 3007,
+  
+  // 限流错误 (4000-4999)
+  RATE_LIMITED = 4001,
+  QUOTA_EXCEEDED = 4002,
+  CONCURRENT_LIMIT = 4003,
+  
+  // 系统错误 (5000-5999)
+  INTERNAL_ERROR = 5001,
+  DATABASE_ERROR = 5002,
+  CONFIG_ERROR = 5003,
+  STORAGE_ERROR = 5004,
+  
+  // 外部服务错误 (6000-6999)
+  EXTERNAL_API_ERROR = 6001,
+  EXTERNAL_TIMEOUT = 6002,
+  EXTERNAL_UNAVAILABLE = 6003,
+  
+  // 工具错误 (7000-7999)
+  TOOL_EXECUTION_FAILED = 7001,
+  TOOL_NOT_FOUND = 7002,
+  TOOL_DISABLED = 7003,
+  
+  // MCP错误 (8000-8999)
+  MCP_CONNECTION_FAILED = 8001,
+  MCP_SERVER_ERROR = 8002,
+  MCP_RESOURCE_NOT_FOUND = 8003,
+}
+
 // 错误码到中文的映射
 const errorMessages: Record<number, string> = {
-  1001: '参数验证失败',
-  1002: '需要登录认证',
-  1003: '认证信息无效',
-  1004: '认证已过期，请重新登录',
-  1005: '权限不足',
-  2001: '资源不存在',
-  2002: '资源已存在',
-  3001: '渠道错误',
-  3002: '渠道不可用',
-  3003: '渠道配额已用尽',
-  4001: '请求频率过高，请稍后再试',
-  6001: '外部API调用失败',
+  // 通用
+  [ErrorCode.SUCCESS]: '操作成功',
+  [ErrorCode.UNKNOWN]: '未知错误',
+  [ErrorCode.NETWORK_ERROR]: '网络连接失败，请检查网络',
+  [ErrorCode.TIMEOUT]: '请求超时，请稍后重试',
+  [ErrorCode.CANCELLED]: '请求已取消',
+  
+  // 参数验证
+  [ErrorCode.VALIDATION_FAILED]: '参数验证失败，请检查输入',
+  [ErrorCode.AUTH_REQUIRED]: '需要登录认证',
+  [ErrorCode.AUTH_INVALID]: '认证信息无效',
+  [ErrorCode.AUTH_EXPIRED]: '登录已过期，请重新登录',
+  [ErrorCode.PERMISSION_DENIED]: '权限不足，无法执行此操作',
+  [ErrorCode.INVALID_FORMAT]: '格式不正确',
+  [ErrorCode.MISSING_FIELD]: '缺少必填字段',
+  [ErrorCode.FIELD_TOO_LONG]: '字段内容过长',
+  [ErrorCode.FIELD_TOO_SHORT]: '字段内容过短',
+  [ErrorCode.INVALID_VALUE]: '值不在有效范围内',
+  
+  // 资源
+  [ErrorCode.NOT_FOUND]: '资源不存在',
+  [ErrorCode.ALREADY_EXISTS]: '资源已存在',
+  [ErrorCode.CONFLICT]: '资源冲突，请刷新后重试',
+  [ErrorCode.LOCKED]: '资源已锁定',
+  [ErrorCode.DELETED]: '资源已删除',
+  
+  // 渠道
+  [ErrorCode.CHANNEL_ERROR]: '渠道请求出错',
+  [ErrorCode.CHANNEL_UNAVAILABLE]: '渠道暂不可用',
+  [ErrorCode.CHANNEL_QUOTA_EXCEEDED]: '渠道配额已用尽',
+  [ErrorCode.CHANNEL_RATE_LIMITED]: '渠道请求过于频繁',
+  [ErrorCode.CHANNEL_AUTH_FAILED]: '渠道认证失败，请检查API Key',
+  [ErrorCode.MODEL_NOT_FOUND]: '模型不存在',
+  [ErrorCode.MODEL_UNAVAILABLE]: '模型暂不可用',
+  
+  // 限流
+  [ErrorCode.RATE_LIMITED]: '请求频率过高，请稍后再试',
+  [ErrorCode.QUOTA_EXCEEDED]: '使用配额已用尽',
+  [ErrorCode.CONCURRENT_LIMIT]: '并发请求数超限',
+  
+  // 系统
+  [ErrorCode.INTERNAL_ERROR]: '系统内部错误',
+  [ErrorCode.DATABASE_ERROR]: '数据库操作失败',
+  [ErrorCode.CONFIG_ERROR]: '配置错误',
+  [ErrorCode.STORAGE_ERROR]: '存储操作失败',
+  
+  // 外部服务
+  [ErrorCode.EXTERNAL_API_ERROR]: '外部API调用失败',
+  [ErrorCode.EXTERNAL_TIMEOUT]: '外部服务响应超时',
+  [ErrorCode.EXTERNAL_UNAVAILABLE]: '外部服务暂不可用',
+  
+  // 工具
+  [ErrorCode.TOOL_EXECUTION_FAILED]: '工具执行失败',
+  [ErrorCode.TOOL_NOT_FOUND]: '工具不存在',
+  [ErrorCode.TOOL_DISABLED]: '工具已禁用',
+  
+  // MCP
+  [ErrorCode.MCP_CONNECTION_FAILED]: 'MCP服务器连接失败',
+  [ErrorCode.MCP_SERVER_ERROR]: 'MCP服务器错误',
+  [ErrorCode.MCP_RESOURCE_NOT_FOUND]: 'MCP资源不存在',
 }
 
 // Hook配置

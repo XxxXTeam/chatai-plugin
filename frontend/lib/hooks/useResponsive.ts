@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 
-// 断点定义（与Tailwind一致）
+// 断点定义
 export const breakpoints = {
   sm: 640,
   md: 768,
@@ -91,7 +91,7 @@ export function useIsTouchDevice(): boolean {
 }
 
 /**
- * 安全区域padding（用于移动端）
+ * 安全区域padding
  */
 export function useSafeArea() {
   const [safeArea] = useState(() => {

@@ -19,7 +19,7 @@ import imageRoutes from './imageRoutes.js'
 import logsRoutes from './logsRoutes.js'
 import memoryRoutes from './memoryRoutes.js'
 import groupAdminRoutes, { generateGroupAdminLoginCode } from './groupAdminRoutes.js'
-import { ChaiteResponse, ApiResponse, getDatabase } from './shared.js'
+import { ChaiteResponse, ApiResponse, getDatabase, ErrorCodes } from './shared.js'
 
 export { 
     createConversationRoutes,
@@ -43,5 +43,6 @@ export {
     createPresetsConfigRoutes,
     ChaiteResponse,
     ApiResponse,
-    getDatabase
+    getDatabase,
+    ErrorCodes
 }
