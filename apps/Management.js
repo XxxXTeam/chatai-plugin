@@ -670,30 +670,50 @@ export class AIManagement extends plugin {
     async help() {
         const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
         
-        const msg = `AI插件命令帮助：
+        const msg = `📚 AI插件命令帮助
 
-【基础命令】
-${cmdPrefix}结束对话 - 结束当前对话
+━━━━ 对话命令 ━━━━
+#结束对话 - 结束当前对话，清除上下文
+#清除记忆 - 清除个人记忆数据
+#对话状态 - 查看当前对话详细状态
+#我的记忆 - 查看已保存的记忆
+#总结记忆 - 整理合并记忆条目
+
+━━━━ 群聊功能 ━━━━
+#群聊总结 - AI总结近期群聊内容
+#个人画像 - 分析用户个人画像
+#画像@xxx - 分析指定用户画像
+#今日词云 - 生成群聊词云图
+#群记忆 - 查看群聊共享记忆
+
+━━━━ 人格设定 ━━━━
 ${cmdPrefix}设置人格 <内容> - 设置个人专属人格
-${cmdPrefix}查看人格 - 查看当前生效的人格设定
+${cmdPrefix}查看人格 - 查看当前生效的人格
 ${cmdPrefix}清除人格 - 清除个人人格设定
-${cmdPrefix}帮助 - 显示此帮助信息
 
-【群管理员命令】
-${cmdPrefix}群设置 - 查看本群功能设置
-${cmdPrefix}群伪人开启/关闭 - 开关本群伪人模式
-${cmdPrefix}群绘图开启/关闭 - 开关本群绘图功能
-${cmdPrefix}设置群人格 <内容> - 设置群组人格
-${cmdPrefix}清除群人格 - 清除群组人格设定
+━━━━ 群管理命令 ━━━━
+#群管理面板 - 获取群设置面板
+${cmdPrefix}群设置 - 查看本群功能状态
+${cmdPrefix}群伪人开启/关闭 - 本群伪人模式
+${cmdPrefix}群绘图开启/关闭 - 本群绘图功能
+${cmdPrefix}设置群人格 <内容> - 设置群人格
+${cmdPrefix}清除群人格 - 清除群人格设定
 
-【主人命令】
-${cmdPrefix}管理面板 - 获取管理面板链接
-${cmdPrefix}状态 - 查看插件状态
-${cmdPrefix}调试开启/关闭 - 开关调试模式
-${cmdPrefix}伪人开启/关闭 - 开关伪人模式（全局）
+━━━━ 主人命令 ━━━━
+${cmdPrefix}管理面板 - Web管理面板(临时)
+${cmdPrefix}管理面板 永久 - Web管理面板(永久)
+${cmdPrefix}状态 - 查看插件运行状态
+${cmdPrefix}调试开启/关闭 - 调试模式
+${cmdPrefix}伪人开启/关闭 - 全局伪人模式
 ${cmdPrefix}设置模型 <名称> - 设置默认模型
+${cmdPrefix}结束全部对话 - 清除所有对话
+#ai更新 - 更新插件
+#ai版本 - 查看版本信息
 
-人格优先级：群内用户 > 群组 > 用户全局 > 默认预设`
+━━━━ 调试命令 ━━━━
+#chatdebug - 切换聊天调试模式
+
+💡 人格优先级: 群内用户 > 群组 > 用户全局 > 默认预设`
 
         await this.reply(msg, true)
     }

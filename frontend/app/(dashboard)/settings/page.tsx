@@ -1484,7 +1484,10 @@ export default function SettingsPage() {
           </Card>
 
           <Card>
-            <CardHeader><CardTitle>定时总结推送</CardTitle></CardHeader>
+            <CardHeader>
+              <CardTitle>定时总结推送</CardTitle>
+              <CardDescription>按设定间隔自动向群聊推送消息总结，跳过已关闭的群</CardDescription>
+            </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div><Label>全局启用</Label><p className="text-sm text-muted-foreground">启用定时群聊总结推送功能</p></div>
@@ -1492,22 +1495,66 @@ export default function SettingsPage() {
               </div>
               {(config.memory as { summaryPush?: { enabled?: boolean } })?.summaryPush?.enabled && (
                 <>
-                  <div className="grid gap-2">
-                    <Label>检查间隔（分钟）</Label>
-                    <Input type="number" value={(config.memory as { summaryPush?: { checkInterval?: number } })?.summaryPush?.checkInterval || 60} onChange={(e) => updateConfig('memory.summaryPush.checkInterval', parseInt(e.target.value))} />
-                    <p className="text-xs text-muted-foreground">检查是否需要推送的间隔时间</p>
+                  <Separator />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>间隔类型</Label>
+                      <Select 
+                        value={(config.memory as { summaryPush?: { intervalType?: string } })?.summaryPush?.intervalType || 'day'} 
+                        onValueChange={(v) => updateConfig('memory.summaryPush.intervalType', v)}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="day">按天</SelectItem>
+                          <SelectItem value="hour">按小时</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>间隔值</Label>
+                      <Input type="number" min={1} value={(config.memory as { summaryPush?: { defaultInterval?: number } })?.summaryPush?.defaultInterval || 1} onChange={(e) => updateConfig('memory.summaryPush.defaultInterval', parseInt(e.target.value) || 1)} />
+                    </div>
+                    {((config.memory as { summaryPush?: { intervalType?: string } })?.summaryPush?.intervalType || 'day') === 'day' && (
+                      <div className="space-y-2">
+                        <Label>推送时间</Label>
+                        <Select 
+                          value={String((config.memory as { summaryPush?: { defaultPushHour?: number } })?.summaryPush?.defaultPushHour ?? 22)} 
+                          onValueChange={(v) => updateConfig('memory.summaryPush.defaultPushHour', parseInt(v))}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {Array.from({ length: 24 }, (_, i) => (
+                              <SelectItem key={i} value={String(i)}>{i.toString().padStart(2, '0')}:00</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <Label>消息数量</Label>
+                      <Input type="number" min={10} max={500} value={(config.memory as { summaryPush?: { maxMessages?: number } })?.summaryPush?.maxMessages || 300} onChange={(e) => updateConfig('memory.summaryPush.maxMessages', parseInt(e.target.value) || 100)} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>检查间隔（分钟）</Label>
+                      <Input type="number" min={1} value={(config.memory as { summaryPush?: { checkInterval?: number } })?.summaryPush?.checkInterval || 60} onChange={(e) => updateConfig('memory.summaryPush.checkInterval', parseInt(e.target.value) || 60)} />
+                      <p className="text-xs text-muted-foreground">检查是否需要推送的间隔</p>
+                    </div>
                   </div>
-                  <div className="grid gap-2">
-                    <Label>默认推送间隔（小时）</Label>
-                    <Input type="number" value={(config.memory as { summaryPush?: { defaultInterval?: number } })?.summaryPush?.defaultInterval || 24} onChange={(e) => updateConfig('memory.summaryPush.defaultInterval', parseInt(e.target.value))} />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>默认推送时间（小时，0-23）</Label>
-                    <Input type="number" min={0} max={23} value={(config.memory as { summaryPush?: { defaultPushHour?: number } })?.summaryPush?.defaultPushHour ?? 22} onChange={(e) => updateConfig('memory.summaryPush.defaultPushHour', parseInt(e.target.value))} />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>默认最大消息数</Label>
-                    <Input type="number" value={(config.memory as { summaryPush?: { maxMessages?: number } })?.summaryPush?.maxMessages || 300} onChange={(e) => updateConfig('memory.summaryPush.maxMessages', parseInt(e.target.value))} />
+                  <div className="space-y-2">
+                    <Label>总结模型</Label>
+                    <Select 
+                      value={(config.memory as { summaryPush?: { model?: string } })?.summaryPush?.model || '__default__'} 
+                      onValueChange={(v) => updateConfig('memory.summaryPush.model', v === '__default__' ? '' : v)}
+                    >
+                      <SelectTrigger><SelectValue placeholder="使用默认模型" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__default__">使用默认总结模型</SelectItem>
+                        {allModels.map((model) => (
+                          <SelectItem key={model} value={model}>{model}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">未配置则使用「群聊总结」模型或默认模型</p>
                   </div>
                   <div className="flex items-center justify-between">
                     <div><Label>使用LLM生成总结</Label><p className="text-sm text-muted-foreground">调用AI模型生成智能总结</p></div>
@@ -1515,7 +1562,7 @@ export default function SettingsPage() {
                   </div>
                 </>
               )}
-              <p className="text-xs text-muted-foreground">群组独立配置请在「群组管理」中设置</p>
+              <p className="text-xs text-muted-foreground">群组独立配置请在「群组管理」中设置，已关闭推送的群将被跳过</p>
             </CardContent>
           </Card>
 
