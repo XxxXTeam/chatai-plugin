@@ -54,14 +54,28 @@ export const icqqGroup = {
     
     async kickMember(bot, groupId, userId, rejectAdd = false) {
         const group = bot.pickGroup?.(parseInt(groupId))
-        if (!group?.kickMember) throw new Error('icqq: 无法踢出成员')
-        return await group.kickMember(parseInt(userId), '', rejectAdd)
+        if (group?.kickMember) {
+            return await group.kickMember(parseInt(userId), '', rejectAdd)
+        }
+        // 兼容 newer API setGroupKick / setGroupKickBan
+        if (typeof group?.setGroupKick === 'function') {
+            return await group.setGroupKick(parseInt(userId), rejectAdd)
+        }
+        if (typeof group?.setGroupKickBan === 'function') {
+            return await group.setGroupKickBan(parseInt(userId), rejectAdd)
+        }
+        throw new Error('icqq: 无法踢出成员')
     },
     
     async setAdmin(bot, groupId, userId, enable = true) {
         const group = bot.pickGroup?.(parseInt(groupId))
-        if (!group?.setAdmin) throw new Error('icqq: 无法设置管理员')
-        return await group.setAdmin(parseInt(userId), enable)
+        if (group?.setAdmin) {
+            return await group.setAdmin(parseInt(userId), enable)
+        }
+        if (typeof group?.setGroupAdmin === 'function') {
+            return await group.setGroupAdmin(parseInt(userId), enable)
+        }
+        throw new Error('icqq: 无法设置管理员')
     },
     
     async setCard(bot, groupId, userId, card) {
@@ -72,8 +86,13 @@ export const icqqGroup = {
     
     async setTitle(bot, groupId, userId, title, duration = -1) {
         const group = bot.pickGroup?.(parseInt(groupId))
-        if (!group?.setTitle) throw new Error('icqq: 无法设置头衔')
-        return await group.setTitle(parseInt(userId), title, duration)
+        if (group?.setTitle) {
+            return await group.setTitle(parseInt(userId), title, duration)
+        }
+        if (typeof group?.setGroupSpecialTitle === 'function') {
+            return await group.setGroupSpecialTitle(parseInt(userId), title, duration)
+        }
+        throw new Error('icqq: 无法设置头衔')
     },
     
     async pokeMember(bot, groupId, userId) {

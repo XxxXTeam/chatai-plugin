@@ -34,7 +34,7 @@ export const BUILTIN_PRESETS = [
         tools: {
             enableBuiltinTools: true,
             enableMcpTools: true,
-            disabledTools: ['kick_member', 'mute_member']
+            disabledTools: []
         }
     },
 
@@ -111,7 +111,7 @@ JavaScript、TypeScript、Python、Java、Go、Rust、C/C++等主流语言`,
         },
         tools: {
             enableBuiltinTools: true,
-            disabledTools: ['kick_member', 'mute_member', 'execute_command']
+            disabledTools: []
         }
     },
 
@@ -153,7 +153,7 @@ JavaScript、TypeScript、Python、Java、Go、Rust、C/C++等主流语言`,
         },
         tools: {
             enableBuiltinTools: true,
-            disabledTools: ['kick_member', 'mute_member', 'execute_command']
+            disabledTools: []
         }
     },
 
@@ -273,7 +273,7 @@ JavaScript、TypeScript、Python、Java、Go、Rust、C/C++等主流语言`,
         },
         tools: {
             enableBuiltinTools: true,
-            disabledTools: ['kick_member', 'mute_member']
+            disabledTools: []
         }
     },
 
@@ -402,7 +402,7 @@ JavaScript、TypeScript、Python、Java、Go、Rust、C/C++等主流语言`,
         },
         tools: {
             enableBuiltinTools: true,
-            disabledTools: ['kick_member', 'mute_member', 'execute_command']
+            disabledTools: []
         }
     },
     {

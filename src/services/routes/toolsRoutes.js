@@ -49,7 +49,7 @@ router.get('/builtin/config', async (req, res) => {
             allowedTools: builtinConfig.allowedTools || [],
             disabledTools: builtinConfig.disabledTools || [],
             allowDangerous: builtinConfig.allowDangerous || false,
-            dangerousTools: builtinConfig.dangerousTools || ['kick_member', 'mute_member', 'recall_message']
+            dangerousTools: builtinConfig.dangerousTools || []
         }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))

@@ -22,10 +22,8 @@ class ToolFilterService {
         // 危险工具列表（需要特殊权限）
         this.defaultDangerousTools = [
             'kick_member',
-            'mute_member',
             'recall_message',
             'set_group_whole_ban',
-            'set_group_admin',
             'delete_group_file',
             'execute_command',
             'send_group_notice'
@@ -118,7 +116,7 @@ class ToolFilterService {
         // 6. 权限过滤（非管理员不能使用管理工具）
         if (userPermission !== 'owner' && userPermission !== 'admin') {
             const adminOnlyTools = [
-                'kick_member', 'mute_member', 'set_group_admin',
+                'kick_member', 'set_group_admin',
                 'set_group_whole_ban', 'set_group_name', 'send_group_notice',
                 'set_essence_message', 'remove_essence_message'
             ]
@@ -159,7 +157,7 @@ class ToolFilterService {
 
         // 检查管理员权限
         const adminOnlyTools = [
-            'kick_member', 'mute_member', 'set_group_admin',
+            'kick_member','set_group_admin',
             'set_group_whole_ban', 'set_group_name', 'send_group_notice'
         ]
         if (adminOnlyTools.includes(toolName) && 

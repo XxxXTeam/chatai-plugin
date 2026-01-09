@@ -5,6 +5,12 @@
 
 import { icqqGroup, callOneBotApi } from './helpers.js'
 
+function requireGroupId(args, ctx) {
+    const gid = args.group_id || ctx.getEvent?.()?.group_id || ctx.getEvent?.()?.group?.group_id
+    if (!gid) throw new Error('缺少群号 group_id')
+    return parseInt(gid)
+}
+
 export const adminTools = [
     {
         name: 'mute_member',
@@ -22,7 +28,7 @@ export const adminTools = [
             try {
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
-                const groupId = parseInt(args.group_id)
+                const groupId = requireGroupId(args, ctx)
                 const userId = parseInt(args.user_id)
                 const duration = Math.min(Math.max(args.duration, 0), 30 * 24 * 3600)
                 
@@ -62,7 +68,7 @@ export const adminTools = [
             try {
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
-                const groupId = parseInt(args.group_id)
+                const groupId = requireGroupId(args, ctx)
                 const userId = parseInt(args.user_id)
                 
                 if (adapter === 'icqq') {
@@ -94,11 +100,12 @@ export const adminTools = [
             try {
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
-                const groupId = parseInt(args.group_id)
+                const groupId = requireGroupId(args, ctx)
                 const userId = parseInt(args.user_id)
+                const card = args.card ?? ''
                 
                 if (adapter === 'icqq') {
-                    await icqqGroup.setCard(bot, groupId, userId, args.card)
+                    await icqqGroup.setCard(bot, groupId, userId, card)
                 } else {
                     await callOneBotApi(bot, 'set_group_card', { group_id: groupId, user_id: userId, card: args.card })
                 }
@@ -125,7 +132,7 @@ export const adminTools = [
             try {
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
-                const groupId = parseInt(args.group_id)
+                const groupId = requireGroupId(args, ctx)
                 
                 if (adapter === 'icqq') {
                     await icqqGroup.muteAll(bot, groupId, args.enable)
@@ -161,7 +168,7 @@ export const adminTools = [
             try {
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
-                const groupId = parseInt(args.group_id)
+                const groupId = requireGroupId(args, ctx)
                 const userId = parseInt(args.user_id)
                 
                 if (adapter === 'icqq') {
@@ -198,7 +205,7 @@ export const adminTools = [
             try {
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
-                const groupId = parseInt(args.group_id)
+                const groupId = requireGroupId(args, ctx)
                 
                 if (adapter === 'icqq') {
                     await icqqGroup.setName(bot, groupId, args.name)
