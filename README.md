@@ -405,6 +405,96 @@ chatai-plugin/
 - **MCP 服务器** - MCP 服务器连接管理
 - **高级设置** - 上下文、记忆、思考等配置
 
+### 界面预览
+
+<details>
+<summary><b>📊 仪表盘</b></summary>
+
+![仪表盘](image/image.png)
+
+*系统概览：渠道状态、模型数量、工具统计等*
+
+</details>
+
+<details>
+<summary><b>⚙️ 系统设置</b></summary>
+
+![系统设置](image/image2.png)
+
+*触发配置：私聊/群聊触发方式、触发词等*
+
+</details>
+
+<details>
+<summary><b>📈 使用统计</b></summary>
+
+![使用统计](image/image3.png)
+
+*消息统计、模型使用排行、工具调用统计*
+
+</details>
+
+<details>
+<summary><b>📝 调用记录</b></summary>
+
+![调用记录](image/image4.png)
+
+*API调用详情：耗时、Token消耗、成功率*
+
+</details>
+
+<details>
+<summary><b>👥 群组管理</b></summary>
+
+![群组管理-基础](image/image5.png)
+
+*群组基础设置：预设、触发模式、独立人设*
+
+![群组管理-事件](image/image6.png)
+
+*事件处理：入群欢迎、退群提醒、伪人设置*
+
+![群组管理-伪人](image/image7.png)
+
+*伪人配置：模式、概率、模型、温度*
+
+</details>
+
+<details>
+<summary><b>🎭 预设管理</b></summary>
+
+![预设管理](image/image8.png)
+
+*AI角色预设：系统提示词、标签、参数配置*
+
+</details>
+
+<details>
+<summary><b>👤 人设管理</b></summary>
+
+![人设管理](image/image9.png)
+
+*人格优先级配置：群人格、用户人格、默认预设*
+
+</details>
+
+<details>
+<summary><b>🔌 渠道管理</b></summary>
+
+![渠道管理](image/image10.png)
+
+*API渠道配置：多渠道、模型列表、优先级*
+
+![渠道模型测试](image/image11.png)
+
+*批量模型测试：验证API可用性*
+
+![添加渠道](image/image12.png)
+
+*添加新渠道：API类型、地址、密钥配置*
+
+</details>
+
 ## 🔌 API 兼容性
 
 ### 支持的 OpenAI 兼容 API

@@ -1230,53 +1230,8 @@ export default function GroupsPage() {
             </div>
             
             <div className="space-y-1.5">
-              <Label className="text-xs">绘图模型 <span className="text-muted-foreground">（生成图片）</span></Label>
-              <Select value={form.drawModel || '__default__'} onValueChange={(v) => setForm({ ...form, drawModel: v === '__default__' ? '' : v })}>
-                <SelectTrigger>
-                  <SelectValue placeholder="使用全局配置" />
-                </SelectTrigger>
-                <SelectContent className="max-h-[200px] overflow-y-auto">
-                  <SelectItem value="__default__">使用全局配置</SelectItem>
-                  {allModels.map((m) => (
-                    <SelectItem key={m} value={m}>{m}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div className="space-y-1.5">
               <Label className="text-xs">搜索模型 <span className="text-muted-foreground">（联网搜索）</span></Label>
               <Select value={form.searchModel || '__default__'} onValueChange={(v) => setForm({ ...form, searchModel: v === '__default__' ? '' : v })}>
-                <SelectTrigger>
-                  <SelectValue placeholder="使用全局配置" />
-                </SelectTrigger>
-                <SelectContent className="max-h-[200px] overflow-y-auto">
-                  <SelectItem value="__default__">使用全局配置</SelectItem>
-                  {allModels.map((m) => (
-                    <SelectItem key={m} value={m}>{m}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div className="space-y-1.5">
-              <Label className="text-xs">伪人模型 <span className="text-muted-foreground">（模拟真人）</span></Label>
-              <Select value={form.roleplayModel || '__default__'} onValueChange={(v) => setForm({ ...form, roleplayModel: v === '__default__' ? '' : v })}>
-                <SelectTrigger>
-                  <SelectValue placeholder="使用全局配置" />
-                </SelectTrigger>
-                <SelectContent className="max-h-[200px] overflow-y-auto">
-                  <SelectItem value="__default__">使用全局配置</SelectItem>
-                  {allModels.map((m) => (
-                    <SelectItem key={m} value={m}>{m}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div className="space-y-1.5">
-              <Label className="text-xs">总结模型 <span className="text-muted-foreground">（群聊总结）</span></Label>
-              <Select value={form.summaryModel || '__default__'} onValueChange={(v) => setForm({ ...form, summaryModel: v === '__default__' ? '' : v })}>
                 <SelectTrigger>
                   <SelectValue placeholder="使用全局配置" />
                 </SelectTrigger>
