@@ -21,12 +21,12 @@ function isTRSSEnvironment() {
 const isIPv4Address = (ip) => net.isIP(ip) === 4
 const isIPv6Address = (ip) => net.isIP(ip) === 6
 
-async function fetchPublicIp(endpoint, validator) {
+async function fetchPublicIp(endpoint, validator, timeoutMs = 1500) {
     try {
         const https = await import('node:https')
         return await new Promise((resolve) => {
-            const timeout = setTimeout(() => resolve(null), 5000)
-            const request = https.get(endpoint, { timeout: 3000 }, (res) => {
+            const timeout = setTimeout(() => resolve(null), timeoutMs)
+            const request = https.get(endpoint, { timeout: timeoutMs - 200 }, (res) => {
                 let data = ''
                 res.on('data', (chunk) => data += chunk)
                 res.on('end', () => {
@@ -42,13 +42,10 @@ async function fetchPublicIp(endpoint, validator) {
         return null
     }
 }
-
-// 获取本地和公网地址
-async function getServerAddresses(port) {
+async function getLocalAddresses(port) {
     const addresses = { local: [], localIPv6: [], public: null, publicIPv6: null }
     
     try {
-        const os = await import('node:os')
         const interfaces = os.networkInterfaces()
         for (const name of Object.keys(interfaces)) {
             for (const iface of interfaces[name]) {
@@ -65,11 +62,53 @@ async function getServerAddresses(port) {
         addresses.local = [`http://127.0.0.1:${port}`]
     }
     
-    // 获取公网IP（包含 IPv4 与 IPv6）
+    return addresses
+}
+
+async function getPublicAddresses(port) {
+    const result = { public: null, publicIPv6: null }
     try {
-        const publicIPv4 = await fetchPublicIp('https://api.ipify.org', isIPv4Address)
+        const [publicIPv4, publicIPv6] = await Promise.all([
+            fetchPublicIp('https://api.ipify.org', isIPv4Address),
+            fetchPublicIp('https://api64.ipify.org', isIPv6Address)
+        ])
+        if (publicIPv4) result.public = `http://${publicIPv4}:${port}`
+        if (publicIPv6) result.publicIPv6 = `http://[${publicIPv6}]:${port}`
+    } catch {}
+    return result
+}
+
+// 快速获取所有地址（本地+公网并行，总超时2秒）
+async function getServerAddressesFast(port) {
+    const addresses = { local: [], localIPv6: [], public: null, publicIPv6: null }
+    
+    // 本地地址（同步获取，很快）
+    try {
+        const interfaces = os.networkInterfaces()
+        for (const name of Object.keys(interfaces)) {
+            for (const iface of interfaces[name]) {
+                if (iface.internal) continue
+                if (iface.family === 'IPv4') {
+                    addresses.local.push(`http://${iface.address}:${port}`)
+                } else if (iface.family === 'IPv6' && !iface.address.startsWith('fe80:')) {
+                    addresses.localIPv6.push(`http://[${iface.address}]:${port}`)
+                }
+            }
+        }
+        addresses.local.unshift(`http://127.0.0.1:${port}`)
+    } catch {
+        addresses.local = [`http://127.0.0.1:${port}`]
+    }
+    
+    // 公网地址（并行获取，总超时2秒）
+    try {
+        const publicPromise = Promise.all([
+            fetchPublicIp('https://api.ipify.org', isIPv4Address, 1500),
+            fetchPublicIp('https://api64.ipify.org', isIPv6Address, 1500)
+        ])
+        const timeoutPromise = new Promise(r => setTimeout(() => r([null, null]), 2000))
+        const [publicIPv4, publicIPv6] = await Promise.race([publicPromise, timeoutPromise])
         if (publicIPv4) addresses.public = `http://${publicIPv4}:${port}`
-        const publicIPv6 = await fetchPublicIp('https://api64.ipify.org', isIPv6Address)
         if (publicIPv6) addresses.publicIPv6 = `http://[${publicIPv6}]:${port}`
     } catch {}
     
@@ -510,10 +549,11 @@ window.location.href = '/';
             await this.startWithOwnPort()
         }
         
-        this.addresses = await getServerAddresses(this.port)
+        // 并行获取本地和公网地址（总超时2秒）
+        this.addresses = await getServerAddressesFast(this.port)
         this.printStartupBanner()
         
-        // 启动周期任务调度服务
+        // 异步启动周期任务调度服务
         schedulerService.init().catch(err => {
             chatLogger.warn('[WebServer] 调度服务启动失败:', err.message)
         })
