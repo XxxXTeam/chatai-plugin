@@ -57,31 +57,31 @@ initTasks.push((async () => {
 const apps = {}
 const loadStats = { success: 0, failed: 0, plugins: [], failedPlugins: [] }
 const appsDir = path.join(__dirname, 'apps')
-if (fs.existsSync(appsDir)) {
+const appsPromise = (async () => {
+  if (!fs.existsSync(appsDir)) return []
   const files = fs.readdirSync(appsDir).filter(file => file.endsWith('.js') && file !== 'update.js')
-  const loadedApps = await Promise.allSettled(files.map(file => import(`./apps/${file}`)))
-
-  files.forEach((file, index) => {
-    const name = file.replace('.js', '')
-    const result = loadedApps[index]
-
+  return Promise.allSettled(files.map(file => import(`./apps/${file}`).then(mod => ({ file, mod }))))
+})()
+const [appsResults, ...initResults] = await Promise.all([appsPromise, ...initTasks])
+if (Array.isArray(appsResults)) {
+  for (const result of appsResults) {
     if (result.status === 'fulfilled') {
-      apps[name] = result.value[Object.keys(result.value)[0]]
+      const { file, mod } = result.value
+      const name = file.replace('.js', '')
+      apps[name] = mod[Object.keys(mod)[0]]
       loadStats.success++
       loadStats.plugins.push(name)
     } else {
       loadStats.failed++
-      loadStats.failedPlugins.push({ name, error: result.reason?.message || result.reason })
+      loadStats.failedPlugins.push({ name: 'unknown', error: result.reason?.message || result.reason })
     }
-  })
+  }
 }
-const initResults = await Promise.allSettled(initTasks)
 const loadTime = Date.now() - startTime
-const mcpResult = initResults.find(r => r.status === 'fulfilled' && r.value?.name === 'MCP')
-const mcpToolCount = mcpResult?.value?.toolCount || 0
-const webResult = initResults.find(r => r.status === 'fulfilled' && r.value?.name === 'WebServer')
-const finalWebPort = webResult?.value?.port || webServerPort || config.get('webServer.port') || 3000
-
+const mcpResult = initResults.find(r => r?.name === 'MCP')
+const mcpToolCount = mcpResult?.toolCount || 0
+const webResult = initResults.find(r => r?.name === 'WebServer')
+const finalWebPort = webResult?.port || webServerPort || config.get('webServer.port') || 3000
 const statsItems = [
   { label: `${icons.module} 模块`, value: `${loadStats.success} 个`, color: c.green },
   { label: `${icons.tool} MCP工具`, value: `${mcpToolCount} 个`, color: c.cyan },

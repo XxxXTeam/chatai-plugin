@@ -30,16 +30,97 @@ class SchedulerService {
             this.scopeManager = getScopeManager(databaseService)
             await this.scopeManager.init()
             
-            // 每分钟检查一次任务
-            this.checkInterval = setInterval(() => this.checkTasks(), 60 * 1000)
-            
-            // 启动时立即检查一次
-            await this.loadScheduledTasks()
-            
             this.initialized = true
             chatLogger.info('[SchedulerService] 调度服务已启动')
+            this.startPeriodicScan()
         } catch (error) {
             chatLogger.error('[SchedulerService] 初始化失败:', error)
+        }
+    }
+    startPeriodicScan() {
+        this.checkInterval = setInterval(() => {
+            this.scanAndCheckTasks().catch(err => 
+                chatLogger.warn('[SchedulerService] 扫描失败:', err.message)
+            )
+        }, 60 * 1000)
+        setTimeout(() => {
+            this.scanAndCheckTasks().catch(err => 
+                chatLogger.warn('[SchedulerService] 首次扫描失败:', err.message)
+            )
+        }, 10 * 1000)
+    }
+    
+    /**
+     * 扫描群并检查/执行任务（合并操作）
+     */
+    async scanAndCheckTasks() {
+        // 1. 扫描所有Bot的群，自动注册新任务
+        await this.syncGroupTasks()
+        
+        // 2. 检查并执行到期任务
+        await this.checkTasks()
+    }
+    
+    /**
+     * 同步群任务（扫描所有群，自动新增/移除任务）
+     */
+    async syncGroupTasks() {
+        try {
+            const globalSummaryPush = config.get('features.groupSummary.push') || {}
+            const groupSettingsList = await this.scopeManager.listGroupSettings()
+            
+            // 构建群组配置映射
+            const groupSettingsMap = new Map()
+            for (const group of groupSettingsList) {
+                groupSettingsMap.set(String(group.groupId), group.settings || {})
+            }
+            
+            // 获取所有Bot的群列表
+            const allGroupIds = await this.getAllBotGroups()
+            
+            // 当前应该启用的群
+            const shouldEnabledGroups = new Set()
+            for (const groupId of allGroupIds) {
+                const settings = groupSettingsMap.get(groupId) || {}
+                const enabled = settings.summaryPushEnabled !== undefined 
+                    ? settings.summaryPushEnabled 
+                    : globalSummaryPush.enabled
+                if (enabled) {
+                    shouldEnabledGroups.add(groupId)
+                }
+            }
+            
+            // 新增任务
+            let added = 0
+            for (const groupId of shouldEnabledGroups) {
+                const taskId = `summary_push_${groupId}`
+                if (!this.tasks.has(taskId)) {
+                    const settings = groupSettingsMap.get(groupId) || {}
+                    this.registerSummaryPushTask(groupId, {
+                        intervalType: settings.summaryPushIntervalType || globalSummaryPush.intervalType || 'day',
+                        intervalValue: settings.summaryPushIntervalValue || globalSummaryPush.intervalValue || 1,
+                        pushHour: settings.summaryPushHour ?? globalSummaryPush.pushHour ?? 20,
+                        summaryModel: settings.summaryModel || globalSummaryPush.model,
+                        messageCount: settings.summaryPushMessageCount || globalSummaryPush.messageCount || 100
+                    })
+                    added++
+                }
+            }
+            
+            // 移除不再需要的任务
+            let removed = 0
+            for (const [taskId, task] of this.tasks) {
+                if (task.type === 'summary_push' && !shouldEnabledGroups.has(task.groupId)) {
+                    this.tasks.delete(taskId)
+                    removed++
+                }
+            }
+            
+            if (added > 0 || removed > 0) {
+                chatLogger.info(`[SchedulerService] 任务同步: +${added} -${removed}, 当前 ${this.tasks.size} 个`)
+            }
+        } catch (error) {
+            chatLogger.warn('[SchedulerService] 同步任务失败:', error.message)
         }
     }
 
@@ -48,25 +129,71 @@ class SchedulerService {
      */
     async loadScheduledTasks() {
         try {
-            const groups = await this.scopeManager.listGroupSettings()
-            
-            for (const group of groups) {
-                const settings = group.settings || {}
+            const globalSummaryPush = config.get('features.groupSummary.push') || {}
+            const groupSettingsList = await this.scopeManager.listGroupSettings()
+            const groupSettingsMap = new Map()
+            for (const group of groupSettingsList) {
+                groupSettingsMap.set(String(group.groupId), group.settings || {})
+            }
+            const allGroupIds = await this.getAllBotGroups()
+            const groupsToRegister = new Set()
+            for (const groupId of allGroupIds) {
+                const settings = groupSettingsMap.get(groupId) || {}
+                const enabled = settings.summaryPushEnabled !== undefined 
+                    ? settings.summaryPushEnabled 
+                    : globalSummaryPush.enabled
                 
-                // 检查定时总结推送配置
-                if (settings.summaryPushEnabled) {
-                    this.registerSummaryPushTask(group.groupId, {
-                        intervalType: settings.summaryPushIntervalType || 'day',
-                        intervalValue: settings.summaryPushIntervalValue || 1,
-                        pushHour: settings.summaryPushHour ?? 20,
-                        summaryModel: settings.summaryModel,
-                        messageCount: settings.summaryPushMessageCount || 100
-                    })
+                if (enabled) {
+                    groupsToRegister.add(groupId)
                 }
             }
+            for (const groupId of groupsToRegister) {
+                const settings = groupSettingsMap.get(groupId) || {}
+                this.registerSummaryPushTask(groupId, {
+                    intervalType: settings.summaryPushIntervalType || globalSummaryPush.intervalType || 'day',
+                    intervalValue: settings.summaryPushIntervalValue || globalSummaryPush.intervalValue || 1,
+                    pushHour: settings.summaryPushHour ?? globalSummaryPush.pushHour ?? 20,
+                    summaryModel: settings.summaryModel || globalSummaryPush.model,
+                    messageCount: settings.summaryPushMessageCount || globalSummaryPush.messageCount || 100
+                })
+            }
+            
+            chatLogger.info(`[SchedulerService] 已加载 ${this.tasks.size} 个定时任务`)
         } catch (error) {
             chatLogger.error('[SchedulerService] 加载任务失败:', error)
         }
+    }
+    
+    /**
+     * 获取Bot的所有群列表
+     * @returns {Promise<string[]>} 群ID列表
+     */
+    async getAllBotGroups() {
+        const groupIds = []
+        try {
+            if (global.Bot) {
+                // 遍历所有Bot实例
+                for (const uin of Object.keys(global.Bot.uin || {})) {
+                    const bot = global.Bot[uin]
+                    if (bot?.gl) {
+                        // gl 是群列表 Map<groupId, groupInfo>
+                        for (const groupId of bot.gl.keys()) {
+                            groupIds.push(String(groupId))
+                        }
+                    }
+                }
+                // 直接从 Bot.gl 获取
+                if (groupIds.length === 0 && global.Bot.gl) {
+                    for (const groupId of global.Bot.gl.keys()) {
+                        groupIds.push(String(groupId))
+                    }
+                }
+            }
+        } catch (err) {
+            chatLogger.warn('[SchedulerService] 获取群列表失败:', err.message)
+        }
+        chatLogger.debug(`[SchedulerService] 获取到 ${groupIds.length} 个群`)
+        return [...new Set(groupIds)] // 去重
     }
 
     /**
@@ -114,13 +241,26 @@ class SchedulerService {
     }
 
     /**
-     * 检查并执行到期任务
+     * 检查并执行到期任务（并发执行多个任务）
      */
     async checkTasks() {
         const now = Date.now()
+        const dueTasks = []
         
+        // 收集所有到期的任务
         for (const [taskId, task] of this.tasks) {
             if (task.nextRun && task.nextRun <= now) {
+                dueTasks.push({ taskId, task })
+            }
+        }
+        
+        if (dueTasks.length === 0) return
+        
+        chatLogger.info(`[SchedulerService] 检测到 ${dueTasks.length} 个到期任务，开始并发执行`)
+        
+        // 并发执行所有到期任务
+        const results = await Promise.allSettled(
+            dueTasks.map(async ({ taskId, task }) => {
                 try {
                     await this.executeTask(taskId, task)
                     
@@ -129,10 +269,19 @@ class SchedulerService {
                     task.nextRun = this.calculateNextRun(task.config)
                     
                     chatLogger.info(`[SchedulerService] 任务完成: ${taskId}, 下次执行: ${new Date(task.nextRun).toLocaleString()}`)
+                    return { taskId, success: true }
                 } catch (error) {
                     chatLogger.error(`[SchedulerService] 任务执行失败: ${taskId}`, error)
+                    return { taskId, success: false, error: error.message }
                 }
-            }
+            })
+        )
+        
+        // 统计执行结果
+        const succeeded = results.filter(r => r.status === 'fulfilled' && r.value?.success).length
+        const failed = dueTasks.length - succeeded
+        if (failed > 0) {
+            chatLogger.warn(`[SchedulerService] 并发执行完成: 成功 ${succeeded}, 失败 ${failed}`)
         }
     }
 

@@ -284,6 +284,16 @@ class Config {
                     enabled: true,           // 群聊总结功能
                     maxMessages: 100,        // 总结最近N条消息
                     autoTrigger: false,      // 自动触发（伪人模式下）
+                    maxChars: 6000,          // 总结最大字符数
+                    // 全局定时推送配置（群组未单独配置时使用）
+                    push: {
+                        enabled: false,          // 全局启用定时推送
+                        intervalType: 'day',     // 推送间隔类型: 'hour' | 'day'
+                        intervalValue: 1,        // 推送间隔值
+                        pushHour: 20,            // 每日推送时间（小时，0-23）
+                        messageCount: 100,       // 总结消息数量
+                        model: '',               // 总结使用的模型（留空使用默认）
+                    },
                 },
                 userPortrait: {
                     enabled: true,           // 个人画像分析

@@ -405,13 +405,9 @@ export class bym extends plugin {
             }
 
             const bymStartTime = Date.now()
-            
-            // 使用 chatService 来确保上下文正确传递和保存
             const groupId = e.group_id ? String(e.group_id) : null
             const userId = String(e.user_id || e.sender?.user_id)
-            
-            // 构建用户ID：群聊使用 groupId_userId，私聊使用 userId
-            const fullUserId = groupId ? `${groupId}_${userId}` : userId
+            const fullUserId = groupId ? `bym_group_${groupId}` : userId
             if (groupId) {
                 try {
                     const { memoryManager } = await import('../src/services/storage/MemoryManager.js')
