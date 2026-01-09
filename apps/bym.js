@@ -412,6 +412,30 @@ export class bym extends plugin {
             
             // 构建用户ID：群聊使用 groupId_userId，私聊使用 userId
             const fullUserId = groupId ? `${groupId}_${userId}` : userId
+            if (groupId) {
+                try {
+                    const { memoryManager } = await import('../src/services/storage/MemoryManager.js')
+                    await memoryManager.init()
+                    const recentMessages = memoryManager.getGroupMessageBuffer(groupId) || []
+                    
+                    if (recentMessages.length > 0) {
+                        const contextMessages = recentMessages.slice(-15)
+                        const contextText = contextMessages.map(m => {
+                            const name = m.nickname || m.userId || '用户'
+                            const content = typeof m.content === 'string' ? m.content : 
+                                (Array.isArray(m.content) ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') : '')
+                            return `[${name}]: ${content}`
+                        }).join('\n')
+                        
+                        if (contextText.trim()) {
+                            systemPrompt += `\n\n【最近群聊记录】\n${contextText}\n\n请基于以上聊天记录的话题和氛围，自然地参与对话。`
+                            logger.info(`[BYM] 已添加群聊上下文: ${contextMessages.length} 条消息`)
+                        }
+                    }
+                } catch (err) {
+                    logger.debug('[BYM] 获取群聊上下文失败:', err.message)
+                }
+            }
             
             // 使用 chatService.sendMessage 来正确处理上下文
             const { chatService } = await import('../src/services/llm/ChatService.js')

@@ -126,12 +126,24 @@ export class ApiResponse {
 
 /**
  * 获取已初始化的数据库服务
+ * @returns {import('../storage/DatabaseService.js').databaseService} 数据库服务实例
  */
 export function getDatabase() {
     if (!databaseService.initialized) {
         databaseService.init()
     }
     return databaseService
+}
+
+/**
+ * 获取原始数据库实例（用于直接SQL操作）
+ * @returns {import('better-sqlite3').Database} SQLite数据库实例
+ */
+export function getRawDatabase() {
+    if (!databaseService.initialized) {
+        databaseService.init()
+    }
+    return databaseService.db
 }
 
 export default { ChaiteResponse, ApiResponse, getDatabase }

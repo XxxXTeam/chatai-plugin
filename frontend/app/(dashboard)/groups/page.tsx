@@ -175,6 +175,7 @@ export default function GroupsPage() {
     summaryPushIntervalValue: 1,
     summaryPushHour: 22,
     summaryPushMessageCount: 100,
+    summaryPushModel: '',  // 定时总结使用的模型
     customPrefix: '',
     knowledgeIds: [] as string[],
     inheritFrom: [] as string[],
@@ -260,6 +261,7 @@ export default function GroupsPage() {
       summaryPushIntervalValue: 1,
       summaryPushHour: 22,
       summaryPushMessageCount: 100,
+      summaryPushModel: '',
       customPrefix: '',
       knowledgeIds: [],
       inheritFrom: [],
@@ -320,6 +322,7 @@ export default function GroupsPage() {
         summaryPushIntervalValue: settings.summaryPushIntervalValue ?? 1,
         summaryPushHour: settings.summaryPushHour ?? 22,
         summaryPushMessageCount: settings.summaryPushMessageCount ?? 100,
+        summaryPushModel: settings.summaryPushModel || '',
         customPrefix: settings.customPrefix || '',
         knowledgeIds: group.knowledgeIds || [],
         inheritFrom: group.inheritFrom || [],
@@ -383,6 +386,7 @@ export default function GroupsPage() {
         summaryPushIntervalValue: form.summaryPushIntervalValue,
         summaryPushHour: form.summaryPushHour,
         summaryPushMessageCount: form.summaryPushMessageCount,
+        summaryPushModel: form.summaryPushModel || undefined,
         customPrefix: form.customPrefix || undefined,
         knowledgeIds: form.knowledgeIds.length > 0 ? form.knowledgeIds : undefined,
         inheritFrom: form.inheritFrom.length > 0 ? form.inheritFrom : undefined,
@@ -950,15 +954,37 @@ export default function GroupsPage() {
             </div>
             {form.summaryPushIntervalType === 'day' && (
               <div className="space-y-1">
-                <Label className="text-xs">推送时间 (0-23点)</Label>
-                <Input type="number" min={0} max={23} value={form.summaryPushHour}
-                  onChange={(e) => setForm({ ...form, summaryPushHour: parseInt(e.target.value) })} className="w-24" />
+                <Label className="text-xs">推送时间</Label>
+                <Select value={String(form.summaryPushHour)} onValueChange={(v) => setForm({ ...form, summaryPushHour: parseInt(v) })}>
+                  <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 24 }, (_, i) => (
+                      <SelectItem key={i} value={String(i)}>{i.toString().padStart(2, '0')}:00</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             )}
             <div className="space-y-1">
               <Label className="text-xs">消息数量</Label>
               <Input type="number" min={10} max={500} value={form.summaryPushMessageCount || 100}
                 onChange={(e) => setForm({ ...form, summaryPushMessageCount: parseInt(e.target.value) || 100 })} className="w-24" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">总结模型</Label>
+              <Select 
+                value={form.summaryPushModel || '__default__'} 
+                onValueChange={(v) => setForm({ ...form, summaryPushModel: v === '__default__' ? '' : v })}
+              >
+                <SelectTrigger><SelectValue placeholder="使用默认模型" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">使用默认总结模型</SelectItem>
+                  {allModels.map((model) => (
+                    <SelectItem key={model} value={model}>{model}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">留空使用全局总结模型</p>
             </div>
             <p className="text-xs text-muted-foreground">每次总结获取指定数量的新消息，不会重复总结已处理的消息</p>
           </div>

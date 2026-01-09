@@ -2,7 +2,7 @@
  * 记忆路由模块 - 用户记忆管理
  */
 import express from 'express'
-import { ChaiteResponse, getDatabase } from './shared.js'
+import { ChaiteResponse, getRawDatabase } from './shared.js'
 
 const router = express.Router()
 
@@ -20,11 +20,11 @@ router.get('/users', async (req, res) => {
 // DELETE /clear-all - 清空所有用户记忆（必须在/:userId之前注册）
 router.delete('/clear-all', async (req, res) => {
     try {
-        const db = getDatabase()
-        const allMemories = db.prepare('SELECT DISTINCT userId FROM memories').all()
+        const db = getRawDatabase()
+        const allMemories = db.prepare('SELECT DISTINCT user_id FROM memories').all()
         let clearedCount = 0
-        for (const { userId } of allMemories) {
-            db.prepare('DELETE FROM memories WHERE userId = ?').run(userId)
+        for (const row of allMemories) {
+            db.prepare('DELETE FROM memories WHERE user_id = ?').run(row.user_id)
             clearedCount++
         }
         res.json(ChaiteResponse.ok({ 
