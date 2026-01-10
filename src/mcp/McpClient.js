@@ -77,13 +77,18 @@ export class McpClient {
                 throw new Error(`Unsupported transport type: ${this.type}`)
             }
 
+            // HTTP 类型也需要初始化以获取服务器能力
             await this.initialize()
-            this.startHeartbeat()
+            
+            // 只有非 HTTP 类型才需要心跳（HTTP 是无状态的）
+            if (this.type !== 'http') {
+                this.startHeartbeat()
+            }
             this.reconnectAttempts = 0
 
             logger.info(`[MCP] Connected successfully via ${this.type}`)
         } catch (error) {
-            logger.error(`[MCP] Connection failed:`, error)
+            logger.error(`[MCP] Connection failed: ${error.message}`, error.stack)
             throw error
         }
     }
@@ -155,35 +160,53 @@ export class McpClient {
     }
 
     async connectSSE() {
-        const { url } = this.config
-        this.sseUrl = url  // 保存 URL 用于发送请求
-
-        this.eventSource = new EventSource(url)
-
+        const { url, headers = {} } = this.config
+        this.sseBaseUrl = url.replace(/\/sse\/?$/, '')  // 移除末尾的 /sse
+        
+        // 连接 SSE 端点获取 session
+        const sseUrl = url.endsWith('/sse') ? url : `${url}/sse`
+        logger.debug(`[MCP] Connecting to SSE endpoint: ${sseUrl}`)
+        
+        this.eventSource = new EventSource(sseUrl)
+        
+        // 设置通用消息处理器
         this.eventSource.onmessage = (event) => {
+            logger.debug(`[MCP] SSE message received: ${event.data.substring(0, 200)}`)
             try {
                 const message = JSON.parse(event.data)
                 this.handleMessage(message)
             } catch (error) {
-                logger.error(`[MCP] Failed to parse SSE message:`, error)
+                // 可能不是 JSON，忽略
             }
         }
 
-        this.eventSource.onerror = (error) => {
-            // 只在需要时记录详细错误
-            if (error.type === 'error') {
-                logger.warn(`[MCP] SSE connection error`)
-            }
-            // 检查连接状态，只有在非正常关闭时才尝试重连
-            if (this.eventSource?.readyState === EventSource.CLOSED) {
-                this.handleDisconnect()
-            }
-        }
+        // 等待获取 endpoint
         await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('SSE connection timeout')), 10000)
-            this.eventSource.onopen = () => {
+            const timeout = setTimeout(() => {
+                this.eventSource?.close()
+                reject(new Error('SSE connection timeout'))
+            }, 10000)
+            
+            this.eventSource.addEventListener('endpoint', (event) => {
+                // 获取到消息端点，如 /messages?sessionId=xxx
+                this.sseMessageEndpoint = event.data
+                logger.debug(`[MCP] SSE message endpoint: ${this.sseMessageEndpoint}`)
                 clearTimeout(timeout)
                 resolve()
+            })
+
+            this.eventSource.onerror = (error) => {
+                if (error.type === 'error') {
+                    logger.warn(`[MCP] SSE connection error`)
+                }
+                if (this.eventSource?.readyState === EventSource.CLOSED) {
+                    clearTimeout(timeout)
+                    reject(new Error('SSE connection closed'))
+                }
+            }
+            
+            this.eventSource.onopen = () => {
+                logger.debug(`[MCP] SSE connection opened`)
             }
         })
     }
@@ -213,18 +236,25 @@ export class McpClient {
     }
 
     handleMessage(message) {
+        const pendingIds = Array.from(this.pendingRequests.keys())
+        logger.debug(`[MCP] handleMessage: id=${message.id}, method=${message.method}, hasResult=${message.result !== undefined}, pendingIds=[${pendingIds.join(', ')}]`)
+        
         if (message.id && this.pendingRequests.has(message.id)) {
             const { resolve, reject } = this.pendingRequests.get(message.id)
             this.pendingRequests.delete(message.id)
+            logger.debug(`[MCP] Resolving request ${message.id}, hasError=${!!message.error}`)
 
             if (message.error) {
                 reject(new Error(message.error.message || JSON.stringify(message.error)))
             } else {
+                // 返回 result 字段
                 resolve(message.result)
             }
         } else if (message.method) {
             // Handle notifications or server requests
             this.handleNotification(message)
+        } else if (message.id) {
+            logger.warn(`[MCP] Received response for unknown request id: ${message.id}, pendingIds=[${pendingIds.join(', ')}]`)
         }
     }
 
@@ -315,7 +345,23 @@ export class McpClient {
             return await this.httpRequest(method, params, timeout)
         }
 
-        if (!this.process && !this.eventSource) {
+        // SSE 类型直接调用 sendSSERequest，它内部管理 pendingRequests
+        if (this.type === 'sse') {
+            if (!this.eventSource) {
+                throw new Error('SSE client not connected')
+            }
+            const id = crypto.randomUUID()
+            const request = {
+                jsonrpc: '2.0',
+                id,
+                method,
+                params
+            }
+            return await this.sendSSERequest(request, timeout)
+        }
+
+        // stdio/npm/npx 类型
+        if (!this.process) {
             throw new Error('Client not connected')
         }
 
@@ -348,30 +394,7 @@ export class McpClient {
 
             try {
                 const message = JSON.stringify(request) + '\n'
-                if ((this.type === 'stdio' || this.type === 'npm' || this.type === 'npx') && this.process) {
-                    this.process.stdin.write(message)
-                } else if (this.type === 'sse') {
-                    this.sendSSERequest(request).then(response => {
-                        if (response.id === id) {
-                            const pending = this.pendingRequests.get(id)
-                            if (pending) {
-                                this.pendingRequests.delete(id)
-                                if (response.error) {
-                                    pending.reject(new Error(response.error.message || 'SSE request failed'))
-                                } else {
-                                    pending.resolve(response.result)
-                                }
-                            }
-                        }
-                    }).catch(err => {
-                        const pending = this.pendingRequests.get(id)
-                        if (pending) {
-                            this.pendingRequests.delete(id)
-                            pending.reject(err)
-                        }
-                    })
-                    return 
-                }
+                this.process.stdin.write(message)
             } catch (err) {
                 this.pendingRequests.delete(id)
                 clearTimeout(timer)
@@ -381,26 +404,94 @@ export class McpClient {
     }
 
     /**
-     * 发送 SSE 类型的请求（通过 HTTP POST）
+     * 发送 SSE 类型的请求（通过 HTTP POST 到 message endpoint）
+     * MCP SSE 协议：POST 返回 202 Accepted，实际响应通过 SSE 流返回
+     * @param {Object} request - JSON-RPC 请求对象
+     * @param {number} timeout - 超时时间（毫秒）
+     * @returns {Promise<any>} 响应结果
      */
-    async sendSSERequest(request) {
-        const { headers = {} } = this.config
-        const response = await fetch(this.sseUrl, {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Accept': 'application/json, text/event-stream',
-                ...headers 
-            },
-            body: JSON.stringify(request)
+    async sendSSERequest(request, timeout = 30000) {
+        const { headers: configHeaders = {} } = this.config
+        
+        // 构建完整的消息端点 URL
+        let messageUrl
+        if (this.sseMessageEndpoint) {
+            messageUrl = this.sseMessageEndpoint.startsWith('http') 
+                ? this.sseMessageEndpoint 
+                : `${this.sseBaseUrl}${this.sseMessageEndpoint}`
+        } else {
+            messageUrl = this.sseUrl || this.config.url
+        }
+        
+        logger.debug(`[MCP] SSE POST to: ${messageUrl}, id: ${request.id}, method: ${request.method}`)
+        
+        // 先注册 pending request，再发送 POST（避免时序问题：SSE 响应可能在 POST 返回前到达）
+        const responsePromise = new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                if (this.pendingRequests.has(request.id)) {
+                    this.pendingRequests.delete(request.id)
+                    reject(new Error(`SSE response timeout for ${request.method}`))
+                }
+            }, timeout)
+            
+            this.pendingRequests.set(request.id, {
+                resolve: (result) => {
+                    clearTimeout(timer)
+                    resolve(result)
+                },
+                reject: (err) => {
+                    clearTimeout(timer)
+                    reject(err)
+                }
+            })
         })
         
+        // 发送 POST 请求
+        let response
+        try {
+            response = await fetch(messageUrl, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json, text/event-stream',
+                    ...configHeaders 
+                },
+                body: JSON.stringify(request)
+            })
+        } catch (fetchError) {
+            this.pendingRequests.delete(request.id)
+            throw new Error(`SSE POST failed: ${fetchError.message}`)
+        }
+        
         if (!response.ok) {
+            this.pendingRequests.delete(request.id)
             const text = await response.text().catch(() => '')
             throw new Error(`SSE request failed: ${response.status} ${response.statusText} ${text}`)
         }
         
-        return await response.json()
+        // 检查响应
+        const responseText = await response.text()
+        logger.debug(`[MCP] SSE POST response status: ${response.status}, body: ${responseText.substring(0, 100)}`)
+        
+        // 如果是 202 Accepted 或 "Accepted"，等待 SSE 流响应
+        if (response.status === 202 || responseText === 'Accepted' || responseText.trim() === '') {
+            logger.debug(`[MCP] Waiting for SSE stream response for id: ${request.id}`)
+            return await responsePromise
+        }
+        
+        // 尝试解析 JSON 响应（某些服务器可能直接返回结果）
+        try {
+            this.pendingRequests.delete(request.id)
+            const jsonResponse = JSON.parse(responseText)
+            if (jsonResponse.error) {
+                throw new Error(jsonResponse.error.message || JSON.stringify(jsonResponse.error))
+            }
+            return jsonResponse.result !== undefined ? jsonResponse.result : jsonResponse
+        } catch (e) {
+            // 如果不是 JSON，等待 SSE 响应
+            logger.debug(`[MCP] Response not JSON, waiting for SSE stream...`)
+            return await responsePromise
+        }
     }
 
     async httpRequest(method, params, timeout = 30000) {
@@ -408,6 +499,14 @@ export class McpClient {
         const timer = setTimeout(() => controller.abort(), timeout)
 
         try {
+            logger.debug(`[MCP] HTTP request: ${method} to ${this.httpUrl}`)
+            const requestBody = {
+                jsonrpc: '2.0',
+                id: crypto.randomUUID(),
+                method,
+                params
+            }
+            
             const response = await fetch(this.httpUrl, {
                 method: 'POST',
                 headers: {
@@ -415,12 +514,7 @@ export class McpClient {
                     'Accept': 'application/json, text/event-stream',
                     ...this.httpHeaders
                 },
-                body: JSON.stringify({
-                    jsonrpc: '2.0',
-                    id: crypto.randomUUID(),
-                    method,
-                    params
-                }),
+                body: JSON.stringify(requestBody),
                 signal: controller.signal
             })
 
@@ -431,7 +525,16 @@ export class McpClient {
                 throw new Error(`HTTP request failed: ${response.status} ${response.statusText} ${text}`)
             }
 
+            const contentType = response.headers.get('content-type') || ''
+            
+            // 处理 SSE 流式响应 (Streamable HTTP)
+            if (contentType.includes('text/event-stream')) {
+                return await this.parseSSEResponse(response)
+            }
+            
+            // 处理普通 JSON 响应
             const result = await response.json()
+            logger.debug(`[MCP] HTTP response for ${method}:`, JSON.stringify(result).substring(0, 200))
 
             if (result.error) {
                 throw new Error(result.error.message || JSON.stringify(result.error))
@@ -440,36 +543,85 @@ export class McpClient {
             return result.result
         } catch (error) {
             clearTimeout(timer)
+            logger.error(`[MCP] HTTP request failed for ${method}: ${error.message}`, error.stack)
             throw error
         }
     }
 
-    async initialize() {
-        const result = await this.request('initialize', {
-            protocolVersion: '2024-11-05',
-            capabilities: {
-                roots: { listChanged: false },
-                sampling: {}
-            },
-            clientInfo: {
-                name: 'yunzai-new-plugin',
-                version: '1.0.0'
+    /**
+     * 解析 SSE 流式响应 (Streamable HTTP MCP)
+     */
+    async parseSSEResponse(response) {
+        const text = await response.text()
+        logger.debug(`[MCP] SSE response text:`, text.substring(0, 500))
+        
+        // 解析 SSE 格式: "event: message\ndata: {...}\n\n"
+        const lines = text.split('\n')
+        let jsonData = null
+        
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim()
+            if (line.startsWith('data:')) {
+                const dataStr = line.substring(5).trim()
+                if (dataStr) {
+                    try {
+                        jsonData = JSON.parse(dataStr)
+                        // 如果找到有效的 JSON-RPC 响应，返回结果
+                        if (jsonData && (jsonData.result !== undefined || jsonData.error)) {
+                            break
+                        }
+                    } catch (e) {
+                        // 继续尝试下一行
+                    }
+                }
             }
-        })
-
-        this.initialized = true
-        this.serverCapabilities = result.capabilities || {}
-
-        // Send initialized notification
-        if (this.type === 'stdio' && this.process) {
-            this.process.stdin.write(JSON.stringify({
-                jsonrpc: '2.0',
-                method: 'notifications/initialized'
-            }) + '\n')
         }
+        
+        if (!jsonData) {
+            throw new Error('No valid JSON-RPC response found in SSE stream')
+        }
+        
+        if (jsonData.error) {
+            throw new Error(jsonData.error.message || JSON.stringify(jsonData.error))
+        }
+        
+        return jsonData.result
+    }
 
-        logger.debug('[MCP] Initialized with capabilities:', Object.keys(this.serverCapabilities || {}))
-        return result
+    async initialize() {
+        try {
+            const result = await this.request('initialize', {
+                protocolVersion: '2024-11-05',
+                capabilities: {
+                    roots: { listChanged: false },
+                    sampling: {}
+                },
+                clientInfo: {
+                    name: 'yunzai-new-plugin',
+                    version: '1.0.0'
+                }
+            })
+
+            this.initialized = true
+            this.serverCapabilities = result?.capabilities || {}
+
+            // Send initialized notification (only for stdio/npm/npx types with process)
+            if ((this.type === 'stdio' || this.type === 'npm' || this.type === 'npx') && this.process) {
+                this.process.stdin.write(JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'notifications/initialized'
+                }) + '\n')
+            }
+
+            logger.debug('[MCP] Initialized with capabilities:', Object.keys(this.serverCapabilities || {}))
+            return result
+        } catch (error) {
+            // 某些 MCP 服务器可能不支持 initialize，尝试继续
+            logger.warn(`[MCP] Initialize failed (may be unsupported): ${error.message}`)
+            this.initialized = true
+            this.serverCapabilities = {}
+            return {}
+        }
     }
 
     /**
@@ -477,8 +629,28 @@ export class McpClient {
      * @returns {Promise<Array<Object>>} 工具列表
      */
     async listTools() {
-        const result = await this.request('tools/list', {})
-        return result.tools || []
+        try {
+            const result = await this.request('tools/list', {})
+            logger.debug(`[MCP] listTools raw result:`, JSON.stringify(result).substring(0, 500))
+            
+            // 处理不同的响应格式
+            if (Array.isArray(result)) {
+                return result
+            }
+            if (result?.tools && Array.isArray(result.tools)) {
+                return result.tools
+            }
+            if (result === undefined || result === null) {
+                logger.warn(`[MCP] listTools returned empty result`)
+                return []
+            }
+            
+            logger.warn(`[MCP] Unexpected listTools response format:`, typeof result, result)
+            return []
+        } catch (error) {
+            logger.error(`[MCP] listTools failed: ${error.message}`)
+            return []
+        }
     }
 
     /**

@@ -42,6 +42,8 @@ export class McpManager {
         this.maxLogs = 1000
         /** @type {boolean} 是否已初始化 */
         this.initialized = false
+        /** @type {Promise|null} 初始化 Promise（用于防止并发初始化） */
+        this.initPromise = null
         /** @type {Object} 服务器配置 */
         this.serversConfig = { servers: {} }
     }
@@ -102,7 +104,26 @@ export class McpManager {
         }
     }
     async init() {
+        // 如果已初始化，直接返回
         if (this.initialized) return
+        
+        // 如果正在初始化，等待完成
+        if (this.initPromise) {
+            return await this.initPromise
+        }
+        
+        // 开始初始化，设置 Promise 锁
+        this.initPromise = this._doInit()
+        try {
+            await this.initPromise
+        } finally {
+            this.initPromise = null
+        }
+    }
+    
+    async _doInit() {
+        if (this.initialized) return
+        
         await this.initBuiltinServer()
         await this.initCustomToolsServer()
 
@@ -213,14 +234,39 @@ export class McpManager {
         logger.info(`[MCP] Loaded ${success}/${serverNames.length} external servers`)
     }
 
+    /**
+     * 规范化服务器配置
+     * 支持两种格式:
+     * 1. 扁平格式: { type: 'http', url: '...' }
+     * 2. transport嵌套格式: { transport: { type: 'http', url: '...' } }
+     */
+    normalizeServerConfig(serverConfig) {
+        if (!serverConfig) return serverConfig
+        
+        // 如果有 transport 嵌套，提取出来
+        if (serverConfig.transport && typeof serverConfig.transport === 'object') {
+            const { transport, ...rest } = serverConfig
+            return {
+                ...transport,
+                ...rest  // 保留其他顶层字段如 env, headers 等
+            }
+        }
+        
+        return serverConfig
+    }
+
     async connectServer(name, serverConfig) {
         try {
+            // 规范化配置格式
+            const normalizedConfig = this.normalizeServerConfig(serverConfig)
+            logger.debug(`[MCP] Connecting to ${name} with config:`, JSON.stringify(normalizedConfig))
+            
             if (name === 'builtin') {
                 await this.initBuiltinServer()
                 return { success: true, tools: this.servers.get('builtin')?.tools?.length || 0 }
             }
             
-            if (name === 'custom-tools' || serverConfig?.type === 'custom') {
+            if (name === 'custom-tools' || normalizedConfig?.type === 'custom') {
                 await builtinMcpServer.loadJsTools()
                 await this.initCustomToolsServer()
                 return { success: true, tools: this.servers.get('custom-tools')?.tools?.length || 0 }
@@ -231,11 +277,13 @@ export class McpManager {
                 await this.disconnectServer(name)
             }
 
-            const client = new McpClient(serverConfig)
+            const client = new McpClient(normalizedConfig)
             await client.connect()
+            logger.debug(`[MCP] Client connected for ${name}, fetching tools...`)
 
             // Fetch tools
             const tools = await client.listTools()
+            logger.debug(`[MCP] Fetched ${tools.length} tools from ${name}`)
 
             // Fetch resources if supported
             let resources = []
@@ -255,7 +303,7 @@ export class McpManager {
 
             this.servers.set(name, {
                 status: 'connected',
-                config: serverConfig,
+                config: normalizedConfig,
                 client,
                 tools,
                 resources,
@@ -290,10 +338,10 @@ export class McpManager {
             logger.info(`[MCP] Connected to server: ${name}, loaded ${tools.length} tools, ${resources.length} resources, ${prompts.length} prompts`)
             return { success: true, tools: tools.length, resources: resources.length, prompts: prompts.length }
         } catch (err) {
-            logger.error(`[MCP] Failed to connect to server ${name}:`, err)
+            logger.error(`[MCP] Failed to connect to server ${name}: ${err.message}`, err.stack)
             this.servers.set(name, {
                 status: 'error',
-                config: serverConfig,
+                config: this.normalizeServerConfig(serverConfig),
                 error: err.message,
                 lastAttempt: Date.now()
             })
