@@ -16,7 +16,7 @@ class SchedulerService {
         this.tasks = new Map()  // taskId -> { interval, lastRun, config }
         this.checkInterval = null
         this.scopeManager = null
-        this.lastMessageSeq = new Map()  // groupId -> lastProcessedSeq (避免重复总结)
+        this.executingTasks = new Set()  // 正在执行的任务ID，防止重复执行
     }
 
     /**
@@ -247,8 +247,13 @@ class SchedulerService {
         const now = Date.now()
         const dueTasks = []
         
-        // 收集所有到期的任务
+        // 收集所有到期的任务（排除正在执行的）
         for (const [taskId, task] of this.tasks) {
+            // 跳过正在执行的任务，防止重复执行
+            if (this.executingTasks.has(taskId)) {
+                chatLogger.debug(`[SchedulerService] 任务 ${taskId} 正在执行中，跳过`)
+                continue
+            }
             if (task.nextRun && task.nextRun <= now) {
                 dueTasks.push({ taskId, task })
             }
@@ -261,6 +266,15 @@ class SchedulerService {
         // 并发执行所有到期任务
         const results = await Promise.allSettled(
             dueTasks.map(async ({ taskId, task }) => {
+                // 双重检查：再次确认任务未在执行
+                if (this.executingTasks.has(taskId)) {
+                    chatLogger.debug(`[SchedulerService] 任务 ${taskId} 已在执行，跳过`)
+                    return { taskId, success: false, skipped: true }
+                }
+                
+                // 标记任务开始执行
+                this.executingTasks.add(taskId)
+                
                 try {
                     await this.executeTask(taskId, task)
                     
@@ -273,15 +287,19 @@ class SchedulerService {
                 } catch (error) {
                     chatLogger.error(`[SchedulerService] 任务执行失败: ${taskId}`, error)
                     return { taskId, success: false, error: error.message }
+                } finally {
+                    // 无论成功失败，都移除执行标记
+                    this.executingTasks.delete(taskId)
                 }
             })
         )
         
         // 统计执行结果
         const succeeded = results.filter(r => r.status === 'fulfilled' && r.value?.success).length
-        const failed = dueTasks.length - succeeded
-        if (failed > 0) {
-            chatLogger.warn(`[SchedulerService] 并发执行完成: 成功 ${succeeded}, 失败 ${failed}`)
+        const skipped = results.filter(r => r.status === 'fulfilled' && r.value?.skipped).length
+        const failed = dueTasks.length - succeeded - skipped
+        if (failed > 0 || skipped > 0) {
+            chatLogger.warn(`[SchedulerService] 并发执行完成: 成功 ${succeeded}, 跳过 ${skipped}, 失败 ${failed}`)
         }
     }
 
@@ -308,8 +326,8 @@ class SchedulerService {
             const messageCount = taskConfig.messageCount || 100
             const maxChars = config.get('features.groupSummary.maxChars') || 6000
             
-            // 获取上次处理的消息序号
-            const lastSeq = this.lastMessageSeq.get(groupId) || 0
+            // 获取上次处理的消息序号（从数据库持久化读取）
+            const lastSeq = databaseService.getKV(`summary_last_seq_${groupId}`, 0)
             
             // 使用与 Commands.js 相同的方式循环获取群聊历史
             let history = []
@@ -367,8 +385,8 @@ class SchedulerService {
                 return
             }
             
-            // 更新已处理的消息序号
-            this.lastMessageSeq.set(groupId, newLastSeq)
+            // 更新已处理的消息序号（持久化到数据库）
+            databaseService.setKV(`summary_last_seq_${groupId}`, newLastSeq)
             chatLogger.debug(`[SchedulerService] 群 ${groupId} 消息序号更新: ${lastSeq} -> ${newLastSeq}`)
             
             // 构建对话文本
@@ -596,17 +614,26 @@ ${dialogText}${truncatedNote}`
 
     /**
      * 更新群组的定时任务
+     * @param {string} groupId - 群ID
+     * @param {Object} settings - 群组设置
      */
     updateGroupTask(groupId, settings) {
         const taskId = `summary_push_${groupId}`
+        const globalSummaryPush = config.get('features.groupSummary.push') || {}
         
-        if (settings.summaryPushEnabled) {
+        // 判断是否启用：群组设置优先，否则使用全局设置
+        const enabled = settings.summaryPushEnabled !== undefined 
+            ? settings.summaryPushEnabled 
+            : globalSummaryPush.enabled
+        
+        if (enabled) {
+            // 合并配置：群组设置优先，全局设置作为回退
             this.registerSummaryPushTask(groupId, {
-                intervalType: settings.summaryPushIntervalType || 'day',
-                intervalValue: settings.summaryPushIntervalValue || 1,
-                pushHour: settings.summaryPushHour ?? 20,
-                summaryModel: settings.summaryModel,
-                messageCount: settings.summaryPushMessageCount || 100
+                intervalType: settings.summaryPushIntervalType || globalSummaryPush.intervalType || 'day',
+                intervalValue: settings.summaryPushIntervalValue || globalSummaryPush.intervalValue || 1,
+                pushHour: settings.summaryPushHour ?? globalSummaryPush.pushHour ?? 20,
+                summaryModel: settings.summaryModel || globalSummaryPush.model,
+                messageCount: settings.summaryPushMessageCount || globalSummaryPush.messageCount || 100
             })
         } else {
             // 移除任务
@@ -674,6 +701,7 @@ ${dialogText}${truncatedNote}`
             this.checkInterval = null
         }
         this.tasks.clear()
+        this.executingTasks.clear()
         this.initialized = false
         chatLogger.info('[SchedulerService] 调度服务已停止')
     }

@@ -1293,22 +1293,22 @@ export class ChatService {
         const conversationId = contextManager.getConversationId(userId, groupId)
         await historyManager.deleteConversation(conversationId)
         await contextManager.cleanContext(conversationId)
+        contextManager.clearSessionState(conversationId)
+        if (groupId) {
+            contextManager.clearGroupContextCache(String(groupId))
+        }
+        contextManager.clearQueue(conversationId)
         presetManager.markContextCleared(conversationId)
-        logger.debug(`[ChatService] 对话已清除: ${conversationId}`)
+        
+        logger.debug(`[ChatService] 对话已清除: ${conversationId}, 群ID: ${groupId || '无'}`)
     }
     isPureToolCallJson(text) {
         if (!text || typeof text !== 'string') return false
         
         const trimmed = text.trim()
-        
-        // 检测被截断或不完整的工具调用JSON（如 {"tool_calls": [{"id":... ）
-        // 这种情况下JSON.parse会失败，但仍然应该被过滤
         if (trimmed.startsWith('{"tool_calls"') || trimmed.startsWith('{ "tool_calls"')) {
-            // 检查是否只包含工具调用相关内容，没有其他有意义的文本
             const toolCallPattern = /^\{\s*"tool_calls"\s*:\s*\[/
             if (toolCallPattern.test(trimmed)) {
-                // 检查是否有非JSON的正常文本内容
-                // 如果整个文本都是JSON格式（即使不完整），则过滤
                 const hasNormalText = /[^\s\{\}\[\]"':,\d\w_-]/.test(trimmed.replace(/"[^"]*"/g, ''))
                 if (!hasNormalText) {
                     return true

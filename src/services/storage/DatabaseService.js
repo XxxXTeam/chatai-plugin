@@ -68,6 +68,12 @@ class DatabaseService {
             );
             CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id);
             CREATE INDEX IF NOT EXISTS idx_memories_timestamp ON memories(timestamp);
+
+            CREATE TABLE IF NOT EXISTS kv_store (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
         `)
     }
 
@@ -726,6 +732,70 @@ class DatabaseService {
             WHERE conversation_id LIKE ?
         `)
         stmt.run(`%${userId}%`)
+    }
+
+    /**
+     * 设置键值对
+     * @param {string} key 
+     * @param {any} value 
+     */
+    setKV(key, value) {
+        this.ensureInit()
+        const stmt = this.db.prepare(`
+            INSERT OR REPLACE INTO kv_store (key, value, updated_at)
+            VALUES (?, ?, ?)
+        `)
+        stmt.run(key, JSON.stringify(value), Date.now())
+    }
+
+    /**
+     * 获取键值对
+     * @param {string} key 
+     * @param {any} defaultValue 
+     * @returns {any}
+     */
+    getKV(key, defaultValue = null) {
+        this.ensureInit()
+        const stmt = this.db.prepare('SELECT value FROM kv_store WHERE key = ?')
+        const row = stmt.get(key)
+        if (row) {
+            try {
+                return JSON.parse(row.value)
+            } catch {
+                return row.value
+            }
+        }
+        return defaultValue
+    }
+
+    /**
+     * 删除键值对
+     * @param {string} key 
+     */
+    deleteKV(key) {
+        this.ensureInit()
+        const stmt = this.db.prepare('DELETE FROM kv_store WHERE key = ?')
+        stmt.run(key)
+    }
+
+    /**
+     * 获取以prefix开头的所有键值对
+     * @param {string} prefix 
+     * @returns {Object}
+     */
+    getKVByPrefix(prefix) {
+        this.ensureInit()
+        const stmt = this.db.prepare('SELECT key, value FROM kv_store WHERE key LIKE ?')
+        const rows = stmt.all(`${prefix}%`)
+        const result = {}
+        for (const row of rows) {
+            try {
+                result[row.key] = JSON.parse(row.value)
+            } catch {
+                result[row.key] = row.value
+            }
+        }
+        return result
     }
 }
 
