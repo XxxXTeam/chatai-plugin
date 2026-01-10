@@ -97,8 +97,9 @@ class ToolContext {
     }
 
     getBot(botId) {
-        if (this.bot) return this.bot
+        // 优先从 event.bot 获取（确保多Bot环境下获取正确的Bot实例）
         if (this.event?.bot) return this.event.bot
+        if (this.bot) return this.bot
         
         const framework = getBotFramework()
         if (framework === 'trss' && botId && Bot.bots?.get) {
@@ -118,7 +119,8 @@ class ToolContext {
     getAdapter() {
         if (this._adapterInfo) return this._adapterInfo
         
-        const bot = this.getBot()
+        // 优先从 event.bot 获取 Bot 对象（确保多Bot环境下检测正确的适配器）
+        const bot = this.event?.bot || this.bot || this.getBot()
         const botId = bot?.uin || bot?.self_id || 'default'
         
         // 检查缓存

@@ -192,7 +192,7 @@ export class Chat extends plugin {
         // 标记消息正在处理
         if (!startProcessingMessage(e)) return false
         markMessageProcessed(e)
-        
+        e.toICQQ = true
         // 处理聊天
         return this.processChat(triggerResult.msg, {
             persona: triggerResult.persona,

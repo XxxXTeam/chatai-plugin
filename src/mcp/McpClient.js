@@ -1,6 +1,9 @@
 import { spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import { EventSource } from 'eventsource'
+import { chatLogger } from '../core/utils/logger.js'
+
+const logger = chatLogger
 
 /**
  * MCP Client - Model Context Protocol 客户端实现
