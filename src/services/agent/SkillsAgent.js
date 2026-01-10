@@ -6,8 +6,6 @@ import { setBuiltinToolContext, getBuiltinToolContext } from '../../mcp/BuiltinM
 
 /**
  * SkillsAgent - 统一技能代理
- * 
- * 直接使用 McpManager 加载工具，不重复实现
  */
 export class SkillsAgent {
     constructor(options = {}) {
@@ -26,17 +24,11 @@ export class SkillsAgent {
 
     async init() {
         if (this.initialized) return this
-        
-        // 初始化 MCP（统一加载入口）
         await mcpManager.init()
         await toolFilterService.init()
-        
-        // 设置上下文
         if (this.event) {
             setBuiltinToolContext({ event: this.event, bot: this.bot })
         }
-        
-        // 从 McpManager 获取工具（不重复加载）
         this._loadFromMcpManager()
         
         this.initialized = true
@@ -72,9 +64,6 @@ export class SkillsAgent {
             this.categories.get(category).tools.push(tool.name)
         }
     }
-
-    // ========== 静态方法（兼容 toolAdapter） ==========
-    
     static async getAllTools(options = {}) {
         const agent = new SkillsAgent(options)
         await agent.init()

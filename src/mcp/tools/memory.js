@@ -23,7 +23,7 @@ export const memoryTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const { memoryManager } = await import('../../services/MemoryManager.js')
+                const { memoryManager } = await import('../../services/storage/MemoryManager.js')
                 await memoryManager.init()
                 
                 const e = ctx.getEvent()
@@ -66,7 +66,7 @@ export const memoryTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const { memoryManager } = await import('../../services/MemoryManager.js')
+                const { memoryManager } = await import('../../services/storage/MemoryManager.js')
                 await memoryManager.init()
                 
                 const e = ctx.getEvent()
@@ -120,7 +120,7 @@ export const memoryTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const { memoryManager } = await import('../../services/MemoryManager.js')
+                const { memoryManager } = await import('../../services/storage/MemoryManager.js')
                 await memoryManager.init()
                 
                 const e = ctx.getEvent()
@@ -163,7 +163,7 @@ export const memoryTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const { memoryManager } = await import('../../services/MemoryManager.js')
+                const { memoryManager } = await import('../../services/storage/MemoryManager.js')
                 await memoryManager.init()
                 
                 const e = ctx.getEvent()
