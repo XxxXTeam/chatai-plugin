@@ -123,7 +123,7 @@ export class bym extends plugin {
             logger.debug('[BYM] 跳过: 消息包含图片且未启用图片处理')
             return false
         }
-        
+        e.toICQQ = true
         // 继承群组的关键词配置（不使用独立的bym.nicknames）
         const globalKeywords = triggerCfg.keywords || []
         const allKeywords = [...new Set(globalKeywords)].filter(n => n && n.trim())

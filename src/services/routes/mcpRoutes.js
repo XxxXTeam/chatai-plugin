@@ -2,7 +2,6 @@
  * MCP路由模块 - MCP服务器管理
  */
 import express from 'express'
-import config from '../../../config/config.js'
 import { ChaiteResponse } from './shared.js'
 import { mcpManager } from '../../mcp/McpManager.js'
 
@@ -30,42 +29,66 @@ router.get('/servers/:name', async (req, res) => {
     }
 })
 
+// POST /servers - 创建MCP服务器（支持所有类型）
 router.post('/servers', async (req, res) => {
     try {
-        const { name, command, args, env } = req.body
-        if (!name || !command) {
-            return res.status(400).json(ChaiteResponse.fail(null, 'name and command are required'))
+        const { name, config } = req.body
+        if (!name) {
+            return res.status(400).json(ChaiteResponse.fail(null, 'name is required'))
         }
         
-        const mcpServers = config.get('mcpServers') || {}
-        if (mcpServers[name]) {
-            return res.status(409).json(ChaiteResponse.fail(null, 'Server already exists'))
+        // 验证配置
+        const serverConfig = config || {}
+        const type = (serverConfig.type || 'stdio').toLowerCase()
+        
+        // 根据类型验证必需字段
+        if (type === 'stdio') {
+            if (!serverConfig.command) {
+                return res.status(400).json(ChaiteResponse.fail(null, 'command is required for stdio type'))
+            }
+        } else if (type === 'npm' || type === 'npx') {
+            if (!serverConfig.package) {
+                return res.status(400).json(ChaiteResponse.fail(null, 'package is required for npm/npx type'))
+            }
+        } else if (type === 'sse' || type === 'http') {
+            if (!serverConfig.url) {
+                return res.status(400).json(ChaiteResponse.fail(null, 'url is required for sse/http type'))
+            }
+        } else {
+            return res.status(400).json(ChaiteResponse.fail(null, `Unsupported server type: ${type}`))
         }
         
-        mcpServers[name] = { command, args: args || [], env: env || {} }
-        config.set('mcpServers', mcpServers)
+        // 使用 McpManager 添加服务器
+        await mcpManager.init()
+        const result = await mcpManager.addServer(name, serverConfig)
         
-        res.status(201).json(ChaiteResponse.ok({ success: true }))
+        res.status(201).json(ChaiteResponse.ok(result))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
 
-// PUT /servers/:name - 更新MCP服务器
+// PUT /servers/:name - 更新MCP服务器配置
 router.put('/servers/:name', async (req, res) => {
     try {
-        const mcpServers = config.get('mcpServers') || {}
-        if (!mcpServers[req.params.name]) {
+        await mcpManager.init()
+        const server = mcpManager.getServer(req.params.name)
+        if (!server) {
             return res.status(404).json(ChaiteResponse.fail(null, 'Server not found'))
         }
         
-        const { command, args, env } = req.body
-        if (command) mcpServers[req.params.name].command = command
-        if (args) mcpServers[req.params.name].args = args
-        if (env) mcpServers[req.params.name].env = env
+        if (server.isBuiltin) {
+            return res.status(400).json(ChaiteResponse.fail(null, 'Cannot update builtin server'))
+        }
         
-        config.set('mcpServers', mcpServers)
-        res.json(ChaiteResponse.ok({ success: true }))
+        const { config: newConfig } = req.body
+        if (!newConfig || typeof newConfig !== 'object') {
+            return res.status(400).json(ChaiteResponse.fail(null, 'config object is required'))
+        }
+        
+        // 使用 McpManager 更新服务器
+        const result = await mcpManager.updateServer(req.params.name, newConfig)
+        res.json(ChaiteResponse.ok(result))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
@@ -74,14 +97,18 @@ router.put('/servers/:name', async (req, res) => {
 // DELETE /servers/:name - 删除MCP服务器
 router.delete('/servers/:name', async (req, res) => {
     try {
-        const mcpServers = config.get('mcpServers') || {}
-        if (!mcpServers[req.params.name]) {
+        await mcpManager.init()
+        const server = mcpManager.getServer(req.params.name)
+        if (!server) {
             return res.status(404).json(ChaiteResponse.fail(null, 'Server not found'))
         }
         
-        delete mcpServers[req.params.name]
-        config.set('mcpServers', mcpServers)
+        if (server.isBuiltin) {
+            return res.status(400).json(ChaiteResponse.fail(null, 'Cannot delete builtin server'))
+        }
         
+        // 使用 McpManager 删除服务器
+        await mcpManager.removeServer(req.params.name)
         res.json(ChaiteResponse.ok({ success: true }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -103,26 +130,60 @@ router.post('/servers/:name/reconnect', async (req, res) => {
 router.get('/servers/:name/tools', async (req, res) => {
     try {
         await mcpManager.init()
-        const tools = await mcpManager.getServerTools(req.params.name)
-        res.json(ChaiteResponse.ok(tools))
+        const server = mcpManager.getServer(req.params.name)
+        if (!server) {
+            return res.status(404).json(ChaiteResponse.fail(null, 'Server not found'))
+        }
+        res.json(ChaiteResponse.ok(server.tools || []))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
 
-// POST /import - 导入MCP配置
+// POST /import - 导入MCP配置（支持所有服务器类型）
 router.post('/import', async (req, res) => {
     try {
         const { mcpServers } = req.body
         if (!mcpServers || typeof mcpServers !== 'object') {
-            return res.status(400).json(ChaiteResponse.fail(null, 'Invalid config format'))
+            return res.status(400).json(ChaiteResponse.fail(null, 'Invalid config format, expected { mcpServers: { ... } }'))
         }
         
-        const existingServers = config.get('mcpServers') || {}
-        const mergedServers = { ...existingServers, ...mcpServers }
-        config.set('mcpServers', mergedServers)
+        await mcpManager.init()
         
-        res.json(ChaiteResponse.ok({ success: true, count: Object.keys(mcpServers).length }))
+        let success = 0
+        let failed = 0
+        const errors = []
+        
+        for (const [name, serverConfig] of Object.entries(mcpServers)) {
+            try {
+                // 转换配置格式（兼容 Claude Desktop 格式）
+                const config = { ...serverConfig }
+                
+                // 如果没有 type，根据配置推断
+                if (!config.type) {
+                    if (config.url) {
+                        config.type = 'sse'
+                    } else if (config.package) {
+                        config.type = 'npm'
+                    } else if (config.command) {
+                        config.type = 'stdio'
+                    }
+                }
+                
+                await mcpManager.addServer(name, config)
+                success++
+            } catch (error) {
+                failed++
+                errors.push({ name, error: error.message })
+            }
+        }
+        
+        res.json(ChaiteResponse.ok({ 
+            success, 
+            failed, 
+            total: Object.keys(mcpServers).length,
+            errors: errors.length > 0 ? errors : undefined
+        }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
@@ -132,7 +193,7 @@ router.post('/import', async (req, res) => {
 router.get('/resources', async (req, res) => {
     try {
         await mcpManager.init()
-        const resources = await mcpManager.listResources()
+        const resources = mcpManager.getResources()
         res.json(ChaiteResponse.ok(resources))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))

@@ -55,15 +55,29 @@ export class McpManager {
 
     /**
      * 加载 MCP 服务器配置
+     * 如果配置文件不存在，自动创建默认配置
      */
     loadServersConfig() {
         try {
-            if (fs.existsSync(MCP_SERVERS_FILE)) {
-                const content = fs.readFileSync(MCP_SERVERS_FILE, 'utf-8')
-                this.serversConfig = JSON.parse(content)
-                if (!this.serversConfig.servers) {
-                    this.serversConfig.servers = {}
-                }
+            // 确保目录存在
+            const dir = path.dirname(MCP_SERVERS_FILE)
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true })
+                logger.info('[MCP] 创建配置目录:', dir)
+            }
+            
+            // 如果文件不存在，创建默认配置
+            if (!fs.existsSync(MCP_SERVERS_FILE)) {
+                this.serversConfig = { servers: {} }
+                this.saveServersConfig()
+                logger.info('[MCP] 创建默认配置文件:', MCP_SERVERS_FILE)
+                return this.serversConfig
+            }
+            
+            const content = fs.readFileSync(MCP_SERVERS_FILE, 'utf-8')
+            this.serversConfig = JSON.parse(content)
+            if (!this.serversConfig.servers) {
+                this.serversConfig.servers = {}
             }
         } catch (error) {
             logger.error('[MCP] 加载服务器配置失败:', error.message)
