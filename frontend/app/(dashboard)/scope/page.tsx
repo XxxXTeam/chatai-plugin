@@ -708,7 +708,10 @@ export default function ScopeManagerPage() {
                 placeholder="为该用户设置专属的系统提示词...留空表示使用空人设（无系统提示词）"
                 rows={6}
               />
-              <p className="text-xs text-muted-foreground">提示：留空表示使用空人设（AI将不带任何系统提示词的回复）</p>
+              <p className="text-xs text-muted-foreground">
+                支持变量: {'{{user_name}}'} {'{{user_id}}'} {'{{group_name}}'} {'{{date}}'} {'{{time}}'} 等<br/>
+                支持表达式: {'${e.user_id}'} {'${e.group?.name}'} (e为event对象)
+              </p>
             </div>
             <div className="space-y-2">
               <Label>使用预设</Label>
@@ -760,7 +763,10 @@ export default function ScopeManagerPage() {
                 placeholder="为该群组设置专属的系统提示词...留空表示使用空人设"
                 rows={6}
               />
-              <p className="text-xs text-muted-foreground">提示：留空表示使用空人设（AI将不带任何系统提示词的回复）</p>
+              <p className="text-xs text-muted-foreground">
+                支持变量: {'{{user_name}}'} {'{{group_name}}'} {'{{date}}'} {'{{time}}'} 等<br/>
+                支持表达式: {'${e.user_id}'} {'${e.group?.name}'} (e为event对象)
+              </p>
             </div>
             <div className="space-y-2">
               <Label>使用预设</Label>
@@ -934,7 +940,9 @@ export default function ScopeManagerPage() {
                 placeholder="为该群内的特定用户设置专属的系统提示词...留空表示使用空人设"
                 rows={6}
               />
-              <p className="text-xs text-muted-foreground">提示：留空表示使用空人设（AI将不带任何系统提示词的回复）</p>
+              <p className="text-xs text-muted-foreground">
+                支持变量: {'{{user_name}}'} {'{{group_name}}'} {'{{date}}'} 等 | 表达式: {'${e.user_id}'} (e为event)
+              </p>
             </div>
             <div className="space-y-2">
               <Label>使用预设</Label>
@@ -986,7 +994,9 @@ export default function ScopeManagerPage() {
                 placeholder="为该用户在私聊场景设置专属的系统提示词...留空表示使用空人设"
                 rows={6}
               />
-              <p className="text-xs text-muted-foreground">提示：留空表示使用空人设（AI将不带任何系统提示词的回复）</p>
+              <p className="text-xs text-muted-foreground">
+                支持变量: {'{{user_name}}'} {'{{user_id}}'} {'{{date}}'} {'{{time}}'} 等 | 表达式: {'${e.user_id}'} (e为event)
+              </p>
             </div>
             <div className="space-y-2">
               <Label>使用预设</Label>

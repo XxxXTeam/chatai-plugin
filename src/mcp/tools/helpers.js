@@ -2120,18 +2120,42 @@ export const qqWebApi = {
     },
 
     /**
+     * 通用请求方法（带debug）
+     */
+    async _request(name, url, options = {}) {
+        logger.debug(`[qqWebApi] ${name} 请求: ${url}`)
+        if (options.body) {
+            logger.debug(`[qqWebApi] ${name} body:`, typeof options.body === 'string' ? options.body : JSON.stringify(options.body))
+        }
+        try {
+            const response = await fetch(url, options)
+            const text = await response.text()
+            logger.debug(`[qqWebApi] ${name} 响应状态: ${response.status}`)
+            logger.debug(`[qqWebApi] ${name} 响应内容: ${text.substring(0, 500)}${text.length > 500 ? '...' : ''}`)
+            try {
+                return JSON.parse(text)
+            } catch {
+                return { _raw: text, _parseError: true }
+            }
+        } catch (err) {
+            logger.error(`[qqWebApi] ${name} 请求失败:`, err.message)
+            throw err
+        }
+    },
+
+    /**
      * 获取群星级
      */
     async getGroupLevel(bot, groupId) {
         const url = `https://qqweb.qq.com/c/activedata/get_credit_level_info?bkn=${bot.bkn}&uin=${bot.uin}&gc=${groupId}`
-        const response = await fetch(url, {
+        logger.debug(`[qqWebApi] getGroupLevel cookies: ${bot.cookies?.['qqweb.qq.com'] ? '有' : '无'} qqweb, ${bot.cookies?.['qun.qq.com'] ? '有' : '无'} qun`)
+        return await this._request('getGroupLevel', url, {
             headers: {
                 'Cookie': bot.cookies?.['qqweb.qq.com'] || bot.cookies?.['qun.qq.com'] || '',
                 'Referer': `https://qqweb.qq.com/m/business/qunlevel/index.html?gc=${groupId}&from=0&_wv=1027`,
                 'User-agent': 'Mozilla/5.0 (Linux; Android 12; M2012K11AC Build/SKQ1.220303.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/89.0.4389.72 MQQBrowser/6.2 TBS/046141 Mobile Safari/537.36'
             }
         })
-        return await response.json()
     },
 
     /**
@@ -2139,16 +2163,23 @@ export const qqWebApi = {
      */
     async getDragonKing(bot, groupId) {
         const url = `https://qun.qq.com/interactive/honorlist?gc=${groupId}&type=1&_wv=3&_wwv=129`
+        logger.debug(`[qqWebApi] getDragonKing cookies: ${bot.cookies?.['qun.qq.com'] ? '有' : '无'}`)
         const response = await fetch(url, {
             headers: { Cookie: bot.cookies?.['qun.qq.com'] || '' }
         })
         const html = await response.text()
+        logger.debug(`[qqWebApi] getDragonKing 响应长度: ${html.length}`)
         const match = html.match(/<script>window\.__INITIAL_STATE__=(.*?)<\/script>/)
-        if (!match) return null
+        if (!match) {
+            logger.debug(`[qqWebApi] getDragonKing 未找到 __INITIAL_STATE__`)
+            return null
+        }
         try {
             const data = JSON.parse(match[1])
+            logger.debug(`[qqWebApi] getDragonKing 解析成功:`, JSON.stringify(data?.currentTalkative || null))
             return data?.currentTalkative || null
-        } catch {
+        } catch (e) {
+            logger.debug(`[qqWebApi] getDragonKing JSON解析失败:`, e.message)
             return null
         }
     },
@@ -2162,7 +2193,8 @@ export const qqWebApi = {
         const today = new Date()
         const dayYmd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`
         
-        const response = await fetch(`${url}?g_tk=${gtk}`, {
+        logger.debug(`[qqWebApi] getSignInToday gtk=${gtk}, dayYmd=${dayYmd}`)
+        return await this._request('getSignInToday', `${url}?g_tk=${gtk}`, {
             method: 'POST',
             headers: this.getHeaders(bot),
             body: JSON.stringify({
@@ -2173,7 +2205,6 @@ export const qqWebApi = {
                 groupId: String(groupId)
             })
         })
-        return await response.json()
     },
 
     /**
@@ -2190,10 +2221,10 @@ export const qqWebApi = {
             time: weekly ? 1 : 0
         })
         
-        const response = await fetch(`${url}?${params}`, {
+        logger.debug(`[qqWebApi] getSpeakRank bkn=${bot.bkn}, weekly=${weekly}`)
+        return await this._request('getSpeakRank', `${url}?${params}`, {
             headers: this.getHeaders(bot)
         })
-        return await response.json()
     },
 
     /**
@@ -2208,10 +2239,10 @@ export const qqWebApi = {
             bkn: bot.bkn
         })
         
-        const response = await fetch(`${url}?${params}`, {
+        logger.debug(`[qqWebApi] getGroupData bkn=${bot.bkn}, weekly=${weekly}`)
+        return await this._request('getGroupData', `${url}?${params}`, {
             headers: this.getHeaders(bot)
         })
-        return await response.json()
     },
 
     /**
@@ -2219,7 +2250,8 @@ export const qqWebApi = {
      */
     async getLuckyList(bot, groupId, start = 0, limit = 20) {
         const url = 'https://qun.qq.com/v2/luckyword/proxy/domain/qun.qq.com/cgi-bin/group_lucky_word/word_list'
-        const response = await fetch(`${url}?bkn=${bot.bkn}`, {
+        logger.debug(`[qqWebApi] getLuckyList bkn=${bot.bkn}`)
+        return await this._request('getLuckyList', `${url}?bkn=${bot.bkn}`, {
             method: 'POST',
             headers: this.getHeaders(bot),
             body: JSON.stringify({
@@ -2229,7 +2261,6 @@ export const qqWebApi = {
                 need_equip_info: true
             })
         })
-        return await response.json()
     },
 
     /**
@@ -2237,14 +2268,14 @@ export const qqWebApi = {
      */
     async drawLucky(bot, groupId) {
         const url = 'https://qun.qq.com/v2/luckyword/proxy/domain/qun.qq.com/cgi-bin/group_lucky_word/draw_lottery'
-        const response = await fetch(`${url}?bkn=${bot.bkn}`, {
+        logger.debug(`[qqWebApi] drawLucky bkn=${bot.bkn}`)
+        return await this._request('drawLucky', `${url}?bkn=${bot.bkn}`, {
             method: 'POST',
             headers: this.getHeaders(bot),
             body: JSON.stringify({
                 group_code: String(groupId)
             })
         })
-        return await response.json()
     },
 
     /**
@@ -2252,7 +2283,8 @@ export const qqWebApi = {
      */
     async equipLucky(bot, groupId, wordId) {
         const url = 'https://qun.qq.com/v2/luckyword/proxy/domain/qun.qq.com/cgi-bin/group_lucky_word/equip'
-        const response = await fetch(`${url}?bkn=${bot.bkn}`, {
+        logger.debug(`[qqWebApi] equipLucky bkn=${bot.bkn}, wordId=${wordId}`)
+        return await this._request('equipLucky', `${url}?bkn=${bot.bkn}`, {
             method: 'POST',
             headers: this.getHeaders(bot),
             body: JSON.stringify({
@@ -2260,7 +2292,6 @@ export const qqWebApi = {
                 word_id: String(wordId)
             })
         })
-        return await response.json()
     },
 
     /**
@@ -2269,7 +2300,8 @@ export const qqWebApi = {
      */
     async switchLucky(bot, groupId, enable) {
         const url = 'https://qun.qq.com/v2/luckyword/proxy/domain/qun.qq.com/cgi-bin/group_lucky_word/setting'
-        const response = await fetch(`${url}?bkn=${bot.bkn}`, {
+        logger.debug(`[qqWebApi] switchLucky bkn=${bot.bkn}, enable=${enable}`)
+        return await this._request('switchLucky', `${url}?bkn=${bot.bkn}`, {
             method: 'POST',
             headers: this.getHeaders(bot),
             body: JSON.stringify({
@@ -2277,6 +2309,5 @@ export const qqWebApi = {
                 cmd: enable ? 1 : 2
             })
         })
-        return await response.json()
     }
 }
