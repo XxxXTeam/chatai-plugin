@@ -2,7 +2,7 @@
  * MCP 工具辅助函数
  */
 
-import { createLogger } from '../../utils/logger.js'
+import { createLogger } from '../../core/utils/logger.js'
 const logger = createLogger('mcp-helpers')
 
 /**
