@@ -423,7 +423,10 @@ export class McpClient {
             messageUrl = this.sseUrl || this.config.url
         }
         
-        logger.debug(`[MCP] SSE POST to: ${messageUrl}, id: ${request.id}, method: ${request.method}`)
+        // 对 ping 方法不输出 debug 日志（心跳每30秒调用一次，避免日志过多）
+        if (request.method !== 'ping') {
+            logger.debug(`[MCP] SSE POST to: ${messageUrl}, id: ${request.id}, method: ${request.method}`)
+        }
         
         // 先注册 pending request，再发送 POST（避免时序问题：SSE 响应可能在 POST 返回前到达）
         const responsePromise = new Promise((resolve, reject) => {
@@ -471,11 +474,15 @@ export class McpClient {
         
         // 检查响应
         const responseText = await response.text()
-        logger.debug(`[MCP] SSE POST response status: ${response.status}, body: ${responseText.substring(0, 100)}`)
+        if (request.method !== 'ping') {
+            logger.debug(`[MCP] SSE POST response status: ${response.status}, body: ${responseText.substring(0, 100)}`)
+        }
         
         // 如果是 202 Accepted 或 "Accepted"，等待 SSE 流响应
         if (response.status === 202 || responseText === 'Accepted' || responseText.trim() === '') {
-            logger.debug(`[MCP] Waiting for SSE stream response for id: ${request.id}`)
+            if (request.method !== 'ping') {
+                logger.debug(`[MCP] Waiting for SSE stream response for id: ${request.id}`)
+            }
             return await responsePromise
         }
         
