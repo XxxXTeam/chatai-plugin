@@ -525,5 +525,194 @@ export const groupStatsTools = [
                 return { success: false, error: `获取最近入群成员失败: ${err.message}` }
             }
         }
+    },
+
+    {
+        name: 'get_group_honor',
+        description: '获取群荣誉信息，包括龙王、群聊之火、群聊炽焰、冒尖小春笋、快乐源泉等荣誉称号及获得者。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' },
+                type: { 
+                    type: 'string', 
+                    description: '荣誉类型：talkative(龙王)、performer(群聊之火)、legend(群聊炽焰)、strong_newbie(冒尖小春笋)、emotion(快乐源泉)、all(全部)',
+                    enum: ['talkative', 'performer', 'legend', 'strong_newbie', 'emotion', 'all']
+                }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = requireGroupId(args, ctx)
+                const honorType = args.type || 'all'
+                
+                if (!bot.getGroupHonorInfo) {
+                    return { success: false, error: '当前协议不支持获取群荣誉' }
+                }
+                
+                const honor = await bot.getGroupHonorInfo(groupId, honorType)
+                
+                return {
+                    success: true,
+                    group_id: groupId,
+                    type: honorType,
+                    honor: honor,
+                    _tip: 'talkative是龙王(发言最多)，performer是群聊之火(活跃度高)，legend是群聊炽焰(长期活跃)，strong_newbie是冒尖小春笋(活跃新人)，emotion是快乐源泉(表情包达人)'
+                }
+            } catch (err) {
+                return { success: false, error: `获取群荣誉失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_group_stat',
+        description: '获取群成员统计信息，包括成员总数、群主数、管理员数、普通成员数，以及性别分布统计。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = requireGroupId(args, ctx)
+                
+                const groupInfo = bot.gl?.get(groupId)
+                if (!groupInfo) {
+                    return { success: false, error: '机器人不在此群内' }
+                }
+                
+                const memberList = await getGroupMemberList({ bot, groupId })
+                
+                if (!memberList || memberList.length === 0) {
+                    return { success: false, error: '无法获取群成员列表' }
+                }
+                
+                const stats = {
+                    total: memberList.length,
+                    owner: 0,
+                    admin: 0,
+                    member: 0,
+                    male: 0,
+                    female: 0,
+                    unknown_sex: 0
+                }
+                
+                for (const m of memberList) {
+                    if (m.role === 'owner') stats.owner++
+                    else if (m.role === 'admin') stats.admin++
+                    else stats.member++
+                    
+                    if (m.sex === 'male') stats.male++
+                    else if (m.sex === 'female') stats.female++
+                    else stats.unknown_sex++
+                }
+                
+                return {
+                    success: true,
+                    group_id: groupId,
+                    group_name: groupInfo.group_name,
+                    max_member_count: groupInfo.max_member_count,
+                    stats,
+                    _tip: 'owner是群主(只有1个)，admin是管理员，member是普通成员。male/female/unknown_sex是性别统计'
+                }
+            } catch (err) {
+                return { success: false, error: `获取统计失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_random_group_member',
+        description: '随机抽取群成员，可用于随机点名、抽奖、随机@等场景。支持过滤条件如排除机器人、排除管理员、按角色筛选等。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' },
+                count: { type: 'number', description: '抽取数量，默认1，最多50' },
+                exclude_bot: { type: 'boolean', description: '是否排除机器人自己，默认true' },
+                exclude_admin: { type: 'boolean', description: '是否排除管理员和群主，默认false' },
+                role_filter: { 
+                    type: 'string', 
+                    description: '角色过滤：all(所有人)、member(仅普通成员)、admin(仅管理员)、owner(仅群主)',
+                    enum: ['all', 'member', 'admin', 'owner']
+                }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = requireGroupId(args, ctx)
+                const count = Math.min(Math.max(args.count || 1, 1), 50)
+                const excludeBot = args.exclude_bot !== false
+                const excludeAdmin = args.exclude_admin === true
+                const roleFilter = args.role_filter || 'all'
+                
+                const groupInfo = bot.gl?.get(groupId)
+                if (!groupInfo) {
+                    return { success: false, error: '机器人不在此群内' }
+                }
+                
+                const memberList = await getGroupMemberList({ bot, groupId })
+                
+                if (!memberList || memberList.length === 0) {
+                    return { success: false, error: '群成员列表为空' }
+                }
+                
+                // 过滤成员
+                let filteredList = memberList.filter(m => {
+                    const userId = m.user_id || m.uid
+                    const role = m.role || 'member'
+                    if (excludeBot && userId === bot.uin) return false
+                    if (excludeAdmin && (role === 'admin' || role === 'owner')) return false
+                    if (roleFilter === 'member' && role !== 'member') return false
+                    if (roleFilter === 'admin' && role !== 'admin') return false
+                    if (roleFilter === 'owner' && role !== 'owner') return false
+                    return true
+                })
+                
+                if (filteredList.length === 0) {
+                    return { success: false, error: '没有符合条件的群成员' }
+                }
+                
+                // 随机抽取
+                const selected = []
+                const usedIndices = new Set()
+                const actualCount = Math.min(count, filteredList.length)
+                
+                while (selected.length < actualCount) {
+                    const randomIndex = Math.floor(Math.random() * filteredList.length)
+                    if (!usedIndices.has(randomIndex)) {
+                        usedIndices.add(randomIndex)
+                        const m = filteredList[randomIndex]
+                        selected.push({
+                            user_id: m.user_id || m.uid,
+                            nickname: m.nickname || m.nick || '',
+                            card: m.card || '',
+                            role: m.role || 'member',
+                            title: m.title || '',
+                            display_name: m.card || m.nickname || m.nick || `用户${m.user_id || m.uid}`,
+                            avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${m.user_id || m.uid}&s=100`
+                        })
+                    }
+                }
+                
+                return {
+                    success: true,
+                    group_id: groupId,
+                    group_name: groupInfo.group_name,
+                    total_members: memberList.length,
+                    filtered_count: filteredList.length,
+                    selected_count: selected.length,
+                    members: selected,
+                    _tip: 'display_name是优先显示群名片(card)，没有则显示昵称。可用user_id来@被抽中的成员'
+                }
+            } catch (err) {
+                return { success: false, error: `随机抽取失败: ${err.message}` }
+            }
+        }
     }
 ]
