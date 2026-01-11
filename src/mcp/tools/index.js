@@ -8,6 +8,7 @@ import { userTools } from './user.js'
 import { groupTools } from './group.js'
 import { messageTools, forwardDataTools } from './message.js'
 import { adminTools } from './admin.js'
+import { groupStatsTools } from './groupStats.js'
 import { fileTools } from './file.js'
 import { webTools } from './web.js'
 import { memoryTools } from './memory.js'
@@ -54,6 +55,12 @@ export const toolCategories = {
         description: '禁言、踢人、设置群名片等管理功能',
         icon: 'Shield',
         tools: adminTools
+    },
+    groupStats: {
+        name: '群统计',
+        description: '群星级、龙王、发言榜、幸运字符、不活跃成员等',
+        icon: 'BarChart',
+        tools: groupStatsTools
     },
     file: {
         name: '文件操作',

@@ -1,0 +1,529 @@
+/**
+ * 群统计与管理工具
+ * 幸运字符、龙王、群星级、打卡、发言榜等功能
+ * 参考 yenai-plugin 实现
+ */
+
+import { qqWebApi, getGroupMemberList } from './helpers.js'
+
+function requireGroupId(args, ctx) {
+    const gid = args.group_id || ctx.getEvent?.()?.group_id || ctx.getEvent?.()?.group?.group_id
+    if (!gid) throw new Error('缺少群号 group_id')
+    return parseInt(gid)
+}
+
+export const groupStatsTools = [
+    {
+        name: 'get_group_level',
+        description: '获取QQ群星级信息，包括群等级、活跃人数、群排名等。群星级是QQ官方对群活跃度的评估指标。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = requireGroupId(args, ctx)
+                
+                if (!bot.cookies?.['qun.qq.com'] && !bot.cookies?.['qqweb.qq.com']) {
+                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
+                }
+                
+                const result = await qqWebApi.getGroupLevel(bot, groupId)
+                
+                if (result?.ec === 0 || result?.retcode === 0) {
+                    return {
+                        success: true,
+                        group_id: groupId,
+                        level: result.lv || result.level,
+                        level_name: result.lvName || result.level_name,
+                        credit: result.credit,
+                        active_member_count: result.activeNum,
+                        total_member_count: result.memberNum,
+                        rank: result.rank,
+                        _tip: '群星级从LV1到LV5，等级越高表示群越活跃'
+                    }
+                }
+                
+                return { success: false, error: result?.em || result?.msg || '获取群星级失败' }
+            } catch (err) {
+                return { success: false, error: `获取群星级失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_dragon_king',
+        description: '获取群龙王信息。龙王是QQ群中当日发言最多的成员，每天0点更新。返回当前龙王的QQ号、昵称和连续天数。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = requireGroupId(args, ctx)
+                
+                if (!bot.cookies?.['qun.qq.com']) {
+                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
+                }
+                
+                const result = await qqWebApi.getDragonKing(bot, groupId)
+                
+                if (result) {
+                    return {
+                        success: true,
+                        group_id: groupId,
+                        has_dragon_king: true,
+                        dragon_king: {
+                            user_id: result.uin || result.user_id,
+                            nickname: result.nick || result.nickname,
+                            avatar: result.avatar,
+                            consecutive_days: result.day_count || result.dayCount
+                        },
+                        _tip: '龙王是当日群内发言最多的成员，consecutive_days表示连续蝉联天数'
+                    }
+                }
+                
+                return { 
+                    success: true, 
+                    group_id: groupId, 
+                    has_dragon_king: false,
+                    dragon_king: null, 
+                    _tip: '该群当前没有龙王，可能是今日还没有人发言或群未开启此功能' 
+                }
+            } catch (err) {
+                return { success: false, error: `获取龙王失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_sign_in_today',
+        description: '获取今日群打卡列表。群打卡是QQ群的签到功能，成员可以每天打卡一次。返回今日已打卡的成员列表。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = requireGroupId(args, ctx)
+                
+                if (!bot.cookies?.['qun.qq.com']) {
+                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
+                }
+                
+                const result = await qqWebApi.getSignInToday(bot, groupId)
+                
+                if (result?.retcode === 0 || result?.data) {
+                    const data = result.data || result
+                    const list = data.signedList || data.list || []
+                    return {
+                        success: true,
+                        group_id: groupId,
+                        signed_count: list.length,
+                        signed_members: list.map(m => ({
+                            user_id: m.uin || m.user_id,
+                            nickname: m.nick || m.nickname,
+                            sign_time: m.signTime || m.sign_time
+                        })),
+                        _tip: 'sign_time是打卡时间戳(秒)，signed_count是今日打卡人数'
+                    }
+                }
+                
+                return { success: false, error: result?.msg || '获取打卡列表失败' }
+            } catch (err) {
+                return { success: false, error: `获取打卡列表失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_speak_rank',
+        description: '获取群发言排行榜。统计群成员的发言消息数量并排名。可选择查看昨日榜单或近7天榜单。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' },
+                weekly: { type: 'boolean', description: 'true查看近7天榜单，false查看昨日榜单，默认false' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = requireGroupId(args, ctx)
+                const weekly = args.weekly || false
+                
+                if (!bot.cookies?.['qun.qq.com']) {
+                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
+                }
+                
+                const result = await qqWebApi.getSpeakRank(bot, groupId, weekly)
+                
+                if (result?.ec === 0 || result?.retcode === 0) {
+                    const list = result.list || result.data?.list || []
+                    return {
+                        success: true,
+                        group_id: groupId,
+                        time_range: weekly ? '近7天' : '昨日',
+                        total_ranked: list.length,
+                        rank_list: list.map((m, i) => ({
+                            rank: i + 1,
+                            user_id: m.uin || m.user_id,
+                            nickname: m.nick || m.nickname,
+                            message_count: m.msg_count || m.msgCount || m.count
+                        })),
+                        _tip: 'rank从1开始，message_count是该时间段内的发言条数'
+                    }
+                }
+                
+                return { success: false, error: result?.em || result?.msg || '获取发言榜单失败' }
+            } catch (err) {
+                return { success: false, error: `获取发言榜单失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_group_data',
+        description: '获取群活跃数据统计，包括消息总数、活跃成员数、新增成员数、退群人数等。可查看昨日或近7天的数据。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' },
+                weekly: { type: 'boolean', description: 'true查看近7天数据，false查看昨日数据，默认false' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = requireGroupId(args, ctx)
+                const weekly = args.weekly || false
+                
+                if (!bot.cookies?.['qun.qq.com']) {
+                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
+                }
+                
+                const result = await qqWebApi.getGroupData(bot, groupId, weekly)
+                
+                if (result?.ec === 0 || result?.retcode === 0) {
+                    const data = result.data || result
+                    return {
+                        success: true,
+                        group_id: groupId,
+                        time_range: weekly ? '近7天' : '昨日',
+                        message_count: data.msgCount || data.msg_count,
+                        active_member_count: data.activeNum || data.active_num,
+                        new_member_count: data.joinNum || data.join_num,
+                        exit_member_count: data.exitNum || data.exit_num,
+                        _tip: 'message_count是消息总数，active_member_count是发过言的成员数，new/exit是入群/退群人数'
+                    }
+                }
+                
+                return { success: false, error: result?.em || result?.msg || '获取群数据失败' }
+            } catch (err) {
+                return { success: false, error: `获取群数据失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_lucky_list',
+        description: '获取群幸运字符列表。幸运字符是QQ群的趣味功能，成员可以抽取并装备字符显示在群名片旁。返回已拥有的字符和当前装备的字符。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' },
+                limit: { type: 'number', description: '获取数量，默认20' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = requireGroupId(args, ctx)
+                const limit = args.limit || 20
+                
+                if (!bot.cookies?.['qun.qq.com']) {
+                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
+                }
+                
+                const result = await qqWebApi.getLuckyList(bot, groupId, 0, limit)
+                
+                if (result?.retcode === 0 || result?.word_list) {
+                    const list = result.word_list || result.data?.word_list || []
+                    const equipped = result.equip_info || result.data?.equip_info
+                    return {
+                        success: true,
+                        group_id: groupId,
+                        total_owned: list.length,
+                        currently_equipped: equipped ? {
+                            word_id: equipped.word_id,
+                            word: equipped.word,
+                            word_type: equipped.word_type
+                        } : null,
+                        owned_words: list.map(w => ({
+                            word_id: w.word_id,
+                            word: w.word,
+                            word_type: w.word_type,
+                            is_currently_equipped: w.is_equip || false
+                        })),
+                        _tip: 'word_id用于装备字符，currently_equipped是当前佩戴的字符，owned_words是所有已拥有的字符'
+                    }
+                }
+                
+                return { success: false, error: result?.msg || '获取幸运字符列表失败' }
+            } catch (err) {
+                return { success: false, error: `获取幸运字符列表失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'draw_lucky',
+        description: '抽取幸运字符。每天可以抽取一次，抽到的字符会加入你的字符库。如果今日已抽取则会失败。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = requireGroupId(args, ctx)
+                
+                if (!bot.cookies?.['qun.qq.com']) {
+                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
+                }
+                
+                const result = await qqWebApi.drawLucky(bot, groupId)
+                
+                if (result?.retcode === 0) {
+                    const data = result.data || result
+                    return {
+                        success: true,
+                        group_id: groupId,
+                        drawn_word: data.word,
+                        word_id: data.word_id,
+                        word_type: data.word_type,
+                        is_new_word: data.is_new || false,
+                        _tip: 'is_new_word为true表示抽到了新字符，false表示抽到了重复的字符'
+                    }
+                }
+                
+                return { success: false, error: result?.msg || '抽取失败，可能今日已抽取过' }
+            } catch (err) {
+                return { success: false, error: `抽取幸运字符失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'equip_lucky',
+        description: '装备或更换幸运字符。将指定的字符设为当前显示的字符，会显示在群名片旁边。需要先通过get_lucky_list获取word_id。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' },
+                word_id: { type: 'string', description: '要装备的字符ID，从get_lucky_list返回的word_id获取' }
+            },
+            required: ['word_id']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = requireGroupId(args, ctx)
+                
+                if (!bot.cookies?.['qun.qq.com']) {
+                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
+                }
+                
+                const result = await qqWebApi.equipLucky(bot, groupId, args.word_id)
+                
+                if (result?.retcode === 0) {
+                    return {
+                        success: true,
+                        group_id: groupId,
+                        equipped_word_id: args.word_id,
+                        _tip: '装备成功，该字符现在会显示在你的群名片旁边'
+                    }
+                }
+                
+                return { success: false, error: result?.msg || '装备失败，请确认word_id正确且你拥有该字符' }
+            } catch (err) {
+                return { success: false, error: `装备幸运字符失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'switch_lucky',
+        description: '开启或关闭群幸运字符功能。需要群管理员权限。关闭后群成员将无法抽取和显示幸运字符。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' },
+                enable: { type: 'boolean', description: 'true开启幸运字符功能，false关闭' }
+            },
+            required: ['enable']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = requireGroupId(args, ctx)
+                
+                if (!bot.cookies?.['qun.qq.com']) {
+                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
+                }
+                
+                const result = await qqWebApi.switchLucky(bot, groupId, args.enable)
+                
+                if (result?.retcode === 0) {
+                    return {
+                        success: true,
+                        group_id: groupId,
+                        lucky_enabled: args.enable,
+                        _tip: args.enable ? '幸运字符功能已开启，群成员可以抽取和装备字符' : '幸运字符功能已关闭'
+                    }
+                }
+                
+                return { success: false, error: result?.msg || '设置失败，可能没有管理员权限' }
+            } catch (err) {
+                return { success: false, error: `设置幸运字符开关失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_inactive_members',
+        description: '获取群内不活跃成员列表。可以查找从未发言的成员，或指定天数内未发言的成员。常用于清理僵尸粉或了解群活跃情况。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' },
+                days: { type: 'number', description: '多少天未发言视为不活跃，默认30。设为0表示查找从未发言过的成员' },
+                limit: { type: 'number', description: '最多返回多少人，默认50' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = requireGroupId(args, ctx)
+                const days = args.days ?? 30
+                const limit = args.limit || 50
+                
+                const memberList = await getGroupMemberList({ bot, groupId })
+                
+                if (!memberList || memberList.length === 0) {
+                    return { success: false, error: '无法获取群成员列表' }
+                }
+                
+                const now = Math.floor(Date.now() / 1000)
+                const threshold = days > 0 ? now - days * 24 * 3600 : 0
+                
+                const inactiveMembers = memberList
+                    .filter(m => {
+                        const lastSpeakTime = m.last_sent_time || m.last_speak_time || m.lastSpeakTime || 0
+                        if (days === 0) {
+                            return lastSpeakTime === 0
+                        }
+                        return lastSpeakTime < threshold
+                    })
+                    .sort((a, b) => {
+                        const aTime = a.last_sent_time || a.last_speak_time || a.lastSpeakTime || 0
+                        const bTime = b.last_sent_time || b.last_speak_time || b.lastSpeakTime || 0
+                        return aTime - bTime
+                    })
+                    .slice(0, limit)
+                    .map(m => ({
+                        user_id: m.user_id || m.uin,
+                        nickname: m.nickname || m.nick || '',
+                        card: m.card || '',
+                        join_time: m.join_time || m.joinTime,
+                        last_speak_time: m.last_sent_time || m.last_speak_time || m.lastSpeakTime || 0,
+                        role: m.role || 'member'
+                    }))
+                
+                return {
+                    success: true,
+                    group_id: groupId,
+                    filter_criteria: days === 0 ? '从未发言' : `${days}天内未发言`,
+                    group_total_members: memberList.length,
+                    inactive_count: inactiveMembers.length,
+                    inactive_members: inactiveMembers,
+                    _tip: 'last_speak_time为0表示从未发言，join_time是入群时间戳(秒)，role可能是owner/admin/member'
+                }
+            } catch (err) {
+                return { success: false, error: `获取不活跃成员失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_recent_join_members',
+        description: '获取最近入群的成员列表。可以查看指定天数内新加入群的成员，了解群的新人情况。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号，不填则使用当前群' },
+                days: { type: 'number', description: '查看最近多少天内入群的成员，默认7天' },
+                limit: { type: 'number', description: '最多返回多少人，默认50' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = requireGroupId(args, ctx)
+                const days = args.days || 7
+                const limit = args.limit || 50
+                
+                const memberList = await getGroupMemberList({ bot, groupId })
+                
+                if (!memberList || memberList.length === 0) {
+                    return { success: false, error: '无法获取群成员列表' }
+                }
+                
+                const now = Math.floor(Date.now() / 1000)
+                const threshold = now - days * 24 * 3600
+                
+                const recentMembers = memberList
+                    .filter(m => {
+                        const joinTime = m.join_time || m.joinTime || 0
+                        return joinTime >= threshold
+                    })
+                    .sort((a, b) => {
+                        const aTime = a.join_time || a.joinTime || 0
+                        const bTime = b.join_time || b.joinTime || 0
+                        return bTime - aTime
+                    })
+                    .slice(0, limit)
+                    .map(m => ({
+                        user_id: m.user_id || m.uin,
+                        nickname: m.nickname || m.nick || '',
+                        card: m.card || '',
+                        join_time: m.join_time || m.joinTime,
+                        last_speak_time: m.last_sent_time || m.last_speak_time || m.lastSpeakTime || 0
+                    }))
+                
+                return {
+                    success: true,
+                    group_id: groupId,
+                    filter_criteria: `最近${days}天入群`,
+                    group_total_members: memberList.length,
+                    new_member_count: recentMembers.length,
+                    new_members: recentMembers,
+                    _tip: 'join_time是入群时间戳(秒)，last_speak_time为0表示入群后从未发言，列表按入群时间倒序排列(最新的在前)'
+                }
+            } catch (err) {
+                return { success: false, error: `获取最近入群成员失败: ${err.message}` }
+            }
+        }
+    }
+]
