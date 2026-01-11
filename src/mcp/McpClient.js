@@ -171,9 +171,14 @@ export class McpClient {
 
         // 设置通用消息处理器
         this.eventSource.onmessage = event => {
-            logger.debug(`[MCP] SSE message received: ${event.data.substring(0, 200)}`)
             try {
                 const message = JSON.parse(event.data)
+                // 检查是否是 ping 响应（result 为空对象且有对应的 pending request）
+                const pending = message.id ? this.pendingRequests.get(message.id) : null
+                const isPing = pending?.method === 'ping'
+                if (!isPing) {
+                    logger.debug(`[MCP] SSE message received: ${event.data.substring(0, 200)}`)
+                }
                 this.handleMessage(message)
             } catch (error) {
                 // 可能不是 JSON，忽略
