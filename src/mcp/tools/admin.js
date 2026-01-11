@@ -3,7 +3,7 @@
  * 禁言、踢人、设置群名片等管理功能
  */
 
-import { icqqGroup, callOneBotApi } from './helpers.js'
+import { icqqGroup, callOneBotApi, groupNoticeApi } from './helpers.js'
 
 function requireGroupId(args, ctx) {
     const gid = args.group_id || ctx.getEvent?.()?.group_id || ctx.getEvent?.()?.group?.group_id
@@ -14,23 +14,73 @@ function requireGroupId(args, ctx) {
 export const adminTools = [
     {
         name: 'mute_member',
-        description: '禁言群成员（需要管理员权限）',
+        description: '禁言群成员，支持单个或批量禁言（需要管理员权限）',
         inputSchema: {
             type: 'object',
             properties: {
                 group_id: { type: 'string', description: '群号' },
-                user_id: { type: 'string', description: '用户QQ号' },
-                duration: { type: 'number', description: '禁言时长(秒)，0表示解除禁言，最大30天' }
-            },
-            required: ['group_id', 'user_id', 'duration']
+                user_id: { type: 'string', description: '用户QQ号（单个禁言时使用）' },
+                duration: { type: 'number', description: '禁言时长(秒)，0表示解除禁言，最大30天（单个禁言时使用）' },
+                mutes: { 
+                    type: 'object', 
+                    description: '批量禁言，JSON格式 {"QQ号": 秒数, ...}，例如 {"123456": 600, "789012": 0}，0表示解禁',
+                    additionalProperties: { type: 'number' }
+                }
+            }
         },
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
                 const groupId = requireGroupId(args, ctx)
+                
+                // 批量禁言模式
+                if (args.mutes && typeof args.mutes === 'object') {
+                    const results = []
+                    const entries = Object.entries(args.mutes)
+                    
+                    if (entries.length === 0) {
+                        return { success: false, error: '批量禁言的 mutes 对象为空' }
+                    }
+                    
+                    for (const [userId, duration] of entries) {
+                        try {
+                            const uid = parseInt(userId)
+                            if (isNaN(uid)) {
+                                results.push({ user_id: userId, success: false, error: 'QQ号格式错误' })
+                                continue
+                            }
+                            const dur = Math.min(Math.max(Number(duration) || 0, 0), 30 * 24 * 3600)
+                            
+                            if (adapter === 'icqq') {
+                                await icqqGroup.muteMember(bot, groupId, uid, dur)
+                            } else {
+                                await callOneBotApi(bot, 'set_group_ban', { group_id: groupId, user_id: uid, duration: dur })
+                            }
+                            results.push({ user_id: userId, duration: dur, action: dur === 0 ? '解禁' : `禁言${dur}秒`, success: true })
+                        } catch (err) {
+                            results.push({ user_id: userId, success: false, error: err.message })
+                        }
+                    }
+                    
+                    const successCount = results.filter(r => r.success).length
+                    return { 
+                        success: successCount > 0, 
+                        adapter, 
+                        group_id: groupId, 
+                        total: entries.length,
+                        success_count: successCount,
+                        results 
+                    }
+                }
+                
+                // 单个禁言模式
+                if (!args.user_id) {
+                    return { success: false, error: '请提供 user_id（单个禁言）或 mutes（批量禁言）' }
+                }
+                
                 const userId = parseInt(args.user_id)
-                const duration = Math.min(Math.max(args.duration, 0), 30 * 24 * 3600)
+                const duration = Math.min(Math.max(args.duration || 0, 0), 30 * 24 * 3600)
                 
                 if (adapter === 'icqq') {
                     await icqqGroup.muteMember(bot, groupId, userId, duration)
@@ -54,27 +104,77 @@ export const adminTools = [
 
     {
         name: 'kick_member',
-        description: '踢出群成员（需要管理员权限）',
+        description: '踢出群成员，支持单个或批量踢人（需要管理员权限）',
         inputSchema: {
             type: 'object',
             properties: {
                 group_id: { type: 'string', description: '群号' },
-                user_id: { type: 'string', description: '用户QQ号' },
+                user_id: { type: 'string', description: '用户QQ号（单个踢人时使用）' },
+                user_ids: { 
+                    type: 'array', 
+                    items: { type: 'string' },
+                    description: '批量踢人，QQ号数组，例如 ["123456", "789012"]'
+                },
                 reject_add: { type: 'boolean', description: '是否拒绝再次加群，默认false' }
-            },
-            required: ['group_id', 'user_id']
+            }
         },
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
                 const groupId = requireGroupId(args, ctx)
+                const rejectAdd = args.reject_add || false
+                
+                // 批量踢人模式
+                if (args.user_ids && Array.isArray(args.user_ids)) {
+                    const results = []
+                    
+                    if (args.user_ids.length === 0) {
+                        return { success: false, error: '批量踢人的 user_ids 数组为空' }
+                    }
+                    
+                    for (const userId of args.user_ids) {
+                        try {
+                            const uid = parseInt(userId)
+                            if (isNaN(uid)) {
+                                results.push({ user_id: userId, success: false, error: 'QQ号格式错误' })
+                                continue
+                            }
+                            
+                            if (adapter === 'icqq') {
+                                await icqqGroup.kickMember(bot, groupId, uid, rejectAdd)
+                            } else {
+                                await callOneBotApi(bot, 'set_group_kick', { group_id: groupId, user_id: uid, reject_add_request: rejectAdd })
+                            }
+                            results.push({ user_id: userId, success: true })
+                        } catch (err) {
+                            results.push({ user_id: userId, success: false, error: err.message })
+                        }
+                    }
+                    
+                    const successCount = results.filter(r => r.success).length
+                    return { 
+                        success: successCount > 0, 
+                        adapter, 
+                        group_id: groupId, 
+                        reject_add: rejectAdd,
+                        total: args.user_ids.length,
+                        success_count: successCount,
+                        results 
+                    }
+                }
+                
+                // 单个踢人模式
+                if (!args.user_id) {
+                    return { success: false, error: '请提供 user_id（单个踢人）或 user_ids（批量踢人）' }
+                }
+                
                 const userId = parseInt(args.user_id)
                 
                 if (adapter === 'icqq') {
-                    await icqqGroup.kickMember(bot, groupId, userId, args.reject_add || false)
+                    await icqqGroup.kickMember(bot, groupId, userId, rejectAdd)
                 } else {
-                    await callOneBotApi(bot, 'set_group_kick', { group_id: groupId, user_id: userId, reject_add_request: args.reject_add || false })
+                    await callOneBotApi(bot, 'set_group_kick', { group_id: groupId, user_id: userId, reject_add_request: rejectAdd })
                 }
                 
                 return { success: true, adapter, group_id: groupId, user_id: userId }
@@ -86,21 +186,70 @@ export const adminTools = [
 
     {
         name: 'set_group_card',
-        description: '设置群成员名片',
+        description: '设置群成员名片，支持单个或批量设置',
         inputSchema: {
             type: 'object',
             properties: {
                 group_id: { type: 'string', description: '群号' },
-                user_id: { type: 'string', description: '用户QQ号' },
-                card: { type: 'string', description: '新群名片，空字符串表示删除' }
-            },
-            required: ['group_id', 'user_id', 'card']
+                user_id: { type: 'string', description: '用户QQ号（单个设置时使用）' },
+                card: { type: 'string', description: '新群名片（单个设置时使用），空字符串表示删除' },
+                cards: { 
+                    type: 'object', 
+                    description: '批量设置群名片，JSON格式 {"QQ号": "名片", ...}，例如 {"123456": "小明", "789012": "小红"}',
+                    additionalProperties: { type: 'string' }
+                }
+            }
         },
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
                 const groupId = requireGroupId(args, ctx)
+                
+                // 批量设置模式
+                if (args.cards && typeof args.cards === 'object') {
+                    const results = []
+                    const entries = Object.entries(args.cards)
+                    
+                    if (entries.length === 0) {
+                        return { success: false, error: '批量设置的 cards 对象为空' }
+                    }
+                    
+                    for (const [userId, card] of entries) {
+                        try {
+                            const uid = parseInt(userId)
+                            if (isNaN(uid)) {
+                                results.push({ user_id: userId, success: false, error: 'QQ号格式错误' })
+                                continue
+                            }
+                            
+                            if (adapter === 'icqq') {
+                                await icqqGroup.setCard(bot, groupId, uid, card || '')
+                            } else {
+                                await callOneBotApi(bot, 'set_group_card', { group_id: groupId, user_id: uid, card: card || '' })
+                            }
+                            results.push({ user_id: userId, card, success: true })
+                        } catch (err) {
+                            results.push({ user_id: userId, success: false, error: err.message })
+                        }
+                    }
+                    
+                    const successCount = results.filter(r => r.success).length
+                    return { 
+                        success: successCount > 0, 
+                        adapter, 
+                        group_id: groupId, 
+                        total: entries.length,
+                        success_count: successCount,
+                        results 
+                    }
+                }
+                
+                // 单个设置模式
+                if (!args.user_id) {
+                    return { success: false, error: '请提供 user_id（单个设置）或 cards（批量设置）' }
+                }
+                
                 const userId = parseInt(args.user_id)
                 const card = args.card ?? ''
                 
@@ -154,27 +303,78 @@ export const adminTools = [
 
     {
         name: 'set_group_admin',
-        description: '设置/取消群管理员（需要群主权限）',
+        description: '设置/取消群管理员，支持单个或批量设置（需要群主权限）',
         inputSchema: {
             type: 'object',
             properties: {
                 group_id: { type: 'string', description: '群号' },
-                user_id: { type: 'string', description: '用户QQ号' },
+                user_id: { type: 'string', description: '用户QQ号（单个设置时使用）' },
+                user_ids: { 
+                    type: 'array', 
+                    items: { type: 'string' },
+                    description: '批量设置管理员，QQ号数组，例如 ["123456", "789012"]'
+                },
                 enable: { type: 'boolean', description: 'true设置管理员，false取消管理员' }
             },
-            required: ['group_id', 'user_id', 'enable']
+            required: ['enable']
         },
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
                 const groupId = requireGroupId(args, ctx)
+                const enable = args.enable
+                
+                // 批量设置模式
+                if (args.user_ids && Array.isArray(args.user_ids)) {
+                    const results = []
+                    
+                    if (args.user_ids.length === 0) {
+                        return { success: false, error: '批量设置的 user_ids 数组为空' }
+                    }
+                    
+                    for (const userId of args.user_ids) {
+                        try {
+                            const uid = parseInt(userId)
+                            if (isNaN(uid)) {
+                                results.push({ user_id: userId, success: false, error: 'QQ号格式错误' })
+                                continue
+                            }
+                            
+                            if (adapter === 'icqq') {
+                                await icqqGroup.setAdmin(bot, groupId, uid, enable)
+                            } else {
+                                await callOneBotApi(bot, 'set_group_admin', { group_id: groupId, user_id: uid, enable })
+                            }
+                            results.push({ user_id: userId, action: enable ? '设为管理员' : '取消管理员', success: true })
+                        } catch (err) {
+                            results.push({ user_id: userId, success: false, error: err.message })
+                        }
+                    }
+                    
+                    const successCount = results.filter(r => r.success).length
+                    return { 
+                        success: successCount > 0, 
+                        adapter, 
+                        group_id: groupId, 
+                        action: enable ? '设为管理员' : '取消管理员',
+                        total: args.user_ids.length,
+                        success_count: successCount,
+                        results 
+                    }
+                }
+                
+                // 单个设置模式
+                if (!args.user_id) {
+                    return { success: false, error: '请提供 user_id（单个设置）或 user_ids（批量设置）' }
+                }
+                
                 const userId = parseInt(args.user_id)
                 
                 if (adapter === 'icqq') {
-                    await icqqGroup.setAdmin(bot, groupId, userId, args.enable)
+                    await icqqGroup.setAdmin(bot, groupId, userId, enable)
                 } else {
-                    await callOneBotApi(bot, 'set_group_admin', { group_id: groupId, user_id: userId, enable: args.enable })
+                    await callOneBotApi(bot, 'set_group_admin', { group_id: groupId, user_id: userId, enable })
                 }
                 
                 return { 
@@ -182,7 +382,7 @@ export const adminTools = [
                     adapter,
                     group_id: groupId, 
                     user_id: userId,
-                    action: args.enable ? '设为管理员' : '取消管理员'
+                    action: enable ? '设为管理员' : '取消管理员'
                 }
             } catch (err) {
                 return { success: false, error: `设置管理员失败: ${err.message}` }
@@ -222,31 +422,85 @@ export const adminTools = [
 
     {
         name: 'set_group_special_title',
-        description: '设置群成员专属头衔（需要群主权限）',
+        description: '设置群成员专属头衔，支持单个或批量设置（需要群主权限）',
         inputSchema: {
             type: 'object',
             properties: {
                 group_id: { type: 'string', description: '群号' },
-                user_id: { type: 'string', description: '用户QQ号' },
-                title: { type: 'string', description: '专属头衔，空字符串表示删除' },
+                user_id: { type: 'string', description: '用户QQ号（单个设置时使用）' },
+                title: { type: 'string', description: '专属头衔（单个设置时使用），空字符串表示删除' },
+                titles: { 
+                    type: 'object', 
+                    description: '批量设置头衔，JSON格式 {"QQ号": "头衔", ...}，例如 {"123456": "大佬", "789012": "萌新"}',
+                    additionalProperties: { type: 'string' }
+                },
                 duration: { type: 'number', description: '有效期(秒)，-1表示永久' }
-            },
-            required: ['group_id', 'user_id', 'title']
+            }
         },
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
-                const groupId = parseInt(args.group_id)
+                const groupId = parseInt(args.group_id || ctx.getEvent?.()?.group_id)
+                const duration = args.duration || -1
+                
+                if (!groupId) {
+                    return { success: false, error: '缺少群号 group_id' }
+                }
+                
+                // 批量设置模式
+                if (args.titles && typeof args.titles === 'object') {
+                    const results = []
+                    const entries = Object.entries(args.titles)
+                    
+                    if (entries.length === 0) {
+                        return { success: false, error: '批量设置的 titles 对象为空' }
+                    }
+                    
+                    for (const [userId, title] of entries) {
+                        try {
+                            const uid = parseInt(userId)
+                            if (isNaN(uid)) {
+                                results.push({ user_id: userId, success: false, error: 'QQ号格式错误' })
+                                continue
+                            }
+                            
+                            if (adapter === 'icqq') {
+                                await icqqGroup.setTitle(bot, groupId, uid, title || '', duration)
+                            } else {
+                                await callOneBotApi(bot, 'set_group_special_title', { group_id: groupId, user_id: uid, special_title: title || '', duration })
+                            }
+                            results.push({ user_id: userId, title: title || '', success: true })
+                        } catch (err) {
+                            results.push({ user_id: userId, success: false, error: err.message })
+                        }
+                    }
+                    
+                    const successCount = results.filter(r => r.success).length
+                    return { 
+                        success: successCount > 0, 
+                        adapter, 
+                        group_id: groupId, 
+                        total: entries.length,
+                        success_count: successCount,
+                        results 
+                    }
+                }
+                
+                // 单个设置模式
+                if (!args.user_id) {
+                    return { success: false, error: '请提供 user_id（单个设置）或 titles（批量设置）' }
+                }
+                
                 const userId = parseInt(args.user_id)
                 
                 if (adapter === 'icqq') {
-                    await icqqGroup.setTitle(bot, groupId, userId, args.title, args.duration || -1)
+                    await icqqGroup.setTitle(bot, groupId, userId, args.title || '', duration)
                 } else {
-                    await callOneBotApi(bot, 'set_group_special_title', { group_id: groupId, user_id: userId, special_title: args.title, duration: args.duration || -1 })
+                    await callOneBotApi(bot, 'set_group_special_title', { group_id: groupId, user_id: userId, special_title: args.title || '', duration })
                 }
                 
-                return { success: true, adapter, group_id: groupId, user_id: userId, title: args.title }
+                return { success: true, adapter, group_id: groupId, user_id: userId, title: args.title || '' }
             } catch (err) {
                 return { success: false, error: `设置头衔失败: ${err.message}` }
             }
@@ -261,7 +515,9 @@ export const adminTools = [
             properties: {
                 group_id: { type: 'string', description: '群号' },
                 content: { type: 'string', description: '公告内容' },
-                image: { type: 'string', description: '公告图片URL（可选）' }
+                image: { type: 'string', description: '公告图片URL（可选）' },
+                pinned: { type: 'boolean', description: '是否置顶，默认false' },
+                confirm_required: { type: 'boolean', description: '是否需要群成员确认，默认true' }
             },
             required: ['group_id', 'content']
         },
@@ -270,12 +526,58 @@ export const adminTools = [
                 const bot = ctx.getBot()
                 const groupId = parseInt(args.group_id)
                 
-                const group = bot.pickGroup(groupId)
-                await group.sendNotice?.(args.content, args.image)
+                const result = await groupNoticeApi.sendNotice(bot, groupId, args.content, {
+                    image: args.image,
+                    pinned: args.pinned || false,
+                    confirmRequired: args.confirm_required !== false
+                })
                 
-                return { success: true, group_id: groupId }
+                if (result?.ec === 0 || result?.retcode === 0 || !result?.ec) {
+                    return { success: true, group_id: groupId, content: args.content }
+                }
+                
+                return { success: false, error: result?.em || result?.message || '发送公告失败' }
             } catch (err) {
                 return { success: false, error: `发送公告失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'delete_group_notice',
+        description: '删除群公告（需要管理员权限）',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号' },
+                notice_id: { type: 'string', description: '公告ID（从获取公告列表获得）' },
+                index: { type: 'number', description: '公告序号（1-N），与notice_id二选一' }
+            },
+            required: ['group_id']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const groupId = parseInt(args.group_id)
+                
+                if (!args.notice_id && !args.index) {
+                    return { success: false, error: '请提供 notice_id 或 index 参数' }
+                }
+                
+                const fidOrIndex = args.notice_id || args.index
+                const result = await groupNoticeApi.deleteNotice(bot, groupId, fidOrIndex)
+                
+                if (result?.ec === 0 || result?.retcode === 0 || !result?.ec) {
+                    return { 
+                        success: true, 
+                        group_id: groupId, 
+                        deleted_notice: result.text || args.notice_id || `序号${args.index}`
+                    }
+                }
+                
+                return { success: false, error: result?.em || result?.message || '删除公告失败' }
+            } catch (err) {
+                return { success: false, error: `删除公告失败: ${err.message}` }
             }
         }
     },

@@ -167,6 +167,7 @@ export const icqqFriend = {
         return await user.getSimpleInfo()
     }
 }
+
 export async function callOneBotApi(bot, action, params = {}) {
     if (bot.sendApi) {
         return await bot.sendApi(action, params)
@@ -177,6 +178,276 @@ export async function callOneBotApi(bot, action, params = {}) {
     throw new Error(`不支持的API: ${action}`)
 }
 
+/**
+ * 群公告 API 封装
+ * 参考 yenai-plugin 实现，主要使用 QQ Web API
+ */
+export const groupNoticeApi = {
+    /**
+     * 获取群公告列表
+     * @param {Object} bot - Bot 实例
+     * @param {number} groupId - 群号
+     * @param {number} index - 获取指定序号的公告（0表示获取列表）
+     * @returns {Promise<Array|Object>}
+     */
+    async getNoticeList(bot, groupId, index = 0) {
+        // 方式1: 使用 QQ Web API (主要方式)
+        if (bot.cookies?.['qun.qq.com'] && bot.bkn) {
+            return await this._getNoticeListWeb(bot, groupId, index)
+        }
+        
+        // 方式2: NapCat/go-cqhttp API
+        if (bot.sendApi) {
+            try {
+                const result = await bot.sendApi('_get_group_notice', { group_id: groupId })
+                const list = result?.data || result || []
+                if (index > 0 && list?.[index - 1]) {
+                    return {
+                        text: list[index - 1].message?.text || list[index - 1].content || '',
+                        fid: list[index - 1].notice_id || list[index - 1].fid
+                    }
+                }
+                return list
+            } catch (e) {
+                // 尝试另一个 API 名称
+                try {
+                    const result = await bot.sendApi('get_group_notice', { group_id: groupId })
+                    return result?.data || result || []
+                } catch (e2) {}
+            }
+        }
+        
+        throw new Error('当前协议不支持获取群公告，需要 cookies 或 NapCat/go-cqhttp')
+    },
+    
+    /**
+     * 通过 Web API 获取群公告
+     */
+    async _getNoticeListWeb(bot, groupId, index = 0) {
+        const n = index ? 1 : 20
+        const s = index ? index - 1 : 0
+        const url = `https://web.qun.qq.com/cgi-bin/announce/get_t_list?bkn=${bot.bkn}&qid=${groupId}&ft=23&s=${s}&n=${n}`
+        
+        const response = await fetch(url, {
+            headers: {
+                Cookie: bot.cookies['qun.qq.com']
+            }
+        })
+        const res = await response.json()
+        
+        if (res.ec !== 0) {
+            throw new Error(res.em || '获取群公告失败')
+        }
+        
+        if (index && res.feeds?.[0]) {
+            return {
+                text: res.feeds[0].msg?.text || '',
+                fid: res.feeds[0].fid
+            }
+        }
+        
+        return res.feeds || []
+    },
+    
+    /**
+     * 发送群公告
+     * @param {Object} bot - Bot 实例
+     * @param {number} groupId - 群号
+     * @param {string} content - 公告内容
+     * @param {Object} options - 选项
+     * @param {string} options.image - 图片URL
+     * @param {boolean} options.pinned - 是否置顶
+     * @param {boolean} options.confirmRequired - 是否需要确认
+     * @param {boolean} options.showEditCard - 是否显示编辑卡片
+     * @returns {Promise<Object>}
+     */
+    async sendNotice(bot, groupId, content, options = {}) {
+        const { image, pinned = false, confirmRequired = true, showEditCard = true } = options
+        
+        // 方式1: 使用 QQ Web API (主要方式)
+        if (bot.cookies?.['qun.qq.com'] && bot.bkn) {
+            return await this._sendNoticeWeb(bot, groupId, content, { image, pinned, confirmRequired, showEditCard })
+        }
+        
+        // 方式2: NapCat/go-cqhttp API
+        if (bot.sendApi) {
+            try {
+                return await bot.sendApi('_send_group_notice', {
+                    group_id: groupId,
+                    content,
+                    image
+                })
+            } catch (e) {
+                // 尝试另一个 API
+                try {
+                    return await bot.sendApi('send_group_notice', {
+                        group_id: groupId,
+                        content,
+                        image
+                    })
+                } catch (e2) {}
+            }
+        }
+        
+        // 方式3: icqq group.sendNotice (备用)
+        const group = bot.pickGroup?.(parseInt(groupId))
+        if (group?.sendNotice) {
+            return await group.sendNotice(content, image)
+        }
+        if (group?.announce) {
+            return await group.announce(content)
+        }
+        
+        throw new Error('当前协议不支持发送群公告，需要 cookies 或 NapCat/go-cqhttp')
+    },
+    
+    /**
+     * 通过 Web API 发送群公告
+     */
+    async _sendNoticeWeb(bot, groupId, content, options = {}) {
+        const { image, pinned = false, confirmRequired = true, showEditCard = true } = options
+        
+        const data = new URLSearchParams({
+            qid: groupId,
+            bkn: bot.bkn,
+            text: content,
+            pinned: pinned ? 1 : 0,
+            type: 1,
+            settings: JSON.stringify({
+                is_show_edit_card: showEditCard ? 1 : 0,
+                tip_window_type: 1,
+                confirm_required: confirmRequired ? 1 : 0
+            })
+        })
+        
+        // 如果有图片，先上传
+        if (image) {
+            try {
+                const imgResult = await this._uploadNoticeImage(bot, image)
+                if (imgResult?.ec === 0 && imgResult?.id) {
+                    const p = JSON.parse(imgResult.id.replace(/&quot;/g, '"'))
+                    data.append('pic', p.id)
+                    data.append('imgWidth', p.w)
+                    data.append('imgHeight', p.h)
+                }
+            } catch (e) {
+                // 图片上传失败，继续发送文字公告
+            }
+        }
+        
+        const url = `https://web.qun.qq.com/cgi-bin/announce/add_qun_notice?bkn=${bot.bkn}`
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Cookie': bot.cookies['qun.qq.com'],
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: data.toString()
+        })
+        
+        return await response.json()
+    },
+    
+    /**
+     * 上传公告图片
+     */
+    async _uploadNoticeImage(bot, imageUrl) {
+        // 下载图片
+        const imgResponse = await fetch(imageUrl)
+        const buffer = await imgResponse.arrayBuffer()
+        
+        const formData = new FormData()
+        formData.append('bkn', bot.bkn)
+        formData.append('source', 'troopNotice')
+        formData.append('m', '0')
+        formData.append('pic_up', new Blob([buffer], { type: 'image/png' }), 'image.png')
+        
+        const response = await fetch('https://web.qun.qq.com/cgi-bin/announce/upload_img', {
+            method: 'POST',
+            headers: {
+                'Cookie': bot.cookies['qun.qq.com']
+            },
+            body: formData
+        })
+        
+        return await response.json()
+    },
+    
+    /**
+     * 删除群公告
+     * @param {Object} bot - Bot 实例
+     * @param {number} groupId - 群号
+     * @param {string|number} fidOrIndex - 公告ID 或 序号
+     * @returns {Promise<Object>}
+     */
+    async deleteNotice(bot, groupId, fidOrIndex) {
+        let fid = fidOrIndex
+        let text = ''
+        
+        // 如果是数字序号，先获取对应的 fid
+        if (typeof fidOrIndex === 'number' || /^\d+$/.test(fidOrIndex)) {
+            const index = parseInt(fidOrIndex)
+            if (index > 0 && index <= 100) {
+                const notice = await this.getNoticeList(bot, groupId, index)
+                if (notice?.fid) {
+                    fid = notice.fid
+                    text = notice.text
+                } else {
+                    throw new Error(`未找到序号 ${index} 的公告`)
+                }
+            }
+        }
+        
+        // 方式1: 使用 QQ Web API (主要方式)
+        if (bot.cookies?.['qun.qq.com'] && bot.bkn) {
+            return await this._deleteNoticeWeb(bot, groupId, fid, text)
+        }
+        
+        // 方式2: NapCat/go-cqhttp API
+        if (bot.sendApi) {
+            try {
+                const result = await bot.sendApi('_del_group_notice', {
+                    group_id: groupId,
+                    notice_id: fid
+                })
+                return { ...result, text }
+            } catch (e) {
+                try {
+                    const result = await bot.sendApi('del_group_notice', {
+                        group_id: groupId,
+                        notice_id: fid
+                    })
+                    return { ...result, text }
+                } catch (e2) {}
+            }
+        }
+        
+        throw new Error('当前协议不支持删除群公告，需要 cookies 或 NapCat/go-cqhttp')
+    },
+    
+    /**
+     * 通过 Web API 删除群公告
+     */
+    async _deleteNoticeWeb(bot, groupId, fid, text = '') {
+        const url = `https://web.qun.qq.com/cgi-bin/announce/del_feed?bkn=${bot.bkn}`
+        
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Cookie': bot.cookies['qun.qq.com'],
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: new URLSearchParams({
+                bkn: bot.bkn,
+                fid: fid,
+                qid: groupId
+            }).toString()
+        })
+        
+        const result = await response.json()
+        return { ...result, text }
+    }
+}
 
 /**
  * 获取群成员列表
