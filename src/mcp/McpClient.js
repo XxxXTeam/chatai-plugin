@@ -236,15 +236,23 @@ export class McpClient {
     }
 
     handleMessage(message) {
-        const pendingIds = Array.from(this.pendingRequests.keys())
-        logger.debug(
-            `[MCP] handleMessage: id=${message.id}, method=${message.method}, hasResult=${message.result !== undefined}, pendingIds=[${pendingIds.join(', ')}]`
-        )
+        const pending = this.pendingRequests.get(message.id)
+        const isPing = pending?.method === 'ping'
 
-        if (message.id && this.pendingRequests.has(message.id)) {
-            const { resolve, reject } = this.pendingRequests.get(message.id)
+        // 不打印 ping 响应的日志（心跳每30秒调用一次，避免日志过多）
+        if (!isPing) {
+            const pendingIds = Array.from(this.pendingRequests.keys())
+            logger.debug(
+                `[MCP] handleMessage: id=${message.id}, method=${message.method}, hasResult=${message.result !== undefined}, pendingIds=[${pendingIds.join(', ')}]`
+            )
+        }
+
+        if (message.id && pending) {
+            const { resolve, reject } = pending
             this.pendingRequests.delete(message.id)
-            logger.debug(`[MCP] Resolving request ${message.id}, hasError=${!!message.error}`)
+            if (!isPing) {
+                logger.debug(`[MCP] Resolving request ${message.id}, hasError=${!!message.error}`)
+            }
 
             if (message.error) {
                 reject(new Error(message.error.message || JSON.stringify(message.error)))
@@ -388,6 +396,7 @@ export class McpClient {
             }, timeout)
 
             this.pendingRequests.set(id, {
+                method,
                 resolve: res => {
                     clearTimeout(timer)
                     resolve(res)
@@ -444,6 +453,7 @@ export class McpClient {
             }, timeout)
 
             this.pendingRequests.set(request.id, {
+                method: request.method,
                 resolve: result => {
                     clearTimeout(timer)
                     resolve(result)
