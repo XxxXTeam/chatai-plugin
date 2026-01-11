@@ -300,14 +300,18 @@ export const contextTools = [
                     return { success: false, error: '没有可用的会话上下文' }
                 }
                 
+                const botUin = e.bot?.uin || e.self_id
                 const atList = []
                 for (const seg of e.message || []) {
                     if (seg.type === 'at') {
                         const qq = seg.qq || seg.data?.qq
+                        const isBotSelf = String(qq) === String(botUin)
                         atList.push({
                             user_id: String(qq),
                             is_all: qq === 'all',
-                            text: seg.text || seg.data?.text || ''
+                            is_bot: isBotSelf,
+                            text: seg.text || seg.data?.text || '',
+                            ...(isBotSelf ? { tip: '此QQ为Bot本身' } : {})
                         })
                     }
                 }

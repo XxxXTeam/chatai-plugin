@@ -2085,3 +2085,198 @@ export function processMessageForQQBot(e, message) {
     
     return result
 }
+
+
+/**
+ * QQ Web API 封装
+ * 参考 yenai-plugin 实现
+ */
+export const qqWebApi = {
+    /**
+     * 获取 GTK (g_tk) 值
+     */
+    getGtk(bot, domain = 'qun.qq.com') {
+        const cookies = bot.cookies?.[domain] || ''
+        const match = cookies.match(/p_skey=([^;]+)/)
+        const pSkey = match ? match[1] : ''
+        
+        let hash = 5381
+        for (let i = 0; i < pSkey.length; i++) {
+            hash += (hash << 5) + pSkey.charCodeAt(i)
+        }
+        return hash & 2147483647
+    },
+
+    /**
+     * 获取通用请求头
+     */
+    getHeaders(bot) {
+        return {
+            'Content-type': 'application/json;charset=UTF-8',
+            'Cookie': bot.cookies?.['qun.qq.com'] || '',
+            'qname-service': '976321:131072',
+            'qname-space': 'Production'
+        }
+    },
+
+    /**
+     * 获取群星级
+     */
+    async getGroupLevel(bot, groupId) {
+        const url = `https://qqweb.qq.com/c/activedata/get_credit_level_info?bkn=${bot.bkn}&uin=${bot.uin}&gc=${groupId}`
+        const response = await fetch(url, {
+            headers: {
+                'Cookie': bot.cookies?.['qqweb.qq.com'] || bot.cookies?.['qun.qq.com'] || '',
+                'Referer': `https://qqweb.qq.com/m/business/qunlevel/index.html?gc=${groupId}&from=0&_wv=1027`,
+                'User-agent': 'Mozilla/5.0 (Linux; Android 12; M2012K11AC Build/SKQ1.220303.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/89.0.4389.72 MQQBrowser/6.2 TBS/046141 Mobile Safari/537.36'
+            }
+        })
+        return await response.json()
+    },
+
+    /**
+     * 获取群龙王
+     */
+    async getDragonKing(bot, groupId) {
+        const url = `https://qun.qq.com/interactive/honorlist?gc=${groupId}&type=1&_wv=3&_wwv=129`
+        const response = await fetch(url, {
+            headers: { Cookie: bot.cookies?.['qun.qq.com'] || '' }
+        })
+        const html = await response.text()
+        const match = html.match(/<script>window\.__INITIAL_STATE__=(.*?)<\/script>/)
+        if (!match) return null
+        try {
+            const data = JSON.parse(match[1])
+            return data?.currentTalkative || null
+        } catch {
+            return null
+        }
+    },
+
+    /**
+     * 今日打卡列表
+     */
+    async getSignInToday(bot, groupId) {
+        const url = 'https://qun.qq.com/v2/signin/trpc/GetDaySignedList'
+        const gtk = this.getGtk(bot, 'qun.qq.com')
+        const today = new Date()
+        const dayYmd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`
+        
+        const response = await fetch(`${url}?g_tk=${gtk}`, {
+            method: 'POST',
+            headers: this.getHeaders(bot),
+            body: JSON.stringify({
+                dayYmd,
+                offset: 0,
+                limit: 100,
+                uid: String(bot.uin),
+                groupId: String(groupId)
+            })
+        })
+        return await response.json()
+    },
+
+    /**
+     * 群发言榜单
+     * @param {boolean} weekly - true为7天，false为昨天
+     */
+    async getSpeakRank(bot, groupId, weekly = false) {
+        const url = 'https://qun.qq.com/m/qun/activedata/proxy/domain/qun.qq.com/cgi-bin/manager/report/list'
+        const params = new URLSearchParams({
+            bkn: bot.bkn,
+            gc: groupId,
+            type: 0,
+            start: 0,
+            time: weekly ? 1 : 0
+        })
+        
+        const response = await fetch(`${url}?${params}`, {
+            headers: this.getHeaders(bot)
+        })
+        return await response.json()
+    },
+
+    /**
+     * 群数据统计
+     * @param {boolean} weekly - true为7天，false为昨天
+     */
+    async getGroupData(bot, groupId, weekly = false) {
+        const url = 'https://qun.qq.com/m/qun/activedata/proxy/domain/qun.qq.com/cgi-bin/manager/report/index'
+        const params = new URLSearchParams({
+            gc: groupId,
+            time: weekly ? 1 : 0,
+            bkn: bot.bkn
+        })
+        
+        const response = await fetch(`${url}?${params}`, {
+            headers: this.getHeaders(bot)
+        })
+        return await response.json()
+    },
+
+    /**
+     * 幸运字符列表
+     */
+    async getLuckyList(bot, groupId, start = 0, limit = 20) {
+        const url = 'https://qun.qq.com/v2/luckyword/proxy/domain/qun.qq.com/cgi-bin/group_lucky_word/word_list'
+        const response = await fetch(`${url}?bkn=${bot.bkn}`, {
+            method: 'POST',
+            headers: this.getHeaders(bot),
+            body: JSON.stringify({
+                group_code: String(groupId),
+                start,
+                limit,
+                need_equip_info: true
+            })
+        })
+        return await response.json()
+    },
+
+    /**
+     * 抽取幸运字符
+     */
+    async drawLucky(bot, groupId) {
+        const url = 'https://qun.qq.com/v2/luckyword/proxy/domain/qun.qq.com/cgi-bin/group_lucky_word/draw_lottery'
+        const response = await fetch(`${url}?bkn=${bot.bkn}`, {
+            method: 'POST',
+            headers: this.getHeaders(bot),
+            body: JSON.stringify({
+                group_code: String(groupId)
+            })
+        })
+        return await response.json()
+    },
+
+    /**
+     * 更换/装备幸运字符
+     */
+    async equipLucky(bot, groupId, wordId) {
+        const url = 'https://qun.qq.com/v2/luckyword/proxy/domain/qun.qq.com/cgi-bin/group_lucky_word/equip'
+        const response = await fetch(`${url}?bkn=${bot.bkn}`, {
+            method: 'POST',
+            headers: this.getHeaders(bot),
+            body: JSON.stringify({
+                group_code: String(groupId),
+                word_id: String(wordId)
+            })
+        })
+        return await response.json()
+    },
+
+    /**
+     * 开关幸运字符
+     * @param {boolean} enable - true开启，false关闭
+     */
+    async switchLucky(bot, groupId, enable) {
+        const url = 'https://qun.qq.com/v2/luckyword/proxy/domain/qun.qq.com/cgi-bin/group_lucky_word/setting'
+        const response = await fetch(`${url}?bkn=${bot.bkn}`, {
+            method: 'POST',
+            headers: this.getHeaders(bot),
+            body: JSON.stringify({
+                group_code: String(groupId),
+                cmd: enable ? 1 : 2
+            })
+        })
+        return await response.json()
+    }
+}
