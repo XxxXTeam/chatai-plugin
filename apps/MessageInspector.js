@@ -3,12 +3,12 @@ import { formatTimeToBeiJing } from '../src/utils/common.js'
 import { renderService } from '../src/services/media/RenderService.js'
 import { statsService } from '../src/services/stats/StatsService.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
-import { 
-    IcqqMessageUtils, 
-    ProtobufUtils, 
+import {
+    IcqqMessageUtils,
+    ProtobufUtils,
     ForwardMessageParser,
     MsgRecordExtractor,
-    NapCatMessageUtils 
+    NapCatMessageUtils
 } from '../src/utils/messageParser.js'
 let masterList = null
 async function getMasterList() {
@@ -36,7 +36,7 @@ async function isMaster(userId) {
  * 获取框架类型
  */
 function getFramework() {
-    return getBotFramework()  // 'trss' 或 'miao'
+    return getBotFramework() // 'trss' 或 'miao'
 }
 
 /**
@@ -52,10 +52,10 @@ export class MessageInspector extends plugin {
             name: 'AI-MessageInspector',
             dsc: '消息检查器 - 获取消息raw/pb信息',
             event: 'message',
-            priority: 1,  // 高优先级，确保命令能被触发
+            priority: 1, // 高优先级，确保命令能被触发
             rule: [
                 {
-                    reg: '^#取(\\d*)$',  // 简化正则，匹配#取 或 #取123
+                    reg: '^#取(\\d*)$', // 简化正则，匹配#取 或 #取123
                     fnc: 'inspectMessage',
                     permission: 'master'
                 },
@@ -100,46 +100,46 @@ export class MessageInspector extends plugin {
     async inspectMessage() {
         const e = this.e
         const bot = e.bot || Bot
-        
+
         // 获取目标消息
         let targetSeq = null
         let targetMsgId = null
         let getPrevious = false
-        
+
         // 从命令中提取seq
         const match = e.msg.match(/#(?:取|取消息|消息详情)\s*(\d+)?/)
         if (match && match[1]) {
             targetSeq = parseInt(match[1])
         }
-        
+
         // 调试：打印引用相关字段
-        logger.debug(`[MessageInspector] Reply debug: source=${JSON.stringify(e.source)}, reply_id=${e.reply_id}, message_type=${typeof e.message}, message_len=${Array.isArray(e.message) ? e.message.length : 'N/A'}`)
+        logger.debug(
+            `[MessageInspector] Reply debug: source=${JSON.stringify(e.source)}, reply_id=${e.reply_id}, message_type=${typeof e.message}, message_len=${Array.isArray(e.message) ? e.message.length : 'N/A'}`
+        )
         if (Array.isArray(e.message)) {
-            logger.debug(`[MessageInspector] e.message segments: ${JSON.stringify(e.message.map(s => ({ type: s.type, id: s.data?.id || s.id })))}`)
+            logger.debug(
+                `[MessageInspector] e.message segments: ${JSON.stringify(e.message.map(s => ({ type: s.type, id: s.data?.id || s.id })))}`
+            )
         }
-        
+
         // 从引用消息中获取
         if (!targetSeq && e.source) {
             targetSeq = e.source.seq
             targetMsgId = e.source.message_id || e.source.id
             logger.debug(`[MessageInspector] Got from e.source: seq=${targetSeq}, msgId=${targetMsgId}`)
         }
-        
+
         // NapCat/OneBot: 从 e.reply_id 获取
         if (!targetSeq && !targetMsgId && e.reply_id) {
             targetMsgId = e.reply_id
             logger.debug(`[MessageInspector] Got from e.reply_id: ${targetMsgId}`)
         }
-        
+
         // NapCat/OneBot: 从消息数组中提取 reply 段的 id
         if (!targetSeq && !targetMsgId) {
             // 尝试多个可能的消息数组位置
-            const msgArrays = [
-                e.message,
-                e.original_msg?.message,
-                e.raw_message_json
-            ].filter(Boolean)
-            
+            const msgArrays = [e.message, e.original_msg?.message, e.raw_message_json].filter(Boolean)
+
             for (const msgArray of msgArrays) {
                 if (!Array.isArray(msgArray)) continue
                 for (const seg of msgArray) {
@@ -152,19 +152,21 @@ export class MessageInspector extends plugin {
                 if (targetMsgId) break
             }
         }
-        
-        logger.debug(`[MessageInspector] Final: targetSeq=${targetSeq}, targetMsgId=${targetMsgId}, getPrevious=${!targetSeq && !targetMsgId}`)
-        
+
+        logger.debug(
+            `[MessageInspector] Final: targetSeq=${targetSeq}, targetMsgId=${targetMsgId}, getPrevious=${!targetSeq && !targetMsgId}`
+        )
+
         // 没有指定seq也没有引用，则获取上一条消息
         if (!targetSeq && !targetMsgId) {
             getPrevious = true
         }
-        
+
         try {
             let rawMsg = null
             let isForwardMsg = false
             let forwardData = null
-            
+
             // 获取消息
             if (getPrevious) {
                 // 获取上一条消息（通过聊天历史）
@@ -186,12 +188,12 @@ export class MessageInspector extends plugin {
                 // 通过seq或message_id获取
                 rawMsg = await this.fetchMessage(bot, e, targetSeq, targetMsgId)
             }
-            
+
             if (!rawMsg) {
                 await this.reply('❌ 获取消息失败，请引用消息后发送 #取 或提供消息seq', true)
                 return true
             }
-            
+
             // 检查是否是转发消息
             const message = rawMsg.message || rawMsg.content || []
             for (const seg of message) {
@@ -222,37 +224,36 @@ export class MessageInspector extends plugin {
                     } catch {}
                 }
             }
-            
+
             // 构建完整数据
             const fullData = await this.buildFullMessageData(rawMsg, forwardData)
-            
+
             // 发送合并转发
             await this.sendDataAsForward(e, fullData, isForwardMsg)
-            
         } catch (error) {
             logger.error('[MessageInspector] Error:', error)
             await this.reply(`❌ 获取消息失败: ${error.message}`, true)
         }
-        
+
         return true
     }
-    
+
     /**
      * 获取消息
      */
     async fetchMessage(bot, e, targetSeq, targetMsgId) {
         let rawMsg = null
-        
+
         if (e.group_id) {
             const group = bot.pickGroup(e.group_id)
-            
+
             // icqq: group.getMsg
             if (!rawMsg && group?.getMsg) {
                 try {
                     rawMsg = await group.getMsg(targetSeq || targetMsgId)
                 } catch {}
             }
-            
+
             // icqq: group.getChatHistory
             if (!rawMsg && group?.getChatHistory && targetSeq) {
                 try {
@@ -260,14 +261,14 @@ export class MessageInspector extends plugin {
                     rawMsg = history?.[0]
                 } catch {}
             }
-            
+
             // NapCat/OneBot: bot.getMsg
             if (!rawMsg && bot?.getMsg) {
                 try {
                     rawMsg = await bot.getMsg(targetMsgId || targetSeq)
                 } catch {}
             }
-            
+
             // NapCat: sendApi
             if (!rawMsg && bot?.sendApi) {
                 try {
@@ -277,30 +278,30 @@ export class MessageInspector extends plugin {
             }
         } else {
             const friend = bot.pickFriend(e.user_id)
-            
+
             if (!rawMsg && friend?.getMsg) {
                 try {
                     rawMsg = await friend.getMsg(targetSeq || targetMsgId)
                 } catch {}
             }
-            
+
             if (!rawMsg && friend?.getChatHistory) {
                 try {
                     const history = await friend.getChatHistory(targetSeq, 1)
                     rawMsg = history?.[0]
                 } catch {}
             }
-            
+
             if (!rawMsg && bot?.getMsg) {
                 try {
                     rawMsg = await bot.getMsg(targetMsgId || targetSeq)
                 } catch {}
             }
         }
-        
+
         return rawMsg
     }
-    
+
     /**
      * 构建完整消息数据
      */
@@ -325,19 +326,19 @@ export class MessageInspector extends plugin {
             atme: rawMsg.atme || null,
             atall: rawMsg.atall || null
         }
-        
+
         // 提取 proto 数据
         const proto = IcqqMessageUtils.extractProto(rawMsg)
         if (proto) {
             data.proto = proto
         }
-        
+
         // 提取序列化数据
         const serialized = IcqqMessageUtils.serializeMessage(rawMsg)
         if (serialized) {
             data.serialized = serialized.toString('base64')
         }
-        
+
         // 提取 raw buffer (pb 原始数据)
         if (rawMsg.raw) {
             if (Buffer.isBuffer(rawMsg.raw)) {
@@ -350,12 +351,12 @@ export class MessageInspector extends plugin {
                 data.pb = rawMsg.raw
             }
         }
-        
+
         // 提取 elem 数据
         if (rawMsg.elems) {
             data.elems = rawMsg.elems
         }
-        
+
         // 提取 parsed 数据 (Parser)
         if (rawMsg.parsed) {
             data.parsed = {
@@ -366,10 +367,10 @@ export class MessageInspector extends plugin {
                 quotation: rawMsg.parsed.quotation
             }
         }
-        
+
         // 添加 msgrecord
         data.msgrecord = MsgRecordExtractor.fromApiResponse(rawMsg)
-        
+
         // 转发消息数据
         if (forwardData?.success) {
             data.forward = {
@@ -382,16 +383,18 @@ export class MessageInspector extends plugin {
                     raw_message: msg.raw_message,
                     proto: msg.proto || null,
                     serialized: msg.serialized || null,
-                    nested_forward: msg.nested_forward?.success ? {
-                        total: msg.nested_forward.totalCount
-                    } : null
+                    nested_forward: msg.nested_forward?.success
+                        ? {
+                              total: msg.nested_forward.totalCount
+                          }
+                        : null
                 }))
             }
         }
-        
+
         return data
     }
-    
+
     /**
      * 以合并转发形式发送数据
      */
@@ -399,7 +402,7 @@ export class MessageInspector extends plugin {
         const bot = e.bot || Bot
         const botId = bot?.uin || e.self_id || 10000
         const msgs = []
-        
+
         // 1. 基础消息信息
         const basicInfo = {
             message_id: data.message_id,
@@ -415,7 +418,7 @@ export class MessageInspector extends plugin {
         if (data.message?.length > 0) {
             msgs.push(`${this.safeStringify(data.message)}`)
         }
-        
+
         // 3. icqq 特有字段
         const icqqFields = {
             font: data.font,
@@ -426,18 +429,18 @@ export class MessageInspector extends plugin {
         if (Object.values(icqqFields).some(v => v !== null)) {
             msgs.push(`${this.safeStringify(icqqFields)}`)
         }
-        
+
         // 4. elems 数据
         if (data.elems) {
             const elemsStr = this.safeStringify(data.elems)
             msgs.push(`${elemsStr.substring(0, 3000)}`)
         }
-        
+
         // 5. parsed 数据
         if (data.parsed) {
             msgs.push(`${this.safeStringify(data.parsed)}`)
         }
-        
+
         // 6. pb 数据
         if (data.pb) {
             if (typeof data.pb === 'object' && data.pb.base64) {
@@ -453,7 +456,7 @@ export class MessageInspector extends plugin {
                 msgs.push(`📦 pb 数据\n${this.safeStringify(data.pb)}`)
             }
         }
-        
+
         // 7. proto 数据
         if (data.proto) {
             const protoStr = this.safeStringify(data.proto)
@@ -462,12 +465,12 @@ export class MessageInspector extends plugin {
                 msgs.push(`📦 proto 数据 (${i + 1}/${protoChunks.length})\n${chunk}`)
             })
         }
-        
+
         // 8. serialized 数据
         if (data.serialized) {
             msgs.push(`📦 serialized数据\n${data.serialized}`)
         }
-        
+
         // 9. msgrecord
         if (data.msgrecord) {
             const recordStr = this.safeStringify(data.msgrecord)
@@ -483,10 +486,13 @@ export class MessageInspector extends plugin {
         }
         const sendResult = await this.sendForwardMsg(e, '消息数据', msgs)
         if (!sendResult) {
-            await this.reply(`📋 消息数据 (seq: ${data.seq})\n${this.safeStringify(basicInfo).substring(0, 1000)}`, true)
+            await this.reply(
+                `📋 消息数据 (seq: ${data.seq})\n${this.safeStringify(basicInfo).substring(0, 1000)}`,
+                true
+            )
         }
     }
-    
+
     /**
      * 分割长字符串
      */
@@ -497,25 +503,29 @@ export class MessageInspector extends plugin {
         }
         return chunks
     }
-    
+
     /**
      * 安全的 JSON 序列化（处理 BigInt 和 Buffer）
      */
     safeStringify(obj, space = 2) {
-        return JSON.stringify(obj, (key, value) => {
-            if (typeof value === 'bigint') {
-                return value.toString()
-            }
-            if (Buffer.isBuffer(value)) {
-                return `[Buffer: ${value.length} bytes]`
-            }
-            if (key === '_event' || key === '_raw') {
-                return undefined
-            }
-            return value
-        }, space)
+        return JSON.stringify(
+            obj,
+            (key, value) => {
+                if (typeof value === 'bigint') {
+                    return value.toString()
+                }
+                if (Buffer.isBuffer(value)) {
+                    return `[Buffer: ${value.length} bytes]`
+                }
+                if (key === '_event' || key === '_raw') {
+                    return undefined
+                }
+                return value
+            },
+            space
+        )
     }
-    
+
     /**
      * 渲染消息详情为图片
      */
@@ -543,9 +553,9 @@ export class MessageInspector extends plugin {
             `### 📦 消息段`,
             '```json',
             JSON.stringify(rawMsg.message || [], null, 2).substring(0, 800),
-            '```',
+            '```'
         ].filter(Boolean)
-        
+
         // icqq 特有字段
         if (rawMsg.rand !== undefined || rawMsg.font !== undefined) {
             markdown.push(``, `### 🎲 icqq 特有字段`)
@@ -553,7 +563,7 @@ export class MessageInspector extends plugin {
             markdown.push(`- **Font:** ${rawMsg.font ?? 'N/A'}`)
             markdown.push(`- **PktNum:** ${rawMsg.pktnum ?? 'N/A'}`)
         }
-        
+
         // PB 数据
         if (result.pb?.exists) {
             markdown.push(``, `### 📦 PB 原始数据`)
@@ -561,13 +571,13 @@ export class MessageInspector extends plugin {
             markdown.push(`- **是否Buffer:** ${result.pb.isBuffer}`)
             markdown.push(`- **长度:** ${result.pb.length} bytes`)
         }
-        
+
         // 查询方法
         markdown.push(``, `### 🛠️ 查询方法`)
         result.methods.forEach(m => {
             markdown.push(`- ${m.success ? '✅' : '❌'} **${m.name}**${m.error ? ` - ${m.error}` : ''}`)
         })
-        
+
         return renderService.renderMarkdownToImage({
             markdown: markdown.join('\n'),
             title: '消息检查器',
@@ -584,7 +594,7 @@ export class MessageInspector extends plugin {
         const msgs = []
         const botId = e.bot?.uin || e.self_id || Bot?.uin || 10000
         const nickname = '消息检查器'
-        
+
         // 1. 基本信息
         const basicInfo = [
             '📋 基本信息',
@@ -598,9 +608,11 @@ export class MessageInspector extends plugin {
             `🆔 发送者ID: ${rawMsg.sender?.user_id || 'N/A'}`,
             rawMsg.group_id ? `👥 群号: ${rawMsg.group_id}` : '',
             '━━━━━━━━━━━━━━━━'
-        ].filter(Boolean).join('\n')
+        ]
+            .filter(Boolean)
+            .join('\n')
         msgs.push(basicInfo)
-        
+
         // 2. 消息内容
         const contentInfo = [
             '💬 消息内容',
@@ -611,7 +623,7 @@ export class MessageInspector extends plugin {
             JSON.stringify(rawMsg.message || [], null, 2)
         ].join('\n')
         msgs.push(contentInfo)
-        
+
         // 3. icqq 特有字段
         if (rawMsg.rand !== undefined || rawMsg.font !== undefined || rawMsg.pktnum !== undefined) {
             const icqqInfo = [
@@ -625,7 +637,7 @@ export class MessageInspector extends plugin {
             ].join('\n')
             msgs.push(icqqInfo)
         }
-        
+
         // 4. PB 数据
         if (result.pb?.exists) {
             const pbInfo = [
@@ -639,33 +651,35 @@ export class MessageInspector extends plugin {
                 (result.pb.hex || '').substring(0, 500) + (result.pb.hex?.length > 500 ? '...' : '')
             ].join('\n')
             msgs.push(pbInfo)
-            
+
             // Base64 单独一条
             if (result.pb.base64) {
                 msgs.push(`📦 PB Base64 数据:\n${result.pb.base64}`)
             }
         }
-        
+
         // 5. 查询方法记录
         const methodsInfo = [
             '🛠️ 查询方法',
             '━━━━━━━━━━━━━━━━',
-            ...result.methods.map(m => 
-                `${m.success ? '✅' : '❌'} ${m.name}${m.error ? ` (${m.error})` : ''}`
-            )
+            ...result.methods.map(m => `${m.success ? '✅' : '❌'} ${m.name}${m.error ? ` (${m.error})` : ''}`)
         ].join('\n')
         msgs.push(methodsInfo)
-        
+
         // 6. 完整JSON
-        const fullJson = JSON.stringify({
-            ...rawMsg,
-            raw: result.pb?.exists ? '[Buffer]' : undefined  // 不序列化 Buffer
-        }, null, 2)
+        const fullJson = JSON.stringify(
+            {
+                ...rawMsg,
+                raw: result.pb?.exists ? '[Buffer]' : undefined // 不序列化 Buffer
+            },
+            null,
+            2
+        )
         msgs.push(`📄 完整 JSON:\n${fullJson}`)
-        
+
         return msgs
     }
-    
+
     /**
      * 发送合并转发消息
      */
@@ -673,7 +687,7 @@ export class MessageInspector extends plugin {
         const bot = e.bot || Bot
         const botId = bot?.uin || e.self_id || 10000
         const nickname = title
-        
+
         try {
             // 构建转发节点
             const forwardNodes = messages.map(msg => ({
@@ -681,7 +695,7 @@ export class MessageInspector extends plugin {
                 nickname: nickname,
                 message: typeof msg === 'string' ? [{ type: 'text', text: msg }] : msg
             }))
-            
+
             // TRSS 框架
             if (getFramework() === 'trss') {
                 if (e.isGroup && e.group?.makeForwardMsg) {
@@ -698,7 +712,7 @@ export class MessageInspector extends plugin {
                     }
                 }
             }
-            
+
             // Miao-Yunzai / icqq
             if (e.isGroup || e.group_id) {
                 const group = bot.pickGroup(e.group_id)
@@ -719,21 +733,21 @@ export class MessageInspector extends plugin {
                     }
                 }
             }
-            
+
             // 尝试使用 Bot.makeForwardMsg
             if (typeof Bot?.makeForwardMsg === 'function') {
                 const forwardMsg = await Bot.makeForwardMsg(forwardNodes)
                 await this.reply(forwardMsg)
                 return true
             }
-            
+
             return false
         } catch (err) {
             logger.warn('[MessageInspector] 发送合并转发失败:', err.message)
             return false
         }
     }
-    
+
     /**
      * 发送回退简要信息
      */
@@ -753,17 +767,26 @@ export class MessageInspector extends plugin {
             '━━━━━━━━━━━━━━━━',
             '(合并转发发送失败，显示简要信息)',
             '完整数据已输出到控制台'
-        ].filter(Boolean).join('\n')
-        
+        ]
+            .filter(Boolean)
+            .join('\n')
+
         await this.reply(output, true)
-        
+
         // 输出完整信息到控制台
-        logger.info('[MessageInspector] 完整消息数据:', JSON.stringify(result, (key, value) => {
-            if (Buffer.isBuffer(value)) {
-                return `[Buffer: ${value.length} bytes]`
-            }
-            return value
-        }, 2))
+        logger.info(
+            '[MessageInspector] 完整消息数据:',
+            JSON.stringify(
+                result,
+                (key, value) => {
+                    if (Buffer.isBuffer(value)) {
+                        return `[Buffer: ${value.length} bytes]`
+                    }
+                    return value
+                },
+                2
+            )
+        )
     }
 
     /**
@@ -771,7 +794,7 @@ export class MessageInspector extends plugin {
      */
     async showStats() {
         await this.reply('📊 正在生成统计信息...', true)
-        
+
         try {
             const stats = statsService.getOverview()
             const imageBuffer = await this.renderStatsImage(stats)
@@ -790,88 +813,69 @@ export class MessageInspector extends plugin {
     async showDetailedStats() {
         const stats = statsService.getOverview()
         const msgs = []
-        
+
         // 1. 概览
-        msgs.push([
-            '📊 AI 统计概览',
-            '━━━━━━━━━━━━━━━━',
-            `🕐 运行时间: ${stats.uptime.days}天${stats.uptime.hours}小时`,
-            `📨 消息总数: ${stats.messages.total}`,
-            `💬 对话数: ${stats.messages.conversations}`,
-            `🤖 模型调用: ${stats.models.totalCalls}`,
-            `🔧 工具调用: ${stats.tools.totalCalls}`,
-            `📝 Tokens: ${this.formatNumber(stats.tokens.totalSum)}`
-        ].join('\n'))
-        
+        msgs.push(
+            [
+                '📊 AI 统计概览',
+                '━━━━━━━━━━━━━━━━',
+                `🕐 运行时间: ${stats.uptime.days}天${stats.uptime.hours}小时`,
+                `📨 消息总数: ${stats.messages.total}`,
+                `💬 对话数: ${stats.messages.conversations}`,
+                `🤖 模型调用: ${stats.models.totalCalls}`,
+                `🔧 工具调用: ${stats.tools.totalCalls}`,
+                `📝 Tokens: ${this.formatNumber(stats.tokens.totalSum)}`
+            ].join('\n')
+        )
+
         // 2. 消息类型分布
         if (Object.keys(stats.messages.types).length > 0) {
             const typeLines = Object.entries(stats.messages.types)
                 .sort((a, b) => b[1] - a[1])
                 .map(([type, count]) => `  ${type}: ${count}`)
-            msgs.push([
-                '📝 消息类型分布',
-                '━━━━━━━━━━━━━━━━',
-                ...typeLines
-            ].join('\n'))
+            msgs.push(['📝 消息类型分布', '━━━━━━━━━━━━━━━━', ...typeLines].join('\n'))
         }
-        
+
         // 3. 模型使用统计
         if (stats.models.byModel.length > 0) {
-            const modelLines = stats.models.byModel.slice(0, 15).map(m => 
-                `  ${m.name.split('/').pop()}: ${m.calls}次 (${this.formatNumber(m.inputTokens + m.outputTokens)} tokens)`
-            )
-            msgs.push([
-                '🤖 模型使用统计',
-                '━━━━━━━━━━━━━━━━',
-                ...modelLines
-            ].join('\n'))
+            const modelLines = stats.models.byModel
+                .slice(0, 15)
+                .map(
+                    m =>
+                        `  ${m.name.split('/').pop()}: ${m.calls}次 (${this.formatNumber(m.inputTokens + m.outputTokens)} tokens)`
+                )
+            msgs.push(['🤖 模型使用统计', '━━━━━━━━━━━━━━━━', ...modelLines].join('\n'))
         }
-        
+
         // 4. Tokens 统计
-        msgs.push([
-            '📊 Tokens 统计',
-            '━━━━━━━━━━━━━━━━',
-            `总输入: ${this.formatNumber(stats.tokens.total.input)}`,
-            `总输出: ${this.formatNumber(stats.tokens.total.output)}`,
-            `总计: ${this.formatNumber(stats.tokens.totalSum)}`
-        ].join('\n'))
-        
+        msgs.push(
+            [
+                '📊 Tokens 统计',
+                '━━━━━━━━━━━━━━━━',
+                `总输入: ${this.formatNumber(stats.tokens.total.input)}`,
+                `总输出: ${this.formatNumber(stats.tokens.total.output)}`,
+                `总计: ${this.formatNumber(stats.tokens.totalSum)}`
+            ].join('\n')
+        )
+
         // 5. 群组 Top 10
         if (stats.messages.topGroups.length > 0) {
-            const groupLines = stats.messages.topGroups.map((g, i) => 
-                `  ${i + 1}. ${g.id}: ${g.count}条`
-            )
-            msgs.push([
-                '👥 活跃群组 Top 10',
-                '━━━━━━━━━━━━━━━━',
-                ...groupLines
-            ].join('\n'))
+            const groupLines = stats.messages.topGroups.map((g, i) => `  ${i + 1}. ${g.id}: ${g.count}条`)
+            msgs.push(['👥 活跃群组 Top 10', '━━━━━━━━━━━━━━━━', ...groupLines].join('\n'))
         }
-        
+
         // 6. 用户 Top 10
         if (stats.messages.topUsers.length > 0) {
-            const userLines = stats.messages.topUsers.map((u, i) => 
-                `  ${i + 1}. ${u.id}: ${u.count}条`
-            )
-            msgs.push([
-                '👤 活跃用户 Top 10',
-                '━━━━━━━━━━━━━━━━',
-                ...userLines
-            ].join('\n'))
+            const userLines = stats.messages.topUsers.map((u, i) => `  ${i + 1}. ${u.id}: ${u.count}条`)
+            msgs.push(['👤 活跃用户 Top 10', '━━━━━━━━━━━━━━━━', ...userLines].join('\n'))
         }
-        
+
         // 7. 工具使用 Top 10
         if (stats.tools.byTool.length > 0) {
-            const toolLines = stats.tools.byTool.slice(0, 10).map(t => 
-                `  ${t.name}: ${t.calls}次 (成功${t.success})`
-            )
-            msgs.push([
-                '🔧 工具使用 Top 10',
-                '━━━━━━━━━━━━━━━━',
-                ...toolLines
-            ].join('\n'))
+            const toolLines = stats.tools.byTool.slice(0, 10).map(t => `  ${t.name}: ${t.calls}次 (成功${t.success})`)
+            msgs.push(['🔧 工具使用 Top 10', '━━━━━━━━━━━━━━━━', ...toolLines].join('\n'))
         }
-        
+
         // 8. 小时分布
         if (Object.keys(stats.messages.hourlyDistribution).length > 0) {
             const hourLines = []
@@ -882,14 +886,10 @@ export class MessageInspector extends plugin {
                 }
             }
             if (hourLines.length > 0) {
-                msgs.push([
-                    '⏰ 消息时段分布',
-                    '━━━━━━━━━━━━━━━━',
-                    ...hourLines
-                ].join('\n'))
+                msgs.push(['⏰ 消息时段分布', '━━━━━━━━━━━━━━━━', ...hourLines].join('\n'))
             }
         }
-        
+
         const sendResult = await this.sendForwardMsg(this.e, 'AI 详细统计', msgs)
         if (!sendResult) {
             await this.reply(msgs.slice(0, 3).join('\n\n'))
@@ -903,10 +903,10 @@ export class MessageInspector extends plugin {
     async showDebugInfo() {
         const e = this.e
         const bot = e.bot || Bot
-        
+
         const framework = getBotFramework()
         const adapter = getAdapter(e)
-        
+
         // 收集调试信息
         const debugInfo = {
             framework,
@@ -933,7 +933,7 @@ export class MessageInspector extends plugin {
             message: e.message,
             raw_message: e.raw_message
         }
-        
+
         // 内存使用
         const memUsage = process.memoryUsage()
         debugInfo.memory = {
@@ -941,7 +941,7 @@ export class MessageInspector extends plugin {
             heapUsed: this.formatBytes(memUsage.heapUsed),
             heapTotal: this.formatBytes(memUsage.heapTotal)
         }
-        
+
         // 统计概览
         const stats = statsService.getOverview()
         debugInfo.stats = {
@@ -950,7 +950,7 @@ export class MessageInspector extends plugin {
             toolCalls: stats.tools.totalCalls,
             tokens: stats.tokens.totalSum
         }
-        
+
         try {
             const markdown = [
                 `## 🔧 Debug 信息`,
@@ -987,7 +987,7 @@ export class MessageInspector extends plugin {
                 `| 工具调用 | ${debugInfo.stats.toolCalls} |`,
                 `| Tokens | ${this.formatNumber(debugInfo.stats.tokens)} |`
             ]
-            
+
             const imageBuffer = await renderService.renderMarkdownToImage({
                 markdown: markdown.join('\n'),
                 title: 'Debug 信息',
@@ -997,17 +997,20 @@ export class MessageInspector extends plugin {
             await this.reply(segment.image(imageBuffer))
         } catch (err) {
             // 文本回退
-            await this.reply([
-                '🔧 Debug 信息',
-                '━━━━━━━━━━━━━━━━',
-                `框架: ${framework}`,
-                `适配器: ${adapter}`,
-                `Bot: ${debugInfo.bot.uin}`,
-                `内存: ${debugInfo.memory.heapUsed}`,
-                `消息: ${debugInfo.stats.messages}`,
-                `模型调用: ${debugInfo.stats.modelCalls}`,
-                `Tokens: ${this.formatNumber(debugInfo.stats.tokens)}`
-            ].join('\n'), true)
+            await this.reply(
+                [
+                    '🔧 Debug 信息',
+                    '━━━━━━━━━━━━━━━━',
+                    `框架: ${framework}`,
+                    `适配器: ${adapter}`,
+                    `Bot: ${debugInfo.bot.uin}`,
+                    `内存: ${debugInfo.memory.heapUsed}`,
+                    `消息: ${debugInfo.stats.messages}`,
+                    `模型调用: ${debugInfo.stats.modelCalls}`,
+                    `Tokens: ${this.formatNumber(debugInfo.stats.tokens)}`
+                ].join('\n'),
+                true
+            )
         }
         return true
     }
@@ -1040,7 +1043,7 @@ export class MessageInspector extends plugin {
             ``,
             `### 🤖 模型使用 Top 5`
         ]
-        
+
         if (stats.models.byModel.length > 0) {
             markdown.push(`| 模型 | 调用 | Tokens |`)
             markdown.push(`|------|------|--------|`)
@@ -1051,7 +1054,7 @@ export class MessageInspector extends plugin {
         } else {
             markdown.push(`暂无数据`)
         }
-        
+
         markdown.push(``, `### 👥 活跃群组 Top 5`)
         if (stats.messages.topGroups.length > 0) {
             markdown.push(`| 群号 | 消息数 |`)
@@ -1062,7 +1065,7 @@ export class MessageInspector extends plugin {
         } else {
             markdown.push(`暂无数据`)
         }
-        
+
         markdown.push(``, `### 👤 活跃用户 Top 5`)
         if (stats.messages.topUsers.length > 0) {
             markdown.push(`| 用户 | 消息数 |`)
@@ -1073,7 +1076,7 @@ export class MessageInspector extends plugin {
         } else {
             markdown.push(`暂无数据`)
         }
-        
+
         return renderService.renderMarkdownToImage({
             markdown: markdown.join('\n'),
             title: 'AI 统计',

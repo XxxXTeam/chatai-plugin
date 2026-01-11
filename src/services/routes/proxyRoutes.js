@@ -107,7 +107,7 @@ router.post('/test', async (req, res) => {
     try {
         const { proxyService } = await import('../proxy/ProxyService.js')
         const { profileId, testUrl, type, host, port, username, password } = req.body
-        
+
         let profile
         if (profileId) {
             profile = proxyService.getProfileById(profileId)
@@ -116,7 +116,7 @@ router.post('/test', async (req, res) => {
             if (!host || !port) return res.status(400).json(ChaiteResponse.fail(null, 'host and port are required'))
             profile = { type, host, port: parseInt(port), username, password }
         }
-        
+
         const result = await proxyService.testProxy(profile, testUrl || 'https://www.google.com')
         res.json(ChaiteResponse.ok(result))
     } catch (error) {

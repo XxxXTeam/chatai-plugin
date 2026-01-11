@@ -31,28 +31,208 @@ class PermissionService {
     getDefaultCommands() {
         return [
             // 基础指令
-            { id: 'chat', command: '@Bot / 触发词', name: '对话', category: 'basic', level: 'all', whitelist: [], blacklist: [], enabled: true },
-            { id: 'endConversation', command: '#ai结束对话', name: '结束对话', category: 'basic', level: 'all', whitelist: [], blacklist: [], enabled: true },
-            { id: 'setPersonality', command: '#ai设置人格', name: '设置人格', category: 'basic', level: 'all', whitelist: [], blacklist: [], enabled: true },
-            { id: 'viewPersonality', command: '#ai查看人格', name: '查看人格', category: 'basic', level: 'all', whitelist: [], blacklist: [], enabled: true },
-            { id: 'clearPersonality', command: '#ai清除人格', name: '清除人格', category: 'basic', level: 'all', whitelist: [], blacklist: [], enabled: true },
-            { id: 'help', command: '#ai帮助', name: '帮助', category: 'basic', level: 'all', whitelist: [], blacklist: [], enabled: true },
+            {
+                id: 'chat',
+                command: '@Bot / 触发词',
+                name: '对话',
+                category: 'basic',
+                level: 'all',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'endConversation',
+                command: '#ai结束对话',
+                name: '结束对话',
+                category: 'basic',
+                level: 'all',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'setPersonality',
+                command: '#ai设置人格',
+                name: '设置人格',
+                category: 'basic',
+                level: 'all',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'viewPersonality',
+                command: '#ai查看人格',
+                name: '查看人格',
+                category: 'basic',
+                level: 'all',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'clearPersonality',
+                command: '#ai清除人格',
+                name: '清除人格',
+                category: 'basic',
+                level: 'all',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'help',
+                command: '#ai帮助',
+                name: '帮助',
+                category: 'basic',
+                level: 'all',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
             // 群管理指令
-            { id: 'groupSettings', command: '#ai群设置', name: '群设置', category: 'group', level: 'admin', whitelist: [], blacklist: [], enabled: true },
-            { id: 'groupBym', command: '#ai群伪人开启/关闭', name: '群伪人开关', category: 'group', level: 'admin', whitelist: [], blacklist: [], enabled: true },
-            { id: 'groupBymProb', command: '#ai群伪人概率', name: '群伪人概率', category: 'group', level: 'admin', whitelist: [], blacklist: [], enabled: true },
-            { id: 'groupBymModel', command: '#ai群伪人模型', name: '群伪人模型', category: 'group', level: 'admin', whitelist: [], blacklist: [], enabled: true },
-            { id: 'groupBymPreset', command: '#ai群伪人预设', name: '群伪人预设', category: 'group', level: 'admin', whitelist: [], blacklist: [], enabled: true },
-            { id: 'groupImageGen', command: '#ai群绘图开启/关闭', name: '群绘图开关', category: 'group', level: 'admin', whitelist: [], blacklist: [], enabled: true },
-            { id: 'setGroupPersonality', command: '#ai设置群人格', name: '设置群人格', category: 'group', level: 'admin', whitelist: [], blacklist: [], enabled: true },
-            { id: 'clearGroupPersonality', command: '#ai清除群人格', name: '清除群人格', category: 'group', level: 'admin', whitelist: [], blacklist: [], enabled: true },
+            {
+                id: 'groupSettings',
+                command: '#ai群设置',
+                name: '群设置',
+                category: 'group',
+                level: 'admin',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'groupBym',
+                command: '#ai群伪人开启/关闭',
+                name: '群伪人开关',
+                category: 'group',
+                level: 'admin',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'groupBymProb',
+                command: '#ai群伪人概率',
+                name: '群伪人概率',
+                category: 'group',
+                level: 'admin',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'groupBymModel',
+                command: '#ai群伪人模型',
+                name: '群伪人模型',
+                category: 'group',
+                level: 'admin',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'groupBymPreset',
+                command: '#ai群伪人预设',
+                name: '群伪人预设',
+                category: 'group',
+                level: 'admin',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'groupImageGen',
+                command: '#ai群绘图开启/关闭',
+                name: '群绘图开关',
+                category: 'group',
+                level: 'admin',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'setGroupPersonality',
+                command: '#ai设置群人格',
+                name: '设置群人格',
+                category: 'group',
+                level: 'admin',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'clearGroupPersonality',
+                command: '#ai清除群人格',
+                name: '清除群人格',
+                category: 'group',
+                level: 'admin',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
             // 主人指令
-            { id: 'adminPanel', command: '#ai管理面板', name: '管理面板', category: 'master', level: 'master', whitelist: [], blacklist: [], enabled: true },
-            { id: 'status', command: '#ai状态', name: '状态', category: 'master', level: 'master', whitelist: [], blacklist: [], enabled: true },
-            { id: 'toggleDebug', command: '#ai调试开启/关闭', name: '调试开关', category: 'master', level: 'master', whitelist: [], blacklist: [], enabled: true },
-            { id: 'toggleBym', command: '#ai伪人开启/关闭', name: '伪人开关(全局)', category: 'master', level: 'master', whitelist: [], blacklist: [], enabled: true },
-            { id: 'setModel', command: '#ai设置模型', name: '设置模型', category: 'master', level: 'master', whitelist: [], blacklist: [], enabled: true },
-            { id: 'endAllConversations', command: '#ai结束全部对话', name: '结束全部对话', category: 'master', level: 'master', whitelist: [], blacklist: [], enabled: true },
+            {
+                id: 'adminPanel',
+                command: '#ai管理面板',
+                name: '管理面板',
+                category: 'master',
+                level: 'master',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'status',
+                command: '#ai状态',
+                name: '状态',
+                category: 'master',
+                level: 'master',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'toggleDebug',
+                command: '#ai调试开启/关闭',
+                name: '调试开关',
+                category: 'master',
+                level: 'master',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'toggleBym',
+                command: '#ai伪人开启/关闭',
+                name: '伪人开关(全局)',
+                category: 'master',
+                level: 'master',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'setModel',
+                command: '#ai设置模型',
+                name: '设置模型',
+                category: 'master',
+                level: 'master',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            },
+            {
+                id: 'endAllConversations',
+                command: '#ai结束全部对话',
+                name: '结束全部对话',
+                category: 'master',
+                level: 'master',
+                whitelist: [],
+                blacklist: [],
+                enabled: true
+            }
         ]
     }
 
@@ -130,10 +310,10 @@ class PermissionService {
     check(commandId, userId, options = {}) {
         const { isGroup = false, senderRole = 'member', isMaster: frameworkMaster } = options
         const userIdStr = String(userId)
-        
+
         const permissions = this.getPermissionsConfig()
         const command = permissions.commands?.find(c => c.id === commandId)
-        
+
         // 主人无视所有限制（优先使用框架判断结果）
         if (frameworkMaster || this.isMaster(userId)) {
             return { allowed: true, reason: 'master' }
@@ -160,12 +340,12 @@ class PermissionService {
             const listMode = gs.listMode || 'none'
             const blacklist = gs.blacklist || []
             const whitelist = gs.whitelist || []
-            
+
             // 黑名单模式：在黑名单中的用户被禁止
             if (listMode === 'blacklist' && blacklist.includes(userIdStr)) {
                 return { allowed: false, reason: 'group_blacklist' }
             }
-            
+
             // 白名单模式：只有白名单中的用户允许
             if (listMode === 'whitelist') {
                 if (!whitelist.includes(userIdStr)) {
@@ -183,13 +363,13 @@ class PermissionService {
         switch (command.level) {
             case 'all':
                 return { allowed: true, reason: 'level_all' }
-            
+
             case 'whitelist':
                 if (command.whitelist?.includes(userIdStr)) {
                     return { allowed: true, reason: 'in_whitelist' }
                 }
                 return { allowed: false, reason: 'not_in_whitelist' }
-            
+
             case 'admin':
                 // 群聊中检查是否是管理员
                 if (isGroup) {
@@ -200,14 +380,14 @@ class PermissionService {
                 }
                 // 私聊中不允许
                 return { allowed: false, reason: 'group_only' }
-            
+
             case 'master':
                 // 只有主人可用，前面已经检查过了
                 return { allowed: false, reason: 'need_master' }
-            
+
             case 'disabled':
                 return { allowed: false, reason: 'command_disabled' }
-            
+
             default:
                 return { allowed: false, reason: 'unknown_level' }
         }
@@ -219,23 +399,23 @@ class PermissionService {
      */
     checkWithMessage(commandId, userId, options = {}) {
         const result = this.check(commandId, userId, options)
-        
+
         if (result.allowed) {
             return null
         }
 
         // 根据原因返回对应消息
         const messages = {
-            'command_disabled': '此命令已被禁用',
-            'global_blacklist': '您已被加入黑名单，无法使用此功能',
-            'command_blacklist': '您已被禁止使用此命令',
-            'group_blacklist': '您已被加入本群黑名单，无法使用AI功能',
-            'group_whitelist_only': '本群已启用白名单模式，您不在白名单中',
-            'not_in_whitelist': '此命令仅限白名单用户使用',
-            'need_admin': '此命令需要群管理员或群主权限',
-            'need_master': '此命令仅限主人使用',
-            'group_only': '此命令仅可在群聊中使用',
-            'unknown_level': '权限配置错误'
+            command_disabled: '此命令已被禁用',
+            global_blacklist: '您已被加入黑名单，无法使用此功能',
+            command_blacklist: '您已被禁止使用此命令',
+            group_blacklist: '您已被加入本群黑名单，无法使用AI功能',
+            group_whitelist_only: '本群已启用白名单模式，您不在白名单中',
+            not_in_whitelist: '此命令仅限白名单用户使用',
+            need_admin: '此命令需要群管理员或群主权限',
+            need_master: '此命令仅限主人使用',
+            group_only: '此命令仅可在群聊中使用',
+            unknown_level: '权限配置错误'
         }
 
         return messages[result.reason] || '您没有权限执行此命令'
@@ -252,7 +432,7 @@ class PermissionService {
             isGroup: e.isGroup,
             groupId: e.group_id ? String(e.group_id) : null,
             senderRole: e.sender?.role || 'member',
-            isMaster: e.isMaster  // 使用框架的主人判断
+            isMaster: e.isMaster // 使用框架的主人判断
         })
     }
 
@@ -267,7 +447,7 @@ class PermissionService {
             isGroup: e.isGroup,
             groupId: e.group_id ? String(e.group_id) : null,
             senderRole: e.sender?.role || 'member',
-            isMaster: e.isMaster  // 使用框架的主人判断
+            isMaster: e.isMaster // 使用框架的主人判断
         })
     }
 }

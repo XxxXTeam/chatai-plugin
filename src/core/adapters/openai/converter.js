@@ -1,20 +1,27 @@
-import { registerFromChaiteConverter, registerFromChaiteToolConverter, registerIntoChaiteConverter } from '../../utils/converter.js'
+import {
+    registerFromChaiteConverter,
+    registerFromChaiteToolConverter,
+    registerIntoChaiteConverter
+} from '../../utils/converter.js'
 
 /**
  * Convert Chaite IMessage to OpenAI format
  */
-registerFromChaiteConverter('openai', (source) => {
+registerFromChaiteConverter('openai', source => {
     switch (source.role) {
         case 'assistant': {
             const content = source.content || []
-            const text = Array.isArray(content) 
-                ? content.filter(t => t && t.type === 'text').map(t => t.text).join('')
+            const text = Array.isArray(content)
+                ? content
+                      .filter(t => t && t.type === 'text')
+                      .map(t => t.text)
+                      .join('')
                 : ''
 
             const hasToolCalls = source.toolCalls && source.toolCalls.length > 0
             const msg = {
                 role: 'assistant',
-                content: text || (hasToolCalls ? null : ''),
+                content: text || (hasToolCalls ? null : '')
             }
             if (hasToolCalls) {
                 msg.tool_calls = source.toolCalls.map(t => {
@@ -22,11 +29,12 @@ registerFromChaiteConverter('openai', (source) => {
                         id: t.id,
                         type: t.type || 'function',
                         function: {
-                            arguments: typeof t.function.arguments === 'string' 
-                                ? t.function.arguments 
-                                : JSON.stringify(t.function.arguments),
-                            name: t.function.name,
-                        },
+                            arguments:
+                                typeof t.function.arguments === 'string'
+                                    ? t.function.arguments
+                                    : JSON.stringify(t.function.arguments),
+                            name: t.function.name
+                        }
                     }
                     // 保留 Gemini thought_signature（OpenAI 兼容模式）
                     if (t.thought_signature || t.extra_content?.google?.thought_signature) {
@@ -48,7 +56,7 @@ registerFromChaiteConverter('openai', (source) => {
             if (!Array.isArray(userContent) || userContent.length === 0) {
                 return { role: 'user', content: '' }
             }
-            
+
             // Check if content is simple text only (for better compatibility with proxy APIs)
             const hasOnlyText = userContent.every(t => t.type === 'text')
             const isSingleText = userContent.length === 1 && userContent[0].type === 'text'
@@ -64,43 +72,46 @@ registerFromChaiteConverter('openai', (source) => {
             // For multimodal content or multiple text items, use array format
             return {
                 role: 'user',
-                content: userContent.map(t => {
-                    switch (t.type) {
-                        case 'text':
-                            return { type: 'text', text: t.text }
-                        case 'audio':
-                            return {
-                                type: 'input_audio',
-                                input_audio: { data: t.data, format: t.format },
-                            }
-                        case 'image':
-                            // 支持base64和URL
-                            return {
-                                type: 'image_url',
-                                image_url: { 
-                                    url: t.image.startsWith('http') || t.image.startsWith('data:') 
-                                        ? t.image 
-                                        : `data:image/jpeg;base64,${t.image}` 
-                                },
-                            }
-                        case 'image_url':
-                            // 直接传递 image_url 类型（来自 messageParser）
-                            return {
-                                type: 'image_url',
-                                image_url: { url: t.image_url?.url || t.url || '' }
-                            }
-                        case 'video_info':
-                            // 视频信息转为文本描述（大多数API不支持视频）
-                            return {
-                                type: 'text',
-                                text: `[视频${t.name ? ':' + t.name : ''} URL:${t.url || ''}]`
-                            }
-                        default:
-                            // 未知类型跳过
-                            console.warn('[OpenAI Converter] 未知的content类型:', t.type)
-                            return null
-                    }
-                }).filter(Boolean),  // 过滤掉null
+                content: userContent
+                    .map(t => {
+                        switch (t.type) {
+                            case 'text':
+                                return { type: 'text', text: t.text }
+                            case 'audio':
+                                return {
+                                    type: 'input_audio',
+                                    input_audio: { data: t.data, format: t.format }
+                                }
+                            case 'image':
+                                // 支持base64和URL
+                                return {
+                                    type: 'image_url',
+                                    image_url: {
+                                        url:
+                                            t.image.startsWith('http') || t.image.startsWith('data:')
+                                                ? t.image
+                                                : `data:image/jpeg;base64,${t.image}`
+                                    }
+                                }
+                            case 'image_url':
+                                // 直接传递 image_url 类型（来自 messageParser）
+                                return {
+                                    type: 'image_url',
+                                    image_url: { url: t.image_url?.url || t.url || '' }
+                                }
+                            case 'video_info':
+                                // 视频信息转为文本描述（大多数API不支持视频）
+                                return {
+                                    type: 'text',
+                                    text: `[视频${t.name ? ':' + t.name : ''} URL:${t.url || ''}]`
+                                }
+                            default:
+                                // 未知类型跳过
+                                console.warn('[OpenAI Converter] 未知的content类型:', t.type)
+                                return null
+                        }
+                    })
+                    .filter(Boolean) // 过滤掉null
             }
         }
         case 'tool': {
@@ -117,12 +128,12 @@ registerFromChaiteConverter('openai', (source) => {
                 }
                 // 确保 name 不为空（Gemini API 强制要求）
                 toolName = toolName || 'tool_result'
-                
+
                 return {
                     role: 'tool',
                     tool_call_id: tcr.tool_call_id,
                     content: tcr.content,
-                    name: toolName,
+                    name: toolName
                 }
             })
             return toolMsgs
@@ -131,8 +142,13 @@ registerFromChaiteConverter('openai', (source) => {
             // Handle system messages
             const systemContent = source.content || []
             const systemText = Array.isArray(systemContent)
-                ? systemContent.filter(t => t && t.type === 'text').map(t => t.text).join('\n')
-                : (typeof systemContent === 'string' ? systemContent : '')
+                ? systemContent
+                      .filter(t => t && t.type === 'text')
+                      .map(t => t.text)
+                      .join('\n')
+                : typeof systemContent === 'string'
+                  ? systemContent
+                  : ''
             return {
                 role: 'system',
                 content: systemText
@@ -142,8 +158,13 @@ registerFromChaiteConverter('openai', (source) => {
             // Handle developer messages (for thinking models)
             const devContent = source.content || []
             const devText = Array.isArray(devContent)
-                ? devContent.filter(t => t && t.type === 'text').map(t => t.text).join('\n')
-                : (typeof devContent === 'string' ? devContent : '')
+                ? devContent
+                      .filter(t => t && t.type === 'text')
+                      .map(t => t.text)
+                      .join('\n')
+                : typeof devContent === 'string'
+                  ? devContent
+                  : ''
             return {
                 role: 'developer',
                 content: devText
@@ -158,13 +179,17 @@ registerFromChaiteConverter('openai', (source) => {
 /**
  * Convert OpenAI format to Chaite IMessage
  */
-registerIntoChaiteConverter('openai', (msg) => {
+registerIntoChaiteConverter('openai', msg => {
     switch (msg.role) {
         case 'assistant': {
-            const content = msg.content ? (Array.isArray(msg.content) ? msg.content : [{ type: 'text', text: msg.content }]) : []
+            const content = msg.content
+                ? Array.isArray(msg.content)
+                    ? msg.content
+                    : [{ type: 'text', text: msg.content }]
+                : []
 
             const contents = []
-            
+
             // 处理 reasoning_content 字段（思考内容）
             if (msg.reasoning_content) {
                 contents.push({
@@ -172,16 +197,18 @@ registerIntoChaiteConverter('openai', (msg) => {
                     text: msg.reasoning_content
                 })
             }
-            
+
             // 处理普通 content
-            contents.push(...content.map(t => {
-                let text = t.type === 'text' ? t.text : t.refusal || ''
-                // 去除首行换行符（某些模型会在回复开头添加换行）
-                if (typeof text === 'string') {
-                    text = text.replace(/^[\r\n]+/, '')
-                }
-                return { type: 'text', text }
-            }))
+            contents.push(
+                ...content.map(t => {
+                    let text = t.type === 'text' ? t.text : t.refusal || ''
+                    // 去除首行换行符（某些模型会在回复开头添加换行）
+                    if (typeof text === 'string') {
+                        text = text.replace(/^[\r\n]+/, '')
+                    }
+                    return { type: 'text', text }
+                })
+            )
             let toolCalls = undefined
             if (msg.tool_calls && msg.tool_calls.length > 0) {
                 toolCalls = msg.tool_calls.map(t => {
@@ -206,7 +233,7 @@ registerIntoChaiteConverter('openai', (msg) => {
                             for (let i = 0; i < openBraces - closeBraces; i++) {
                                 fixed += '}'
                             }
-                            
+
                             try {
                                 args = JSON.parse(fixed)
                                 console.debug('[OpenAI Converter] 修复截断的arguments成功:', fixed)
@@ -223,8 +250,8 @@ registerIntoChaiteConverter('openai', (msg) => {
                         type: 'function',
                         function: {
                             name: t.function?.name,
-                            arguments: args,
-                        },
+                            arguments: args
+                        }
                     }
                     if (t.extra_content?.google?.thought_signature) {
                         toolCall.thought_signature = t.extra_content.google.thought_signature
@@ -237,14 +264,14 @@ registerIntoChaiteConverter('openai', (msg) => {
             return {
                 role: 'assistant',
                 content: contents,
-                toolCalls,
+                toolCalls
             }
         }
         case 'user': {
             if (typeof msg.content === 'string') {
                 return {
                     role: 'user',
-                    content: [{ type: 'text', text: msg.content }],
+                    content: [{ type: 'text', text: msg.content }]
                 }
             }
             return {
@@ -258,35 +285,43 @@ registerIntoChaiteConverter('openai', (msg) => {
                         case 'input_audio':
                             return { type: 'audio', data: t.input_audio.data, format: t.input_audio.format || 'mp3' }
                     }
-                }),
+                })
             }
         }
         case 'system': {
             return {
                 role: 'system',
-                content: typeof msg.content === 'string' ? [{ type: 'text', text: msg.content }] : msg.content?.map(t => ({
-                    type: 'text',
-                    text: t.text,
-                })),
+                content:
+                    typeof msg.content === 'string'
+                        ? [{ type: 'text', text: msg.content }]
+                        : msg.content?.map(t => ({
+                              type: 'text',
+                              text: t.text
+                          }))
             }
         }
         case 'tool': {
             return {
                 role: 'tool',
-                content: [{
-                    type: 'tool',
-                    tool_call_id: msg.tool_call_id,
-                    content: typeof msg.content === 'string' ? msg.content : msg.content[0]?.text || '',
-                }],
+                content: [
+                    {
+                        type: 'tool',
+                        tool_call_id: msg.tool_call_id,
+                        content: typeof msg.content === 'string' ? msg.content : msg.content[0]?.text || ''
+                    }
+                ]
             }
         }
         case 'developer': {
             return {
                 role: 'developer',
-                content: typeof msg.content === 'string' ? [{ type: 'text', text: msg.content }] : msg.content?.map(t => ({
-                    type: 'text',
-                    text: t.text,
-                })),
+                content:
+                    typeof msg.content === 'string'
+                        ? [{ type: 'text', text: msg.content }]
+                        : msg.content?.map(t => ({
+                              type: 'text',
+                              text: t.text
+                          }))
             }
         }
         default: {
@@ -298,15 +333,15 @@ registerIntoChaiteConverter('openai', (msg) => {
 /**
  * Convert Chaite Tool to OpenAI format
  */
-registerFromChaiteToolConverter('openai', (tool) => {
+registerFromChaiteToolConverter('openai', tool => {
     return {
         type: 'function',
         function: {
             name: tool.function.name,
             description: tool.function.description,
-            parameters: tool.function.parameters,
-        },
+            parameters: tool.function.parameters
+        }
     }
 })
 
-export { }
+export {}

@@ -12,17 +12,17 @@ import fetch from 'node-fetch'
  */
 function htmlToMarkdown(html) {
     if (!html) return ''
-    
+
     let md = html
-    
+
     // 移除script和style标签及其内容
     md = md.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
     md = md.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
     md = md.replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
-    
+
     // 移除HTML注释
     md = md.replace(/<!--[\s\S]*?-->/g, '')
-    
+
     // 处理标题
     md = md.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n# $1\n')
     md = md.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n## $1\n')
@@ -30,38 +30,38 @@ function htmlToMarkdown(html) {
     md = md.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, '\n#### $1\n')
     md = md.replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, '\n##### $1\n')
     md = md.replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, '\n###### $1\n')
-    
+
     // 处理段落和换行
     md = md.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '\n$1\n')
     md = md.replace(/<br\s*\/?>/gi, '\n')
     md = md.replace(/<\/div>/gi, '\n')
     md = md.replace(/<div[^>]*>/gi, '')
-    
+
     // 处理链接
     md = md.replace(/<a[^>]*href=["']([^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
-    
+
     // 处理图片
     md = md.replace(/<img[^>]*alt=["']([^"']*)["'][^>]*src=["']([^"']*)["'][^>]*\/?>/gi, '![$1]($2)')
     md = md.replace(/<img[^>]*src=["']([^"']*)["'][^>]*alt=["']([^"']*)["'][^>]*\/?>/gi, '![$2]($1)')
     md = md.replace(/<img[^>]*src=["']([^"']*)["'][^>]*\/?>/gi, '![]($1)')
-    
+
     // 处理加粗和斜体
     md = md.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
     md = md.replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**')
     md = md.replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*')
     md = md.replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*')
-    
+
     // 处理代码
     md = md.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, '`$1`')
     md = md.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, '\n```\n$1\n```\n')
-    
+
     // 处理列表
     md = md.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n')
     md = md.replace(/<\/?[uo]l[^>]*>/gi, '\n')
-    
+
     // 处理引用
     md = md.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, '> $1\n')
-    
+
     // 处理表格（简化处理）
     md = md.replace(/<th[^>]*>([\s\S]*?)<\/th>/gi, '| $1 ')
     md = md.replace(/<td[^>]*>([\s\S]*?)<\/td>/gi, '| $1 ')
@@ -69,10 +69,10 @@ function htmlToMarkdown(html) {
     md = md.replace(/<\/?table[^>]*>/gi, '\n')
     md = md.replace(/<\/?thead[^>]*>/gi, '')
     md = md.replace(/<\/?tbody[^>]*>/gi, '')
-    
+
     // 移除剩余的HTML标签
     md = md.replace(/<[^>]+>/g, '')
-    
+
     // 解码HTML实体
     md = md.replace(/&nbsp;/g, ' ')
     md = md.replace(/&amp;/g, '&')
@@ -86,12 +86,12 @@ function htmlToMarkdown(html) {
     md = md.replace(/&reg;/g, '®')
     md = md.replace(/&hellip;/g, '...')
     md = md.replace(/&#(\d+);/g, (_, code) => String.fromCharCode(code))
-    
+
     // 清理多余空白
     md = md.replace(/\n{3,}/g, '\n\n')
     md = md.replace(/[ \t]+/g, ' ')
     md = md.trim()
-    
+
     return md
 }
 
@@ -103,38 +103,39 @@ function htmlToMarkdown(html) {
  */
 async function fetchUrlToMarkdown(url, options = {}) {
     const { maxLength = 8000, timeout = 10000 } = options
-    
+
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), timeout)
-    
+
     try {
         const response = await fetch(url, {
             signal: controller.signal,
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'User-Agent':
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
             }
         })
-        
+
         clearTimeout(timeoutId)
-        
+
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}`)
         }
-        
+
         const html = await response.text()
-        
+
         // 提取标题
         const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
         const title = titleMatch ? titleMatch[1].trim() : url
-        
+
         // 提取主要内容区域（优先级：article > main > body）
         let mainContent = html
         const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i)
         const mainMatch = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i)
         const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)
-        
+
         if (articleMatch) {
             mainContent = articleMatch[1]
         } else if (mainMatch) {
@@ -142,15 +143,15 @@ async function fetchUrlToMarkdown(url, options = {}) {
         } else if (bodyMatch) {
             mainContent = bodyMatch[1]
         }
-        
+
         // 转换为Markdown
         let markdown = htmlToMarkdown(mainContent)
-        
+
         // 限制长度
         if (markdown.length > maxLength) {
             markdown = markdown.substring(0, maxLength) + '\n\n...[内容已截断]'
         }
-        
+
         return {
             success: true,
             title,
@@ -181,65 +182,70 @@ export const searchTools = [
             },
             required: ['query']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const query = args.query
                 const count = Math.min(args.count || 5, 10)
                 const fetchContent = args.fetchContent || false
-                
+
                 // 使用Bing搜索（通过HTML解析）
                 const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${count}`
-                
+
                 const response = await fetch(searchUrl, {
                     headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'User-Agent':
+                            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
                     }
                 })
-                
+
                 if (!response.ok) {
                     throw new Error(`Bing搜索请求失败: HTTP ${response.status}`)
                 }
-                
+
                 const html = await response.text()
                 const results = []
-                
+
                 // 解析Bing搜索结果
                 // Bing搜索结果在 <li class="b_algo"> 中
                 const resultPattern = /<li class="b_algo"[^>]*>([\s\S]*?)<\/li>/gi
                 const matches = html.matchAll(resultPattern)
-                
+
                 for (const match of matches) {
                     if (results.length >= count) break
-                    
+
                     const itemHtml = match[1]
-                    
+
                     // 提取标题和链接
                     const titleMatch = itemHtml.match(/<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/i)
                     if (!titleMatch) continue
-                    
+
                     const url = titleMatch[1]
                     const title = titleMatch[2].replace(/<[^>]+>/g, '').trim()
-                    
+
                     // 过滤非HTTP链接
                     if (!url.startsWith('http')) continue
-                    
+
                     // 提取摘要
-                    const snippetMatch = itemHtml.match(/<p[^>]*>([\s\S]*?)<\/p>/i) || 
-                                        itemHtml.match(/<div class="b_caption"[^>]*>([\s\S]*?)<\/div>/i)
-                    const snippet = snippetMatch 
-                        ? snippetMatch[1].replace(/<[^>]+>/g, '').trim().substring(0, 300)
+                    const snippetMatch =
+                        itemHtml.match(/<p[^>]*>([\s\S]*?)<\/p>/i) ||
+                        itemHtml.match(/<div class="b_caption"[^>]*>([\s\S]*?)<\/div>/i)
+                    const snippet = snippetMatch
+                        ? snippetMatch[1]
+                              .replace(/<[^>]+>/g, '')
+                              .trim()
+                              .substring(0, 300)
                         : ''
-                    
+
                     results.push({ title, url, snippet })
                 }
-                
+
                 // 备用解析方法（如果上面没有找到结果）
                 if (results.length === 0) {
                     const altPattern = /<h2[^>]*><a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a><\/h2>/gi
                     const altMatches = html.matchAll(altPattern)
-                    
+
                     for (const match of altMatches) {
                         if (results.length >= count) break
                         const url = match[1]
@@ -249,11 +255,11 @@ export const searchTools = [
                         }
                     }
                 }
-                
+
                 // 如果需要获取网页内容
                 if (fetchContent && results.length > 0) {
                     const contentResults = await Promise.all(
-                        results.slice(0, 3).map(async (r) => {
+                        results.slice(0, 3).map(async r => {
                             const pageContent = await fetchUrlToMarkdown(r.url, { maxLength: 3000 })
                             return {
                                 ...r,
@@ -262,7 +268,7 @@ export const searchTools = [
                             }
                         })
                     )
-                    
+
                     return {
                         success: true,
                         query,
@@ -271,7 +277,7 @@ export const searchTools = [
                         results: contentResults
                     }
                 }
-                
+
                 return {
                     success: true,
                     query,
@@ -296,7 +302,7 @@ export const searchTools = [
             },
             required: ['url']
         },
-        handler: async (args) => {
+        handler: async args => {
             return await fetchUrlToMarkdown(args.url, { maxLength: args.maxLength || 8000 })
         }
     },
@@ -318,7 +324,7 @@ export const searchTools = [
                 const query = args.query
                 const count = args.count || 5
                 const engine = args.engine || 'bing'
-                
+
                 // 优先使用Bing搜索
                 if (engine === 'bing') {
                     // 调用bing_search工具
@@ -327,15 +333,15 @@ export const searchTools = [
                         return await bingTool.handler({ query, count })
                     }
                 }
-                
+
                 // 使用 DuckDuckGo Instant Answer API（免费无需API Key）
                 if (engine === 'duckduckgo') {
                     const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`
                     const response = await fetch(url)
                     const data = await response.json()
-                    
+
                     const results = []
-                    
+
                     // 添加摘要结果
                     if (data.Abstract) {
                         results.push({
@@ -345,7 +351,7 @@ export const searchTools = [
                             source: data.AbstractSource
                         })
                     }
-                    
+
                     // 添加相关主题
                     if (data.RelatedTopics) {
                         for (const topic of data.RelatedTopics.slice(0, count - 1)) {
@@ -358,7 +364,7 @@ export const searchTools = [
                             }
                         }
                     }
-                    
+
                     return {
                         success: true,
                         query,
@@ -367,7 +373,7 @@ export const searchTools = [
                         results
                     }
                 }
-                
+
                 return {
                     success: false,
                     error: `不支持的搜索引擎: ${engine}`,
@@ -390,24 +396,24 @@ export const searchTools = [
             },
             required: ['query']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const lang = args.lang || 'zh'
                 const url = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(args.query)}`
-                
+
                 const response = await fetch(url, {
                     headers: { 'User-Agent': 'ChatBot/1.0' }
                 })
-                
+
                 if (!response.ok) {
                     if (response.status === 404) {
                         return { success: false, error: '未找到相关词条' }
                     }
                     throw new Error(`HTTP ${response.status}`)
                 }
-                
+
                 const data = await response.json()
-                
+
                 return {
                     success: true,
                     title: data.title,
@@ -439,21 +445,21 @@ export const searchTools = [
                 const e = ctx.getEvent()
                 const bot = ctx.getBot()
                 const groupId = args.group_id || e?.group_id
-                
+
                 if (!groupId) {
                     return { success: false, error: '需要群号参数或在群聊中使用' }
                 }
-                
+
                 const group = bot.pickGroup(parseInt(groupId))
                 if (!group?.getChatHistory) {
                     return { success: false, error: '无法获取聊天记录' }
                 }
-                
+
                 // 获取最近的消息
                 const history = await group.getChatHistory(0, 100)
                 const keyword = args.keyword.toLowerCase()
                 const limit = args.limit || 10
-                
+
                 // 搜索包含关键词的消息
                 const matches = []
                 for (const msg of (history || []).reverse()) {
@@ -468,7 +474,7 @@ export const searchTools = [
                         if (matches.length >= limit) break
                     }
                 }
-                
+
                 return {
                     success: true,
                     keyword: args.keyword,
@@ -494,21 +500,21 @@ export const searchTools = [
             },
             required: ['text']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const text = args.text
                 const targetLang = args.to || 'zh'
-                
+
                 // 使用免费翻译 API
                 const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${args.from || 'auto'}|${targetLang}`
-                
+
                 const response = await fetch(url)
                 const data = await response.json()
-                
+
                 if (data.responseStatus !== 200) {
                     return { success: false, error: data.responseDetails || '翻译失败' }
                 }
-                
+
                 return {
                     success: true,
                     original: text,
@@ -533,28 +539,28 @@ export const searchTools = [
             },
             required: ['city']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const city = encodeURIComponent(args.city)
-                
+
                 // 使用 wttr.in 免费天气 API
                 const url = `https://wttr.in/${city}?format=j1&lang=zh`
                 const response = await fetch(url, {
                     headers: { 'User-Agent': 'curl/7.68.0' }
                 })
-                
+
                 if (!response.ok) {
                     return { success: false, error: '获取天气失败，请检查城市名称' }
                 }
-                
+
                 const data = await response.json()
                 const current = data.current_condition?.[0]
                 const forecast = data.weather?.slice(0, args.days || 1) || []
-                
+
                 if (!current) {
                     return { success: false, error: '未找到该城市的天气信息' }
                 }
-                
+
                 return {
                     success: true,
                     city: args.city,
@@ -591,20 +597,18 @@ export const searchTools = [
                 ip: { type: 'string', description: 'IP地址，不填则查询当前IP' }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const ip = args.ip || ''
-                const url = ip 
-                    ? `http://ip-api.com/json/${ip}?lang=zh-CN`
-                    : 'http://ip-api.com/json/?lang=zh-CN'
-                
+                const url = ip ? `http://ip-api.com/json/${ip}?lang=zh-CN` : 'http://ip-api.com/json/?lang=zh-CN'
+
                 const response = await fetch(url)
                 const data = await response.json()
-                
+
                 if (data.status !== 'success') {
                     return { success: false, error: data.message || 'IP查询失败' }
                 }
-                
+
                 return {
                     success: true,
                     ip: data.query,
@@ -633,18 +637,18 @@ export const searchTools = [
             },
             required: ['keyword']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 // 使用百度百科 OpenSearch API
                 const url = `https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?scope=103&format=json&appid=379020&bk_key=${encodeURIComponent(args.keyword)}&bk_length=600`
-                
+
                 const response = await fetch(url)
                 const data = await response.json()
-                
+
                 if (!data.title) {
                     return { success: false, error: '未找到相关词条' }
                 }
-                
+
                 return {
                     success: true,
                     title: data.title,
@@ -665,23 +669,24 @@ export const searchTools = [
         inputSchema: {
             type: 'object',
             properties: {
-                type: { 
-                    type: 'string', 
-                    description: '句子类型: a(动画) b(漫画) c(游戏) d(文学) e(原创) f(网络) g(其他) h(影视) i(诗词) j(网易云) k(哲学) l(抖机灵)',
+                type: {
+                    type: 'string',
+                    description:
+                        '句子类型: a(动画) b(漫画) c(游戏) d(文学) e(原创) f(网络) g(其他) h(影视) i(诗词) j(网易云) k(哲学) l(抖机灵)',
                     enum: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l']
                 }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 let url = 'https://v1.hitokoto.cn/?encode=json'
                 if (args.type) {
                     url += `&c=${args.type}`
                 }
-                
+
                 const response = await fetch(url)
                 const data = await response.json()
-                
+
                 return {
                     success: true,
                     content: data.hitokoto,
@@ -702,19 +707,19 @@ export const searchTools = [
         inputSchema: {
             type: 'object',
             properties: {
-                platform: { 
-                    type: 'string', 
+                platform: {
+                    type: 'string',
                     description: '平台: weibo(微博) zhihu(知乎) baidu(百度) bilibili(B站)',
                     enum: ['weibo', 'zhihu', 'baidu', 'bilibili']
                 },
                 limit: { type: 'number', description: '返回数量，默认10' }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const platform = args.platform || 'weibo'
                 const limit = args.limit || 10
-                
+
                 // 使用第三方热搜 API
                 const apiMap = {
                     weibo: 'https://tenapi.cn/v2/weibohot',
@@ -722,21 +727,21 @@ export const searchTools = [
                     baidu: 'https://tenapi.cn/v2/baiduhot',
                     bilibili: 'https://tenapi.cn/v2/bilihot'
                 }
-                
+
                 const url = apiMap[platform]
                 if (!url) {
                     return { success: false, error: '不支持的平台' }
                 }
-                
+
                 const response = await fetch(url)
                 const data = await response.json()
-                
+
                 if (data.code !== 200) {
                     return { success: false, error: '获取热搜失败' }
                 }
-                
+
                 const items = (data.data || []).slice(0, limit)
-                
+
                 return {
                     success: true,
                     platform,
@@ -763,20 +768,20 @@ export const searchTools = [
                 limit: { type: 'number', description: '返回数量，默认10' }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const limit = args.limit || 10
                 const url = 'https://tenapi.cn/v2/douyinhot'
-                
+
                 const response = await fetch(url)
                 const data = await response.json()
-                
+
                 if (data.code !== 200) {
                     return { success: false, error: '获取抖音热榜失败' }
                 }
-                
+
                 const items = (data.data || []).slice(0, limit)
-                
+
                 return {
                     success: true,
                     count: items.length,
@@ -803,23 +808,23 @@ export const searchTools = [
                 day: { type: 'number', description: '日期（1-31），默认当前日' }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const now = new Date()
-                const month = args.month || (now.getMonth() + 1)
+                const month = args.month || now.getMonth() + 1
                 const day = args.day || now.getDate()
-                
+
                 const url = `https://api.oioweb.cn/api/common/history?month=${month}&day=${day}`
-                
+
                 const response = await fetch(url)
                 const data = await response.json()
-                
+
                 if (data.code !== 200) {
                     return { success: false, error: '获取历史上的今天失败' }
                 }
-                
+
                 const events = (data.result || []).slice(0, 10)
-                
+
                 return {
                     success: true,
                     date: `${month}月${day}日`,
@@ -845,14 +850,14 @@ export const searchTools = [
         handler: async () => {
             try {
                 const url = 'https://api.oioweb.cn/api/common/OneDuanzi'
-                
+
                 const response = await fetch(url)
                 const data = await response.json()
-                
+
                 if (data.code !== 200) {
                     return { success: false, error: '获取笑话失败' }
                 }
-                
+
                 return {
                     success: true,
                     content: data.result
@@ -873,14 +878,14 @@ export const searchTools = [
         handler: async () => {
             try {
                 const url = 'https://api.oioweb.cn/api/common/60s'
-                
+
                 const response = await fetch(url)
                 const data = await response.json()
-                
+
                 if (data.code !== 200) {
                     return { success: false, error: '获取早报失败' }
                 }
-                
+
                 return {
                     success: true,
                     date: data.result?.date,
@@ -904,17 +909,17 @@ export const searchTools = [
             },
             required: ['url']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const url = `https://api.oioweb.cn/api/common/ShortUrl?url=${encodeURIComponent(args.url)}`
-                
+
                 const response = await fetch(url)
                 const data = await response.json()
-                
+
                 if (data.code !== 200) {
                     return { success: false, error: '生成短链接失败' }
                 }
-                
+
                 return {
                     success: true,
                     original: args.url,
@@ -935,25 +940,25 @@ export const searchTools = [
                 province: { type: 'string', description: '省份名称，如"北京"、"上海"' }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 let url = 'https://api.oioweb.cn/api/common/OilPrice'
                 if (args.province) {
                     url += `?prov=${encodeURIComponent(args.province)}`
                 }
-                
+
                 const response = await fetch(url)
                 const data = await response.json()
-                
+
                 if (data.code !== 200) {
                     return { success: false, error: '获取油价失败' }
                 }
-                
+
                 return {
                     success: true,
                     province: data.result?.prov || args.province,
                     prices: {
-                        p0: data.result?.p0,  // 0号柴油
+                        p0: data.result?.p0, // 0号柴油
                         p92: data.result?.p92,
                         p95: data.result?.p95,
                         p98: data.result?.p98

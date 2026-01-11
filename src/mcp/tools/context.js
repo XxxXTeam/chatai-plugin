@@ -17,9 +17,9 @@ export const contextTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 const bot = ctx.getBot()
-                
+
                 return {
                     success: true,
                     is_group: !!e.group_id,
@@ -51,19 +51,19 @@ export const contextTools = [
             try {
                 const { contextManager } = await import('../../services/ContextManager.js')
                 await contextManager.init()
-                
+
                 const e = ctx.getEvent()
                 const userId = e?.user_id?.toString()
                 const groupId = e?.group_id?.toString()
-                
+
                 if (!userId) {
                     return { success: false, error: '无法确定用户' }
                 }
-                
+
                 const conversationId = contextManager.getConversationId(userId, groupId)
                 const stats = await contextManager.getContextStats(conversationId)
                 const isolation = contextManager.getIsolationMode()
-                
+
                 return {
                     success: true,
                     conversation_id: conversationId,
@@ -94,23 +94,23 @@ export const contextTools = [
                 if (args.confirm !== true) {
                     return { success: false, error: '需要确认清除操作' }
                 }
-                
+
                 const { contextManager } = await import('../../services/ContextManager.js')
                 const historyManager = (await import('../../core/utils/history.js')).default
                 await contextManager.init()
-                
+
                 const e = ctx.getEvent()
                 const userId = e?.user_id?.toString()
                 const groupId = e?.group_id?.toString()
-                
+
                 if (!userId) {
                     return { success: false, error: '无法确定用户' }
                 }
-                
+
                 const conversationId = contextManager.getConversationId(userId, groupId)
                 await historyManager.deleteConversation(conversationId)
                 contextManager.clearSessionState(conversationId)
-                
+
                 return {
                     success: true,
                     message: '对话历史已清除',
@@ -138,19 +138,19 @@ export const contextTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 if (!e.source && !e.reply_id) {
-                    return { 
-                        success: true, 
+                    return {
+                        success: true,
                         has_reply: false,
                         message: '当前消息没有引用其他消息'
                     }
                 }
-                
+
                 const bot = e.bot || global.Bot
                 const includeChain = args.include_chain !== false
                 const maxDepth = args.max_depth || 3
-                
+
                 /**
                  * 获取单条消息
                  */
@@ -177,32 +177,35 @@ export const contextTools = [
                     } catch {}
                     return null
                 }
-                
+
                 /**
                  * 提取消息文本内容
                  */
-                const extractContent = (msg) => {
+                const extractContent = msg => {
                     if (!msg) return ''
                     const data = msg.data || msg
                     if (data.raw_message) return data.raw_message
                     if (Array.isArray(data.message)) {
-                        return data.message.map(m => {
-                            if (m.type === 'text') return m.text || m.data?.text || ''
-                            if (m.type === 'at') return `@${m.data?.name || m.data?.qq || ''}`
-                            if (m.type === 'image') return '[图片]'
-                            if (m.type === 'face') return '[表情]'
-                            if (m.type === 'record') return '[语音]'
-                            if (m.type === 'reply') return '' // 忽略引用标记
-                            return `[${m.type}]`
-                        }).join('').trim()
+                        return data.message
+                            .map(m => {
+                                if (m.type === 'text') return m.text || m.data?.text || ''
+                                if (m.type === 'at') return `@${m.data?.name || m.data?.qq || ''}`
+                                if (m.type === 'image') return '[图片]'
+                                if (m.type === 'face') return '[表情]'
+                                if (m.type === 'record') return '[语音]'
+                                if (m.type === 'reply') return '' // 忽略引用标记
+                                return `[${m.type}]`
+                            })
+                            .join('')
+                            .trim()
                     }
                     return ''
                 }
-                
+
                 /**
                  * 检查消息是否也引用了其他消息
                  */
-                const getReplyInfo = (msg) => {
+                const getReplyInfo = msg => {
                     if (!msg) return null
                     const data = msg.data || msg
                     // 检查 source
@@ -218,21 +221,21 @@ export const contextTools = [
                     }
                     return null
                 }
-                
+
                 // 获取直接引用的消息
                 const messageId = e.source?.message_id || e.reply_id
                 const seq = e.source?.seq
                 const replyMsg = await getMessage(messageId, seq)
-                
+
                 if (!replyMsg) {
-                    return { 
-                        success: true, 
+                    return {
+                        success: true,
                         has_reply: true,
                         error: '无法获取引用消息内容',
                         source_info: { message_id: messageId, seq }
                     }
                 }
-                
+
                 const replyInfo = replyMsg.data || replyMsg
                 const result = {
                     success: true,
@@ -245,20 +248,20 @@ export const contextTools = [
                         message_id: replyInfo.message_id || messageId
                     }
                 }
-                
+
                 // 获取引用链
                 if (includeChain) {
                     const chain = []
                     let currentMsg = replyMsg
                     let depth = 0
-                    
+
                     while (depth < maxDepth) {
                         const nestedReply = getReplyInfo(currentMsg)
                         if (!nestedReply) break
-                        
+
                         const nestedMsg = await getMessage(nestedReply.message_id, nestedReply.seq)
                         if (!nestedMsg) break
-                        
+
                         const nestedInfo = nestedMsg.data || nestedMsg
                         chain.push({
                             depth: depth + 1,
@@ -268,17 +271,17 @@ export const contextTools = [
                             time: nestedInfo.time,
                             message_id: nestedInfo.message_id
                         })
-                        
+
                         currentMsg = nestedMsg
                         depth++
                     }
-                    
+
                     if (chain.length > 0) {
                         result.reply_chain = chain
                         result.chain_depth = chain.length
                     }
                 }
-                
+
                 return result
             } catch (err) {
                 return { success: false, error: `获取引用消息失败: ${err.message}` }
@@ -299,7 +302,7 @@ export const contextTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 const botUin = e.bot?.uin || e.self_id
                 const atList = []
                 for (const seg of e.message || []) {
@@ -315,7 +318,7 @@ export const contextTools = [
                         })
                     }
                 }
-                
+
                 return {
                     success: true,
                     count: atList.length,
@@ -340,16 +343,16 @@ export const contextTools = [
             try {
                 const { memoryManager } = await import('../../services/MemoryManager.js')
                 await memoryManager.init()
-                
+
                 const e = ctx.getEvent()
                 const groupId = args.group_id || e?.group_id?.toString()
-                
+
                 if (!groupId) {
                     return { success: false, error: '需要群号参数或在群聊中使用' }
                 }
-                
+
                 const context = await memoryManager.getGroupContext(groupId)
-                
+
                 return {
                     success: true,
                     group_id: groupId,

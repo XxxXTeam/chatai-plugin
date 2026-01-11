@@ -11,10 +11,10 @@ let jwtSecret = crypto.randomUUID()
 
 // 用户权限级别
 export const PermissionLevel = {
-    READONLY: 0,   // 只读
-    USER: 1,       // 普通用户
-    ADMIN: 2,      // 管理员
-    SUPER: 3       // 超级管理员
+    READONLY: 0, // 只读
+    USER: 1, // 普通用户
+    ADMIN: 2, // 管理员
+    SUPER: 3 // 超级管理员
 }
 
 /**
@@ -59,7 +59,7 @@ class TokenManager {
     }
     /**
      * 验证Token
-     * @param {string} token 
+     * @param {string} token
      * @param {boolean} consume - 是否消耗临时token
      * @returns {{ valid: boolean, level: number }}
      */
@@ -116,20 +116,24 @@ export const tokenManager = new TokenManager()
 export const JwtUtils = {
     /**
      * 生成JWT
-     * @param {object} payload 
-     * @param {string} expiresIn 
+     * @param {object} payload
+     * @param {string} expiresIn
      * @returns {string}
      */
     sign(payload, expiresIn = '30d') {
-        return jwt.sign({
-            ...payload,
-            iat: Math.floor(Date.now() / 1000)
-        }, jwtSecret, { expiresIn })
+        return jwt.sign(
+            {
+                ...payload,
+                iat: Math.floor(Date.now() / 1000)
+            },
+            jwtSecret,
+            { expiresIn }
+        )
     },
 
     /**
      * 验证JWT
-     * @param {string} token 
+     * @param {string} token
      * @returns {{ valid: boolean, payload?: object, error?: string }}
      */
     verify(token) {
@@ -146,7 +150,7 @@ export const JwtUtils = {
 
     /**
      * 解码JWT
-     * @param {string} token 
+     * @param {string} token
      * @returns {object|null}
      */
     decode(token) {
@@ -234,14 +238,15 @@ export function authMiddleware(options = {}) {
 
         // 检查认证状态
         if (!authenticated && !optional) {
-            return res.unauthorized?.('需要登录认证') 
-                || res.status(401).json({ code: 1002, message: '需要登录认证', data: null })
+            return (
+                res.unauthorized?.('需要登录认证') ||
+                res.status(401).json({ code: 1002, message: '需要登录认证', data: null })
+            )
         }
 
         // 检查权限级别
         if (authenticated && userLevel < requiredLevel) {
-            return res.forbidden?.('权限不足') 
-                || res.status(403).json({ code: 1005, message: '权限不足', data: null })
+            return res.forbidden?.('权限不足') || res.status(403).json({ code: 1005, message: '权限不足', data: null })
         }
 
         next()
@@ -285,11 +290,14 @@ export function processLogin(token) {
     }
 
     // 生成JWT
-    const jwtToken = JwtUtils.sign({
-        authenticated: true,
-        level: result.level,
-        loginTime: Date.now()
-    }, '30d')
+    const jwtToken = JwtUtils.sign(
+        {
+            authenticated: true,
+            level: result.level,
+            loginTime: Date.now()
+        },
+        '30d'
+    )
 
     return {
         success: true,
@@ -319,7 +327,7 @@ class RateLimiter {
 
     /**
      * 检查是否超过限流
-     * @param {string} ip 
+     * @param {string} ip
      * @param {number} maxRequests - 最大请求数
      * @param {number} windowMs - 时间窗口（毫秒）
      * @returns {{ allowed: boolean, remaining: number, resetTime: number }}
@@ -368,9 +376,7 @@ export function rateLimit(options = {}) {
     const { maxRequests = 1000000, windowMs = 60000, byUser = false } = options
 
     return (req, res, next) => {
-        const key = byUser && req.auth?.userId 
-            ? `user:${req.auth.userId}` 
-            : `ip:${req.ip}`
+        const key = byUser && req.auth?.userId ? `user:${req.auth.userId}` : `ip:${req.ip}`
 
         const result = rateLimiter.check(key, maxRequests, windowMs)
 
@@ -380,12 +386,14 @@ export function rateLimit(options = {}) {
         res.set('X-RateLimit-Reset', Math.ceil(result.resetTime / 1000))
 
         if (!result.allowed) {
-            return res.tooManyRequests?.('请求过于频繁，请稍后再试') 
-                || res.status(429).json({ 
-                    code: 4001, 
-                    message: '请求过于频繁，请稍后再试', 
-                    data: null 
+            return (
+                res.tooManyRequests?.('请求过于频繁，请稍后再试') ||
+                res.status(429).json({
+                    code: 4001,
+                    message: '请求过于频繁，请稍后再试',
+                    data: null
                 })
+            )
         }
 
         next()
@@ -404,7 +412,7 @@ export function securityHeaders(req, res, next) {
     res.set('X-XSS-Protection', '1; mode=block')
     // 引用策略
     res.set('Referrer-Policy', 'strict-origin-when-cross-origin')
-    
+
     next()
 }
 
@@ -420,7 +428,7 @@ export function requestLogger(options = {}) {
     return (req, res, next) => {
         const startTime = Date.now()
         const requestId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-        
+
         req.requestId = requestId
 
         // 记录请求
@@ -450,7 +458,7 @@ export function requestLogger(options = {}) {
         // 记录响应
         if (logResponse) {
             const originalJson = res.json.bind(res)
-            res.json = (body) => {
+            res.json = body => {
                 const duration = Date.now() - startTime
                 logger?.debug?.('[API Response]', {
                     requestId,
@@ -473,15 +481,11 @@ export function requestLogger(options = {}) {
  * @param {boolean} options.credentials - 是否允许凭证
  */
 export function cors(options = {}) {
-    const { 
-        origin = '*', 
-        methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-        credentials = true 
-    } = options
+    const { origin = '*', methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'], credentials = true } = options
 
     return (req, res, next) => {
         const requestOrigin = req.get('origin')
-        
+
         // 处理origin
         if (origin === '*') {
             res.set('Access-Control-Allow-Origin', '*')
@@ -495,7 +499,7 @@ export function cors(options = {}) {
 
         res.set('Access-Control-Allow-Methods', methods.join(', '))
         res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key, X-Request-ID')
-        
+
         if (credentials) {
             res.set('Access-Control-Allow-Credentials', 'true')
         }

@@ -52,10 +52,10 @@ class ToolFilterService {
     getPresetToolConfig(presetId) {
         const preset = presetManager.get(presetId)
         const globalConfig = config.get('builtinTools') || {}
-        
+
         // 合并全局配置和预设配置
         const presetTools = preset?.tools || {}
-        
+
         return {
             enableBuiltinTools: presetTools.enableBuiltinTools ?? globalConfig.enabled ?? true,
             enableMcpTools: presetTools.enableMcpTools ?? true,
@@ -91,9 +91,8 @@ class ToolFilterService {
             filteredTools = filteredTools.filter(t => t.serverName === 'builtin' || t.isBuiltin)
         }
         if (toolConfig.allowedTools.length > 0) {
-            filteredTools = filteredTools.filter(t => 
-                toolConfig.allowedTools.includes(t.name) || 
-                toolConfig.allowedTools.includes(t.function?.name)
+            filteredTools = filteredTools.filter(
+                t => toolConfig.allowedTools.includes(t.name) || toolConfig.allowedTools.includes(t.function?.name)
             )
         }
 
@@ -116,9 +115,13 @@ class ToolFilterService {
         // 6. 权限过滤（非管理员不能使用管理工具）
         if (userPermission !== 'owner' && userPermission !== 'admin') {
             const adminOnlyTools = [
-                'kick_member', 'set_group_admin',
-                'set_group_whole_ban', 'set_group_name', 'send_group_notice',
-                'set_essence_message', 'remove_essence_message'
+                'kick_member',
+                'set_group_admin',
+                'set_group_whole_ban',
+                'set_group_name',
+                'send_group_notice',
+                'set_essence_message',
+                'remove_essence_message'
             ]
             filteredTools = filteredTools.filter(t => {
                 const name = t.name || t.function?.name
@@ -157,11 +160,13 @@ class ToolFilterService {
 
         // 检查管理员权限
         const adminOnlyTools = [
-            'kick_member','set_group_admin',
-            'set_group_whole_ban', 'set_group_name', 'send_group_notice'
+            'kick_member',
+            'set_group_admin',
+            'set_group_whole_ban',
+            'set_group_name',
+            'send_group_notice'
         ]
-        if (adminOnlyTools.includes(toolName) && 
-            userPermission !== 'owner' && userPermission !== 'admin') {
+        if (adminOnlyTools.includes(toolName) && userPermission !== 'owner' && userPermission !== 'admin') {
             return { allowed: false, reason: `工具 "${toolName}" 需要管理员权限` }
         }
 
@@ -187,7 +192,7 @@ class ToolFilterService {
                     return { valid: false, reason: '不能对自己执行此操作' }
                 }
                 break
-            
+
             case 'send_private_message':
             case 'send_group_message':
                 // 检查消息内容
@@ -201,8 +206,13 @@ class ToolFilterService {
                 const cmd = (args.command || '').toLowerCase()
                 const dangerousPatterns = [
                     /rm\s+(-[rf]+\s+)*[\/~]/,
-                    /mkfs/, /dd\s+if=/, /:\(\)\s*\{/,
-                    /shutdown/, /reboot/, /sudo\s/, /su\s+-/
+                    /mkfs/,
+                    /dd\s+if=/,
+                    /:\(\)\s*\{/,
+                    /shutdown/,
+                    /reboot/,
+                    /sudo\s/,
+                    /su\s+-/
                 ]
                 for (const pattern of dangerousPatterns) {
                     if (pattern.test(cmd)) {
@@ -214,7 +224,8 @@ class ToolFilterService {
             case 'mute_member':
                 // 禁言时间限制
                 const duration = parseInt(args.duration) || 0
-                if (duration < 0 || duration > 2592000) { // 30天
+                if (duration < 0 || duration > 2592000) {
+                    // 30天
                     return { valid: false, reason: '禁言时间必须在0-30天之间' }
                 }
                 break
@@ -231,7 +242,7 @@ class ToolFilterService {
     getToolCallLimits(presetId = 'default') {
         const preset = presetManager.get(presetId)
         const globalToolsConfig = config.get('tools') || {}
-        
+
         return {
             maxConsecutiveCalls: preset?.tools?.maxConsecutiveCalls || 5,
             maxConsecutiveIdenticalCalls: preset?.tools?.maxConsecutiveIdenticalCalls || 2,

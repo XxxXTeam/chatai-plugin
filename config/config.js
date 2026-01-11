@@ -62,26 +62,26 @@ class Config {
     getDefaultConfig() {
         return {
             basic: {
-                commandPrefix: '#ai',      // AI命令前缀
+                commandPrefix: '#ai', // AI命令前缀
                 debug: false,
                 showThinkingMessage: true, // 是否发送"思考中..."提示
-                debugToConsoleOnly: true,  // 调试信息仅输出到控制台
-                quoteReply: true,          // 是否引用触发消息
+                debugToConsoleOnly: true, // 调试信息仅输出到控制台
+                quoteReply: true, // 是否引用触发消息
                 autoRecall: {
-                    enabled: false,        // 是否启用自动撤回
-                    delay: 60,             // 撤回延迟（秒）
-                    recallError: true,     // 是否撤回错误消息
-                },
+                    enabled: false, // 是否启用自动撤回
+                    delay: 60, // 撤回延迟（秒）
+                    recallError: true // 是否撤回错误消息
+                }
             },
             admin: {
-                masterQQ: [],              // 主人QQ列表，留空使用Yunzai配置
-                loginNotifyPrivate: true,  // 登录链接私聊推送
-                sensitiveCommandMasterOnly: true, // 敏感命令仅主人可用
+                masterQQ: [], // 主人QQ列表，留空使用Yunzai配置
+                loginNotifyPrivate: true, // 登录链接私聊推送
+                sensitiveCommandMasterOnly: true // 敏感命令仅主人可用
             },
             llm: {
                 defaultModel: 'qwen/qwen3-next-80b-a3b-instruct',
                 defaultChatPresetId: 'default',
-                embeddingModel: 'text-embedding-004',  // Gemini embedding 模型
+                embeddingModel: 'text-embedding-004', // Gemini embedding 模型
                 dimensions: 1536,
                 // 模型分类配置（每个分类配置一个模型名，空则使用默认模型）
                 models: {
@@ -100,16 +100,16 @@ class Config {
                 },
                 // 备选模型配置 - 主模型失败时自动轮询
                 fallback: {
-                    enabled: true,              // 启用备选模型轮询
-                    models: [],                 // 备选模型列表，按优先级排序
-                    maxRetries: 3,              // 最大重试次数
-                    retryDelay: 500,            // 重试间隔(ms)
-                    notifyOnFallback: false,    // 切换模型时是否通知用户
+                    enabled: true, // 启用备选模型轮询
+                    models: [], // 备选模型列表，按优先级排序
+                    maxRetries: 3, // 最大重试次数
+                    retryDelay: 500, // 重试间隔(ms)
+                    notifyOnFallback: false // 切换模型时是否通知用户
                 },
                 // 旧配置兼容
                 chatModel: '',
                 codeModel: '',
-                translationModel: '',
+                translationModel: ''
             },
             bym: {
                 enable: false,
@@ -118,32 +118,63 @@ class Config {
                 maxTokens: 100,
                 recall: false,
                 model: '',
-                systemPrompt: '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。',
+                systemPrompt:
+                    '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。',
                 // 继承人格配置：启用后会使用用户/群组的独立人格设置
                 inheritPersonality: true,
                 // 关键词预设映射：{ "关键词": "预设ID" }
                 presetMap: {},
                 // 仅伪人模式可用的功能
-                exclusiveFeatures: ['groupSummary', 'userPortrait'],
+                exclusiveFeatures: ['groupSummary', 'userPortrait']
             },
             // 工具调用配置
             tools: {
-                showCallLogs: true,        // 显示工具调用日志
-                useForwardMsg: true,       // 工具日志使用合并转发
-                parallelExecution: true,   // 启用并行工具执行
+                showCallLogs: true, // 显示工具调用日志
+                useForwardMsg: true, // 工具日志使用合并转发
+                parallelExecution: true, // 启用并行工具执行
                 sendIntermediateReply: true, // 工具调用前发送模型的中间回复
                 // 工具组配置 - 调度模型只接收工具组摘要，选中后返回完整工具列表
-                useToolGroups: true,       // 启用工具组模式
-                dispatchFirst: true,       // 先用调度模型选择工具组，再用工具模型执行
+                useToolGroups: true, // 启用工具组模式
+                dispatchFirst: true // 先用调度模型选择工具组，再用工具模型执行
             },
             // 工具组定义（可在面板配置）
             toolGroups: [
-                { index: 0, name: 'system', description: '系统工具：获取时间、日期、系统信息等', tools: ['get_time', 'get_date', 'get_system_info'] },
-                { index: 1, name: 'qq', description: 'QQ操作：发消息、获取群信息、管理成员等', tools: ['send_message', 'get_group_info', 'get_member_info', 'kick_member', 'mute_member'] },
-                { index: 2, name: 'web', description: '网络工具：搜索、获取网页内容、访问URL等', tools: ['web_search', 'fetch_url', 'read_webpage'] },
-                { index: 3, name: 'file', description: '文件操作：读写文件、列目录等', tools: ['read_file', 'write_file', 'list_directory'] },
-                { index: 4, name: 'memory', description: '记忆管理：保存和检索用户记忆', tools: ['save_memory', 'get_memory', 'search_memory'] },
-                { index: 5, name: 'image', description: '图像处理：生成、编辑、分析图片', tools: ['generate_image', 'edit_image', 'analyze_image'] },
+                {
+                    index: 0,
+                    name: 'system',
+                    description: '系统工具：获取时间、日期、系统信息等',
+                    tools: ['get_time', 'get_date', 'get_system_info']
+                },
+                {
+                    index: 1,
+                    name: 'qq',
+                    description: 'QQ操作：发消息、获取群信息、管理成员等',
+                    tools: ['send_message', 'get_group_info', 'get_member_info', 'kick_member', 'mute_member']
+                },
+                {
+                    index: 2,
+                    name: 'web',
+                    description: '网络工具：搜索、获取网页内容、访问URL等',
+                    tools: ['web_search', 'fetch_url', 'read_webpage']
+                },
+                {
+                    index: 3,
+                    name: 'file',
+                    description: '文件操作：读写文件、列目录等',
+                    tools: ['read_file', 'write_file', 'list_directory']
+                },
+                {
+                    index: 4,
+                    name: 'memory',
+                    description: '记忆管理：保存和检索用户记忆',
+                    tools: ['save_memory', 'get_memory', 'search_memory']
+                },
+                {
+                    index: 5,
+                    name: 'image',
+                    description: '图像处理：生成、编辑、分析图片',
+                    tools: ['generate_image', 'edit_image', 'analyze_image']
+                }
             ],
             builtinTools: {
                 enabled: true,
@@ -174,15 +205,15 @@ class Config {
             },
             web: {
                 port: 3000,
-                sharePort: false,           // TRSS环境下共享端口
-                mountPath: '/chatai',      // TRSS共享端口时的挂载路径
+                sharePort: false, // TRSS环境下共享端口
+                mountPath: '/chatai' // TRSS共享端口时的挂载路径
             },
             update: {
-                autoCheck: true,           // 启用自动检查更新
-                checkOnStart: true,        // 启动时检查更新
-                autoUpdate: false,         // 自动更新（不推荐）
-                autoRestart: false,        // 更新后自动重启
-                notifyMaster: true,        // 有更新时通知主人
+                autoCheck: true, // 启用自动检查更新
+                checkOnStart: true, // 启动时检查更新
+                autoUpdate: false, // 自动更新（不推荐）
+                autoRestart: false, // 更新后自动重启
+                notifyMaster: true // 有更新时通知主人
             },
             proxy: {
                 enabled: false,
@@ -199,46 +230,46 @@ class Config {
                 cleaningStrategy: 'auto', // 'auto', 'manual'
                 // 隔离模式配置
                 isolation: {
-                    groupUserIsolation: false,  // 群聊用户隔离（false=群共享上下文, true=每用户独立）
-                    privateIsolation: true,     // 私聊隔离（每用户独立上下文）
+                    groupUserIsolation: false, // 群聊用户隔离（false=群共享上下文, true=每用户独立）
+                    privateIsolation: true // 私聊隔离（每用户独立上下文）
                 },
                 // 自动上下文配置
                 autoContext: {
-                    enabled: true,              // 启用自动上下文
-                    maxHistoryMessages: 20,     // 携带的历史消息数量
-                    includeToolCalls: false,    // 是否包含工具调用记录
+                    enabled: true, // 启用自动上下文
+                    maxHistoryMessages: 20, // 携带的历史消息数量
+                    includeToolCalls: false // 是否包含工具调用记录
                 },
                 // 定量自动结束对话
                 autoEnd: {
-                    enabled: false,             // 是否启用自动结束
-                    maxRounds: 50,              // 最大对话轮数（用户+AI各算1轮）
-                    notifyUser: true,           // 结束时是否通知用户
-                    notifyMessage: '对话已达到最大轮数限制，已自动开始新会话。',
+                    enabled: false, // 是否启用自动结束
+                    maxRounds: 50, // 最大对话轮数（用户+AI各算1轮）
+                    notifyUser: true, // 结束时是否通知用户
+                    notifyMessage: '对话已达到最大轮数限制，已自动开始新会话。'
                 },
                 // 群聊上下文传递
                 groupContextSharing: true,
                 // 全局系统提示词
                 globalSystemPrompt: '',
                 // 全局提示词模式: append(追加) | prepend(前置) | override(覆盖)
-                globalPromptMode: 'append',
+                globalPromptMode: 'append'
             },
             memory: {
                 enabled: false,
                 storage: 'database', // 使用数据库存储
-                autoExtract: true,   // 自动从对话提取记忆
-                pollInterval: 5,     // 轮询间隔（分钟）
-                maxMemories: 50,     // 每用户最大记忆数
-                model: '',           // 记忆提取使用的模型（留空使用默认模型）
+                autoExtract: true, // 自动从对话提取记忆
+                pollInterval: 5, // 轮询间隔（分钟）
+                maxMemories: 50, // 每用户最大记忆数
+                model: '', // 记忆提取使用的模型（留空使用默认模型）
                 // 群聊上下文采集
                 groupContext: {
-                    enabled: true,           // 启用群聊上下文采集
-                    collectInterval: 10,     // 采集间隔（分钟）
+                    enabled: true, // 启用群聊上下文采集
+                    collectInterval: 10, // 采集间隔（分钟）
                     maxMessagesPerCollect: 50, // 每次采集最大消息数
-                    analyzeThreshold: 20,    // 触发分析的最小消息数
-                    extractUserInfo: true,   // 提取用户信息作为记忆
-                    extractTopics: true,     // 提取讨论话题
-                    extractRelations: true,  // 提取用户关系
-                },
+                    analyzeThreshold: 20, // 触发分析的最小消息数
+                    extractUserInfo: true, // 提取用户信息作为记忆
+                    extractTopics: true, // 提取讨论话题
+                    extractRelations: true // 提取用户关系
+                }
             },
             presets: {
                 // 默认预设 ID
@@ -258,216 +289,212 @@ class Config {
                 useIndependent: true,
                 // 独立人格上下文设置
                 isolateContext: {
-                    enabled: false,           // 启用独立上下文（不与其他预设共享对话历史）
-                    clearOnSwitch: false,     // 切换人格时是否清除上下文
-                },
+                    enabled: false, // 启用独立上下文（不与其他预设共享对话历史）
+                    clearOnSwitch: false // 切换人格时是否清除上下文
+                }
             },
             loadBalancing: {
-                strategy: 'priority', // 'priority', 'round-robin', 'random'
+                strategy: 'priority' // 'priority', 'round-robin', 'random'
             },
             thinking: {
-                enabled: true,              // 思考适配总开关（关闭后不解析和显示思考内容）
-                defaultLevel: 'low',        // 思考深度: 'low', 'medium', 'high'
-                enableReasoning: false,     // 启用推理模式（发送reasoning参数给API）
-                showThinkingContent: true,  // 显示思考内容
-                useForwardMsg: true,        // 思考内容使用合并转发
+                enabled: true, // 思考适配总开关（关闭后不解析和显示思考内容）
+                defaultLevel: 'low', // 思考深度: 'low', 'medium', 'high'
+                enableReasoning: false, // 启用推理模式（发送reasoning参数给API）
+                showThinkingContent: true, // 显示思考内容
+                useForwardMsg: true // 思考内容使用合并转发
             },
             // 渲染配置
             render: {
-                mathFormula: true,          // 启用数学公式自动渲染为图片
-                theme: 'light',             // 渲染主题: 'light' | 'dark'
-                width: 800,                 // 渲染宽度
+                mathFormula: true, // 启用数学公式自动渲染为图片
+                theme: 'light', // 渲染主题: 'light' | 'dark'
+                width: 800 // 渲染宽度
             },
             // 高级功能
             features: {
                 groupSummary: {
-                    enabled: true,           // 群聊总结功能
-                    maxMessages: 100,        // 总结最近N条消息
-                    autoTrigger: false,      // 自动触发（伪人模式下）
-                    maxChars: 6000,          // 总结最大字符数
+                    enabled: true, // 群聊总结功能
+                    maxMessages: 100, // 总结最近N条消息
+                    autoTrigger: false, // 自动触发（伪人模式下）
+                    maxChars: 6000, // 总结最大字符数
                     // 全局定时推送配置（群组未单独配置时使用）
                     push: {
-                        enabled: false,          // 全局启用定时推送
-                        intervalType: 'day',     // 推送间隔类型: 'hour' | 'day'
-                        intervalValue: 1,        // 推送间隔值
-                        pushHour: 20,            // 每日推送时间（小时，0-23）
-                        messageCount: 100,       // 总结消息数量
-                        model: '',               // 总结使用的模型（留空使用默认）
-                    },
+                        enabled: false, // 全局启用定时推送
+                        intervalType: 'day', // 推送间隔类型: 'hour' | 'day'
+                        intervalValue: 1, // 推送间隔值
+                        pushHour: 20, // 每日推送时间（小时，0-23）
+                        messageCount: 100, // 总结消息数量
+                        model: '' // 总结使用的模型（留空使用默认）
+                    }
                 },
                 userPortrait: {
-                    enabled: true,           // 个人画像分析
-                    minMessages: 10,         // 最少需要N条消息才能分析
+                    enabled: true, // 个人画像分析
+                    minMessages: 10 // 最少需要N条消息才能分析
                 },
                 // 戳一戳响应（默认关闭，需在面板开启）
                 poke: {
-                    enabled: false,          // 启用戳一戳响应
-                    pokeBack: false,         // 是否回戳
-                    message: '别戳了~',       // AI失败时的默认回复
+                    enabled: false, // 启用戳一戳响应
+                    pokeBack: false, // 是否回戳
+                    message: '别戳了~' // AI失败时的默认回复
                 },
                 // 表情回应处理（默认关闭，需在面板开启）
                 reaction: {
-                    enabled: false,          // 启用表情回应处理
-                    prompt: '',              // 添加回应的提示词模板（留空使用默认）
-                    removePrompt: '',        // 取消回应的提示词模板（留空使用默认）
+                    enabled: false, // 启用表情回应处理
+                    prompt: '', // 添加回应的提示词模板（留空使用默认）
+                    removePrompt: '' // 取消回应的提示词模板（留空使用默认）
                 },
                 // 消息撤回响应（默认关闭）
                 recall: {
-                    enabled: false,          // 启用撤回响应
-                    aiResponse: true,        // 使用AI响应撤回
-                    prompt: '',              // 自定义提示词（留空使用默认）
+                    enabled: false, // 启用撤回响应
+                    aiResponse: true, // 使用AI响应撤回
+                    prompt: '' // 自定义提示词（留空使用默认）
                 },
                 // 入群欢迎（默认关闭）
                 welcome: {
-                    enabled: false,          // 启用入群欢迎
-                    message: '',             // 默认欢迎语（空则使用AI生成）
-                    prompt: '',              // 自定义提示词（留空使用默认）
+                    enabled: false, // 启用入群欢迎
+                    message: '', // 默认欢迎语（空则使用AI生成）
+                    prompt: '' // 自定义提示词（留空使用默认）
                 },
                 // 退群通知（默认关闭）
                 goodbye: {
-                    enabled: false,          // 启用退群通知
-                    aiResponse: false,       // 使用AI响应退群
-                    prompt: '',              // 自定义提示词（留空使用默认）
+                    enabled: false, // 启用退群通知
+                    aiResponse: false, // 使用AI响应退群
+                    prompt: '' // 自定义提示词（留空使用默认）
                 },
                 // 禁言事件响应（默认关闭）
                 ban: {
-                    enabled: false,          // 启用禁言响应
-                    aiResponse: true,        // 使用AI响应禁言
-                    prompt: '',              // 自定义提示词（留空使用默认）
+                    enabled: false, // 启用禁言响应
+                    aiResponse: true, // 使用AI响应禁言
+                    prompt: '' // 自定义提示词（留空使用默认）
                 },
                 // 管理员变更响应（默认关闭）
                 admin: {
-                    enabled: false,          // 启用管理员变更响应
-                    prompt: '',              // 自定义提示词（留空使用默认）
+                    enabled: false, // 启用管理员变更响应
+                    prompt: '' // 自定义提示词（留空使用默认）
                 },
                 // 运气王响应（默认关闭）
                 luckyKing: {
-                    enabled: false,          // 启用运气王响应
-                    congratulate: false,     // 祝贺他人成为运气王
-                    prompt: '',              // 自定义提示词（留空使用默认）
+                    enabled: false, // 启用运气王响应
+                    congratulate: false, // 祝贺他人成为运气王
+                    prompt: '' // 自定义提示词（留空使用默认）
                 },
                 // 荣誉变更响应（默认关闭）
                 honor: {
-                    enabled: false,          // 启用荣誉响应（龙王、群聊之火等）
-                    prompt: '',              // 自定义提示词（留空使用默认）
+                    enabled: false, // 启用荣誉响应（龙王、群聊之火等）
+                    prompt: '' // 自定义提示词（留空使用默认）
                 },
                 // 精华消息响应（默认关闭）
                 essence: {
-                    enabled: false,          // 启用精华消息响应
-                    prompt: '',              // 自定义提示词（留空使用默认）
+                    enabled: false, // 启用精华消息响应
+                    prompt: '' // 自定义提示词（留空使用默认）
                 },
                 // AI绘图
                 imageGen: {
-                    enabled: true,           // 启用绘图功能
-                    model: 'gemini-3-pro-image',  // 默认模型
-                    videoModel: 'veo-2.0-generate-001',  // 视频生成模型
-                    timeout: 600000,         // 超时时间（毫秒）
-                    maxImages: 3,            // 最大图片数
+                    enabled: true, // 启用绘图功能
+                    model: 'gemini-3-pro-image', // 默认模型
+                    videoModel: 'veo-2.0-generate-001', // 视频生成模型
+                    timeout: 600000, // 超时时间（毫秒）
+                    maxImages: 3, // 最大图片数
                     // API列表
-                    apis: [
-                        { baseUrl: 'https://business.928100.xyz/v1/chat/completions', apiKey: 'X-Free' }
-                    ],
+                    apis: [{ baseUrl: 'https://business.928100.xyz/v1/chat/completions', apiKey: 'X-Free' }],
                     // 预设来源配置
-                    presetSources: [
-                        { name: '云端预设', url: 'https://ht.pippi.top/data.json', enabled: true }
-                    ],
+                    presetSources: [{ name: '云端预设', url: 'https://ht.pippi.top/data.json', enabled: true }],
                     // 自定义预设（面板可编辑）
-                    customPresets: [],
+                    customPresets: []
                 },
                 // 语音回复（旧配置，兼容）
                 voiceReply: {
-                    enabled: false,          // 启用语音回复
-                    ttsProvider: 'system',   // TTS提供者
-                    triggerOnTool: false,    // 工具调用后语音回复
-                    triggerAlways: false,    // 总是语音回复
-                    maxTextLength: 500,      // 最大文本长度
-                },
+                    enabled: false, // 启用语音回复
+                    ttsProvider: 'system', // TTS提供者
+                    triggerOnTool: false, // 工具调用后语音回复
+                    triggerAlways: false, // 总是语音回复
+                    maxTextLength: 500 // 最大文本长度
+                }
             },
             // AI声聊配置（QQ原生功能）
             voice: {
-                enabled: false,              // 全局开关
-                defaultCharacter: '',        // 默认AI声聊角色
-                maxTextLength: 500,          // 最大文本长度
+                enabled: false, // 全局开关
+                defaultCharacter: '', // 默认AI声聊角色
+                maxTextLength: 500 // 最大文本长度
             },
             // QQ官方Bot代理配置
             qqBotProxy: {
-                enabled: false,              // 是否启用QQ官方Bot代理
-                proxyUrl: 'http://localhost:2173',  // 代理服务器地址
-                bots: [],                    // Bot配置列表 [{appid, secret, sandbox, intents}]
-                autoReconnect: true,         // 自动重连
-                reconnectInterval: 5000,     // 重连间隔(ms)
-                maxReconnectAttempts: 10,    // 最大重连次数
+                enabled: false, // 是否启用QQ官方Bot代理
+                proxyUrl: 'http://localhost:2173', // 代理服务器地址
+                bots: [], // Bot配置列表 [{appid, secret, sandbox, intents}]
+                autoReconnect: true, // 自动重连
+                reconnectInterval: 5000, // 重连间隔(ms)
+                maxReconnectAttempts: 10, // 最大重连次数
                 // 消息处理配置
                 messageHandler: {
-                    enabled: true,           // 是否处理消息
-                    useAI: true,             // 使用AI处理消息
-                    presetId: '',            // 使用的预设ID（留空使用默认）
+                    enabled: true, // 是否处理消息
+                    useAI: true, // 使用AI处理消息
+                    presetId: '' // 使用的预设ID（留空使用默认）
                 },
                 // IC代发配置：IC触发时使用官方Bot回复
                 icRelay: {
-                    enabled: false,          // 启用IC代发模式
-                    globalRelay: false,      // 全局代发（所有群都代发，否则只代发白名单群）
-                    officialBotQQ: '',       // 官方Bot的QQ号
-                    groups: {},              // 群号映射: {"IC群号": "group_openid"}
-                    whitelistGroups: [],     // 代发白名单群（globalRelay=false时生效）
-                    blacklistGroups: [],     // 代发黑名单群（globalRelay=true时生效）
-                    fallbackToIC: true,      // 获取被动ID失败时回退到IC发送
+                    enabled: false, // 启用IC代发模式
+                    globalRelay: false, // 全局代发（所有群都代发，否则只代发白名单群）
+                    officialBotQQ: '', // 官方Bot的QQ号
+                    groups: {}, // 群号映射: {"IC群号": "group_openid"}
+                    whitelistGroups: [], // 代发白名单群（globalRelay=false时生效）
+                    blacklistGroups: [], // 代发黑名单群（globalRelay=true时生效）
+                    fallbackToIC: true, // 获取被动ID失败时回退到IC发送
                     // Markdown模板配置
                     markdown: {
-                        enabled: false,      // 是否使用MD模板发送
-                        templateId: '',      // MD模板ID
-                        templateKeys: 'abcdefghij',  // 模板参数键名
+                        enabled: false, // 是否使用MD模板发送
+                        templateId: '', // MD模板ID
+                        templateKeys: 'abcdefghij' // 模板参数键名
                     },
                     // 按钮配置
                     button: {
-                        enabled: false,      // 是否发送按钮
-                        appid: '',           // 按钮appid
-                        templateId: '',      // 按钮模板ID（keyboard_id）
-                    },
+                        enabled: false, // 是否发送按钮
+                        appid: '', // 按钮appid
+                        templateId: '' // 按钮模板ID（keyboard_id）
+                    }
                 },
                 // 事件处理配置
                 events: {
-                    READY: true,             // Bot就绪事件
+                    READY: true, // Bot就绪事件
                     AT_MESSAGE_CREATE: true, // @消息
                     DIRECT_MESSAGE_CREATE: true, // 私信消息
-                    C2C_MESSAGE_CREATE: true,    // C2C消息
+                    C2C_MESSAGE_CREATE: true, // C2C消息
                     GROUP_AT_MESSAGE_CREATE: true, // 群@消息
-                    MESSAGE_CREATE: true,    // 频道消息
-                    GUILD_CREATE: true,      // 加入频道
-                    GUILD_DELETE: true,      // 退出频道
-                    INTERACTION_CREATE: true, // 互动事件
-                },
+                    MESSAGE_CREATE: true, // 频道消息
+                    GUILD_CREATE: true, // 加入频道
+                    GUILD_DELETE: true, // 退出频道
+                    INTERACTION_CREATE: true // 互动事件
+                }
             },
             streaming: {
-                enabled: true,
+                enabled: true
             },
             // IP探针配置
             probe: {
-                serverUrl: 'http://127.0.0.1:9527',  // 探针服务器地址
-                secretKey: 'your-secret-key-change-me',  // API密钥，需与服务端一致
+                serverUrl: 'http://127.0.0.1:9527', // 探针服务器地址
+                secretKey: 'your-secret-key-change-me' // API密钥，需与服务端一致
             },
             // AI触发配置
             trigger: {
                 private: {
-                    enabled: true,          // 是否响应私聊
-                    mode: 'prefix',         // 私聊触发模式: 'always'(总是), 'prefix'(需前缀), 'off'(关闭)
+                    enabled: true, // 是否响应私聊
+                    mode: 'prefix' // 私聊触发模式: 'always'(总是), 'prefix'(需前缀), 'off'(关闭)
                 },
                 group: {
-                    enabled: true,          // 是否响应群聊
-                    at: true,               // @机器人触发
-                    prefix: true,           // 前缀触发
-                    keyword: false,         // 关键词触发
-                    random: false,          // 随机触发
-                    randomRate: 0.05,       // 随机触发概率
+                    enabled: true, // 是否响应群聊
+                    at: true, // @机器人触发
+                    prefix: true, // 前缀触发
+                    keyword: false, // 关键词触发
+                    random: false, // 随机触发
+                    randomRate: 0.05 // 随机触发概率
                 },
-                prefixes: ['#chat'],        // 前缀列表
-                keywords: [],               // 关键词列表
-                collectGroupMsg: true,      // 采集群消息用于记忆
-                blacklistUsers: [],         // 用户黑名单
-                whitelistUsers: [],         // 用户白名单（空=不限）
-                blacklistGroups: [],        // 群黑名单
-                whitelistGroups: [],        // 群白名单（空=不限）
-            },
+                prefixes: ['#chat'], // 前缀列表
+                keywords: [], // 关键词列表
+                collectGroupMsg: true, // 采集群消息用于记忆
+                blacklistUsers: [], // 用户黑名单
+                whitelistUsers: [], // 用户白名单（空=不限）
+                blacklistGroups: [], // 群黑名单
+                whitelistGroups: [] // 群白名单（空=不限）
+            }
         }
     }
 

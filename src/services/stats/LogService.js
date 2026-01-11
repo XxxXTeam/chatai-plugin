@@ -59,10 +59,10 @@ class LogService {
     flushBuffer() {
         for (const [type, entries] of this.buffer) {
             if (entries.length === 0) continue
-            
+
             const filePath = this.getLogFilePath(type)
             const content = entries.map(e => JSON.stringify(e) + '\n').join('')
-            
+
             try {
                 fs.appendFileSync(filePath, content, 'utf8')
             } catch (err) {
@@ -90,7 +90,7 @@ class LogService {
      */
     write(type, message, data = null) {
         this.init()
-        
+
         const timestamp = new Date().toISOString()
         const logEntry = {
             timestamp,
@@ -111,7 +111,7 @@ class LogService {
                     fs.renameSync(filePath, rotatedPath)
                 }
             }
-            
+
             fs.appendFileSync(filePath, logLine, 'utf8')
         } catch (err) {
             console.error('[LogService] 写入日志失败:', err.message)
@@ -148,9 +148,9 @@ class LogService {
                 }
             })
         }
-        
+
         this.write('error', message, data)
-        
+
         // 同时输出到控制台
         if (typeof logger !== 'undefined') {
             logger.error(`[LogService] ${message}`, error?.message || '')
@@ -200,9 +200,9 @@ class LogService {
                 }
             })
         }
-        
+
         this.write('warn', message, data)
-        
+
         // 同时输出到控制台
         if (typeof logger !== 'undefined') {
             logger.warn(`[LogService] ${message}`, error?.message || '')
@@ -231,7 +231,7 @@ class LogService {
                 }
             })
         }
-        
+
         this.error(`[${adapter}] API请求失败 - ${model}`, error, context)
     }
 
@@ -248,13 +248,13 @@ class LogService {
             // 静默处理，避免刷屏
             return
         }
-        
+
         const context = {
             mediaType: type,
             url: this.truncateUrl(url),
             urlLength: url?.length
         }
-        
+
         this.warn(`[Media] ${type}处理失败`, error, context)
     }
 
@@ -269,10 +269,10 @@ class LogService {
 
             for (const file of files) {
                 if (!file.endsWith('.log')) continue
-                
+
                 const filePath = path.join(this.logDir, file)
                 const stats = fs.statSync(filePath)
-                
+
                 if (now - stats.mtime.getTime() > maxAge) {
                     fs.unlinkSync(filePath)
                     console.log(`[LogService] 清理过期日志: ${file}`)
@@ -290,7 +290,7 @@ class LogService {
      */
     getRecentErrors(lines = 100) {
         this.init()
-        
+
         const filePath = this.getLogFilePath('error')
         if (!fs.existsSync(filePath)) {
             return []
@@ -300,7 +300,7 @@ class LogService {
             const content = fs.readFileSync(filePath, 'utf8')
             const logLines = content.trim().split('\n').filter(Boolean)
             const recentLines = logLines.slice(-lines)
-            
+
             return recentLines.map(line => {
                 try {
                     return JSON.parse(line)
@@ -320,7 +320,7 @@ class LogService {
      */
     getLogFiles() {
         this.init()
-        
+
         try {
             const files = fs.readdirSync(this.logDir)
             return files
@@ -342,8 +342,8 @@ class LogService {
 
     /**
      * 截断URL用于日志显示
-     * @param {string} url 
-     * @param {number} maxLen 
+     * @param {string} url
+     * @param {number} maxLen
      * @returns {string}
      */
     truncateUrl(url, maxLen = 100) {
@@ -354,7 +354,7 @@ class LogService {
 
     /**
      * 清理敏感头信息
-     * @param {Object} headers 
+     * @param {Object} headers
      * @returns {Object}
      */
     sanitizeHeaders(headers) {
@@ -380,15 +380,13 @@ class LogService {
         const data = {
             tool: toolName,
             args: this.sanitizeArgs(args),
-            result: typeof result === 'string' 
-                ? result.substring(0, 500) 
-                : JSON.stringify(result).substring(0, 500),
+            result: typeof result === 'string' ? result.substring(0, 500) : JSON.stringify(result).substring(0, 500),
             duration: context.duration || 0,
             success: context.success !== false,
             userId: context.userId,
             groupId: context.groupId
         }
-        
+
         this.write('tool', `[${toolName}] ${context.success !== false ? '成功' : '失败'}`, data)
     }
 
@@ -409,7 +407,7 @@ class LogService {
             error: details.error,
             previousChannel: details.previousChannel
         }
-        
+
         this.write('channel', `[${action}] ${details.channelName || details.channelId || ''}`, data)
     }
 
@@ -429,7 +427,7 @@ class LogService {
             duration: details.duration,
             error: details.error
         }
-        
+
         this.write('dispatch', `[${phase}] ${details.analysis || ''}`, data)
     }
 
@@ -450,13 +448,13 @@ class LogService {
             toolCalls: details.toolCalls,
             success: details.success !== false
         }
-        
+
         this.write('conversation', `[${conversationId}]`, data)
     }
 
     /**
      * 清理参数中的敏感信息
-     * @param {Object} args 
+     * @param {Object} args
      * @returns {Object}
      */
     sanitizeArgs(args) {
@@ -477,27 +475,27 @@ class LogService {
      */
     getLogSummary() {
         this.init()
-        
+
         const summary = {
             totalFiles: 0,
             totalSize: 0,
             recentErrors: 0,
             byType: {}
         }
-        
+
         try {
             const files = fs.readdirSync(this.logDir)
             const today = new Date().toISOString().split('T')[0]
-            
+
             for (const file of files) {
                 if (!file.endsWith('.log')) continue
-                
+
                 const filePath = path.join(this.logDir, file)
                 const stats = fs.statSync(filePath)
-                
+
                 summary.totalFiles++
                 summary.totalSize += stats.size
-                
+
                 // 提取日志类型
                 const typeMatch = file.match(/^([^-]+)-/)
                 if (typeMatch) {
@@ -508,14 +506,14 @@ class LogService {
                     summary.byType[type].files++
                     summary.byType[type].size += stats.size
                 }
-                
+
                 // 统计今日错误
                 if (file.includes('error') && file.includes(today)) {
                     const content = fs.readFileSync(filePath, 'utf8')
                     summary.recentErrors = content.split('\n').filter(Boolean).length
                 }
             }
-            
+
             // 格式化大小
             summary.totalSizeFormatted = this.formatSize(summary.totalSize)
             for (const type of Object.keys(summary.byType)) {
@@ -524,13 +522,13 @@ class LogService {
         } catch (err) {
             console.error('[LogService] 获取日志摘要失败:', err.message)
         }
-        
+
         return summary
     }
 
     /**
      * 格式化文件大小
-     * @param {number} bytes 
+     * @param {number} bytes
      * @returns {string}
      */
     formatSize(bytes) {

@@ -1,7 +1,7 @@
 /**
  * AI 群组事件处理 - 统一事件监听系统
  * 支持自定义提示词模板和占位符
- * 
+ *
  * 占位符说明:
  * - {nickname}     触发用户昵称
  * - {user_id}      触发用户QQ号
@@ -43,19 +43,19 @@ async function getScopeManagerLazy() {
  */
 async function isGroupEventEnabled(groupId, globalDefault) {
     if (!groupId) return globalDefault
-    
+
     try {
         const scopeManager = await getScopeManagerLazy()
         const groupSettings = await scopeManager.getGroupSettings(String(groupId))
         const settings = groupSettings?.settings || {}
-        
+
         if (settings.eventEnabled !== undefined) {
             return settings.eventEnabled
         }
     } catch (err) {
         logger.debug('[GroupEvents] 获取群组eventEnabled设置失败:', err.message)
     }
-    
+
     return globalDefault
 }
 import {
@@ -74,10 +74,10 @@ import {
 } from '../src/utils/eventAdapter.js'
 const messageCache = new Map()
 const MESSAGE_CACHE_TTL = 5 * 60 * 1000
-const MESSAGE_CACHE_MAX = 1000 
+const MESSAGE_CACHE_MAX = 1000
 export function cacheGroupMessage(e) {
     if (!e?.message_id || !e?.group_id) return
-    
+
     const cacheData = {
         message: e.message,
         raw_message: e.raw_message || e.msg,
@@ -86,9 +86,9 @@ export function cacheGroupMessage(e) {
         group_id: e.group_id,
         sender: e.sender
     }
-    
+
     messageCache.set(e.message_id, cacheData)
-    
+
     // 清理过期和超量缓存
     if (messageCache.size > MESSAGE_CACHE_MAX) {
         const now = Date.now()
@@ -130,10 +130,11 @@ async function getAIResponse(prompt, options = {}) {
             mode: 'roleplay',
             skipHistory: true
         })
-        let reply = result.response
-            ?.filter(c => c.type === 'text')
-            ?.map(c => c.text)
-            ?.join('') || ''
+        let reply =
+            result.response
+                ?.filter(c => c.type === 'text')
+                ?.map(c => c.text)
+                ?.join('') || ''
         if (maxLength && reply.length > maxLength) {
             reply = reply.substring(0, maxLength)
         }
@@ -197,15 +198,15 @@ function parseMessageSegments(message) {
         }
         return { text: '', type: 'unknown' }
     }
-    
+
     const parts = []
     let msgType = 'text'
-    
+
     for (const seg of message) {
         if (!seg) continue
         const type = seg.type || seg.Type
         const data = seg.data || seg
-        
+
         switch (type) {
             case 'text':
                 if (data.text) parts.push(data.text)
@@ -254,7 +255,7 @@ function parseMessageSegments(message) {
                 else if (type) parts.push(`[${type}]`)
         }
     }
-    
+
     return { text: parts.join('') || '', type: msgType }
 }
 
@@ -264,7 +265,7 @@ function parseMessageSegments(message) {
 async function getRecalledMessage(e, bot) {
     try {
         const msgId = e.message_id || e.msg_id
-        
+
         // 1. 优先从本地缓存获取
         const cached = getCachedMessage(msgId)
         if (cached) {
@@ -274,13 +275,13 @@ async function getRecalledMessage(e, bot) {
                 return { content: parsed.text, type: parsed.type }
             }
         }
-        
+
         // 2. 使用统一适配器获取原消息
         const originalMsg = await getOriginalMessage(e, bot, messageCache)
         if (originalMsg.content) {
             return originalMsg
         }
-        
+
         // 3. 从事件字段获取 (撤回事件特有字段)
         if (e.recall) {
             const recallData = e.recall
@@ -293,7 +294,7 @@ async function getRecalledMessage(e, bot) {
                 return { content: recallData.raw_message, type: 'text' }
             }
         }
-        
+
         return { content: '', type: 'unknown' }
     } catch (err) {
         logger.debug('[GroupEvents] 获取撤回消息失败:', err.message)
@@ -311,7 +312,9 @@ export class AI_Welcome extends plugin {
             rule: [{ fnc: 'skip', log: false }]
         })
     }
-    async skip() { return false }
+    async skip() {
+        return false
+    }
 }
 
 export class AI_Goodbye extends plugin {
@@ -324,10 +327,12 @@ export class AI_Goodbye extends plugin {
             rule: [{ fnc: 'skip', log: false }]
         })
     }
-    async skip() { return false }
+    async skip() {
+        return false
+    }
 }
 const processedEvents = new Map()
-const EVENT_DEDUP_TTL = 5000 
+const EVENT_DEDUP_TTL = 5000
 
 function getEventKey(e) {
     return `${e.group_id}-${e.user_id}-${e.sub_type}-${e.time || Date.now()}`
@@ -378,7 +383,7 @@ function getEventPrompt(eventType, data) {
         const leaveReason = data.action === '被踢出' ? `被 ${data.operator} 踢出` : '主动退出'
         template = template.replace(/\{leave_reason\}/g, leaveReason)
     }
-    
+
     return replacePlaceholders(template, data)
 }
 
@@ -389,14 +394,14 @@ let eventListenersRegistered = false
  */
 async function handleGroupEvent(eventType, e, bot) {
     if (!shouldProcessEvent(e)) return
-    
+
     const configKey = `features.${eventType}.enabled`
     const globalEnabled = config.get(configKey)
-    
+
     // 检查群组级别的事件处理开关
     const isEnabled = await isGroupEventEnabled(e.group_id, globalEnabled)
     if (!isEnabled) return
-    
+
     const botIds = getBotIds()
     const userId = e.user_id || e.operator_id
     const operatorId = e.operator_id || e.user_id
@@ -439,18 +444,20 @@ async function handleGroupEvent(eventType, e, bot) {
             data.message_type = recalledMsg.type
             if (data.message) {
                 const preview = data.message.substring(0, 50) + (data.message.length > 50 ? '...' : '')
-                logger.info(`[AI-${eventType}] ${data.nickname}(${userId}) 撤回了${data.message_type !== 'text' ? `(${data.message_type})` : ''}消息: "${preview}"`)
+                logger.info(
+                    `[AI-${eventType}] ${data.nickname}(${userId}) 撤回了${data.message_type !== 'text' ? `(${data.message_type})` : ''}消息: "${preview}"`
+                )
             } else {
                 logger.info(`[AI-${eventType}] ${data.nickname}(${userId}) 撤回了一条消息(内容未知)`)
             }
             break
-            
+
         case 'welcome':
             if (botIds.has(String(userId))) return
             data.action = '加入'
             logger.info(`[AI-${eventType}] ${data.nickname}(${userId}) 加入了群 ${groupId}`)
             break
-            
+
         case 'goodbye':
             if (botIds.has(String(userId))) return
             if (e.sub_type === 'kick_me') return
@@ -459,9 +466,11 @@ async function handleGroupEvent(eventType, e, bot) {
             if (e.sub_type === 'kick' && e.operator_id && e.operator_id !== e.user_id) {
                 data.operator = await getUserNickname(e, e.operator_id, bot)
             }
-            logger.info(`[AI-${eventType}] ${data.nickname}(${userId}) ${data.action}了群 ${groupId}${e.sub_type === 'kick' ? ` (由 ${data.operator} 操作)` : ''}`)
+            logger.info(
+                `[AI-${eventType}] ${data.nickname}(${userId}) ${data.action}了群 ${groupId}${e.sub_type === 'kick' ? ` (由 ${data.operator} 操作)` : ''}`
+            )
             break
-            
+
         case 'ban':
             // 使用统一解析
             const banInfo = parseBanEvent(e)
@@ -471,12 +480,12 @@ async function handleGroupEvent(eventType, e, bot) {
             data.nickname = data.target
             data.duration = banInfo.duration
             data.duration_text = banInfo.durationText
-            
+
             if (botIds.has(String(banInfo.userId))) {
                 logger.warn(`[AI-${eventType}] 机器人被 ${data.operator} 禁言 ${banInfo.duration} 秒`)
                 return
             }
-            
+
             if (!banInfo.isLift) {
                 data.action = `被禁言 ${data.duration_text}`
                 data.sub_type = 'ban'
@@ -486,7 +495,7 @@ async function handleGroupEvent(eventType, e, bot) {
             }
             logger.info(`[AI-${eventType}] ${data.nickname} 被 ${data.operator} ${data.action}`)
             break
-            
+
         case 'essence':
             const essenceOperatorId = e.operator_id
             data.operator = await getUserNickname(e, essenceOperatorId, bot)
@@ -500,7 +509,7 @@ async function handleGroupEvent(eventType, e, bot) {
                 return // 暂不处理取消精华
             }
             break
-            
+
         case 'admin':
             if (!botIds.has(String(userId))) return
             if (e.sub_type === 'set') {
@@ -512,7 +521,7 @@ async function handleGroupEvent(eventType, e, bot) {
             }
             logger.info(`[AI-${eventType}] 机器人${e.sub_type === 'set' ? '成为' : '取消'}管理员`)
             break
-            
+
         case 'luckyKing':
             const luckyUserId = e.target_id || e.user_id
             data.target_id = luckyUserId
@@ -530,7 +539,7 @@ async function handleGroupEvent(eventType, e, bot) {
             }
             logger.info(`[AI-${eventType}] ${data.nickname} 成为运气王`)
             break
-            
+
         case 'honor':
             // 使用统一解析
             const honorInfo = parseHonorEvent(e)
@@ -548,7 +557,7 @@ async function handleGroupEvent(eventType, e, bot) {
             groupId: groupId,
             maxLength: config.get(`features.${eventType}.maxLength`) || 100
         })
-        
+
         if (aiReply) {
             await sendMessage(bot, groupId, aiReply)
         }
@@ -561,87 +570,88 @@ async function handleGroupEvent(eventType, e, bot) {
 function registerEventListeners() {
     if (eventListenersRegistered) return
     eventListenersRegistered = true
-    
+
     setTimeout(() => {
         try {
-            const bots = Bot?.uin ? [Bot] : (Bot?.bots ? Object.values(Bot.bots) : [])
+            const bots = Bot?.uin ? [Bot] : Bot?.bots ? Object.values(Bot.bots) : []
             if (bots.length === 0 && global.Bot) bots.push(global.Bot)
-            
+
             for (const bot of bots) {
                 if (!bot || bot._groupEventListenersAdded) continue
                 bot._groupEventListenersAdded = true
                 // icqq: notice.group.recall
-                bot.on?.('notice.group.recall', (e) => handleGroupEvent('recall', e, bot))
+                bot.on?.('notice.group.recall', e => handleGroupEvent('recall', e, bot))
                 // OneBot 通用
-                bot.on?.('notice.group', (e) => {
+                bot.on?.('notice.group', e => {
                     if (e.sub_type === 'recall' || e.notice_type === 'group_recall') {
                         handleGroupEvent('recall', e, bot)
                     }
                 })
                 // NapCat/部分适配器
-                bot.on?.('notice', (e) => {
-                    if (e.notice_type === 'group_recall' || 
-                        (e.post_type === 'notice' && e.notice_type === 'group_recall')) {
+                bot.on?.('notice', e => {
+                    if (
+                        e.notice_type === 'group_recall' ||
+                        (e.post_type === 'notice' && e.notice_type === 'group_recall')
+                    ) {
                         handleGroupEvent('recall', e, bot)
                     }
                 })
-                bot.on?.('notice.group.increase', (e) => handleGroupEvent('welcome', e, bot))
-                bot.on?.('notice.group', (e) => {
+                bot.on?.('notice.group.increase', e => handleGroupEvent('welcome', e, bot))
+                bot.on?.('notice.group', e => {
                     if (e.sub_type === 'increase' || e.sub_type === 'approve' || e.sub_type === 'invite') {
                         handleGroupEvent('welcome', e, bot)
                     }
                 })
-                bot.on?.('notice', (e) => {
+                bot.on?.('notice', e => {
                     if (e.notice_type === 'group_increase') {
                         handleGroupEvent('welcome', e, bot)
                     }
                 })
-                bot.on?.('notice.group.decrease', (e) => handleGroupEvent('goodbye', e, bot))
-                bot.on?.('notice.group', (e) => {
+                bot.on?.('notice.group.decrease', e => handleGroupEvent('goodbye', e, bot))
+                bot.on?.('notice.group', e => {
                     if (e.sub_type === 'decrease' || e.sub_type === 'kick' || e.sub_type === 'leave') {
                         handleGroupEvent('goodbye', e, bot)
                     }
                 })
-                bot.on?.('notice', (e) => {
+                bot.on?.('notice', e => {
                     if (e.notice_type === 'group_decrease') {
                         handleGroupEvent('goodbye', e, bot)
                     }
                 })
-                bot.on?.('notice.group.ban', (e) => handleGroupEvent('ban', e, bot))
-                bot.on?.('notice.group', (e) => {
+                bot.on?.('notice.group.ban', e => handleGroupEvent('ban', e, bot))
+                bot.on?.('notice.group', e => {
                     if (e.sub_type === 'ban' || e.sub_type === 'lift_ban') {
                         handleGroupEvent('ban', e, bot)
                     }
                 })
-                bot.on?.('notice', (e) => {
+                bot.on?.('notice', e => {
                     if (e.notice_type === 'group_ban') {
                         handleGroupEvent('ban', e, bot)
                     }
                 })
-                bot.on?.('notice.group.essence', (e) => handleGroupEvent('essence', e, bot))
-                bot.on?.('notice', (e) => {
+                bot.on?.('notice.group.essence', e => handleGroupEvent('essence', e, bot))
+                bot.on?.('notice', e => {
                     if (e.notice_type === 'essence' || e.notice_type === 'group_essence') {
                         handleGroupEvent('essence', e, bot)
                     }
                 })
-                bot.on?.('notice.group.admin', (e) => handleGroupEvent('admin', e, bot))
-                bot.on?.('notice', (e) => {
+                bot.on?.('notice.group.admin', e => handleGroupEvent('admin', e, bot))
+                bot.on?.('notice', e => {
                     if (e.notice_type === 'group_admin') {
                         handleGroupEvent('admin', e, bot)
                     }
                 })
-                bot.on?.('notice.notify', (e) => {
+                bot.on?.('notice.notify', e => {
                     if (e.sub_type === 'lucky_king') handleGroupEvent('luckyKing', e, bot)
                     if (e.sub_type === 'honor') handleGroupEvent('honor', e, bot)
                 })
-                bot.on?.('notice', (e) => {
+                bot.on?.('notice', e => {
                     if (e.notice_type === 'notify') {
                         if (e.sub_type === 'lucky_king') handleGroupEvent('luckyKing', e, bot)
                         if (e.sub_type === 'honor') handleGroupEvent('honor', e, bot)
                     }
                 })
             }
-            
         } catch (err) {
             logger.error('[GroupEvents] 注册事件监听器失败:', err)
         }
@@ -658,7 +668,9 @@ export class AI_Recall extends plugin {
             rule: [{ fnc: 'skip', log: false }]
         })
     }
-    async skip() { return false }
+    async skip() {
+        return false
+    }
 }
 
 export class AI_Essence extends plugin {
@@ -671,7 +683,9 @@ export class AI_Essence extends plugin {
             rule: [{ fnc: 'skip', log: false }]
         })
     }
-    async skip() { return false }
+    async skip() {
+        return false
+    }
 }
 
 export class AI_Ban extends plugin {
@@ -684,7 +698,9 @@ export class AI_Ban extends plugin {
             rule: [{ fnc: 'skip', log: false }]
         })
     }
-    async skip() { return false }
+    async skip() {
+        return false
+    }
 }
 
 export class AI_Admin extends plugin {
@@ -697,7 +713,9 @@ export class AI_Admin extends plugin {
             rule: [{ fnc: 'skip', log: false }]
         })
     }
-    async skip() { return false }
+    async skip() {
+        return false
+    }
 }
 
 export class AI_LuckyKing extends plugin {
@@ -710,7 +728,9 @@ export class AI_LuckyKing extends plugin {
             rule: [{ fnc: 'skip', log: false }]
         })
     }
-    async skip() { return false }
+    async skip() {
+        return false
+    }
 }
 
 export class AI_Honor extends plugin {
@@ -723,5 +743,7 @@ export class AI_Honor extends plugin {
             rule: [{ fnc: 'skip', log: false }]
         })
     }
-    async skip() { return false }
+    async skip() {
+        return false
+    }
 }

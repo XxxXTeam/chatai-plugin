@@ -10,7 +10,7 @@ const logger = chatLogger
 
 const TOOL_STATS_KEY = 'chaite:tool_stats'
 const TOOL_STATS_LIST_KEY = 'chaite:tool_stats_list'
-const MAX_RECORDS = 1000  // 固定保存1000条
+const MAX_RECORDS = 1000 // 固定保存1000条
 
 /**
  * 工具调用记录结构
@@ -48,14 +48,20 @@ class ToolCallStats {
 
     async init() {
         if (this.initialized) return
-        
+
         try {
             // 从 Redis 加载历史记录
             const rawRecords = await redisClient.lrange(TOOL_STATS_LIST_KEY, 0, MAX_RECORDS - 1)
-            this.records = rawRecords.map(r => {
-                try { return JSON.parse(r) } catch { return null }
-            }).filter(Boolean)
-            
+            this.records = rawRecords
+                .map(r => {
+                    try {
+                        return JSON.parse(r)
+                    } catch {
+                        return null
+                    }
+                })
+                .filter(Boolean)
+
             // 从 Redis 加载汇总统计
             const summaryData = await redisClient.get(TOOL_STATS_KEY)
             if (summaryData) {
@@ -63,12 +69,12 @@ class ToolCallStats {
                     this.summary = { ...this.summary, ...JSON.parse(summaryData) }
                 } catch {}
             }
-            
+
             logger.info(`[ToolCallStats] 初始化完成，已加载 ${this.records.length} 条记录`)
         } catch (err) {
             logger.debug('[ToolCallStats] Redis加载失败，使用内存模式:', err.message)
         }
-        
+
         this.initialized = true
     }
 
@@ -79,7 +85,7 @@ class ToolCallStats {
      */
     async record(options) {
         await this.init()
-        
+
         const {
             toolName,
             request,
@@ -92,9 +98,9 @@ class ToolCallStats {
             groupId = null,
             source = 'mcp'
         } = options
-        
+
         const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-        
+
         const record = {
             id,
             timestamp: Date.now(),
@@ -109,16 +115,16 @@ class ToolCallStats {
             groupId,
             source
         }
-        
+
         // 添加到内存
         this.records.unshift(record)
         if (this.records.length > this.maxRecords) {
             this.records.pop()
         }
-        
+
         // 更新汇总统计
         this.updateSummary(record)
-        
+
         // 保存到 Redis
         try {
             await redisClient.lpush(TOOL_STATS_LIST_KEY, JSON.stringify(record))
@@ -127,12 +133,12 @@ class ToolCallStats {
         } catch (err) {
             logger.debug('[ToolCallStats] Redis保存失败:', err.message)
         }
-        
+
         // 日志
         const icon = success ? '✓' : '✗'
         const errorInfo = error ? ` | ${error.substring(0, 50)}` : ''
         logger.debug(`[ToolCallStats] ${icon} ${toolName} | ${duration}ms${errorInfo}`)
-        
+
         return id
     }
 
@@ -141,10 +147,10 @@ class ToolCallStats {
      */
     sanitizeRequest(request) {
         if (!request) return null
-        
+
         try {
             const sanitized = { ...request }
-            
+
             // 限制大文本字段
             for (const [key, value] of Object.entries(sanitized)) {
                 if (typeof value === 'string' && value.length > 1000) {
@@ -155,7 +161,7 @@ class ToolCallStats {
                     sanitized[key] = '[REDACTED]'
                 }
             }
-            
+
             return sanitized
         } catch {
             return { _raw: String(request).substring(0, 500) }
@@ -167,10 +173,10 @@ class ToolCallStats {
      */
     sanitizeResponse(response) {
         if (!response) return null
-        
+
         try {
             const sanitized = { ...response }
-            
+
             // 限制大文本字段
             for (const [key, value] of Object.entries(sanitized)) {
                 if (typeof value === 'string' && value.length > 2000) {
@@ -182,7 +188,7 @@ class ToolCallStats {
                     sanitized[`${key}_total`] = value.length
                 }
             }
-            
+
             return sanitized
         } catch {
             return { _raw: String(response).substring(0, 1000) }
@@ -209,7 +215,7 @@ class ToolCallStats {
                 this.summary.recentErrors.pop()
             }
         }
-        
+
         // 按工具统计
         if (!this.summary.byTool[record.toolName]) {
             this.summary.byTool[record.toolName] = { calls: 0, success: 0, failed: 0, totalDuration: 0 }
@@ -219,7 +225,7 @@ class ToolCallStats {
         toolStats.totalDuration += record.duration
         if (record.success) toolStats.success++
         else toolStats.failed++
-        
+
         // 按小时统计
         const hour = new Date().getHours()
         this.summary.byHour[hour] = (this.summary.byHour[hour] || 0) + 1
@@ -232,9 +238,9 @@ class ToolCallStats {
      */
     async getRecords(filter = {}, limit = 100) {
         await this.init()
-        
+
         let results = [...this.records]
-        
+
         // 应用过滤器
         if (filter.toolName) {
             results = results.filter(r => r.toolName === filter.toolName)
@@ -256,13 +262,14 @@ class ToolCallStats {
         }
         if (filter.keyword) {
             const kw = filter.keyword.toLowerCase()
-            results = results.filter(r => 
-                r.toolName.toLowerCase().includes(kw) ||
-                r.error?.toLowerCase().includes(kw) ||
-                JSON.stringify(r.request).toLowerCase().includes(kw)
+            results = results.filter(
+                r =>
+                    r.toolName.toLowerCase().includes(kw) ||
+                    r.error?.toLowerCase().includes(kw) ||
+                    JSON.stringify(r.request).toLowerCase().includes(kw)
             )
         }
-        
+
         return results.slice(0, limit)
     }
 
@@ -279,7 +286,7 @@ class ToolCallStats {
      */
     async getSummary() {
         await this.init()
-        
+
         const toolRanking = Object.entries(this.summary.byTool)
             .map(([name, stats]) => ({
                 name,
@@ -288,14 +295,12 @@ class ToolCallStats {
                 successRate: stats.calls > 0 ? Math.round((stats.success / stats.calls) * 100) : 0
             }))
             .sort((a, b) => b.calls - a.calls)
-        
+
         return {
             total: this.summary.total,
             success: this.summary.success,
             failed: this.summary.failed,
-            successRate: this.summary.total > 0 
-                ? Math.round((this.summary.success / this.summary.total) * 100) 
-                : 0,
+            successRate: this.summary.total > 0 ? Math.round((this.summary.success / this.summary.total) * 100) : 0,
             toolRanking,
             hourlyDistribution: this.summary.byHour,
             recentErrors: this.summary.recentErrors.slice(0, 20),
@@ -309,14 +314,12 @@ class ToolCallStats {
      */
     async getToolStats(toolName) {
         await this.init()
-        
+
         const stats = this.summary.byTool[toolName]
         if (!stats) return null
-        
-        const recentCalls = this.records
-            .filter(r => r.toolName === toolName)
-            .slice(0, 50)
-        
+
+        const recentCalls = this.records.filter(r => r.toolName === toolName).slice(0, 50)
+
         return {
             name: toolName,
             ...stats,
@@ -347,14 +350,14 @@ class ToolCallStats {
             byHour: {},
             recentErrors: []
         }
-        
+
         try {
             await redisClient.del(TOOL_STATS_KEY)
             await redisClient.del(TOOL_STATS_LIST_KEY)
         } catch (err) {
             logger.debug('[ToolCallStats] 清除Redis数据失败:', err.message)
         }
-        
+
         logger.info('[ToolCallStats] 统计数据已清除')
     }
 

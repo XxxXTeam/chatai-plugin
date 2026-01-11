@@ -15,7 +15,7 @@ const DEFAULT_BASE_URLS = {
 }
 
 /*
- * @param {string} url 
+ * @param {string} url
  * @returns {boolean}
  */
 function hasCustomPath(url) {
@@ -31,8 +31,8 @@ function hasCustomPath(url) {
 /**
  * 规范化 API Base URL
  * 默认添加 /v1，除非用户已指定自定义路径
- * @param {string} baseUrl 
- * @param {string} adapterType 
+ * @param {string} baseUrl
+ * @param {string} adapterType
  * @returns {string}
  */
 export function normalizeBaseUrl(baseUrl, adapterType) {
@@ -40,7 +40,7 @@ export function normalizeBaseUrl(baseUrl, adapterType) {
     if (!baseUrl || !baseUrl.trim()) {
         return DEFAULT_BASE_URLS[adapterType] || ''
     }
-    
+
     // 移除末尾斜杠
     let url = baseUrl.trim().replace(/\/+$/, '')
     if (hasCustomPath(url)) {
@@ -52,17 +52,17 @@ export function normalizeBaseUrl(baseUrl, adapterType) {
     if (adapterType === 'claude') {
         url = url + '/v1'
     }
-    
+
     return url
 }
 
 // APIKey轮询策略
 export const KeyStrategy = {
-    ROUND_ROBIN: 'round-robin',  // 轮询
-    RANDOM: 'random',            // 随机
-    WEIGHTED: 'weighted',        // 权重
-    LEAST_USED: 'least-used',    // 最少使用
-    FAILOVER: 'failover'         // 故障转移（按顺序，失败后换下一个）
+    ROUND_ROBIN: 'round-robin', // 轮询
+    RANDOM: 'random', // 随机
+    WEIGHTED: 'weighted', // 权重
+    LEAST_USED: 'least-used', // 最少使用
+    FAILOVER: 'failover' // 故障转移（按顺序，失败后换下一个）
 }
 
 // 渠道状态
@@ -79,7 +79,7 @@ export class ChannelManager {
         this.channels = new Map()
         this.activeRequests = new Map()
         this.channelStats = new Map() // 渠道使用统计
-        this.keyStats = new Map()     // APIKey使用统计
+        this.keyStats = new Map() // APIKey使用统计
         this.initialized = false
         this.healthCheckInterval = null
     }
@@ -101,7 +101,7 @@ export class ChannelManager {
 
         for (const channelConfig of channels) {
             const normalizedUrl = normalizeBaseUrl(channelConfig.baseUrl, channelConfig.adapterType)
-            
+
             this.channels.set(channelConfig.id, {
                 ...channelConfig,
                 baseUrl: normalizedUrl,
@@ -189,7 +189,7 @@ export class ChannelManager {
      */
     async create(channelData) {
         const id = channelData.id || `${channelData.adapterType}-${crypto.randomBytes(4).toString('hex')}`
-        
+
         // 规范化 baseUrl
         const normalizedUrl = normalizeBaseUrl(channelData.baseUrl, channelData.adapterType)
 
@@ -209,30 +209,30 @@ export class ChannelManager {
             headersTemplate: channelData.headersTemplate || '',
             requestBodyTemplate: channelData.requestBodyTemplate || '',
             overrides: {
-                temperature: channelData.overrides?.temperature,       // 温度 0-2
-                maxTokens: channelData.overrides?.maxTokens,           // 最大输出token
-                topP: channelData.overrides?.topP,                     // Top-P采样
-                topK: channelData.overrides?.topK,                     // Top-K采样
+                temperature: channelData.overrides?.temperature, // 温度 0-2
+                maxTokens: channelData.overrides?.maxTokens, // 最大输出token
+                topP: channelData.overrides?.topP, // Top-P采样
+                topK: channelData.overrides?.topK, // Top-K采样
                 frequencyPenalty: channelData.overrides?.frequencyPenalty, // 频率惩罚
-                presencePenalty: channelData.overrides?.presencePenalty,   // 存在惩罚
-                stopSequences: channelData.overrides?.stopSequences || [],  // 停止序列
+                presencePenalty: channelData.overrides?.presencePenalty, // 存在惩罚
+                stopSequences: channelData.overrides?.stopSequences || [], // 停止序列
                 systemPromptPrefix: channelData.overrides?.systemPromptPrefix || '', // 系统提示前缀
                 systemPromptSuffix: channelData.overrides?.systemPromptSuffix || '', // 系统提示后缀
-                modelMapping: channelData.overrides?.modelMapping || {}, 
+                modelMapping: channelData.overrides?.modelMapping || {},
                 ...(channelData.overrides || {})
             },
             endpoints: {
-                chat: channelData.endpoints?.chat || '',           // 聊天端点，如 /chat/completions
-                models: channelData.endpoints?.models || '',       // 模型列表端点
-                embeddings: channelData.endpoints?.embeddings || '',// 嵌入端点
-                images: channelData.endpoints?.images || '',       // 图像生成端点
+                chat: channelData.endpoints?.chat || '', // 聊天端点，如 /chat/completions
+                models: channelData.endpoints?.models || '', // 模型列表端点
+                embeddings: channelData.endpoints?.embeddings || '', // 嵌入端点
+                images: channelData.endpoints?.images || '', // 图像生成端点
                 ...(channelData.endpoints || {})
             },
             // 认证方式覆盖
             auth: {
-                type: channelData.auth?.type || 'bearer',          // bearer/api-key/custom
-                headerName: channelData.auth?.headerName || '',    // 自定义认证头名称
-                prefix: channelData.auth?.prefix || '',            // 认证值前缀
+                type: channelData.auth?.type || 'bearer', // bearer/api-key/custom
+                headerName: channelData.auth?.headerName || '', // 自定义认证头名称
+                prefix: channelData.auth?.prefix || '', // 认证值前缀
                 ...(channelData.auth || {})
             },
             // 图片处理配置
@@ -285,10 +285,27 @@ export class ChannelManager {
 
         // 更新允许的字段
         const allowedFields = [
-            'name', 'adapterType', 'baseUrl', 'apiKey', 'apiKeys', 'strategy', 
-            'models', 'priority', 'enabled', 'advanced', 'customHeaders', 
-            'headersTemplate', 'requestBodyTemplate', 'timeout', 'retry', 'quota', 'weight',
-            'overrides', 'endpoints', 'auth', 'imageConfig'  // 新增图片处理配置字段
+            'name',
+            'adapterType',
+            'baseUrl',
+            'apiKey',
+            'apiKeys',
+            'strategy',
+            'models',
+            'priority',
+            'enabled',
+            'advanced',
+            'customHeaders',
+            'headersTemplate',
+            'requestBodyTemplate',
+            'timeout',
+            'retry',
+            'quota',
+            'weight',
+            'overrides',
+            'endpoints',
+            'auth',
+            'imageConfig' // 新增图片处理配置字段
         ]
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
@@ -305,7 +322,7 @@ export class ChannelManager {
         // 如果凭据或适配器类型变更，清除模型缓存
         if (updates.apiKey || updates.baseUrl || updates.apiKeys || updates.adapterType) {
             channel.modelsCached = false
-            channel.status = undefined  // Reset status when config changes
+            channel.status = undefined // Reset status when config changes
             await redisClient.del(`models:${id}`)
         }
 
@@ -398,16 +415,15 @@ export class ChannelManager {
             apiKey: channel.apiKey,
             baseURL: channel.baseUrl,
             defaultHeaders: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            },
+                'User-Agent':
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                Accept: 'application/json, text/plain, */*',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+            }
         })
 
         const modelsList = await openai.models.list()
-        const models = modelsList.data
-            .map(m => m.id)
-            .sort()
+        const models = modelsList.data.map(m => m.id).sort()
 
         return models
     }
@@ -506,7 +522,7 @@ export class ChannelManager {
                 // 按顺序选择第一个可用的
                 for (let i = 0; i < activeKeys.length; i++) {
                     const k = activeKeys[i]
-                    if (!k.lastError || (Date.now() - k.lastError > 5 * 60 * 1000)) {
+                    if (!k.lastError || Date.now() - k.lastError > 5 * 60 * 1000) {
                         selectedIndex = i
                         break
                     }
@@ -528,9 +544,8 @@ export class ChannelManager {
         const keyName = typeof selectedKey === 'object' ? selectedKey.name : null
 
         // 在原始apiKeys数组中找到真实索引
-        const originalIndex = channel.apiKeys.findIndex(k => 
-            (typeof k === 'string' && k === keyValue) || 
-            (typeof k === 'object' && k.key === keyValue)
+        const originalIndex = channel.apiKeys.findIndex(
+            k => (typeof k === 'string' && k === keyValue) || (typeof k === 'object' && k.key === keyValue)
         )
 
         // 记录使用
@@ -553,19 +568,19 @@ export class ChannelManager {
             strategy
         }
 
-        return { 
-            key: keyValue, 
-            keyIndex: originalIndex,  // 返回原始数组中的索引
+        return {
+            key: keyValue,
+            keyIndex: originalIndex, // 返回原始数组中的索引
             keyObj: selectedKey,
-            keyName: keyDisplay,      // 返回key名称
-            strategy                  // 返回使用的策略
+            keyName: keyDisplay, // 返回key名称
+            strategy // 返回使用的策略
         }
     }
 
     /**
      * 报告APIKey错误
-     * @param {string} channelId 
-     * @param {number} keyIndex 
+     * @param {string} channelId
+     * @param {number} keyIndex
      */
     reportKeyError(channelId, keyIndex) {
         const channel = this.channels.get(channelId)
@@ -580,7 +595,7 @@ export class ChannelManager {
 
     /**
      * 重置APIKey错误计数
-     * @param {string} channelId 
+     * @param {string} channelId
      * @param {number} keyIndex - -1表示重置所有
      */
     resetKeyErrors(channelId, keyIndex = -1) {
@@ -602,7 +617,7 @@ export class ChannelManager {
 
     /**
      * 获取APIKey统计信息
-     * @param {string} channelId 
+     * @param {string} channelId
      * @returns {Array}
      */
     getKeyStats(channelId) {
@@ -619,9 +634,10 @@ export class ChannelManager {
             lastUsed: k.lastUsed,
             lastError: k.lastError,
             // 隐藏key的大部分内容
-            keyPreview: typeof k === 'string' 
-                ? `${k.substring(0, 8)}...${k.slice(-4)}`
-                : `${k.key.substring(0, 8)}...${k.key.slice(-4)}`
+            keyPreview:
+                typeof k === 'string'
+                    ? `${k.substring(0, 8)}...${k.slice(-4)}`
+                    : `${k.key.substring(0, 8)}...${k.key.slice(-4)}`
         }))
     }
 
@@ -640,15 +656,15 @@ export class ChannelManager {
         }
 
         const { model, skipModelCheck = false } = options
-        
+
         try {
             if (channel.adapterType === 'openai') {
                 const { OpenAIClient } = await import('../core/adapters/index.js')
                 const { key: apiKey } = this.getChannelKey(channel)
-                
+
                 // 选择测试模型：优先使用指定模型，其次使用渠道配置的第一个模型，最后使用默认模型
                 const testModel = model || channel.models?.[0] || 'gpt-3.5-turbo'
-                
+
                 const client = new OpenAIClient({
                     apiKey: apiKey,
                     baseUrl: channel.baseUrl,
@@ -663,10 +679,11 @@ export class ChannelManager {
                         { model: testModel, maxToken: 20 }
                     )
 
-                    const replyText = response.contents
-                        ?.filter(c => c.type === 'text')
-                        ?.map(c => c.text)
-                        ?.join('') || ''
+                    const replyText =
+                        response.contents
+                            ?.filter(c => c.type === 'text')
+                            ?.map(c => c.text)
+                            ?.join('') || ''
                     try {
                         await statsService.recordApiCall({
                             channelId: id,
@@ -676,9 +693,11 @@ export class ChannelManager {
                             success: true,
                             source: 'health_check',
                             responseText: replyText,
-                            request: { messages: [{ role: 'user', content: '说一声你好' }], model: testModel },
+                            request: { messages: [{ role: 'user', content: '说一声你好' }], model: testModel }
                         })
-                    } catch (e) { /* 统计失败不影响主流程 */ }
+                    } catch (e) {
+                        /* 统计失败不影响主流程 */
+                    }
 
                     channel.status = 'active'
                     channel.lastHealthCheck = Date.now()
@@ -695,7 +714,6 @@ export class ChannelManager {
                     }
                 } catch (chatError) {
                     if (chatError.message?.includes('401') || chatError.message?.includes('Unauthorized')) {
-                        
                         try {
                             // 尝试获取模型列表
                             const models = await this.fetchModels(id)
@@ -706,7 +724,7 @@ export class ChannelManager {
                                 channel.errorCount = 0
                                 this.channels.set(id, channel)
                                 await this.saveToConfig() // 持久化状态
-                                
+
                                 return {
                                     success: true,
                                     message: `连接验证成功（通过模型列表）！可用模型数: ${models.length}`,
@@ -729,19 +747,20 @@ export class ChannelManager {
                     features: ['chat'],
                     tools: []
                 })
-                
+
                 const testModel = model || channel.models?.[0] || 'gemini-pro'
                 const geminiStartTime = Date.now()
                 const response = await client.sendMessage(
                     { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
                     { model: testModel, maxToken: 20 }
                 )
-                
-                const replyText = response.contents
-                    ?.filter(c => c.type === 'text')
-                    ?.map(c => c.text)
-                    ?.join('') || ''
-                
+
+                const replyText =
+                    response.contents
+                        ?.filter(c => c.type === 'text')
+                        ?.map(c => c.text)
+                        ?.join('') || ''
+
                 // 记录统计
                 try {
                     await statsService.recordApiCall({
@@ -752,10 +771,12 @@ export class ChannelManager {
                         success: true,
                         source: 'health_check',
                         responseText: replyText,
-                        request: { messages: [{ role: 'user', content: '说一声你好' }], model: testModel },
+                        request: { messages: [{ role: 'user', content: '说一声你好' }], model: testModel }
                     })
-                } catch (e) { /* 统计失败不影响主流程 */ }
-                
+                } catch (e) {
+                    /* 统计失败不影响主流程 */
+                }
+
                 channel.status = 'active'
                 channel.lastHealthCheck = Date.now()
                 channel.testedAt = Date.now()
@@ -775,19 +796,20 @@ export class ChannelManager {
                     features: ['chat'],
                     tools: []
                 })
-                
+
                 const testModel = model || channel.models?.[0] || 'claude-3-haiku-20240307'
                 const claudeStartTime = Date.now()
                 const response = await client.sendMessage(
                     { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
                     { model: testModel, maxToken: 20 }
                 )
-                
-                const replyText = response.contents
-                    ?.filter(c => c.type === 'text')
-                    ?.map(c => c.text)
-                    ?.join('') || ''
-                
+
+                const replyText =
+                    response.contents
+                        ?.filter(c => c.type === 'text')
+                        ?.map(c => c.text)
+                        ?.join('') || ''
+
                 // 记录统计
                 try {
                     await statsService.recordApiCall({
@@ -798,16 +820,18 @@ export class ChannelManager {
                         success: true,
                         source: 'health_check',
                         responseText: replyText,
-                        request: { messages: [{ role: 'user', content: '说一声你好' }], model: testModel },
+                        request: { messages: [{ role: 'user', content: '说一声你好' }], model: testModel }
                     })
-                } catch (e) { /* 统计失败不影响主流程 */ }
-                
+                } catch (e) {
+                    /* 统计失败不影响主流程 */
+                }
+
                 channel.status = 'active'
                 channel.lastHealthCheck = Date.now()
                 channel.testedAt = Date.now()
                 this.channels.set(id, channel)
                 await this.saveToConfig() // 持久化状态
-                
+
                 return {
                     success: true,
                     message: replyText ? `连接成功！AI回复：${replyText}` : '连接成功！',
@@ -855,12 +879,16 @@ export class ChannelManager {
             candidates = candidates.filter(ch => {
                 const errorCount = ch.errorCount || 0
                 let cooldownMs = 0
-                if (errorCount === 1) cooldownMs = 30 * 1000       // 30秒
-                else if (errorCount === 2) cooldownMs = 60 * 1000  // 1分钟
+                if (errorCount === 1)
+                    cooldownMs = 30 * 1000 // 30秒
+                else if (errorCount === 2)
+                    cooldownMs = 60 * 1000 // 1分钟
                 else if (errorCount >= 3) cooldownMs = 5 * 60 * 1000 // 5分钟
-                
-                if (ch.lastErrorTime && cooldownMs > 0 && (now - ch.lastErrorTime < cooldownMs)) {
-                    logger.debug(`[ChannelManager] 渠道 ${ch.id} 在冷却中: 错误${errorCount}次, 剩余${Math.ceil((cooldownMs - (now - ch.lastErrorTime)) / 1000)}秒`)
+
+                if (ch.lastErrorTime && cooldownMs > 0 && now - ch.lastErrorTime < cooldownMs) {
+                    logger.debug(
+                        `[ChannelManager] 渠道 ${ch.id} 在冷却中: 错误${errorCount}次, 剩余${Math.ceil((cooldownMs - (now - ch.lastErrorTime)) / 1000)}秒`
+                    )
                     return false
                 }
                 return true
@@ -878,7 +906,9 @@ export class ChannelManager {
             if (ch.quota && ch.usage && ch.quota.daily > 0) {
                 const today = new Date().toISOString().split('T')[0]
                 if (ch.usage.date === today && ch.usage.count >= ch.quota.daily) {
-                    logger.debug(`[ChannelManager] 渠道 ${ch.id} 因超出每日配额被过滤: ${ch.usage.count}/${ch.quota.daily}`)
+                    logger.debug(
+                        `[ChannelManager] 渠道 ${ch.id} 因超出每日配额被过滤: ${ch.usage.count}/${ch.quota.daily}`
+                    )
                     return false
                 }
             }
@@ -887,7 +917,7 @@ export class ChannelManager {
         if (candidates.length === 0 && modelChannelsCount > 0) {
             candidates = modelChannels.filter(ch => ch.status !== ChannelStatus.DISABLED)
         }
-        
+
         if (candidates.length === 0) return null
 
         let result = null
@@ -911,7 +941,7 @@ export class ChannelManager {
 
     /**
      * Start tracking a request for a channel
-     * @param {string} channelId 
+     * @param {string} channelId
      */
     startRequest(channelId) {
         const count = this.activeRequests.get(channelId) || 0
@@ -920,7 +950,7 @@ export class ChannelManager {
 
     /**
      * End tracking a request for a channel
-     * @param {string} channelId 
+     * @param {string} channelId
      */
     endRequest(channelId) {
         const count = this.activeRequests.get(channelId) || 0
@@ -931,8 +961,8 @@ export class ChannelManager {
 
     /**
      * Report channel usage
-     * @param {string} channelId 
-     * @param {number} tokens 
+     * @param {string} channelId
+     * @param {number} tokens
      */
     async reportUsage(channelId, tokens = 0) {
         const channel = this.channels.get(channelId)
@@ -950,12 +980,12 @@ export class ChannelManager {
         channel.usage.tokens += tokens
 
         // Persist changes (mock)
-       // await this.saveChannels()
+        // await this.saveChannels()
     }
 
     /**
      * Report channel error
-     * @param {string} channelId 
+     * @param {string} channelId
      * @param {Object} options - 错误选项
      * @param {number} options.keyIndex - 出错的key索引
      * @param {string} options.errorType - 错误类型: 'auth' | 'quota' | 'timeout' | 'network' | 'empty' | 'unknown'
@@ -967,7 +997,7 @@ export class ChannelManager {
         if (!channel) return
 
         const { keyIndex = -1, errorType = 'unknown', errorMessage = '', isRetry = false } = options
-        
+
         channel.lastErrorType = errorType
         channel.lastErrorMessage = errorMessage
 
@@ -998,18 +1028,18 @@ export class ChannelManager {
             channel.status = ChannelStatus.ERROR
             logger.warn(`[ChannelManager] 渠道 ${channel.name} 错误次数过多(${channel.errorCount})，已禁用`)
         }
-        
+
         logger.debug(`[ChannelManager] 渠道 ${channel.name} 错误: ${errorType}, 累计${channel.errorCount}次`)
     }
 
     /**
      * 报告渠道请求成功，重置错误计数
-     * @param {string} channelId 
+     * @param {string} channelId
      */
     reportSuccess(channelId) {
         const channel = this.channels.get(channelId)
         if (!channel) return
-        
+
         // 成功时重置错误计数
         if (channel.errorCount > 0) {
             channel.errorCount = 0
@@ -1018,7 +1048,7 @@ export class ChannelManager {
             channel.lastErrorMessage = null
             logger.debug(`[ChannelManager] 渠道 ${channel.name} 请求成功，重置错误计数`)
         }
-        
+
         // 如果之前是error状态，恢复为idle
         if (channel.status === ChannelStatus.ERROR) {
             channel.status = ChannelStatus.IDLE
@@ -1033,7 +1063,7 @@ export class ChannelManager {
     resetChannelError(channelId) {
         const channel = this.channels.get(channelId)
         if (!channel) return
-        
+
         channel.errorCount = 0
         channel.lastErrorTime = null
         channel.lastErrorType = null
@@ -1054,37 +1084,36 @@ export class ChannelManager {
     getAvailableChannels(model, options = {}) {
         const { excludeChannelId = null, includeErrorChannels = false } = options
         const now = Date.now()
-        
-        let candidates = Array.from(this.channels.values())
-            .filter(ch => {
-                // 基础过滤
-                if (!ch.enabled) return false
-                if (excludeChannelId && ch.id === excludeChannelId) return false
-                
-                // 模型支持检查
-                const hasModel = ch.models?.includes(model) || ch.models?.includes('*')
-                if (!hasModel) return false
-                
-                // 状态检查
-                if (!includeErrorChannels && ch.status === ChannelStatus.ERROR) return false
-                if (ch.status === ChannelStatus.QUOTA_EXCEEDED) return false
-                
-                // 错误冷却检查（动态冷却时间）
-                const errorCount = ch.errorCount || 0
-                let cooldownMs = 0
-                if (errorCount === 1) cooldownMs = 30 * 1000
-                else if (errorCount === 2) cooldownMs = 60 * 1000
-                else if (errorCount >= 3) cooldownMs = 5 * 60 * 1000
-                
-                if (ch.lastErrorTime && cooldownMs > 0 && (now - ch.lastErrorTime < cooldownMs)) {
-                    // 但如果有多个key，可能还有可用的
-                    const availableKeys = this.getAvailableKeysCount(ch)
-                    if (availableKeys === 0) return false
-                }
-                
-                return true
-            })
-        
+
+        let candidates = Array.from(this.channels.values()).filter(ch => {
+            // 基础过滤
+            if (!ch.enabled) return false
+            if (excludeChannelId && ch.id === excludeChannelId) return false
+
+            // 模型支持检查
+            const hasModel = ch.models?.includes(model) || ch.models?.includes('*')
+            if (!hasModel) return false
+
+            // 状态检查
+            if (!includeErrorChannels && ch.status === ChannelStatus.ERROR) return false
+            if (ch.status === ChannelStatus.QUOTA_EXCEEDED) return false
+
+            // 错误冷却检查（动态冷却时间）
+            const errorCount = ch.errorCount || 0
+            let cooldownMs = 0
+            if (errorCount === 1) cooldownMs = 30 * 1000
+            else if (errorCount === 2) cooldownMs = 60 * 1000
+            else if (errorCount >= 3) cooldownMs = 5 * 60 * 1000
+
+            if (ch.lastErrorTime && cooldownMs > 0 && now - ch.lastErrorTime < cooldownMs) {
+                // 但如果有多个key，可能还有可用的
+                const availableKeys = this.getAvailableKeysCount(ch)
+                if (availableKeys === 0) return false
+            }
+
+            return true
+        })
+
         return candidates.sort((a, b) => {
             // 优先级排序：priority > 错误次数少 > 最近未使用
             if (a.priority !== b.priority) return a.priority - b.priority
@@ -1102,7 +1131,7 @@ export class ChannelManager {
         if (!channel.apiKeys || channel.apiKeys.length === 0) {
             return channel.apiKey ? 1 : 0
         }
-        
+
         return channel.apiKeys.filter(k => {
             if (typeof k === 'string') return true
             return k.enabled !== false && (k.errorCount || 0) < 10
@@ -1120,95 +1149,93 @@ export class ChannelManager {
      * @returns {Promise<{success: boolean, result?: any, error?: string, attempts: number, channelsUsed: string[]}>}
      */
     async withRetry(model, executor, options = {}) {
-        const { 
-            maxRetries = 3, 
-            retryDelay = 1000, 
-            switchChannel = true, 
-            switchKey = true 
-        } = options
-        
+        const { maxRetries = 3, retryDelay = 1000, switchChannel = true, switchKey = true } = options
+
         let attempts = 0
         let lastError = null
         const channelsUsed = []
         const triedChannels = new Set()
-        
+
         // 获取初始渠道
         let currentChannel = this.getBestChannel(model)
         if (!currentChannel) {
-            return { 
-                success: false, 
-                error: `未找到支持模型 ${model} 的可用渠道`, 
-                attempts: 0, 
-                channelsUsed: [] 
+            return {
+                success: false,
+                error: `未找到支持模型 ${model} 的可用渠道`,
+                attempts: 0,
+                channelsUsed: []
             }
         }
-        
+
         while (attempts < maxRetries) {
             attempts++
             channelsUsed.push(currentChannel.id)
             triedChannels.add(currentChannel.id)
-            
+
             // 获取当前渠道的Key信息
             const keyInfo = this.getChannelKey(currentChannel)
-            
+
             try {
                 this.startRequest(currentChannel.id)
-                
+
                 logger.debug(`[ChannelManager] 执行请求: 渠道=${currentChannel.name}, 尝试=${attempts}/${maxRetries}`)
-                
+
                 const result = await executor(currentChannel, keyInfo)
-                
+
                 // 成功，报告并返回
                 this.reportSuccess(currentChannel.id)
                 this.endRequest(currentChannel.id)
-                
-                return { 
-                    success: true, 
-                    result, 
-                    attempts, 
-                    channelsUsed 
+
+                return {
+                    success: true,
+                    result,
+                    attempts,
+                    channelsUsed
                 }
-                
             } catch (error) {
                 this.endRequest(currentChannel.id)
                 lastError = error
-                
+
                 // 分析错误类型
                 const errorType = this.classifyError(error)
-                logger.warn(`[ChannelManager] 请求失败: 渠道=${currentChannel.name}, 类型=${errorType}, 错误=${error.message}`)
-                
+                logger.warn(
+                    `[ChannelManager] 请求失败: 渠道=${currentChannel.name}, 类型=${errorType}, 错误=${error.message}`
+                )
+
                 // 报告错误
-                await this.reportError(currentChannel.id, { 
-                    keyIndex: keyInfo.keyIndex, 
+                await this.reportError(currentChannel.id, {
+                    keyIndex: keyInfo.keyIndex,
                     errorType,
                     errorMessage: error.message,
                     isRetry: attempts > 1
                 })
-                
+
                 // 判断是否需要重试
                 if (attempts >= maxRetries) {
                     break
                 }
-                
+
                 // 尝试切换策略
                 let switched = false
-                
+
                 // 1. 先尝试同渠道切换Key
                 if (switchKey && currentChannel.apiKeys?.length > 1) {
                     const nextKey = this.getNextAvailableKey(currentChannel.id, keyInfo.keyIndex)
                     if (nextKey) {
-                        logger.info(`[ChannelManager] 切换Key: ${currentChannel.name} Key#${keyInfo.keyIndex + 1} -> Key#${nextKey.keyIndex + 1}`)
+                        logger.info(
+                            `[ChannelManager] 切换Key: ${currentChannel.name} Key#${keyInfo.keyIndex + 1} -> Key#${nextKey.keyIndex + 1}`
+                        )
                         currentChannel.keyIndex = nextKey.keyIndex
                         switched = true
                     }
                 }
-                
+
                 // 2. Key切换失败，尝试切换渠道
                 if (!switched && switchChannel) {
-                    const fallbackChannels = this.getAvailableChannels(model, { 
-                        excludeChannelId: currentChannel.id 
+                    const fallbackChannels = this.getAvailableChannels(model, {
+                        excludeChannelId: currentChannel.id
                     }).filter(ch => !triedChannels.has(ch.id))
-                    
+
                     if (fallbackChannels.length > 0) {
                         const nextChannel = fallbackChannels[0]
                         logger.info(`[ChannelManager] 切换渠道: ${currentChannel.name} -> ${nextChannel.name}`)
@@ -1216,22 +1243,22 @@ export class ChannelManager {
                         switched = true
                     }
                 }
-                
+
                 // 3. 都无法切换，延迟后重试当前渠道
                 if (!switched) {
                     logger.debug(`[ChannelManager] 无可切换渠道，延迟${retryDelay}ms后重试`)
                 }
-                
+
                 // 延迟重试
                 await new Promise(r => setTimeout(r, retryDelay * attempts))
             }
         }
-        
-        return { 
-            success: false, 
-            error: lastError?.message || '请求失败，已达最大重试次数', 
-            attempts, 
-            channelsUsed 
+
+        return {
+            success: false,
+            error: lastError?.message || '请求失败，已达最大重试次数',
+            attempts,
+            channelsUsed
         }
     }
 
@@ -1242,23 +1269,37 @@ export class ChannelManager {
      */
     classifyError(error) {
         const msg = error.message?.toLowerCase() || ''
-        
-        if (msg.includes('401') || msg.includes('403') || msg.includes('unauthorized') || msg.includes('invalid api key')) {
+
+        if (
+            msg.includes('401') ||
+            msg.includes('403') ||
+            msg.includes('unauthorized') ||
+            msg.includes('invalid api key')
+        ) {
             return 'auth'
         }
         if (msg.includes('429') || msg.includes('rate limit') || msg.includes('quota') || msg.includes('exceeded')) {
             return 'quota'
         }
-        if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('econnrefused') || msg.includes('enotfound')) {
+        if (
+            msg.includes('timeout') ||
+            msg.includes('timed out') ||
+            msg.includes('econnrefused') ||
+            msg.includes('enotfound')
+        ) {
             return 'network'
         }
-        if (msg.includes('choices字段缺失') || msg.includes('未能生成回复') || msg.includes('completion_tokens') && msg.includes('0')) {
+        if (
+            msg.includes('choices字段缺失') ||
+            msg.includes('未能生成回复') ||
+            (msg.includes('completion_tokens') && msg.includes('0'))
+        ) {
             return 'empty'
         }
         if (msg.includes('500') || msg.includes('502') || msg.includes('503') || msg.includes('504')) {
             return 'server'
         }
-        
+
         return 'unknown'
     }
 
@@ -1286,16 +1327,16 @@ export class ChannelManager {
 
         // 选择错误次数最少的key
         activeKeys.sort((a, b) => {
-            const errA = typeof a.key === 'object' ? (a.key.errorCount || 0) : 0
-            const errB = typeof b.key === 'object' ? (b.key.errorCount || 0) : 0
+            const errA = typeof a.key === 'object' ? a.key.errorCount || 0 : 0
+            const errB = typeof b.key === 'object' ? b.key.errorCount || 0 : 0
             return errA - errB
         })
 
         const selected = activeKeys[0]
         const keyValue = typeof selected.key === 'string' ? selected.key : selected.key.key
-        
+
         logger.info(`[ChannelManager] 渠道 ${channel.name} 切换到备用Key #${selected.index + 1}`)
-        
+
         return {
             key: keyValue,
             keyIndex: selected.index,
@@ -1337,7 +1378,7 @@ export class ChannelManager {
 
     /**
      * 记录渠道使用
-     * @param {string} channelId 
+     * @param {string} channelId
      * @param {Object} usage { tokens, success, duration, model, keyIndex, switched, previousChannelId }
      */
     recordUsage(channelId, usage = {}) {
@@ -1352,12 +1393,12 @@ export class ChannelManager {
                 avgDuration: 0,
                 lastUsed: null,
                 // 新增统计项
-                modelUsage: {},       // 按模型统计
-                keyUsage: {},         // 按Key统计
-                switchCount: 0,       // 切换次数
-                errorTypes: {},       // 错误类型统计
-                hourlyStats: {},      // 按小时统计
-                dailyStats: {}        // 按日统计
+                modelUsage: {}, // 按模型统计
+                keyUsage: {}, // 按Key统计
+                switchCount: 0, // 切换次数
+                errorTypes: {}, // 错误类型统计
+                hourlyStats: {}, // 按小时统计
+                dailyStats: {} // 按日统计
             }
             this.channelStats.set(channelId, stats)
         }
@@ -1442,19 +1483,17 @@ export class ChannelManager {
 
     /**
      * 获取渠道统计
-     * @param {string} channelId 
+     * @param {string} channelId
      * @returns {Object|null}
      */
     getStats(channelId) {
         if (channelId) {
             const stats = this.channelStats.get(channelId)
             if (!stats) return null
-            
+
             // 计算成功率
-            const successRate = stats.totalCalls > 0 
-                ? Math.round((stats.successCalls / stats.totalCalls) * 100) 
-                : 0
-            
+            const successRate = stats.totalCalls > 0 ? Math.round((stats.successCalls / stats.totalCalls) * 100) : 0
+
             return {
                 ...stats,
                 successRate,
@@ -1464,9 +1503,7 @@ export class ChannelManager {
         // 返回所有统计（带计算字段）
         const allStats = {}
         for (const [id, stats] of this.channelStats) {
-            const successRate = stats.totalCalls > 0 
-                ? Math.round((stats.successCalls / stats.totalCalls) * 100) 
-                : 0
+            const successRate = stats.totalCalls > 0 ? Math.round((stats.successCalls / stats.totalCalls) * 100) : 0
             allStats[id] = {
                 ...stats,
                 successRate,
@@ -1483,7 +1520,7 @@ export class ChannelManager {
     getLoadBalanceSummary() {
         const channels = Array.from(this.channels.values())
         const stats = this.getStats()
-        
+
         const summary = {
             totalChannels: channels.length,
             enabledChannels: channels.filter(ch => ch.enabled !== false).length,
@@ -1529,9 +1566,8 @@ export class ChannelManager {
         }
 
         // 计算平均成功率
-        summary.avgSuccessRate = summary.totalCalls > 0 
-            ? Math.round((summary.totalSuccess / summary.totalCalls) * 100) 
-            : 0
+        summary.avgSuccessRate =
+            summary.totalCalls > 0 ? Math.round((summary.totalSuccess / summary.totalCalls) * 100) : 0
 
         // 按调用量排序
         summary.channelBreakdown.sort((a, b) => b.calls - a.calls)

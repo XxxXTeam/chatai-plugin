@@ -21,7 +21,7 @@ export const fileTools = [
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
                 const groupId = parseInt(args.group_id)
-                
+
                 let files = []
                 if (adapter === 'icqq') {
                     const fs = icqqGroup.getFs(bot, groupId)
@@ -29,13 +29,13 @@ export const fileTools = [
                         files = await fs.ls(args.folder_id || '/')
                     }
                 } else {
-                    const result = await callOneBotApi(bot, 'get_group_file_list', { 
-                        group_id: groupId, 
-                        folder_id: args.folder_id || '/' 
+                    const result = await callOneBotApi(bot, 'get_group_file_list', {
+                        group_id: groupId,
+                        folder_id: args.folder_id || '/'
                     })
                     files = result?.data?.files || result?.files || []
                 }
-                
+
                 const result = (files || []).map(f => ({
                     name: f.name || f.file_name,
                     id: f.id || f.fid || f.file_id,
@@ -44,7 +44,7 @@ export const fileTools = [
                     upload_time: f.upload_time || f.create_time,
                     uploader: f.uploader || f.uploader_uin || f.user_id
                 }))
-                
+
                 return { success: true, adapter, group_id: groupId, count: result.length, files: result }
             } catch (err) {
                 return { success: false, error: `获取群文件失败: ${err.message}` }
@@ -68,7 +68,7 @@ export const fileTools = [
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
                 const groupId = parseInt(args.group_id)
-                
+
                 let url = ''
                 if (adapter === 'icqq') {
                     const fs = icqqGroup.getFs(bot, groupId)
@@ -77,17 +77,17 @@ export const fileTools = [
                         url = result?.url || result
                     }
                 } else {
-                    const result = await callOneBotApi(bot, 'get_group_file_url', { 
-                        group_id: groupId, 
-                        file_id: args.file_id 
+                    const result = await callOneBotApi(bot, 'get_group_file_url', {
+                        group_id: groupId,
+                        file_id: args.file_id
                     })
                     url = result?.data?.url || result?.url
                 }
-                
+
                 if (!url) {
                     return { success: false, error: '无法获取文件链接' }
                 }
-                
+
                 return { success: true, adapter, group_id: groupId, file_id: args.file_id, url }
             } catch (err) {
                 return { success: false, error: `获取文件链接失败: ${err.message}` }
@@ -113,7 +113,7 @@ export const fileTools = [
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
                 const groupId = parseInt(args.group_id)
-                
+
                 if (adapter === 'icqq') {
                     await icqqGroup.sendFile(bot, groupId, args.file_url, args.name)
                 } else {
@@ -124,7 +124,7 @@ export const fileTools = [
                         folder: args.folder_id || '/'
                     })
                 }
-                
+
                 return { success: true, adapter, group_id: groupId, name: args.name }
             } catch (err) {
                 return { success: false, error: `上传文件失败: ${err.message}` }
@@ -147,9 +147,9 @@ export const fileTools = [
             try {
                 const bot = ctx.getBot()
                 const groupId = parseInt(args.group_id)
-                
+
                 const group = bot.pickGroup(groupId)
-                
+
                 if (group.deleteFile) {
                     await group.deleteFile(args.file_id)
                 } else if (group.fs?.rm) {
@@ -157,7 +157,7 @@ export const fileTools = [
                 } else {
                     return { success: false, error: '当前协议不支持删除文件' }
                 }
-                
+
                 return { success: true, group_id: groupId, file_id: args.file_id }
             } catch (err) {
                 return { success: false, error: `删除文件失败: ${err.message}` }
@@ -181,9 +181,9 @@ export const fileTools = [
             try {
                 const bot = ctx.getBot()
                 const groupId = parseInt(args.group_id)
-                
+
                 const group = bot.pickGroup(groupId)
-                
+
                 if (group.createFolder) {
                     await group.createFolder(args.name, args.parent_id || '/')
                 } else if (group.fs?.mkdir) {
@@ -200,14 +200,14 @@ export const fileTools = [
                         return { success: false, error: '当前协议不支持创建文件夹' }
                     }
                 }
-                
+
                 return { success: true, group_id: groupId, name: args.name }
             } catch (err) {
                 return { success: false, error: `创建文件夹失败: ${err.message}` }
             }
         }
     },
-    
+
     {
         name: 'get_group_file_system_info',
         description: '获取群文件系统信息（用量、数量等）',
@@ -222,19 +222,19 @@ export const fileTools = [
             try {
                 const bot = ctx.getBot()
                 const groupId = parseInt(args.group_id)
-                
+
                 // 尝试 icqq API
                 const group = bot.pickGroup?.(groupId)
                 if (group?.fs?.stat) {
                     const stat = await group.fs.stat()
                     return { success: true, group_id: groupId, ...stat }
                 }
-                
+
                 // 尝试 NapCat API
                 try {
                     const result = await callOneBotApi(bot, 'get_group_file_system_info', { group_id: groupId })
-                    return { 
-                        success: true, 
+                    return {
+                        success: true,
                         group_id: groupId,
                         file_count: result?.data?.file_count || result?.file_count,
                         limit_count: result?.data?.limit_count || result?.limit_count,
@@ -264,13 +264,11 @@ export const fileTools = [
             try {
                 const bot = ctx.getBot()
                 const groupId = parseInt(args.group_id)
-                
+
                 // 尝试 icqq API
                 const group = bot.pickGroup?.(groupId)
                 if (group?.getFileList || group?.fs?.ls) {
-                    const files = group.getFileList 
-                        ? await group.getFileList('/') 
-                        : await group.fs.ls('/')
+                    const files = group.getFileList ? await group.getFileList('/') : await group.fs.ls('/')
                     const result = (files || []).map(f => ({
                         name: f.name || f.file_name,
                         id: f.id || f.fid || f.file_id,
@@ -281,12 +279,12 @@ export const fileTools = [
                     }))
                     return { success: true, group_id: groupId, files: result }
                 }
-                
+
                 // 尝试 NapCat API
                 try {
                     const result = await callOneBotApi(bot, 'get_group_root_files', { group_id: groupId })
-                    return { 
-                        success: true, 
+                    return {
+                        success: true,
                         group_id: groupId,
                         files: result?.data?.files || result?.files || [],
                         folders: result?.data?.folders || result?.folders || []
@@ -315,12 +313,12 @@ export const fileTools = [
             try {
                 const bot = ctx.getBot()
                 const groupId = parseInt(args.group_id)
-                
+
                 // 尝试 icqq API
                 const group = bot.pickGroup?.(groupId)
                 if (group?.getFileList || group?.fs?.ls) {
-                    const files = group.getFileList 
-                        ? await group.getFileList(args.folder_id) 
+                    const files = group.getFileList
+                        ? await group.getFileList(args.folder_id)
                         : await group.fs.ls(args.folder_id)
                     const result = (files || []).map(f => ({
                         name: f.name || f.file_name,
@@ -331,15 +329,15 @@ export const fileTools = [
                     }))
                     return { success: true, group_id: groupId, folder_id: args.folder_id, files: result }
                 }
-                
+
                 // 尝试 NapCat API
                 try {
                     const result = await callOneBotApi(bot, 'get_group_files_by_folder', {
                         group_id: groupId,
                         folder_id: args.folder_id
                     })
-                    return { 
-                        success: true, 
+                    return {
+                        success: true,
                         group_id: groupId,
                         folder_id: args.folder_id,
                         files: result?.data?.files || result?.files || [],
@@ -371,14 +369,14 @@ export const fileTools = [
             try {
                 const bot = ctx.getBot()
                 const groupId = parseInt(args.group_id)
-                
+
                 // 尝试 icqq API
                 const group = bot.pickGroup?.(groupId)
                 if (group?.fs?.mv) {
                     await group.fs.mv(args.file_id, args.parent_directory, args.target_directory)
                     return { success: true, group_id: groupId, file_id: args.file_id }
                 }
-                
+
                 // 尝试 NapCat API
                 try {
                     await callOneBotApi(bot, 'move_group_file', {
@@ -413,14 +411,14 @@ export const fileTools = [
             try {
                 const bot = ctx.getBot()
                 const groupId = parseInt(args.group_id)
-                
+
                 // 尝试 icqq API
                 const group = bot.pickGroup?.(groupId)
                 if (group?.fs?.rename) {
                     await group.fs.rename(args.file_id, args.new_name)
                     return { success: true, group_id: groupId, file_id: args.file_id, new_name: args.new_name }
                 }
-                
+
                 // 尝试 NapCat API
                 try {
                     await callOneBotApi(bot, 'rename_group_file', {
@@ -453,14 +451,14 @@ export const fileTools = [
             try {
                 const bot = ctx.getBot()
                 const groupId = parseInt(args.group_id)
-                
+
                 // 尝试 icqq API
                 const group = bot.pickGroup?.(groupId)
                 if (group?.fs?.rmdir) {
                     await group.fs.rmdir(args.folder_id)
                     return { success: true, group_id: groupId, folder_id: args.folder_id }
                 }
-                
+
                 // 尝试 NapCat API
                 try {
                     await callOneBotApi(bot, 'delete_group_folder', {
@@ -493,14 +491,14 @@ export const fileTools = [
             try {
                 const bot = ctx.getBot()
                 const userId = parseInt(args.user_id)
-                
+
                 // 尝试 icqq API
                 const friend = bot.pickFriend?.(userId)
                 if (friend?.sendFile) {
                     await friend.sendFile(args.file_url, args.name)
                     return { success: true, user_id: userId, name: args.name }
                 }
-                
+
                 // 尝试 NapCat API
                 try {
                     await callOneBotApi(bot, 'upload_private_file', {
@@ -531,14 +529,14 @@ export const fileTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 // 尝试 NapCat API
                 try {
                     const result = await callOneBotApi(bot, 'get_private_file_url', {
                         file_id: args.file_id
                     })
-                    return { 
-                        success: true, 
+                    return {
+                        success: true,
                         file_id: args.file_id,
                         url: result?.data?.url || result?.url
                     }
@@ -566,18 +564,20 @@ export const fileTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 // 尝试 NapCat API
                 try {
                     const params = { url: args.url }
                     if (args.thread_count) params.thread_count = args.thread_count
                     if (args.headers) {
-                        try { params.headers = JSON.parse(args.headers) } catch (e) {}
+                        try {
+                            params.headers = JSON.parse(args.headers)
+                        } catch (e) {}
                     }
-                    
+
                     const result = await callOneBotApi(bot, 'download_file', params)
-                    return { 
-                        success: true, 
+                    return {
+                        success: true,
                         file: result?.data?.file || result?.file
                     }
                 } catch (e) {
@@ -588,7 +588,7 @@ export const fileTools = [
             }
         }
     },
-    
+
     {
         name: 'send_file_message',
         description: '发送文件消息（群聊或私聊）',
@@ -607,7 +607,7 @@ export const fileTools = [
                 const bot = ctx.getBot()
                 const targetId = parseInt(args.target_id)
                 const fileName = args.name || args.file.split('/').pop() || 'file'
-                
+
                 if (args.target_type === 'group') {
                     const group = bot.pickGroup?.(targetId)
                     if (group?.sendFile) {
@@ -627,11 +627,13 @@ export const fileTools = [
                     }
                     // 尝试 NapCat 方式
                     if (bot.sendPrivateMsg) {
-                        await bot.sendPrivateMsg(targetId, [{ type: 'file', data: { file: args.file, name: fileName } }])
+                        await bot.sendPrivateMsg(targetId, [
+                            { type: 'file', data: { file: args.file, name: fileName } }
+                        ])
                         return { success: true, target: 'private', target_id: targetId, name: fileName }
                     }
                 }
-                
+
                 return { success: false, error: '当前协议不支持发送文件消息' }
             } catch (err) {
                 return { success: false, error: `发送文件消息失败: ${err.message}` }
@@ -652,7 +654,7 @@ export const fileTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 // 尝试 NapCat API: get_file
                 if (bot.sendApi) {
                     try {
@@ -671,7 +673,7 @@ export const fileTools = [
                         // 继续尝试其他方法
                     }
                 }
-                
+
                 // 尝试 get_image (如果是图片)
                 if (bot.sendApi) {
                     try {
@@ -688,7 +690,7 @@ export const fileTools = [
                         // 继续
                     }
                 }
-                
+
                 return { success: false, error: '无法获取文件信息' }
             } catch (err) {
                 return { success: false, error: `获取文件信息失败: ${err.message}` }
@@ -703,20 +705,24 @@ export const fileTools = [
             type: 'object',
             properties: {
                 file: { type: 'string', description: '语音文件名或ID' },
-                out_format: { type: 'string', description: '输出格式: mp3/amr/wma/m4a/spx/ogg/wav/flac', default: 'mp3' }
+                out_format: {
+                    type: 'string',
+                    description: '输出格式: mp3/amr/wma/m4a/spx/ogg/wav/flac',
+                    default: 'mp3'
+                }
             },
             required: ['file']
         },
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 if (bot.sendApi) {
                     const result = await bot.sendApi('get_record', {
                         file: args.file,
                         out_format: args.out_format || 'mp3'
                     })
-                    
+
                     return {
                         success: true,
                         file: result?.data?.file || result?.file,
@@ -724,7 +730,7 @@ export const fileTools = [
                         format: args.out_format || 'mp3'
                     }
                 }
-                
+
                 return { success: false, error: '当前协议不支持获取语音信息' }
             } catch (err) {
                 return { success: false, error: `获取语音信息失败: ${err.message}` }
@@ -745,10 +751,10 @@ export const fileTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 if (bot.sendApi) {
                     const result = await bot.sendApi('ocr_image', { image: args.image })
-                    
+
                     if (result?.data || result?.texts) {
                         const texts = result.data?.texts || result.texts || []
                         return {
@@ -763,7 +769,7 @@ export const fileTools = [
                         }
                     }
                 }
-                
+
                 return { success: false, error: '当前协议不支持OCR' }
             } catch (err) {
                 return { success: false, error: `OCR识别失败: ${err.message}` }
@@ -781,7 +787,7 @@ export const fileTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 if (bot.sendApi) {
                     const result = await bot.sendApi('can_send_record', {})
                     return {
@@ -789,7 +795,7 @@ export const fileTools = [
                         can_send: result?.data?.yes ?? result?.yes ?? true
                     }
                 }
-                
+
                 // 默认认为可以
                 return { success: true, can_send: true }
             } catch (err) {
@@ -808,7 +814,7 @@ export const fileTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 if (bot.sendApi) {
                     const result = await bot.sendApi('can_send_image', {})
                     return {
@@ -816,7 +822,7 @@ export const fileTools = [
                         can_send: result?.data?.yes ?? result?.yes ?? true
                     }
                 }
-                
+
                 return { success: true, can_send: true }
             } catch (err) {
                 return { success: true, can_send: true }

@@ -36,7 +36,7 @@ export class ClaudeClient extends AbstractClient {
     async _sendMessage(histories, apiKey, options) {
         const client = new Anthropic({
             apiKey,
-            baseURL: this.baseUrl,
+            baseURL: this.baseUrl
         })
 
         const model = options.model || 'claude-3-5-sonnet-20241022'
@@ -75,7 +75,7 @@ export class ClaudeClient extends AbstractClient {
             temperature: options.temperature,
             system: systemPrompt || undefined,
             messages,
-            tools,
+            tools
         })
 
         logger.info('[Claude适配器] API响应:', JSON.stringify(response).substring(0, 300))
@@ -92,17 +92,18 @@ export class ClaudeClient extends AbstractClient {
 
         let contents = chaiteMessage.content || []
         let toolCalls = chaiteMessage.toolCalls || []
-        
+
         // 检查文本内容中是否有非原生格式的工具调用
         // 支持: <tools>, <tool_call>, ```json, JSON数组
         const textContents = contents.filter(c => c.type === 'text')
         for (const textItem of textContents) {
-            if (textItem.text && (
-                textItem.text.includes('<tools>') || 
-                textItem.text.includes('<tool_call>') ||
-                textItem.text.includes('```') ||
-                textItem.text.includes('"name"')
-            )) {
+            if (
+                textItem.text &&
+                (textItem.text.includes('<tools>') ||
+                    textItem.text.includes('<tool_call>') ||
+                    textItem.text.includes('```') ||
+                    textItem.text.includes('"name"'))
+            ) {
                 const { cleanText, toolCalls: parsedToolCalls } = parseXmlToolCalls(textItem.text)
                 if (parsedToolCalls.length > 0) {
                     textItem.text = cleanText
@@ -111,14 +112,14 @@ export class ClaudeClient extends AbstractClient {
                 }
             }
         }
-        
+
         // 过滤空文本
         contents = contents.filter(c => c.type !== 'text' || (c.text && c.text.trim()))
 
         const usage = {
             promptTokens: response.usage?.input_tokens,
             completionTokens: response.usage?.output_tokens,
-            totalTokens: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0),
+            totalTokens: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0)
         }
 
         return {
@@ -127,7 +128,7 @@ export class ClaudeClient extends AbstractClient {
             role: 'assistant',
             content: contents,
             toolCalls,
-            usage,
+            usage
         }
     }
 
@@ -141,7 +142,7 @@ export class ClaudeClient extends AbstractClient {
         const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
         const client = new Anthropic({
             apiKey,
-            baseURL: this.baseUrl,
+            baseURL: this.baseUrl
         })
 
         const model = options.model || 'claude-3-5-sonnet-20241022'
@@ -176,7 +177,7 @@ export class ClaudeClient extends AbstractClient {
             system: systemPrompt || undefined,
             messages,
             tools,
-            stream: true,
+            stream: true
         })
 
         async function* generator() {
@@ -214,7 +215,7 @@ export class ClaudeClient extends AbstractClient {
             'claude-3-haiku-20240307',
             'claude-2.1',
             'claude-2.0',
-            'claude-instant-1.2',
+            'claude-instant-1.2'
         ]
     }
 
@@ -231,16 +232,16 @@ export class ClaudeClient extends AbstractClient {
             'claude-3-sonnet-20240229': { contextWindow: 200000, maxOutput: 4096 },
             'claude-3-haiku-20240307': { contextWindow: 200000, maxOutput: 4096 },
             'claude-2.1': { contextWindow: 200000, maxOutput: 4096 },
-            'claude-2.0': { contextWindow: 100000, maxOutput: 4096 },
+            'claude-2.0': { contextWindow: 100000, maxOutput: 4096 }
         }
-        
+
         const info = knownModels[modelId]
         return {
             id: modelId,
             name: modelId,
             contextWindow: info?.contextWindow || 200000,
             maxOutput: info?.maxOutput || 4096,
-            supported: !!info,
+            supported: !!info
         }
     }
 }

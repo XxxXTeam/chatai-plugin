@@ -15,15 +15,31 @@ puppeteer.use(StealthPlugin())
  * 清理HTML
  */
 function cleanHTML(html) {
-    html = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    html = html
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
         .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
         .replace(/<link[^>]*>/gi, '')
         .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, '')
         .replace(/<!--[\s\S]*?-->/g, '')
         .replace(/<figure[^>]*>[\s\S]*?<\/figure>/gi, '')
 
-    const allowedTags = ['title', 'meta', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'img', 'video', 'audio', 'source', 'a']
-    
+    const allowedTags = [
+        'title',
+        'meta',
+        'h1',
+        'h2',
+        'h3',
+        'h4',
+        'h5',
+        'h6',
+        'p',
+        'img',
+        'video',
+        'audio',
+        'source',
+        'a'
+    ]
+
     html = html.replace(/<\/?([a-zA-Z0-9]+)(\s[^>]*)?>/g, (match, tagName, attrs) => {
         tagName = tagName.toLowerCase()
         if (allowedTags.includes(tagName)) {
@@ -56,7 +72,7 @@ function convertToMarkdown(html) {
         bulletListMarker: '-',
         codeBlockStyle: 'fenced'
     })
-    
+
     turndownService.addRule('images', {
         filter: ['img'],
         replacement: (content, node) => {
@@ -65,7 +81,7 @@ function convertToMarkdown(html) {
             return src ? `![${alt}](${src})` : ''
         }
     })
-    
+
     return turndownService.turndown(html)
 }
 
@@ -77,9 +93,9 @@ export const webTools = [
             type: 'object',
             properties: {
                 url: { type: 'string', description: '要访问的网页URL' },
-                mode: { 
-                    type: 'string', 
-                    description: '获取模式：text(纯文本)、markdown(Markdown格式)、html(原始HTML)', 
+                mode: {
+                    type: 'string',
+                    description: '获取模式：text(纯文本)、markdown(Markdown格式)、html(原始HTML)',
                     enum: ['text', 'markdown', 'html']
                 },
                 wait: { type: 'number', description: '等待页面加载的时间(毫秒)，默认3000' },
@@ -88,12 +104,12 @@ export const webTools = [
             },
             required: ['url']
         },
-        handler: async (args) => {
+        handler: async args => {
             const url = args.url
             const mode = args.mode || 'markdown'
             const waitTime = args.wait || 3000
             const maxLength = args.max_length || 8000
-            
+
             let browser = null
             try {
                 // 获取代理配置
@@ -102,31 +118,33 @@ export const webTools = [
                     headless: 'new',
                     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
                 }
-                
+
                 if (proxyUrl) {
                     launchOptions.args.push(`--proxy-server=${proxyUrl}`)
                 }
-                
+
                 browser = await puppeteer.launch(launchOptions)
                 const page = await browser.newPage()
-                
-                await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+                await page.setUserAgent(
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                )
                 await page.setViewport({ width: 1920, height: 1080 })
-                
+
                 await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 })
-                
+
                 if (args.selector) {
                     await page.waitForSelector(args.selector, { timeout: 10000 }).catch(() => {})
                 }
-                
+
                 await new Promise(r => setTimeout(r, waitTime))
-                
+
                 const title = await page.title()
                 let content = await page.content()
-                
+
                 await browser.close()
                 browser = null
-                
+
                 // 处理内容
                 let result
                 if (mode === 'html') {
@@ -136,11 +154,14 @@ export const webTools = [
                     if (mode === 'markdown') {
                         result = convertToMarkdown(cleanedHtml)
                     } else {
-                        result = cleanedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+                        result = cleanedHtml
+                            .replace(/<[^>]+>/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim()
                     }
                     result = result.substring(0, maxLength)
                 }
-                
+
                 return {
                     success: true,
                     url,
@@ -170,7 +191,7 @@ export const webTools = [
             },
             required: ['url']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const maxLength = args.max_length || 8000
                 const options = {
@@ -180,27 +201,27 @@ export const webTools = [
                         ...args.headers
                     }
                 }
-                
+
                 if (args.body && args.method === 'POST') {
                     options.body = args.body
                 }
-                
+
                 // 获取代理
                 const agent = proxyService.getApiProxyAgent(args.url)
                 if (agent) options.agent = agent
-                
+
                 const response = await fetch(args.url, options)
                 const contentType = response.headers.get('content-type') || ''
-                
+
                 let content
                 if (contentType.includes('application/json')) {
                     content = JSON.stringify(await response.json(), null, 2)
                 } else {
                     content = await response.text()
                 }
-                
+
                 content = content.substring(0, maxLength)
-                
+
                 return {
                     success: true,
                     url: args.url,

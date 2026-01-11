@@ -19,7 +19,7 @@ class RedisClient {
             port: redisConfig.port || 6379,
             password: redisConfig.password || undefined,
             db: redisConfig.db || 0,
-            retryStrategy: (times) => {
+            retryStrategy: times => {
                 const delay = Math.min(times * 50, 2000)
                 return delay
             }
@@ -30,7 +30,7 @@ class RedisClient {
             logger.info('[Redis] Connected to Redis')
         })
 
-        this.client.on('error', (err) => {
+        this.client.on('error', err => {
             logger.error('[Redis] Error:', err)
         })
 

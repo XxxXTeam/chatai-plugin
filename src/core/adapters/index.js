@@ -1,4 +1,4 @@
-export { 
+export {
     AbstractClient,
     parseXmlToolCalls,
     preprocessMediaToBase64,
@@ -7,11 +7,11 @@ export {
     needsImageBase64Preprocess
 } from './AbstractClient.js'
 export { OpenAIClient } from './openai/OpenAIClient.js'
-import './openai/converter.js'  
+import './openai/converter.js'
 export { GeminiClient } from './gemini/GeminiClient.js'
-import './gemini/converter.js' 
+import './gemini/converter.js'
 export { ClaudeClient } from './claude/ClaudeClient.js'
-import './claude/converter.js'  
+import './claude/converter.js'
 export {
     registerFromChaiteConverter,
     registerFromChaiteToolConverter,

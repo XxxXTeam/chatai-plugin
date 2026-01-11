@@ -27,11 +27,13 @@ router.delete('/clear-all', async (req, res) => {
             db.prepare('DELETE FROM memories WHERE user_id = ?').run(row.user_id)
             clearedCount++
         }
-        res.json(ChaiteResponse.ok({ 
-            success: true, 
-            message: `已清空 ${clearedCount} 个用户的记忆`,
-            clearedUsers: clearedCount
-        }))
+        res.json(
+            ChaiteResponse.ok({
+                success: true,
+                message: `已清空 ${clearedCount} 个用户的记忆`,
+                clearedUsers: clearedCount
+            })
+        )
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }

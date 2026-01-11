@@ -36,11 +36,11 @@ router.post('/servers', async (req, res) => {
         if (!name) {
             return res.status(400).json(ChaiteResponse.fail(null, 'name is required'))
         }
-        
+
         // 验证配置
         const serverConfig = config || {}
         const type = (serverConfig.type || 'stdio').toLowerCase()
-        
+
         // 根据类型验证必需字段
         if (type === 'stdio') {
             if (!serverConfig.command) {
@@ -57,11 +57,11 @@ router.post('/servers', async (req, res) => {
         } else {
             return res.status(400).json(ChaiteResponse.fail(null, `Unsupported server type: ${type}`))
         }
-        
+
         // 使用 McpManager 添加服务器
         await mcpManager.init()
         const result = await mcpManager.addServer(name, serverConfig)
-        
+
         res.status(201).json(ChaiteResponse.ok(result))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -76,16 +76,16 @@ router.put('/servers/:name', async (req, res) => {
         if (!server) {
             return res.status(404).json(ChaiteResponse.fail(null, 'Server not found'))
         }
-        
+
         if (server.isBuiltin) {
             return res.status(400).json(ChaiteResponse.fail(null, 'Cannot update builtin server'))
         }
-        
+
         const { config: newConfig } = req.body
         if (!newConfig || typeof newConfig !== 'object') {
             return res.status(400).json(ChaiteResponse.fail(null, 'config object is required'))
         }
-        
+
         // 使用 McpManager 更新服务器
         const result = await mcpManager.updateServer(req.params.name, newConfig)
         res.json(ChaiteResponse.ok(result))
@@ -102,11 +102,11 @@ router.delete('/servers/:name', async (req, res) => {
         if (!server) {
             return res.status(404).json(ChaiteResponse.fail(null, 'Server not found'))
         }
-        
+
         if (server.isBuiltin) {
             return res.status(400).json(ChaiteResponse.fail(null, 'Cannot delete builtin server'))
         }
-        
+
         // 使用 McpManager 删除服务器
         await mcpManager.removeServer(req.params.name)
         res.json(ChaiteResponse.ok({ success: true }))
@@ -145,20 +145,22 @@ router.post('/import', async (req, res) => {
     try {
         const { mcpServers } = req.body
         if (!mcpServers || typeof mcpServers !== 'object') {
-            return res.status(400).json(ChaiteResponse.fail(null, 'Invalid config format, expected { mcpServers: { ... } }'))
+            return res
+                .status(400)
+                .json(ChaiteResponse.fail(null, 'Invalid config format, expected { mcpServers: { ... } }'))
         }
-        
+
         await mcpManager.init()
-        
+
         let success = 0
         let failed = 0
         const errors = []
-        
+
         for (const [name, serverConfig] of Object.entries(mcpServers)) {
             try {
                 // 转换配置格式（兼容 Claude Desktop 格式）
                 const config = { ...serverConfig }
-                
+
                 // 如果没有 type，根据配置推断
                 if (!config.type) {
                     if (config.url) {
@@ -169,7 +171,7 @@ router.post('/import', async (req, res) => {
                         config.type = 'stdio'
                     }
                 }
-                
+
                 await mcpManager.addServer(name, config)
                 success++
             } catch (error) {
@@ -177,13 +179,15 @@ router.post('/import', async (req, res) => {
                 errors.push({ name, error: error.message })
             }
         }
-        
-        res.json(ChaiteResponse.ok({ 
-            success, 
-            failed, 
-            total: Object.keys(mcpServers).length,
-            errors: errors.length > 0 ? errors : undefined
-        }))
+
+        res.json(
+            ChaiteResponse.ok({
+                success,
+                failed,
+                total: Object.keys(mcpServers).length,
+                errors: errors.length > 0 ? errors : undefined
+            })
+        )
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }

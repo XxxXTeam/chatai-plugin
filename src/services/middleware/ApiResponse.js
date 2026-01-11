@@ -166,27 +166,27 @@ export function responseHelper(req, res, next) {
     }
 
     // 未授权
-    res.unauthorized = (message) => {
+    res.unauthorized = message => {
         res.status(HttpStatus.UNAUTHORIZED).json(ApiResponse.unauthorized(message))
     }
 
     // 禁止访问
-    res.forbidden = (message) => {
+    res.forbidden = message => {
         res.status(HttpStatus.FORBIDDEN).json(ApiResponse.forbidden(message))
     }
 
     // 资源不存在
-    res.notFound = (resource) => {
+    res.notFound = resource => {
         res.status(HttpStatus.NOT_FOUND).json(ApiResponse.notFound(resource))
     }
 
     // 冲突
-    res.conflict = (message) => {
+    res.conflict = message => {
         res.status(HttpStatus.CONFLICT).json(ApiResponse.error(ErrorCode.RESOURCE_EXISTS, message))
     }
 
     // 请求过多
-    res.tooManyRequests = (message) => {
+    res.tooManyRequests = message => {
         res.status(HttpStatus.TOO_MANY_REQUESTS).json(ApiResponse.error(ErrorCode.RATE_LIMIT_EXCEEDED, message))
     }
 
@@ -218,27 +218,19 @@ export function errorHandler(err, req, res, next) {
 
     // 处理特定类型的错误
     if (err.name === 'ValidationError') {
-        return res.status(HttpStatus.BAD_REQUEST).json(
-            ApiResponse.validationError(err.details, err.message)
-        )
+        return res.status(HttpStatus.BAD_REQUEST).json(ApiResponse.validationError(err.details, err.message))
     }
 
     if (err.name === 'UnauthorizedError' || err.status === 401) {
-        return res.status(HttpStatus.UNAUTHORIZED).json(
-            ApiResponse.unauthorized(err.message)
-        )
+        return res.status(HttpStatus.UNAUTHORIZED).json(ApiResponse.unauthorized(err.message))
     }
 
     if (err.name === 'ForbiddenError' || err.status === 403) {
-        return res.status(HttpStatus.FORBIDDEN).json(
-            ApiResponse.forbidden(err.message)
-        )
+        return res.status(HttpStatus.FORBIDDEN).json(ApiResponse.forbidden(err.message))
     }
 
     if (err.name === 'NotFoundError' || err.status === 404) {
-        return res.status(HttpStatus.NOT_FOUND).json(
-            ApiResponse.notFound()
-        )
+        return res.status(HttpStatus.NOT_FOUND).json(ApiResponse.notFound())
     }
 
     // 默认服务器错误
@@ -254,7 +246,7 @@ export function errorHandler(err, req, res, next) {
 export function validate(schema) {
     return (req, res, next) => {
         const errors = {}
-        
+
         // 验证body
         if (schema.body) {
             const bodyErrors = validateObject(req.body, schema.body)
@@ -280,8 +272,7 @@ export function validate(schema) {
         }
 
         if (Object.keys(errors).length > 0) {
-            return res.badRequest?.('参数验证失败', errors) 
-                || res.status(400).json(ApiResponse.validationError(errors))
+            return res.badRequest?.('参数验证失败', errors) || res.status(400).json(ApiResponse.validationError(errors))
         }
 
         next()
@@ -293,7 +284,7 @@ export function validate(schema) {
  */
 function validateObject(obj, schema) {
     const errors = {}
-    
+
     for (const [field, rules] of Object.entries(schema)) {
         const value = obj?.[field]
 
@@ -358,7 +349,7 @@ function validateObject(obj, schema) {
 
 // 向后兼容的ChaiteResponse
 export const ChaiteResponse = {
-    ok: (data) => ApiResponse.ok(data),
+    ok: data => ApiResponse.ok(data),
     fail: (data, msg) => ApiResponse.error(ErrorCode.UNKNOWN_ERROR, msg)
 }
 

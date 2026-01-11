@@ -13,13 +13,12 @@ import { isQQBotPlatform, urlToQRCode } from '../src/utils/platformAdapter.js'
 let yunzaiCfg = null
 try {
     yunzaiCfg = (await import('../../../lib/config/config.js')).default
-} catch (e) {
-}
+} catch (e) {}
 
 export class AIManagement extends plugin {
     constructor() {
         const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
-        
+
         super({
             name: 'AI插件管理',
             dsc: 'AI插件管理命令',
@@ -136,17 +135,17 @@ export class AIManagement extends plugin {
     async isGroupAdmin() {
         const e = this.e
         if (!e.isGroup) return false
-        
+
         // 主人始终有权限
         if (this.isMasterUser(e.user_id)) return true
-        
+
         // 检查群管理员/群主
         try {
             const role = e.sender?.role
             if (role === 'owner' || role === 'admin') {
                 return true
             }
-            
+
             // 尝试获取群成员信息
             const group = e.group || e.bot?.pickGroup?.(e.group_id)
             if (group?.pickMember) {
@@ -159,7 +158,7 @@ export class AIManagement extends plugin {
         } catch (err) {
             logger.debug('[Management] 获取群成员信息失败:', err.message)
         }
-        
+
         return false
     }
 
@@ -175,7 +174,7 @@ export class AIManagement extends plugin {
             }
             const scopeManager = getScopeManager(databaseService)
             await scopeManager.init()
-            
+
             const groupSettings = await scopeManager.getGroupSettings(groupId)
             return groupSettings?.settings || {}
         } catch (err) {
@@ -198,13 +197,13 @@ export class AIManagement extends plugin {
             }
             const scopeManager = getScopeManager(databaseService)
             await scopeManager.init()
-            
-            const existingSettings = await scopeManager.getGroupSettings(groupId) || {}
+
+            const existingSettings = (await scopeManager.getGroupSettings(groupId)) || {}
             const currentFeatures = existingSettings.settings || {}
-            
+
             // 更新功能设置
             currentFeatures[feature] = enabled
-            
+
             // 正确结构：顶层字段单独传递，功能设置存储在otherSettings中
             await scopeManager.setGroupSettings(groupId, {
                 systemPrompt: existingSettings.systemPrompt,
@@ -213,7 +212,7 @@ export class AIManagement extends plugin {
                 inheritFrom: existingSettings.inheritFrom,
                 ...currentFeatures
             })
-            
+
             return true
         } catch (err) {
             logger.error('[Management] 设置群组功能失败:', err.message)
@@ -242,7 +241,7 @@ export class AIManagement extends plugin {
             await this.reply(`获取管理面板失败: ${err.message}`, true)
         }
     }
-    
+
     /**
      * 发送面板登录信息（私聊+合并转发）
      * @param {boolean} permanent - 是否永久有效
@@ -250,28 +249,28 @@ export class AIManagement extends plugin {
      */
     async sendPanelInfo(permanent = false, forceNew = false) {
         const webServer = getWebServer()
-        
+
         // 使用新的getLoginInfo方法获取完整登录信息
         const loginInfo = webServer.getLoginInfo(permanent, forceNew)
         const { localUrl, localUrls, localIPv6Urls, publicUrl, customUrls, validity } = loginInfo
-        
+
         const validityText = validity
         const warningText = permanent ? '\n\n⚠️ 请妥善保管此链接，不要泄露给他人！' : ''
         const newTokenText = forceNew ? '（已重新生成）' : ''
-        
+
         // 检测是否为QQBot平台，需要将URL转为二维码
         const isQQBot = isQQBotPlatform(this.e)
-        
+
         // 构建消息内容
         const messages = []
-        
+
         // 标题
         messages.push({
             message: `🔐 AI插件管理面板（${validityText}）`,
             nickname: 'AI管理面板',
             user_id: this.e.self_id
         })
-        
+
         // QQBot平台：优先使用公网地址或第一个可用地址生成二维码
         if (isQQBot) {
             const primaryUrl = publicUrl || (customUrls && customUrls[0]?.url) || localUrl
@@ -279,16 +278,13 @@ export class AIManagement extends plugin {
                 const qrcode = await urlToQRCode(primaryUrl)
                 if (qrcode) {
                     messages.push({
-                        message: [
-                            `📱 请扫描二维码打开管理面板：`,
-                            { type: 'image', file: qrcode }
-                        ],
+                        message: [`📱 请扫描二维码打开管理面板：`, { type: 'image', file: qrcode }],
                         nickname: 'AI管理面板',
                         user_id: this.e.self_id
                     })
                 }
             }
-            
+
             // 使用说明（QQBot版本）
             messages.push({
                 message: `📌 使用说明：\n1. 使用手机扫描上方二维码\n2. 或在浏览器中打开链接\n3. 链接包含登录凭证，请勿分享${warningText}`,
@@ -305,7 +301,7 @@ export class AIManagement extends plugin {
                     user_id: this.e.self_id
                 })
             }
-            
+
             // 所有本地IPv6地址
             if (localIPv6Urls && localIPv6Urls.length > 0) {
                 messages.push({
@@ -314,7 +310,7 @@ export class AIManagement extends plugin {
                     user_id: this.e.self_id
                 })
             }
-            
+
             // 公网地址
             if (publicUrl) {
                 messages.push({
@@ -323,7 +319,7 @@ export class AIManagement extends plugin {
                     user_id: this.e.self_id
                 })
             }
-            
+
             // 自定义地址
             if (customUrls && customUrls.length > 0) {
                 for (const custom of customUrls) {
@@ -334,7 +330,7 @@ export class AIManagement extends plugin {
                     })
                 }
             }
-            
+
             // 使用说明
             messages.push({
                 message: `📌 使用说明：\n1. 点击链接在浏览器中打开\n2. 优先使用与设备同网段的地址\n3. 如本地访问失败，请尝试公网地址\n4. 链接包含登录凭证，请勿分享${warningText}`,
@@ -342,7 +338,7 @@ export class AIManagement extends plugin {
                 user_id: this.e.self_id
             })
         }
-        
+
         // 私聊发送
         const userId = this.e.user_id
         try {
@@ -363,10 +359,10 @@ export class AIManagement extends plugin {
                     }
                 }
             }
-            
+
             if (isQQBot) {
                 const msgParts = [`🔐 AI插件管理面板（${validityText}）`]
-                
+
                 // 收集所有可用URL
                 const allUrls = []
                 if (customUrls && customUrls.length > 0) {
@@ -380,7 +376,7 @@ export class AIManagement extends plugin {
                 if (localUrl) {
                     allUrls.push({ label: '本地', url: localUrl })
                 }
-                
+
                 // 为每个URL生成二维码
                 for (const item of allUrls) {
                     const qrcode = await urlToQRCode(item.url)
@@ -389,46 +385,43 @@ export class AIManagement extends plugin {
                         msgParts.push({ type: 'image', file: qrcode })
                     }
                 }
-                
+
                 msgParts.push(`\n📌 链接包含登录凭证，请勿分享${warningText}`)
                 await this.reply(msgParts, true)
                 return
             } else {
                 // 非QQBot平台：发送文本
-                const textParts = [
-                    `🔐 AI插件管理面板（${validityText}）`,
-                    ''
-                ]
-                
+                const textParts = [`🔐 AI插件管理面板（${validityText}）`, '']
+
                 // 添加所有IPv4地址
                 if (localUrls && localUrls.length > 0) {
                     textParts.push(`📍 本地地址（IPv4）：`)
                     textParts.push(...localUrls)
                     textParts.push('')
                 }
-                
+
                 // 添加所有IPv6地址
                 if (localIPv6Urls && localIPv6Urls.length > 0) {
                     textParts.push(`📍 本地地址（IPv6）：`)
                     textParts.push(...localIPv6Urls)
                     textParts.push('')
                 }
-                
+
                 if (publicUrl) {
                     textParts.push(`🌐 公网地址：`, publicUrl, '')
                 }
-                
+
                 // 添加自定义地址
                 if (customUrls && customUrls.length > 0) {
                     for (const custom of customUrls) {
                         textParts.push(`🔗 ${custom.label}：`, custom.url, '')
                     }
                 }
-                
+
                 textParts.push(`📌 链接包含登录凭证，请勿分享${warningText}`)
-                
+
                 const textMsg = textParts.filter(Boolean).join('\n')
-                
+
                 if (this.e.friend?.sendMsg) {
                     await this.e.friend.sendMsg(textMsg)
                 } else if (bot?.sendPrivateMsg) {
@@ -438,7 +431,7 @@ export class AIManagement extends plugin {
                     return
                 }
             }
-            
+
             if (this.e.group_id) {
                 await this.reply('✅ 管理面板链接已私聊发送，请查收', true)
             }
@@ -457,7 +450,7 @@ export class AIManagement extends plugin {
             }
         }
     }
-    
+
     /**
      * 构建合并转发消息
      */
@@ -512,7 +505,7 @@ export class AIManagement extends plugin {
         try {
             const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
             const prompt = this.e.msg.replace(new RegExp(`^${cmdPrefix}设置人格\\s+`), '').trim()
-            
+
             if (!prompt) {
                 await this.reply('请输入人格设定内容', true)
                 return
@@ -527,7 +520,10 @@ export class AIManagement extends plugin {
             const userId = this.e.user_id?.toString()
             await scopeManager.setUserPrompt(userId, prompt)
 
-            await this.reply(`已设置你的专属人格：\n${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}`, true)
+            await this.reply(
+                `已设置你的专属人格：\n${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}`,
+                true
+            )
         } catch (err) {
             await this.reply(`设置人格失败: ${err.message}`, true)
         }
@@ -545,7 +541,7 @@ export class AIManagement extends plugin {
         try {
             const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
             const prompt = this.e.msg.replace(new RegExp(`^${cmdPrefix}设置群人格\\s+`), '').trim()
-            
+
             if (!prompt) {
                 await this.reply('请输入群人格设定内容', true)
                 return
@@ -581,10 +577,10 @@ export class AIManagement extends plugin {
             const groupId = this.e.group_id?.toString()
 
             const effective = await scopeManager.getEffectiveSettings(groupId, userId)
-            
+
             let msg = '当前人格设定：\n'
             msg += `来源: ${effective.source}\n`
-            
+
             if (effective.systemPrompt) {
                 msg += `内容: ${effective.systemPrompt.substring(0, 200)}${effective.systemPrompt.length > 200 ? '...' : ''}`
             } else {
@@ -649,7 +645,7 @@ export class AIManagement extends plugin {
         try {
             const webServer = getWebServer()
             const addresses = webServer.getAddresses()
-            
+
             let msg = 'AI插件状态：\n'
             msg += `运行状态: 正常\n`
             msg += `本地地址: ${addresses.local[0] || '未知'}\n`
@@ -669,7 +665,7 @@ export class AIManagement extends plugin {
      */
     async help() {
         const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
-        
+
         const msg = `📚 AI插件命令帮助
 
 ━━━━ 对话命令 ━━━━
@@ -756,7 +752,7 @@ ${cmdPrefix}结束全部对话 - 清除所有对话
 
         const action = this.e.msg.includes('开启')
         const groupId = String(this.e.group_id)
-        
+
         const success = await this.setGroupFeature(groupId, 'bymEnabled', action)
         if (success) {
             await this.reply(`本群伪人模式已${action ? '开启' : '关闭'}`, true)
@@ -784,7 +780,7 @@ ${cmdPrefix}结束全部对话 - 清除所有对话
 
         const action = this.e.msg.includes('开启')
         const groupId = String(this.e.group_id)
-        
+
         const success = await this.setGroupFeature(groupId, 'imageGenEnabled', action)
         if (success) {
             await this.reply(`本群绘图功能已${action ? '开启' : '关闭'}`, true)
@@ -812,18 +808,18 @@ ${cmdPrefix}结束全部对话 - 清除所有对话
 
         const groupId = String(this.e.group_id)
         const settings = await this.getGroupFeatureSettings(groupId)
-        
+
         // 获取全局设置作为默认值
         const globalBym = config.get('bym.enable') || false
         const globalImageGen = config.get('features.imageGen.enabled') !== false
-        
+
         const bymStatus = settings.bymEnabled !== undefined ? settings.bymEnabled : globalBym
         const imageGenStatus = settings.imageGenEnabled !== undefined ? settings.imageGenEnabled : globalImageGen
-        
+
         const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
-        
+
         const msg = `📋 本群AI功能设置\n━━━━━━━━━━━━\n🎭 伪人模式: ${bymStatus ? '✅ 开启' : '❌ 关闭'}${settings.bymEnabled === undefined ? ' (继承全局)' : ''}\n🎨 绘图功能: ${imageGenStatus ? '✅ 开启' : '❌ 关闭'}${settings.imageGenEnabled === undefined ? ' (继承全局)' : ''}\n━━━━━━━━━━━━\n💡 管理命令:\n${cmdPrefix}群伪人开启/关闭\n${cmdPrefix}群绘图开启/关闭`
-        
+
         await this.reply(msg, true)
         return true
     }
@@ -842,5 +838,4 @@ ${cmdPrefix}结束全部对话 - 清除所有对话
         await this.reply(`默认模型已设置为: ${model}`, true)
         return true
     }
-
 }

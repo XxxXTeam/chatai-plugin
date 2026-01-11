@@ -31,9 +31,9 @@ const ensureScopeManager = async () => {
 
 /**
  * Chat Service - 统一的聊天消息处理服务
- * 
+ *
  * @description 提供 AI 对话功能，支持多模型、工具调用、上下文管理等
- * 
+ *
  * @example
  * ```js
  * const result = await chatService.sendMessage({
@@ -46,7 +46,7 @@ const ensureScopeManager = async () => {
 export class ChatService {
     /**
      * 发送聊天消息
-     * 
+     *
      * @param {Object} options - 消息选项
      * @param {string} options.userId - 用户ID（必填）
      * @param {string} [options.message] - 消息文本
@@ -71,26 +71,26 @@ export class ChatService {
         } catch (error) {
             const autoCleanConfig = config.get('features.autoCleanOnError')
             const autoCleanEnabled = autoCleanConfig?.enabled === true
-            
+
             if (autoCleanEnabled) {
                 try {
                     const fullUserId = String(options.userId)
                     const pureUserId = fullUserId.includes('_') ? fullUserId.split('_').pop() : fullUserId
                     const groupId = options.event?.group_id ? String(options.event.group_id) : null
-                    const historyManager = (await import("../../core/utils/history.js")).default
+                    const historyManager = (await import('../../core/utils/history.js')).default
                     const currentConversationId = contextManager.getConversationId(pureUserId, groupId)
                     const legacyConversationId = groupId ? `group:${groupId}:user:${pureUserId}` : `user:${pureUserId}`
                     await historyManager.deleteConversation(currentConversationId)
                     await contextManager.cleanContext(currentConversationId)
-                    
+
                     // 删除旧格式（如果不同）
                     if (legacyConversationId !== currentConversationId) {
                         await historyManager.deleteConversation(legacyConversationId)
                         await contextManager.cleanContext(legacyConversationId)
                     }
-                    
+
                     logger.debug(`[ChatService] 自动结清完成: pureUserId=${pureUserId}, groupId=${groupId}`)
-                    
+
                     // 向用户回复结清提示（检查 notifyUser 配置）
                     if (autoCleanConfig?.notifyUser !== false && options.event && options.event.reply) {
                         try {
@@ -124,28 +124,30 @@ export class ChatService {
             adapterType,
             event, // Yunzai事件对象，用于工具上下文
             mode = 'chat',
-            debugMode = false,  // 调试模式
-            prefixPersona = null,  // 前缀人格（独立于普通人设）
-            disableTools = false,  // 禁用工具调用（用于防止递归）
-            skipHistory = false,  // 跳过历史记录（用于事件响应等场景）
-            skipPersona = false,  // 跳过人设获取（用于总结等场景）
-            temperature: overrideTemperature,  // 覆盖温度参数
-            maxTokens: overrideMaxTokens       // 覆盖最大token参数
+            debugMode = false, // 调试模式
+            prefixPersona = null, // 前缀人格（独立于普通人设）
+            disableTools = false, // 禁用工具调用（用于防止递归）
+            skipHistory = false, // 跳过历史记录（用于事件响应等场景）
+            skipPersona = false, // 跳过人设获取（用于总结等场景）
+            temperature: overrideTemperature, // 覆盖温度参数
+            maxTokens: overrideMaxTokens // 覆盖最大token参数
         } = options
 
         // 调试信息收集
-        const debugInfo = debugMode ? { 
-            request: {}, 
-            response: {}, 
-            context: {},
-            toolCalls: [],
-            timing: { start: Date.now() },
-            channel: {},
-            memory: {},
-            knowledge: {},
-            preset: {},
-            scope: {}
-        } : null
+        const debugInfo = debugMode
+            ? {
+                  request: {},
+                  response: {},
+                  context: {},
+                  toolCalls: [],
+                  timing: { start: Date.now() },
+                  channel: {},
+                  memory: {},
+                  knowledge: {},
+                  preset: {},
+                  scope: {}
+              }
+            : null
 
         if (!userId) {
             throw new Error('userId is required')
@@ -157,11 +159,11 @@ export class ChatService {
 
         // 从选项或事件中获取群组ID以实现正确隔离
         const groupId = options.groupId || event?.group_id || event?.data?.group_id || null
-        
+
         // 提取纯userId（不带群号前缀）
         const pureUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
         const cleanUserId = pureUserId?.includes('_') ? pureUserId.split('_').pop() : pureUserId
-        
+
         // 群聊始终使用共享上下文，确保所有用户能看到彼此的对话
         // 用户独立人设通过 systemPrompt 实现，而非隔离历史记录
         let conversationId
@@ -174,7 +176,7 @@ export class ChatService {
             // 私聊：使用用户独立上下文
             conversationId = contextManager.getConversationId(cleanUserId, null)
         }
-        
+
         // 检查用户是否有独立人设（用于后续 systemPrompt 构建，不影响历史共享）
         let hasIndependentPersona = false
         if (groupId) {
@@ -231,7 +233,7 @@ export class ChatService {
                         continue
                     }
                 }
-                
+
                 // 字符串格式处理
                 if (typeof imageRef === 'string') {
                     // 如果是HTTP URL，直接使用
@@ -242,7 +244,7 @@ export class ChatService {
                         })
                         continue
                     }
-                    
+
                     // 如果是base64 data URL，直接使用
                     if (imageRef.startsWith('data:')) {
                         messageContent.push({
@@ -251,7 +253,7 @@ export class ChatService {
                         })
                         continue
                     }
-                    
+
                     // 如果是图片ID，从服务获取
                     if (imageRef.length === 32 && !/[:/]/.test(imageRef)) {
                         const base64Image = await imageService.getImageBase64(imageRef, 'jpeg')
@@ -264,7 +266,7 @@ export class ChatService {
                         continue
                     }
                 }
-                
+
                 logger.warn('[ChatService] 无法处理的图片引用:', typeof imageRef, imageRef)
             } catch (error) {
                 logger.error('[ChatService] 处理图片失败:', error)
@@ -273,12 +275,14 @@ export class ChatService {
         const userMessage = {
             role: 'user',
             content: messageContent,
-            sender: event?.sender ? {
-                user_id: event.user_id || event.sender.user_id,
-                nickname: event.sender.nickname || '用户',
-                card: event.sender.card || '',
-                role: event.sender.role || 'member'
-            } : { user_id: userId, nickname: '用户', card: '', role: 'member' },
+            sender: event?.sender
+                ? {
+                      user_id: event.user_id || event.sender.user_id,
+                      nickname: event.sender.nickname || '用户',
+                      card: event.sender.card || '',
+                      role: event.sender.role || 'member'
+                  }
+                : { user_id: userId, nickname: '用户', card: '', role: 'member' },
             timestamp: Date.now(),
             source_type: groupId ? 'group' : 'private',
             ...(groupId && { group_id: groupId })
@@ -287,10 +291,10 @@ export class ChatService {
         // 增加历史记录数量以改善上下文理解，从20条增加到30条
         const historyLimit = config.get('context.autoContext.maxHistoryMessages') || 30
         let history = skipHistory ? [] : await contextManager.getContextHistory(conversationId, historyLimit)
-        
+
         // 获取默认预设配置
         await presetManager.init()
-        
+
         // 从ScopeManager获取群组/用户的预设配置（支持群聊和私聊）
         let scopePresetId = null
         let scopePresetSource = null
@@ -301,29 +305,27 @@ export class ChatService {
             const sm = await ensureScopeManager()
             const pureUserId = cleanUserId
             const isPrivate = !groupId
-            const effectiveSettings = await sm.getEffectiveSettings(
-                groupId ? String(groupId) : null, 
-                pureUserId,
-                { isPrivate }
-            )
-            
+            const effectiveSettings = await sm.getEffectiveSettings(groupId ? String(groupId) : null, pureUserId, {
+                isPrivate
+            })
+
             // 获取作用域配置的预设ID
             if (effectiveSettings?.presetId) {
                 scopePresetId = effectiveSettings.presetId
                 scopePresetSource = effectiveSettings.source
             }
-            
+
             // 获取作用域配置的模型ID
             if (effectiveSettings?.modelId) {
                 scopeModelId = effectiveSettings.modelId
                 scopeModelSource = effectiveSettings.modelSource
             }
-            
+
             // 获取功能配置
             if (effectiveSettings?.features) {
                 scopeFeatures = effectiveSettings.features
             }
-            
+
             // 输出配置摘要日志
             const scene = isPrivate ? '私聊' : `群聊(${groupId})`
             const modelInfo = []
@@ -337,15 +339,17 @@ export class ChatService {
         } catch (e) {
             logger.warn('[ChatService] 获取作用域配置失败:', e.message)
         }
-        
+
         // 预设优先级：传入presetId > 传入preset > 作用域配置 > 全局默认
-        const effectivePresetIdForModel = presetId || preset?.id || scopePresetId || config.get('llm.defaultChatPresetId') || 'default'
+        const effectivePresetIdForModel =
+            presetId || preset?.id || scopePresetId || config.get('llm.defaultChatPresetId') || 'default'
         const currentPreset = preset || presetManager.get(effectivePresetIdForModel)
-        
+
         if (scopePresetId && !presetId && !preset) {
             logger.debug(`[ChatService] 使用群组/用户配置的预设: ${effectivePresetIdForModel}`)
         }
-        const presetEnableTools = currentPreset?.tools?.enableBuiltinTools !== false && currentPreset?.enableTools !== false
+        const presetEnableTools =
+            currentPreset?.tools?.enableBuiltinTools !== false && currentPreset?.enableTools !== false
         // 检查群组工具配置（scopeFeatures.toolsEnabled: true/false/undefined）
         let scopeToolsEnabled = true
         if (scopeFeatures.toolsEnabled !== undefined) {
@@ -357,29 +361,31 @@ export class ChatService {
         const toolsAllowed = !disableTools && presetEnableTools && scopeToolsEnabled
         const hasImages = images.length > 0
         let allTools = []
-        
+
         // 简化逻辑：直接根据配置决定是否加载工具
         if (toolsAllowed) {
             await mcpManager.init()
             allTools = mcpManager.getTools({ applyConfig: true })
             logger.debug(`[ChatService] 加载工具: ${allTools.length}个`)
         }
-        
+
         // 统一使用对话模型，同时处理上下文和工具调用
         let llmModel = model || scopeFeatures.chatModel || LlmService.getModel()
         let actualEnableTools = allTools.length > 0
         let actualTools = allTools
         if (!model && currentPreset?.model && currentPreset.model.trim()) {
             llmModel = currentPreset.model.trim()
-            logger.debug(`[ChatService] 使用预设模型覆盖: ${llmModel} (预设: ${currentPreset.name || effectivePresetIdForModel})`)
+            logger.debug(
+                `[ChatService] 使用预设模型覆盖: ${llmModel} (预设: ${currentPreset.name || effectivePresetIdForModel})`
+            )
         }
-        
+
         // 作用域模型覆盖（群组/用户独立模型配置）
         if (!model && scopeModelId) {
             llmModel = scopeModelId
             logger.info(`[ChatService] 使用作用域模型: ${llmModel} (来源: ${scopeModelSource})`)
         }
-        
+
         if (!llmModel || typeof llmModel !== 'string') {
             throw new Error('未配置模型，请先在管理面板「设置 → 模型配置」中配置默认模型')
         }
@@ -390,8 +396,10 @@ export class ChatService {
         }
         await channelManager.init()
         const channel = channelManager.getBestChannel(llmModel)
-        logger.debug(`[ChatService] Channel: ${channel?.id}, hasAdvanced=${!!channel?.advanced}, streaming=${JSON.stringify(channel?.advanced?.streaming)}`)
-        
+        logger.debug(
+            `[ChatService] Channel: ${channel?.id}, hasAdvanced=${!!channel?.advanced}, streaming=${JSON.stringify(channel?.advanced?.streaming)}`
+        )
+
         // 收集渠道调试信息
         if (debugInfo && channel) {
             debugInfo.channel = {
@@ -430,10 +438,12 @@ export class ChatService {
             presetId: effectivePresetId,
             userPermission: event?.sender?.role || 'member'
         }
-        
+
         // 输出模型选择摘要
-        const modelSource = scopeFeatures.chatModel ? '群组配置' : (scopeModelId ? '作用域' : '全局')
-        logger.info(`[ChatService] 模型: ${llmModel} (来源: ${modelSource}, 工具: ${actualEnableTools ? actualTools.length + '个' : '禁用'})`)
+        const modelSource = scopeFeatures.chatModel ? '群组配置' : scopeModelId ? '作用域' : '全局'
+        logger.info(
+            `[ChatService] 模型: ${llmModel} (来源: ${modelSource}, 工具: ${actualEnableTools ? actualTools.length + '个' : '禁用'})`
+        )
 
         if (channel) {
             clientOptions.adapterType = channel.adapterType
@@ -459,7 +469,7 @@ export class ChatService {
 
         const client = await LlmService.createClient(clientOptions)
         await presetManager.init()
-        
+
         const promptContext = {}
         if (event) {
             promptContext.user_name = event.sender?.card || event.sender?.nickname || '用户'
@@ -470,7 +480,7 @@ export class ChatService {
             promptContext.bot_id = event.self_id?.toString() || ''
         }
         // 预设的systemPrompt也需要经过占位符替换
-        let defaultPrompt = preset?.systemPrompt 
+        let defaultPrompt = preset?.systemPrompt
             ? presetManager.replaceVariables(preset.systemPrompt, promptContext)
             : presetManager.buildSystemPrompt(effectivePresetId, promptContext)
         if (debugInfo) {
@@ -480,12 +490,14 @@ export class ChatService {
                 hasSystemPrompt: !!preset?.systemPrompt,
                 enableTools: preset?.tools?.enableBuiltinTools !== false,
                 enableReasoning: preset?.enableReasoning,
-                toolsConfig: preset?.tools ? {
-                    enableBuiltinTools: preset.tools.enableBuiltinTools,
-                    enableMcpTools: preset.tools.enableMcpTools,
-                    allowedTools: preset.tools.allowedTools?.slice(0, 10),
-                    blockedTools: preset.tools.blockedTools?.slice(0, 10)
-                } : null,
+                toolsConfig: preset?.tools
+                    ? {
+                          enableBuiltinTools: preset.tools.enableBuiltinTools,
+                          enableMcpTools: preset.tools.enableMcpTools,
+                          allowedTools: preset.tools.allowedTools?.slice(0, 10),
+                          blockedTools: preset.tools.blockedTools?.slice(0, 10)
+                      }
+                    : null,
                 isNewSession,
                 promptContext
             }
@@ -495,11 +507,13 @@ export class ChatService {
         let globalPromptText = ''
         if (globalSystemPrompt && typeof globalSystemPrompt === 'string' && globalSystemPrompt.trim()) {
             globalPromptText = globalSystemPrompt.trim()
-            logger.debug(`[ChatService] 已加载全局系统提示词 (${globalPromptText.length} 字符, 模式: ${globalPromptMode})`)
+            logger.debug(
+                `[ChatService] 已加载全局系统提示词 (${globalPromptText.length} 字符, 模式: ${globalPromptMode})`
+            )
         }
         const sm = await ensureScopeManager()
         let systemPrompt = defaultPrompt
-        
+
         // skipPersona 模式：跳过人设获取，使用空的 systemPrompt（用于总结等场景）
         if (skipPersona) {
             systemPrompt = ''
@@ -541,8 +555,8 @@ export class ChatService {
                         hasPrefixPersona: !!prefixPersona
                     }
                 }
-            } catch (e) { 
-                logger.warn(`[ChatService] 获取独立人设失败:`, e.message) 
+            } catch (e) {
+                logger.warn(`[ChatService] 获取独立人设失败:`, e.message)
             }
         }
         let prefixPresetId = null
@@ -550,10 +564,10 @@ export class ChatService {
         if (prefixPersona && !skipPersona) {
             logger.debug(`[ChatService] 收到前缀人格参数: "${prefixPersona}" (长度: ${prefixPersona?.length || 0})`)
             const prefixPreset = presetManager.get(prefixPersona)
-            
+
             // 保存原有的基础人设用于合并
             const basePrompt = systemPrompt
-            
+
             if (prefixPreset) {
                 prefixPresetId = prefixPersona
                 const prefixPromptText = prefixPreset.systemPrompt || ''
@@ -566,7 +580,9 @@ export class ChatService {
                         logger.debug(`[ChatService] 前缀人格已覆盖基础人设 (基础人设长度: ${basePrompt.length})`)
                     }
                 }
-                logger.debug(`[ChatService] 使用前缀人格预设: ${prefixPresetId} (${prefixPreset.name || prefixPresetId})`)
+                logger.debug(
+                    `[ChatService] 使用前缀人格预设: ${prefixPresetId} (${prefixPreset.name || prefixPresetId})`
+                )
             } else {
                 // 纯文本前缀人格 - 作为附加内容而不是完全覆盖
                 if (prefixPersona.startsWith('覆盖:') || prefixPersona.startsWith('override:')) {
@@ -576,7 +592,9 @@ export class ChatService {
                 } else {
                     // 默认合并模式：将前缀人格放在基础人设之前
                     systemPrompt = prefixPersona + (basePrompt ? '\n\n' + basePrompt : '')
-                    logger.debug(`[ChatService] 前缀人格合并模式 (前缀: ${prefixPersona.length}, 基础: ${basePrompt?.length || 0})`)
+                    logger.debug(
+                        `[ChatService] 前缀人格合并模式 (前缀: ${prefixPersona.length}, 基础: ${basePrompt?.length || 0})`
+                    )
                 }
             }
             logger.debug(`[ChatService] 前缀人格应用后systemPrompt长度: ${systemPrompt.length}`)
@@ -587,7 +605,7 @@ export class ChatService {
                 const memoryContext = await memoryManager.getMemoryContext(userId, message || '', {
                     event,
                     groupId: groupId ? String(groupId) : null,
-                    includeProfile: true 
+                    includeProfile: true
                 })
                 if (memoryContext) {
                     systemPrompt += memoryContext
@@ -607,7 +625,9 @@ export class ChatService {
                 }
                 if (groupId && config.get('memory.groupContext.enabled')) {
                     const nickname = event?.sender?.card || event?.sender?.nickname
-                    const groupMemory = await memoryManager.getGroupMemoryContext(String(groupId), cleanUserId, { nickname })
+                    const groupMemory = await memoryManager.getGroupMemoryContext(String(groupId), cleanUserId, {
+                        nickname
+                    })
                     if (groupMemory) {
                         const parts = []
                         if (groupMemory.userInfo?.length > 0) {
@@ -649,7 +669,9 @@ export class ChatService {
             })
             if (knowledgePrompt) {
                 systemPrompt += '\n\n' + knowledgePrompt
-                logger.debug(`[ChatService] 已添加知识库上下文 (${knowledgePrompt.length} 字符, 预设: ${knowledgePresetId})`)
+                logger.debug(
+                    `[ChatService] 已添加知识库上下文 (${knowledgePrompt.length} 字符, 预设: ${knowledgePresetId})`
+                )
                 // 收集知识库调试信息
                 if (debugInfo) {
                     debugInfo.knowledge = {
@@ -692,21 +714,21 @@ export class ChatService {
         const isolation = contextManager.getIsolationMode()
         if (groupId && !isolation.groupUserIsolation && groupContextSharingEnabled) {
             validHistory = contextManager.buildLabeledContext(validHistory)
-            
+
             // 当前用户信息
             const currentUserLabel = event?.sender?.card || event?.sender?.nickname || `用户${userId}`
             const currentUserUin = event?.user_id || userId
-            
+
             // 给当前消息也添加用户标签
             userMessage.content = contextManager.addUserLabelToContent(
-                userMessage.content, 
-                currentUserLabel, 
+                userMessage.content,
+                currentUserLabel,
                 currentUserUin
             )
-            
+
             // 获取群信息
             const groupName = event?.group_name || event?.group?.name || ''
-            
+
             // 在系统提示中说明多用户环境，并包含群基本信息
             systemPrompt += `\n\n[当前对话环境]
 群号: ${groupId}${groupName ? `\n群名: ${groupName}` : ''}
@@ -723,7 +745,7 @@ export class ChatService {
 群号: ${groupId}${groupName ? `\n群名: ${groupName}` : ''}
 当前用户: ${currentUserLabel}(QQ:${currentUserUin})
 消息中的 [提及用户 QQ:xxx ...] 表示被@的用户，包含其QQ号、群名片、昵称等信息。`
-            
+
             if (!groupContextSharingEnabled) {
                 validHistory = []
                 logger.debug(`[ChatService] 群上下文传递已禁用，不携带群聊历史`)
@@ -739,7 +761,9 @@ export class ChatService {
         messages.push(...validHistory, userMessage)
         const hasTools = client.tools && client.tools.length > 0
         const useStreaming = stream || channelStreaming.enabled === true
-        logger.debug(`[ChatService] Request: model=${llmModel}, stream=${useStreaming}, tools=${hasTools ? client.tools.length : 0}, channelStreaming=${JSON.stringify(channelStreaming)}`)
+        logger.debug(
+            `[ChatService] Request: model=${llmModel}, stream=${useStreaming}, tools=${hasTools ? client.tools.length : 0}, channelStreaming=${JSON.stringify(channelStreaming)}`
+        )
         let finalResponse = null
         let finalUsage = null
         let allToolLogs = []
@@ -756,14 +780,23 @@ export class ChatService {
             conversationId,
             systemOverride: systemPrompt,
             stream: useStreaming,
-            disableHistoryRead: skipHistory,
+            disableHistoryRead: skipHistory
         }
-        const tempSource = overrideTemperature !== undefined ? '调用方' : (presetParams.temperature !== undefined ? '预设' : (channelLlm.temperature !== undefined ? '渠道' : '默认'))
-        logger.debug(`[ChatService] 请求参数: temperature=${requestOptions.temperature}, maxToken=${requestOptions.maxToken}, 来源: ${tempSource}`)
-        
+        const tempSource =
+            overrideTemperature !== undefined
+                ? '调用方'
+                : presetParams.temperature !== undefined
+                  ? '预设'
+                  : channelLlm.temperature !== undefined
+                    ? '渠道'
+                    : '默认'
+        logger.debug(
+            `[ChatService] 请求参数: temperature=${requestOptions.temperature}, maxToken=${requestOptions.maxToken}, 来源: ${tempSource}`
+        )
+
         try {
             if (event && event.reply) {
-                client.setOnMessageWithToolCall(async (data) => {
+                client.setOnMessageWithToolCall(async data => {
                     if (data?.intermediateText && data.isIntermediate) {
                         let text = data.intermediateText.trim()
                         if (text) {
@@ -772,8 +805,7 @@ export class ChatService {
                             }
                             await event.reply(text, true)
                         }
-                    }
-                    else if (data?.type === 'text' && data.text) {
+                    } else if (data?.type === 'text' && data.text) {
                         await event.reply(data.text, true)
                     }
                 })
@@ -800,12 +832,12 @@ export class ChatService {
                     messagesStructure: messages.map((msg, idx) => ({
                         index: idx,
                         role: msg.role,
-                        contentTypes: Array.isArray(msg.content) 
-                            ? msg.content.map(c => c.type)
-                            : ['text'],
+                        contentTypes: Array.isArray(msg.content) ? msg.content.map(c => c.type) : ['text'],
                         contentLength: Array.isArray(msg.content)
                             ? msg.content.reduce((sum, c) => sum + (c.text?.length || 0), 0)
-                            : (typeof msg.content === 'string' ? msg.content.length : 0),
+                            : typeof msg.content === 'string'
+                              ? msg.content.length
+                              : 0,
                         hasSender: !!msg.sender,
                         hasToolCalls: !!msg.toolCalls?.length
                     })),
@@ -816,15 +848,23 @@ export class ChatService {
                 debugInfo.context = {
                     historyMessages: validHistory.slice(-5).map(msg => ({
                         role: msg.role,
-                        contentPreview: Array.isArray(msg.content) 
-                            ? msg.content.filter(c => c.type === 'text').map(c => c.text?.substring(0, 100)).join('').substring(0, 150)
-                            : (typeof msg.content === 'string' ? msg.content.substring(0, 150) : ''),
+                        contentPreview: Array.isArray(msg.content)
+                            ? msg.content
+                                  .filter(c => c.type === 'text')
+                                  .map(c => c.text?.substring(0, 100))
+                                  .join('')
+                                  .substring(0, 150)
+                            : typeof msg.content === 'string'
+                              ? msg.content.substring(0, 150)
+                              : '',
                         hasToolCalls: !!msg.toolCalls?.length,
                         // 添加发送者信息
-                        sender: msg.sender ? {
-                            user_id: msg.sender.user_id,
-                            nickname: msg.sender.nickname || msg.sender.card
-                        } : null
+                        sender: msg.sender
+                            ? {
+                                  user_id: msg.sender.user_id,
+                                  nickname: msg.sender.nickname || msg.sender.card
+                              }
+                            : null
                     })),
                     systemPromptPreview: systemPrompt.substring(0, 300) + (systemPrompt.length > 300 ? '...' : ''),
                     totalHistoryLength: validHistory.length,
@@ -834,7 +874,9 @@ export class ChatService {
                     maxContextMessages: 20
                 }
                 // 工具列表
-                debugInfo.availableTools = hasTools ? client.tools.map(t => t.function?.name || t.name).slice(0, 20) : []
+                debugInfo.availableTools = hasTools
+                    ? client.tools.map(t => t.function?.name || t.name).slice(0, 20)
+                    : []
             }
             const concurrentCount = contextManager.recordRequest(conversationId)
             if (concurrentCount > 1) {
@@ -849,7 +891,7 @@ export class ChatService {
                 const enableChannelSwitch = fallbackConfig.enableChannelSwitch !== false // 默认启用渠道切换
                 const enableKeyRotation = fallbackConfig.enableKeyRotation !== false // 默认启用Key轮换
                 const emptyRetries = fallbackConfig.emptyRetries || 2 // 空响应重试次数
-                
+
                 const modelsToTry = [llmModel, ...fallbackModels.filter(m => m && m !== llmModel)]
                 let response = null
                 let usedModel = llmModel
@@ -859,7 +901,7 @@ export class ChatService {
                 let totalRetryCount = 0
                 let currentKeyIndex = clientOptions.keyIndex ?? -1
                 const switchChain = [channel?.name || channel?.id || 'unknown'] // 记录渠道切换链
-                
+
                 for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
                     const currentModel = modelsToTry[modelIndex]
                     const isMainModel = modelIndex === 0
@@ -867,7 +909,7 @@ export class ChatService {
                     let emptyRetryCount = 0
                     let currentClient = client
                     let currentChannel = isMainModel ? channel : null
-                    
+
                     // 备选模型时获取新渠道
                     if (!isMainModel) {
                         currentChannel = channelManager.getBestChannel(currentModel)
@@ -884,27 +926,29 @@ export class ChatService {
                             currentClient = await LlmService.createClient(fallbackClientOptions)
                         }
                     }
-                    
+
                     while (retryCount <= (isMainModel ? maxRetries : 1)) {
                         try {
                             const currentRequestOptions = { ...requestOptions, model: currentModel }
                             response = await currentClient.sendMessage(userMessage, currentRequestOptions)
-                            
+
                             const hasToolCallLogs = response?.toolCallLogs?.length > 0
                             const hasContents = response?.contents?.length > 0
                             const hasTextContent = response?.contents?.some(c => c.type === 'text' && c.text?.trim())
                             const hasAnyContent = hasContents || hasToolCallLogs
-                            
+
                             // 成功响应：有内容或有工具调用
                             if (response && hasAnyContent) {
                                 // 检查是否为空文本响应（无工具调用且无文本）
                                 if (!hasToolCallLogs && !hasTextContent && emptyRetryCount < emptyRetries) {
                                     emptyRetryCount++
-                                    logger.warn(`[ChatService] 模型 ${currentModel} 返回空文本，重试第${emptyRetryCount}次...`)
+                                    logger.warn(
+                                        `[ChatService] 模型 ${currentModel} 返回空文本，重试第${emptyRetryCount}次...`
+                                    )
                                     await new Promise(r => setTimeout(r, retryDelay * emptyRetryCount))
                                     continue
                                 }
-                                
+
                                 // 成功
                                 usedModel = currentModel
                                 usedChannel = currentChannel
@@ -912,7 +956,9 @@ export class ChatService {
                                     fallbackUsed = true
                                     logger.info(`[ChatService] 使用备选模型成功: ${currentModel}`)
                                     if (notifyOnFallback && event?.reply) {
-                                        try { await event.reply(`[已切换至备选模型: ${currentModel}]`, false) } catch {}
+                                        try {
+                                            await event.reply(`[已切换至备选模型: ${currentModel}]`, false)
+                                        } catch {}
                                     }
                                 }
                                 // 成功后重置渠道错误计数
@@ -921,37 +967,47 @@ export class ChatService {
                                 }
                                 break
                             }
-                            
+
                             // 空响应处理
                             emptyRetryCount++
                             if (emptyRetryCount <= emptyRetries) {
-                                logger.warn(`[ChatService] 模型 ${currentModel} 返回空响应，重试第${emptyRetryCount}次...`)
+                                logger.warn(
+                                    `[ChatService] 模型 ${currentModel} 返回空响应，重试第${emptyRetryCount}次...`
+                                )
                                 await new Promise(r => setTimeout(r, retryDelay * emptyRetryCount))
                                 continue
                             }
-                            
+
                             // 空响应重试耗尽，尝试切换Key
                             if (enableKeyRotation && currentChannel && currentKeyIndex >= 0) {
                                 const nextKey = channelManager.getNextAvailableKey(currentChannel.id, currentKeyIndex)
                                 if (nextKey) {
-                                    logger.info(`[ChatService] 空响应后切换Key: ${currentChannel.name} Key#${nextKey.keyIndex + 1}`)
+                                    logger.info(
+                                        `[ChatService] 空响应后切换Key: ${currentChannel.name} Key#${nextKey.keyIndex + 1}`
+                                    )
                                     currentKeyIndex = nextKey.keyIndex
-                                    const newClientOptions = { ...clientOptions, apiKey: nextKey.key, keyIndex: nextKey.keyIndex }
+                                    const newClientOptions = {
+                                        ...clientOptions,
+                                        apiKey: nextKey.key,
+                                        keyIndex: nextKey.keyIndex
+                                    }
                                     currentClient = await LlmService.createClient(newClientOptions)
                                     emptyRetryCount = 0 // 重置空响应计数
                                     continue
                                 }
                             }
-                            
+
                             // 尝试切换渠道
                             if (enableChannelSwitch && isMainModel) {
-                                const altChannels = channelManager.getAvailableChannels(currentModel, { 
-                                    excludeChannelId: currentChannel?.id 
+                                const altChannels = channelManager.getAvailableChannels(currentModel, {
+                                    excludeChannelId: currentChannel?.id
                                 })
                                 if (altChannels.length > 0) {
                                     const altChannel = altChannels[0]
                                     const altKeyInfo = channelManager.getChannelKey(altChannel)
-                                    logger.info(`[ChatService] 空响应后切换渠道: ${currentChannel?.name} -> ${altChannel.name}`)
+                                    logger.info(
+                                        `[ChatService] 空响应后切换渠道: ${currentChannel?.name} -> ${altChannel.name}`
+                                    )
                                     currentChannel = altChannel
                                     currentKeyIndex = altKeyInfo.keyIndex
                                     channelSwitched = true
@@ -968,28 +1024,35 @@ export class ChatService {
                                     continue
                                 }
                             }
-                            
+
                             // 无法处理空响应，进入下一个模型
                             break
-                            
                         } catch (modelError) {
                             lastError = modelError
                             const errorMsg = modelError.message || ''
-                            
+
                             // 分析错误类型
                             let errorType = 'unknown'
-                            if (errorMsg.includes('401') || errorMsg.includes('Unauthorized') || errorMsg.includes('invalid_api_key')) {
+                            if (
+                                errorMsg.includes('401') ||
+                                errorMsg.includes('Unauthorized') ||
+                                errorMsg.includes('invalid_api_key')
+                            ) {
                                 errorType = 'auth'
-                            } else if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('rate_limit')) {
+                            } else if (
+                                errorMsg.includes('429') ||
+                                errorMsg.includes('quota') ||
+                                errorMsg.includes('rate_limit')
+                            ) {
                                 errorType = 'quota'
                             } else if (errorMsg.includes('timeout') || errorMsg.includes('ETIMEDOUT')) {
                                 errorType = 'timeout'
                             } else if (errorMsg.includes('ECONNREFUSED') || errorMsg.includes('network')) {
                                 errorType = 'network'
                             }
-                            
+
                             logger.error(`[ChatService] 模型 ${currentModel} 请求失败 (${errorType}): ${errorMsg}`)
-                            
+
                             // 报告渠道错误
                             if (currentChannel) {
                                 await channelManager.reportError(currentChannel.id, {
@@ -998,19 +1061,25 @@ export class ChatService {
                                     errorMessage: errorMsg
                                 })
                             }
-                            
+
                             // 认证错误: 尝试切换Key
                             if (errorType === 'auth' && enableKeyRotation && currentChannel && currentKeyIndex >= 0) {
                                 const nextKey = channelManager.getNextAvailableKey(currentChannel.id, currentKeyIndex)
                                 if (nextKey) {
-                                    logger.info(`[ChatService] 认证失败后切换Key: ${currentChannel.name} Key#${nextKey.keyIndex + 1}`)
+                                    logger.info(
+                                        `[ChatService] 认证失败后切换Key: ${currentChannel.name} Key#${nextKey.keyIndex + 1}`
+                                    )
                                     currentKeyIndex = nextKey.keyIndex
-                                    const newClientOptions = { ...clientOptions, apiKey: nextKey.key, keyIndex: nextKey.keyIndex }
+                                    const newClientOptions = {
+                                        ...clientOptions,
+                                        apiKey: nextKey.key,
+                                        keyIndex: nextKey.keyIndex
+                                    }
                                     currentClient = await LlmService.createClient(newClientOptions)
                                     continue // 不增加retryCount，直接重试
                                 }
                             }
-                            
+
                             // 配额/限流错误: 尝试切换渠道
                             if ((errorType === 'quota' || errorType === 'auth') && enableChannelSwitch && isMainModel) {
                                 const altChannels = channelManager.getAvailableChannels(currentModel, {
@@ -1019,7 +1088,9 @@ export class ChatService {
                                 if (altChannels.length > 0) {
                                     const altChannel = altChannels[0]
                                     const altKeyInfo = channelManager.getChannelKey(altChannel)
-                                    logger.info(`[ChatService] ${errorType}错误后切换渠道: ${currentChannel?.name} -> ${altChannel.name}`)
+                                    logger.info(
+                                        `[ChatService] ${errorType}错误后切换渠道: ${currentChannel?.name} -> ${altChannel.name}`
+                                    )
                                     currentChannel = altChannel
                                     currentKeyIndex = altKeyInfo.keyIndex
                                     channelSwitched = true
@@ -1035,10 +1106,10 @@ export class ChatService {
                                     continue
                                 }
                             }
-                            
+
                             retryCount++
                             totalRetryCount++
-                            
+
                             if (retryCount <= (isMainModel ? maxRetries : 1)) {
                                 // 指数退避延迟
                                 const delay = Math.min(retryDelay * Math.pow(2, retryCount - 1), 10000)
@@ -1047,7 +1118,7 @@ export class ChatService {
                             }
                         }
                     }
-                    
+
                     // 如果成功获取响应，退出模型循环
                     if (response && (response.contents?.length > 0 || response.toolCallLogs?.length > 0)) {
                         break
@@ -1055,7 +1126,7 @@ export class ChatService {
                     if (!fallbackEnabled || modelIndex >= modelsToTry.length - 1) {
                         break
                     }
-                    
+
                     logger.info(`[ChatService] 尝试备选模型: ${modelsToTry[modelIndex + 1]}`)
                 }
                 if (!response && lastError) {
@@ -1066,11 +1137,11 @@ export class ChatService {
                     }
                     throw lastError
                 }
-                
+
                 if (!response) {
                     logger.warn('[ChatService] 所有模型和渠道尝试后仍无有效响应')
                 }
-                
+
                 finalResponse = response?.contents || []
                 finalUsage = response?.usage || {}
                 allToolLogs = response?.toolCallLogs || []
@@ -1082,26 +1153,28 @@ export class ChatService {
                         return true
                     })
                 }
-                
+
                 // 记录实际使用的模型和渠道切换信息
                 if (debugInfo) {
                     debugInfo.usedModel = usedModel
                     debugInfo.fallbackUsed = fallbackUsed
                     debugInfo.channelSwitched = channelSwitched
-                    debugInfo.usedChannel = usedChannel ? {
-                        id: usedChannel.id,
-                        name: usedChannel.name
-                    } : null
+                    debugInfo.usedChannel = usedChannel
+                        ? {
+                              id: usedChannel.id,
+                              name: usedChannel.name
+                          }
+                        : null
                     debugInfo.totalRetryCount = totalRetryCount
-                    debugInfo.switchChain = switchChain.length > 1 ? switchChain : null 
+                    debugInfo.switchChain = switchChain.length > 1 ? switchChain : null
                 }
             }
-            
+
             // 收集响应调试信息
             if (debugInfo) {
                 debugInfo.timing.end = Date.now()
                 debugInfo.timing.duration = debugInfo.timing.end - debugInfo.timing.start
-                
+
                 debugInfo.response = {
                     contentsCount: finalResponse?.length || 0,
                     toolCallLogsCount: allToolLogs.length,
@@ -1109,20 +1182,20 @@ export class ChatService {
                     hasReasoning: finalResponse?.some(c => c.type === 'reasoning'),
                     durationMs: debugInfo.timing.duration
                 }
-                
+
                 // 工具调用详情
                 debugInfo.toolCalls = allToolLogs.map((log, idx) => ({
                     index: idx + 1,
                     name: log.name,
                     args: log.args,
-                    resultPreview: typeof log.result === 'string' 
-                        ? log.result.substring(0, 300) + (log.result.length > 300 ? '...' : '')
-                        : JSON.stringify(log.result).substring(0, 300),
+                    resultPreview:
+                        typeof log.result === 'string'
+                            ? log.result.substring(0, 300) + (log.result.length > 300 ? '...' : '')
+                            : JSON.stringify(log.result).substring(0, 300),
                     duration: log.duration,
                     success: !log.isError
                 }))
             }
-            
         } finally {
             if (channel) {
                 channelManager.endRequest(channel.id)
@@ -1132,14 +1205,18 @@ export class ChatService {
                     channelManager.reportSuccess(channel.id)
                 }
             }
-            
+
             // 记录统计（使用统一入口）
             try {
                 const keyInfo = channel?.lastUsedKey || {}
                 const requestDuration = Date.now() - requestStartTime
-                const responseText = finalResponse?.filter(c => c.type === 'text').map(c => c.text).join('') || ''
+                const responseText =
+                    finalResponse
+                        ?.filter(c => c.type === 'text')
+                        .map(c => c.text)
+                        .join('') || ''
                 const requestSuccess = !!finalResponse?.length
-                
+
                 await statsService.recordApiCall({
                     channelId: debugInfo?.usedChannel?.id || channel?.id || `no-channel-${llmModel}`,
                     channelName: debugInfo?.usedChannel?.name || channel?.name || `无渠道(${llmModel})`,
@@ -1149,7 +1226,7 @@ export class ChatService {
                     strategy: keyInfo.strategy || '',
                     duration: requestDuration,
                     success: requestSuccess,
-                    error: !requestSuccess ? (lastError?.message || lastError?.toString() || '未知错误') : null,
+                    error: !requestSuccess ? lastError?.message || lastError?.toString() || '未知错误' : null,
                     source: 'chat',
                     userId,
                     groupId: groupId || null,
@@ -1162,23 +1239,27 @@ export class ChatService {
                     messages,
                     responseText,
                     // 请求详情
-                    request: { 
-                        messages, 
+                    request: {
+                        messages,
                         model: debugInfo?.usedModel || llmModel,
-                        tools: hasTools ? client.tools.map(t => ({ name: t.name, description: t.description?.substring(0, 100) })) : null,
+                        tools: hasTools
+                            ? client.tools.map(t => ({ name: t.name, description: t.description?.substring(0, 100) }))
+                            : null,
                         temperature: requestOptions.temperature,
                         maxToken: requestOptions.maxToken,
                         topP: requestOptions.topP,
-                        systemPrompt: systemPrompt?.substring(0, 500) + (systemPrompt?.length > 500 ? '...' : ''),
+                        systemPrompt: systemPrompt?.substring(0, 500) + (systemPrompt?.length > 500 ? '...' : '')
                     },
-                    response: !requestSuccess ? { 
-                        error: lastError?.message || lastError?.toString() || '未知错误',
-                        code: lastError?.code || lastError?.status || null,
-                        type: lastError?.type || lastError?.name || null,
-                        contents: finalResponse 
-                    } : null,
+                    response: !requestSuccess
+                        ? {
+                              error: lastError?.message || lastError?.toString() || '未知错误',
+                              code: lastError?.code || lastError?.status || null,
+                              type: lastError?.type || lastError?.name || null,
+                              contents: finalResponse
+                          }
+                        : null
                 })
-                
+
                 // 记录工具调用
                 if (allToolLogs?.length > 0) {
                     for (const log of allToolLogs) {
@@ -1192,7 +1273,10 @@ export class ChatService {
 
         // Update Context
         if (finalResponse) {
-            const textContent = finalResponse.filter(c => c.type === 'text').map(c => c.text).join('\n')
+            const textContent = finalResponse
+                .filter(c => c.type === 'text')
+                .map(c => c.text)
+                .join('\n')
             if (textContent.length > 50) {
                 await contextManager.updateContext(conversationId, {
                     lastInteraction: Date.now(),
@@ -1201,14 +1285,14 @@ export class ChatService {
             }
             // Auto Memory
             if (config.get('memory.enabled') && config.get('memory.autoExtract') !== false) {
-                memoryManager.extractMemoryFromConversation(userId, message, textContent)
+                memoryManager
+                    .extractMemoryFromConversation(userId, message, textContent)
                     .catch(err => logger.warn('[ChatService] Automatic memory extraction failed:', err.message))
             }
             const voiceConfig = config.get('features.voiceReply')
             if (voiceConfig?.enabled && event && event.reply) {
-                const shouldVoice = voiceConfig.triggerAlways || 
-                    (voiceConfig.triggerOnTool && allToolLogs.length > 0)
-                
+                const shouldVoice = voiceConfig.triggerAlways || (voiceConfig.triggerOnTool && allToolLogs.length > 0)
+
                 if (shouldVoice && textContent) {
                     try {
                         await this.sendVoiceReply(event, textContent, voiceConfig)
@@ -1227,7 +1311,7 @@ export class ChatService {
                 // 执行自动结束
                 await contextManager.executeAutoEnd(conversationId)
                 autoEndInfo = autoEndCheck
-                
+
                 // 通知用户（如果配置启用且有 event）
                 if (autoEndCheck.notifyUser && event && event.reply) {
                     try {
@@ -1247,7 +1331,7 @@ export class ChatService {
             usage: finalUsage || {},
             model: llmModel,
             toolCallLogs: allToolLogs,
-            debugInfo,  // 调试信息（仅在 debugMode 时有值）
+            debugInfo, // 调试信息（仅在 debugMode 时有值）
             autoEndInfo // 自动结束信息（如果触发）
         }
     }
@@ -1262,7 +1346,7 @@ export class ChatService {
         const provider = voiceConfig.ttsProvider || 'system'
         const maxLength = voiceConfig.maxTextLength || 500
         const truncatedText = text.length > maxLength ? text.substring(0, maxLength) + '...' : text
-        
+
         try {
             if (provider === 'miao' && global.Bot?.app?.getService) {
                 const Miao = global.Bot.app.getService('Miao')
@@ -1299,12 +1383,12 @@ export class ChatService {
         }
         contextManager.clearQueue(conversationId)
         presetManager.markContextCleared(conversationId)
-        
+
         logger.debug(`[ChatService] 对话已清除: ${conversationId}, 群ID: ${groupId || '无'}`)
     }
     isPureToolCallJson(text) {
         if (!text || typeof text !== 'string') return false
-        
+
         const trimmed = text.trim()
         if (trimmed.startsWith('{"tool_calls"') || trimmed.startsWith('{ "tool_calls"')) {
             const toolCallPattern = /^\{\s*"tool_calls"\s*:\s*\[/
@@ -1316,11 +1400,11 @@ export class ChatService {
             }
         }
         const toolArgsPatterns = [
-            /^\s*,?\s*\[\s*\{.*"user_id".*"nickname".*"message".*\}\s*\]/s,  
-            /^\s*,?\s*\{.*"user_id".*"nickname".*"message".*\}/s,            
-            /^\s*\{.*"function".*"name".*"arguments".*\}/s,                  
-            /^\s*\{.*"name".*"arguments".*\}/s,                            
-            /\]\s*\}"\s*\}\s*\]\s*\}$/,                                      
+            /^\s*,?\s*\[\s*\{.*"user_id".*"nickname".*"message".*\}\s*\]/s,
+            /^\s*,?\s*\{.*"user_id".*"nickname".*"message".*\}/s,
+            /^\s*\{.*"function".*"name".*"arguments".*\}/s,
+            /^\s*\{.*"name".*"arguments".*\}/s,
+            /\]\s*\}"\s*\}\s*\]\s*\}$/
         ]
         for (const pattern of toolArgsPatterns) {
             if (pattern.test(trimmed)) {
@@ -1331,19 +1415,18 @@ export class ChatService {
                 }
             }
         }
-        
+
         if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
             try {
                 const parsed = JSON.parse(trimmed)
                 const keys = Object.keys(parsed)
                 if (keys.length === 1 && keys[0] === 'tool_calls' && Array.isArray(parsed.tool_calls)) {
-                    return parsed.tool_calls.length === 0 || parsed.tool_calls.every(tc => 
-                        tc && typeof tc === 'object' && 
-                        (tc.function?.name || tc.name) 
+                    return (
+                        parsed.tool_calls.length === 0 ||
+                        parsed.tool_calls.every(tc => tc && typeof tc === 'object' && (tc.function?.name || tc.name))
                     )
                 }
-            } catch {
-            }
+            } catch {}
         }
         const codeBlockMatch = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i)
         if (codeBlockMatch) {
@@ -1354,9 +1437,11 @@ export class ChatService {
                     const keys = Object.keys(parsed)
                     if (keys.length === 1 && keys[0] === 'tool_calls' && Array.isArray(parsed.tool_calls)) {
                         // 空数组或有效的工具调用数组都视为纯工具调用JSON
-                        return parsed.tool_calls.length === 0 || parsed.tool_calls.every(tc => 
-                            tc && typeof tc === 'object' && 
-                            (tc.function?.name || tc.name)
+                        return (
+                            parsed.tool_calls.length === 0 ||
+                            parsed.tool_calls.every(
+                                tc => tc && typeof tc === 'object' && (tc.function?.name || tc.name)
+                            )
                         )
                     }
                 } catch {
@@ -1370,20 +1455,25 @@ export class ChatService {
         }
         return false
     }
-    
+
     async exportHistory(userId, format = 'json', groupId = null) {
-       // ... [Original exportHistory code] ...
-       const history = await this.getHistory(userId, 1000, groupId)
+        // ... [Original exportHistory code] ...
+        const history = await this.getHistory(userId, 1000, groupId)
         if (format === 'json') {
             return JSON.stringify(history, null, 2)
         } else {
-            return history.map(msg => {
-                const role = msg.role === 'user' ? '👤 用户' : '🤖 助手'
-                const content = Array.isArray(msg.content)
-                    ? msg.content.filter(c => c.type === 'text').map(c => c.text).join('\n')
-                    : msg.content
-                return `${role}:\n${content}\n`
-            }).join('\n---\n\n')
+            return history
+                .map(msg => {
+                    const role = msg.role === 'user' ? '👤 用户' : '🤖 助手'
+                    const content = Array.isArray(msg.content)
+                        ? msg.content
+                              .filter(c => c.type === 'text')
+                              .map(c => c.text)
+                              .join('\n')
+                        : msg.content
+                    return `${role}:\n${content}\n`
+                })
+                .join('\n---\n\n')
         }
     }
 }

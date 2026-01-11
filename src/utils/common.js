@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename)
 
 /**
  * 生成 MD5 哈希
- * @param {string} str 
+ * @param {string} str
  * @returns {string}
  */
 export function md5(str) {
@@ -124,7 +124,7 @@ export function sleep(ms) {
 export async function retry(fn, options = {}) {
     const { retries = 3, delay = 1000, backoff = 2, onRetry } = options
     let lastError
-    
+
     for (let i = 0; i <= retries; i++) {
         try {
             return await fn()
@@ -191,7 +191,7 @@ export function deepClone(obj) {
     if (obj instanceof Array) return obj.map(item => deepClone(item))
     if (obj instanceof Map) return new Map(Array.from(obj.entries()).map(([k, v]) => [k, deepClone(v)]))
     if (obj instanceof Set) return new Set(Array.from(obj).map(v => deepClone(v)))
-    
+
     const cloned = {}
     for (const key in obj) {
         if (Object.prototype.hasOwnProperty.call(obj, key)) {
@@ -210,7 +210,7 @@ export function deepClone(obj) {
 export function deepMerge(target, ...sources) {
     if (!sources.length) return target
     const source = sources.shift()
-    
+
     if (isPlainObject(target) && isPlainObject(source)) {
         for (const key in source) {
             if (isPlainObject(source[key])) {
@@ -259,7 +259,7 @@ export function throttle(fn, limit) {
         if (!inThrottle) {
             fn.apply(this, args)
             inThrottle = true
-            setTimeout(() => inThrottle = false, limit)
+            setTimeout(() => (inThrottle = false), limit)
         }
     }
 }
@@ -313,19 +313,19 @@ export function extractErrorMessage(error) {
 export async function parallelLimit(items, fn, concurrency = 5) {
     const results = []
     const executing = new Set()
-    
+
     for (const [index, item] of items.entries()) {
         const promise = Promise.resolve().then(() => fn(item, index))
         results.push(promise)
         executing.add(promise)
-        
+
         promise.finally(() => executing.delete(promise))
-        
+
         if (executing.size >= concurrency) {
             await Promise.race(executing)
         }
     }
-    
+
     return Promise.all(results)
 }
 
@@ -337,9 +337,7 @@ export async function parallelLimit(items, fn, concurrency = 5) {
  * @returns {Promise}
  */
 export function withTimeout(promise, ms, message = 'Operation timed out') {
-    const timeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error(message)), ms)
-    )
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))
     return Promise.race([promise, timeout])
 }
 
@@ -368,5 +366,8 @@ export function toCamelCase(str) {
  * @returns {string}
  */
 export function toSnakeCase(str) {
-    return str.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '')
+    return str
+        .replace(/([A-Z])/g, '_$1')
+        .toLowerCase()
+        .replace(/^_/, '')
 }

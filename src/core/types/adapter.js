@@ -100,7 +100,7 @@ export class SendMessageOption {
             toolGroupId: this.toolGroupId,
             responseModalities: this.responseModalities,
             safetySettings: this.safetySettings,
-            toolCallLimit: this.toolCallLimit,
+            toolCallLimit: this.toolCallLimit
         }
         return JSON.stringify(json)
     }
@@ -114,4 +114,4 @@ export class SendMessageOption {
     }
 }
 
-export { }
+export {}

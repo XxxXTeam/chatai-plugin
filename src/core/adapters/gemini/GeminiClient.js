@@ -70,20 +70,20 @@ export class GeminiClient extends AbstractClient {
         const safetySettings = [
             {
                 category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-                threshold: HarmBlockThreshold.BLOCK_NONE,
+                threshold: HarmBlockThreshold.BLOCK_NONE
             },
             {
                 category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                threshold: HarmBlockThreshold.BLOCK_NONE,
+                threshold: HarmBlockThreshold.BLOCK_NONE
             },
             {
                 category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                threshold: HarmBlockThreshold.BLOCK_NONE,
+                threshold: HarmBlockThreshold.BLOCK_NONE
             },
             {
                 category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                threshold: HarmBlockThreshold.BLOCK_NONE,
-            },
+                threshold: HarmBlockThreshold.BLOCK_NONE
+            }
         ]
 
         // 转换工具
@@ -91,20 +91,23 @@ export class GeminiClient extends AbstractClient {
         const tools = this.tools.length > 0 ? this.tools.map(toolConvert) : undefined
 
         // 创建生成式模型
-        const generativeModel = genAI.getGenerativeModel({
-            model,
-            systemInstruction: systemInstruction || undefined,
-            safetySettings,
-            tools: tools ? [{ functionDeclarations: tools }] : undefined,
-            generationConfig: {
-                temperature: options.temperature,
-                maxOutputTokens: options.maxToken,
+        const generativeModel = genAI.getGenerativeModel(
+            {
+                model,
+                systemInstruction: systemInstruction || undefined,
+                safetySettings,
+                tools: tools ? [{ functionDeclarations: tools }] : undefined,
+                generationConfig: {
+                    temperature: options.temperature,
+                    maxOutputTokens: options.maxToken
+                }
             },
-        }, requestOptions)
+            requestOptions
+        )
 
         // 生成内容
         const result = await generativeModel.generateContent({
-            contents,
+            contents
         })
 
         const response = result.response
@@ -125,12 +128,13 @@ export class GeminiClient extends AbstractClient {
         let toolCalls = chaiteMessage.toolCalls || []
         const textContents = responseContents.filter(c => c.type === 'text')
         for (const textItem of textContents) {
-            if (textItem.text && (
-                textItem.text.includes('<tools>') || 
-                textItem.text.includes('<tool_call>') ||
-                textItem.text.includes('```') ||
-                textItem.text.includes('"name"')
-            )) {
+            if (
+                textItem.text &&
+                (textItem.text.includes('<tools>') ||
+                    textItem.text.includes('<tool_call>') ||
+                    textItem.text.includes('```') ||
+                    textItem.text.includes('"name"'))
+            ) {
                 const { cleanText, toolCalls: parsedToolCalls } = parseXmlToolCalls(textItem.text)
                 if (parsedToolCalls.length > 0) {
                     textItem.text = cleanText
@@ -139,14 +143,14 @@ export class GeminiClient extends AbstractClient {
                 }
             }
         }
-        
+
         // 过滤空文本
         responseContents = responseContents.filter(c => c.type !== 'text' || (c.text && c.text.trim()))
 
         const usage = {
             promptTokens: response.usageMetadata?.promptTokenCount,
             completionTokens: response.usageMetadata?.candidatesTokenCount,
-            totalTokens: response.usageMetadata?.totalTokenCount,
+            totalTokens: response.usageMetadata?.totalTokenCount
         }
 
         return {
@@ -155,7 +159,7 @@ export class GeminiClient extends AbstractClient {
             role: 'assistant',
             content: responseContents,
             toolCalls,
-            usage,
+            usage
         }
     }
 
@@ -198,20 +202,20 @@ export class GeminiClient extends AbstractClient {
         const safetySettings = [
             {
                 category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-                threshold: HarmBlockThreshold.BLOCK_NONE,
+                threshold: HarmBlockThreshold.BLOCK_NONE
             },
             {
                 category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                threshold: HarmBlockThreshold.BLOCK_NONE,
+                threshold: HarmBlockThreshold.BLOCK_NONE
             },
             {
                 category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                threshold: HarmBlockThreshold.BLOCK_NONE,
+                threshold: HarmBlockThreshold.BLOCK_NONE
             },
             {
                 category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                threshold: HarmBlockThreshold.BLOCK_NONE,
-            },
+                threshold: HarmBlockThreshold.BLOCK_NONE
+            }
         ]
 
         const toolConvert = getFromChaiteToolConverter('gemini')
@@ -224,12 +228,12 @@ export class GeminiClient extends AbstractClient {
             tools: tools ? [{ functionDeclarations: tools }] : undefined,
             generationConfig: {
                 temperature: options.temperature,
-                maxOutputTokens: options.maxToken,
-            },
+                maxOutputTokens: options.maxToken
+            }
         })
 
         const result = await generativeModel.generateContentStream({
-            contents,
+            contents
         })
 
         async function* generator() {
@@ -280,12 +284,14 @@ export class GeminiClient extends AbstractClient {
                 duration: Date.now() - embeddingStartTime,
                 success: true,
                 source: 'embedding',
-                request: { inputCount: texts.length, model },
+                request: { inputCount: texts.length, model }
             })
-        } catch (e) { /* 统计失败不影响主流程 */ }
+        } catch (e) {
+            /* 统计失败不影响主流程 */
+        }
 
         return {
-            embeddings,
+            embeddings
         }
     }
 
@@ -297,22 +303,22 @@ export class GeminiClient extends AbstractClient {
     async listModels() {
         const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
         const baseUrl = this.baseUrl || 'https://generativelanguage.googleapis.com'
-        
+
         try {
             const response = await fetch(`${baseUrl}/v1beta/models?key=${apiKey}`, {
                 method: 'GET',
                 headers: {
-                    'Content-Type': 'application/json',
+                    'Content-Type': 'application/json'
                 }
             })
-            
+
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`)
             }
-            
+
             const data = await response.json()
             const models = data.models || []
-            
+
             // 提取模型名称，过滤掉非生成模型
             return models
                 .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
@@ -329,7 +335,7 @@ export class GeminiClient extends AbstractClient {
                 'gemini-1.5-flash',
                 'gemini-1.5-flash-latest',
                 'gemini-1.5-flash-8b',
-                'gemini-1.0-pro',
+                'gemini-1.0-pro'
             ]
         }
     }
@@ -343,20 +349,20 @@ export class GeminiClient extends AbstractClient {
     async getModelInfo(modelId) {
         const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
         const baseUrl = this.baseUrl || 'https://generativelanguage.googleapis.com'
-        
+
         try {
             const modelName = modelId.startsWith('models/') ? modelId : `models/${modelId}`
             const response = await fetch(`${baseUrl}/v1beta/${modelName}?key=${apiKey}`, {
                 method: 'GET',
                 headers: {
-                    'Content-Type': 'application/json',
+                    'Content-Type': 'application/json'
                 }
             })
-            
+
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`)
             }
-            
+
             const model = await response.json()
             return {
                 id: model.name?.replace('models/', '') || modelId,
@@ -368,7 +374,7 @@ export class GeminiClient extends AbstractClient {
                 supportedGenerationMethods: model.supportedGenerationMethods || [],
                 temperature: model.temperature,
                 topP: model.topP,
-                topK: model.topK,
+                topK: model.topK
             }
         } catch (error) {
             logger.error('[Gemini适配器] 获取模型信息失败:', error.message)
