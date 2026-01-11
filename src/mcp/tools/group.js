@@ -3,6 +3,8 @@
  * 获取群信息、成员列表等
  */
 
+import { groupNoticeApi } from './helpers.js'
+
 export const groupTools = [
     {
         name: 'get_group_info',
@@ -468,7 +470,9 @@ export const groupTools = [
         inputSchema: {
             type: 'object',
             properties: {
-                group_id: { type: 'string', description: '群号，不填则使用当前群' }
+                group_id: { type: 'string', description: '群号，不填则使用当前群' },
+                index: { type: 'number', description: '获取指定序号的公告详情（1-N），不填则获取列表' },
+                limit: { type: 'number', description: '返回数量限制，默认10' }
             }
         },
         handler: async (args, ctx) => {
@@ -476,40 +480,58 @@ export const groupTools = [
                 const e = ctx.getEvent()
                 const bot = ctx.getBot()
                 const groupId = parseInt(args.group_id || e?.group_id)
+                const limit = args.limit || 10
                 
                 if (!groupId) {
                     return { success: false, error: '需要群号参数或在群聊中使用' }
                 }
                 
-                const group = bot.pickGroup?.(groupId)
-                if (!group?.getAnnouncementList && !bot.getGroupNotice) {
-                    return { success: false, error: '当前协议不支持获取群公告' }
-                }
-                
-                let notices = []
-                try {
-                    if (group?.getAnnouncementList) {
-                        notices = await group.getAnnouncementList() || []
-                    } else if (bot.getGroupNotice) {
-                        notices = await bot.getGroupNotice(groupId) || []
+                // 获取指定序号的公告
+                if (args.index) {
+                    try {
+                        const notice = await groupNoticeApi.getNoticeList(bot, groupId, args.index)
+                        if (notice?.fid) {
+                            return {
+                                success: true,
+                                group_id: groupId,
+                                index: args.index,
+                                notice: {
+                                    id: notice.fid,
+                                    content: notice.text
+                                }
+                            }
+                        }
+                        return { success: false, error: `未找到序号 ${args.index} 的公告` }
+                    } catch (err) {
+                        return { success: false, error: err.message }
                     }
-                } catch (e) {
-                    return { success: false, error: '获取群公告失败' }
                 }
                 
-                const formattedNotices = notices.slice(0, 10).map(n => ({
-                    id: n.notice_id || n.fid,
-                    content: n.message?.text || n.content || '',
-                    sender_id: n.sender_id || n.u,
-                    time: n.publish_time || n.pubt,
-                    confirm_required: n.need_confirm || n.type === 1
-                }))
-                
-                return {
-                    success: true,
-                    group_id: groupId,
-                    count: formattedNotices.length,
-                    notices: formattedNotices
+                // 获取公告列表
+                try {
+                    const notices = await groupNoticeApi.getNoticeList(bot, groupId)
+                    
+                    const formattedNotices = (Array.isArray(notices) ? notices : [])
+                        .slice(0, limit)
+                        .map((n, idx) => ({
+                            index: idx + 1,
+                            id: n.notice_id || n.fid,
+                            content: n.message?.text || n.msg?.text || n.content || '',
+                            sender_id: n.sender_id || n.u,
+                            time: n.publish_time || n.pubt,
+                            confirm_required: n.need_confirm || n.type === 1,
+                            read_count: n.read_num,
+                            is_pinned: n.is_top || n.pinned
+                        }))
+                    
+                    return {
+                        success: true,
+                        group_id: groupId,
+                        count: formattedNotices.length,
+                        notices: formattedNotices
+                    }
+                } catch (err) {
+                    return { success: false, error: err.message }
                 }
             } catch (err) {
                 return { success: false, error: `获取群公告失败: ${err.message}` }
