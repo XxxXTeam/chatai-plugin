@@ -125,9 +125,10 @@ export const voiceTools = [
                     success: false,
                     protocol,
                     error: 'AI声聊功能需要 NapCat 协议端支持',
-                    hint: protocol === 'icqq'
-                        ? 'icqq 协议不支持AI声聊，这是QQ原生功能，需要通过NapCat调用'
-                        : '请确认协议端是否支持 set_group_ai_record API'
+                    hint:
+                        protocol === 'icqq'
+                            ? 'icqq 协议不支持AI声聊，这是QQ原生功能，需要通过NapCat调用'
+                            : '请确认协议端是否支持 set_group_ai_record API'
                 }
             } catch (err) {
                 return { success: false, error: `设置AI声聊失败: ${err.message}` }
@@ -137,7 +138,8 @@ export const voiceTools = [
 
     {
         name: 'get_ai_voice_characters',
-        description: '【查询】获取AI声聊可用的角色/音色列表。仅用于查询可用角色，不发送消息。常见角色包括：嘉然_元气、珈乐_温柔、乃琳_温柔、贝拉_可爱、阿梓_元气',
+        description:
+            '【查询】获取AI声聊可用的角色/音色列表。仅用于查询可用角色，不发送消息。常见角色包括：嘉然_元气、珈乐_温柔、乃琳_温柔、贝拉_可爱、阿梓_元气',
         inputSchema: {
             type: 'object',
             properties: {
@@ -239,12 +241,16 @@ export const voiceTools = [
 
     {
         name: 'send_ai_voice',
-        description: '【发送】AI语音消息到群聊（使用QQ的AI声聊功能合成语音）。必须提供当前群号group_id。角色ID推荐：lucy-voice-laibixiaoxin(小新)、lucy-voice-houge(猴哥)、lucy-voice-daji(妲己)、lucy-voice-xueling(元气少女)、lucy-voice-female1(邻家小妹)',
+        description:
+            '【发送】AI语音消息到群聊（使用QQ的AI声聊功能合成语音）。必须提供当前群号group_id。角色ID推荐：lucy-voice-laibixiaoxin(小新)、lucy-voice-houge(猴哥)、lucy-voice-daji(妲己)、lucy-voice-xueling(元气少女)、lucy-voice-female1(邻家小妹)',
         inputSchema: {
             type: 'object',
             properties: {
                 text: { type: 'string', description: '要转为语音的文字内容' },
-                character: { type: 'string', description: '角色ID（必填），推荐：lucy-voice-laibixiaoxin、lucy-voice-houge、lucy-voice-daji' },
+                character: {
+                    type: 'string',
+                    description: '角色ID（必填），推荐：lucy-voice-laibixiaoxin、lucy-voice-houge、lucy-voice-daji'
+                },
                 group_id: { type: 'string', description: '群号（必填，请填写当前群号）' }
             },
             required: ['text', 'character', 'group_id']
@@ -265,20 +271,20 @@ export const voiceTools = [
                 }
                 // 角色名到ID的映射
                 const characterMap = {
-                    '小新': 'lucy-voice-laibixiaoxin',
-                    '猴哥': 'lucy-voice-houge',
-                    '妲己': 'lucy-voice-daji',
-                    '四郎': 'lucy-voice-silang',
-                    '吕布': 'lucy-voice-lvbu',
-                    '霸道总裁': 'lucy-voice-lizeyan',
-                    '酥心御姐': 'lucy-voice-suxinjiejie',
-                    '元气少女': 'lucy-voice-xueling',
-                    '邻家小妹': 'lucy-voice-female1',
-                    '嘉然_元气': 'lucy-voice-xueling',
-                    '珈乐_温柔': 'lucy-voice-female2',
-                    '乃琳_温柔': 'lucy-voice-suxinjiejie',
-                    '贝拉_可爱': 'lucy-voice-female1',
-                    '阿梓_元气': 'lucy-voice-xueling'
+                    小新: 'lucy-voice-laibixiaoxin',
+                    猴哥: 'lucy-voice-houge',
+                    妲己: 'lucy-voice-daji',
+                    四郎: 'lucy-voice-silang',
+                    吕布: 'lucy-voice-lvbu',
+                    霸道总裁: 'lucy-voice-lizeyan',
+                    酥心御姐: 'lucy-voice-suxinjiejie',
+                    元气少女: 'lucy-voice-xueling',
+                    邻家小妹: 'lucy-voice-female1',
+                    嘉然_元气: 'lucy-voice-xueling',
+                    珈乐_温柔: 'lucy-voice-female2',
+                    乃琳_温柔: 'lucy-voice-suxinjiejie',
+                    贝拉_可爱: 'lucy-voice-female1',
+                    阿梓_元气: 'lucy-voice-xueling'
                 }
 
                 const { adapter, isNT, canAiVoice } = getAdapterInfo(ctx)
@@ -482,9 +488,10 @@ export const voiceTools = [
                     success: false,
                     adapter,
                     error: '当前适配器不支持AI声聊',
-                    hint: adapter === 'onebot'
-                        ? 'OneBot 实现需要支持 send_group_ai_record API'
-                        : '需要 icqq(NT) 或 NapCat 适配器'
+                    hint:
+                        adapter === 'onebot'
+                            ? 'OneBot 实现需要支持 send_group_ai_record API'
+                            : '需要 icqq(NT) 或 NapCat 适配器'
                 }
             } catch (err) {
                 return { success: false, error: `发送AI语音失败: ${err.message}` }
@@ -668,32 +675,106 @@ export const voiceTools = [
         handler: async () => {
             // VITS 支持的角色列表（按游戏/来源分类）
             const speakers = {
-                '原神': [
-                    '派蒙', '凯亚', '安柏', '丽莎', '琴', '香菱', '枫原万叶', '迪卢克',
-                    '温迪', '可莉', '早柚', '托马', '芭芭拉', '优菈', '云堇', '钟离',
-                    '魈', '凝光', '雷电将军', '北斗', '甘雨', '七七', '刻晴', '神里绫华',
-                    '戴因斯雷布', '雷泽', '神里绫人', '罗莎莉亚', '阿贝多', '八重神子',
-                    '宵宫', '若陀龙王', '九条裟罗', '夜兰', '珊瑚宫心海', '五郎',
-                    '散兵', '女士', '达达利亚', '莫娜', '班尼特', '申鹤', '行秋',
-                    '烟绯', '久岐忍', '辛焱', '砂糖', '胡桃', '重云', '菲谢尔',
-                    '诺艾尔', '迪奥娜', '鹿野院平藏'
+                原神: [
+                    '派蒙',
+                    '凯亚',
+                    '安柏',
+                    '丽莎',
+                    '琴',
+                    '香菱',
+                    '枫原万叶',
+                    '迪卢克',
+                    '温迪',
+                    '可莉',
+                    '早柚',
+                    '托马',
+                    '芭芭拉',
+                    '优菈',
+                    '云堇',
+                    '钟离',
+                    '魈',
+                    '凝光',
+                    '雷电将军',
+                    '北斗',
+                    '甘雨',
+                    '七七',
+                    '刻晴',
+                    '神里绫华',
+                    '戴因斯雷布',
+                    '雷泽',
+                    '神里绫人',
+                    '罗莎莉亚',
+                    '阿贝多',
+                    '八重神子',
+                    '宵宫',
+                    '若陀龙王',
+                    '九条裟罗',
+                    '夜兰',
+                    '珊瑚宫心海',
+                    '五郎',
+                    '散兵',
+                    '女士',
+                    '达达利亚',
+                    '莫娜',
+                    '班尼特',
+                    '申鹤',
+                    '行秋',
+                    '烟绯',
+                    '久岐忍',
+                    '辛焱',
+                    '砂糖',
+                    '胡桃',
+                    '重云',
+                    '菲谢尔',
+                    '诺艾尔',
+                    '迪奥娜',
+                    '鹿野院平藏'
                 ],
-                '崩坏3': [
-                    '琪亚娜', '爱莉希雅', '卡莲', '八重樱', '雷电芽衣', '布洛妮娅',
-                    '希儿', '明日香', '符华', '德丽莎', '渡鸦', '芽衣'
+                崩坏3: [
+                    '琪亚娜',
+                    '爱莉希雅',
+                    '卡莲',
+                    '八重樱',
+                    '雷电芽衣',
+                    '布洛妮娅',
+                    '希儿',
+                    '明日香',
+                    '符华',
+                    '德丽莎',
+                    '渡鸦',
+                    '芽衣'
                 ],
-                '崩坏星穹铁道': [
-                    '开拓者女', '开拓者男', '三月七', '丹恒', '希露瓦', '姬子',
-                    '瓦尔特', '艾丝妲', '布洛妮娅', '希儿', '杰帕德', '景元'
+                崩坏星穹铁道: [
+                    '开拓者女',
+                    '开拓者男',
+                    '三月七',
+                    '丹恒',
+                    '希露瓦',
+                    '姬子',
+                    '瓦尔特',
+                    '艾丝妲',
+                    '布洛妮娅',
+                    '希儿',
+                    '杰帕德',
+                    '景元'
                 ],
-                '赛马娘': [
-                    '特别周', '无声铃鹿', '东海帝王', '丸善斯基', '富士奇迹', '小栗帽',
-                    '黄金船', '伏特加', '大和赤骥', '目白麦昆', '神鹰', '好歌剧',
-                    '成田白仁', '草上飞'
+                赛马娘: [
+                    '特别周',
+                    '无声铃鹿',
+                    '东海帝王',
+                    '丸善斯基',
+                    '富士奇迹',
+                    '小栗帽',
+                    '黄金船',
+                    '伏特加',
+                    '大和赤骥',
+                    '目白麦昆',
+                    '神鹰',
+                    '好歌剧',
+                    '成田白仁',
+                    '草上飞'
                 ],
-                '其他': [
-                    '塔菲', '阿梓', '奶绿', '星瞳', '向晚', '嘉然', '乃琳', '贝拉', '珈乐'
-                ]
+                其他: ['塔菲', '阿梓', '奶绿', '星瞳', '向晚', '嘉然', '乃琳', '贝拉', '珈乐']
             }
 
             const allSpeakers = []
@@ -794,7 +875,9 @@ export const voiceTools = [
                 const noise_scale_w = safePositiveNumber(args.noise_scale_w, 0.668)
                 const length_scale = safePositiveNumber(args.length_scale, 1.0)
 
-                logger.info(`[send_tts] 开始生成: speaker=${speaker}, lang=${lang}, text="${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`)
+                logger.info(
+                    `[send_tts] 开始生成: speaker=${speaker}, lang=${lang}, text="${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`
+                )
 
                 // 构建 API 请求
                 const payload = {
@@ -804,7 +887,7 @@ export const voiceTools = [
                 }
 
                 const response = await axios.post(VITS_API_URL, payload, {
-                    timeout: 30000  // 30秒超时
+                    timeout: 30000 // 30秒超时
                 })
                 const data = response.data
 
@@ -895,7 +978,11 @@ export const voiceTools = [
                         speaker,
                         text: text.substring(0, 100)
                     }
-                } else if (result?.error || result?.code < 0 || (result?.retcode !== undefined && result?.retcode !== 0)) {
+                } else if (
+                    result?.error ||
+                    result?.code < 0 ||
+                    (result?.retcode !== undefined && result?.retcode !== 0)
+                ) {
                     const errorMsg = result?.error || result?.message || '发送VITS语音失败'
                     logger.warn(`[send_tts] 发送失败: ${errorMsg} (code: ${result?.code})`)
                     return {
@@ -930,7 +1017,6 @@ export const voiceTools = [
                     speaker,
                     text: text.substring(0, 100)
                 }
-
             } catch (err) {
                 // 详细的错误日志
                 let errMsg = err.message
@@ -1202,9 +1288,10 @@ export const voiceTools = [
                     success: false,
                     adapter,
                     error: '当前协议不支持私聊AI语音',
-                    hint: adapter === 'icqq'
-                        ? 'icqq不支持直接私聊AI语音，请在群聊中使用 send_ai_voice'
-                        : '请确认协议端支持 send_private_ai_record 或 get_ai_record API'
+                    hint:
+                        adapter === 'icqq'
+                            ? 'icqq不支持直接私聊AI语音，请在群聊中使用 send_ai_voice'
+                            : '请确认协议端支持 send_private_ai_record 或 get_ai_record API'
                 }
             } catch (err) {
                 return { success: false, error: `发送私聊AI语音失败: ${err.message}` }
@@ -1383,7 +1470,7 @@ export const voiceTools = [
                                 file: fileId
                             }
                         }
-                    } catch (e) { }
+                    } catch (e) {}
                 }
 
                 return { success: false, error: '当前协议不支持语音转文字' }
@@ -1425,9 +1512,7 @@ export const voiceTools = [
                         adapter,
                         isNT,
                         canAiVoice,
-                        note: isNT
-                            ? 'icqq(NT)支持AI声聊，使用 send_ai_voice 发送'
-                            : 'icqq需要NT协议才能使用AI声聊'
+                        note: isNT ? 'icqq(NT)支持AI声聊，使用 send_ai_voice 发送' : 'icqq需要NT协议才能使用AI声聊'
                     }
                 }
 

@@ -92,16 +92,18 @@ router.post('/', async (req, res) => {
 // GET /config/advanced - 获取高级配置
 router.get('/advanced', (req, res) => {
     try {
-        res.json(ChaiteResponse.ok({
-            llm: config.get('llm'),
-            context: config.get('context'),
-            tools: config.get('tools'),
-            proxy: config.get('proxy'),
-            qqBotProxy: config.get('qqBotProxy'),
-            web: config.get('web'),
-            redis: config.get('redis'),
-            update: config.get('update')
-        }))
+        res.json(
+            ChaiteResponse.ok({
+                llm: config.get('llm'),
+                context: config.get('context'),
+                tools: config.get('tools'),
+                proxy: config.get('proxy'),
+                qqBotProxy: config.get('qqBotProxy'),
+                web: config.get('web'),
+                redis: config.get('redis'),
+                update: config.get('update')
+            })
+        )
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
@@ -186,10 +188,12 @@ router.patch('/personality', async (req, res) => {
 // GET /config/links - 获取登录链接配置
 router.get('/links', (req, res) => {
     try {
-        res.json(ChaiteResponse.ok({
-            loginLinks: config.get('web.loginLinks') || [],
-            publicUrl: config.get('web.publicUrl') || ''
-        }))
+        res.json(
+            ChaiteResponse.ok({
+                loginLinks: config.get('web.loginLinks') || [],
+                publicUrl: config.get('web.publicUrl') || ''
+            })
+        )
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }

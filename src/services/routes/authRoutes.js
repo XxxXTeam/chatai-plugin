@@ -32,7 +32,7 @@ class FrontendAuthHandler {
             }
             return permanentToken
         }
-        
+
         const timestamp = Math.floor(Date.now() / 1000)
         const randomString = Math.random().toString(36).substring(2, 15)
         const token = `${timestamp}-${randomString}`
@@ -129,10 +129,8 @@ export function createAuthMiddleware() {
     return async (req, res, next) => {
         const authHeader = req.headers.authorization
         const cookieToken = req.cookies?.auth_token
-        
-        const token = authHeader?.startsWith('Bearer ') 
-            ? authHeader.substring(7) 
-            : cookieToken
+
+        const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : cookieToken
 
         if (!token) {
             return res.status(401).json(ApiResponse.fail(null, 'Authentication required'))
@@ -140,7 +138,7 @@ export function createAuthMiddleware() {
 
         try {
             const decoded = jwt.verify(token, getAuthKey())
-            
+
             const fingerprint = req.headers['x-client-fingerprint']
             if (!fingerprintValidator.validate(token, fingerprint)) {
                 chatLogger.warn('[Auth] 客户端指纹不匹配')
@@ -163,9 +161,7 @@ export function setupAuthRoutes(app) {
         const { token } = req.query
         const authHeader = req.headers.authorization
         const cookieToken = req.cookies?.auth_token
-        const existingToken = authHeader?.startsWith('Bearer ') 
-            ? authHeader.substring(7) 
-            : cookieToken
+        const existingToken = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : cookieToken
 
         if (existingToken) {
             try {
@@ -180,24 +176,28 @@ export function setupAuthRoutes(app) {
 
         try {
             const success = authHandler.validateToken(token)
-            
+
             if (success) {
-                const jwtToken = jwt.sign({
-                    authenticated: true,
-                    loginTime: Date.now(),
-                    jti: crypto.randomUUID(),
-                    iss: 'chatai-panel',
-                    aud: 'chatai-client'
-                }, getAuthKey(), { 
-                    expiresIn: '30d',
-                    algorithm: 'HS256'
-                })
-                
+                const jwtToken = jwt.sign(
+                    {
+                        authenticated: true,
+                        loginTime: Date.now(),
+                        jti: crypto.randomUUID(),
+                        iss: 'chatai-panel',
+                        aud: 'chatai-client'
+                    },
+                    getAuthKey(),
+                    {
+                        expiresIn: '30d',
+                        algorithm: 'HS256'
+                    }
+                )
+
                 res.cookie('auth_token', jwtToken, {
                     maxAge: 30 * 24 * 60 * 60 * 1000,
-                    httpOnly: false, 
+                    httpOnly: false,
                     sameSite: 'lax',
-                    path: '/'  
+                    path: '/'
                 })
                 res.redirect(`/?auth_token=${jwtToken}`)
             } else {
@@ -217,7 +217,7 @@ export function setupAuthRoutes(app) {
             let success = false
             let loginType = ''
             const authToken = token || password
-            
+
             if (authToken) {
                 if (authHandler.validateToken(authToken)) {
                     success = true
@@ -227,27 +227,33 @@ export function setupAuthRoutes(app) {
                     loginType = 'permanent_token'
                 }
             }
-            
+
             if (success) {
-                const jwtToken = jwt.sign({
-                    authenticated: true,
-                    loginTime: Date.now(),
-                    jti: crypto.randomUUID(),
-                    iss: 'chatai-panel',
-                    aud: 'chatai-client'
-                }, getAuthKey(), { 
-                    expiresIn: '30d',
-                    algorithm: 'HS256'
-                })
+                const jwtToken = jwt.sign(
+                    {
+                        authenticated: true,
+                        loginTime: Date.now(),
+                        jti: crypto.randomUUID(),
+                        iss: 'chatai-panel',
+                        aud: 'chatai-client'
+                    },
+                    getAuthKey(),
+                    {
+                        expiresIn: '30d',
+                        algorithm: 'HS256'
+                    }
+                )
 
                 if (clientFingerprint) {
                     fingerprintValidator.bind(jwtToken, clientFingerprint)
                 }
 
-                res.json(ApiResponse.ok({
-                    token: jwtToken,
-                    expiresIn: 30 * 24 * 60 * 60
-                }))
+                res.json(
+                    ApiResponse.ok({
+                        token: jwtToken,
+                        expiresIn: 30 * 24 * 60 * 60
+                    })
+                )
             } else {
                 res.status(401).json(ApiResponse.fail(null, 'Invalid token'))
             }
@@ -270,9 +276,7 @@ export function setupAuthRoutes(app) {
     router.get('/status', async (req, res) => {
         const authHeader = req.headers.authorization
         const cookieToken = req.cookies?.auth_token
-        const token = authHeader?.startsWith('Bearer ') 
-            ? authHeader.substring(7) 
-            : cookieToken
+        const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : cookieToken
 
         if (!token) {
             return res.json(ApiResponse.ok({ authenticated: false }))
@@ -280,10 +284,12 @@ export function setupAuthRoutes(app) {
 
         try {
             const decoded = jwt.verify(token, getAuthKey())
-            res.json(ApiResponse.ok({ 
-                authenticated: true, 
-                loginTime: decoded.loginTime 
-            }))
+            res.json(
+                ApiResponse.ok({
+                    authenticated: true,
+                    loginTime: decoded.loginTime
+                })
+            )
         } catch {
             res.json(ApiResponse.ok({ authenticated: false }))
         }

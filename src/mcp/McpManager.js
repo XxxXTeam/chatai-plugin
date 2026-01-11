@@ -16,7 +16,7 @@ const MCP_SERVERS_FILE = path.join(__dirname, '../../data/mcp-servers.json')
 /**
  * @description 管理内置工具、自定义JS工具、外部MCP服务器
  * 支持工具调用、资源读取、提示词管理等功能
- * 
+ *
  * @example
  * ```js
  * await mcpManager.init()
@@ -67,7 +67,7 @@ export class McpManager {
                 fs.mkdirSync(dir, { recursive: true })
                 logger.info('[MCP] 创建配置目录:', dir)
             }
-            
+
             // 如果文件不存在，创建默认配置
             if (!fs.existsSync(MCP_SERVERS_FILE)) {
                 this.serversConfig = { servers: {} }
@@ -75,7 +75,7 @@ export class McpManager {
                 logger.info('[MCP] 创建默认配置文件:', MCP_SERVERS_FILE)
                 return this.serversConfig
             }
-            
+
             const content = fs.readFileSync(MCP_SERVERS_FILE, 'utf-8')
             this.serversConfig = JSON.parse(content)
             if (!this.serversConfig.servers) {
@@ -106,12 +106,12 @@ export class McpManager {
     async init() {
         // 如果已初始化，直接返回
         if (this.initialized) return
-        
+
         // 如果正在初始化，等待完成
         if (this.initPromise) {
             return await this.initPromise
         }
-        
+
         // 开始初始化，设置 Promise 锁
         this.initPromise = this._doInit()
         try {
@@ -120,10 +120,10 @@ export class McpManager {
             this.initPromise = null
         }
     }
-    
+
     async _doInit() {
         if (this.initialized) return
-        
+
         await this.initBuiltinServer()
         await this.initCustomToolsServer()
 
@@ -142,7 +142,7 @@ export class McpManager {
             await builtinMcpServer.init()
             const allTools = builtinMcpServer.listTools()
             const builtinTools = allTools.filter(t => !t.isJsTool)
-            
+
             for (const tool of builtinTools) {
                 this.tools.set(tool.name, {
                     ...tool,
@@ -169,7 +169,7 @@ export class McpManager {
         try {
             const allTools = builtinMcpServer.listTools()
             const jsTools = allTools.filter(t => t.isJsTool)
-            
+
             if (jsTools.length === 0) {
                 logger.info('[MCP] 在data/tools中未找到自定义JS工具')
                 return
@@ -242,16 +242,16 @@ export class McpManager {
      */
     normalizeServerConfig(serverConfig) {
         if (!serverConfig) return serverConfig
-        
+
         // 如果有 transport 嵌套，提取出来
         if (serverConfig.transport && typeof serverConfig.transport === 'object') {
             const { transport, ...rest } = serverConfig
             return {
                 ...transport,
-                ...rest  // 保留其他顶层字段如 env, headers 等
+                ...rest // 保留其他顶层字段如 env, headers 等
             }
         }
-        
+
         return serverConfig
     }
 
@@ -260,18 +260,18 @@ export class McpManager {
             // 规范化配置格式
             const normalizedConfig = this.normalizeServerConfig(serverConfig)
             logger.debug(`[MCP] Connecting to ${name} with config:`, JSON.stringify(normalizedConfig))
-            
+
             if (name === 'builtin') {
                 await this.initBuiltinServer()
                 return { success: true, tools: this.servers.get('builtin')?.tools?.length || 0 }
             }
-            
+
             if (name === 'custom-tools' || normalizedConfig?.type === 'custom') {
                 await builtinMcpServer.loadJsTools()
                 await this.initCustomToolsServer()
                 return { success: true, tools: this.servers.get('custom-tools')?.tools?.length || 0 }
             }
-            
+
             // Disconnect existing server if any
             if (this.servers.has(name)) {
                 await this.disconnectServer(name)
@@ -335,7 +335,9 @@ export class McpManager {
                 })
             }
 
-            logger.info(`[MCP] Connected to server: ${name}, loaded ${tools.length} tools, ${resources.length} resources, ${prompts.length} prompts`)
+            logger.info(
+                `[MCP] Connected to server: ${name}, loaded ${tools.length} tools, ${resources.length} resources, ${prompts.length} prompts`
+            )
             return { success: true, tools: tools.length, resources: resources.length, prompts: prompts.length }
         } catch (err) {
             logger.error(`[MCP] Failed to connect to server ${name}: ${err.message}`, err.stack)
@@ -482,7 +484,7 @@ export class McpManager {
     getTools(options = {}) {
         const { applyConfig = true } = options
         const builtinConfig = config.get('builtinTools') || { enabled: true }
-        
+
         let tools = []
         for (const [name, tool] of this.tools) {
             tools.push({
@@ -495,29 +497,28 @@ export class McpManager {
                 isCustom: tool.isCustom
             })
         }
-        
+
         // 应用配置过滤
         if (applyConfig) {
             // 过滤禁用的工具
             if (builtinConfig.disabledTools?.length > 0) {
                 tools = tools.filter(t => !builtinConfig.disabledTools.includes(t.name))
             }
-            
+
             // 过滤危险工具（如果不允许）
             if (!builtinConfig.allowDangerous) {
                 const dangerous = builtinConfig.dangerousTools || []
                 tools = tools.filter(t => !dangerous.includes(t.name))
             }
-            
+
             // 过滤允许的工具（白名单模式）
             if (builtinConfig.allowedTools?.length > 0) {
-                tools = tools.filter(t => 
-                    builtinConfig.allowedTools.includes(t.name) || 
-                    t.isJsTool || t.isCustom  // JS工具和自定义工具不受白名单限制
+                tools = tools.filter(
+                    t => builtinConfig.allowedTools.includes(t.name) || t.isJsTool || t.isCustom // JS工具和自定义工具不受白名单限制
                 )
             }
         }
-        
+
         return tools
     }
 
@@ -666,7 +667,7 @@ export class McpManager {
                 tool = { ...customTool, isCustom: true, serverName: 'builtin' }
             }
         }
-        
+
         if (!tool) {
             throw new Error(`Tool not found: ${name}`)
         }
@@ -695,9 +696,13 @@ export class McpManager {
             const argsPreview = this.truncateArgs(args)
             logger.debug(`[MCP] Calling: ${name} ${argsPreview}`)
             let result
-            const useBuiltin = tool.isBuiltin || tool.isJsTool || tool.isCustom || 
-                               tool.serverName === 'builtin' || tool.serverName === 'custom-tools'
-            
+            const useBuiltin =
+                tool.isBuiltin ||
+                tool.isJsTool ||
+                tool.isCustom ||
+                tool.serverName === 'builtin' ||
+                tool.serverName === 'custom-tools'
+
             if (useBuiltin) {
                 result = await builtinMcpServer.callTool(name, args, options.context)
             } else {
@@ -758,7 +763,7 @@ export class McpManager {
 
         // 并行执行所有调用
         const results = await Promise.allSettled(
-            toolCalls.map(async (call) => {
+            toolCalls.map(async call => {
                 const callStart = Date.now()
                 try {
                     const result = await this.callTool(call.name, call.args, options)
@@ -784,12 +789,16 @@ export class McpManager {
 
         logger.debug(`[MCP] 并行完成: ${successCount}/${toolCalls.length}, ${totalDuration}ms`)
 
-        return results.map(r => r.status === 'fulfilled' ? r.value : {
-            name: 'unknown',
-            error: r.reason?.message || 'Unknown error',
-            duration: 0,
-            success: false
-        })
+        return results.map(r =>
+            r.status === 'fulfilled'
+                ? r.value
+                : {
+                      name: 'unknown',
+                      error: r.reason?.message || 'Unknown error',
+                      duration: 0,
+                      success: false
+                  }
+        )
     }
 
     /**
@@ -851,10 +860,11 @@ export class McpManager {
 
         if (searchQuery) {
             const query = searchQuery.toLowerCase()
-            logs = logs.filter(l => 
-                l.toolName.toLowerCase().includes(query) ||
-                l.userId?.toLowerCase().includes(query) ||
-                JSON.stringify(l.arguments).toLowerCase().includes(query)
+            logs = logs.filter(
+                l =>
+                    l.toolName.toLowerCase().includes(query) ||
+                    l.userId?.toLowerCase().includes(query) ||
+                    JSON.stringify(l.arguments).toLowerCase().includes(query)
             )
         }
 
@@ -996,7 +1006,7 @@ export class McpManager {
      */
     getToolCategorySummary() {
         const categories = new Map()
-        
+
         for (const [name, tool] of this.tools) {
             const category = tool.category || tool.serverName || 'builtin'
             if (!categories.has(category)) {
@@ -1004,7 +1014,7 @@ export class McpManager {
             }
             categories.get(category).tools.push(name)
         }
-        
+
         return Array.from(categories.values()).map(cat => ({
             name: cat.name,
             toolCount: cat.tools.length

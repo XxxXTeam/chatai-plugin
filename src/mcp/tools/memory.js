@@ -12,9 +12,9 @@ export const memoryTools = [
             properties: {
                 content: { type: 'string', description: '要保存的记忆内容' },
                 user_id: { type: 'string', description: '用户QQ号（不填则使用当前用户）' },
-                type: { 
-                    type: 'string', 
-                    description: '记忆类型', 
+                type: {
+                    type: 'string',
+                    description: '记忆类型',
                     enum: ['preference', 'fact', 'note', 'relationship']
                 },
                 importance: { type: 'number', description: '重要程度(1-10)，默认5' }
@@ -25,23 +25,23 @@ export const memoryTools = [
             try {
                 const { memoryManager } = await import('../../services/storage/MemoryManager.js')
                 await memoryManager.init()
-                
+
                 const e = ctx.getEvent()
                 const userId = args.user_id || e?.user_id?.toString()
-                
+
                 if (!userId) {
                     return { success: false, error: '无法确定用户' }
                 }
-                
+
                 const memory = await memoryManager.addMemory(userId, {
                     content: args.content,
                     type: args.type || 'note',
                     importance: args.importance || 5,
                     source: 'ai_tool'
                 })
-                
-                return { 
-                    success: true, 
+
+                return {
+                    success: true,
                     memory_id: memory.id,
                     user_id: userId,
                     content: args.content
@@ -68,29 +68,27 @@ export const memoryTools = [
             try {
                 const { memoryManager } = await import('../../services/storage/MemoryManager.js')
                 await memoryManager.init()
-                
+
                 const e = ctx.getEvent()
                 const userId = args.user_id || e?.user_id?.toString()
-                
+
                 if (!userId) {
                     return { success: false, error: '无法确定用户' }
                 }
-                
+
                 let memories = await memoryManager.getMemories(userId, {
                     type: args.type,
                     limit: args.limit || 20
                 })
-                
+
                 // 关键词筛选
                 if (args.keyword) {
                     const keyword = args.keyword.toLowerCase()
-                    memories = memories.filter(m => 
-                        m.content?.toLowerCase().includes(keyword)
-                    )
+                    memories = memories.filter(m => m.content?.toLowerCase().includes(keyword))
                 }
-                
-                return { 
-                    success: true, 
+
+                return {
+                    success: true,
                     user_id: userId,
                     count: memories.length,
                     memories: memories.map(m => ({
@@ -122,18 +120,18 @@ export const memoryTools = [
             try {
                 const { memoryManager } = await import('../../services/storage/MemoryManager.js')
                 await memoryManager.init()
-                
+
                 const e = ctx.getEvent()
                 const userId = args.user_id || e?.user_id?.toString()
-                
+
                 if (!userId) {
                     return { success: false, error: '无法确定用户' }
                 }
-                
+
                 const results = await memoryManager.searchMemories(userId, args.query)
-                
-                return { 
-                    success: true, 
+
+                return {
+                    success: true,
                     user_id: userId,
                     query: args.query,
                     count: results.length,
@@ -165,12 +163,12 @@ export const memoryTools = [
             try {
                 const { memoryManager } = await import('../../services/storage/MemoryManager.js')
                 await memoryManager.init()
-                
+
                 const e = ctx.getEvent()
                 const userId = args.user_id || e?.user_id?.toString()
-                
+
                 const success = await memoryManager.deleteMemory(userId, args.memory_id)
-                
+
                 return { success, memory_id: args.memory_id }
             } catch (err) {
                 return { success: false, error: `删除记忆失败: ${err.message}` }

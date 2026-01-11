@@ -36,16 +36,16 @@ function detectAdapter(bot) {
     if (!bot) return { adapter: 'unknown', isNT: false, canAiVoice: false }
     const hasIcqqFeatures = !!(bot.pickGroup && bot.pickFriend && bot.fl && bot.gl)
     const hasNT = typeof bot.sendOidbSvcTrpcTcp === 'function'
-    
+
     if (hasIcqqFeatures) {
         logger.debug(`[detectAdapter] icqq检测: hasIcqqFeatures=${hasIcqqFeatures}, hasNT=${hasNT}`)
         return { adapter: 'icqq', isNT: hasNT, canAiVoice: hasNT }
     }
-    
+
     // OneBot/NapCat 检测
     if (bot.sendApi) {
         const isNapCat = !!(
-            bot.adapter?.name?.toLowerCase?.()?.includes?.('napcat') || 
+            bot.adapter?.name?.toLowerCase?.()?.includes?.('napcat') ||
             bot.config?.protocol === 'napcat' ||
             bot.version?.app_name?.toLowerCase?.()?.includes?.('napcat')
         )
@@ -55,7 +55,7 @@ function detectAdapter(bot) {
         // 其他OneBot实现可能也支持AI声聊
         return { adapter: 'onebot', isNT: false, canAiVoice: false }
     }
-    
+
     return { adapter: 'unknown', isNT: false, canAiVoice: false }
 }
 
@@ -84,14 +84,13 @@ class ToolContext {
                 isNT: ctx.isNT ?? false,
                 canAiVoice: ctx.canAiVoice ?? false
             }
-        }
-        else {
+        } else {
             this._adapterInfo = null
         }
         const userId = this.event?.user_id
         this._isMaster = userId ? checkIsMaster(userId) : false
     }
-    
+
     get isMaster() {
         return this._isMaster
     }
@@ -100,7 +99,7 @@ class ToolContext {
         // 优先从 event.bot 获取（确保多Bot环境下获取正确的Bot实例）
         if (this.event?.bot) return this.event.bot
         if (this.bot) return this.bot
-        
+
         const framework = getBotFramework()
         if (framework === 'trss' && botId && Bot.bots?.get) {
             return Bot.bots.get(botId) || Bot
@@ -118,17 +117,17 @@ class ToolContext {
      */
     getAdapter() {
         if (this._adapterInfo) return this._adapterInfo
-        
+
         // 优先从 event.bot 获取 Bot 对象（确保多Bot环境下检测正确的适配器）
         const bot = this.event?.bot || this.bot || this.getBot()
         const botId = bot?.uin || bot?.self_id || 'default'
-        
+
         // 检查缓存
         if (adapterCache.has(botId)) {
             this._adapterInfo = adapterCache.get(botId)
             return this._adapterInfo
         }
-        
+
         // 检测并缓存
         this._adapterInfo = detectAdapter(bot)
         adapterCache.set(botId, this._adapterInfo)
@@ -198,10 +197,10 @@ export function getBuiltinToolContext() {
 export class BuiltinMcpServer {
     constructor() {
         this.name = 'builtin'
-        this.tools = [] 
-        this.jsTools = new Map()  // 存储 JS 文件加载的工具
-        this.modularTools = []     // 分割后的模块化工具
-        this.toolCategories = {}   // 工具类别信息
+        this.tools = []
+        this.jsTools = new Map() // 存储 JS 文件加载的工具
+        this.modularTools = [] // 分割后的模块化工具
+        this.toolCategories = {} // 工具类别信息
         this.initialized = false
     }
 
@@ -213,7 +212,15 @@ export class BuiltinMcpServer {
         await this.loadModularTools()
         await this.loadJsTools()
         this.initialized = true
-        logger.debug('[BuiltinMCP] 初始化完成:', this.tools.length, '内置工具,', this.modularTools.length, '模块化工具,', this.jsTools.size, 'JS工具')
+        logger.debug(
+            '[BuiltinMCP] 初始化完成:',
+            this.tools.length,
+            '内置工具,',
+            this.modularTools.length,
+            '模块化工具,',
+            this.jsTools.size,
+            'JS工具'
+        )
     }
 
     /**
@@ -222,18 +229,18 @@ export class BuiltinMcpServer {
     async loadModularTools() {
         try {
             const { getAllTools, getCategoryInfo, toolCategories } = await import('./tools/index.js')
-            
+
             // 获取类别信息
             this.toolCategories = toolCategories
-            
+
             // 获取工具配置
             const builtinConfig = config.get('builtinTools') || {}
             const enabledCategories = builtinConfig.enabledCategories // 未设置则启用所有
             const disabledTools = builtinConfig.disabledTools || []
-            
+
             // 加载工具
             this.modularTools = getAllTools({ enabledCategories, disabledTools })
-            
+
             logger.debug(`[BuiltinMCP] 加载模块化工具: ${this.modularTools.length} 个`)
         } catch (err) {
             logger.warn('[BuiltinMCP] 加载模块化工具失败，使用内置定义:', err.message)
@@ -244,14 +251,14 @@ export class BuiltinMcpServer {
         const builtinConfig = config.get('builtinTools') || {}
         const enabledCategories = builtinConfig.enabledCategories
         const categories = []
-        
+
         if (!this.toolCategories) {
             return categories
         }
-        
+
         for (const [key, categoryConfig] of Object.entries(this.toolCategories)) {
             const isEnabled = enabledCategories ? enabledCategories.includes(key) : true
-            
+
             categories.push({
                 key,
                 name: categoryConfig.name,
@@ -273,7 +280,7 @@ export class BuiltinMcpServer {
     async toggleCategory(category, enabled) {
         const builtinConfig = config.get('builtinTools') || {}
         let enabledCategories = builtinConfig.enabledCategories || Object.keys(this.toolCategories)
-        
+
         if (enabled) {
             if (!enabledCategories.includes(category)) {
                 enabledCategories.push(category)
@@ -281,7 +288,7 @@ export class BuiltinMcpServer {
         } else {
             enabledCategories = enabledCategories.filter(c => c !== category)
         }
-        
+
         await config.set('builtinTools.enabledCategories', enabledCategories)
         await this.loadModularTools()
         return { success: true, enabledCategories }
@@ -295,7 +302,7 @@ export class BuiltinMcpServer {
     async toggleTool(toolName, enabled) {
         const builtinConfig = config.get('builtinTools') || {}
         let disabledTools = builtinConfig.disabledTools || []
-        
+
         if (enabled) {
             disabledTools = disabledTools.filter(t => t !== toolName)
         } else {
@@ -303,7 +310,7 @@ export class BuiltinMcpServer {
                 disabledTools.push(toolName)
             }
         }
-        
+
         await config.set('builtinTools.disabledTools', disabledTools)
         await this.loadModularTools()
         return { success: true, disabledTools }
@@ -312,17 +319,17 @@ export class BuiltinMcpServer {
         const toolsDir = path.join(__dirname, '../../data/tools')
         logger.debug(`[BuiltinMCP] 加载JS工具: ${toolsDir}`)
         this.jsTools.clear()
-        
+
         if (!fs.existsSync(toolsDir)) {
             logger.debug(`[BuiltinMCP] 创建工具目录: ${toolsDir}`)
             fs.mkdirSync(toolsDir, { recursive: true })
             return
         }
-        
+
         const allFiles = fs.readdirSync(toolsDir)
         const files = allFiles.filter(f => f.endsWith('.js') && f !== 'CustomTool.js')
         logger.debug(`[BuiltinMCP] 发现 ${files.length} 个JS工具`)
-        
+
         for (const file of files) {
             try {
                 const filePath = path.join(toolsDir, file)
@@ -330,16 +337,16 @@ export class BuiltinMcpServer {
                 const timestamp = Date.now()
                 const module = await import(`file://${filePath}?t=${timestamp}`)
                 const tool = module.default
-                
+
                 if (!tool) {
                     logger.warn(`[BuiltinMCP] ✗ No default export in ${file}`)
                     continue
                 }
                 const toolName = tool.name || tool.function?.name
                 const hasRun = typeof tool.run === 'function'
-                
+
                 logger.debug(`[BuiltinMCP] 模块: ${toolName}, run=${hasRun}`)
-                
+
                 if (toolName && hasRun) {
                     tool.__filename = file
                     tool.__filepath = filePath
@@ -352,7 +359,7 @@ export class BuiltinMcpServer {
                 logger.error(`[BuiltinMCP] ✗ Failed to load tool ${file}:`, error.message)
             }
         }
-        
+
         logger.debug(`[BuiltinMCP] JS工具加载完成: ${this.jsTools.size}`)
     }
 
@@ -375,7 +382,7 @@ export class BuiltinMcpServer {
      */
     listTools() {
         const builtinConfig = config.get('builtinTools') || { enabled: true }
-        
+
         let tools = []
         const disabledTools = builtinConfig.disabledTools || []
         if (builtinConfig.enabled) {
@@ -433,16 +440,25 @@ export class BuiltinMcpServer {
      * 提供完整的内部 API 访问
      */
     async executeCustomHandler(handlerCode, args, ctx) {
-        const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor
-        
+        const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+
         try {
             const runtime = await this.buildToolRuntime(ctx)
             const fn = new AsyncFunction(
-                'args', 'ctx', 'fetch', 'runtime',
-                'Redis', 'config', 'logger', 'Bot', 'fs', 'path', 'crypto',
+                'args',
+                'ctx',
+                'fetch',
+                'runtime',
+                'Redis',
+                'config',
+                'logger',
+                'Bot',
+                'fs',
+                'path',
+                'crypto',
                 handlerCode
             )
-            
+
             const result = await fn(
                 args,
                 ctx,
@@ -479,13 +495,13 @@ export class BuiltinMcpServer {
         const userId = event?.user_id?.toString()
         const groupId = event?.group_id?.toString()
         const conversationId = userId ? contextManager.getConversationId(userId, groupId) : null
-        
+
         return {
             Redis: redisClient,
             config: config,
             logger: logger,
             Bot: ctx?.getBot?.() || global.Bot,
-            
+
             // 当前会话上下文
             context: {
                 userId,
@@ -495,7 +511,7 @@ export class BuiltinMcpServer {
                 isGroup: !!groupId,
                 isPrivate: !groupId && !!userId
             },
-            
+
             // 服务访问
             services: {
                 chat: chatService,
@@ -506,23 +522,23 @@ export class BuiltinMcpServer {
                 knowledge: knowledgeService,
                 preset: presetManager
             },
-            
+
             // 知识库快捷访问
             knowledge: {
                 // 搜索知识库
                 search: (query, options = {}) => knowledgeService.search(query, options),
                 // 获取文档
-                get: (id) => knowledgeService.get(id),
+                get: id => knowledgeService.get(id),
                 // 获取预设关联的知识库
-                getForPreset: (presetId) => knowledgeService.getPresetKnowledge(presetId),
+                getForPreset: presetId => knowledgeService.getPresetKnowledge(presetId),
                 // 构建知识库提示词
                 buildPrompt: (presetId, options) => knowledgeService.buildKnowledgePrompt(presetId, options)
             },
-            
+
             // 记忆快捷访问
             memory: {
                 // 获取用户记忆
-                get: async (targetUserId) => {
+                get: async targetUserId => {
                     const uid = targetUserId || userId
                     if (!uid) return []
                     return memoryManager.getMemories(uid)
@@ -540,19 +556,19 @@ export class BuiltinMcpServer {
                     return memoryManager.searchMemories(uid, query)
                 },
                 // 删除记忆
-                delete: async (memoryId) => memoryManager.deleteMemory(memoryId)
+                delete: async memoryId => memoryManager.deleteMemory(memoryId)
             },
-            
+
             // 上下文快捷访问
             conversation: {
                 // 获取历史
-                getHistory: async (convId) => {
+                getHistory: async convId => {
                     const id = convId || conversationId
                     if (!id) return []
                     return contextManager.getContextHistory(id)
                 },
                 // 清除历史
-                clear: async (convId) => {
+                clear: async convId => {
                     const id = convId || conversationId
                     if (!id) return false
                     const historyManager = (await import('../core/utils/history.js')).default
@@ -560,7 +576,7 @@ export class BuiltinMcpServer {
                     return true
                 },
                 // 获取统计
-                getStats: async (convId) => {
+                getStats: async convId => {
                     const id = convId || conversationId
                     if (!id) return null
                     return contextManager.getContextStats(id)
@@ -595,15 +611,15 @@ export class BuiltinMcpServer {
                     }
                 },
                 // 延迟
-                sleep: (ms) => new Promise(r => setTimeout(r, ms)),
+                sleep: ms => new Promise(r => setTimeout(r, ms)),
                 // 生成 UUID
                 uuid: () => crypto.randomUUID(),
                 // 读取文件
-                readFile: (filePath) => fs.readFileSync(filePath, 'utf-8'),
+                readFile: filePath => fs.readFileSync(filePath, 'utf-8'),
                 // 写入文件
                 writeFile: (filePath, content) => fs.writeFileSync(filePath, content),
                 // 执行 shell 命令
-                exec: async (cmd) => {
+                exec: async cmd => {
                     // 危险命令黑名单
                     const dangerousPatterns = [
                         /rm\s+(-[rf]+\s+)*[\/~]/, // rm -rf / 或 rm ~/
@@ -627,15 +643,15 @@ export class BuiltinMcpServer {
                         /pkill\s+-9/, // pkill -9
                         /history\s+-c/, // 清除历史
                         /shred/, // 安全删除
-                        /wipefs/, // 擦除文件系统
+                        /wipefs/ // 擦除文件系统
                     ]
-                    
+
                     for (const pattern of dangerousPatterns) {
                         if (pattern.test(cmd)) {
                             throw new Error('检测到危险命令，已拒绝执行')
                         }
                     }
-                    
+
                     const { exec } = await import('child_process')
                     return new Promise((resolve, reject) => {
                         exec(cmd, { timeout: 10000 }, (err, stdout, stderr) => {
@@ -645,7 +661,7 @@ export class BuiltinMcpServer {
                     })
                 }
             },
-            
+
             // MCP 相关
             mcp: {
                 callTool: async (name, toolArgs) => {
@@ -672,7 +688,7 @@ export class BuiltinMcpServer {
     async callTool(name, args, requestContext = null) {
         // 创建请求级上下文包装器，优先使用传入的上下文
         const ctx = this.createRequestContext(requestContext)
-        
+
         // 检查危险工具拦截
         // 兼容多种配置路径（面板/手动配置），并提供默认值
         const firstDefined = (...vals) => vals.find(v => v !== undefined)
@@ -682,19 +698,21 @@ export class BuiltinMcpServer {
             config.get('tools.builtin.allowDangerous'),
             false
         )
-        const dangerousTools = firstDefined(
-            config.get('builtinTools.dangerousTools'),
-            config.get('bots.default.builtinTools.dangerousTools'),
-            config.get('tools.builtin.dangerousTools'),
-            ['kick_member', 'mute_member', 'recall_message']
-        ) || []
-        const disabledTools = firstDefined(
-            config.get('builtinTools.disabledTools'),
-            config.get('bots.default.builtinTools.disabledTools'),
-            config.get('tools.builtin.disabledTools'),
-            []
-        ) || []
-        
+        const dangerousTools =
+            firstDefined(
+                config.get('builtinTools.dangerousTools'),
+                config.get('bots.default.builtinTools.dangerousTools'),
+                config.get('tools.builtin.dangerousTools'),
+                ['kick_member', 'mute_member', 'recall_message']
+            ) || []
+        const disabledTools =
+            firstDefined(
+                config.get('builtinTools.disabledTools'),
+                config.get('bots.default.builtinTools.disabledTools'),
+                config.get('tools.builtin.disabledTools'),
+                []
+            ) || []
+
         // 检查是否是被禁用的工具
         if (disabledTools.includes(name)) {
             logger.warn(`[BuiltinMCP] 工具 ${name} 已被禁用，拒绝执行`)
@@ -703,24 +721,29 @@ export class BuiltinMcpServer {
                 isError: true
             }
         }
-        
+
         // 检查是否是危险工具且未允许危险操作
         if (dangerousTools.includes(name) && !allowDangerous) {
             logger.warn(`[BuiltinMCP] 危险工具 ${name} 被拦截，需要在设置中开启"允许危险操作"`)
             return {
-                content: [{ type: 'text', text: `危险工具 "${name}" 已被拦截。此工具可能执行踢人、禁言、撤回等危险操作。如需使用，请在管理面板的"工具管理-高级设置"中开启"允许危险操作"选项。` }],
+                content: [
+                    {
+                        type: 'text',
+                        text: `危险工具 "${name}" 已被拦截。此工具可能执行踢人、禁言、撤回等危险操作。如需使用，请在管理面板的"工具管理-高级设置"中开启"允许危险操作"选项。`
+                    }
+                ],
                 isError: true
             }
         }
-        
+
         // 记录开始时间用于统计
         const startTime = Date.now()
-        
+
         // 获取用户信息用于统计
         const event = ctx.getEvent?.()
         const userId = event?.user_id?.toString()
         const groupId = event?.group_id?.toString()
-        
+
         // 统计记录辅助函数
         const recordStats = async (result, error = null) => {
             try {
@@ -742,12 +765,12 @@ export class BuiltinMcpServer {
                 logger.debug('[BuiltinMCP] 记录统计失败:', e.message)
             }
         }
-        
+
         // 先检查是否是 JS 文件工具
         const jsTool = this.jsTools.get(name)
         if (jsTool) {
             logger.debug(`[BuiltinMCP] 调用JS工具: ${name}`)
-            
+
             // 参数验证
             if (jsTool.inputSchema) {
                 const validation = validateParams(args, jsTool.inputSchema, ctx)
@@ -758,7 +781,7 @@ export class BuiltinMcpServer {
                     return this.formatResult(errorResult)
                 }
             }
-            
+
             try {
                 // 设置上下文供工具使用
                 const { asyncLocalStorage } = await import('../core/utils/helpers.js')
@@ -772,7 +795,7 @@ export class BuiltinMcpServer {
                     event: ctx.getEvent?.(),
                     bot: ctx.getBot?.()
                 }
-                
+
                 // 在 asyncLocalStorage 中运行，以便工具可以获取上下文
                 const result = await asyncLocalStorage.run(chaiteContext, async () => {
                     return await jsTool.run(args, chaiteContext)
@@ -788,14 +811,14 @@ export class BuiltinMcpServer {
                 }
             }
         }
-        
+
         // 检查是否是 YAML 配置的自定义工具
         const customTools = this.getCustomTools()
         const customTool = customTools.find(t => t.name === name)
-        
+
         if (customTool) {
             logger.debug(`[BuiltinMCP] 调用自定义工具: ${name}`)
-            
+
             // 参数验证
             if (customTool.inputSchema) {
                 const validation = validateParams(args, customTool.inputSchema, ctx)
@@ -806,7 +829,7 @@ export class BuiltinMcpServer {
                     return this.formatResult(errorResult)
                 }
             }
-            
+
             try {
                 const result = await this.executeCustomHandler(customTool.handler, args, ctx)
                 await recordStats(result)
@@ -823,7 +846,7 @@ export class BuiltinMcpServer {
         const modularTool = this.modularTools.find(t => t.name === name)
         if (modularTool) {
             logger.debug(`[BuiltinMCP] 调用模块化工具: ${name}, 参数:`, JSON.stringify(args))
-            
+
             // 参数验证
             if (modularTool.inputSchema) {
                 const validation = validateParams(args, modularTool.inputSchema, ctx)
@@ -835,7 +858,7 @@ export class BuiltinMcpServer {
                     return this.formatResult(errorResult)
                 }
             }
-            
+
             try {
                 const result = await modularTool.handler(args, ctx)
                 await recordStats(result)
@@ -891,11 +914,15 @@ export class BuiltinMcpServer {
     createRequestContext(requestContext) {
         // 如果直接传入了 isMaster（如管理面板测试），创建简化上下文
         if (requestContext && requestContext.isMaster !== undefined && !requestContext.event) {
-            const adapterInfo = requestContext.adapterInfo || (requestContext.adapter ? {
-                adapter: requestContext.adapter,
-                isNT: requestContext.isNT ?? false,
-                canAiVoice: requestContext.canAiVoice ?? false
-            } : null)
+            const adapterInfo =
+                requestContext.adapterInfo ||
+                (requestContext.adapter
+                    ? {
+                          adapter: requestContext.adapter,
+                          isNT: requestContext.isNT ?? false,
+                          canAiVoice: requestContext.canAiVoice ?? false
+                      }
+                    : null)
             return {
                 getBot: () => global.Bot,
                 getEvent: () => null,
@@ -912,7 +939,7 @@ export class BuiltinMcpServer {
             }
         }
         if (requestContext && requestContext.event) {
-            const getBot = (botId) => {
+            const getBot = botId => {
                 if (requestContext.bot) return requestContext.bot
                 if (requestContext.event?.bot) return requestContext.event.bot
                 const framework = getBotFramework()
@@ -921,11 +948,15 @@ export class BuiltinMcpServer {
                 }
                 return Bot
             }
-            let _adapterInfo = requestContext.adapterInfo || (requestContext.adapter ? {
-                adapter: requestContext.adapter,
-                isNT: requestContext.isNT ?? false,
-                canAiVoice: requestContext.canAiVoice ?? false
-            } : null)
+            let _adapterInfo =
+                requestContext.adapterInfo ||
+                (requestContext.adapter
+                    ? {
+                          adapter: requestContext.adapter,
+                          isNT: requestContext.isNT ?? false,
+                          canAiVoice: requestContext.canAiVoice ?? false
+                      }
+                    : null)
             const getAdapter = () => {
                 if (_adapterInfo) return _adapterInfo
                 const bot = getBot()
@@ -940,7 +971,7 @@ export class BuiltinMcpServer {
             }
             const userId = requestContext.event?.user_id
             const isMasterUser = userId ? checkIsMaster(userId) : false
-            
+
             return {
                 getBot,
                 getEvent: () => requestContext.event,
@@ -950,7 +981,7 @@ export class BuiltinMcpServer {
                 isNT: () => getAdapter().isNT,
                 bot: getBot(),
                 event: requestContext.event,
-                isMaster: isMasterUser,  
+                isMaster: isMasterUser,
                 registerCallback: (id, cb) => toolContext.registerCallback(id, cb),
                 executeCallback: (id, data) => toolContext.executeCallback(id, data)
             }
@@ -1013,9 +1044,7 @@ export class BuiltinMcpServer {
         return { content, isError: result.error ? true : false }
     }
     defineTools() {
-        return [
-        
-        ]
+        return []
     }
 }
 export const builtinMcpServer = new BuiltinMcpServer()

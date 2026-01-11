@@ -25,7 +25,7 @@ export const extraTools = [
             },
             required: ['city']
         },
-        handler: async (args) => {
+        handler: async args => {
             const { city, lang = 'zh' } = args
             if (!city) return { error: '请提供城市名称' }
 
@@ -34,7 +34,7 @@ export const extraTools = [
                 {
                     name: 'wttr.in',
                     url: `https://wttr.in/${encodeURIComponent(city)}?format=j1&lang=${lang}`,
-                    parse: (data) => {
+                    parse: data => {
                         if (!data.current_condition?.[0]) {
                             throw new Error('无法获取该城市的天气信息')
                         }
@@ -69,13 +69,13 @@ export const extraTools = [
                     name: 'open-meteo',
                     // 备用API：使用地理编码+天气查询
                     url: `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=zh`,
-                    parse: async (geoData) => {
+                    parse: async geoData => {
                         if (!geoData.results?.[0]) {
                             throw new Error('找不到该城市')
                         }
                         const { latitude, longitude, name, country } = geoData.results[0]
                         const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&timezone=auto`
-                        const weatherResp = await fetch(weatherUrl, { 
+                        const weatherResp = await fetch(weatherUrl, {
                             signal: AbortSignal.timeout(10000),
                             headers: { 'User-Agent': 'ChatBot/1.0' }
                         })
@@ -83,10 +83,22 @@ export const extraTools = [
                         const weatherData = await weatherResp.json()
                         const current = weatherData.current
                         const weatherCodes = {
-                            0: '晴天', 1: '基本晴朗', 2: '多云', 3: '阴天',
-                            45: '雾', 48: '雾凇', 51: '小毛毛雨', 53: '毛毛雨',
-                            61: '小雨', 63: '中雨', 65: '大雨', 71: '小雪', 73: '中雪', 75: '大雪',
-                            95: '雷暴', 96: '冰雹雷暴'
+                            0: '晴天',
+                            1: '基本晴朗',
+                            2: '多云',
+                            3: '阴天',
+                            45: '雾',
+                            48: '雾凇',
+                            51: '小毛毛雨',
+                            53: '毛毛雨',
+                            61: '小雨',
+                            63: '中雨',
+                            65: '大雨',
+                            71: '小雪',
+                            73: '中雪',
+                            75: '大雪',
+                            95: '雷暴',
+                            96: '冰雹雷暴'
                         }
                         return {
                             success: true,
@@ -107,7 +119,7 @@ export const extraTools = [
                 try {
                     const controller = new AbortController()
                     const timeoutId = setTimeout(() => controller.abort(), 15000)
-                    
+
                     const response = await fetch(api.url, {
                         headers: { 'User-Agent': 'ChatBot/1.0' },
                         signal: controller.signal
@@ -138,12 +150,13 @@ export const extraTools = [
             properties: {
                 type: {
                     type: 'string',
-                    description: '句子类型：a(动画), b(漫画), c(游戏), d(文学), e(原创), f(网络), g(其他), h(影视), i(诗词), j(网易云), k(哲学), l(抖机灵)',
+                    description:
+                        '句子类型：a(动画), b(漫画), c(游戏), d(文学), e(原创), f(网络), g(其他), h(影视), i(诗词), j(网易云), k(哲学), l(抖机灵)',
                     enum: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l']
                 }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             const { type } = args
             try {
                 let url = 'https://v1.hitokoto.cn/?encode=json'
@@ -159,8 +172,18 @@ export const extraTools = [
 
                 const data = await response.json()
                 const typeNames = {
-                    a: '动画', b: '漫画', c: '游戏', d: '文学', e: '原创',
-                    f: '网络', g: '其他', h: '影视', i: '诗词', j: '网易云', k: '哲学', l: '抖机灵'
+                    a: '动画',
+                    b: '漫画',
+                    c: '游戏',
+                    d: '文学',
+                    e: '原创',
+                    f: '网络',
+                    g: '其他',
+                    h: '影视',
+                    i: '诗词',
+                    j: '网易云',
+                    k: '哲学',
+                    l: '抖机灵'
                 }
 
                 return {
@@ -193,7 +216,7 @@ export const extraTools = [
             },
             required: ['expression']
         },
-        handler: async (args) => {
+        handler: async args => {
             const { expression, reason } = args
             if (!expression) return { error: '请提供骰子表达式' }
 
@@ -252,7 +275,7 @@ export const extraTools = [
             },
             required: ['options']
         },
-        handler: async (args) => {
+        handler: async args => {
             const { options, count = 1, unique = true } = args
             if (!options?.length) return { error: '请提供至少一个选项' }
             if (unique && count > options.length) {
@@ -274,9 +297,10 @@ export const extraTools = [
             return {
                 success: true,
                 results,
-                text: count === 1 
-                    ? `🎯 选择结果: ${results[0]}`
-                    : `🎯 选择结果:\n${results.map((r, i) => `${i + 1}. ${r}`).join('\n')}`
+                text:
+                    count === 1
+                        ? `🎯 选择结果: ${results[0]}`
+                        : `🎯 选择结果:\n${results.map((r, i) => `${i + 1}. ${r}`).join('\n')}`
             }
         }
     },
@@ -297,7 +321,7 @@ export const extraTools = [
             },
             required: ['target_date']
         },
-        handler: async (args) => {
+        handler: async args => {
             const { target_date, event_name } = args
             if (!target_date) return { error: '请提供目标日期' }
 
@@ -328,7 +352,9 @@ export const extraTools = [
                 success: true,
                 target_date: target.toISOString(),
                 is_past: isPast,
-                days, hours, minutes,
+                days,
+                hours,
+                minutes,
                 text: `${emoji} ${event_name ? `距离「${event_name}」` : '距离目标日期'}${prefix} ${readable}`
             }
         }
@@ -343,7 +369,7 @@ export const extraTools = [
             },
             required: ['url']
         },
-        handler: async (args) => {
+        handler: async args => {
             const { url } = args
             if (!url) return { error: '请提供需要缩短的链接' }
 
@@ -383,13 +409,11 @@ export const extraTools = [
                 ip: { type: 'string', description: 'IP地址，不填则查询当前IP' }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             const { ip } = args
             try {
-                const url = ip 
-                    ? `http://ip-api.com/json/${ip}?lang=zh-CN`
-                    : 'http://ip-api.com/json/?lang=zh-CN'
-                
+                const url = ip ? `http://ip-api.com/json/${ip}?lang=zh-CN` : 'http://ip-api.com/json/?lang=zh-CN'
+
                 const response = await fetch(url, {
                     headers: { 'User-Agent': 'ChatBot/1.0' }
                 })
@@ -465,12 +489,12 @@ export const extraTools = [
                     if (!/^\d{1,2}:\d{1,2}(:\d{1,2})?$/.test(time)) {
                         return { error: `时间格式不正确: "${time}"，请使用 'HH:mm' 格式` }
                     }
-                    
+
                     const [hour, minute, second = 0] = time.split(':').map(Number)
                     if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
                         return { error: `时间数值无效: ${time}` }
                     }
-                    
+
                     let targetDate = new Date()
                     targetDate.setHours(hour, minute, second, 0)
                     if (targetDate <= now) targetDate.setDate(targetDate.getDate() + 1)
@@ -479,12 +503,12 @@ export const extraTools = [
                     const hoursMatch = relative_time.match(/(\d+)\s*h/i)
                     const minutesMatch = relative_time.match(/(\d+)\s*m/i)
                     const secondsMatch = relative_time.match(/(\d+)\s*s/i)
-                    
+
                     const hours = hoursMatch ? parseInt(hoursMatch[1]) : 0
                     const minutes = minutesMatch ? parseInt(minutesMatch[1]) : 0
                     const seconds = secondsMatch ? parseInt(secondsMatch[1]) : 0
-                    
-                    delayMs = (hours * 3600000) + (minutes * 60000) + (seconds * 1000)
+
+                    delayMs = hours * 3600000 + minutes * 60000 + seconds * 1000
                     if (delayMs <= 0) return { error: `相对时间解析后必须大于0` }
                 }
 
@@ -507,10 +531,14 @@ export const extraTools = [
 
                 activeReminders.set(reminderId, { timerId, qq, content, targetTime: targetDate })
 
-                const remindTimeStr = targetDate.toLocaleString('zh-CN', { 
-                    hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+                const remindTimeStr = targetDate.toLocaleString('zh-CN', {
+                    hour12: false,
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit'
                 })
-                
+
                 return {
                     success: true,
                     message: `提醒已设置，将在 ${remindTimeStr} 提醒用户 ${qq}`,
@@ -565,7 +593,9 @@ export const extraTools = [
 
                 const data = await response.json()
                 if (!data?.data?.length) {
-                    return { message: tags.length > 0 ? `找不到包含标签「${tags.join(', ')}」的图片` : '暂时没有找到图片' }
+                    return {
+                        message: tags.length > 0 ? `找不到包含标签「${tags.join(', ')}」的图片` : '暂时没有找到图片'
+                    }
                 }
 
                 const results = []

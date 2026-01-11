@@ -1,7 +1,7 @@
 /**
  * Shell 命令执行工具
  * 支持执行 shell 命令、获取环境信息等
- * 
+ *
  * 注意：这是一个危险工具，需要在配置中显式允许
  */
 
@@ -39,7 +39,7 @@ export const shellTools = [
             required: ['command']
         },
         dangerous: true,
-        requireMaster: true,  // 标记需要主人权限
+        requireMaster: true, // 标记需要主人权限
         handler: async (args, context) => {
             // 主人权限检查
             if (!context?.isMaster) {
@@ -48,24 +48,24 @@ export const shellTools = [
                     error: '权限不足：execute_command 仅限主人使用'
                 }
             }
-            
+
             const { command, cwd, timeout = 30000 } = args
             // 根据系统选择默认shell
             const defaultShell = process.platform === 'win32' ? 'cmd.exe' : '/bin/bash'
             const shell = args.shell || defaultShell
-            
+
             // 危险命令黑名单
             const dangerousPatterns = [
-                /rm\s+-rf\s+\/(?!\w)/i,  // rm -rf /
+                /rm\s+-rf\s+\/(?!\w)/i, // rm -rf /
                 /mkfs/i,
                 /dd\s+if=/i,
                 />\s*\/dev\/sd/i,
                 /chmod\s+777\s+\//i,
-                /:(){ :|:& };:/,  // fork bomb
-                /format\s+[a-z]:/i,  // Windows format
-                /del\s+\/[fqs]\s+[a-z]:\\/i,  // Windows del
+                /:(){ :|:& };:/, // fork bomb
+                /format\s+[a-z]:/i, // Windows format
+                /del\s+\/[fqs]\s+[a-z]:\\/i // Windows del
             ]
-            
+
             for (const pattern of dangerousPatterns) {
                 if (pattern.test(command)) {
                     return {
@@ -74,17 +74,17 @@ export const shellTools = [
                     }
                 }
             }
-            
+
             try {
                 const workDir = cwd || process.cwd()
                 const { stdout, stderr } = await execAsync(command, {
                     cwd: workDir,
                     timeout,
                     shell,
-                    maxBuffer: 1024 * 1024 * 10,  // 10MB
+                    maxBuffer: 1024 * 1024 * 10, // 10MB
                     env: { ...process.env, LANG: 'en_US.UTF-8' }
                 })
-                
+
                 return {
                     success: true,
                     command,
@@ -120,9 +120,9 @@ export const shellTools = [
                 }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             const detailed = args.detailed ?? false
-            
+
             const info = {
                 platform: os.platform(),
                 arch: os.arch(),
@@ -144,7 +144,7 @@ export const shellTools = [
                 home: os.homedir(),
                 tmpdir: os.tmpdir()
             }
-            
+
             if (detailed) {
                 info.cpus = os.cpus().map((cpu, i) => ({
                     core: i,
@@ -163,7 +163,7 @@ export const shellTools = [
                     PATH: process.env.PATH?.split(':').slice(0, 5).join(':') + '...'
                 }
             }
-            
+
             return info
         }
     },
@@ -211,18 +211,23 @@ export const shellTools = [
                 }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             const { name, pattern } = args
-            
+
             // 敏感变量列表（不返回）
             const sensitivePatterns = [
-                /password/i, /secret/i, /token/i, /key/i, /credential/i,
-                /auth/i, /api_key/i, /private/i
+                /password/i,
+                /secret/i,
+                /token/i,
+                /key/i,
+                /credential/i,
+                /auth/i,
+                /api_key/i,
+                /private/i
             ]
-            
-            const isSensitive = (varName) => 
-                sensitivePatterns.some(p => p.test(varName))
-            
+
+            const isSensitive = varName => sensitivePatterns.some(p => p.test(varName))
+
             if (name) {
                 if (isSensitive(name)) {
                     return { error: '不允许读取敏感环境变量' }
@@ -233,18 +238,17 @@ export const shellTools = [
                     exists: name in process.env
                 }
             }
-            
-            let envVars = Object.entries(process.env)
-                .filter(([k]) => !isSensitive(k))
-            
+
+            let envVars = Object.entries(process.env).filter(([k]) => !isSensitive(k))
+
             if (pattern) {
                 const regex = new RegExp(pattern, 'i')
                 envVars = envVars.filter(([k]) => regex.test(k))
             }
-            
+
             return {
                 count: envVars.length,
-                variables: Object.fromEntries(envVars.slice(0, 50))  // 最多返回50个
+                variables: Object.fromEntries(envVars.slice(0, 50)) // 最多返回50个
             }
         }
     },
@@ -269,38 +273,38 @@ export const shellTools = [
                 }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             const fs = await import('fs/promises')
             const targetPath = args.path || process.cwd()
             const showHidden = args.showHidden ?? false
             const limit = args.limit || 50
-            
+
             try {
                 const entries = await fs.readdir(targetPath, { withFileTypes: true })
-                
-                let items = entries
-                    .filter(e => showHidden || !e.name.startsWith('.'))
-                    .slice(0, limit)
-                
-                const results = await Promise.all(items.map(async (entry) => {
-                    const fullPath = path.join(targetPath, entry.name)
-                    try {
-                        const stat = await fs.stat(fullPath)
-                        return {
-                            name: entry.name,
-                            type: entry.isDirectory() ? 'directory' : 'file',
-                            size: entry.isFile() ? formatBytes(stat.size) : null,
-                            modified: stat.mtime.toISOString()
+
+                let items = entries.filter(e => showHidden || !e.name.startsWith('.')).slice(0, limit)
+
+                const results = await Promise.all(
+                    items.map(async entry => {
+                        const fullPath = path.join(targetPath, entry.name)
+                        try {
+                            const stat = await fs.stat(fullPath)
+                            return {
+                                name: entry.name,
+                                type: entry.isDirectory() ? 'directory' : 'file',
+                                size: entry.isFile() ? formatBytes(stat.size) : null,
+                                modified: stat.mtime.toISOString()
+                            }
+                        } catch {
+                            return {
+                                name: entry.name,
+                                type: entry.isDirectory() ? 'directory' : 'file',
+                                error: 'stat failed'
+                            }
                         }
-                    } catch {
-                        return {
-                            name: entry.name,
-                            type: entry.isDirectory() ? 'directory' : 'file',
-                            error: 'stat failed'
-                        }
-                    }
-                }))
-                
+                    })
+                )
+
                 return {
                     path: targetPath,
                     total: entries.length,
@@ -332,12 +336,12 @@ function formatUptime(seconds) {
     const hours = Math.floor((seconds % 86400) / 3600)
     const mins = Math.floor((seconds % 3600) / 60)
     const secs = Math.floor(seconds % 60)
-    
+
     const parts = []
     if (days > 0) parts.push(`${days}天`)
     if (hours > 0) parts.push(`${hours}小时`)
     if (mins > 0) parts.push(`${mins}分钟`)
     if (secs > 0 || parts.length === 0) parts.push(`${secs}秒`)
-    
+
     return parts.join('')
 }

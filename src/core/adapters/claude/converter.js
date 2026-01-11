@@ -1,10 +1,14 @@
 import crypto from 'node:crypto'
-import { registerFromChaiteConverter, registerFromChaiteToolConverter, registerIntoChaiteConverter } from '../../utils/converter.js'
+import {
+    registerFromChaiteConverter,
+    registerFromChaiteToolConverter,
+    registerIntoChaiteConverter
+} from '../../utils/converter.js'
 
 /**
  * Convert Chaite IMessage to Claude format
  */
-registerFromChaiteConverter('claude', (source) => {
+registerFromChaiteConverter('claude', source => {
     switch (source.role) {
         case 'assistant': {
             const content = []
@@ -14,7 +18,7 @@ registerFromChaiteConverter('claude', (source) => {
                 if (part.type === 'text') {
                     content.push({
                         type: 'text',
-                        text: part.text,
+                        text: part.text
                     })
                 }
             }
@@ -26,14 +30,14 @@ registerFromChaiteConverter('claude', (source) => {
                         type: 'tool_use',
                         id: toolCall.id,
                         name: toolCall.function.name,
-                        input: toolCall.function.arguments,
+                        input: toolCall.function.arguments
                     })
                 }
             }
 
             return {
                 role: 'assistant',
-                content,
+                content
             }
         }
         case 'user': {
@@ -42,7 +46,7 @@ registerFromChaiteConverter('claude', (source) => {
                     case 'text':
                         return {
                             type: 'text',
-                            text: t.text,
+                            text: t.text
                         }
                     case 'image': {
                         // Claude expects base64 images with media type
@@ -58,7 +62,7 @@ registerFromChaiteConverter('claude', (source) => {
                             // In production, we'd need to download and convert
                             return {
                                 type: 'text',
-                                text: '[Image URL not supported by Claude]',
+                                text: '[Image URL not supported by Claude]'
                             }
                         } else {
                             source_data = t.image
@@ -69,21 +73,21 @@ registerFromChaiteConverter('claude', (source) => {
                             source: {
                                 type: 'base64',
                                 media_type,
-                                data: source_data,
-                            },
+                                data: source_data
+                            }
                         }
                     }
                     default:
                         return {
                             type: 'text',
-                            text: '',
+                            text: ''
                         }
                 }
             })
 
             return {
                 role: 'user',
-                content,
+                content
             }
         }
         case 'tool': {
@@ -91,12 +95,12 @@ registerFromChaiteConverter('claude', (source) => {
             const content = source.content.map(tcr => ({
                 type: 'tool_result',
                 tool_use_id: tcr.tool_call_id,
-                content: tcr.content,
+                content: tcr.content
             }))
 
             return {
                 role: 'user',
-                content,
+                content
             }
         }
         default: {
@@ -108,7 +112,7 @@ registerFromChaiteConverter('claude', (source) => {
 /**
  * Convert Claude format to Chaite IMessage
  */
-registerIntoChaiteConverter('claude', (response) => {
+registerIntoChaiteConverter('claude', response => {
     const content = []
     const toolCalls = []
 
@@ -117,7 +121,7 @@ registerIntoChaiteConverter('claude', (response) => {
         if (block.type === 'text') {
             content.push({
                 type: 'text',
-                text: block.text,
+                text: block.text
             })
         }
         if (block.type === 'tool_use') {
@@ -126,8 +130,8 @@ registerIntoChaiteConverter('claude', (response) => {
                 type: 'function',
                 function: {
                     name: block.name,
-                    arguments: block.input,
-                },
+                    arguments: block.input
+                }
             })
         }
     }
@@ -135,19 +139,19 @@ registerIntoChaiteConverter('claude', (response) => {
     return {
         role: 'assistant',
         content,
-        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined
     }
 })
 
 /**
  * Convert Chaite Tool to Claude format
  */
-registerFromChaiteToolConverter('claude', (tool) => {
+registerFromChaiteToolConverter('claude', tool => {
     return {
         name: tool.function.name,
         description: tool.function.description,
-        input_schema: tool.function.parameters,
+        input_schema: tool.function.parameters
     }
 })
 
-export { }
+export {}

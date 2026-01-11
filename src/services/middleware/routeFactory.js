@@ -27,7 +27,7 @@ export function createCrudRoutes(options) {
          */
         list: asyncHandler(async (req, res) => {
             const { page = 1, pageSize = 20, ...filters } = req.query
-            
+
             let result
             if (typeof service.getAll === 'function') {
                 result = await service.getAll(filters)
@@ -44,15 +44,20 @@ export function createCrudRoutes(options) {
 
             // 如果包含分页信息
             if (result.items && result.total !== undefined) {
-                return res.paginated?.(result.items, {
-                    page: Number(page),
-                    pageSize: Number(pageSize),
-                    total: result.total
-                }) || res.json(ApiResponse.paginated(result.items, {
-                    page: Number(page),
-                    pageSize: Number(pageSize),
-                    total: result.total
-                }))
+                return (
+                    res.paginated?.(result.items, {
+                        page: Number(page),
+                        pageSize: Number(pageSize),
+                        total: result.total
+                    }) ||
+                    res.json(
+                        ApiResponse.paginated(result.items, {
+                            page: Number(page),
+                            pageSize: Number(pageSize),
+                            total: result.total
+                        })
+                    )
+                )
             }
 
             res.ok?.(result) || res.json(ApiResponse.ok(result))
@@ -63,11 +68,13 @@ export function createCrudRoutes(options) {
          */
         get: asyncHandler(async (req, res) => {
             const { id } = req.params
-            
+
             const result = await service.get(id)
             if (!result) {
-                return res.notFound?.(resourceName) || 
+                return (
+                    res.notFound?.(resourceName) ||
                     res.status(HttpStatus.NOT_FOUND).json(ApiResponse.notFound(resourceName))
+                )
             }
 
             res.ok?.(result) || res.json(ApiResponse.ok(result))
@@ -81,13 +88,15 @@ export function createCrudRoutes(options) {
             if (validators.create) {
                 const errors = validators.create(req.body)
                 if (errors && Object.keys(errors).length > 0) {
-                    return res.badRequest?.('参数验证失败', errors) ||
+                    return (
+                        res.badRequest?.('参数验证失败', errors) ||
                         res.status(HttpStatus.BAD_REQUEST).json(ApiResponse.validationError(errors))
+                    )
                 }
             }
 
             const result = await service.create(req.body)
-            res.created?.(result, `${resourceName}创建成功`) || 
+            res.created?.(result, `${resourceName}创建成功`) ||
                 res.status(HttpStatus.CREATED).json(ApiResponse.created(result, `${resourceName}创建成功`))
         }),
 
@@ -100,16 +109,20 @@ export function createCrudRoutes(options) {
             // 检查资源是否存在
             const existing = await service.get(id)
             if (!existing) {
-                return res.notFound?.(resourceName) ||
+                return (
+                    res.notFound?.(resourceName) ||
                     res.status(HttpStatus.NOT_FOUND).json(ApiResponse.notFound(resourceName))
+                )
             }
 
             // 验证
             if (validators.update) {
                 const errors = validators.update(req.body)
                 if (errors && Object.keys(errors).length > 0) {
-                    return res.badRequest?.('参数验证失败', errors) ||
+                    return (
+                        res.badRequest?.('参数验证失败', errors) ||
                         res.status(HttpStatus.BAD_REQUEST).json(ApiResponse.validationError(errors))
+                    )
                 }
             }
 
@@ -126,8 +139,10 @@ export function createCrudRoutes(options) {
             // 检查资源是否存在
             const existing = await service.get(id)
             if (!existing) {
-                return res.notFound?.(resourceName) ||
+                return (
+                    res.notFound?.(resourceName) ||
                     res.status(HttpStatus.NOT_FOUND).json(ApiResponse.notFound(resourceName))
+                )
             }
 
             await service.delete(id)
@@ -139,12 +154,14 @@ export function createCrudRoutes(options) {
          */
         batchDelete: asyncHandler(async (req, res) => {
             const { ids } = req.body
-            
+
             if (!Array.isArray(ids) || ids.length === 0) {
-                return res.badRequest?.('请提供要删除的ID列表') ||
-                    res.status(HttpStatus.BAD_REQUEST).json(
-                        ApiResponse.validationError({ ids: '请提供要删除的ID列表' })
-                    )
+                return (
+                    res.badRequest?.('请提供要删除的ID列表') ||
+                    res
+                        .status(HttpStatus.BAD_REQUEST)
+                        .json(ApiResponse.validationError({ ids: '请提供要删除的ID列表' }))
+                )
             }
 
             let deleted = 0
@@ -184,8 +201,10 @@ export function createConfigRoutes(options) {
             if (validator) {
                 const errors = validator(req.body)
                 if (errors && Object.keys(errors).length > 0) {
-                    return res.badRequest?.('参数验证失败', errors) ||
+                    return (
+                        res.badRequest?.('参数验证失败', errors) ||
                         res.status(HttpStatus.BAD_REQUEST).json(ApiResponse.validationError(errors))
+                    )
                 }
             }
 

@@ -16,13 +16,11 @@ export const utilsTools = [
             },
             required: ['expression']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 // 安全的数学表达式计算
-                const expr = args.expression
-                    .replace(/\s+/g, '')
-                    .replace(/[^0-9+\-*/().%^sqrtpilognabsceilfoor]/gi, '')
-                
+                const expr = args.expression.replace(/\s+/g, '').replace(/[^0-9+\-*/().%^sqrtpilognabsceilfoor]/gi, '')
+
                 // 支持的数学函数
                 const mathFunctions = {
                     sqrt: Math.sqrt,
@@ -40,7 +38,7 @@ export const utilsTools = [
                     pi: Math.PI,
                     e: Math.E
                 }
-                
+
                 // 替换函数名
                 let safeExpr = expr
                 for (const [name, fn] of Object.entries(mathFunctions)) {
@@ -48,14 +46,16 @@ export const utilsTools = [
                         safeExpr = safeExpr.replace(new RegExp(name, 'gi'), fn.toString())
                     }
                 }
-                
+
                 // 使用 Function 计算（仍需谨慎）
-                const result = Function(`'use strict'; const {sqrt,abs,ceil,floor,round,sin,cos,tan,log,log10,exp,pow} = Math; return (${safeExpr})`)()
-                
+                const result = Function(
+                    `'use strict'; const {sqrt,abs,ceil,floor,round,sin,cos,tan,log,log10,exp,pow} = Math; return (${safeExpr})`
+                )()
+
                 if (typeof result !== 'number' || isNaN(result) || !isFinite(result)) {
                     return { success: false, error: '计算结果无效' }
                 }
-                
+
                 return {
                     success: true,
                     expression: args.expression,
@@ -80,24 +80,24 @@ export const utilsTools = [
                 unique: { type: 'boolean', description: '是否不重复，默认true' }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             const min = args.min ?? 1
             const max = args.max ?? 100
             const count = Math.min(args.count || 1, 100)
             const unique = args.unique !== false
-            
+
             if (min > max) {
                 return { success: false, error: 'min 不能大于 max' }
             }
-            
+
             const range = max - min + 1
             if (unique && count > range) {
                 return { success: false, error: `范围内只有 ${range} 个数，无法生成 ${count} 个不重复数` }
             }
-            
+
             const results = []
             const used = new Set()
-            
+
             while (results.length < count) {
                 const num = Math.floor(Math.random() * range) + min
                 if (!unique || !used.has(num)) {
@@ -105,7 +105,7 @@ export const utilsTools = [
                     used.add(num)
                 }
             }
-            
+
             return {
                 success: true,
                 min,
@@ -123,28 +123,28 @@ export const utilsTools = [
         inputSchema: {
             type: 'object',
             properties: {
-                items: { 
-                    type: 'array', 
+                items: {
+                    type: 'array',
                     items: { type: 'string' },
-                    description: '选项列表' 
+                    description: '选项列表'
                 },
                 count: { type: 'number', description: '选择数量，默认1' },
                 unique: { type: 'boolean', description: '是否不重复选择，默认true' }
             },
             required: ['items']
         },
-        handler: async (args) => {
+        handler: async args => {
             const items = args.items
             if (!items || items.length === 0) {
                 return { success: false, error: '选项列表不能为空' }
             }
-            
+
             const count = Math.min(args.count || 1, items.length)
             const unique = args.unique !== false
-            
+
             const results = []
             const available = [...items]
-            
+
             for (let i = 0; i < count; i++) {
                 if (available.length === 0) break
                 const idx = Math.floor(Math.random() * available.length)
@@ -153,7 +153,7 @@ export const utilsTools = [
                     available.splice(idx, 1)
                 }
             }
-            
+
             return {
                 success: true,
                 count: results.length,
@@ -173,14 +173,14 @@ export const utilsTools = [
                 count: { type: 'number', description: '生成数量，默认1' }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             const count = Math.min(args.count || 1, 10)
             const uuids = []
-            
+
             for (let i = 0; i < count; i++) {
                 uuids.push(crypto.randomUUID())
             }
-            
+
             return {
                 success: true,
                 count: uuids.length,
@@ -197,15 +197,19 @@ export const utilsTools = [
             type: 'object',
             properties: {
                 text: { type: 'string', description: '要计算哈希的文本' },
-                algorithm: { type: 'string', description: '哈希算法：md5, sha1, sha256, sha512', enum: ['md5', 'sha1', 'sha256', 'sha512'] }
+                algorithm: {
+                    type: 'string',
+                    description: '哈希算法：md5, sha1, sha256, sha512',
+                    enum: ['md5', 'sha1', 'sha256', 'sha512']
+                }
             },
             required: ['text']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const algorithm = args.algorithm || 'sha256'
                 const hash = crypto.createHash(algorithm).update(args.text).digest('hex')
-                
+
                 return {
                     success: true,
                     algorithm,
@@ -228,7 +232,7 @@ export const utilsTools = [
             },
             required: ['text']
         },
-        handler: async (args) => {
+        handler: async args => {
             return {
                 success: true,
                 original: args.text,
@@ -247,7 +251,7 @@ export const utilsTools = [
             },
             required: ['base64']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 return {
                     success: true,
@@ -271,7 +275,7 @@ export const utilsTools = [
             },
             required: ['text']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 if (args.decode) {
                     return {
@@ -305,13 +309,11 @@ export const utilsTools = [
             },
             required: ['json']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const parsed = JSON.parse(args.json)
-                const result = args.minify 
-                    ? JSON.stringify(parsed) 
-                    : JSON.stringify(parsed, null, 2)
-                
+                const result = args.minify ? JSON.stringify(parsed) : JSON.stringify(parsed, null, 2)
+
                 return {
                     success: true,
                     result,
@@ -334,10 +336,10 @@ export const utilsTools = [
                 format: { type: 'string', description: '输出格式' }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 let date
-                
+
                 if (args.timestamp) {
                     // 自动识别秒或毫秒
                     const ts = args.timestamp > 1e12 ? args.timestamp : args.timestamp * 1000
@@ -347,11 +349,11 @@ export const utilsTools = [
                 } else {
                     date = new Date()
                 }
-                
+
                 if (isNaN(date.getTime())) {
                     return { success: false, error: '无效的时间' }
                 }
-                
+
                 return {
                     success: true,
                     timestamp_s: Math.floor(date.getTime() / 1000),
@@ -377,16 +379,16 @@ export const utilsTools = [
             },
             required: ['target']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const target = new Date(args.target)
                 if (isNaN(target.getTime())) {
                     return { success: false, error: '无效的目标时间' }
                 }
-                
+
                 const now = new Date()
                 const diff = target.getTime() - now.getTime()
-                
+
                 if (diff <= 0) {
                     return {
                         success: true,
@@ -396,12 +398,12 @@ export const utilsTools = [
                         text: `${args.title || '目标时间'} 已过去`
                     }
                 }
-                
+
                 const days = Math.floor(diff / (1000 * 60 * 60 * 24))
                 const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
                 const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
                 const seconds = Math.floor((diff % (1000 * 60)) / 1000)
-                
+
                 return {
                     success: true,
                     title: args.title || '倒计时',
@@ -431,11 +433,11 @@ export const utilsTools = [
             },
             required: ['text', 'pattern']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const regex = new RegExp(args.pattern, args.flags || 'gi')
                 const matches = args.text.match(regex) || []
-                
+
                 return {
                     success: true,
                     pattern: args.pattern,
@@ -461,11 +463,11 @@ export const utilsTools = [
             },
             required: ['text', 'pattern', 'replacement']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const regex = new RegExp(args.pattern, args.flags || 'g')
                 const result = args.text.replace(regex, args.replacement)
-                
+
                 return {
                     success: true,
                     original: args.text,
@@ -488,7 +490,7 @@ export const utilsTools = [
             },
             required: ['text']
         },
-        handler: async (args) => {
+        handler: async args => {
             const text = args.text
             const lines = text.split('\n')
             const words = text.match(/[\u4e00-\u9fa5]|[a-zA-Z]+/g) || []
@@ -496,7 +498,7 @@ export const utilsTools = [
             const chineseChars = (text.match(/[\u4e00-\u9fa5]/g) || []).length
             const englishWords = (text.match(/[a-zA-Z]+/g) || []).length
             const numbers = (text.match(/\d+/g) || []).length
-            
+
             return {
                 success: true,
                 char_count: text.length,
@@ -517,15 +519,16 @@ export const utilsTools = [
             type: 'object',
             properties: {
                 text: { type: 'string', description: '要转换的文本' },
-                transform: { 
-                    type: 'string', 
-                    description: '转换类型：upper(大写)、lower(小写)、capitalize(首字母大写)、reverse(反转)、trim(去空格)',
+                transform: {
+                    type: 'string',
+                    description:
+                        '转换类型：upper(大写)、lower(小写)、capitalize(首字母大写)、reverse(反转)、trim(去空格)',
                     enum: ['upper', 'lower', 'capitalize', 'reverse', 'trim']
                 }
             },
             required: ['text', 'transform']
         },
-        handler: async (args) => {
+        handler: async args => {
             let result
             switch (args.transform) {
                 case 'upper':
@@ -546,7 +549,7 @@ export const utilsTools = [
                 default:
                     result = args.text
             }
-            
+
             return {
                 success: true,
                 original: args.text,
@@ -566,10 +569,10 @@ export const utilsTools = [
             },
             required: ['text']
         },
-        handler: async (args) => {
+        handler: async args => {
             const urlRegex = /https?:\/\/[^\s<>\[\]()]+/gi
             const urls = args.text.match(urlRegex) || []
-            
+
             return {
                 success: true,
                 count: urls.length,
@@ -588,10 +591,10 @@ export const utilsTools = [
             },
             required: ['text']
         },
-        handler: async (args) => {
+        handler: async args => {
             const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/gi
             const emails = args.text.match(emailRegex) || []
-            
+
             return {
                 success: true,
                 count: emails.length,
@@ -610,10 +613,10 @@ export const utilsTools = [
             },
             required: ['text']
         },
-        handler: async (args) => {
+        handler: async args => {
             const phoneRegex = /1[3-9]\d{9}/g
             const phones = args.text.match(phoneRegex) || []
-            
+
             return {
                 success: true,
                 count: phones.length,
@@ -635,17 +638,17 @@ export const utilsTools = [
             },
             required: ['text']
         },
-        handler: async (args) => {
+        handler: async args => {
             const delimiter = args.delimiter || '\n'
             let parts = args.text.split(delimiter)
-            
+
             if (args.trim !== false) {
                 parts = parts.map(p => p.trim())
             }
             if (args.filter_empty !== false) {
                 parts = parts.filter(p => p.length > 0)
             }
-            
+
             return {
                 success: true,
                 count: parts.length,
@@ -660,19 +663,19 @@ export const utilsTools = [
         inputSchema: {
             type: 'object',
             properties: {
-                items: { 
-                    type: 'array', 
+                items: {
+                    type: 'array',
                     items: { type: 'string' },
-                    description: '要合并的项' 
+                    description: '要合并的项'
                 },
                 delimiter: { type: 'string', description: '分隔符，默认换行' }
             },
             required: ['items']
         },
-        handler: async (args) => {
+        handler: async args => {
             const delimiter = args.delimiter ?? '\n'
             const result = args.items.join(delimiter)
-            
+
             return {
                 success: true,
                 count: args.items.length,
@@ -693,14 +696,14 @@ export const utilsTools = [
             },
             required: ['text', 'length']
         },
-        handler: async (args) => {
+        handler: async args => {
             const suffix = args.suffix ?? '...'
             const maxLen = args.length - suffix.length
-            
+
             if (args.text.length <= args.length) {
                 return { success: true, result: args.text, truncated: false }
             }
-            
+
             const result = args.text.substring(0, maxLen) + suffix
             return { success: true, result, truncated: true }
         }
@@ -717,7 +720,7 @@ export const utilsTools = [
             },
             required: ['text']
         },
-        handler: async (args) => {
+        handler: async args => {
             let result
             if (args.unescape) {
                 result = args.text
@@ -734,7 +737,7 @@ export const utilsTools = [
                     .replace(/"/g, '&quot;')
                     .replace(/'/g, '&#39;')
             }
-            
+
             return {
                 success: true,
                 original: args.text,
@@ -757,22 +760,22 @@ export const utilsTools = [
                 include_symbols: { type: 'boolean', description: '包含符号，默认true' }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             const length = args.length || 16
             let chars = ''
-            
+
             if (args.include_upper !== false) chars += 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
             if (args.include_lower !== false) chars += 'abcdefghijklmnopqrstuvwxyz'
             if (args.include_numbers !== false) chars += '0123456789'
             if (args.include_symbols !== false) chars += '!@#$%^&*()_+-=[]{}|;:,.<>?'
-            
+
             if (!chars) chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
-            
+
             let password = ''
             for (let i = 0; i < length; i++) {
                 password += chars[Math.floor(Math.random() * chars.length)]
             }
-            
+
             return {
                 success: true,
                 password,
@@ -792,28 +795,28 @@ export const utilsTools = [
             },
             required: ['dice']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const count = Math.min(args.count || 1, 10)
                 const results = []
-                
+
                 // 解析骰子表达式 如 2d6+3
                 const match = args.dice.toLowerCase().match(/^(\d*)d(\d+)([+-]\d+)?$/)
                 if (!match) {
                     return { success: false, error: '无效的骰子表达式，格式如 "2d6+3" 或 "d20"' }
                 }
-                
+
                 const diceCount = parseInt(match[1]) || 1
                 const diceSides = parseInt(match[2])
                 const modifier = parseInt(match[3]) || 0
-                
+
                 if (diceSides < 2 || diceSides > 100) {
                     return { success: false, error: '骰子面数必须在2-100之间' }
                 }
                 if (diceCount > 20) {
                     return { success: false, error: '单次最多掷20个骰子' }
                 }
-                
+
                 for (let i = 0; i < count; i++) {
                     const rolls = []
                     for (let j = 0; j < diceCount; j++) {
@@ -822,7 +825,7 @@ export const utilsTools = [
                     const sum = rolls.reduce((a, b) => a + b, 0) + modifier
                     results.push({ rolls, modifier, total: sum })
                 }
-                
+
                 return {
                     success: true,
                     dice: args.dice,
@@ -842,15 +845,15 @@ export const utilsTools = [
         inputSchema: {
             type: 'object',
             properties: {
-                options: { 
-                    type: 'array', 
+                options: {
+                    type: 'array',
                     items: { type: 'string' },
-                    description: '选项列表，不填则使用默认签文' 
+                    description: '选项列表，不填则使用默认签文'
                 },
                 count: { type: 'number', description: '抽取数量，默认1' }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             const defaultOptions = [
                 '大吉：万事如意，心想事成',
                 '中吉：诸事顺遂，稳中有进',
@@ -860,13 +863,13 @@ export const utilsTools = [
                 '凶：注意小心，谨慎行事',
                 '大凶：多加注意，化险为夷'
             ]
-            
+
             const options = args.options?.length > 0 ? args.options : defaultOptions
             const count = Math.min(args.count || 1, options.length)
-            
+
             const shuffled = [...options].sort(() => Math.random() - 0.5)
             const selected = shuffled.slice(0, count)
-            
+
             return {
                 success: true,
                 count,

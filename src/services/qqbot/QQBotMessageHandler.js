@@ -6,7 +6,7 @@ const logger = {
     info: (...args) => chatLogger.info('QQBotMsg', ...args),
     warn: (...args) => chatLogger.warn('QQBotMsg', ...args),
     error: (...args) => chatLogger.error('QQBotMsg', ...args),
-    debug: (...args) => chatLogger.debug('QQBotMsg', ...args),
+    debug: (...args) => chatLogger.debug('QQBotMsg', ...args)
 }
 
 let _chatService = null
@@ -82,7 +82,7 @@ class QQBotMessageHandler {
             username: author.username,
             nickname: member?.nick || author.username,
             content: cleanContent,
-            raw: data,
+            raw: data
         }
 
         await this.processWithAI(context, botInstance)
@@ -109,7 +109,7 @@ class QQBotMessageHandler {
             userId: author.id,
             username: author.username,
             content: cleanContent,
-            raw: data,
+            raw: data
         }
 
         await this.processWithAI(context, botInstance)
@@ -129,7 +129,7 @@ class QQBotMessageHandler {
             messageId: id,
             userId: author.user_openid,
             content: content,
-            raw: data,
+            raw: data
         }
 
         await this.processWithAI(context, botInstance)
@@ -144,19 +144,19 @@ class QQBotMessageHandler {
 
         const cleanContent = this.cleanAtContent(content || '')
         logger.info(`群消息 [${group_openid}] ${author.member_openid}: ${cleanContent.substring(0, 50) || '(空)'}`)
-        
+
         // IC代发模式：存储被动消息ID
         const icRelayCfg = config.get('qqBotProxy.icRelay')
         if (icRelayCfg?.enabled) {
             qqBotSender.onOfficialBotTriggered(group_openid, id)
-            
+
             // 同时存储到事件ID（作为备用）
             const icGroupId = qqBotSender.getICGroupId(group_openid)
             if (icGroupId) {
                 // 群@消息也可以作为事件ID使用
                 qqBotSender.saveEventId(icGroupId, id, group_openid, author.member_openid)
             }
-            
+
             // 检查是否需要回复带按钮的MD消息（用于获取buttonId）
             const buttonCfg = icRelayCfg.button
             const mdCfg = icRelayCfg.markdown
@@ -177,7 +177,7 @@ class QQBotMessageHandler {
             groupId: group_openid,
             userId: author.member_openid,
             content: cleanContent,
-            raw: data,
+            raw: data
         }
 
         await this.processWithAI(context, botInstance)
@@ -185,15 +185,15 @@ class QQBotMessageHandler {
 
     async handleInteraction(data, botInstance) {
         logger.debug('收到互动事件:', JSON.stringify(data).substring(0, 200))
-        
+
         // 处理按钮点击事件
         const { id, group_openid, data: interactionData, group_member_openid } = data
-        
+
         if (group_openid && id) {
             // 存储交互事件ID供IC代发使用（包含用户ID）
             qqBotSender.onInteractionCreate(group_openid, id, group_member_openid)
             logger.info(`按钮点击事件: group=${group_openid}, eventId=${id}, user=${group_member_openid}`)
-            
+
             // 提取按钮ID信息（用于后续模拟点击）
             const buttonId = interactionData?.resolved?.button_id
             const buttonData = interactionData?.resolved?.button_data
@@ -201,7 +201,7 @@ class QQBotMessageHandler {
                 // 保存按钮ID供后续模拟点击使用
                 qqBotSender.saveButtonIdFromInteraction(group_openid, buttonId, buttonData)
             }
-            
+
             // 回应交互事件（必须回应否则客户端会显示loading）
             await this.ackInteraction(data, botInstance)
         }
@@ -215,10 +215,8 @@ class QQBotMessageHandler {
             const accessToken = await this.getAccessToken(bot.bot_id)
             if (!accessToken) return
 
-            const apiBase = bot.sandbox 
-                ? 'https://sandbox.api.sgroup.qq.com'
-                : 'https://api.sgroup.qq.com'
-            
+            const apiBase = bot.sandbox ? 'https://sandbox.api.sgroup.qq.com' : 'https://api.sgroup.qq.com'
+
             const apiPath = `/interactions/${data.id}`
             const proxyUrl = config.get('qqBotProxy.proxyUrl') || 'http://localhost:2173'
             const ackUrl = `${proxyUrl}/proxy?url=${encodeURIComponent(apiBase + apiPath)}`
@@ -227,10 +225,10 @@ class QQBotMessageHandler {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `QQBot ${accessToken}`,
-                    'X-Union-Appid': bot.appid,
+                    Authorization: `QQBot ${accessToken}`,
+                    'X-Union-Appid': bot.appid
                 },
-                body: JSON.stringify({ code: 0 }),
+                body: JSON.stringify({ code: 0 })
             })
             logger.debug('交互事件已确认')
         } catch (err) {
@@ -250,10 +248,8 @@ class QQBotMessageHandler {
             const mdCfg = icRelayCfg?.markdown
             const buttonCfg = icRelayCfg?.button
 
-            const apiBase = bot.sandbox 
-                ? 'https://sandbox.api.sgroup.qq.com'
-                : 'https://api.sgroup.qq.com'
-            
+            const apiBase = bot.sandbox ? 'https://sandbox.api.sgroup.qq.com' : 'https://api.sgroup.qq.com'
+
             const apiPath = `/v2/groups/${groupOpenId}/messages`
             const proxyUrl = config.get('qqBotProxy.proxyUrl') || 'http://localhost:2173'
             const sendUrl = `${proxyUrl}/proxy?url=${encodeURIComponent(apiBase + apiPath)}`
@@ -271,21 +267,21 @@ class QQBotMessageHandler {
                 msg_seq: Math.floor(Math.random() * 1000000),
                 markdown: {
                     custom_template_id: mdCfg.templateId,
-                    params,
+                    params
                 },
                 keyboard: {
-                    id: buttonCfg.templateId,
-                },
+                    id: buttonCfg.templateId
+                }
             }
 
             const res = await fetch(sendUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `QQBot ${accessToken}`,
-                    'X-Union-Appid': bot.appid,
+                    Authorization: `QQBot ${accessToken}`,
+                    'X-Union-Appid': bot.appid
                 },
-                body: JSON.stringify(body),
+                body: JSON.stringify(body)
             })
 
             const result = await res.json()
@@ -336,7 +332,10 @@ class QQBotMessageHandler {
 
     cleanAtContent(content) {
         // 移除@机器人的部分
-        return content.replace(/<@!\d+>/g, '').replace(/<@\d+>/g, '').trim()
+        return content
+            .replace(/<@!\d+>/g, '')
+            .replace(/<@\d+>/g, '')
+            .trim()
     }
 
     async processWithAI(context, botInstance) {
@@ -348,21 +347,21 @@ class QQBotMessageHandler {
 
         try {
             const chatService = await getChatService()
-            
+
             // 构建伪装的e对象，适配现有的ChatService
             const mockE = this.createMockE(context, botInstance)
-            
+
             // 使用ChatService.sendMessage处理
             const result = await chatService.sendMessage({
                 userId: context.userId,
                 message: context.content,
                 event: mockE,
-                presetId: cfg.presetId || '',
+                presetId: cfg.presetId || ''
             })
-            
+
             if (result?.response) {
-                const responseText = Array.isArray(result.response) 
-                    ? result.response.map(r => typeof r === 'string' ? r : r.text || '').join('')
+                const responseText = Array.isArray(result.response)
+                    ? result.response.map(r => (typeof r === 'string' ? r : r.text || '')).join('')
                     : String(result.response)
                 if (responseText) {
                     await this.sendReply(context, responseText, botInstance)
@@ -374,7 +373,7 @@ class QQBotMessageHandler {
     }
 
     createMockE(context, botInstance) {
-        const reply = async (msg) => {
+        const reply = async msg => {
             await this.sendReply(context, msg, botInstance)
         }
 
@@ -382,7 +381,7 @@ class QQBotMessageHandler {
             user_id: context.userId,
             sender: {
                 user_id: context.userId,
-                nickname: context.nickname || context.username || context.userId,
+                nickname: context.nickname || context.username || context.userId
             },
             group_id: context.groupId || context.guildId,
             isGroup: context.type === 'group' || context.type === 'guild',
@@ -393,13 +392,13 @@ class QQBotMessageHandler {
             // QQBot特有标识
             isQQBot: true,
             qqBotContext: context,
-            qqBotInstance: botInstance,
+            qqBotInstance: botInstance
         }
     }
 
     async sendReply(context, message, botInstance) {
         const proxyUrl = config.get('qqBotProxy.proxyUrl') || 'http://localhost:2173'
-        
+
         // 根据消息类型构建不同的API请求
         let apiPath = ''
         let body = {}
@@ -411,14 +410,14 @@ class QQBotMessageHandler {
                 apiPath = `/channels/${context.channelId}/messages`
                 body = {
                     content: msgContent,
-                    msg_id: context.messageId,
+                    msg_id: context.messageId
                 }
                 break
             case 'direct':
                 apiPath = `/dms/${context.guildId}/messages`
                 body = {
                     content: msgContent,
-                    msg_id: context.messageId,
+                    msg_id: context.messageId
                 }
                 break
             case 'c2c':
@@ -426,7 +425,7 @@ class QQBotMessageHandler {
                 body = {
                     content: msgContent,
                     msg_type: 0,
-                    msg_id: context.messageId,
+                    msg_id: context.messageId
                 }
                 break
             case 'group':
@@ -434,7 +433,7 @@ class QQBotMessageHandler {
                 body = {
                     content: msgContent,
                     msg_type: 0,
-                    msg_id: context.messageId,
+                    msg_id: context.messageId
                 }
                 break
             default:
@@ -455,24 +454,22 @@ class QQBotMessageHandler {
             }
 
             // 发送消息
-            const apiBase = context.raw?.sandbox 
-                ? 'https://sandbox.api.sgroup.qq.com'
-                : 'https://api.sgroup.qq.com'
-            
+            const apiBase = context.raw?.sandbox ? 'https://sandbox.api.sgroup.qq.com' : 'https://api.sgroup.qq.com'
+
             const sendUrl = `${proxyUrl}/proxy?url=${encodeURIComponent(apiBase + apiPath)}`
-            
+
             const res = await fetch(sendUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `QQBot ${accessToken}`,
-                    'X-Union-Appid': botInstance.appid,
+                    Authorization: `QQBot ${accessToken}`,
+                    'X-Union-Appid': botInstance.appid
                 },
-                body: JSON.stringify(body),
+                body: JSON.stringify(body)
             })
 
             const result = await res.json()
-            
+
             if (result.code) {
                 logger.error(`发送消息失败: ${result.code} ${result.message}`)
             } else {

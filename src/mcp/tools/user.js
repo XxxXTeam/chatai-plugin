@@ -42,7 +42,9 @@ export const userTools = [
                 if (adapter === 'icqq') {
                     stranger = await icqqFriend.getSimpleInfo(bot, userId)
                 } else {
-                    stranger = await bot.getStrangerInfo?.(userId) || await callOneBotApi(bot, 'get_stranger_info', { user_id: userId })
+                    stranger =
+                        (await bot.getStrangerInfo?.(userId)) ||
+                        (await callOneBotApi(bot, 'get_stranger_info', { user_id: userId }))
                 }
                 if (stranger) {
                     return {
@@ -60,10 +62,10 @@ export const userTools = [
                 // ignore
             }
 
-            return { 
-                success: false, 
+            return {
+                success: false,
                 adapter,
-                error: '无法获取用户信息，QQ号可能不存在', 
+                error: '无法获取用户信息，QQ号可能不存在',
                 user_id: userId,
                 avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
             }
@@ -117,7 +119,7 @@ export const userTools = [
                 const { adapter } = ctx.getAdapter()
                 const userId = parseInt(args.user_id)
                 const times = Math.min(Math.max(args.times || 10, 1), 20)
-                
+
                 if (adapter === 'icqq') {
                     await icqqFriend.thumbUp(bot, userId, times)
                     return { success: true, adapter, user_id: userId, times }
@@ -143,10 +145,10 @@ export const userTools = [
             },
             required: ['type', 'id']
         },
-        handler: async (args) => {
+        handler: async args => {
             const size = args.size || 640
             const id = args.id
-            
+
             let url
             if (args.type === 'user') {
                 url = `https://q1.qlogo.cn/g?b=qq&nk=${id}&s=${size}`
@@ -155,7 +157,7 @@ export const userTools = [
             } else {
                 return { success: false, error: '类型必须是 user 或 group' }
             }
-            
+
             return { success: true, type: args.type, id, size, url }
         }
     },
@@ -174,17 +176,17 @@ export const userTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 const userId = e.user_id
                 const sender = e.sender || {}
-                
+
                 const result = {
                     success: true,
                     user_id: userId,
                     nickname: sender.nickname || sender.nick || '',
-                    card: sender.card || '',  // 群名片
+                    card: sender.card || '', // 群名片
                     role: sender.role || 'member',
-                    title: sender.title || '',  // 群头衔
+                    title: sender.title || '', // 群头衔
                     sex: sender.sex || 'unknown',
                     age: sender.age,
                     level: sender.level,
@@ -192,13 +194,13 @@ export const userTools = [
                     is_group: !!e.group_id,
                     is_friend: bot.fl?.has(userId) || false
                 }
-                
+
                 // 如果在群内，添加群相关信息
                 if (e.group_id) {
                     result.group_id = e.group_id
                     result.group_name = e.group_name || bot.gl?.get(e.group_id)?.group_name || ''
                 }
-                
+
                 return result
             } catch (err) {
                 return { success: false, error: `获取发送者信息失败: ${err.message}` }
@@ -223,12 +225,12 @@ export const userTools = [
                 const keyword = args.keyword.toLowerCase()
                 const limit = args.limit || 10
                 const fl = bot.fl || new Map()
-                
+
                 const matches = []
                 for (const [uid, friend] of fl) {
                     const nickname = (friend.nickname || '').toLowerCase()
                     const remark = (friend.remark || '').toLowerCase()
-                    
+
                     if (nickname.includes(keyword) || remark.includes(keyword)) {
                         matches.push({
                             user_id: uid,
@@ -240,7 +242,7 @@ export const userTools = [
                         if (matches.length >= limit) break
                     }
                 }
-                
+
                 return {
                     success: true,
                     keyword: args.keyword,
@@ -268,10 +270,10 @@ export const userTools = [
                 const bot = ctx.getBot()
                 const userId = parseInt(args.user_id)
                 const fl = bot.fl || new Map()
-                
+
                 const isFriend = fl.has(userId)
                 const friend = fl.get(userId)
-                
+
                 return {
                     success: true,
                     user_id: userId,
@@ -296,7 +298,7 @@ export const userTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 return {
                     success: true,
                     user_id: bot.uin || bot.self_id,
@@ -329,22 +331,22 @@ export const userTools = [
                 const e = ctx.getEvent()
                 const bot = ctx.getBot()
                 const userId = parseInt(args.user_id || e?.user_id)
-                
+
                 if (!userId) {
                     return { success: false, error: '需要提供 user_id' }
                 }
-                
+
                 // 尝试获取详细资料
                 let profile = {}
                 try {
                     if (bot.getStrangerInfo) {
-                        profile = await bot.getStrangerInfo(userId, true) || {}
+                        profile = (await bot.getStrangerInfo(userId, true)) || {}
                     }
                 } catch (e) {}
-                
+
                 // 检查是否是好友
                 const friend = bot.fl?.get(userId)
-                
+
                 return {
                     success: true,
                     user_id: userId,
@@ -353,7 +355,7 @@ export const userTools = [
                     age: profile.age,
                     level: profile.level,
                     sign: profile.sign || profile.signature || '',
-                    qid: profile.qid,  // Q号ID
+                    qid: profile.qid, // Q号ID
                     is_friend: !!friend,
                     remark: friend?.remark || '',
                     avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`

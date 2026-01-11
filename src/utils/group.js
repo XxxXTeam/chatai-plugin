@@ -43,7 +43,10 @@ export class ICQQGroupContextCollector extends GroupContextCollector {
                         break
                     }
                     chats.push(...chatHistory.reverse())
-                    if (seq === chatHistory[chatHistory.length - 1].seq || seq === chatHistory[chatHistory.length - 1].message_id) {
+                    if (
+                        seq === chatHistory[chatHistory.length - 1].seq ||
+                        seq === chatHistory[chatHistory.length - 1].message_id
+                    ) {
                         break
                     }
                     seq = chatHistory[chatHistory.length - 1].seq || chatHistory[chatHistory.length - 1].message_id
@@ -128,24 +131,27 @@ export async function getGroupContextPrompt(e, length) {
         .filter(chat => chat)
         .map(chat => {
             const sender = chat.sender || {}
-            return groupContextTemplateMessage
-                // eslint-disable-next-line no-template-curly-in-string
-                .replace('${message.sender.card}', sender.card || '-')
-                // eslint-disable-next-line no-template-curly-in-string
-                .replace('${message.sender.nickname}', sender.nickname || '-')
-                // eslint-disable-next-line no-template-curly-in-string
-                .replace('${message.sender.user_id}', sender.user_id || '-')
-                // eslint-disable-next-line no-template-curly-in-string
-                .replace('${message.sender.role}', sender.role || '-')
-                // eslint-disable-next-line no-template-curly-in-string
-                .replace('${message.sender.title}', sender.title || '-')
-                // eslint-disable-next-line no-template-curly-in-string
-                .replace('${message.time}', chat.time ? formatTimeToBeiJing(chat.time) : '-')
-                // eslint-disable-next-line no-template-curly-in-string
-                .replace('${message.messageId}', chat.messageId || '-')
-                // eslint-disable-next-line no-template-curly-in-string
-                .replace('${message.raw_message}', cleanCQCode(chat.raw_message || '') || '-')
-        }).join('\n')
+            return (
+                groupContextTemplateMessage
+                    // eslint-disable-next-line no-template-curly-in-string
+                    .replace('${message.sender.card}', sender.card || '-')
+                    // eslint-disable-next-line no-template-curly-in-string
+                    .replace('${message.sender.nickname}', sender.nickname || '-')
+                    // eslint-disable-next-line no-template-curly-in-string
+                    .replace('${message.sender.user_id}', sender.user_id || '-')
+                    // eslint-disable-next-line no-template-curly-in-string
+                    .replace('${message.sender.role}', sender.role || '-')
+                    // eslint-disable-next-line no-template-curly-in-string
+                    .replace('${message.sender.title}', sender.title || '-')
+                    // eslint-disable-next-line no-template-curly-in-string
+                    .replace('${message.time}', chat.time ? formatTimeToBeiJing(chat.time) : '-')
+                    // eslint-disable-next-line no-template-curly-in-string
+                    .replace('${message.messageId}', chat.messageId || '-')
+                    // eslint-disable-next-line no-template-curly-in-string
+                    .replace('${message.raw_message}', cleanCQCode(chat.raw_message || '') || '-')
+            )
+        })
+        .join('\n')
     return [
         groupContextTemplatePrefix
             // eslint-disable-next-line no-template-curly-in-string

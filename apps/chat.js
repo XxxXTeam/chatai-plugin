@@ -108,30 +108,32 @@ export class Chat extends plugin {
      */
     async handleMessage() {
         const e = this.e
-        
+
         if (isSelfMessage(e)) return false
         if (isMessageProcessed(e)) return false
-        
+
         // 缓存群消息
         if (e.isGroup && e.message_id) {
-            try { cacheGroupMessage(e) } catch {}
+            try {
+                cacheGroupMessage(e)
+            } catch {}
         }
-        
+
         // 检查监听器是否启用
         const listenerEnabled = config.get('listener.enabled')
         if (listenerEnabled === false) {
             this.collectGroupMessage(e)
             return false
         }
-        
+
         // 获取触发配置
         let triggerCfg = this.getTriggerConfig()
-        
+
         // 群消息收集
         if (e.isGroup && e.group_id && triggerCfg.collectGroupMsg !== false) {
             this.collectGroupMessage(e)
         }
-        
+
         // 检查系统命令
         const rawMsg = e.msg || ''
         const systemCmdPatterns = [
@@ -142,17 +144,17 @@ export class Chat extends plugin {
         for (const pattern of systemCmdPatterns) {
             if (pattern.test(rawMsg)) return false
         }
-        
+
         // 检查#命令
         const allowHashCmds = triggerCfg.allowHashCommands === true
         if (!allowHashCmds && /^#\S/.test(rawMsg)) {
             const cleanedForCheck = this.cleanAtBot(rawMsg)
             if (/^#\S/.test(cleanedForCheck.trim())) return false
         }
-        
+
         // 检查访问权限
         if (!this.checkAccess(triggerCfg)) return false
-        
+
         // 检查群组独立黑白名单
         if (e.isGroup && e.group_id) {
             const groupAccess = await this.checkGroupAccess(e.group_id, e.user_id)
@@ -161,7 +163,7 @@ export class Chat extends plugin {
                 return false
             }
         }
-        
+
         // 获取群组独立配置
         if (e.isGroup && e.group_id) {
             const groupConfig = await getGroupTriggerConfig(e.group_id)
@@ -184,11 +186,11 @@ export class Chat extends plugin {
                 triggerCfg.prefixPersonas = [...groupConfig.prefixPersonas, ...globalPrefixPersonas]
             }
         }
-        
+
         // 检查触发条件
         const triggerResult = this.checkTrigger(triggerCfg)
         if (!triggerResult.triggered) return false
-        
+
         // 标记消息正在处理
         if (!startProcessingMessage(e)) return false
         markMessageProcessed(e)
@@ -251,7 +253,8 @@ export class Chat extends plugin {
         if (includesAsString(cfg.blacklistUsers, userId)) return false
         if (cfg.whitelistUsers?.length > 0 && !includesAsString(cfg.whitelistUsers, userId)) return false
         if (e.isGroup && includesAsString(cfg.blacklistGroups, groupId)) return false
-        if (e.isGroup && cfg.whitelistGroups?.length > 0 && !includesAsString(cfg.whitelistGroups, groupId)) return false
+        if (e.isGroup && cfg.whitelistGroups?.length > 0 && !includesAsString(cfg.whitelistGroups, groupId))
+            return false
         return true
     }
 
@@ -263,21 +266,21 @@ export class Chat extends plugin {
      */
     async checkGroupAccess(groupId, userId) {
         if (!groupId) return { allowed: true }
-        
+
         try {
             const scopeManager = await ensureScopeManager()
             const groupSettings = await scopeManager.getGroupSettings(String(groupId))
             const settings = groupSettings?.settings || {}
-            
+
             const listMode = settings.listMode || 'none'
             const blacklist = settings.blacklist || []
             const whitelist = settings.whitelist || []
-            
+
             // 黑名单模式
             if (listMode === 'blacklist' && blacklist.includes(String(userId))) {
                 return { allowed: false, reason: '您已被加入本群黑名单，无法使用AI功能' }
             }
-            
+
             // 白名单模式
             if (listMode === 'whitelist' && !whitelist.includes(String(userId))) {
                 return { allowed: false, reason: '本群已启用白名单模式，您不在白名单中' }
@@ -285,7 +288,7 @@ export class Chat extends plugin {
         } catch (err) {
             logger.debug('[Chat] 检查群组黑白名单失败:', err.message)
         }
-        
+
         return { allowed: true }
     }
 
@@ -295,67 +298,67 @@ export class Chat extends plugin {
     checkTrigger(cfg) {
         const e = this.e
         const rawMsg = e.msg || ''
-        
+
         // 私聊
         if (!e.isGroup) {
             const privateCfg = cfg.private || {}
             if (privateCfg.enabled === false) return { triggered: false }
-            
+
             // 先检查前缀
             const prefixResult = this.checkPrefix(rawMsg, cfg.prefixes, cfg.prefixPersonas)
             if (prefixResult.matched) {
-                return { 
-                    triggered: true, 
+                return {
+                    triggered: true,
                     msg: prefixResult.content,
                     persona: prefixResult.persona,
                     isPersonaPrefix: prefixResult.isPersonaPrefix
                 }
             }
-            
+
             const mode = privateCfg.mode || 'always'
             if (mode === 'always') {
                 return { triggered: true, msg: rawMsg }
             }
             return { triggered: false }
         }
-        
+
         // 群聊
         const groupCfg = cfg.group || {}
         if (!groupCfg.enabled) return { triggered: false }
-        
+
         // @触发
         if (groupCfg.at && e.atBot) {
             const isReplyToBot = isReplyToBotMessage(e)
             const hasReply = !!e.source
             const cleanedMsg = this.cleanAtBot(rawMsg)
-            
+
             if (!cleanedMsg.trim()) return { triggered: false }
-            
+
             if (isReplyToBot && groupCfg.replyBot) {
                 return { triggered: true, msg: cleanedMsg }
             } else if (!isReplyToBot) {
                 return { triggered: true, msg: cleanedMsg }
             }
         }
-        
+
         // 引用机器人
         if (groupCfg.replyBot && e.source && !e.atBot && isReplyToBotMessage(e)) {
             return { triggered: true, msg: rawMsg }
         }
-        
+
         // 前缀触发
         if (groupCfg.prefix) {
             const result = this.checkPrefix(rawMsg, cfg.prefixes, cfg.prefixPersonas)
             if (result.matched) {
-                return { 
-                    triggered: true, 
+                return {
+                    triggered: true,
                     msg: result.content,
                     persona: result.persona,
                     isPersonaPrefix: result.isPersonaPrefix
                 }
             }
         }
-        
+
         // 关键词触发
         if (groupCfg.keyword && cfg.keywords?.length > 0) {
             for (const kw of cfg.keywords) {
@@ -364,7 +367,7 @@ export class Chat extends plugin {
                 }
             }
         }
-        
+
         // 随机触发
         if (groupCfg.random) {
             const rate = groupCfg.randomRate || 0.05
@@ -372,7 +375,7 @@ export class Chat extends plugin {
                 return { triggered: true, msg: rawMsg }
             }
         }
-        
+
         return { triggered: false }
     }
 
@@ -386,9 +389,9 @@ export class Chat extends plugin {
                 if (!persona?.prefix) continue
                 const prefix = persona.prefix.trim()
                 if (msg.startsWith(prefix)) {
-                    return { 
-                        matched: true, 
-                        prefix, 
+                    return {
+                        matched: true,
+                        prefix,
                         content: msg.slice(prefix.length).trimStart(),
                         persona: persona.preset || persona.systemPrompt,
                         isPersonaPrefix: true
@@ -443,7 +446,7 @@ export class Chat extends plugin {
     async processChat(msg, options = {}) {
         const e = this.e
         const { persona, isPersonaPrefix } = options
-        
+
         // 检测 debug 模式
         let debugMode = isDebugEnabled(e)
         let msgForChat = msg
@@ -451,11 +454,14 @@ export class Chat extends plugin {
             debugMode = true
             msgForChat = msgForChat.replace(/\s+debug\s*$/i, '').trim()
         }
-        
+
         const debugLogs = []
         const addDebugLog = (title, content) => {
             if (debugMode) {
-                debugLogs.push({ title, content: typeof content === 'string' ? content : JSON.stringify(content, null, 2) })
+                debugLogs.push({
+                    title,
+                    content: typeof content === 'string' ? content : JSON.stringify(content, null, 2)
+                })
             }
         }
 
@@ -474,7 +480,7 @@ export class Chat extends plugin {
 
         const rawTextContent = parsedMessage.content?.find(c => c.type === 'text')?.text?.trim()
         const textContent = msgForChat?.trim() || rawTextContent
-        
+
         if (!textContent && (!parsedMessage.content || parsedMessage.content.length === 0)) {
             return false
         }
@@ -498,14 +504,15 @@ export class Chat extends plugin {
 
         // 处理图片
         const images = parsedMessage.content?.filter(c => c.type === 'image' || c.type === 'image_url') || []
-        
+
         // 处理引用消息
         let finalMessage = textContent
         if (parsedMessage.quote) {
             const quoteSender = parsedMessage.quote.sender?.card || parsedMessage.quote.sender?.nickname || '某人'
-            const quoteText = typeof parsedMessage.quote.content === 'string' 
-                ? parsedMessage.quote.content 
-                : (parsedMessage.quote.raw_message || '')
+            const quoteText =
+                typeof parsedMessage.quote.content === 'string'
+                    ? parsedMessage.quote.content
+                    : parsedMessage.quote.raw_message || ''
             if (quoteText) {
                 finalMessage = `[引用 ${quoteSender} 的消息: "${quoteText}"]\n${textContent}`
             }
@@ -525,7 +532,7 @@ export class Chat extends plugin {
             parsedMessage,
             debugMode
         }
-        
+
         if (isPersonaPrefix && persona) {
             chatOptions.prefixPersona = persona
         }
@@ -563,7 +570,7 @@ export class Chat extends plugin {
                     if (!usedOfficialBot) {
                         const quoteReply = config.get('basic.quoteReply') === true
                         const mathRenderEnabled = config.get('render.mathFormula') !== false
-                        
+
                         if (mathRenderEnabled && replyTextContent) {
                             const mathDetection = renderService.detectMathFormulas(replyTextContent)
                             if (mathDetection.hasMath && mathDetection.confidence !== 'low') {
@@ -606,7 +613,6 @@ export class Chat extends plugin {
             if (debugMode && result.debugInfo) {
                 this.sendDebugInfo(result.debugInfo, debugLogs)
             }
-
         } catch (error) {
             const userFriendlyError = this.formatErrorForUser(error)
             const errorResult = await this.reply(userFriendlyError, true)
@@ -636,7 +642,11 @@ export class Chat extends plugin {
                 case 'record':
                     let audioData = item.url || item.data || item.file
                     if (audioData) {
-                        if (!audioData.startsWith('base64://') && !audioData.startsWith('http') && !audioData.startsWith('file://')) {
+                        if (
+                            !audioData.startsWith('base64://') &&
+                            !audioData.startsWith('http') &&
+                            !audioData.startsWith('file://')
+                        ) {
                             audioData = audioData.replace(/^data:audio\/[^;]+;base64,/, '')
                             audioData = `base64://${audioData}`
                         }
@@ -657,7 +667,11 @@ export class Chat extends plugin {
         if (di.preset) debugLogs.push({ title: '🎭 预设信息', content: JSON.stringify(di.preset, null, 2) })
         if (di.scope) debugLogs.push({ title: '🎯 Scope信息', content: JSON.stringify(di.scope, null, 2) })
         if (di.memory) debugLogs.push({ title: '🧠 记忆信息', content: JSON.stringify(di.memory, null, 2) })
-        if (di.request) debugLogs.push({ title: '📤 请求信息', content: JSON.stringify({ model: di.request?.model, messagesCount: di.request?.messagesCount }, null, 2) })
+        if (di.request)
+            debugLogs.push({
+                title: '📤 请求信息',
+                content: JSON.stringify({ model: di.request?.model, messagesCount: di.request?.messagesCount }, null, 2)
+            })
         if (di.response) debugLogs.push({ title: '📥 响应信息', content: JSON.stringify(di.response, null, 2) })
         if (di.timing) debugLogs.push({ title: '⏱️ 耗时', content: `${di.timing.duration}ms` })
 
@@ -676,11 +690,11 @@ export class Chat extends plugin {
         const autoRecall = config.get('basic.autoRecall')
         if (!autoRecall || autoRecall.enabled !== true) return
         if (isError && autoRecall.recallError !== true) return
-        
+
         const delay = (autoRecall.delay || 60) * 1000
         const messageId = replyResult?.message_id || replyResult?.data?.message_id
         if (!messageId) return
-        
+
         const e = this.e
         setTimeout(async () => {
             try {

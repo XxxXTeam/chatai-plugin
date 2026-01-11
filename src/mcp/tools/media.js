@@ -19,7 +19,7 @@ export const mediaTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                
+
                 // 从消息中获取图片
                 let images = []
                 if (args.image_url) {
@@ -34,17 +34,17 @@ export const mediaTools = [
                         }
                     }
                 }
-                
+
                 if (images.length === 0) {
                     return { success: false, error: '没有找到图片' }
                 }
-                
+
                 const results = []
                 for (const url of images) {
                     if (!url) continue
-                    
+
                     const result = { url }
-                    
+
                     if (args.to_base64) {
                         try {
                             const response = await fetch(url)
@@ -59,10 +59,10 @@ export const mediaTools = [
                             result.error = err.message
                         }
                     }
-                    
+
                     results.push(result)
                 }
-                
+
                 return {
                     success: true,
                     count: results.length,
@@ -90,12 +90,12 @@ export const mediaTools = [
                 const size = args.size || 200
                 // 使用公共 API 生成二维码
                 const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(args.text)}`
-                
+
                 const e = ctx.getEvent()
                 if (e) {
                     await e.reply(segment.image(qrUrl))
                 }
-                
+
                 return {
                     success: true,
                     url: qrUrl,
@@ -118,10 +118,10 @@ export const mediaTools = [
             },
             required: ['url']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const response = await fetch(args.url, { method: 'HEAD' })
-                
+
                 return {
                     success: true,
                     url: args.url,
@@ -152,9 +152,9 @@ export const mediaTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 const msgParts = []
-                
+
                 if (args.url) {
                     msgParts.push(segment.image(args.url))
                 } else if (args.base64) {
@@ -162,11 +162,11 @@ export const mediaTools = [
                 } else {
                     return { success: false, error: '需要提供 url 或 base64' }
                 }
-                
+
                 if (args.message) {
                     msgParts.push(args.message)
                 }
-                
+
                 const result = await e.reply(msgParts)
                 return {
                     success: true,
@@ -195,7 +195,7 @@ export const mediaTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 let videoData
                 if (args.url) {
                     videoData = args.url
@@ -204,16 +204,16 @@ export const mediaTools = [
                 } else {
                     return { success: false, error: '需要提供 url 或 file' }
                 }
-                
+
                 const videoSeg = {
                     type: 'video',
                     file: videoData
                 }
-                
+
                 if (args.cover) {
                     videoSeg.cover = args.cover
                 }
-                
+
                 const result = await e.reply(videoSeg)
                 return {
                     success: true,
@@ -238,7 +238,7 @@ export const mediaTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 let videoInfo = null
                 for (const seg of e.message || []) {
                     if (seg.type === 'video') {
@@ -253,11 +253,11 @@ export const mediaTools = [
                         break
                     }
                 }
-                
+
                 if (!videoInfo) {
                     return { success: false, error: '消息中没有视频' }
                 }
-                
+
                 return {
                     success: true,
                     video: videoInfo
@@ -281,10 +281,10 @@ export const mediaTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 const diceSeg = { type: 'dice' }
                 const result = await e.reply(diceSeg)
-                
+
                 return {
                     success: true,
                     message_id: result?.message_id
@@ -308,10 +308,10 @@ export const mediaTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 const rpsSeg = { type: 'rps' }
                 const result = await e.reply(rpsSeg)
-                
+
                 return {
                     success: true,
                     message_id: result?.message_id
@@ -328,8 +328,8 @@ export const mediaTools = [
         inputSchema: {
             type: 'object',
             properties: {
-                type: { 
-                    type: 'string', 
+                type: {
+                    type: 'string',
                     enum: ['qq', '163', 'xm', 'custom'],
                     description: '音乐平台类型: qq(QQ音乐), 163(网易云), xm(虾米), custom(自定义)'
                 },
@@ -348,7 +348,7 @@ export const mediaTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 let musicSeg
                 if (args.type === 'custom') {
                     if (!args.url || !args.audio || !args.title) {
@@ -373,7 +373,7 @@ export const mediaTools = [
                         id: args.id
                     }
                 }
-                
+
                 const result = await e.reply(musicSeg)
                 return {
                     success: true,
@@ -404,7 +404,7 @@ export const mediaTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 const locationSeg = {
                     type: 'location',
                     lat: args.lat,
@@ -412,7 +412,7 @@ export const mediaTools = [
                     title: args.title || '位置',
                     content: args.content || ''
                 }
-                
+
                 const result = await e.reply(locationSeg)
                 return {
                     success: true,
@@ -443,7 +443,7 @@ export const mediaTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 const shareSeg = {
                     type: 'share',
                     url: args.url,
@@ -451,7 +451,7 @@ export const mediaTools = [
                     content: args.content || '',
                     image: args.image || ''
                 }
-                
+
                 const result = await e.reply(shareSeg)
                 return {
                     success: true,
@@ -469,7 +469,11 @@ export const mediaTools = [
         inputSchema: {
             type: 'object',
             properties: {
-                id: { type: 'number', description: 'QQ表情ID。常用: 0(惊讶) 1(撇嘴) 2(色) 4(得意) 5(流泪) 6(害羞) 12(调皮) 14(微笑) 21(飞吻) 23(发怒) 49(拥抱) 66(爱心) 76(赞) 124(OK)' },
+                id: {
+                    type: 'number',
+                    description:
+                        'QQ表情ID。常用: 0(惊讶) 1(撇嘴) 2(色) 4(得意) 5(流泪) 6(害羞) 12(调皮) 14(微笑) 21(飞吻) 23(发怒) 49(拥抱) 66(爱心) 76(赞) 124(OK)'
+                },
                 message: { type: 'string', description: '附带的文字消息（可选）' }
             },
             required: ['id']
@@ -480,12 +484,12 @@ export const mediaTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 const msgParts = [{ type: 'face', id: args.id }]
                 if (args.message) {
                     msgParts.push(args.message)
                 }
-                
+
                 const result = await e.reply(msgParts)
                 return {
                     success: true,
@@ -517,7 +521,7 @@ export const mediaTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 const mfaceSeg = {
                     type: 'mface',
                     emoji_id: args.emoji_id,
@@ -525,7 +529,7 @@ export const mediaTools = [
                     key: args.key || '',
                     summary: args.summary || ''
                 }
-                
+
                 const result = await e.reply(mfaceSeg)
                 return {
                     success: true,
@@ -553,7 +557,7 @@ export const mediaTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 let imageData
                 if (args.url) {
                     imageData = args.url
@@ -562,13 +566,13 @@ export const mediaTools = [
                 } else {
                     return { success: false, error: '需要提供 url 或 file' }
                 }
-                
+
                 const flashSeg = {
                     type: 'image',
                     file: imageData,
                     type: 'flash'
                 }
-                
+
                 const result = await e.reply(flashSeg)
                 return {
                     success: true,
@@ -587,7 +591,11 @@ export const mediaTools = [
             type: 'object',
             properties: {
                 user_id: { type: 'string', description: '接收者QQ号' },
-                gift_id: { type: 'number', description: '礼物ID。0(甜Wink) 1(快乐肥宅水) 2(幸运手链) 3(卡布奇诺) 4(猫咪手表) 5(绒绒手套) 6(彩虹糖果) 7(坚强) 8(告白话筒) 9(牵你的手) 10(可爱猫咪) 11(神秘面具) 12(我超忙的) 13(爱心口罩)' }
+                gift_id: {
+                    type: 'number',
+                    description:
+                        '礼物ID。0(甜Wink) 1(快乐肥宅水) 2(幸运手链) 3(卡布奇诺) 4(猫咪手表) 5(绒绒手套) 6(彩虹糖果) 7(坚强) 8(告白话筒) 9(牵你的手) 10(可爱猫咪) 11(神秘面具) 12(我超忙的) 13(爱心口罩)'
+                }
             },
             required: ['user_id', 'gift_id']
         },
@@ -595,7 +603,7 @@ export const mediaTools = [
             try {
                 const bot = ctx.getBot()
                 const userId = parseInt(args.user_id)
-                
+
                 // NapCat/go-cqhttp API
                 if (bot.sendApi) {
                     await bot.sendApi('send_group_gift', {
@@ -605,14 +613,14 @@ export const mediaTools = [
                     })
                     return { success: true, user_id: userId, gift_id: args.gift_id }
                 }
-                
+
                 // icqq 方式
                 const friend = bot.pickFriend?.(userId)
                 if (friend?.sendGift) {
                     await friend.sendGift(args.gift_id)
                     return { success: true, user_id: userId, gift_id: args.gift_id }
                 }
-                
+
                 return { success: false, error: '当前协议不支持发送礼物' }
             } catch (err) {
                 return { success: false, error: `发送礼物失败: ${err.message}` }
@@ -629,34 +637,85 @@ export const mediaTools = [
         },
         handler: async () => {
             const faces = [
-                { id: 0, name: '惊讶' }, { id: 1, name: '撇嘴' }, { id: 2, name: '色' },
-                { id: 4, name: '得意' }, { id: 5, name: '流泪' }, { id: 6, name: '害羞' },
-                { id: 7, name: '闭嘴' }, { id: 8, name: '睡' }, { id: 9, name: '大哭' },
-                { id: 10, name: '尴尬' }, { id: 11, name: '发怒' }, { id: 12, name: '调皮' },
-                { id: 13, name: '呲牙' }, { id: 14, name: '微笑' }, { id: 15, name: '难过' },
-                { id: 16, name: '酷' }, { id: 18, name: '抓狂' }, { id: 19, name: '吐' },
-                { id: 20, name: '偷笑' }, { id: 21, name: '飞吻' }, { id: 22, name: '白眼' },
-                { id: 23, name: '傲慢' }, { id: 24, name: '饥饿' }, { id: 25, name: '困' },
-                { id: 26, name: '惊恐' }, { id: 27, name: '流汗' }, { id: 28, name: '憨笑' },
-                { id: 29, name: '悠闲' }, { id: 30, name: '奋斗' }, { id: 31, name: '咒骂' },
-                { id: 32, name: '疑问' }, { id: 33, name: '嘘' }, { id: 34, name: '晕' },
-                { id: 35, name: '折磨' }, { id: 36, name: '衰' }, { id: 37, name: '骷髅' },
-                { id: 38, name: '敲打' }, { id: 39, name: '再见' }, { id: 49, name: '拥抱' },
-                { id: 53, name: '蛋糕' }, { id: 66, name: '爱心' }, { id: 74, name: '太阳' },
-                { id: 75, name: '月亮' }, { id: 76, name: '赞' }, { id: 77, name: '踩' },
-                { id: 78, name: '握手' }, { id: 79, name: 'V胜利' }, { id: 89, name: '西瓜' },
-                { id: 96, name: '冷汗' }, { id: 97, name: '擦汗' }, { id: 98, name: '抠鼻' },
-                { id: 99, name: '鼓掌' }, { id: 100, name: '糗大了' }, { id: 101, name: '坏笑' },
-                { id: 102, name: '左哼哼' }, { id: 103, name: '右哼哼' }, { id: 104, name: '哈欠' },
-                { id: 105, name: '鄙视' }, { id: 106, name: '委屈' }, { id: 107, name: '快哭了' },
-                { id: 108, name: '阴险' }, { id: 109, name: '亲亲' }, { id: 110, name: '吓' },
-                { id: 111, name: '可怜' }, { id: 112, name: '菜刀' }, { id: 114, name: '篮球' },
-                { id: 116, name: '示爱' }, { id: 118, name: '抱拳' }, { id: 119, name: '勾引' },
-                { id: 120, name: '拳头' }, { id: 121, name: '差劲' }, { id: 122, name: '爱你' },
-                { id: 123, name: 'NO' }, { id: 124, name: 'OK' }, { id: 179, name: 'doge' },
-                { id: 180, name: '汗' }, { id: 181, name: '滑稽' }
+                { id: 0, name: '惊讶' },
+                { id: 1, name: '撇嘴' },
+                { id: 2, name: '色' },
+                { id: 4, name: '得意' },
+                { id: 5, name: '流泪' },
+                { id: 6, name: '害羞' },
+                { id: 7, name: '闭嘴' },
+                { id: 8, name: '睡' },
+                { id: 9, name: '大哭' },
+                { id: 10, name: '尴尬' },
+                { id: 11, name: '发怒' },
+                { id: 12, name: '调皮' },
+                { id: 13, name: '呲牙' },
+                { id: 14, name: '微笑' },
+                { id: 15, name: '难过' },
+                { id: 16, name: '酷' },
+                { id: 18, name: '抓狂' },
+                { id: 19, name: '吐' },
+                { id: 20, name: '偷笑' },
+                { id: 21, name: '飞吻' },
+                { id: 22, name: '白眼' },
+                { id: 23, name: '傲慢' },
+                { id: 24, name: '饥饿' },
+                { id: 25, name: '困' },
+                { id: 26, name: '惊恐' },
+                { id: 27, name: '流汗' },
+                { id: 28, name: '憨笑' },
+                { id: 29, name: '悠闲' },
+                { id: 30, name: '奋斗' },
+                { id: 31, name: '咒骂' },
+                { id: 32, name: '疑问' },
+                { id: 33, name: '嘘' },
+                { id: 34, name: '晕' },
+                { id: 35, name: '折磨' },
+                { id: 36, name: '衰' },
+                { id: 37, name: '骷髅' },
+                { id: 38, name: '敲打' },
+                { id: 39, name: '再见' },
+                { id: 49, name: '拥抱' },
+                { id: 53, name: '蛋糕' },
+                { id: 66, name: '爱心' },
+                { id: 74, name: '太阳' },
+                { id: 75, name: '月亮' },
+                { id: 76, name: '赞' },
+                { id: 77, name: '踩' },
+                { id: 78, name: '握手' },
+                { id: 79, name: 'V胜利' },
+                { id: 89, name: '西瓜' },
+                { id: 96, name: '冷汗' },
+                { id: 97, name: '擦汗' },
+                { id: 98, name: '抠鼻' },
+                { id: 99, name: '鼓掌' },
+                { id: 100, name: '糗大了' },
+                { id: 101, name: '坏笑' },
+                { id: 102, name: '左哼哼' },
+                { id: 103, name: '右哼哼' },
+                { id: 104, name: '哈欠' },
+                { id: 105, name: '鄙视' },
+                { id: 106, name: '委屈' },
+                { id: 107, name: '快哭了' },
+                { id: 108, name: '阴险' },
+                { id: 109, name: '亲亲' },
+                { id: 110, name: '吓' },
+                { id: 111, name: '可怜' },
+                { id: 112, name: '菜刀' },
+                { id: 114, name: '篮球' },
+                { id: 116, name: '示爱' },
+                { id: 118, name: '抱拳' },
+                { id: 119, name: '勾引' },
+                { id: 120, name: '拳头' },
+                { id: 121, name: '差劲' },
+                { id: 122, name: '爱你' },
+                { id: 123, name: 'NO' },
+                { id: 124, name: 'OK' },
+                { id: 179, name: 'doge' },
+                { id: 180, name: '汗' },
+                { id: 181, name: '滑稽' }
             ]
-            
+
             return {
                 success: true,
                 count: faces.length,
@@ -678,7 +737,7 @@ export const mediaTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 const mfaces = []
                 for (const seg of e.message || []) {
                     if (seg.type === 'mface') {
@@ -691,11 +750,11 @@ export const mediaTools = [
                         })
                     }
                 }
-                
+
                 if (mfaces.length === 0) {
                     return { success: false, error: '消息中没有商城表情' }
                 }
-                
+
                 return {
                     success: true,
                     count: mfaces.length,
@@ -718,20 +777,20 @@ export const mediaTools = [
             },
             required: ['url']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const response = await fetch(args.url)
                 if (!response.ok) {
                     return { success: false, error: `下载失败: HTTP ${response.status}` }
                 }
-                
+
                 const buffer = await response.arrayBuffer()
                 const contentType = response.headers.get('content-type') || 'image/jpeg'
                 const ext = contentType.split('/')[1]?.split(';')[0] || 'jpg'
-                
+
                 // 返回 base64 格式，可直接用于发送
                 const base64 = Buffer.from(buffer).toString('base64')
-                
+
                 return {
                     success: true,
                     url: args.url,
@@ -762,13 +821,13 @@ export const mediaTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 // 尝试发送 markdown 消息段
                 const mdSeg = {
                     type: 'markdown',
                     content: args.content
                 }
-                
+
                 const result = await e.reply(mdSeg)
                 return {
                     success: true,
@@ -806,21 +865,19 @@ export const mediaTools = [
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
-                
+
                 let buttonData
                 try {
-                    buttonData = typeof args.content === 'string' 
-                        ? JSON.parse(args.content) 
-                        : args.content
+                    buttonData = typeof args.content === 'string' ? JSON.parse(args.content) : args.content
                 } catch (e) {
                     return { success: false, error: '无效的按钮配置JSON' }
                 }
-                
+
                 const buttonSeg = {
                     type: 'button',
                     data: buttonData
                 }
-                
+
                 const result = await e.reply(buttonSeg)
                 return {
                     success: true,

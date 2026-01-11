@@ -22,8 +22,7 @@ import path from 'node:path'
 let yunzaiCfg = null
 try {
     yunzaiCfg = (await import('../../../lib/config/config.js')).default
-} catch (e) {
-}
+} catch (e) {}
 
 const require = createRequire(import.meta.url)
 const { exec, execSync } = require('child_process')
@@ -37,7 +36,7 @@ let upingTimeout = null
 const UPING_TIMEOUT = 120000
 
 // Debug模式状态管理（运行时内存，重启后重置）
-const debugSessions = new Map()  // key: groupId或`private_${userId}`, value: boolean
+const debugSessions = new Map() // key: groupId或`private_${userId}`, value: boolean
 
 /**
  * 检查群组功能是否启用
@@ -48,7 +47,7 @@ const debugSessions = new Map()  // key: groupId或`private_${userId}`, value: b
  */
 async function isGroupFeatureEnabled(groupId, feature, globalDefault) {
     if (!groupId) return globalDefault
-    
+
     try {
         if (!databaseService.initialized) {
             await databaseService.init()
@@ -57,14 +56,14 @@ async function isGroupFeatureEnabled(groupId, feature, globalDefault) {
         await scopeManager.init()
         const groupSettings = await scopeManager.getGroupSettings(String(groupId))
         const settings = groupSettings?.settings || {}
-        
+
         if (settings[feature] !== undefined) {
             return settings[feature]
         }
     } catch (err) {
         logger.debug(`[Commands] 获取群组${feature}设置失败:`, err.message)
     }
-    
+
     return globalDefault
 }
 
@@ -76,7 +75,7 @@ async function isGroupFeatureEnabled(groupId, feature, globalDefault) {
  */
 async function getGroupFeatureModel(groupId, modelKey) {
     if (!groupId) return null
-    
+
     try {
         if (!databaseService.initialized) {
             await databaseService.init()
@@ -85,7 +84,7 @@ async function getGroupFeatureModel(groupId, modelKey) {
         await scopeManager.init()
         const groupSettings = await scopeManager.getGroupSettings(String(groupId))
         const settings = groupSettings?.settings || {}
-        
+
         if (settings[modelKey] && settings[modelKey].trim()) {
             logger.info(`[Commands] 使用群组独立${modelKey}: ${settings[modelKey]} (群: ${groupId})`)
             return settings[modelKey].trim()
@@ -93,7 +92,7 @@ async function getGroupFeatureModel(groupId, modelKey) {
     } catch (err) {
         logger.debug(`[Commands] 获取群组${modelKey}设置失败:`, err.message)
     }
-    
+
     return null
 }
 
@@ -137,7 +136,7 @@ export class AICommands extends plugin {
             name: 'AI-Commands',
             dsc: 'AI插件命令处理',
             event: 'message',
-            priority: -100,  // 最高优先级，确保命令不被其他插件抢占（数值越小优先级越高）
+            priority: -100, // 最高优先级，确保命令不被其他插件抢占（数值越小优先级越高）
             rule: [
                 {
                     reg: '^#(结束对话|结束会话|新对话|新会话)$',
@@ -236,7 +235,7 @@ export class AICommands extends plugin {
         // 回退到 global.Bot 配置
         return global.Bot?.config?.master || []
     }
-    
+
     /**
      * 手动触发记忆总结
      * #总结记忆 / #记忆总结 / #整理记忆
@@ -245,29 +244,29 @@ export class AICommands extends plugin {
         const e = this.e
         try {
             await memoryManager.init()
-            
+
             const userId = e.user_id || e.sender?.user_id || 'unknown'
             const groupId = e.group_id || null
             const fullUserId = groupId ? `${groupId}_${userId}` : String(userId)
-            
+
             await this.reply('🔄 正在整理记忆...', true)
-            
+
             // 执行覆盖式总结
             const result = await memoryManager.summarizeUserMemory(fullUserId)
-            
+
             if (!result.success) {
                 await this.reply(`❌ 记忆整理失败: ${result.error}`, true)
                 return true
             }
-            
+
             // 构建反馈
             const feedbackLines = [
                 '✅ 记忆整理完成',
                 `━━━━━━━━━━━━`,
                 `📊 整理前: ${result.beforeCount} 条`,
-                `📊 整理后: ${result.afterCount} 条`,
+                `📊 整理后: ${result.afterCount} 条`
             ]
-            
+
             if (result.memories && result.memories.length > 0) {
                 feedbackLines.push(``, `📝 当前记忆:`)
                 result.memories.slice(0, 5).forEach((m, i) => {
@@ -277,9 +276,9 @@ export class AICommands extends plugin {
                     feedbackLines.push(`  ... 共 ${result.memories.length} 条`)
                 }
             }
-            
+
             feedbackLines.push(``, `💡 记忆已合并去重，保留有价值的信息`)
-            
+
             await this.reply(feedbackLines.join('\n'), true)
         } catch (error) {
             logger.error('[AI-Commands] Summarize memory error:', error)
@@ -295,7 +294,7 @@ export class AICommands extends plugin {
     async toggleChatDebug() {
         const e = this.e
         const match = e.msg.match(/#chatdebug\s*(true|false|on|off|开启|关闭)?$/i)
-        
+
         let enabled
         if (!match || !match[1]) {
             // 无参数时切换状态
@@ -304,13 +303,16 @@ export class AICommands extends plugin {
             const param = match[1].toLowerCase()
             enabled = ['true', 'on', '开启'].includes(param)
         }
-        
+
         const key = setDebugMode(e, enabled)
         const status = enabled ? '开启' : '关闭'
         const scope = e.group_id ? `群聊 ${e.group_id}` : '当前私聊'
-        
-        await this.reply(`✅ Debug模式已${status}\n📍 作用范围: ${scope}\n💡 ${enabled ? '后续消息将输出详细日志' : '已恢复正常模式'}\n⚠️ 重启后状态将重置`, true)
-        
+
+        await this.reply(
+            `✅ Debug模式已${status}\n📍 作用范围: ${scope}\n💡 ${enabled ? '后续消息将输出详细日志' : '已恢复正常模式'}\n⚠️ 重启后状态将重置`,
+            true
+        )
+
         logger.info(`[AI-Commands] Debug模式${status}: ${key}`)
         return true
     }
@@ -363,12 +365,12 @@ export class AICommands extends plugin {
             const fullUserId = groupId ? `${groupId}_${userId}` : String(userId)
 
             await memoryManager.init()
-            
+
             // 获取清理前的统计
-            const userMemories = await memoryManager.getMemories(String(userId)) || []
+            const userMemories = (await memoryManager.getMemories(String(userId))) || []
             let groupUserMemories = []
             if (groupId) {
-                groupUserMemories = await memoryManager.getMemories(fullUserId) || []
+                groupUserMemories = (await memoryManager.getMemories(fullUserId)) || []
             }
             const totalMemories = userMemories.length + groupUserMemories.length
 
@@ -434,7 +436,7 @@ export class AICommands extends plugin {
             // 获取当前使用的模型配置
             const llmService = new LlmService()
             const chatModel = llmService.getModel('chat')
-            
+
             // 获取渠道信息
             let channelInfo = { name: '未知', status: '未知' }
             try {
@@ -482,7 +484,7 @@ export class AICommands extends plugin {
             const scope = groupId ? `群聊 ${groupId}` : '私聊'
 
             // 格式化 Token 数量
-            const formatTokens = (n) => {
+            const formatTokens = n => {
                 if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
                 if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
                 return String(n)
@@ -520,7 +522,7 @@ export class AICommands extends plugin {
                 `- **#结束对话** - 开始新会话`,
                 `- **#清除记忆** - 清除记忆数据`,
                 `- **#我的记忆** - 查看记忆列表`,
-                `- **#chatdebug** - 切换调试模式`,
+                `- **#chatdebug** - 切换调试模式`
             ].join('\n')
 
             try {
@@ -546,7 +548,7 @@ export class AICommands extends plugin {
                     `🧠 记忆条目: ${memoryCount} 条`,
                     `📊 Token: ${formatTokens(tokenStats.input)}入/${formatTokens(tokenStats.output)}出`,
                     `⏰ 最后活动: ${lastActive}`,
-                    `🔧 Debug: ${debugEnabled}`,
+                    `🔧 Debug: ${debugEnabled}`
                 ].join('\n')
                 await this.reply(textStatus, true)
             }
@@ -569,7 +571,7 @@ export class AICommands extends plugin {
      */
     async groupAdminPanel() {
         const e = this.e
-        
+
         if (!e.group_id) {
             await this.reply('此功能仅支持群聊使用', true)
             return true
@@ -580,48 +582,51 @@ export class AICommands extends plugin {
             await this.reply('仅群管理员、群主或Bot主人可使用此功能', true)
             return true
         }
-        
+
         try {
             // 生成一次性登录码（5分钟有效，使用后失效）
             const { code } = generateGroupAdminLoginCode(e.group_id, e.user_id)
-            
+
             // 获取所有可用地址
             const webServer = getWebServer()
             const addresses = webServer.getAddresses()
             const loginLinks = config.get('web.loginLinks') || []
             const publicUrl = config.get('web.publicUrl')
-            
+
             // 构建所有登录URL
             const urls = []
-            
+
             // 本地地址
             if (addresses.local?.length > 0) {
                 for (const addr of addresses.local) {
                     urls.push({ label: '本地', url: `${addr}/group-admin?code=${code}` })
                 }
             }
-            
+
             // IPv6本地地址
             if (addresses.localIPv6?.length > 0) {
                 for (const addr of addresses.localIPv6) {
                     urls.push({ label: 'IPv6', url: `${addr}/group-admin?code=${code}` })
                 }
             }
-            
+
             // 公网地址
             if (publicUrl) {
                 urls.push({ label: '公网', url: `${publicUrl.replace(/\/$/, '')}/group-admin?code=${code}` })
             } else if (addresses.public) {
                 urls.push({ label: '公网', url: `${addresses.public}/group-admin?code=${code}` })
             }
-            
+
             // 自定义链接
             for (const link of loginLinks) {
                 if (link.url) {
-                    urls.push({ label: link.label || '自定义', url: `${link.url.replace(/\/$/, '')}/group-admin?code=${code}` })
+                    urls.push({
+                        label: link.label || '自定义',
+                        url: `${link.url.replace(/\/$/, '')}/group-admin?code=${code}`
+                    })
                 }
             }
-            
+
             // 构建消息
             const msgLines = [
                 `🔧 群管理面板`,
@@ -630,21 +635,21 @@ export class AICommands extends plugin {
                 `👤 管理员: ${e.sender?.nickname || e.user_id}`,
                 ``
             ]
-            
+
             if (urls.length > 0) {
                 msgLines.push(`🔗 可用登录地址:`)
                 for (const { label, url } of urls) {
                     msgLines.push(`[${label}] ${url}`)
                 }
             }
-            
+
             msgLines.push(``)
             msgLines.push(`🔑 手动登录码: ${code}`)
             msgLines.push(`⏰ 登录码5分钟内有效，使用后失效`)
             msgLines.push(`💡 登录后24小时内无需再次验证`)
-            
+
             const msg = msgLines.join('\n')
-            
+
             // 尝试私聊发送（更安全）
             try {
                 if (e.friend || global.Bot?.pickFriend) {
@@ -658,7 +663,7 @@ export class AICommands extends plugin {
             } catch (err) {
                 logger.debug('[Commands] 私聊发送失败:', err.message)
             }
-            
+
             // 私聊失败则在群里发送（带撤回提示）
             await this.reply(msg + '\n\n⚠️ 建议30秒内复制链接后撤回本消息', true)
         } catch (error) {
@@ -695,30 +700,32 @@ export class AICommands extends plugin {
             try {
                 const history = await getGroupChatHistory(e, maxMessages)
                 if (history && history.length > 0) {
-                    const apiMessages = await Promise.all(history.map(async msg => {
-                        let nickname = msg.sender?.card || msg.sender?.nickname || '用户'
-                        const contentParts = await Promise.all(
-                            (msg.message || []).map(async part => {
-                                if (part.type === 'text') return part.text
-                                if (part.type === 'at') {
-                                    if (part.qq === 'all' || part.qq === 0) return '@全体成员'
-                                    try {
-                                        const info = await getMemberInfo(e, part.qq)
-                                        return `@${info?.card || info?.nickname || part.qq}`
-                                    } catch {
-                                        return `@${part.qq}`
+                    const apiMessages = await Promise.all(
+                        history.map(async msg => {
+                            let nickname = msg.sender?.card || msg.sender?.nickname || '用户'
+                            const contentParts = await Promise.all(
+                                (msg.message || []).map(async part => {
+                                    if (part.type === 'text') return part.text
+                                    if (part.type === 'at') {
+                                        if (part.qq === 'all' || part.qq === 0) return '@全体成员'
+                                        try {
+                                            const info = await getMemberInfo(e, part.qq)
+                                            return `@${info?.card || info?.nickname || part.qq}`
+                                        } catch {
+                                            return `@${part.qq}`
+                                        }
                                     }
-                                }
-                                return ''
-                            })
-                        )
-                        return {
-                            userId: msg.sender?.user_id,
-                            nickname,
-                            content: contentParts.join(''),
-                            timestamp: msg.time ? msg.time * 1000 : Date.now()
-                        }
-                    }))
+                                    return ''
+                                })
+                            )
+                            return {
+                                userId: msg.sender?.user_id,
+                                nickname,
+                                content: contentParts.join(''),
+                                timestamp: msg.time ? msg.time * 1000 : Date.now()
+                            }
+                        })
+                    )
                     messages = apiMessages.filter(m => m.content && m.content.trim())
                     if (messages.length > 0) dataSource = 'Bot API'
                 }
@@ -738,12 +745,21 @@ export class AICommands extends plugin {
                     const conversationId = `group_summary_${groupId}`
                     const rawDbMessages = databaseService.getMessages(conversationId, maxMessages)
                     if (rawDbMessages && rawDbMessages.length > messages.length) {
-                        const dbMessages = rawDbMessages.map(m => ({
-                            nickname: m.metadata?.nickname || '用户',
-                            content: typeof m.content === 'string' ? m.content : 
-                                (Array.isArray(m.content) ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') : String(m.content)),
-                            timestamp: m.timestamp
-                        })).filter(m => m.content && m.content.trim())
+                        const dbMessages = rawDbMessages
+                            .map(m => ({
+                                nickname: m.metadata?.nickname || '用户',
+                                content:
+                                    typeof m.content === 'string'
+                                        ? m.content
+                                        : Array.isArray(m.content)
+                                          ? m.content
+                                                .filter(c => c.type === 'text')
+                                                .map(c => c.text)
+                                                .join('')
+                                          : String(m.content),
+                                timestamp: m.timestamp
+                            }))
+                            .filter(m => m.content && m.content.trim())
                         if (dbMessages.length > messages.length) {
                             messages = dbMessages
                             dataSource = '数据库'
@@ -753,35 +769,47 @@ export class AICommands extends plugin {
                     logger.debug('[AI-Commands] 从数据库读取群消息失败:', dbErr.message)
                 }
             }
-            
+
             if (messages.length < 5) {
-                await this.reply('群聊消息太少，无法生成总结\n\n💡 提示：需要在群里有足够的聊天记录\n请确保：\n1. 群聊消息采集已启用 (trigger.collectGroupMsg)\n2. 群里已有一定量的聊天记录', true)
+                await this.reply(
+                    '群聊消息太少，无法生成总结\n\n💡 提示：需要在群里有足够的聊天记录\n请确保：\n1. 群聊消息采集已启用 (trigger.collectGroupMsg)\n2. 群里已有一定量的聊天记录',
+                    true
+                )
                 return true
             }
 
             // 构建总结提示
             const recentMessages = messages.slice(-maxMessages)
-            let dialogText = recentMessages.map(m => {
-                if (typeof m.content === 'string' && m.content.startsWith('[')) {
-                    return m.content  // 已格式化
-                }
-                const content = typeof m.content === 'string' ? m.content : 
-                    (Array.isArray(m.content) ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') : m.content)
-                return `[${m.nickname || '用户'}]: ${content}`
-            }).join('\n')
+            let dialogText = recentMessages
+                .map(m => {
+                    if (typeof m.content === 'string' && m.content.startsWith('[')) {
+                        return m.content // 已格式化
+                    }
+                    const content =
+                        typeof m.content === 'string'
+                            ? m.content
+                            : Array.isArray(m.content)
+                              ? m.content
+                                    .filter(c => c.type === 'text')
+                                    .map(c => c.text)
+                                    .join('')
+                              : m.content
+                    return `[${m.nickname || '用户'}]: ${content}`
+                })
+                .join('\n')
             let truncatedNote = ''
             if (dialogText.length > maxChars) {
                 dialogText = dialogText.slice(-maxChars)
                 truncatedNote = '\n\n⚠️ 消息过长，已截断到最近部分。'
             }
-            
+
             // 统计参与者
             const participants = new Set(recentMessages.map(m => m.nickname || m.userId || '用户'))
-            
+
             // 预先统计用户活跃度数据
             const userStats = {}
             const hourlyActivity = Array(24).fill(0)
-            
+
             for (const msg of recentMessages) {
                 const name = msg.nickname || msg.userId || '用户'
                 const odId = msg.userId || null
@@ -798,18 +826,18 @@ export class AICommands extends plugin {
                     hourlyActivity[hour]++
                 }
             }
-            
+
             // 获取活跃用户TOP5，包含QQ号用于获取头像
             const topUsers = Object.values(userStats)
                 .sort((a, b) => b.count - a.count)
                 .slice(0, 5)
-                .map(u => ({ 
-                    name: u.name, 
+                .map(u => ({
+                    name: u.name,
                     count: u.count,
                     odId: u.odId,
                     avatar: u.odId ? `https://q1.qlogo.cn/g?b=qq&nk=${u.odId}&s=0` : null
                 }))
-            
+
             const summaryPrompt = `请根据以下群聊记录，对群聊内容进行全面的总结分析。请从以下几个维度进行分析，并以清晰、有条理的Markdown格式呈现你的结论：
 
 ## 分析维度
@@ -844,13 +872,13 @@ ${dialogText}${truncatedNote}`
             try {
                 result = await chatService.sendMessage({
                     userId: `summary_${e.group_id}`,
-                    groupId: null,  // 不传群ID，避免继承群人设
+                    groupId: null, // 不传群ID，避免继承群人设
                     message: summaryPrompt,
-                    model: groupSummaryModel || undefined,  // 使用群组独立模型
+                    model: groupSummaryModel || undefined, // 使用群组独立模型
                     mode: 'chat',
-                    skipHistory: true,  // 跳过历史记录
-                    disableTools: true,  // 禁用工具
-                    skipPersona: true  // 跳过人设获取，不使用任何人设风格
+                    skipHistory: true, // 跳过历史记录
+                    disableTools: true, // 禁用工具
+                    skipPersona: true // 跳过人设获取，不使用任何人设风格
                 })
 
                 if (result.response && Array.isArray(result.response)) {
@@ -868,9 +896,10 @@ ${dialogText}${truncatedNote}`
             if (summaryText) {
                 try {
                     // 获取实际使用的模型信息
-                    const actualModel = result?.model || groupSummaryModel || config.get('llm.defaultModel') || '默认模型'
+                    const actualModel =
+                        result?.model || groupSummaryModel || config.get('llm.defaultModel') || '默认模型'
                     const shortModel = actualModel.split('/').pop()
-                    
+
                     // 渲染为图片
                     const imageBuffer = await renderService.renderGroupSummary(summaryText, {
                         title: '群聊内容总结',
@@ -882,10 +911,14 @@ ${dialogText}${truncatedNote}`
                     })
                     await this.reply(segment.image(imageBuffer))
                 } catch (renderErr) {
-                    const fallbackModel = result?.model || groupSummaryModel || config.get('llm.defaultModel') || '默认模型'
+                    const fallbackModel =
+                        result?.model || groupSummaryModel || config.get('llm.defaultModel') || '默认模型'
                     const fallbackShortModel = fallbackModel.split('/').pop()
                     logger.warn('[AI-Commands] 渲染图片失败:', renderErr.message)
-                    await this.reply(`📊 群聊总结 (${messages.length}条消息 · ${fallbackShortModel})\n\n${summaryText}`, true)
+                    await this.reply(
+                        `📊 群聊总结 (${messages.length}条消息 · ${fallbackShortModel})\n\n${summaryText}`,
+                        true
+                    )
                 }
             } else {
                 await this.reply('总结生成失败', true)
@@ -909,26 +942,27 @@ ${dialogText}${truncatedNote}`
 
         try {
             await this.reply('正在分析用户画像...', true)
-            
+
             databaseService.init()
             const groupId = e.group_id
             const userId = e.user_id
             const nickname = e.sender?.nickname || '用户'
             const minMessages = config.get('features.userPortrait.minMessages') || 10
-            
+
             const userKey = groupId ? `${groupId}_${userId}` : String(userId)
             // 读取配置的消息数量限制 - 优先使用前端配置
-            const maxMessages = config.get('features.groupSummary.maxMessages') || config.get('memory.maxMemories') || 100
+            const maxMessages =
+                config.get('features.groupSummary.maxMessages') || config.get('memory.maxMemories') || 100
             const analyzeCount = Math.min(maxMessages, 100)
-            
+
             const messages = databaseService.getMessages(userKey, maxMessages)
             const userMessages = messages.filter(m => m.role === 'user')
-            
+
             if (userMessages.length < minMessages) {
                 await this.reply(`消息数量不足（需要至少${minMessages}条），无法生成画像`, true)
                 return true
             }
-            
+
             // 获取模型信息
             const modelName = config.get('llm.defaultModel') || '默认模型'
             const shortModel = modelName.split('/').pop()
@@ -937,12 +971,18 @@ ${dialogText}${truncatedNote}`
 
 用户昵称：${nickname}
 发言记录：
-${userMessages.slice(-analyzeCount).map(m => {
-    const text = Array.isArray(m.content) 
-        ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') 
-        : m.content
-    return text
-}).join('\n')}
+${userMessages
+    .slice(-analyzeCount)
+    .map(m => {
+        const text = Array.isArray(m.content)
+            ? m.content
+                  .filter(c => c.type === 'text')
+                  .map(c => c.text)
+                  .join('')
+            : m.content
+        return text
+    })
+    .join('\n')}
 
 请从以下维度分析：
 1. 🎭 性格特点
@@ -954,12 +994,12 @@ ${userMessages.slice(-analyzeCount).map(m => {
 
             const result = await chatService.sendMessage({
                 userId: `portrait_${userId}`,
-                groupId: null,  // 不传群ID，避免继承群人设
+                groupId: null, // 不传群ID，避免继承群人设
                 message: portraitPrompt,
                 mode: 'chat',
-                skipHistory: true,  // 跳过历史记录
-                disableTools: true,  // 禁用工具
-                skipPersona: true  // 跳过人设获取，不使用任何人设风格
+                skipHistory: true, // 跳过历史记录
+                disableTools: true, // 禁用工具
+                skipPersona: true // 跳过人设获取，不使用任何人设风格
             })
 
             let portraitText = ''
@@ -1003,48 +1043,53 @@ ${userMessages.slice(-analyzeCount).map(m => {
         const e = this.e
         try {
             await memoryManager.init()
-            
+
             const userId = e.user_id || e.sender?.user_id || 'unknown'
             const groupId = e.group_id || null
-            
+
             // 获取用户记忆
-            let userMemories = await memoryManager.getMemories(String(userId)) || []
-            
+            let userMemories = (await memoryManager.getMemories(String(userId))) || []
+
             // 如果在群里，也获取群内用户记忆
             let groupUserMemories = []
             if (groupId) {
-                groupUserMemories = await memoryManager.getMemories(`${groupId}_${userId}`) || []
+                groupUserMemories = (await memoryManager.getMemories(`${groupId}_${userId}`)) || []
             }
-            
+
             let allMemories = [...userMemories, ...groupUserMemories]
-            
+
             if (allMemories.length === 0) {
-                await this.reply('📭 暂无记忆记录\n\n💡 与AI聊天时，重要信息会被自动记住\n💡 在群里多聊几句后再试试', true)
+                await this.reply(
+                    '📭 暂无记忆记录\n\n💡 与AI聊天时，重要信息会被自动记住\n💡 在群里多聊几句后再试试',
+                    true
+                )
                 return true
             }
-            
+
             // 按时间排序，最新在前
             allMemories.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
-            
+
             // 最多显示15条
             const displayMemories = allMemories.slice(0, 15)
-            
-            const memoryList = displayMemories.map((m, i) => {
-                const time = m.timestamp ? new Date(m.timestamp).toLocaleDateString('zh-CN') : '未知'
-                const importance = m.importance ? `[${m.importance}]` : ''
-                return `${i + 1}. ${m.content.substring(0, 60)}${m.content.length > 60 ? '...' : ''}\n   📅 ${time} ${importance}`
-            }).join('\n\n')
-            
+
+            const memoryList = displayMemories
+                .map((m, i) => {
+                    const time = m.timestamp ? new Date(m.timestamp).toLocaleDateString('zh-CN') : '未知'
+                    const importance = m.importance ? `[${m.importance}]` : ''
+                    return `${i + 1}. ${m.content.substring(0, 60)}${m.content.length > 60 ? '...' : ''}\n   📅 ${time} ${importance}`
+                })
+                .join('\n\n')
+
             // 解析元数据的辅助函数
-            const getMetaInfo = (m) => {
+            const getMetaInfo = m => {
                 const meta = m.metadata || {}
                 const parts = []
                 // 来源
                 const sourceMap = {
-                    'poll_summary': '定时总结',
-                    'auto_extract': '自动提取',
-                    'group_context': '群聊分析',
-                    'manual': '手动添加'
+                    poll_summary: '定时总结',
+                    auto_extract: '自动提取',
+                    group_context: '群聊分析',
+                    manual: '手动添加'
                 }
                 if (meta.source) parts.push(sourceMap[meta.source] || meta.source)
                 // 模型（简化显示）
@@ -1054,7 +1099,7 @@ ${userMessages.slice(-analyzeCount).map(m => {
                 }
                 return parts.length > 0 ? parts.join(' · ') : ''
             }
-            
+
             // 构建 Markdown
             const markdown = [
                 `## 🧠 我的记忆 (共${allMemories.length}条)`,
@@ -1071,8 +1116,10 @@ ${userMessages.slice(-analyzeCount).map(m => {
                 ``,
                 `---`,
                 `**💡 提示:** 使用 \`#清除记忆\` 可清空所有记忆`
-            ].filter(Boolean).join('\n')
-            
+            ]
+                .filter(Boolean)
+                .join('\n')
+
             try {
                 const nickname = e.sender?.nickname || '用户'
                 const imageBuffer = await renderService.renderMarkdownToImage({
@@ -1114,50 +1161,47 @@ ${userMessages.slice(-analyzeCount).map(m => {
 
         try {
             await memoryManager.init()
-            
+
             const groupId = e.group_id
-            
+
             // 获取群聊相关记忆
             const groupContext = await memoryManager.getGroupContext(String(groupId))
-            
+
             const topics = groupContext?.topics || []
             const relations = groupContext?.relations || []
             const userInfos = groupContext?.userInfos || []
-            
+
             if (topics.length === 0 && relations.length === 0 && userInfos.length === 0) {
                 await this.reply('📭 暂无群聊记忆\n\n💡 群聊活跃后会自动分析并记录', true)
                 return true
             }
-            
+
             const parts = [`🏠 群聊记忆 [${groupId}]`, `━━━━━━━━━━━━`]
-            
+
             if (topics.length > 0) {
                 parts.push(`\n📌 话题记忆 (${topics.length}条)`)
                 topics.slice(0, 5).forEach((t, i) => {
                     parts.push(`  ${i + 1}. ${t.content?.substring(0, 50) || t}`)
                 })
             }
-            
+
             if (userInfos.length > 0) {
                 parts.push(`\n👤 成员记忆 (${userInfos.length}条)`)
                 userInfos.slice(0, 5).forEach((u, i) => {
                     parts.push(`  ${i + 1}. ${u.content?.substring(0, 50) || u}`)
                 })
             }
-            
+
             if (relations.length > 0) {
                 parts.push(`\n🔗 关系记忆 (${relations.length}条)`)
                 relations.slice(0, 3).forEach((r, i) => {
                     parts.push(`  ${i + 1}. ${r.content?.substring(0, 50) || r}`)
                 })
             }
-            
+
             // 构建 Markdown
-            const markdownParts = [
-                `## 🏠 群聊记忆`,
-                ``
-            ]
-            
+            const markdownParts = [`## 🏠 群聊记忆`, ``]
+
             if (topics.length > 0) {
                 markdownParts.push(`### 📌 话题记忆 (${topics.length}条)`)
                 topics.slice(0, 5).forEach((t, i) => {
@@ -1165,7 +1209,7 @@ ${userMessages.slice(-analyzeCount).map(m => {
                 })
                 markdownParts.push('')
             }
-            
+
             if (userInfos.length > 0) {
                 markdownParts.push(`### 👤 成员记忆 (${userInfos.length}条)`)
                 userInfos.slice(0, 5).forEach((u, i) => {
@@ -1173,7 +1217,7 @@ ${userMessages.slice(-analyzeCount).map(m => {
                 })
                 markdownParts.push('')
             }
-            
+
             if (relations.length > 0) {
                 markdownParts.push(`### 🔗 关系记忆 (${relations.length}条)`)
                 relations.slice(0, 3).forEach((r, i) => {
@@ -1181,10 +1225,10 @@ ${userMessages.slice(-analyzeCount).map(m => {
                 })
                 markdownParts.push('')
             }
-            
+
             markdownParts.push(`---`)
             markdownParts.push(`> 💡 群聊记忆通过分析群消息自动生成`)
-            
+
             try {
                 const imageBuffer = await renderService.renderMarkdownToImage({
                     markdown: markdownParts.join('\n'),
@@ -1221,17 +1265,15 @@ ${userMessages.slice(-analyzeCount).map(m => {
 
         // 检查是否是 #画像总结（已有单独命令处理）
         if (e.msg.includes('总结')) {
-            return false  // 让 groupSummary 处理
+            return false // 让 groupSummary 处理
         }
 
         try {
             // 查找消息中的@（排除@机器人）
             let targetUserId = e.user_id
             let targetNickname = e.sender?.card || e.sender?.nickname || '用户'
-            
-            const atMsg = e.message?.find(msg => 
-                msg.type === 'at' && String(msg.qq) !== String(e.self_id)
-            )
+
+            const atMsg = e.message?.find(msg => msg.type === 'at' && String(msg.qq) !== String(e.self_id))
 
             if (atMsg && atMsg.qq) {
                 targetUserId = atMsg.qq
@@ -1252,9 +1294,10 @@ ${userMessages.slice(-analyzeCount).map(m => {
             await this.reply(`正在分析 ${targetNickname} 的用户画像...`, true)
 
             // 获取用户聊天记录 - 使用配置项
-            const maxMessages = config.get('features.groupSummary.maxMessages') || config.get('memory.maxMemories') || 100
+            const maxMessages =
+                config.get('features.groupSummary.maxMessages') || config.get('memory.maxMemories') || 100
             const userMessages = await getUserTextHistory(e, targetUserId, maxMessages)
-            
+
             // 获取模型信息
             const modelName = config.get('llm.defaultModel') || '默认模型'
             const shortModel = modelName.split('/').pop()
@@ -1274,7 +1317,7 @@ ${userMessages.slice(-analyzeCount).map(m => {
                         minute: '2-digit',
                         hour12: false
                     })
-                    
+
                     // 处理消息内容
                     const contentParts = await Promise.all(
                         (chat.message || []).map(async part => {
@@ -1291,7 +1334,7 @@ ${userMessages.slice(-analyzeCount).map(m => {
                             return ''
                         })
                     )
-                    
+
                     return `[${time}] ${contentParts.join('')}`
                 })
             )
@@ -1313,12 +1356,12 @@ ${rawChatHistory}`
 
             const result = await chatService.sendMessage({
                 userId: `profile_${targetUserId}`,
-                groupId: null,  // 不传群ID，避免继承群人设
+                groupId: null, // 不传群ID，避免继承群人设
                 message: aiPrompt,
                 mode: 'chat',
-                skipHistory: true,  // 跳过历史记录
-                disableTools: true,  // 禁用工具
-                prefixPersona: null  // 明确不使用人设
+                skipHistory: true, // 跳过历史记录
+                disableTools: true, // 禁用工具
+                prefixPersona: null // 明确不使用人设
             })
 
             let profileText = ''
@@ -1365,7 +1408,7 @@ ${rawChatHistory}`
 
         try {
             await this.reply('正在生成今日词云...', true)
-            
+
             const groupId = String(e.group_id)
             const maxMessages = config.get('features.wordCloud.maxMessages') || 5000
             await memoryManager.init()
@@ -1377,22 +1420,24 @@ ${rawChatHistory}`
                     const today = new Date()
                     today.setHours(0, 0, 0, 0)
                     const todayTs = today.getTime() / 1000
-                    
+
                     const todayMessages = history.filter(msg => {
                         const msgTime = msg.time || 0
                         return msgTime >= todayTs
                     })
-                    
-                    messages = todayMessages.map(msg => {
-                        const contentParts = (msg.message || [])
-                            .filter(part => part.type === 'text')
-                            .map(part => part.text)
-                        return {
-                            content: contentParts.join(''),
-                            timestamp: msg.time ? msg.time * 1000 : Date.now()
-                        }
-                    }).filter(m => m.content && m.content.trim())
-                    
+
+                    messages = todayMessages
+                        .map(msg => {
+                            const contentParts = (msg.message || [])
+                                .filter(part => part.type === 'text')
+                                .map(part => part.text)
+                            return {
+                                content: contentParts.join(''),
+                                timestamp: msg.time ? msg.time * 1000 : Date.now()
+                            }
+                        })
+                        .filter(m => m.content && m.content.trim())
+
                     if (messages.length > 0) dataSource = 'Bot API'
                 }
             } catch (historyErr) {
@@ -1404,14 +1449,14 @@ ${rawChatHistory}`
                     const today = new Date()
                     today.setHours(0, 0, 0, 0)
                     const todayTs = today.getTime()
-                    
+
                     const todayMemMessages = memoryMessages
                         .filter(m => m.timestamp >= todayTs)
                         .map(m => ({
                             content: m.content || '',
                             timestamp: m.timestamp
                         }))
-                    
+
                     if (todayMemMessages.length > messages.length) {
                         messages = todayMemMessages
                         dataSource = '内存缓冲'
@@ -1427,16 +1472,23 @@ ${rawChatHistory}`
                         const today = new Date()
                         today.setHours(0, 0, 0, 0)
                         const todayTs = today.getTime()
-                        
+
                         const todayDbMessages = rawDbMessages
                             .filter(m => m.timestamp >= todayTs)
                             .map(m => ({
-                                content: typeof m.content === 'string' ? m.content : 
-                                    (Array.isArray(m.content) ? m.content.filter(c => c.type === 'text').map(c => c.text).join('') : ''),
+                                content:
+                                    typeof m.content === 'string'
+                                        ? m.content
+                                        : Array.isArray(m.content)
+                                          ? m.content
+                                                .filter(c => c.type === 'text')
+                                                .map(c => c.text)
+                                                .join('')
+                                          : '',
                                 timestamp: m.timestamp
                             }))
                             .filter(m => m.content && m.content.trim())
-                        
+
                         if (todayDbMessages.length > messages.length) {
                             messages = todayDbMessages
                             dataSource = '数据库'
@@ -1446,13 +1498,13 @@ ${rawChatHistory}`
                     logger.debug('[AI-Commands] 从数据库读取群消息失败:', dbErr.message)
                 }
             }
-            
+
             if (messages.length < 5) {
                 await this.reply('今日群聊消息太少，无法生成词云\n\n💡 提示：需要今天有足够的聊天记录（至少5条）', true)
                 return true
             }
             const wordFreq = this.analyzeWordFrequency(messages.map(m => m.content))
-            
+
             if (wordFreq.length < 5) {
                 await this.reply('有效词汇太少，无法生成词云', true)
                 return true
@@ -1468,7 +1520,10 @@ ${rawChatHistory}`
             } catch (renderErr) {
                 logger.warn('[AI-Commands] 渲染词云失败:', renderErr.message)
                 // 回退到文本
-                const topWords = wordFreq.slice(0, 20).map((w, i) => `${i + 1}. ${w.word} (${w.weight}次)`).join('\n')
+                const topWords = wordFreq
+                    .slice(0, 20)
+                    .map((w, i) => `${i + 1}. ${w.word} (${w.weight}次)`)
+                    .join('\n')
                 await this.reply(`☁️ 今日词云 (${messages.length}条消息)\n━━━━━━━━━━━━\n${topWords}`, true)
             }
         } catch (error) {
@@ -1485,62 +1540,181 @@ ${rawChatHistory}`
      */
     analyzeWordFrequency(texts) {
         const wordMap = new Map()
-        
+
         // 停用词列表
         const stopWords = new Set([
-            '的', '了', '是', '在', '我', '有', '和', '就', '不', '人', '都', '一', '一个',
-            '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好',
-            '自己', '这', '那', '他', '她', '它', '们', '什么', '吗', '啊', '呢', '吧', '嗯',
-            '哦', '哈', '呀', '诶', '嘿', '哎', '唉', '噢', '额', '昂', '啦', '咯', '喔',
-            '这个', '那个', '怎么', '为什么', '可以', '能', '想', '知道', '觉得', '还是',
-            '但是', '因为', '所以', '如果', '虽然', '而且', '或者', '还', '又', '再', '才',
-            '只', '从', '被', '把', '给', '让', '比', '等', '对', '跟', '向', '于', '并',
-            '与', '及', '以', '用', '为', '由', '以及', '而', '且', '之', '其', '如', '则',
-            '么', '来', '去', '过', '得', '地', '里', '后', '前', '中', '下', '多', '少',
-            '大', '小', '好', '坏', '真', '假', '新', '旧', '高', '低', '长', '短', '快', '慢',
-            '图片', '表情', '动画表情', '图片评论'
+            '的',
+            '了',
+            '是',
+            '在',
+            '我',
+            '有',
+            '和',
+            '就',
+            '不',
+            '人',
+            '都',
+            '一',
+            '一个',
+            '上',
+            '也',
+            '很',
+            '到',
+            '说',
+            '要',
+            '去',
+            '你',
+            '会',
+            '着',
+            '没有',
+            '看',
+            '好',
+            '自己',
+            '这',
+            '那',
+            '他',
+            '她',
+            '它',
+            '们',
+            '什么',
+            '吗',
+            '啊',
+            '呢',
+            '吧',
+            '嗯',
+            '哦',
+            '哈',
+            '呀',
+            '诶',
+            '嘿',
+            '哎',
+            '唉',
+            '噢',
+            '额',
+            '昂',
+            '啦',
+            '咯',
+            '喔',
+            '这个',
+            '那个',
+            '怎么',
+            '为什么',
+            '可以',
+            '能',
+            '想',
+            '知道',
+            '觉得',
+            '还是',
+            '但是',
+            '因为',
+            '所以',
+            '如果',
+            '虽然',
+            '而且',
+            '或者',
+            '还',
+            '又',
+            '再',
+            '才',
+            '只',
+            '从',
+            '被',
+            '把',
+            '给',
+            '让',
+            '比',
+            '等',
+            '对',
+            '跟',
+            '向',
+            '于',
+            '并',
+            '与',
+            '及',
+            '以',
+            '用',
+            '为',
+            '由',
+            '以及',
+            '而',
+            '且',
+            '之',
+            '其',
+            '如',
+            '则',
+            '么',
+            '来',
+            '去',
+            '过',
+            '得',
+            '地',
+            '里',
+            '后',
+            '前',
+            '中',
+            '下',
+            '多',
+            '少',
+            '大',
+            '小',
+            '好',
+            '坏',
+            '真',
+            '假',
+            '新',
+            '旧',
+            '高',
+            '低',
+            '长',
+            '短',
+            '快',
+            '慢',
+            '图片',
+            '表情',
+            '动画表情',
+            '图片评论'
         ])
-        
+
         for (const text of texts) {
             if (!text) continue
-            
+
             // 清理文本：移除特殊格式
             let cleanText = text
-                .replace(/\[.+?\]/g, '')  // 移除 [图片] [表情] 等
-                .replace(/@\S+/g, '')      // 移除 @提及
-                .replace(/https?:\/\/\S+/g, '')  // 移除链接
-                .replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, ' ')  // 只保留中文、英文、数字
-            
+                .replace(/\[.+?\]/g, '') // 移除 [图片] [表情] 等
+                .replace(/@\S+/g, '') // 移除 @提及
+                .replace(/https?:\/\/\S+/g, '') // 移除链接
+                .replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, ' ') // 只保留中文、英文、数字
+
             // 简单分词：中文按字符组合，英文按单词
             // 提取2-4字的中文词组
             const chinesePattern = /[\u4e00-\u9fa5]{2,6}/g
             const chineseWords = cleanText.match(chinesePattern) || []
-            
+
             // 提取英文单词
             const englishPattern = /[a-zA-Z]{2,}/g
             const englishWords = cleanText.match(englishPattern) || []
-            
+
             // 统计词频
             const allWords = [...chineseWords, ...englishWords.map(w => w.toLowerCase())]
-            
+
             for (const word of allWords) {
                 if (stopWords.has(word) || word.length < 2) continue
                 wordMap.set(word, (wordMap.get(word) || 0) + 1)
             }
         }
-        
+
         // 转换为数组并排序
         const wordList = Array.from(wordMap.entries())
             .map(([word, weight]) => ({ word, weight }))
-            .filter(w => w.weight >= 2)  // 至少出现2次
+            .filter(w => w.weight >= 2) // 至少出现2次
             .sort((a, b) => b.weight - a.weight)
-            .slice(0, 80)  // 最多80个词
-        
+            .slice(0, 80) // 最多80个词
+
         return wordList
     }
 
     // ==================== 更新相关命令 ====================
-    
+
     /**
      * 显示版本信息
      * #ai版本
@@ -1550,17 +1724,26 @@ ${rawChatHistory}`
             let commitId = 'unknown'
             let branch = 'unknown'
             let commitTime = ''
-            
+
             try {
-                commitId = execSync(`git -C "${pluginPath}" rev-parse --short HEAD`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+                commitId = execSync(`git -C "${pluginPath}" rev-parse --short HEAD`, {
+                    encoding: 'utf-8',
+                    stdio: ['pipe', 'pipe', 'pipe']
+                }).trim()
             } catch {}
-            
+
             try {
-                branch = execSync(`git -C "${pluginPath}" rev-parse --abbrev-ref HEAD`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+                branch = execSync(`git -C "${pluginPath}" rev-parse --abbrev-ref HEAD`, {
+                    encoding: 'utf-8',
+                    stdio: ['pipe', 'pipe', 'pipe']
+                }).trim()
             } catch {}
-            
+
             try {
-                commitTime = execSync(`git -C "${pluginPath}" log -1 --format="%ci"`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+                commitTime = execSync(`git -C "${pluginPath}" log -1 --format="%ci"`, {
+                    encoding: 'utf-8',
+                    stdio: ['pipe', 'pipe', 'pipe']
+                }).trim()
             } catch {}
 
             const lines = [
@@ -1575,7 +1758,7 @@ ${rawChatHistory}`
         }
         return true
     }
-    
+
     /**
      * 检查更新
      * #ai检查更新
@@ -1583,17 +1766,22 @@ ${rawChatHistory}`
     async checkUpdate() {
         if (!this.e.isMaster) return false
         await this.reply('[ChatAI] 正在检查更新...')
-        
+
         try {
             await this.execCommand(`git -C "${pluginPath}" fetch --all`)
-            
+
             const localCommit = execSync(`git -C "${pluginPath}" rev-parse --short HEAD`, { encoding: 'utf-8' }).trim()
-            const remoteCommit = execSync(`git -C "${pluginPath}" rev-parse --short origin/HEAD`, { encoding: 'utf-8' }).trim()
-            
+            const remoteCommit = execSync(`git -C "${pluginPath}" rev-parse --short origin/HEAD`, {
+                encoding: 'utf-8'
+            }).trim()
+
             if (localCommit === remoteCommit) {
                 await this.reply('[ChatAI] 已是最新版本')
             } else {
-                const logs = execSync(`git -C "${pluginPath}" log ${localCommit}..origin/HEAD --oneline --pretty=format:"%s"`, { encoding: 'utf-8' }).trim()
+                const logs = execSync(
+                    `git -C "${pluginPath}" log ${localCommit}..origin/HEAD --oneline --pretty=format:"%s"`,
+                    { encoding: 'utf-8' }
+                ).trim()
                 const logLines = logs.split('\n').slice(0, 10).join('\n')
                 await this.reply(`[ChatAI] 发现新版本！\n更新内容:\n${logLines}\n\n发送 #ai更新 进行更新`)
             }
@@ -1602,14 +1790,14 @@ ${rawChatHistory}`
         }
         return true
     }
-    
+
     /**
      * 执行更新
      * #ai更新 / #ai强制更新
      */
     async doUpdate() {
         if (!this.e.isMaster) return false
-        
+
         if (uping) {
             if (upingTimeout && Date.now() > upingTimeout) {
                 uping = false
@@ -1619,7 +1807,7 @@ ${rawChatHistory}`
                 return false
             }
         }
-        
+
         // 检查git
         try {
             const ret = execSync('git --version', { encoding: 'utf-8' })
@@ -1631,33 +1819,33 @@ ${rawChatHistory}`
             await this.reply('请先安装git')
             return false
         }
-        
+
         const isForce = this.e.msg.includes('强制')
-        
+
         try {
             await this.reply('正在检查更新...')
             await this.execCommand(`git -C "${pluginPath}" fetch --all`)
-            
+
             const oldCommitId = execSync(`git -C "${pluginPath}" rev-parse --short HEAD`, { encoding: 'utf-8' }).trim()
             uping = true
             upingTimeout = Date.now() + UPING_TIMEOUT
-            
+
             if (isForce) {
                 await this.reply('正在执行强制更新，重置本地修改...')
                 await this.execCommand(`git -C "${pluginPath}" checkout . && git -C "${pluginPath}" clean -fd`)
             } else {
                 await this.reply('正在拉取更新...')
             }
-            
+
             const { stdout, error } = await this.execCommand(`git -C "${pluginPath}" pull`)
-            
+
             if (error && !stdout.includes('Already up') && !stdout.includes('已经是最新')) {
                 await this.reply(`更新失败: ${error.toString()}`)
                 return false
             }
-            
+
             const hasUpdate = !/(Already up[ -]to[ -]date|已经是最新的)/.test(stdout)
-            
+
             if (hasUpdate) {
                 // 检查pnpm
                 let npm = 'npm'
@@ -1665,20 +1853,23 @@ ${rawChatHistory}`
                     execSync('pnpm -v', { encoding: 'utf-8' })
                     npm = 'pnpm'
                 } catch {}
-                
+
                 await this.reply(`代码已更新，正在使用 ${npm} 安装依赖...`)
                 await this.execCommand(`cd "${pluginPath}" && ${npm} install --prefer-offline`)
                 await this.reply('依赖安装完成')
             }
-            
-            const time = execSync(`git -C "${pluginPath}" log -1 --oneline --pretty=format:"%cd" --date=format:"%m-%d %H:%M"`, { encoding: 'utf-8' }).trim()
-            
+
+            const time = execSync(
+                `git -C "${pluginPath}" log -1 --oneline --pretty=format:"%cd" --date=format:"%m-%d %H:%M"`,
+                { encoding: 'utf-8' }
+            ).trim()
+
             if (!hasUpdate) {
                 await this.reply(`chatai-plugin已经是最新版本\n最后更新时间：${time}`)
             } else {
                 await this.reply(`chatai-plugin更新成功\n最后更新时间：${time}\n\n请发送 #重启 使更新生效`)
             }
-            
+
             return true
         } catch (err) {
             await this.reply(`更新失败：${err.message}`)
@@ -1688,19 +1879,18 @@ ${rawChatHistory}`
             upingTimeout = null
         }
     }
-    
+
     /**
      * 异步执行命令
      */
     async execCommand(cmd) {
-        return new Promise((resolve) => {
+        return new Promise(resolve => {
             exec(cmd, { windowsHide: true }, (error, stdout, stderr) => {
                 resolve({ error, stdout: stdout || '', stderr: stderr || '' })
             })
         })
     }
 }
-
 
 /**
  * 获取群成员信息
@@ -1712,7 +1902,7 @@ async function getMemberInfo(e, userId) {
     try {
         const group = e.group || e.bot?.pickGroup?.(e.group_id)
         if (!group) return null
-        
+
         // 尝试多种方式获取成员信息
         try {
             const member = group.pickMember?.(userId)
@@ -1723,7 +1913,7 @@ async function getMemberInfo(e, userId) {
                 return member.info
             }
         } catch {}
-        
+
         // 尝试从成员列表获取
         try {
             const memberMap = await group.getMemberMap?.()
@@ -1731,7 +1921,7 @@ async function getMemberInfo(e, userId) {
                 return memberMap.get(Number(userId)) || memberMap.get(String(userId))
             }
         } catch {}
-        
+
         return null
     } catch (err) {
         return null
@@ -1754,11 +1944,11 @@ async function getGroupChatHistory(e, num) {
         let allChats = []
         let seq = e.seq || e.message_id || 0
         let totalScanned = 0
-        const maxScanLimit = Math.min(num * 10, 5000)  // 最多扫描5000条
+        const maxScanLimit = Math.min(num * 10, 5000) // 最多扫描5000条
 
         while (allChats.length < num && totalScanned < maxScanLimit) {
             const chatHistory = await group.getChatHistory(seq, 20)
-            
+
             if (!chatHistory || chatHistory.length === 0) break
 
             totalScanned += chatHistory.length
@@ -1802,11 +1992,11 @@ async function getUserTextHistory(e, userId, num) {
         let userChats = []
         let seq = e.seq || e.message_id || 0
         let totalScanned = 0
-        const maxScanLimit = 3000  // 最多扫描3000条以找到足够的用户消息
+        const maxScanLimit = 3000 // 最多扫描3000条以找到足够的用户消息
 
         while (userChats.length < num && totalScanned < maxScanLimit) {
             const chatHistory = await group.getChatHistory(seq, 20)
-            
+
             if (!chatHistory || chatHistory.length === 0) break
 
             totalScanned += chatHistory.length
@@ -1834,6 +2024,5 @@ async function getUserTextHistory(e, userId, num) {
         return []
     }
 }
-
 
 export { isDebugEnabled, setDebugMode, getDebugSessions }

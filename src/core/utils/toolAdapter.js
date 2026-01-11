@@ -1,6 +1,6 @@
 /**
  * Tool Adapter - 统一工具接口
- * 
+ *
  * 所有工具相关功能已整合到 SkillsAgent，此模块仅作为兼容层重导出
  * @deprecated 请直接使用 SkillsAgent
  */

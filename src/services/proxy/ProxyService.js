@@ -19,10 +19,12 @@ class ProxyService {
      * 获取代理配置
      */
     getConfig() {
-        return config.get('proxy') || {
-            enabled: false,
-            profiles: []
-        }
+        return (
+            config.get('proxy') || {
+                enabled: false,
+                profiles: []
+            }
+        )
     }
 
     /**
@@ -35,7 +37,7 @@ class ProxyService {
 
     /**
      * 根据ID获取代理配置
-     * @param {string} id 
+     * @param {string} id
      */
     getProfileById(id) {
         const profiles = this.getProfiles()
@@ -44,7 +46,7 @@ class ProxyService {
 
     /**
      * 获取指定环境的代理配置
-     * @param {'browser' | 'api' | 'channel'} scope 
+     * @param {'browser' | 'api' | 'channel'} scope
      */
     getProfileForScope(scope) {
         const proxyConfig = this.getConfig()
@@ -64,7 +66,7 @@ class ProxyService {
         if (!profile) return null
 
         const { type, host, port, username, password } = profile
-        
+
         let auth = ''
         if (username && password) {
             auth = `${encodeURIComponent(username)}:${encodeURIComponent(password)}@`
@@ -163,10 +165,8 @@ class ProxyService {
      * @param {'api' | 'channel'} scope 作用域
      */
     getFetchOptions(url, scope = 'api') {
-        const profile = scope === 'channel' 
-            ? this.getProfileForScope('channel')
-            : this.getProfileForScope('api')
-        
+        const profile = scope === 'channel' ? this.getProfileForScope('channel') : this.getProfileForScope('api')
+
         if (!profile) return {}
 
         const agent = this.createProxyAgent(profile, url)
@@ -182,7 +182,7 @@ class ProxyService {
 
     /**
      * 添加代理配置
-     * @param {Object} profile 
+     * @param {Object} profile
      */
     addProfile(profile) {
         const profiles = this.getProfiles()
@@ -205,8 +205,8 @@ class ProxyService {
 
     /**
      * 更新代理配置
-     * @param {string} id 
-     * @param {Object} updates 
+     * @param {string} id
+     * @param {Object} updates
      */
     updateProfile(id, updates) {
         const profiles = this.getProfiles()
@@ -221,7 +221,7 @@ class ProxyService {
 
     /**
      * 删除代理配置
-     * @param {string} id 
+     * @param {string} id
      */
     deleteProfile(id) {
         const profiles = this.getProfiles()
@@ -246,9 +246,9 @@ class ProxyService {
 
     /**
      * 设置作用域代理
-     * @param {'browser' | 'api' | 'channel'} scope 
-     * @param {string | null} profileId 
-     * @param {boolean} enabled 
+     * @param {'browser' | 'api' | 'channel'} scope
+     * @param {string | null} profileId
+     * @param {boolean} enabled
      */
     setScopeProxy(scope, profileId, enabled = true) {
         const validScopes = ['browser', 'api', 'channel']
@@ -265,7 +265,7 @@ class ProxyService {
 
     /**
      * 设置全局启用状态
-     * @param {boolean} enabled 
+     * @param {boolean} enabled
      */
     setEnabled(enabled) {
         config.set('proxy.enabled', enabled)
@@ -286,7 +286,7 @@ class ProxyService {
 
             const fetch = (await import('node-fetch')).default
             const startTime = Date.now()
-            
+
             const response = await fetch(testUrl, {
                 agent,
                 timeout: 10000,

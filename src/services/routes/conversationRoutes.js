@@ -28,7 +28,7 @@ export function createConversationRoutes(authMiddleware) {
         try {
             const db = getDatabase()
             const deletedCount = db.clearAllConversations()
-            
+
             const { contextManager } = await import('../llm/ContextManager.js')
             await contextManager.init()
             contextManager.locks?.clear()
@@ -37,7 +37,7 @@ export function createConversationRoutes(authMiddleware) {
             contextManager.requestCounters?.clear()
             contextManager.groupContextCache?.clear()
             contextManager.sessionStates?.clear()
-            
+
             logger.info(`[WebServer] 清空所有对话完成, 删除: ${deletedCount}条消息`)
             res.json(ChaiteResponse.ok({ success: true, deletedCount }))
         } catch (error) {

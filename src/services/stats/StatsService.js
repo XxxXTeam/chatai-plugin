@@ -67,26 +67,26 @@ class StatsService {
      */
     recordMessage({ type = 'text', groupId, userId, source = 'unknown' }) {
         this.init()
-        
+
         this.stats.messages.total++
-        
+
         // 按类型统计
         this.stats.messages.byType[type] = (this.stats.messages.byType[type] || 0) + 1
-        
+
         // 按群统计
         if (groupId) {
             this.stats.messages.byGroup[groupId] = (this.stats.messages.byGroup[groupId] || 0) + 1
         }
-        
+
         // 按用户统计
         if (userId) {
             this.stats.messages.byUser[userId] = (this.stats.messages.byUser[userId] || 0) + 1
         }
-        
+
         // 按小时统计
         const hour = new Date().getHours()
         this.stats.messages.byHour[hour] = (this.stats.messages.byHour[hour] || 0) + 1
-        
+
         // 定期保存（每100条消息保存一次）
         if (this.stats.messages.total % 100 === 0) {
             this.save()
@@ -108,9 +108,9 @@ class StatsService {
      */
     _updateModelStats({ model, channelId, userId, inputTokens = 0, outputTokens = 0, success = true }) {
         this.init()
-        
+
         this.stats.models.total++
-        
+
         // 按模型统计
         if (!this.stats.models.byModel[model]) {
             this.stats.models.byModel[model] = { calls: 0, success: 0, failed: 0, inputTokens: 0, outputTokens: 0 }
@@ -121,7 +121,7 @@ class StatsService {
         else modelStats.failed++
         modelStats.inputTokens += inputTokens
         modelStats.outputTokens += outputTokens
-        
+
         // 按渠道统计
         if (channelId) {
             if (!this.stats.models.byChannel[channelId]) {
@@ -131,11 +131,11 @@ class StatsService {
             this.stats.models.byChannel[channelId].inputTokens += inputTokens
             this.stats.models.byChannel[channelId].outputTokens += outputTokens
         }
-        
+
         // 总tokens
         this.stats.tokens.total.input += inputTokens
         this.stats.tokens.total.output += outputTokens
-        
+
         // 按用户tokens
         if (userId) {
             if (!this.stats.tokens.byUser[userId]) {
@@ -144,21 +144,21 @@ class StatsService {
             this.stats.tokens.byUser[userId].input += inputTokens
             this.stats.tokens.byUser[userId].output += outputTokens
         }
-        
+
         // 按模型tokens
         if (!this.stats.tokens.byModel[model]) {
             this.stats.tokens.byModel[model] = { input: 0, output: 0 }
         }
         this.stats.tokens.byModel[model].input += inputTokens
         this.stats.tokens.byModel[model].output += outputTokens
-        
+
         this.save()
     }
 
     /**
      * 统一的API调用记录入口（推荐使用）
      * 同时更新内存统计和Redis详细记录，确保数据一致性
-     * 
+     *
      * @param {Object} options - 调用信息
      * @param {string} options.channelId - 渠道ID
      * @param {string} options.channelName - 渠道名称
@@ -223,7 +223,7 @@ class StatsService {
             } else if (apiUsage.input_tokens !== undefined) {
                 inputTokens = apiUsage.input_tokens
             }
-            
+
             if (apiUsage.completion_tokens !== undefined) {
                 outputTokens = apiUsage.completion_tokens
             } else if (apiUsage.completionTokens !== undefined) {
@@ -306,16 +306,16 @@ class StatsService {
      */
     recordToolCall(toolName, success = true) {
         this.init()
-        
+
         this.stats.tools.total++
-        
+
         if (!this.stats.tools.byTool[toolName]) {
             this.stats.tools.byTool[toolName] = { calls: 0, success: 0, failed: 0 }
         }
         this.stats.tools.byTool[toolName].calls++
         if (success) this.stats.tools.byTool[toolName].success++
         else this.stats.tools.byTool[toolName].failed++
-        
+
         // 保存统计数据
         this.save()
     }
@@ -325,11 +325,21 @@ class StatsService {
      * @param {Object} options - 调用详情
      */
     async recordToolCallFull(options) {
-        const { toolName, request, response, success = true, error, duration = 0, userId, groupId, source = 'mcp' } = options
-        
+        const {
+            toolName,
+            request,
+            response,
+            success = true,
+            error,
+            duration = 0,
+            userId,
+            groupId,
+            source = 'mcp'
+        } = options
+
         // 更新简化统计
         this.recordToolCall(toolName, success)
-        
+
         // 记录到详细统计
         try {
             await toolCallStats.record({
@@ -362,18 +372,18 @@ class StatsService {
      */
     getOverview() {
         this.init()
-        
+
         const db = databaseService
         if (!db.initialized) {
             db.init()
         }
         const dbStats = db.getStats()
-        
+
         // 计算运行时间
         const uptime = Date.now() - this.stats.startTime
         const days = Math.floor(uptime / (24 * 60 * 60 * 1000))
         const hours = Math.floor((uptime % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000))
-        
+
         return {
             // 消息统计
             messages: {
@@ -443,14 +453,14 @@ class StatsService {
             lastUpdate: Date.now()
         }
         this.save()
-        
+
         // 同时清空工具调用详细统计
         try {
             await toolCallStats.clear()
         } catch (err) {
             console.error('[StatsService] 清空工具调用统计失败:', err.message)
         }
-        
+
         // 同时清空使用统计
         try {
             await usageStats.clear()
@@ -503,15 +513,15 @@ class StatsService {
      */
     async getUnifiedStats() {
         this.init()
-        
+
         const overview = this.getOverview()
         const toolCallSummary = await toolCallStats.getSummary()
         let usageToday = {}
-        
+
         try {
             usageToday = await usageStats.getTodayStats()
         } catch {}
-        
+
         return {
             ...overview,
             // 工具调用详细统计
@@ -530,7 +540,7 @@ class StatsService {
     async exportAll() {
         const stats = this.getStats()
         const toolCallData = await toolCallStats.export()
-        
+
         return {
             general: stats,
             toolCalls: toolCallData,

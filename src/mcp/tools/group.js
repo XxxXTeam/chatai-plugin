@@ -19,7 +19,7 @@ export const groupTools = [
         handler: async (args, ctx) => {
             const bot = ctx.getBot()
             const groupId = parseInt(args.group_id)
-            
+
             const groupInfo = bot.gl?.get(groupId)
             if (groupInfo) {
                 return {
@@ -34,7 +34,7 @@ export const groupTools = [
                     bot_in_group: true
                 }
             }
-            
+
             try {
                 const group = bot.pickGroup(groupId)
                 const info = group.info || {}
@@ -50,7 +50,7 @@ export const groupTools = [
                     }
                 }
             } catch (e) {}
-            
+
             return {
                 success: false,
                 group_id: groupId,
@@ -105,7 +105,7 @@ export const groupTools = [
             const bot = ctx.getBot()
             const groupId = parseInt(args.group_id)
             const limit = args.limit || 100
-            
+
             const groupInfo = bot.gl?.get(groupId)
             if (!groupInfo) {
                 return {
@@ -115,7 +115,7 @@ export const groupTools = [
                     members: []
                 }
             }
-            
+
             let memberList = []
             try {
                 if (bot.getGroupMemberList) {
@@ -149,13 +149,13 @@ export const groupTools = [
                 title: m.title || ''
             }))
 
-            return { 
+            return {
                 success: true,
-                group_id: groupId, 
+                group_id: groupId,
                 group_name: groupInfo.group_name,
-                total: memberList.length, 
-                returned: members.length, 
-                members 
+                total: memberList.length,
+                returned: members.length,
+                members
             }
         }
     },
@@ -175,7 +175,7 @@ export const groupTools = [
             const bot = ctx.getBot()
             const groupId = parseInt(args.group_id)
             const userId = parseInt(args.user_id)
-            
+
             const groupInfo = bot.gl?.get(groupId)
             if (!groupInfo) {
                 return {
@@ -184,11 +184,11 @@ export const groupTools = [
                     avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
                 }
             }
-            
+
             const group = bot.pickGroup(groupId)
             const memberObj = group.pickMember(userId)
             const member = memberObj.info || {}
-            
+
             if (!member.user_id) {
                 try {
                     const memberMap = await group.getMemberMap()
@@ -196,7 +196,7 @@ export const groupTools = [
                     if (memberData) Object.assign(member, memberData)
                 } catch (e) {}
             }
-            
+
             if (!member.nickname && !member.card) {
                 return {
                     success: false,
@@ -231,14 +231,14 @@ export const groupTools = [
             try {
                 const e = ctx.getEvent()
                 const bot = ctx.getBot()
-                
+
                 if (!e?.group_id) {
                     return { success: false, error: '当前不在群聊中' }
                 }
-                
+
                 const groupId = e.group_id
                 const groupInfo = bot.gl?.get(groupId) || {}
-                
+
                 return {
                     success: true,
                     group_id: groupId,
@@ -269,16 +269,16 @@ export const groupTools = [
                 const e = ctx.getEvent()
                 const bot = ctx.getBot()
                 const groupId = parseInt(args.group_id || e?.group_id)
-                
+
                 if (!groupId) {
                     return { success: false, error: '需要群号参数或在群聊中使用' }
                 }
-                
+
                 const groupInfo = bot.gl?.get(groupId)
                 if (!groupInfo) {
                     return { success: false, error: '机器人不在此群内' }
                 }
-                
+
                 // 获取成员列表
                 let memberList = []
                 try {
@@ -301,7 +301,7 @@ export const groupTools = [
                         }
                     }
                 } catch (e) {}
-                
+
                 // 筛选管理员
                 const admins = memberList
                     .filter(m => m.role === 'owner' || m.role === 'admin')
@@ -313,8 +313,8 @@ export const groupTools = [
                         title: m.title || '',
                         avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${m.user_id || m.uid}&s=100`
                     }))
-                    .sort((a, b) => a.role === 'owner' ? -1 : 1)  // 群主排前面
-                
+                    .sort((a, b) => (a.role === 'owner' ? -1 : 1)) // 群主排前面
+
                 return {
                     success: true,
                     group_id: groupId,
@@ -348,16 +348,16 @@ export const groupTools = [
                 const groupId = parseInt(args.group_id || e?.group_id)
                 const keyword = args.keyword.toLowerCase()
                 const limit = args.limit || 10
-                
+
                 if (!groupId) {
                     return { success: false, error: '需要群号参数或在群聊中使用' }
                 }
-                
+
                 const groupInfo = bot.gl?.get(groupId)
                 if (!groupInfo) {
                     return { success: false, error: '机器人不在此群内' }
                 }
-                
+
                 // 获取成员列表
                 let memberList = []
                 try {
@@ -382,19 +382,19 @@ export const groupTools = [
                 } catch (e) {
                     return { success: false, error: '获取成员列表失败' }
                 }
-                
+
                 // 搜索匹配
                 const matches = []
                 for (const m of memberList) {
                     const nickname = (m.nickname || m.nick || '').toLowerCase()
                     const card = (m.card || '').toLowerCase()
                     const uid = String(m.user_id || m.uid)
-                    
+
                     if (nickname.includes(keyword) || card.includes(keyword) || uid.includes(args.keyword)) {
                         let matchType = 'nickname'
                         if (card.includes(keyword)) matchType = 'card'
                         else if (uid.includes(args.keyword)) matchType = 'user_id'
-                        
+
                         matches.push({
                             user_id: m.user_id || m.uid,
                             nickname: m.nickname || m.nick || '',
@@ -406,7 +406,7 @@ export const groupTools = [
                         if (matches.length >= limit) break
                     }
                 }
-                
+
                 return {
                     success: true,
                     group_id: groupId,
@@ -437,11 +437,11 @@ export const groupTools = [
                 const bot = ctx.getBot()
                 const groupId = parseInt(args.group_id || e?.group_id)
                 const limit = args.limit || 10
-                
+
                 if (!groupId) {
                     return { success: false, error: '需要群号参数或在群聊中使用' }
                 }
-                
+
                 // 获取指定序号的公告
                 if (args.index) {
                     try {
@@ -462,24 +462,22 @@ export const groupTools = [
                         return { success: false, error: err.message }
                     }
                 }
-                
+
                 // 获取公告列表
                 try {
                     const notices = await groupNoticeApi.getNoticeList(bot, groupId)
-                    
-                    const formattedNotices = (Array.isArray(notices) ? notices : [])
-                        .slice(0, limit)
-                        .map((n, idx) => ({
-                            index: idx + 1,
-                            id: n.notice_id || n.fid,
-                            content: n.message?.text || n.msg?.text || n.content || '',
-                            sender_id: n.sender_id || n.u,
-                            time: n.publish_time || n.pubt,
-                            confirm_required: n.need_confirm || n.type === 1,
-                            read_count: n.read_num,
-                            is_pinned: n.is_top || n.pinned
-                        }))
-                    
+
+                    const formattedNotices = (Array.isArray(notices) ? notices : []).slice(0, limit).map((n, idx) => ({
+                        index: idx + 1,
+                        id: n.notice_id || n.fid,
+                        content: n.message?.text || n.msg?.text || n.content || '',
+                        sender_id: n.sender_id || n.u,
+                        time: n.publish_time || n.pubt,
+                        confirm_required: n.need_confirm || n.type === 1,
+                        read_count: n.read_num,
+                        is_pinned: n.is_top || n.pinned
+                    }))
+
                     return {
                         success: true,
                         group_id: groupId,
@@ -512,16 +510,16 @@ export const groupTools = [
                 const bot = ctx.getBot()
                 const userId = parseInt(args.user_id)
                 const groupId = parseInt(args.group_id || e?.group_id)
-                
+
                 if (!groupId) {
                     return { success: false, error: '需要群号参数或在群聊中使用' }
                 }
-                
+
                 const groupInfo = bot.gl?.get(groupId)
                 if (!groupInfo) {
                     return { success: false, error: '机器人不在此群内' }
                 }
-                
+
                 // 获取成员信息
                 const group = bot.pickGroup(groupId)
                 let memberInfo = null
@@ -529,21 +527,23 @@ export const groupTools = [
                     const memberMap = await group.getMemberMap()
                     memberInfo = memberMap.get(userId)
                 } catch (e) {}
-                
+
                 const isInGroup = !!memberInfo
-                
+
                 return {
                     success: true,
                     user_id: userId,
                     group_id: groupId,
                     group_name: groupInfo.group_name,
                     is_in_group: isInGroup,
-                    member_info: isInGroup ? {
-                        nickname: memberInfo.nickname || memberInfo.nick || '',
-                        card: memberInfo.card || '',
-                        role: memberInfo.role || 'member',
-                        title: memberInfo.title || ''
-                    } : null,
+                    member_info: isInGroup
+                        ? {
+                              nickname: memberInfo.nickname || memberInfo.nick || '',
+                              card: memberInfo.card || '',
+                              role: memberInfo.role || 'member',
+                              title: memberInfo.title || ''
+                          }
+                        : null,
                     avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
                 }
             } catch (err) {
@@ -569,12 +569,12 @@ export const groupTools = [
                 const keyword = args.keyword.toLowerCase()
                 const limit = args.limit || 10
                 const gl = bot.gl || new Map()
-                
+
                 const matches = []
                 for (const [gid, group] of gl) {
                     const groupName = (group.group_name || '').toLowerCase()
                     const groupIdStr = String(gid)
-                    
+
                     if (groupName.includes(keyword) || groupIdStr.includes(args.keyword)) {
                         matches.push({
                             group_id: gid,
@@ -586,7 +586,7 @@ export const groupTools = [
                         if (matches.length >= limit) break
                     }
                 }
-                
+
                 return {
                     success: true,
                     keyword: args.keyword,
@@ -597,6 +597,5 @@ export const groupTools = [
                 return { success: false, error: `搜索失败: ${err.message}` }
             }
         }
-    },
-
+    }
 ]

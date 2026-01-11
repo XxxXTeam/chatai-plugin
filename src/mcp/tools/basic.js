@@ -10,8 +10,8 @@ export const basicTools = [
         inputSchema: {
             type: 'object',
             properties: {
-                format: { 
-                    type: 'string', 
+                format: {
+                    type: 'string',
                     description: '时间格式：full(完整)、date(仅日期)、time(仅时间)、timestamp(时间戳)',
                     enum: ['full', 'date', 'time', 'timestamp']
                 },
@@ -21,16 +21,27 @@ export const basicTools = [
                 }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             const now = new Date()
             const tz = args.timezone || 'Asia/Shanghai'
             const format = args.format || 'full'
-            
+
             const options = { timeZone: tz }
-            const dateStr = now.toLocaleDateString('zh-CN', { ...options, year: 'numeric', month: '2-digit', day: '2-digit' })
-            const timeStr = now.toLocaleTimeString('zh-CN', { ...options, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+            const dateStr = now.toLocaleDateString('zh-CN', {
+                ...options,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+            })
+            const timeStr = now.toLocaleTimeString('zh-CN', {
+                ...options,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            })
             const weekday = ['日', '一', '二', '三', '四', '五', '六'][now.getDay()]
-            
+
             let result
             switch (format) {
                 case 'date':
@@ -45,7 +56,7 @@ export const basicTools = [
                 default:
                     result = `${dateStr} ${timeStr} 星期${weekday}`
             }
-            
+
             return {
                 text: `当前时间: ${result}`,
                 datetime: now.toISOString(),
@@ -67,7 +78,7 @@ export const basicTools = [
             },
             required: ['seconds']
         },
-        handler: async (args) => {
+        handler: async args => {
             const seconds = Math.min(Math.max(args.seconds, 0.1), 60)
             await new Promise(r => setTimeout(r, seconds * 1000))
             return { success: true, waited: seconds }
@@ -84,7 +95,7 @@ export const basicTools = [
             },
             required: ['message']
         },
-        handler: async (args) => {
+        handler: async args => {
             return { success: true, message: args.message }
         }
     },
@@ -99,7 +110,7 @@ export const basicTools = [
         handler: async (args, ctx) => {
             const e = ctx?.getEvent?.()
             const bot = ctx?.getBot?.()
-            
+
             return {
                 success: true,
                 node_version: process.version,
@@ -134,25 +145,24 @@ export const basicTools = [
                 keyword: { type: 'string', description: '搜索关键词（可选）' }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const { getCategoryInfo } = await import('./index.js')
                 const categories = getCategoryInfo()
-                
+
                 let result = []
-                
+
                 for (const cat of categories) {
                     if (args.category && cat.key !== args.category) continue
-                    
+
                     let tools = cat.tools
                     if (args.keyword) {
                         const keyword = args.keyword.toLowerCase()
-                        tools = tools.filter(t => 
-                            t.name.toLowerCase().includes(keyword) ||
-                            t.description.toLowerCase().includes(keyword)
+                        tools = tools.filter(
+                            t => t.name.toLowerCase().includes(keyword) || t.description.toLowerCase().includes(keyword)
                         )
                     }
-                    
+
                     if (tools.length > 0) {
                         result.push({
                             category: cat.key,
@@ -162,9 +172,9 @@ export const basicTools = [
                         })
                     }
                 }
-                
+
                 const totalTools = result.reduce((sum, cat) => sum + cat.tools.length, 0)
-                
+
                 return {
                     success: true,
                     total_categories: result.length,
@@ -187,15 +197,15 @@ export const basicTools = [
             },
             required: ['tool_name']
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const { getToolByName } = await import('./index.js')
                 const tool = getToolByName(args.tool_name)
-                
+
                 if (!tool) {
                     return { success: false, error: `未找到工具: ${args.tool_name}` }
                 }
-                
+
                 return {
                     success: true,
                     name: tool.name,
@@ -218,24 +228,53 @@ export const basicTools = [
                 date: { type: 'string', description: '公历日期，格式 YYYY-MM-DD，不填则使用今天' }
             }
         },
-        handler: async (args) => {
+        handler: async args => {
             try {
                 const date = args.date ? new Date(args.date) : new Date()
-                
+
                 // 简单农历计算（仅供参考，精确农历需要专门的库）
                 const lunarMonths = ['正', '二', '三', '四', '五', '六', '七', '八', '九', '十', '冬', '腊']
-                const lunarDays = ['初一', '初二', '初三', '初四', '初五', '初六', '初七', '初八', '初九', '初十',
-                    '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十',
-                    '廿一', '廿二', '廿三', '廿四', '廿五', '廿六', '廿七', '廿八', '廿九', '三十']
+                const lunarDays = [
+                    '初一',
+                    '初二',
+                    '初三',
+                    '初四',
+                    '初五',
+                    '初六',
+                    '初七',
+                    '初八',
+                    '初九',
+                    '初十',
+                    '十一',
+                    '十二',
+                    '十三',
+                    '十四',
+                    '十五',
+                    '十六',
+                    '十七',
+                    '十八',
+                    '十九',
+                    '二十',
+                    '廿一',
+                    '廿二',
+                    '廿三',
+                    '廿四',
+                    '廿五',
+                    '廿六',
+                    '廿七',
+                    '廿八',
+                    '廿九',
+                    '三十'
+                ]
                 const animals = ['鼠', '牛', '虎', '兔', '龙', '蛇', '马', '羊', '猴', '鸡', '狗', '猪']
                 const stems = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸']
                 const branches = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥']
-                
+
                 const year = date.getFullYear()
                 const animal = animals[(year - 4) % 12]
                 const stem = stems[(year - 4) % 10]
                 const branch = branches[(year - 4) % 12]
-                
+
                 return {
                     success: true,
                     solar_date: date.toISOString().split('T')[0],
@@ -260,7 +299,7 @@ export const basicTools = [
         handler: async () => {
             const now = new Date()
             const year = now.getFullYear()
-            
+
             // 主要节日列表
             const festivals = [
                 { date: `${year}-01-01`, name: '元旦' },
@@ -281,7 +320,7 @@ export const basicTools = [
                 { date: `${year}-12-25`, name: '圣诞节' },
                 { date: `${year + 1}-01-01`, name: '元旦' }
             ]
-            
+
             // 找出近期节日
             const upcoming = festivals
                 .filter(f => new Date(f.date) >= now)
@@ -295,7 +334,7 @@ export const basicTools = [
                         days_left: diff
                     }
                 })
-            
+
             return {
                 success: true,
                 today: now.toISOString().split('T')[0],
@@ -311,8 +350,8 @@ export const basicTools = [
             type: 'object',
             properties: {
                 number: { type: 'number', description: '要格式化的数字' },
-                format: { 
-                    type: 'string', 
+                format: {
+                    type: 'string',
                     description: '格式：thousand(千位分隔)、chinese(中文数字)、currency(货币)',
                     enum: ['thousand', 'chinese', 'currency']
                 },
@@ -320,10 +359,10 @@ export const basicTools = [
             },
             required: ['number']
         },
-        handler: async (args) => {
+        handler: async args => {
             const num = args.number
             const format = args.format || 'thousand'
-            
+
             let result
             switch (format) {
                 case 'thousand':
@@ -341,12 +380,13 @@ export const basicTools = [
                     break
                 case 'currency':
                     const symbol = args.currency || '￥'
-                    result = symbol + num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                    result =
+                        symbol + num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                     break
                 default:
                     result = String(num)
             }
-            
+
             return {
                 success: true,
                 original: num,

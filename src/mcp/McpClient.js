@@ -7,13 +7,13 @@ const logger = chatLogger
 
 /**
  * MCP Client - Model Context Protocol 客户端实现
- * 
+ *
  * @description 支持多种传输类型连接 MCP 服务器
  * - stdio: 标准输入输出（本地进程）
  * - npm/npx: npm 包形式的 MCP 服务器
  * - sse: Server-Sent Events
  * - http: HTTP 请求
- * 
+ *
  * @example
  * ```js
  * const client = new McpClient({ type: 'stdio', command: 'node', args: ['server.js'] })
@@ -79,7 +79,7 @@ export class McpClient {
 
             // HTTP 类型也需要初始化以获取服务器能力
             await this.initialize()
-            
+
             // 只有非 HTTP 类型才需要心跳（HTTP 是无状态的）
             if (this.type !== 'http') {
                 this.startHeartbeat()
@@ -101,7 +101,7 @@ export class McpClient {
         if (this.process) return
 
         const { package: pkg, args = [], env } = this.config
-        
+
         if (!pkg) {
             throw new Error('npm/npx type requires "package" field, e.g. "@upstash/context7-mcp"')
         }
@@ -115,17 +115,17 @@ export class McpClient {
             shell: process.platform === 'win32'
         })
 
-        this.process.stdout.on('data', (data) => this.handleData(data))
-        this.process.stderr.on('data', (data) => {
+        this.process.stdout.on('data', data => this.handleData(data))
+        this.process.stderr.on('data', data => {
             logger.warn(`[MCP] Server stderr: ${data.toString()}`)
         })
 
-        this.process.on('close', (code) => {
+        this.process.on('close', code => {
             logger.debug(`[MCP] Server exited with code ${code}`)
             this.handleDisconnect()
         })
 
-        this.process.on('error', (error) => {
+        this.process.on('error', error => {
             logger.error(`[MCP] Process error:`, error)
             this.handleDisconnect()
         })
@@ -143,17 +143,17 @@ export class McpClient {
             stdio: ['pipe', 'pipe', 'pipe']
         })
 
-        this.process.stdout.on('data', (data) => this.handleData(data))
-        this.process.stderr.on('data', (data) => {
+        this.process.stdout.on('data', data => this.handleData(data))
+        this.process.stderr.on('data', data => {
             logger.warn(`[MCP] Server stderr: ${data.toString()}`)
         })
 
-        this.process.on('close', (code) => {
+        this.process.on('close', code => {
             logger.debug(`[MCP] Server exited with code ${code}`)
             this.handleDisconnect()
         })
 
-        this.process.on('error', (error) => {
+        this.process.on('error', error => {
             logger.error(`[MCP] Process error:`, error)
             this.handleDisconnect()
         })
@@ -161,16 +161,16 @@ export class McpClient {
 
     async connectSSE() {
         const { url, headers = {} } = this.config
-        this.sseBaseUrl = url.replace(/\/sse\/?$/, '')  // 移除末尾的 /sse
-        
+        this.sseBaseUrl = url.replace(/\/sse\/?$/, '') // 移除末尾的 /sse
+
         // 连接 SSE 端点获取 session
         const sseUrl = url.endsWith('/sse') ? url : `${url}/sse`
         logger.debug(`[MCP] Connecting to SSE endpoint: ${sseUrl}`)
-        
+
         this.eventSource = new EventSource(sseUrl)
-        
+
         // 设置通用消息处理器
-        this.eventSource.onmessage = (event) => {
+        this.eventSource.onmessage = event => {
             logger.debug(`[MCP] SSE message received: ${event.data.substring(0, 200)}`)
             try {
                 const message = JSON.parse(event.data)
@@ -186,8 +186,8 @@ export class McpClient {
                 this.eventSource?.close()
                 reject(new Error('SSE connection timeout'))
             }, 10000)
-            
-            this.eventSource.addEventListener('endpoint', (event) => {
+
+            this.eventSource.addEventListener('endpoint', event => {
                 // 获取到消息端点，如 /messages?sessionId=xxx
                 this.sseMessageEndpoint = event.data
                 logger.debug(`[MCP] SSE message endpoint: ${this.sseMessageEndpoint}`)
@@ -195,7 +195,7 @@ export class McpClient {
                 resolve()
             })
 
-            this.eventSource.onerror = (error) => {
+            this.eventSource.onerror = error => {
                 if (error.type === 'error') {
                     logger.warn(`[MCP] SSE connection error`)
                 }
@@ -204,7 +204,7 @@ export class McpClient {
                     reject(new Error('SSE connection closed'))
                 }
             }
-            
+
             this.eventSource.onopen = () => {
                 logger.debug(`[MCP] SSE connection opened`)
             }
@@ -237,8 +237,10 @@ export class McpClient {
 
     handleMessage(message) {
         const pendingIds = Array.from(this.pendingRequests.keys())
-        logger.debug(`[MCP] handleMessage: id=${message.id}, method=${message.method}, hasResult=${message.result !== undefined}, pendingIds=[${pendingIds.join(', ')}]`)
-        
+        logger.debug(
+            `[MCP] handleMessage: id=${message.id}, method=${message.method}, hasResult=${message.result !== undefined}, pendingIds=[${pendingIds.join(', ')}]`
+        )
+
         if (message.id && this.pendingRequests.has(message.id)) {
             const { resolve, reject } = this.pendingRequests.get(message.id)
             this.pendingRequests.delete(message.id)
@@ -254,7 +256,9 @@ export class McpClient {
             // Handle notifications or server requests
             this.handleNotification(message)
         } else if (message.id) {
-            logger.warn(`[MCP] Received response for unknown request id: ${message.id}, pendingIds=[${pendingIds.join(', ')}]`)
+            logger.warn(
+                `[MCP] Received response for unknown request id: ${message.id}, pendingIds=[${pendingIds.join(', ')}]`
+            )
         }
     }
 
@@ -299,7 +303,9 @@ export class McpClient {
         this.reconnectAttempts++
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000)
 
-        logger.info(`[MCP] Reconnecting in ${delay}ms... (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`)
+        logger.info(
+            `[MCP] Reconnecting in ${delay}ms... (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`
+        )
 
         setTimeout(async () => {
             try {
@@ -382,11 +388,11 @@ export class McpClient {
             }, timeout)
 
             this.pendingRequests.set(id, {
-                resolve: (res) => {
+                resolve: res => {
                     clearTimeout(timer)
                     resolve(res)
                 },
-                reject: (err) => {
+                reject: err => {
                     clearTimeout(timer)
                     reject(err)
                 }
@@ -412,22 +418,22 @@ export class McpClient {
      */
     async sendSSERequest(request, timeout = 30000) {
         const { headers: configHeaders = {} } = this.config
-        
+
         // 构建完整的消息端点 URL
         let messageUrl
         if (this.sseMessageEndpoint) {
-            messageUrl = this.sseMessageEndpoint.startsWith('http') 
-                ? this.sseMessageEndpoint 
+            messageUrl = this.sseMessageEndpoint.startsWith('http')
+                ? this.sseMessageEndpoint
                 : `${this.sseBaseUrl}${this.sseMessageEndpoint}`
         } else {
             messageUrl = this.sseUrl || this.config.url
         }
-        
+
         // 对 ping 方法不输出 debug 日志（心跳每30秒调用一次，避免日志过多）
         if (request.method !== 'ping') {
             logger.debug(`[MCP] SSE POST to: ${messageUrl}, id: ${request.id}, method: ${request.method}`)
         }
-        
+
         // 先注册 pending request，再发送 POST（避免时序问题：SSE 响应可能在 POST 返回前到达）
         const responsePromise = new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
@@ -436,28 +442,28 @@ export class McpClient {
                     reject(new Error(`SSE response timeout for ${request.method}`))
                 }
             }, timeout)
-            
+
             this.pendingRequests.set(request.id, {
-                resolve: (result) => {
+                resolve: result => {
                     clearTimeout(timer)
                     resolve(result)
                 },
-                reject: (err) => {
+                reject: err => {
                     clearTimeout(timer)
                     reject(err)
                 }
             })
         })
-        
+
         // 发送 POST 请求
         let response
         try {
             response = await fetch(messageUrl, {
                 method: 'POST',
-                headers: { 
+                headers: {
                     'Content-Type': 'application/json',
-                    'Accept': 'application/json, text/event-stream',
-                    ...configHeaders 
+                    Accept: 'application/json, text/event-stream',
+                    ...configHeaders
                 },
                 body: JSON.stringify(request)
             })
@@ -465,19 +471,19 @@ export class McpClient {
             this.pendingRequests.delete(request.id)
             throw new Error(`SSE POST failed: ${fetchError.message}`)
         }
-        
+
         if (!response.ok) {
             this.pendingRequests.delete(request.id)
             const text = await response.text().catch(() => '')
             throw new Error(`SSE request failed: ${response.status} ${response.statusText} ${text}`)
         }
-        
+
         // 检查响应
         const responseText = await response.text()
         if (request.method !== 'ping') {
             logger.debug(`[MCP] SSE POST response status: ${response.status}, body: ${responseText.substring(0, 100)}`)
         }
-        
+
         // 如果是 202 Accepted 或 "Accepted"，等待 SSE 流响应
         if (response.status === 202 || responseText === 'Accepted' || responseText.trim() === '') {
             if (request.method !== 'ping') {
@@ -485,7 +491,7 @@ export class McpClient {
             }
             return await responsePromise
         }
-        
+
         // 尝试解析 JSON 响应（某些服务器可能直接返回结果）
         try {
             this.pendingRequests.delete(request.id)
@@ -513,12 +519,12 @@ export class McpClient {
                 method,
                 params
             }
-            
+
             const response = await fetch(this.httpUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Accept': 'application/json, text/event-stream',
+                    Accept: 'application/json, text/event-stream',
                     ...this.httpHeaders
                 },
                 body: JSON.stringify(requestBody),
@@ -533,12 +539,12 @@ export class McpClient {
             }
 
             const contentType = response.headers.get('content-type') || ''
-            
+
             // 处理 SSE 流式响应 (Streamable HTTP)
             if (contentType.includes('text/event-stream')) {
                 return await this.parseSSEResponse(response)
             }
-            
+
             // 处理普通 JSON 响应
             const result = await response.json()
             logger.debug(`[MCP] HTTP response for ${method}:`, JSON.stringify(result).substring(0, 200))
@@ -561,11 +567,11 @@ export class McpClient {
     async parseSSEResponse(response) {
         const text = await response.text()
         logger.debug(`[MCP] SSE response text:`, text.substring(0, 500))
-        
+
         // 解析 SSE 格式: "event: message\ndata: {...}\n\n"
         const lines = text.split('\n')
         let jsonData = null
-        
+
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i].trim()
             if (line.startsWith('data:')) {
@@ -583,15 +589,15 @@ export class McpClient {
                 }
             }
         }
-        
+
         if (!jsonData) {
             throw new Error('No valid JSON-RPC response found in SSE stream')
         }
-        
+
         if (jsonData.error) {
             throw new Error(jsonData.error.message || JSON.stringify(jsonData.error))
         }
-        
+
         return jsonData.result
     }
 
@@ -614,10 +620,12 @@ export class McpClient {
 
             // Send initialized notification (only for stdio/npm/npx types with process)
             if ((this.type === 'stdio' || this.type === 'npm' || this.type === 'npx') && this.process) {
-                this.process.stdin.write(JSON.stringify({
-                    jsonrpc: '2.0',
-                    method: 'notifications/initialized'
-                }) + '\n')
+                this.process.stdin.write(
+                    JSON.stringify({
+                        jsonrpc: '2.0',
+                        method: 'notifications/initialized'
+                    }) + '\n'
+                )
             }
 
             logger.debug('[MCP] Initialized with capabilities:', Object.keys(this.serverCapabilities || {}))
@@ -639,7 +647,7 @@ export class McpClient {
         try {
             const result = await this.request('tools/list', {})
             logger.debug(`[MCP] listTools raw result:`, JSON.stringify(result).substring(0, 500))
-            
+
             // 处理不同的响应格式
             if (Array.isArray(result)) {
                 return result
@@ -651,7 +659,7 @@ export class McpClient {
                 logger.warn(`[MCP] listTools returned empty result`)
                 return []
             }
-            
+
             logger.warn(`[MCP] Unexpected listTools response format:`, typeof result, result)
             return []
         } catch (error) {

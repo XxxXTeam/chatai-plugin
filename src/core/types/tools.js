@@ -140,8 +140,8 @@ export class CustomTool {
         parameters: {
             type: 'object',
             properties: {},
-            required: [],
-        },
+            required: []
+        }
     }
 
     /**

@@ -37,29 +37,31 @@ class KnowledgeService {
 
     async init() {
         if (this.initialized) return
-        
+
         // 确保知识库目录存在
         if (!fs.existsSync(KNOWLEDGE_DIR)) {
             fs.mkdirSync(KNOWLEDGE_DIR, { recursive: true })
         }
-        
+
         await this.loadDocuments()
         this.initialized = true
-        
+
         // 统计信息
         const docsWithContent = Array.from(this.documents.values()).filter(d => d.content && d.content.length > 0)
         const linkedDocs = Array.from(this.documents.values()).filter(d => d.presetIds && d.presetIds.length > 0)
-        
+
         logger.info(`[KnowledgeService] 初始化完成:`)
         logger.info(`  - 总文档数: ${this.documents.size}`)
         logger.info(`  - 有内容文档: ${docsWithContent.length}`)
         logger.info(`  - 已关联预设: ${linkedDocs.length}`)
         logger.info(`  - 知识库目录: ${KNOWLEDGE_DIR}`)
-        
+
         // 列出已关联的文档
         if (linkedDocs.length > 0) {
             for (const doc of linkedDocs) {
-                logger.info(`  - [${doc.name}] 关联预设: ${doc.presetIds.join(', ')}，内容长度: ${doc.content?.length || 0}`)
+                logger.info(
+                    `  - [${doc.name}] 关联预设: ${doc.presetIds.join(', ')}，内容长度: ${doc.content?.length || 0}`
+                )
             }
         }
     }
@@ -69,12 +71,12 @@ class KnowledgeService {
      */
     async loadDocuments() {
         const indexFile = path.join(KNOWLEDGE_DIR, 'index.json')
-        
+
         if (fs.existsSync(indexFile)) {
             try {
                 const indexData = JSON.parse(fs.readFileSync(indexFile, 'utf-8'))
                 const brokenDocs = []
-                
+
                 for (const doc of indexData.documents || []) {
                     // 从文件读取实际内容（索引只保存元数据）
                     if (doc.filePath) {
@@ -97,9 +99,9 @@ class KnowledgeService {
                         // 没有 filePath，检查是否有内联内容（兼容旧格式）
                         doc.content = doc.content || ''
                     }
-                    
+
                     this.documents.set(doc.id, doc)
-                    
+
                     // 构建预设-文档映射
                     if (doc.presetIds && doc.presetIds.length > 0) {
                         for (const presetId of doc.presetIds) {
@@ -110,14 +112,17 @@ class KnowledgeService {
                         }
                     }
                 }
-                
+
                 logger.info(`[KnowledgeService] 从索引加载 ${this.documents.size} 个文档`)
-                
+
                 // 自动清理损坏的文档记录
                 if (brokenDocs.length > 0) {
                     logger.warn(`[KnowledgeService] 发现 ${brokenDocs.length} 个损坏文档，将自动清理索引`)
                     // 延迟保存索引，移除损坏的文档
-                    setTimeout(() => this.saveIndex().catch(e => logger.error('[KnowledgeService] 清理索引失败:', e)), 1000)
+                    setTimeout(
+                        () => this.saveIndex().catch(e => logger.error('[KnowledgeService] 清理索引失败:', e)),
+                        1000
+                    )
                 }
             } catch (err) {
                 logger.error('[KnowledgeService] 加载索引失败:', err.message)
@@ -133,7 +138,7 @@ class KnowledgeService {
      */
     async scanKnowledgeFiles() {
         const supportedExts = ['.txt', '.md', '.json']
-        
+
         // 收集已被索引文档引用的文件
         const indexedFiles = new Set()
         for (const doc of this.documents.values()) {
@@ -141,30 +146,30 @@ class KnowledgeService {
                 indexedFiles.add(doc.filePath)
             }
         }
-        
+
         try {
             const files = fs.readdirSync(KNOWLEDGE_DIR)
             for (const file of files) {
                 if (file === 'index.json') continue
-                
+
                 const ext = path.extname(file).toLowerCase()
                 if (!supportedExts.includes(ext)) continue
-                
+
                 const filePath = path.join(KNOWLEDGE_DIR, file)
                 const stat = fs.statSync(filePath)
                 if (!stat.isFile()) continue
-                
+
                 // 跳过已被其他文档引用的文件
                 if (indexedFiles.has(file)) {
                     logger.debug(`[KnowledgeService] 跳过已索引文件: ${file}`)
                     continue
                 }
-                
+
                 const id = `file_${file.replace(/\.[^.]+$/, '')}`
-                
+
                 // 跳过已存在的文档
                 if (this.documents.has(id)) continue
-                
+
                 try {
                     const content = fs.readFileSync(filePath, 'utf-8')
                     const doc = {
@@ -210,7 +215,7 @@ class KnowledgeService {
                 contentLength: doc.content?.length || 0
             }))
         }
-        
+
         try {
             fs.writeFileSync(indexFile, JSON.stringify(indexData, null, 2), 'utf-8')
             logger.debug(`[KnowledgeService] 索引已保存: ${indexData.documents.length} 个文档`)
@@ -257,7 +262,7 @@ class KnowledgeService {
     async create(data) {
         const id = data.id || `kb_${crypto.randomUUID()}`
         const now = Date.now()
-        
+
         const doc = {
             id,
             name: data.name || '未命名文档',
@@ -268,7 +273,7 @@ class KnowledgeService {
             updatedAt: now,
             presetIds: data.presetIds || []
         }
-        
+
         // 保存到文件（默认行为，确保持久化）
         if (data.saveToFile !== false) {
             const ext = doc.type === 'markdown' ? '.md' : doc.type === 'json' ? '.json' : '.txt'
@@ -277,17 +282,17 @@ class KnowledgeService {
                 .replace(/[\/\\:*?"<>|]/g, '_')
                 .replace(/\s+/g, '_')
                 .substring(0, 80) // 限制文件名长度
-            
+
             // 如果清理后文件名为空或只有下划线，使用 ID
             if (!safeName || /^_+$/.test(safeName)) {
                 safeName = 'doc'
             }
-            
+
             // 添加 ID 前缀确保文件名唯一，避免不同文档共享同一文件
             const idPrefix = id.replace('kb_', '').substring(0, 8)
             const fileName = `${safeName}_${idPrefix}${ext}`
             const filePath = path.join(KNOWLEDGE_DIR, fileName)
-            
+
             try {
                 fs.writeFileSync(filePath, doc.content, 'utf-8')
                 doc.filePath = fileName
@@ -301,9 +306,9 @@ class KnowledgeService {
                 throw new Error(`保存知识库文件失败: ${err.message}`)
             }
         }
-        
+
         this.documents.set(id, doc)
-        
+
         // 更新预设映射
         for (const presetId of doc.presetIds) {
             if (!this.presetKnowledgeMap.has(presetId)) {
@@ -311,7 +316,7 @@ class KnowledgeService {
             }
             this.presetKnowledgeMap.get(presetId).add(id)
         }
-        
+
         await this.saveIndex()
         logger.debug(`[KnowledgeService] 索引已更新`)
         return doc
@@ -328,16 +333,16 @@ class KnowledgeService {
         if (!doc) {
             throw new Error(`文档不存在: ${id}`)
         }
-        
+
         const oldPresetIds = doc.presetIds || []
-        
+
         // 更新字段
         Object.assign(doc, {
             ...data,
             id, // 不能改变ID
             updatedAt: Date.now()
         })
-        
+
         // 保存文件内容（确保持久化）
         if (data.content !== undefined) {
             // 如果没有文件路径，创建新文件
@@ -347,12 +352,12 @@ class KnowledgeService {
                 doc.filePath = fileName
                 logger.info(`[KnowledgeService] 为文档 ${doc.name} 创建文件: ${fileName}`)
             }
-            
+
             const filePath = path.join(KNOWLEDGE_DIR, doc.filePath)
             fs.writeFileSync(filePath, doc.content, 'utf-8')
             logger.debug(`[KnowledgeService] 已保存文档内容到: ${doc.filePath}`)
         }
-        
+
         // 更新预设映射
         // 移除旧的映射
         for (const presetId of oldPresetIds) {
@@ -366,7 +371,7 @@ class KnowledgeService {
             }
             this.presetKnowledgeMap.get(presetId).add(id)
         }
-        
+
         await this.saveIndex()
         return doc
     }
@@ -379,7 +384,7 @@ class KnowledgeService {
     async delete(id) {
         const doc = this.documents.get(id)
         if (!doc) return false
-        
+
         // 删除文件
         if (doc.filePath) {
             const filePath = path.join(KNOWLEDGE_DIR, doc.filePath)
@@ -387,13 +392,13 @@ class KnowledgeService {
                 fs.unlinkSync(filePath)
             }
         }
-        
+
         // 移除映射
         for (const presetId of doc.presetIds || []) {
             const set = this.presetKnowledgeMap.get(presetId)
             if (set) set.delete(id)
         }
-        
+
         this.documents.delete(id)
         await this.saveIndex()
         return true
@@ -407,7 +412,7 @@ class KnowledgeService {
     getPresetKnowledge(presetId) {
         const docIds = this.presetKnowledgeMap.get(presetId)
         if (!docIds || docIds.size === 0) return []
-        
+
         const docs = []
         for (const id of docIds) {
             const doc = this.documents.get(id)
@@ -426,16 +431,16 @@ class KnowledgeService {
         if (!doc) {
             throw new Error(`文档不存在: ${docId}`)
         }
-        
+
         if (!doc.presetIds.includes(presetId)) {
             doc.presetIds.push(presetId)
             doc.updatedAt = Date.now()
-            
+
             if (!this.presetKnowledgeMap.has(presetId)) {
                 this.presetKnowledgeMap.set(presetId, new Set())
             }
             this.presetKnowledgeMap.get(presetId).add(docId)
-            
+
             await this.saveIndex()
         }
     }
@@ -448,15 +453,15 @@ class KnowledgeService {
     async unlinkFromPreset(docId, presetId) {
         const doc = this.documents.get(docId)
         if (!doc) return
-        
+
         const idx = doc.presetIds.indexOf(presetId)
         if (idx !== -1) {
             doc.presetIds.splice(idx, 1)
             doc.updatedAt = Date.now()
-            
+
             const set = this.presetKnowledgeMap.get(presetId)
             if (set) set.delete(docId)
-            
+
             await this.saveIndex()
         }
     }
@@ -468,41 +473,38 @@ class KnowledgeService {
      * @returns {string}
      */
     buildKnowledgePrompt(presetId, options = {}) {
-        const { 
-            maxLength = 15000, 
-            separator = '\n\n',
-            includeTriples = true 
-        } = options
-        
+        const { maxLength = 15000, separator = '\n\n', includeTriples = true } = options
+
         const docs = this.getPresetKnowledge(presetId)
         if (docs.length === 0) return ''
-        
+
         const parts = []
         parts.push('【知识库参考资料】')
         parts.push('以下是与当前对话相关的参考信息，请在回答时参考这些内容：')
         parts.push('')
-        
+
         let totalLength = 0
         let docIndex = 0
-        
+
         for (const doc of docs) {
             docIndex++
-            
+
             // 构建文档内容
             let docContent = doc.content || ''
-            
+
             // 如果内容太长，智能截断
             const maxDocLength = Math.floor((maxLength - 200) / Math.min(docs.length, 3))
             if (docContent.length > maxDocLength) {
                 // 优先保留结构化内容（实体关系部分）
                 const entitySection = docContent.match(/## 实体关系[\s\S]*?(?=##|$)/)?.[0] || ''
                 const passageSection = docContent.match(/## 知识条目[\s\S]*?(?=##|$)/)?.[0] || ''
-                
+
                 if (entitySection && passageSection) {
                     // 实体关系优先，知识条目截断
                     const entityLen = Math.min(entitySection.length, maxDocLength * 0.6)
                     const passageLen = maxDocLength - entityLen
-                    docContent = entitySection.substring(0, entityLen) + '\n\n' + passageSection.substring(0, passageLen)
+                    docContent =
+                        entitySection.substring(0, entityLen) + '\n\n' + passageSection.substring(0, passageLen)
                     if (docContent.length < doc.content.length) {
                         docContent += '\n...(内容已截断)'
                     }
@@ -510,9 +512,9 @@ class KnowledgeService {
                     docContent = docContent.substring(0, maxDocLength) + '\n...(内容已截断)'
                 }
             }
-            
+
             const docText = `### 📚 ${doc.name}\n${docContent}`
-            
+
             if (totalLength + docText.length > maxLength) {
                 if (docIndex === 1) {
                     // 第一个文档，至少保留一部分
@@ -523,20 +525,20 @@ class KnowledgeService {
                 }
                 break
             }
-            
+
             parts.push(docText)
             totalLength += docText.length
         }
-        
+
         if (parts.length <= 3) {
             // 没有有效内容
             return ''
         }
-        
+
         parts.push('')
         parts.push('---')
         parts.push('请结合以上知识库内容回答用户问题。如果问题与知识库内容相关，优先参考知识库信息。')
-        
+
         return parts.join(separator)
     }
 
@@ -547,7 +549,7 @@ class KnowledgeService {
      * @returns {Object} 导入结果
      */
     async importOpenIE(data, options = {}) {
-        const { 
+        const {
             name = '导入的知识库',
             tags = [],
             presetIds = [],
@@ -586,17 +588,20 @@ class KnowledgeService {
                     if (Array.isArray(triple) && triple.length >= 3) {
                         const [subject, predicate, object] = triple
                         stats.triples.push({ subject, predicate, object })
-                        
+
                         if (!entityMap.has(subject)) {
                             entityMap.set(subject, { attributes: [], relations: [], passages: [] })
                         }
-                        
+
                         const entry = entityMap.get(subject)
                         // 区分属性和关系
-                        const isAttribute = ['是', '为', '有', '属于', '名', '名字', '外文名', '别号', '别名'].some(
-                            k => predicate.includes(k)
-                        ) || predicate.endsWith('色') || predicate.endsWith('名')
-                        
+                        const isAttribute =
+                            ['是', '为', '有', '属于', '名', '名字', '外文名', '别号', '别名'].some(k =>
+                                predicate.includes(k)
+                            ) ||
+                            predicate.endsWith('色') ||
+                            predicate.endsWith('名')
+
                         if (isAttribute) {
                             entry.attributes.push({ predicate, object })
                         } else {
@@ -610,7 +615,7 @@ class KnowledgeService {
             if (doc.passage) {
                 passages.push(doc.passage)
                 stats.imported++
-                
+
                 // 将段落关联到提及的实体
                 if (doc.extracted_entities) {
                     for (const entity of doc.extracted_entities) {
@@ -624,12 +629,12 @@ class KnowledgeService {
 
         // 构建结构化内容 - 实体为中心的组织方式
         let content = ''
-        
+
         // 1. 实体关系图谱（主要内容，AI 更容易理解）
         if (entityMap.size > 0) {
             content += '## 实体关系\n\n'
             content += '以下是知识库中的实体及其属性、关系：\n\n'
-            
+
             // 按实体关联信息量排序，信息量大的优先
             const sortedEntities = Array.from(entityMap.entries())
                 .map(([entity, data]) => ({
@@ -639,12 +644,12 @@ class KnowledgeService {
                 }))
                 .filter(e => e.score > 0)
                 .sort((a, b) => b.score - a.score)
-            
+
             for (const { entity, data } of sortedEntities) {
                 if (data.attributes.length === 0 && data.relations.length === 0) continue
-                
+
                 content += `### 【${entity}】\n`
-                
+
                 // 属性
                 if (data.attributes.length > 0) {
                     content += '**基本属性：**\n'
@@ -652,7 +657,7 @@ class KnowledgeService {
                         content += `- ${attr.predicate}：${attr.object}\n`
                     }
                 }
-                
+
                 // 关系
                 if (data.relations.length > 0) {
                     content += '**相关信息：**\n'
@@ -660,7 +665,7 @@ class KnowledgeService {
                         content += `- ${rel.predicate}：${rel.object}\n`
                     }
                 }
-                
+
                 content += '\n'
             }
         }
@@ -745,29 +750,29 @@ class KnowledgeService {
     search(query, options = {}) {
         const { limit = 10, presetId } = options
         const results = []
-        
+
         let searchDocs = Array.from(this.documents.values())
-        
+
         // 如果指定预设，只搜索关联的文档
         if (presetId) {
             searchDocs = this.getPresetKnowledge(presetId)
         }
-        
+
         const queryLower = query.toLowerCase()
         const queryTerms = queryLower.split(/\s+/).filter(t => t.length > 1)
-        
+
         for (const doc of searchDocs) {
             let score = 0
             const matches = []
             const contentLower = (doc.content || '').toLowerCase()
             const nameLower = (doc.name || '').toLowerCase()
-            
+
             // 标题匹配权重高
             if (nameLower.includes(queryLower)) {
                 score += 15
                 matches.push(`标题匹配: ${doc.name}`)
             }
-            
+
             // 实体标题匹配 (【实体名】格式)
             const entityPattern = /【([^】]+)】/g
             let entityMatch
@@ -783,11 +788,11 @@ class KnowledgeService {
                     }
                 }
             }
-            
+
             // 内容匹配
             for (const term of queryTerms) {
                 if (nameLower.includes(term)) score += 5
-                
+
                 // 计算在内容中出现的次数
                 let idx = 0
                 let count = 0
@@ -801,7 +806,7 @@ class KnowledgeService {
                     matches.push(`内容匹配 "${term}": ${count}次`)
                 }
             }
-            
+
             // 标签匹配
             for (const tag of doc.tags || []) {
                 if (queryTerms.some(t => tag.toLowerCase().includes(t))) {
@@ -809,15 +814,15 @@ class KnowledgeService {
                     matches.push(`标签匹配: ${tag}`)
                 }
             }
-            
+
             if (score > 0) {
                 results.push({ doc, score, matches })
             }
         }
-        
+
         // 按分数排序
         results.sort((a, b) => b.score - a.score)
-        
+
         return results.slice(0, limit)
     }
 
@@ -829,28 +834,28 @@ class KnowledgeService {
      */
     getRelevantKnowledge(query, options = {}) {
         const { presetId, maxLength = 5000, limit = 3 } = options
-        
+
         const results = this.search(query, { presetId, limit })
         if (results.length === 0) return ''
-        
+
         const parts = [`【查询相关知识】关键词: "${query}"`]
         let totalLength = 0
-        
+
         for (const { doc, score, matches } of results) {
             // 提取相关片段而非完整内容
             let relevantContent = this.extractRelevantSection(doc.content, query)
-            
+
             if (totalLength + relevantContent.length > maxLength) {
                 relevantContent = relevantContent.substring(0, maxLength - totalLength - 50) + '...'
             }
-            
+
             parts.push(`\n### ${doc.name} (相关度: ${score})`)
             parts.push(relevantContent)
-            
+
             totalLength += relevantContent.length
             if (totalLength >= maxLength) break
         }
-        
+
         return parts.join('\n')
     }
 
@@ -862,20 +867,20 @@ class KnowledgeService {
      */
     extractRelevantSection(content, query) {
         if (!content || !query) return content || ''
-        
+
         const queryLower = query.toLowerCase()
         const lines = content.split('\n')
         const relevantLines = []
         let inRelevantSection = false
         let sectionDepth = 0
-        
+
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i]
             const lineLower = line.toLowerCase()
-            
+
             // 检查是否是章节标题
             const isHeader = line.match(/^#{1,4}\s/)
-            
+
             // 如果是包含查询词的章节标题，开始收集
             if (isHeader && lineLower.includes(queryLower)) {
                 inRelevantSection = true
@@ -883,7 +888,7 @@ class KnowledgeService {
                 relevantLines.push(line)
                 continue
             }
-            
+
             // 如果在相关章节中
             if (inRelevantSection) {
                 // 遇到同级或更高级标题时结束
@@ -912,12 +917,12 @@ class KnowledgeService {
                 }
             }
         }
-        
+
         // 如果没有找到相关片段，返回开头部分
         if (relevantLines.length === 0) {
             return lines.slice(0, 20).join('\n')
         }
-        
+
         return relevantLines.join('\n')
     }
 }

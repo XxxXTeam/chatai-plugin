@@ -119,4 +119,4 @@
  * @property {number[][]} embeddings
  */
 
-export { }
+export {}

@@ -37,7 +37,7 @@ export const botTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 // 优先从 Bot 对象直接获取
                 if (bot.uin || bot.self_id) {
                     const uin = bot.uin || bot.self_id
@@ -49,7 +49,7 @@ export const botTools = [
                         avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${uin}&s=640`
                     }
                 }
-                
+
                 // 尝试 NapCat/go-cqhttp API
                 try {
                     const result = await callOneBotApi(bot, 'get_login_info', {})
@@ -79,7 +79,7 @@ export const botTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 // 基本状态
                 const status = {
                     success: true,
@@ -90,7 +90,7 @@ export const botTools = [
                     group_count: bot.gl?.size || 0,
                     stat: bot.stat || {}
                 }
-                
+
                 // 尝试获取更多状态信息
                 try {
                     const result = await callOneBotApi(bot, 'get_status', {})
@@ -103,7 +103,7 @@ export const botTools = [
                         status.stat = { ...status.stat, ...data.stat }
                     }
                 } catch (e) {}
-                
+
                 return status
             } catch (err) {
                 return { success: false, error: `获取状态失败: ${err.message}` }
@@ -124,12 +124,12 @@ export const botTools = [
             try {
                 const bot = ctx.getBot()
                 const limit = args.limit || 50
-                
+
                 // 从 Bot 对象获取好友列表
                 const fl = bot.fl || new Map()
                 const friends = []
                 let count = 0
-                
+
                 for (const [uid, friend] of fl) {
                     if (count >= limit) break
                     friends.push({
@@ -140,7 +140,7 @@ export const botTools = [
                     })
                     count++
                 }
-                
+
                 return {
                     success: true,
                     total: fl.size,
@@ -168,7 +168,7 @@ export const botTools = [
             try {
                 const bot = ctx.getBot()
                 const userId = parseInt(args.user_id)
-                
+
                 // 尝试从好友列表获取
                 const friend = bot.fl?.get(userId)
                 if (friend) {
@@ -183,7 +183,7 @@ export const botTools = [
                         avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
                     }
                 }
-                
+
                 // 尝试 API 调用
                 try {
                     const result = await callOneBotApi(bot, 'get_stranger_info', {
@@ -226,7 +226,7 @@ export const botTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 // 基础版本信息
                 const info = {
                     success: true,
@@ -234,7 +234,7 @@ export const botTools = [
                     app_version: bot.version?.version || 'unknown',
                     protocol_version: bot.version?.protocol || 'unknown'
                 }
-                
+
                 // 尝试获取更多版本信息
                 try {
                     const result = await callOneBotApi(bot, 'get_version_info', {})
@@ -246,7 +246,7 @@ export const botTools = [
                     if (data?.runtime_os) info.runtime_os = data.runtime_os
                     if (data?.runtime_arch) info.runtime_arch = data.runtime_arch
                 } catch (e) {}
-                
+
                 return info
             } catch (err) {
                 return { success: false, error: `获取版本信息失败: ${err.message}` }
@@ -264,7 +264,7 @@ export const botTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 try {
                     const result = await callOneBotApi(bot, 'get_online_clients', { no_cache: true })
                     const data = result?.data || result
@@ -291,7 +291,7 @@ export const botTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 try {
                     const result = await callOneBotApi(bot, 'can_send_image', {})
                     return {
@@ -318,7 +318,7 @@ export const botTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 try {
                     const result = await callOneBotApi(bot, 'can_send_record', {})
                     return {
@@ -347,13 +347,13 @@ export const botTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 // 尝试 icqq API
                 if (bot.setAvatar) {
                     await bot.setAvatar(args.file)
                     return { success: true }
                 }
-                
+
                 // 尝试 NapCat API
                 try {
                     await callOneBotApi(bot, 'set_qq_avatar', { file: args.file })
@@ -377,7 +377,7 @@ export const botTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 try {
                     const result = await callOneBotApi(bot, '_get_model_show', {})
                     const data = result?.data || result
@@ -410,13 +410,13 @@ export const botTools = [
                 const bot = ctx.getBot()
                 const userId = parseInt(args.user_id)
                 const times = Math.min(args.times || 1, 10)
-                
+
                 // 尝试 icqq API
                 if (bot.sendLike) {
                     await bot.sendLike(userId, times)
                     return { success: true, user_id: userId, times }
                 }
-                
+
                 // 尝试 NapCat API
                 try {
                     await callOneBotApi(bot, 'send_like', {
@@ -443,7 +443,7 @@ export const botTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-                
+
                 const selfInfo = {
                     success: true,
                     // 基本信息
@@ -461,7 +461,7 @@ export const botTools = [
                         can_send_record: true
                     }
                 }
-                
+
                 // 尝试获取更多信息
                 try {
                     const loginInfo = await callOneBotApi(bot, 'get_login_info', {})
@@ -469,14 +469,14 @@ export const botTools = [
                     if (data?.nickname) selfInfo.nickname = data.nickname
                     if (data?.user_id) selfInfo.user_id = data.user_id
                 } catch (e) {}
-                
+
                 try {
                     const statusInfo = await callOneBotApi(bot, 'get_status', {})
                     const data = statusInfo?.data || statusInfo
                     selfInfo.good = data?.good ?? selfInfo.online
                     if (data?.stat) selfInfo.stat = data.stat
                 } catch (e) {}
-                
+
                 return selfInfo
             } catch (err) {
                 return { success: false, error: `获取自身信息失败: ${err.message}` }

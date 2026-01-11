@@ -196,10 +196,12 @@ router.get('/group/:groupId/knowledge', async (req, res) => {
     try {
         const sm = await ensureScopeManager()
         const settings = await sm.getGroupSettings(req.params.groupId)
-        res.json(ChaiteResponse.ok({
-            knowledgeIds: settings?.knowledgeIds || [],
-            inheritFrom: settings?.inheritFrom || []
-        }))
+        res.json(
+            ChaiteResponse.ok({
+                knowledgeIds: settings?.knowledgeIds || [],
+                inheritFrom: settings?.inheritFrom || []
+            })
+        )
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }

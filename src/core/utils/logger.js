@@ -90,19 +90,21 @@ function formatMessage(level, tag, ...args) {
     const config = LOG_LEVELS[level] || LOG_LEVELS.info
     const time = formatTime()
     const tagStr = tag ? `${c.gray}[${c.reset}${c.brightCyan}${tag}${c.reset}${c.gray}]${c.reset}` : ''
-    
+
     // 格式化参数
-    const message = args.map(arg => {
-        if (typeof arg === 'object') {
-            try {
-                return JSON.stringify(arg, null, 2)
-            } catch {
-                return String(arg)
+    const message = args
+        .map(arg => {
+            if (typeof arg === 'object') {
+                try {
+                    return JSON.stringify(arg, null, 2)
+                } catch {
+                    return String(arg)
+                }
             }
-        }
-        return String(arg)
-    }).join(' ')
-    
+            return String(arg)
+        })
+        .join(' ')
+
     return `${c.gray}${time}${c.reset} ${config.label} ${c.gray}[${c.reset}${c.brightMagenta}${PLUGIN_NAME}${c.reset}${c.gray}]${c.reset}${tagStr} ${config.color}${message}${c.reset}`
 }
 
@@ -222,9 +224,12 @@ class ChatAILogger {
      * 打印模块加载信息（紧凑格式）
      */
     moduleLoad(moduleName, status = 'ok', detail = '') {
-        const icon = status === 'ok' ? `${c.green}${icons.check}${c.reset}` : 
-                     status === 'skip' ? `${c.gray}${icons.dot}${c.reset}` :
-                     `${c.red}${icons.cross}${c.reset}`
+        const icon =
+            status === 'ok'
+                ? `${c.green}${icons.check}${c.reset}`
+                : status === 'skip'
+                  ? `${c.gray}${icons.dot}${c.reset}`
+                  : `${c.red}${icons.cross}${c.reset}`
         const detailStr = detail ? ` ${c.gray}${detail}${c.reset}` : ''
         console.log(`  ${icon} ${c.cyan}${moduleName}${c.reset}${detailStr}`)
     }
@@ -242,7 +247,7 @@ class ChatAILogger {
      * 生成进度条
      */
     progressBar(percent, width = 20) {
-        const filled = Math.round(width * percent / 100)
+        const filled = Math.round((width * percent) / 100)
         const empty = width - filled
         return `${c.green}${'█'.repeat(filled)}${c.reset}${c.gray}${'░'.repeat(empty)}${c.reset}`
     }
@@ -323,4 +328,3 @@ class ChatAILogger {
 export const chatLogger = new ChatAILogger()
 export { colors, c, icons }
 export default chatLogger
-

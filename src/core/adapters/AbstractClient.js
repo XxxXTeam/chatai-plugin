@@ -1,5 +1,11 @@
 import crypto from 'node:crypto'
-import { BaseClientOptions, ChaiteContext, DefaultLogger, MultipleKeyStrategyChoice, SendMessageOption } from '../types/index.js'
+import {
+    BaseClientOptions,
+    ChaiteContext,
+    DefaultLogger,
+    MultipleKeyStrategyChoice,
+    SendMessageOption
+} from '../types/index.js'
 import DefaultHistoryManager from '../utils/history.js'
 import { asyncLocalStorage, extractClassName, getKey } from '../utils/index.js'
 import { logService } from '../../services/stats/LogService.js'
@@ -20,26 +26,24 @@ function normalizeToolArguments(args, strict = false) {
     if (args === undefined || args === null) {
         return strict ? null : '{}'
     }
-    
+
     if (typeof args === 'string') {
         let str = args.trim()
-        
+
         // 空字符串或仅包含 { 的无效字符串
         if (!str || str === '{' || str === '"' || str === '"{' || str === '{"{') {
             return strict ? null : '{}'
         }
-        
+
         // 尝试直接解析
         try {
             const parsed = JSON.parse(str)
             if (typeof parsed === 'object' && parsed !== null) {
                 return str
             }
-        } catch {
-        }
+        } catch {}
         let fixed = str
-        if ((fixed.startsWith('"') && fixed.endsWith('"')) || 
-            (fixed.startsWith("'") && fixed.endsWith("'"))) {
+        if ((fixed.startsWith('"') && fixed.endsWith('"')) || (fixed.startsWith("'") && fixed.endsWith("'"))) {
             fixed = fixed.slice(1, -1)
         }
         fixed = fixed.replace(/\\"/g, '"').replace(/\\'/g, "'")
@@ -72,8 +76,7 @@ function normalizeToolArguments(args, strict = false) {
             if (typeof parsed === 'object' && parsed !== null && Object.keys(parsed).length > 0) {
                 return fixed
             }
-        } catch {
-        }
+        } catch {}
         if (!fixed.startsWith('{') && !fixed.startsWith('[')) {
             if (fixed.includes('=')) {
                 const obj = {}
@@ -96,7 +99,7 @@ function normalizeToolArguments(args, strict = false) {
     if (typeof args === 'object' && Object.keys(args).length > 0) {
         return JSON.stringify(args)
     }
-    
+
     return strict ? null : '{}'
 }
 
@@ -108,23 +111,23 @@ export function parseXmlToolCalls(text) {
     if (!text || typeof text !== 'string') {
         return { cleanText: text || '', toolCalls: [] }
     }
-    
+
     const toolCalls = []
     let cleanText = text
     cleanText = cleanText
-        .replace(/<think>[\s\S]*?<\/think>/gi, '')  
-        .replace(/<glm_block[\s\S]*?<\/glm_block>/gi, '')  
-        .replace(/<glm_block[^>]*>[\s\S]*$/gi, '') 
-        .replace(/[^\u4e00-\u9fa5\n]*?"type"\s*:\s*"mcp"\s*\}\s*<\/glm_block>/gi, '')  
-        .replace(/[^\u4e00-\u9fa5\n]*?\}\s*<\/glm_block>/gi, '') 
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .replace(/<glm_block[\s\S]*?<\/glm_block>/gi, '')
+        .replace(/<glm_block[^>]*>[\s\S]*$/gi, '')
+        .replace(/[^\u4e00-\u9fa5\n]*?"type"\s*:\s*"mcp"\s*\}\s*<\/glm_block>/gi, '')
+        .replace(/[^\u4e00-\u9fa5\n]*?\}\s*<\/glm_block>/gi, '')
         .replace(/<\/?glm_block[^>]*>/gi, '')
-        .replace(/<\/?think>/gi, '') 
+        .replace(/<\/?think>/gi, '')
         .trim()
-    
+
     // 格式A:  JSON
     const toolsRegex = /<tools>([\s\S]*?)<\/tools>/gi
     let match
-    
+
     while ((match = toolsRegex.exec(text)) !== null) {
         const toolContent = match[1].trim()
         try {
@@ -151,10 +154,10 @@ export function parseXmlToolCalls(text) {
         }
     }
     cleanText = cleanText.replace(toolsRegex, '').trim()
-    
+
     // 格式B: <tool_call>name<arg_key>key</arg_key><arg_value>value</arg_value></tool_call>
     const toolCallRegex = /<tool_call>([\s\S]*?)<\/tool_call>/gi
-    
+
     while ((match = toolCallRegex.exec(text)) !== null) {
         const toolContent = match[1].trim()
         try {
@@ -178,28 +181,28 @@ export function parseXmlToolCalls(text) {
                     }
                 } catch {}
             }
-            
+
             // 回退到原始格式解析
             const nameMatch = toolContent.match(/^([^<\s{\[]+)/)
             if (!nameMatch) continue
             const toolName = nameMatch[1].trim()
-            
+
             const args = {}
             const argKeyRegex = /<arg_key>([\s\S]*?)<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>/gi
             let argMatch
             while ((argMatch = argKeyRegex.exec(toolContent)) !== null) {
                 const key = argMatch[1].trim()
                 let value = argMatch[2].trim()
-                
+
                 if (/^-?\d+$/.test(value)) value = parseInt(value, 10)
                 else if (/^-?\d+\.\d+$/.test(value)) value = parseFloat(value)
                 else if (value === 'true') value = true
                 else if (value === 'false') value = false
                 else if (value === 'null') value = null
-                
+
                 args[key] = value
             }
-            
+
             toolCalls.push({
                 id: generateToolId('xml'),
                 type: 'function',
@@ -267,7 +270,7 @@ export function parseXmlToolCalls(text) {
         }
     }
     cleanText = cleanText.replace(invokeRegex, '').trim()
-    const fixMalformedJson = (jsonStr) => {
+    const fixMalformedJson = jsonStr => {
         let fixed = jsonStr
         fixed = fixed.replace(/"arguments"\s*:\s*"(\{(?:[^"\\]|\\.)*\})(\}+)"/g, (match, validJson, extraBraces) => {
             let braceCount = 0
@@ -306,16 +309,13 @@ export function parseXmlToolCalls(text) {
                                     args = testArgs
                                 }
                             }
-                            tc.function.arguments = args
-                                .replace(/^"/, '').replace(/"$/, '')
-                                .replace(/\\"/g, '"')
+                            tc.function.arguments = args.replace(/^"/, '').replace(/"$/, '').replace(/\\"/g, '"')
                         }
                     }
                 }
                 return JSON.stringify(parsed)
             }
-        } catch {
-        }
+        } catch {}
         fixed = fixed.replace(/^```json\s*/i, '').replace(/\s*```$/i, '')
         fixed = fixed.replace(/,\s*([\]}])/g, '$1')
         let lastFixed = fixed
@@ -346,10 +346,10 @@ export function parseXmlToolCalls(text) {
         fixed = lastFixed
         return fixed
     }
-    
+
     const jsonCodeBlockRegex = /```(?:json)?\s*\n?([\s\S]*?)\n?```/gi
     const codeBlockMatches = [...text.matchAll(jsonCodeBlockRegex)]
-    
+
     for (const blockMatch of codeBlockMatches) {
         const blockContent = blockMatch[1].trim()
         if (blockContent.startsWith('[') || blockContent.startsWith('{')) {
@@ -405,25 +405,24 @@ export function parseXmlToolCalls(text) {
                 if (toolCalls.length > beforeCount) {
                     cleanText = cleanText.replace(blockMatch[0], '').trim()
                 }
-            } catch {
-            }
+            } catch {}
         }
     }
     if (toolCalls.length === 0) {
         const toolCallsStartRegex = /\{\s*"tool_calls"\s*:/g
         let startMatch
         const processedRanges = []
-        
+
         while ((startMatch = toolCallsStartRegex.exec(cleanText)) !== null) {
             const startIdx = startMatch.index
             let braceCount = 0
             let endIdx = -1
             let inString = false
             let escapeNext = false
-            
+
             for (let i = startIdx; i < cleanText.length; i++) {
                 const char = cleanText[i]
-                
+
                 if (escapeNext) {
                     escapeNext = false
                     continue
@@ -457,8 +456,7 @@ export function parseXmlToolCalls(text) {
                         const fixedStr = fixMalformedJson(objStr)
                         parsed = JSON.parse(fixedStr)
                         logger.debug('[Tool Parser] 修复裸JSON格式错误成功')
-                    } catch {
-                    }
+                    } catch {}
                 }
                 if (parsed?.tool_calls && Array.isArray(parsed.tool_calls)) {
                     for (const tc of parsed.tool_calls) {
@@ -488,7 +486,7 @@ export function parseXmlToolCalls(text) {
         cleanText = cleanText.trim()
         const jsonArrayRegex = /\[\s*\{[\s\S]*?"name"\s*:\s*"[^"]+[\s\S]*?\}\s*\]/g
         const arrayMatches = cleanText.match(jsonArrayRegex)
-        
+
         if (arrayMatches) {
             for (const arrayStr of arrayMatches) {
                 try {
@@ -503,7 +501,8 @@ export function parseXmlToolCalls(text) {
                         let foundTools = false
                         for (const item of parsed) {
                             const funcName = item.function?.name || item.name || item.tool_name
-                            const funcArgs = item.function?.arguments || item.arguments || item.tool_params || item.params
+                            const funcArgs =
+                                item.function?.arguments || item.arguments || item.tool_params || item.params
                             if (funcName) {
                                 toolCalls.push({
                                     id: item.id || generateToolId('array'),
@@ -521,11 +520,11 @@ export function parseXmlToolCalls(text) {
                             cleanText = cleanText.replace(arrayStr, '').trim()
                         }
                     }
-                } catch {
-                }
+                } catch {}
             }
         }
-        const singleToolRegex = /\{\s*"(?:name|function)"\s*:\s*"([^"]+)"[\s\S]*?"arguments"\s*:\s*(\{[\s\S]*?\}|\"[^"]*\")\s*\}/g
+        const singleToolRegex =
+            /\{\s*"(?:name|function)"\s*:\s*"([^"]+)"[\s\S]*?"arguments"\s*:\s*(\{[\s\S]*?\}|\"[^"]*\")\s*\}/g
         let singleMatch
         while ((singleMatch = singleToolRegex.exec(cleanText)) !== null) {
             try {
@@ -557,7 +556,8 @@ export function parseXmlToolCalls(text) {
         }
     }
     if (toolCalls.length === 0) {
-        const escapedArgsPattern = /"name"\s*:\s*"([a-zA-Z_][a-zA-Z0-9_]*)"\s*,\s*"arguments"\s*:\s*"(\{(?:[^"\\]|\\.|"(?:[^"\\]|\\.)*")*\})"/g
+        const escapedArgsPattern =
+            /"name"\s*:\s*"([a-zA-Z_][a-zA-Z0-9_]*)"\s*,\s*"arguments"\s*:\s*"(\{(?:[^"\\]|\\.|"(?:[^"\\]|\\.)*")*\})"/g
         let escapedMatch
         while ((escapedMatch = escapedArgsPattern.exec(cleanText)) !== null) {
             const funcName = escapedMatch[1]
@@ -565,8 +565,7 @@ export function parseXmlToolCalls(text) {
             if (funcName && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(funcName) && funcName.length >= 2) {
                 try {
                     funcArgs = JSON.parse(`"${funcArgs}"`)
-                } catch {
-                }
+                } catch {}
                 const normalizedArgs = normalizeToolArguments(funcArgs, false)
                 if (!toolCalls.some(tc => tc.function.name === funcName)) {
                     toolCalls.push({
@@ -592,7 +591,7 @@ export function parseXmlToolCalls(text) {
             if (argsStartMatch) {
                 const argsStartIdx = cleanText.indexOf(argsStartMatch[0]) + argsStartMatch[0].length
                 let funcArgs = '{}'
-                
+
                 if (cleanText[argsStartIdx] === '"') {
                     // arguments 是字符串格式: "arguments": "{...}"
                     // 需要找到配对的引号（考虑转义）
@@ -623,7 +622,7 @@ export function parseXmlToolCalls(text) {
                     }
                     funcArgs = cleanText.substring(argsStartIdx, endIdx)
                 }
-                
+
                 const normalizedArgs = normalizeToolArguments(funcArgs, false)
                 if (normalizedArgs && normalizedArgs !== '{}') {
                     if (!toolCalls.some(tc => tc.function.name === funcName)) {
@@ -645,7 +644,7 @@ export function parseXmlToolCalls(text) {
         const fuzzyNamePatterns = [
             /"name"\s*:\s*"([a-zA-Z_][a-zA-Z0-9_]*)"[\s\S]*?"arguments"\s*:\s*(\{[\s\S]*?\}|"[^"]*")/g,
             /"function"\s*:\s*\{\s*"name"\s*:\s*"([a-zA-Z_][a-zA-Z0-9_]*)"[\s\S]*?"arguments"\s*:\s*(\{[\s\S]*?\}|"[^"]*")/g,
-            /\bname\s*[:=]\s*["']?([a-zA-Z_][a-zA-Z0-9_]*)["']?[\s\S]*?\barguments\s*[:=]\s*(\{[\s\S]*?\}|["'][^"']*["'])/gi,
+            /\bname\s*[:=]\s*["']?([a-zA-Z_][a-zA-Z0-9_]*)["']?[\s\S]*?\barguments\s*[:=]\s*(\{[\s\S]*?\}|["'][^"']*["'])/gi
         ]
         for (const pattern of fuzzyNamePatterns) {
             let fuzzyMatch
@@ -683,7 +682,25 @@ export function parseXmlToolCalls(text) {
         while ((funcMatch = funcCallPattern.exec(cleanText)) !== null) {
             const funcName = funcMatch[1]
             const funcArgs = funcMatch[2]
-            const excludeNames = ['if', 'for', 'while', 'switch', 'function', 'return', 'console', 'log', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Date', 'Math', 'Error']
+            const excludeNames = [
+                'if',
+                'for',
+                'while',
+                'switch',
+                'function',
+                'return',
+                'console',
+                'log',
+                'JSON',
+                'Object',
+                'Array',
+                'String',
+                'Number',
+                'Boolean',
+                'Date',
+                'Math',
+                'Error'
+            ]
             if (!excludeNames.includes(funcName) && funcName.length >= 2) {
                 try {
                     JSON.parse(funcArgs)
@@ -699,8 +716,7 @@ export function parseXmlToolCalls(text) {
                         cleanText = cleanText.replace(funcMatch[0], '').trim()
                         logger.debug(`[Tool Parser] 函数调用格式解析到工具: ${funcName}`)
                     }
-                } catch {
-                }
+                } catch {}
             }
         }
     }
@@ -749,9 +765,9 @@ export function parseXmlToolCalls(text) {
         /^\s*,?\s*\[?\s*\{[^{}]*"user_id"[^{}]*"nickname"[^{}]*"message"[^{}]*\}[\s\S]*$/,
         /^[\s\[\]\{\}"',:\\]+$/,
         /^[\s,\[\]\{\}"\\:a-zA-Z0-9_-]+$/,
-        /^```(?:json)?\s*[\s\S]*```$/i,
+        /^```(?:json)?\s*[\s\S]*```$/i
     ]
-    
+
     for (const pattern of toolArgFragmentPatterns) {
         if (pattern.test(cleanText)) {
             const stripped = cleanText.replace(/"[^"]*"/g, '""').replace(/\\"/g, '')
@@ -762,26 +778,27 @@ export function parseXmlToolCalls(text) {
             }
         }
     }
-    
+
     // 工具调用数量限制和智能去重
     const MAX_TOOL_CALLS = 15
     if (toolCalls.length > 0) {
         // 智能去重：只去除连续重复的调用，允许间隔的重复调用（如多次@同一个人）
         // 同时记录每个工具调用的次数，超过阈值才去重
         const deduped = []
-        const callCounts = new Map()  // 工具调用计数
-        const MAX_SAME_CALL = 3  // 同一调用最多允许次数
-        
+        const callCounts = new Map() // 工具调用计数
+        const MAX_SAME_CALL = 3 // 同一调用最多允许次数
+
         for (const tc of toolCalls) {
             const sig = `${tc.function.name}:${tc.function.arguments}`
             const count = callCounts.get(sig) || 0
-            
+
             // 检查是否与上一个调用完全相同（连续重复）
             const lastCall = deduped[deduped.length - 1]
-            const isConsecutiveDupe = lastCall && 
+            const isConsecutiveDupe =
+                lastCall &&
                 lastCall.function.name === tc.function.name &&
                 lastCall.function.arguments === tc.function.arguments
-            
+
             // 允许非连续重复，或者次数未超限
             if (!isConsecutiveDupe && count < MAX_SAME_CALL) {
                 callCounts.set(sig, count + 1)
@@ -792,24 +809,24 @@ export function parseXmlToolCalls(text) {
                 logger.debug(`[Tool Parser] 同一调用超过 ${MAX_SAME_CALL} 次，跳过: ${tc.function.name}`)
             }
         }
-        
+
         if (deduped.length > MAX_TOOL_CALLS) {
             logger.warn(`[Tool Parser] 工具调用数量 ${deduped.length} 超过限制 ${MAX_TOOL_CALLS}，截断`)
             deduped.length = MAX_TOOL_CALLS
         }
-        
+
         if (deduped.length !== toolCalls.length) {
             logger.debug(`[Tool Parser] 智能去重: ${toolCalls.length} -> ${deduped.length}`)
         }
         cleanText = cleanText
             .replace(/\{\s*"tool_calls"\s*:\s*\[[\s\S]*?\]\s*\}/g, '')
-            .replace(/\{\s*"tool_calls"\s*:\s*\[[\s\S]*$/g, '')  // 被截断的情况
-            .replace(/^\s*\[\s*\{[\s\S]*?"function"[\s\S]*?\}\s*\]\s*$/g, '')  // 纯工具调用数组
+            .replace(/\{\s*"tool_calls"\s*:\s*\[[\s\S]*$/g, '') // 被截断的情况
+            .replace(/^\s*\[\s*\{[\s\S]*?"function"[\s\S]*?\}\s*\]\s*$/g, '') // 纯工具调用数组
             .trim()
-        
+
         return { cleanText, toolCalls: deduped }
     }
-    
+
     return { cleanText, toolCalls }
 }
 
@@ -823,10 +840,11 @@ export function parseXmlToolCalls(text) {
  * URL转Base64配置
  */
 const URL_TO_BASE64_CONFIG = {
-    maxRetries: 1,  
+    maxRetries: 1,
     retryDelay: 500,
     timeout: 15000,
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 }
 
 /**
@@ -838,26 +856,26 @@ const URL_TO_BASE64_CONFIG = {
  */
 async function urlToBase64(url, defaultMimeType = 'application/octet-stream', options = {}) {
     const { maxRetries = URL_TO_BASE64_CONFIG.maxRetries, retryDelay = URL_TO_BASE64_CONFIG.retryDelay } = options
-    
+
     try {
         // 处理本地文件路径
         if (url.startsWith('file://') || (url.startsWith('/') && !url.startsWith('//'))) {
             const fs = await import('node:fs')
             const path = await import('node:path')
             const filePath = url.replace('file://', '')
-            
+
             if (!fs.existsSync(filePath)) {
                 const err = new Error(`本地文件不存在: ${filePath}`)
                 logService.mediaError('file', url, err)
                 throw err
             }
-            
+
             const buffer = fs.readFileSync(filePath)
             const ext = path.extname(filePath).toLowerCase().slice(1)
             const mimeType = getMimeType(ext) || defaultMimeType
             return { mimeType, data: buffer.toString('base64') }
         }
-        
+
         // 处理已经是 base64 的情况
         if (url.startsWith('base64://')) {
             return { mimeType: defaultMimeType, data: url.replace('base64://', '') }
@@ -872,51 +890,54 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
             try {
                 const controller = new AbortController()
                 const timeoutId = setTimeout(() => controller.abort(), URL_TO_BASE64_CONFIG.timeout)
-                
+
                 const response = await fetch(url, {
                     signal: controller.signal,
                     headers: {
                         'User-Agent': URL_TO_BASE64_CONFIG.userAgent,
-                        'Accept': '*/*',
+                        Accept: '*/*',
                         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                        'Referer': new URL(url).origin + '/',
+                        Referer: new URL(url).origin + '/'
                     }
                 })
-                
+
                 clearTimeout(timeoutId)
-                
+
                 if (!response.ok) {
                     const err = new Error(`HTTP ${response.status}: ${response.statusText}`)
                     err.status = response.status
                     err.statusText = response.statusText
                     throw err
                 }
-                
+
                 const contentType = response.headers.get('content-type') || defaultMimeType
                 const buffer = Buffer.from(await response.arrayBuffer())
-                
+
                 return {
                     mimeType: contentType.split(';')[0],
                     data: buffer.toString('base64')
                 }
             } catch (fetchErr) {
                 lastError = fetchErr
-                
+
                 // 检测客户端错误（4xx）- 多种检测方式
-                const is4xxError = (fetchErr.status >= 400 && fetchErr.status < 500) ||
-                    /HTTP\s*4\d{2}/i.test(fetchErr.message)
-                
+                const is4xxError =
+                    (fetchErr.status >= 400 && fetchErr.status < 500) || /HTTP\s*4\d{2}/i.test(fetchErr.message)
+
                 // QQ 多媒体 URL 过期是常见情况，完全静默
-                const isQQMedia = url.includes('multimedia.nt.qq.com.cn') || 
+                const isQQMedia =
+                    url.includes('multimedia.nt.qq.com.cn') ||
                     url.includes('gchat.qpic.cn') ||
                     url.includes('c2cpicdw.qpic.cn')
-                
+
                 if (is4xxError || isQQMedia) {
                     // 静默处理，只记录 debug 日志
-                    logger.debug(`[urlToBase64] 媒体获取失败(${fetchErr.status || '4xx'})，跳过: ${url.substring(0, 60)}...`)
+                    logger.debug(
+                        `[urlToBase64] 媒体获取失败(${fetchErr.status || '4xx'})，跳过: ${url.substring(0, 60)}...`
+                    )
                     break
                 }
-                
+
                 // 其他错误（5xx、网络等）才重试
                 if (attempt < maxRetries) {
                     logger.debug(`[urlToBase64] 第${attempt + 1}次获取失败，${retryDelay}ms后重试: ${fetchErr.message}`)
@@ -924,16 +945,17 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
                 }
             }
         }
-        
+
         // 所有重试都失败
         if (lastError) {
             // 检测客户端错误或 QQ 媒体 URL
-            const is4xxError = (lastError.status >= 400 && lastError.status < 500) ||
-                /HTTP\s*4\d{2}/i.test(lastError.message)
-            const isQQMedia = url.includes('multimedia.nt.qq.com.cn') || 
+            const is4xxError =
+                (lastError.status >= 400 && lastError.status < 500) || /HTTP\s*4\d{2}/i.test(lastError.message)
+            const isQQMedia =
+                url.includes('multimedia.nt.qq.com.cn') ||
                 url.includes('gchat.qpic.cn') ||
                 url.includes('c2cpicdw.qpic.cn')
-            
+
             if (is4xxError || isQQMedia) {
                 // 静默返回空数据，不记录错误日志
                 return { mimeType: defaultMimeType, data: '', error: lastError.message }
@@ -941,21 +963,23 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
             // 只有非 4xx 且非 QQ 媒体的错误才记录
             logService.mediaError('url', url, lastError)
         }
-        
+
         // 标记错误已记录，避免外层 catch 重复记录
-        const err = new Error(`获取媒体文件失败 (${URL_TO_BASE64_CONFIG.maxRetries + 1}次尝试): ${lastError?.message || '未知错误'}`)
+        const err = new Error(
+            `获取媒体文件失败 (${URL_TO_BASE64_CONFIG.maxRetries + 1}次尝试): ${lastError?.message || '未知错误'}`
+        )
         err.logged = true
         throw err
-        
     } catch (error) {
         // 只记录未标记的错误
         if (!error.logged) {
             // 再次检查是否为 QQ 媒体 URL 的 4xx 错误
             const is4xxError = /HTTP\s*4\d{2}/i.test(error.message)
-            const isQQMedia = url.includes('multimedia.nt.qq.com.cn') || 
+            const isQQMedia =
+                url.includes('multimedia.nt.qq.com.cn') ||
                 url.includes('gchat.qpic.cn') ||
                 url.includes('c2cpicdw.qpic.cn')
-            
+
             if (!is4xxError && !isQQMedia) {
                 logService.mediaError('media', url, error)
             }
@@ -971,18 +995,33 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
 function getMimeType(ext) {
     const mimeTypes = {
         // 图片
-        'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
-        'gif': 'image/gif', 'webp': 'image/webp', 'bmp': 'image/bmp',
-        'svg': 'image/svg+xml', 'ico': 'image/x-icon',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        png: 'image/png',
+        gif: 'image/gif',
+        webp: 'image/webp',
+        bmp: 'image/bmp',
+        svg: 'image/svg+xml',
+        ico: 'image/x-icon',
         // 视频
-        'mp4': 'video/mp4', 'webm': 'video/webm', 'avi': 'video/x-msvideo',
-        'mov': 'video/quicktime', 'mkv': 'video/x-matroska', 'flv': 'video/x-flv',
-        'm4v': 'video/x-m4v', '3gp': 'video/3gpp',
+        mp4: 'video/mp4',
+        webm: 'video/webm',
+        avi: 'video/x-msvideo',
+        mov: 'video/quicktime',
+        mkv: 'video/x-matroska',
+        flv: 'video/x-flv',
+        m4v: 'video/x-m4v',
+        '3gp': 'video/3gpp',
         // 音频
-        'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg',
-        'm4a': 'audio/mp4', 'flac': 'audio/flac', 'aac': 'audio/aac',
+        mp3: 'audio/mpeg',
+        wav: 'audio/wav',
+        ogg: 'audio/ogg',
+        m4a: 'audio/mp4',
+        flac: 'audio/flac',
+        aac: 'audio/aac',
         // 文档
-        'pdf': 'application/pdf', 'txt': 'text/plain',
+        pdf: 'application/pdf',
+        txt: 'text/plain'
     }
     return mimeTypes[ext?.toLowerCase()]
 }
@@ -1000,7 +1039,7 @@ function getMimeType(ext) {
 export async function preprocessMediaToBase64(histories, options = {}) {
     const { processVideo = true, processAudio = true, maxVideoSize = 20 * 1024 * 1024 } = options
     const processed = []
-    
+
     for (const msg of histories) {
         if (msg.role === 'user' && Array.isArray(msg.content)) {
             const newContent = []
@@ -1021,7 +1060,11 @@ export async function preprocessMediaToBase64(histories, options = {}) {
                         }
                     }
                     // 处理 image_url 类型
-                    else if (item.type === 'image_url' && item.image_url?.url && !item.image_url.url.startsWith('data:')) {
+                    else if (
+                        item.type === 'image_url' &&
+                        item.image_url?.url &&
+                        !item.image_url.url.startsWith('data:')
+                    ) {
                         const { mimeType, data, error } = await urlToBase64(item.image_url.url, 'image/jpeg')
                         if (data && !error) {
                             newContent.push({
@@ -1054,7 +1097,10 @@ export async function preprocessMediaToBase64(histories, options = {}) {
                                     })
                                     logger.debug('[MediaPreprocess] 视频转base64:', videoUrl?.substring(0, 50))
                                 } else {
-                                    logger.warn(`[MediaPreprocess] 视频过大(${(sizeBytes/1024/1024).toFixed(1)}MB)，跳过:`, videoUrl?.substring(0, 50))
+                                    logger.warn(
+                                        `[MediaPreprocess] 视频过大(${(sizeBytes / 1024 / 1024).toFixed(1)}MB)，跳过:`,
+                                        videoUrl?.substring(0, 50)
+                                    )
                                     newContent.push(item) // 保留原始
                                 }
                             } catch (err) {
@@ -1089,8 +1135,7 @@ export async function preprocessMediaToBase64(histories, options = {}) {
                         } else {
                             newContent.push(item)
                         }
-                    }
-                    else {
+                    } else {
                         newContent.push(item)
                     }
                 } catch (err) {
@@ -1146,9 +1191,9 @@ export function needsImageBase64Preprocess(model) {
 
 /** 默认工具调用限制 */
 const DEFAULT_TOOL_CALL_LIMIT = {
-    maxConsecutiveCalls: 10,          // 最大连续调用次数（提高以支持复杂任务）
-    maxConsecutiveIdenticalCalls: 4,  // 最大连续完全相同调用次数（工具名+参数都相同）
-    maxTotalToolCalls: 25             // 单次对话最大工具调用总数
+    maxConsecutiveCalls: 10, // 最大连续调用次数（提高以支持复杂任务）
+    maxConsecutiveIdenticalCalls: 4, // 最大连续完全相同调用次数（工具名+参数都相同）
+    maxTotalToolCalls: 25 // 单次对话最大工具调用总数
 }
 
 /**
@@ -1215,7 +1260,9 @@ export class AbstractClient {
             await this.options.ready()
 
             const apiKey = await getKey(this.apiKey, this.multipleKeyStrategy)
-            const histories = options.disableHistoryRead ? [] : await this.historyManager.getHistory(options.parentMessageId, options.conversationId)
+            const histories = options.disableHistoryRead
+                ? []
+                : await this.historyManager.getHistory(options.parentMessageId, options.conversationId)
             this.context.setHistoryMessages(histories)
 
             if (!options.conversationId) {
@@ -1229,7 +1276,7 @@ export class AbstractClient {
                 thisRequestMsg = {
                     id: userMsgId,
                     parentId: options.parentMessageId,
-                    ...message,
+                    ...message
                 }
 
                 if (!this.isEffectivelyEmptyMessage(thisRequestMsg)) {
@@ -1265,27 +1312,36 @@ export class AbstractClient {
                 this.initToolCallTracking(options)
                 const deduplicatedToolCalls = this.deduplicateToolCalls(modelResponse.toolCalls)
                 if (deduplicatedToolCalls.length < modelResponse.toolCalls.length) {
-                    this.logger.info(`[Tool] 去重后工具调用数: ${modelResponse.toolCalls.length} -> ${deduplicatedToolCalls.length}`)
+                    this.logger.info(
+                        `[Tool] 去重后工具调用数: ${modelResponse.toolCalls.length} -> ${deduplicatedToolCalls.length}`
+                    )
                 }
-                
+
                 // 检查工具调用限制（使用去重后的列表）
                 const limitReason = this.updateToolCallTracking(options, deduplicatedToolCalls)
                 if (limitReason) {
                     this.resetToolCallTracking(options)
-                    
+
                     // 如果已有文本内容，返回它；否则返回限制提示
-                    const textContent = modelResponse.content?.filter(c => c.type === 'text').map(c => c.text).join('') || ''
+                    const textContent =
+                        modelResponse.content
+                            ?.filter(c => c.type === 'text')
+                            .map(c => c.text)
+                            .join('') || ''
                     return {
                         id: modelResponse.id,
                         model: options.model,
                         contents: textContent ? modelResponse.content : [{ type: 'text', text: limitReason }],
                         usage: modelResponse.usage,
-                        toolCallLogs: options._toolCallLogs || [],
+                        toolCallLogs: options._toolCallLogs || []
                     }
                 }
-                
+
                 const intermediateTextContent = modelResponse.content?.filter(c => c.type === 'text') || []
-                let intermediateText = intermediateTextContent.map(c => c.text).join('').trim()
+                let intermediateText = intermediateTextContent
+                    .map(c => c.text)
+                    .join('')
+                    .trim()
                 if (intermediateText) {
                     const { cleanText } = parseXmlToolCalls(intermediateText)
                     intermediateText = cleanText
@@ -1294,10 +1350,10 @@ export class AbstractClient {
                     const callback = options.onMessageWithToolCall || this.onMessageWithToolCall
                     try {
                         await callback({
-                            intermediateText,           // 中间文本回复（已过滤工具调用JSON）
-                            contents: modelResponse.content,  // 完整内容
-                            toolCalls: deduplicatedToolCalls,  // 去重后的工具调用信息
-                            isIntermediate: true       // 标记为中间消息
+                            intermediateText, // 中间文本回复（已过滤工具调用JSON）
+                            contents: modelResponse.content, // 完整内容
+                            toolCalls: deduplicatedToolCalls, // 去重后的工具调用信息
+                            isIntermediate: true // 标记为中间消息
                         })
                     } catch (err) {
                         this.logger.warn('[Tool] 中间消息回调错误:', err.message)
@@ -1305,10 +1361,7 @@ export class AbstractClient {
                 }
 
                 // 执行工具调用
-                const { toolCallResults, toolCallLogs } = await this.executeToolCalls(
-                    deduplicatedToolCalls,
-                    options
-                )
+                const { toolCallResults, toolCallLogs } = await this.executeToolCalls(deduplicatedToolCalls, options)
 
                 // 记录日志
                 if (!options._toolCallLogs) options._toolCallLogs = []
@@ -1320,7 +1373,7 @@ export class AbstractClient {
                     role: 'tool',
                     content: toolCallResults,
                     id: tcMsgId,
-                    parentId: options.parentMessageId,
+                    parentId: options.parentMessageId
                 }
                 options.parentMessageId = tcMsgId
                 await this.historyManager.saveHistory(toolCallResultMessage, options.conversationId)
@@ -1328,13 +1381,13 @@ export class AbstractClient {
                 // 追踪工具调用轮次（用于决定是否禁用工具）
                 if (!options._toolCallCount) options._toolCallCount = 0
                 options._toolCallCount++
-                
+
                 // 检测模型类型，Gemini 模型更容易陷入循环
                 const modelStr = typeof options.model === 'string' ? options.model : ''
                 const isGeminiModel = modelStr.toLowerCase().includes('gemini')
                 // 提高多轮工具调用限制，允许更复杂的工具调用链
                 const maxBeforeDisable = isGeminiModel ? 6 : 10
-                
+
                 // 连续调用超过阈值时禁用工具，防止无限循环
                 if (options._toolCallCount >= maxBeforeDisable) {
                     options.toolChoice = { type: 'none' }
@@ -1342,11 +1395,11 @@ export class AbstractClient {
                 } else {
                     options.toolChoice = { type: 'auto' }
                 }
-                
+
                 // 递归继续对话
                 return await this.sendMessage(undefined, options)
             }
-            
+
             // 无工具调用，重置追踪状态
             this.resetToolCallTracking(options)
 
@@ -1359,7 +1412,7 @@ export class AbstractClient {
                 model: options.model,
                 contents: modelResponse.content,
                 usage: modelResponse.usage,
-                toolCallLogs: options._toolCallLogs || [], // 返回工具调用日志
+                toolCallLogs: options._toolCallLogs || [] // 返回工具调用日志
             }
         }
 
@@ -1539,12 +1592,12 @@ export class AbstractClient {
         if (!response || !response.content || !Array.isArray(response.content)) {
             return response
         }
-        
+
         const filteredContent = response.content.filter(item => {
             if (item.type !== 'text' || !item.text) return true
-            
+
             const text = item.text.trim()
-            
+
             // 检测纯 JSON 格式的工具调用
             if (text.startsWith('{') && text.endsWith('}')) {
                 try {
@@ -1558,7 +1611,7 @@ export class AbstractClient {
                     // 不是有效 JSON，保留
                 }
             }
-            
+
             // 检测代码块包裹的工具调用 JSON
             const codeBlockMatch = text.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i)
             if (codeBlockMatch) {
@@ -1575,10 +1628,10 @@ export class AbstractClient {
                     }
                 }
             }
-            
+
             return true
         })
-        
+
         return {
             ...response,
             content: filteredContent
@@ -1599,8 +1652,8 @@ export class AbstractClient {
         options._lastToolCallSignature = undefined
         options._lastSimplifiedSignature = undefined
         options._toolCallSignatureHistory = new Map()
-        options._simplifiedSignatureHistory = new Map()  // 用于检测功能相似的调用
-        options._successfulToolCalls = new Set()  // 追踪已成功执行的工具调用
+        options._simplifiedSignatureHistory = new Map() // 用于检测功能相似的调用
+        options._successfulToolCalls = new Set() // 追踪已成功执行的工具调用
         options._toolCallLogs = []
     }
 
@@ -1616,7 +1669,7 @@ export class AbstractClient {
 
         // 递增连续调用计数
         options._consecutiveToolCallCount = (options._consecutiveToolCallCount || 0) + 1
-        
+
         // 递增总调用计数
         options._totalToolCallCount = (options._totalToolCallCount || 0) + toolCalls.length
 
@@ -1624,13 +1677,13 @@ export class AbstractClient {
         if (limitConfig.maxConsecutiveCalls && options._consecutiveToolCallCount > limitConfig.maxConsecutiveCalls) {
             return `工具调用轮次超过限制(${limitConfig.maxConsecutiveCalls})，已自动停止`
         }
-        
+
         // 检查总调用次数
         if (limitConfig.maxTotalToolCalls && options._totalToolCallCount > limitConfig.maxTotalToolCalls) {
             return `工具调用总次数超过限制(${limitConfig.maxTotalToolCalls})，已自动停止`
         }
         const signature = this.buildToolCallSignature(toolCalls)
-        
+
         // 检查是否与上次调用完全相同
         if (options._lastToolCallSignature === signature) {
             options._consecutiveIdenticalToolCallCount = (options._consecutiveIdenticalToolCallCount || 0) + 1
@@ -1639,8 +1692,10 @@ export class AbstractClient {
             options._lastToolCallSignature = signature
             options._consecutiveIdenticalToolCallCount = 1
         }
-        if (limitConfig.maxConsecutiveIdenticalCalls && 
-            options._consecutiveIdenticalToolCallCount > limitConfig.maxConsecutiveIdenticalCalls) {
+        if (
+            limitConfig.maxConsecutiveIdenticalCalls &&
+            options._consecutiveIdenticalToolCallCount > limitConfig.maxConsecutiveIdenticalCalls
+        ) {
             return `检测到连续${options._consecutiveIdenticalToolCallCount}次完全相同的工具调用，已自动停止`
         }
         if (!options._toolCallSignatureHistory) {
@@ -1685,10 +1740,10 @@ export class AbstractClient {
      */
     deduplicateToolCalls(toolCalls) {
         if (!toolCalls || toolCalls.length <= 1) return toolCalls
-        
+
         const seen = new Map()
         const deduplicated = []
-        
+
         for (const tc of toolCalls) {
             // 使用简化签名来检测功能相同的调用
             const sig = this.buildSimplifiedSignature([tc])
@@ -1699,7 +1754,7 @@ export class AbstractClient {
                 this.logger.warn(`[Tool] 去重: 移除重复调用 ${tc.function?.name}`)
             }
         }
-        
+
         return deduplicated
     }
 
@@ -1709,10 +1764,12 @@ export class AbstractClient {
      * @returns {string}
      */
     buildToolCallSignature(toolCalls) {
-        return JSON.stringify(toolCalls.map(tc => ({
-            name: tc.function?.name,
-            arguments: tc.function?.arguments,
-        })))
+        return JSON.stringify(
+            toolCalls.map(tc => ({
+                name: tc.function?.name,
+                arguments: tc.function?.arguments
+            }))
+        )
     }
 
     /**
@@ -1720,30 +1777,42 @@ export class AbstractClient {
      * @returns {string}
      */
     buildSimplifiedSignature(toolCalls) {
-        return toolCalls.map(tc => {
-            const name = tc.function?.name || ''
-            let args = tc.function?.arguments
-            if (typeof args === 'string') {
-                try { args = JSON.parse(args) } catch { args = {} }
-            }
-            args = args || {}
-            if (name === 'execute_command' && args.command) {
-                let cmd = args.command.trim().toLowerCase()
-                cmd = cmd.replace(/^(rmdir|rd)\s+/i, 'DELETE_DIR ')
-                cmd = cmd.replace(/^(dir|ls)\s*/i, 'LIST ')
-                return `${name}:${cmd}`
-            }
-            const batchTools = [
-                'send_group_message', 'send_private_message', 'send_message',
-                'poke_user', 'at_user', 'set_group_card', 'set_group_ban',
-                'kick_group_member', 'send_ai_voice'
-            ]
-            if (batchTools.includes(name)) {
-                const targetId = args.group_id || args.user_id || args.target_id || ''
-                return `${name}:${targetId}:${JSON.stringify(args)}`
-            }
-            return `${name}:${JSON.stringify(args)}`
-        }).join('|')
+        return toolCalls
+            .map(tc => {
+                const name = tc.function?.name || ''
+                let args = tc.function?.arguments
+                if (typeof args === 'string') {
+                    try {
+                        args = JSON.parse(args)
+                    } catch {
+                        args = {}
+                    }
+                }
+                args = args || {}
+                if (name === 'execute_command' && args.command) {
+                    let cmd = args.command.trim().toLowerCase()
+                    cmd = cmd.replace(/^(rmdir|rd)\s+/i, 'DELETE_DIR ')
+                    cmd = cmd.replace(/^(dir|ls)\s*/i, 'LIST ')
+                    return `${name}:${cmd}`
+                }
+                const batchTools = [
+                    'send_group_message',
+                    'send_private_message',
+                    'send_message',
+                    'poke_user',
+                    'at_user',
+                    'set_group_card',
+                    'set_group_ban',
+                    'kick_group_member',
+                    'send_ai_voice'
+                ]
+                if (batchTools.includes(name)) {
+                    const targetId = args.group_id || args.user_id || args.target_id || ''
+                    return `${name}:${targetId}:${JSON.stringify(args)}`
+                }
+                return `${name}:${JSON.stringify(args)}`
+            })
+            .join('|')
     }
 
     /**
@@ -1755,13 +1824,18 @@ export class AbstractClient {
         const toolCallResults = []
         const toolCallLogs = []
         const sequentialTools = [
-            'send_group_message', 'send_private_message', 'send_message',
-            'reply_current_message', 'send_forward_message', 'send_ai_voice',
-            'at_user', 'poke_user'
+            'send_group_message',
+            'send_private_message',
+            'send_message',
+            'reply_current_message',
+            'send_forward_message',
+            'send_ai_voice',
+            'at_user',
+            'poke_user'
         ]
         const sequentialCalls = []
         const parallelCalls = []
-        
+
         for (const tc of toolCalls) {
             const name = tc.function?.name || tc.name || ''
             if (sequentialTools.includes(name)) {
@@ -1770,20 +1844,20 @@ export class AbstractClient {
                 parallelCalls.push(tc)
             }
         }
-        
+
         const startTime = Date.now()
         if (parallelCalls.length > 0) {
             const parallelNames = parallelCalls.map(t => t.function?.name || 'unknown').join(', ')
             this.logger.debug(`[Tool] 并行执行: ${parallelNames}`)
-            
+
             const results = await Promise.allSettled(
                 parallelCalls.map(toolCall => this.executeSingleToolCall(toolCall))
             )
-            
+
             for (let i = 0; i < results.length; i++) {
                 const result = results[i]
                 const toolCall = parallelCalls[i]
-                
+
                 if (result.status === 'fulfilled') {
                     toolCallResults.push(result.value.toolResult)
                     toolCallLogs.push(result.value.log)
@@ -1793,7 +1867,7 @@ export class AbstractClient {
                         tool_call_id: toolCall.id,
                         content: `执行失败: ${result.reason?.message || 'Unknown error'}`,
                         type: 'tool',
-                        name: fcName,
+                        name: fcName
                     })
                     toolCallLogs.push({
                         name: fcName,
@@ -1808,7 +1882,7 @@ export class AbstractClient {
         if (sequentialCalls.length > 0) {
             const seqNames = sequentialCalls.map(t => t.function?.name || 'unknown').join(', ')
             this.logger.debug(`[Tool] 串行执行(保序): ${seqNames}`)
-            
+
             for (const toolCall of sequentialCalls) {
                 const { toolResult, log } = await this.executeSingleToolCall(toolCall)
                 toolCallResults.push(toolResult)
@@ -1818,9 +1892,11 @@ export class AbstractClient {
                 }
             }
         }
-        
+
         const totalDuration = Date.now() - startTime
-        this.logger.debug(`[Tool] 执行完成: ${totalDuration}ms (并行:${parallelCalls.length} 串行:${sequentialCalls.length})`)
+        this.logger.debug(
+            `[Tool] 执行完成: ${totalDuration}ms (并行:${parallelCalls.length} 串行:${sequentialCalls.length})`
+        )
 
         return { toolCallResults, toolCallLogs }
     }
@@ -1833,7 +1909,7 @@ export class AbstractClient {
     async executeSingleToolCall(toolCall) {
         const fcName = toolCall.function?.name || toolCall.name || 'unknown_tool'
         let fcArgs = toolCall.function?.arguments || toolCall.arguments
-        
+
         // 解析参数
         if (typeof fcArgs === 'string') {
             try {
@@ -1867,7 +1943,7 @@ export class AbstractClient {
                     tool_call_id: toolCall.id,
                     content: toolResult,
                     type: 'tool',
-                    name: fcName,
+                    name: fcName
                 },
                 log: {
                     name: fcName,
@@ -1883,7 +1959,7 @@ export class AbstractClient {
                     tool_call_id: toolCall.id,
                     content: `工具 "${fcName}" 不存在或未启用`,
                     type: 'tool',
-                    name: fcName,
+                    name: fcName
                 },
                 log: {
                     name: fcName,

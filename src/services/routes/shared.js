@@ -12,7 +12,7 @@ export const ErrorCodes = {
     NETWORK_ERROR: -2,
     TIMEOUT: -3,
     CANCELLED: -4,
-    
+
     // 参数验证错误 (1000-1999)
     VALIDATION_FAILED: 1001,
     AUTH_REQUIRED: 1002,
@@ -24,14 +24,14 @@ export const ErrorCodes = {
     FIELD_TOO_LONG: 1008,
     FIELD_TOO_SHORT: 1009,
     INVALID_VALUE: 1010,
-    
+
     // 资源错误 (2000-2999)
     NOT_FOUND: 2001,
     ALREADY_EXISTS: 2002,
     CONFLICT: 2003,
     LOCKED: 2004,
     DELETED: 2005,
-    
+
     // 渠道错误 (3000-3999)
     CHANNEL_ERROR: 3001,
     CHANNEL_UNAVAILABLE: 3002,
@@ -40,32 +40,32 @@ export const ErrorCodes = {
     CHANNEL_AUTH_FAILED: 3005,
     MODEL_NOT_FOUND: 3006,
     MODEL_UNAVAILABLE: 3007,
-    
+
     // 限流错误 (4000-4999)
     RATE_LIMITED: 4001,
     QUOTA_EXCEEDED: 4002,
     CONCURRENT_LIMIT: 4003,
-    
+
     // 系统错误 (5000-5999)
     INTERNAL_ERROR: 5001,
     DATABASE_ERROR: 5002,
     CONFIG_ERROR: 5003,
     STORAGE_ERROR: 5004,
-    
+
     // 外部服务错误 (6000-6999)
     EXTERNAL_API_ERROR: 6001,
     EXTERNAL_TIMEOUT: 6002,
     EXTERNAL_UNAVAILABLE: 6003,
-    
+
     // 工具错误 (7000-7999)
     TOOL_EXECUTION_FAILED: 7001,
     TOOL_NOT_FOUND: 7002,
     TOOL_DISABLED: 7003,
-    
+
     // MCP错误 (8000-8999)
     MCP_CONNECTION_FAILED: 8001,
     MCP_SERVER_ERROR: 8002,
-    MCP_RESOURCE_NOT_FOUND: 8003,
+    MCP_RESOURCE_NOT_FOUND: 8003
 }
 
 // 错误消息映射
@@ -86,7 +86,7 @@ const errorMessages = {
     [ErrorCodes.INTERNAL_ERROR]: '系统内部错误',
     [ErrorCodes.EXTERNAL_API_ERROR]: '外部API调用失败',
     [ErrorCodes.TOOL_EXECUTION_FAILED]: '工具执行失败',
-    [ErrorCodes.MCP_CONNECTION_FAILED]: 'MCP服务器连接失败',
+    [ErrorCodes.MCP_CONNECTION_FAILED]: 'MCP服务器连接失败'
 }
 
 // Response helper

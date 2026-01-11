@@ -10,7 +10,7 @@ import { encode } from 'gpt-tokenizer'
 
 const STATS_KEY = 'chaite:usage_stats'
 const STATS_LIST_KEY = 'chaite:usage_list'
-const MAX_RECORDS = 10000  // 最多保留记录数
+const MAX_RECORDS = 10000 // 最多保留记录数
 
 /**
  * 使用记录结构
@@ -80,10 +80,10 @@ class UsageStats {
      */
     truncateRequest(request) {
         if (!request) return null
-        
+
         try {
             const truncated = { ...request }
-            
+
             // 处理 messages 数组
             if (truncated.messages && Array.isArray(truncated.messages)) {
                 truncated.messages = truncated.messages.map(msg => {
@@ -105,20 +105,22 @@ class UsageStats {
                     return newMsg
                 })
             }
-            
+
             // 保留工具列表（只保留名称和简短描述）
             if (truncated.tools && Array.isArray(truncated.tools)) {
                 truncated.toolsCount = truncated.tools.length
-                truncated.tools = truncated.tools.slice(0, 20).map(t => 
-                    typeof t === 'object' ? { name: t.name, description: t.description?.substring(0, 50) } : t
-                )
+                truncated.tools = truncated.tools
+                    .slice(0, 20)
+                    .map(t =>
+                        typeof t === 'object' ? { name: t.name, description: t.description?.substring(0, 50) } : t
+                    )
                 if (truncated.toolsCount > 20) {
                     truncated.tools.push({ name: `...还有 ${truncated.toolsCount - 20} 个工具` })
                 }
             }
-            
+
             // systemPrompt 已在调用处截断，这里不再处理
-            
+
             return truncated
         } catch (e) {
             return { error: '解析请求失败', raw: String(request).substring(0, 500) }
@@ -132,16 +134,16 @@ class UsageStats {
      */
     truncateResponse(response) {
         if (!response) return null
-        
+
         try {
             // 如果是错误对象
             if (response instanceof Error) {
                 return {
                     error: response.message,
-                    stack: response.stack?.substring(0, 500),
+                    stack: response.stack?.substring(0, 500)
                 }
             }
-            
+
             // 如果是响应对象，直接返回（限制大小）
             if (typeof response === 'object') {
                 const jsonStr = JSON.stringify(response)
@@ -150,12 +152,12 @@ class UsageStats {
                 }
                 return response
             }
-            
+
             // 字符串响应
             if (typeof response === 'string') {
                 return response.length > 2000 ? response.substring(0, 2000) + '...' : response
             }
-            
+
             return response
         } catch (e) {
             return { parseError: e.message }
@@ -183,7 +185,7 @@ class UsageStats {
                         }
                     }
                 }
-            } 
+            }
             total += 4
         }
         return total
@@ -191,13 +193,13 @@ class UsageStats {
 
     /**
      * 记录一次API使用
-     * @param {Partial<UsageRecord>} record 
+     * @param {Partial<UsageRecord>} record
      * @returns {Promise<string>} 记录ID
      */
     async record(record) {
         const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
         const isSuccess = record.success !== false
-        
+
         const fullRecord = {
             id,
             timestamp: Date.now(),
@@ -221,18 +223,21 @@ class UsageStats {
             userId: record.userId || null,
             groupId: record.groupId || null,
             stream: record.stream || false,
-            isEstimated: record.isEstimated || false,  // 标记是否为估算值
+            isEstimated: record.isEstimated || false, // 标记是否为估算值
             // 记录原始请求（限制大小）
             request: record.request ? this.truncateRequest(record.request) : null,
             // 仅失败时记录响应
-            response: !isSuccess && record.response ? this.truncateResponse(record.response) : null,
+            response: !isSuccess && record.response ? this.truncateResponse(record.response) : null
         }
 
         // 记录日志
         const keyInfo = fullRecord.keyIndex >= 0 ? ` Key#${fullRecord.keyIndex + 1}(${fullRecord.keyName})` : ''
-        const tokenInfo = fullRecord.totalTokens > 0 ? ` tokens:${fullRecord.inputTokens}/${fullRecord.outputTokens}` : ''
+        const tokenInfo =
+            fullRecord.totalTokens > 0 ? ` tokens:${fullRecord.inputTokens}/${fullRecord.outputTokens}` : ''
         const statusIcon = fullRecord.success ? '✓' : '✗'
-        logger.info(`[UsageStats] ${statusIcon} ${fullRecord.channelName}${keyInfo} | ${fullRecord.model} | ${fullRecord.duration}ms${tokenInfo}`)
+        logger.info(
+            `[UsageStats] ${statusIcon} ${fullRecord.channelName}${keyInfo} | ${fullRecord.model} | ${fullRecord.duration}ms${tokenInfo}`
+        )
 
         // 保存到内存
         this.recentStats.unshift(fullRecord)
@@ -247,7 +252,7 @@ class UsageStats {
 
             // 更新汇总统计
             await this.updateAggregateStats(fullRecord)
-            
+
             // 更新用户统计
             await this.updateUserStats(fullRecord)
         } catch (error) {
@@ -263,7 +268,7 @@ class UsageStats {
     async updateAggregateStats(record) {
         const today = new Date().toISOString().split('T')[0]
         const hourKey = new Date().toISOString().split(':')[0]
-        
+
         const statsKey = `${STATS_KEY}:${today}`
         const hourlyKey = `${STATS_KEY}:hourly:${hourKey}`
         const channelKey = `${STATS_KEY}:channel:${record.channelId}`
@@ -274,7 +279,7 @@ class UsageStats {
             ['failedCalls', record.success ? 0 : 1],
             ['totalInputTokens', record.inputTokens],
             ['totalOutputTokens', record.outputTokens],
-            ['totalDuration', record.duration],
+            ['totalDuration', record.duration]
         ]
 
         for (const [field, value] of updates) {
@@ -284,24 +289,30 @@ class UsageStats {
         }
 
         // 设置过期时间
-        await redisClient.expire(statsKey, 86400 * 30)  // 30天
-        await redisClient.expire(hourlyKey, 86400 * 7)   // 7天
+        await redisClient.expire(statsKey, 86400 * 30) // 30天
+        await redisClient.expire(hourlyKey, 86400 * 7) // 7天
         await redisClient.expire(channelKey, 86400 * 90) // 90天
     }
 
     /**
      * 获取最近的使用记录
-     * @param {number} limit 
-     * @param {Object} filter 
+     * @param {number} limit
+     * @param {Object} filter
      */
     async getRecent(limit = 50, filter = {}) {
         let records = []
 
         try {
             const rawRecords = await redisClient.lrange(STATS_LIST_KEY, 0, limit * 2)
-            records = rawRecords.map(r => {
-                try { return JSON.parse(r) } catch { return null }
-            }).filter(Boolean)
+            records = rawRecords
+                .map(r => {
+                    try {
+                        return JSON.parse(r)
+                    } catch {
+                        return null
+                    }
+                })
+                .filter(Boolean)
         } catch {
             records = [...this.recentStats]
         }
@@ -346,12 +357,14 @@ class UsageStats {
                 totalInputTokens: parseInt(stats?.totalInputTokens || '0'),
                 totalOutputTokens: parseInt(stats?.totalOutputTokens || '0'),
                 totalDuration: parseInt(stats?.totalDuration || '0'),
-                avgDuration: stats?.totalCalls > 0 
-                    ? Math.round(parseInt(stats?.totalDuration || '0') / parseInt(stats?.totalCalls || '1'))
-                    : 0,
-                successRate: stats?.totalCalls > 0
-                    ? Math.round((parseInt(stats?.successCalls || '0') / parseInt(stats?.totalCalls || '1')) * 100)
-                    : 0,
+                avgDuration:
+                    stats?.totalCalls > 0
+                        ? Math.round(parseInt(stats?.totalDuration || '0') / parseInt(stats?.totalCalls || '1'))
+                        : 0,
+                successRate:
+                    stats?.totalCalls > 0
+                        ? Math.round((parseInt(stats?.successCalls || '0') / parseInt(stats?.totalCalls || '1')) * 100)
+                        : 0
             }
         } catch {
             // 从内存计算
@@ -377,9 +390,10 @@ class UsageStats {
                 totalInputTokens: parseInt(stats?.totalInputTokens || '0'),
                 totalOutputTokens: parseInt(stats?.totalOutputTokens || '0'),
                 totalDuration: parseInt(stats?.totalDuration || '0'),
-                avgDuration: stats?.totalCalls > 0 
-                    ? Math.round(parseInt(stats?.totalDuration || '0') / parseInt(stats?.totalCalls || '1'))
-                    : 0,
+                avgDuration:
+                    stats?.totalCalls > 0
+                        ? Math.round(parseInt(stats?.totalDuration || '0') / parseInt(stats?.totalCalls || '1'))
+                        : 0
             }
         } catch {
             const channelRecords = this.recentStats.filter(r => r.channelId === channelId)
@@ -406,7 +420,7 @@ class UsageStats {
             totalOutputTokens,
             totalDuration,
             avgDuration: totalCalls > 0 ? Math.round(totalDuration / totalCalls) : 0,
-            successRate: totalCalls > 0 ? Math.round((successCalls / totalCalls) * 100) : 0,
+            successRate: totalCalls > 0 ? Math.round((successCalls / totalCalls) * 100) : 0
         }
     }
 
@@ -442,13 +456,13 @@ class UsageStats {
         for (const record of records) {
             const id = record.channelId
             if (!channelCounts[id]) {
-                channelCounts[id] = { 
-                    channelId: id, 
+                channelCounts[id] = {
+                    channelId: id,
                     channelName: record.channelName,
-                    calls: 0, 
+                    calls: 0,
                     successCalls: 0,
-                    tokens: 0, 
-                    duration: 0 
+                    tokens: 0,
+                    duration: 0
                 }
             }
             channelCounts[id].calls++
@@ -469,9 +483,9 @@ class UsageStats {
      */
     async getUserStats(userId) {
         if (!userId) return null
-        
+
         const userKey = `${STATS_KEY}:user:${userId}`
-        
+
         try {
             // 先尝试从 Redis 获取
             const stats = await redisClient.hgetall(userKey)
@@ -483,15 +497,15 @@ class UsageStats {
                     totalInputTokens: parseInt(stats.totalInputTokens || '0'),
                     totalOutputTokens: parseInt(stats.totalOutputTokens || '0'),
                     totalDuration: parseInt(stats.totalDuration || '0'),
-                    lastUpdated: parseInt(stats.lastUpdated || '0'),
+                    lastUpdated: parseInt(stats.lastUpdated || '0')
                 }
             }
         } catch {}
-        
+
         // 从内存记录计算
         const userRecords = this.recentStats.filter(r => r.userId === userId)
         if (userRecords.length === 0) return null
-        
+
         return {
             userId,
             totalCalls: userRecords.length,
@@ -499,7 +513,7 @@ class UsageStats {
             totalInputTokens: userRecords.reduce((sum, r) => sum + (r.inputTokens || 0), 0),
             totalOutputTokens: userRecords.reduce((sum, r) => sum + (r.outputTokens || 0), 0),
             totalDuration: userRecords.reduce((sum, r) => sum + (r.duration || 0), 0),
-            lastUpdated: userRecords[0]?.timestamp || 0,
+            lastUpdated: userRecords[0]?.timestamp || 0
         }
     }
 
@@ -509,9 +523,9 @@ class UsageStats {
      */
     async updateUserStats(record) {
         if (!record.userId) return
-        
+
         const userKey = `${STATS_KEY}:user:${record.userId}`
-        
+
         try {
             await redisClient.hincrby(userKey, 'totalCalls', 1)
             await redisClient.hincrby(userKey, 'successCalls', record.success ? 1 : 0)
@@ -535,10 +549,10 @@ class UsageStats {
         try {
             // 清除所有相关的 Redis 键
             const patterns = [
-                `${STATS_KEY}*`,           // chaite:usage_stats*
-                STATS_LIST_KEY,            // chaite:usage_list
+                `${STATS_KEY}*`, // chaite:usage_stats*
+                STATS_LIST_KEY // chaite:usage_list
             ]
-            
+
             for (const pattern of patterns) {
                 if (pattern.includes('*')) {
                     const keys = await redisClient.keys(pattern)
@@ -557,7 +571,7 @@ class UsageStats {
                     }
                 }
             }
-            
+
             logger.info(`[UsageStats] 统计数据已清除, 删除 ${deletedCount} 个键, ${listLen} 条记录`)
         } catch (error) {
             logger.warn('[UsageStats] 清除Redis数据失败:', error.message)

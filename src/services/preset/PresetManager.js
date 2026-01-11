@@ -98,10 +98,10 @@ export class PresetManager {
 
         // 加载内置预设
         this.loadBuiltinPresets()
-        
+
         // 加载用户预设
         await this.loadPresets()
-        
+
         // 懒加载知识库服务
         try {
             const { knowledgeService } = await import('../storage/KnowledgeService.js')
@@ -110,7 +110,7 @@ export class PresetManager {
         } catch (err) {
             console.warn('[PresetManager] 知识库服务加载失败:', err.message)
         }
-        
+
         this.initialized = true
     }
 
@@ -159,8 +159,8 @@ export class PresetManager {
             description: '通用助手预设',
             systemPrompt: '你是一个有帮助的AI助手。',
             model: '',
-            disableSystemPrompt: false,  // 是否禁用系统提示词
-            enableReasoning: false,       // 是否启用深度思考
+            disableSystemPrompt: false, // 是否禁用系统提示词
+            enableReasoning: false, // 是否启用深度思考
             modelParams: {
                 temperature: 0.7,
                 top_p: 0.9,
@@ -180,10 +180,10 @@ export class PresetManager {
             context: {
                 maxMessages: 20,
                 maxTokens: 8000,
-                isolateContext: false,      // 是否使用独立上下文
+                isolateContext: false, // 是否使用独立上下文
                 includeGroupContext: false,
                 groupContextLength: 10,
-                clearOnSwitch: false        // 切换预设时是否清除上下文
+                clearOnSwitch: false // 切换预设时是否清除上下文
             },
             tools: {
                 enableBuiltinTools: true,
@@ -213,16 +213,16 @@ export class PresetManager {
     getAll(options = {}) {
         const { includeBuiltin = true, category } = options
         let presets = Array.from(this.presets.values())
-        
+
         if (includeBuiltin) {
             const builtins = Array.from(this.builtinPresets.values())
             presets = [...builtins, ...presets]
         }
-        
+
         if (category) {
             presets = presets.filter(p => p.category === category)
         }
-        
+
         return presets
     }
 
@@ -241,7 +241,7 @@ export class PresetManager {
      */
     get(idOrName) {
         if (!idOrName) return null
-        
+
         // 优先按ID查找用户预设
         if (this.presets.has(idOrName)) {
             return this.presets.get(idOrName)
@@ -250,7 +250,7 @@ export class PresetManager {
         if (this.builtinPresets.has(idOrName)) {
             return this.builtinPresets.get(idOrName)
         }
-        
+
         // 按名称查找用户预设
         for (const preset of this.presets.values()) {
             if (preset.name === idOrName) {
@@ -263,7 +263,7 @@ export class PresetManager {
                 return preset
             }
         }
-        
+
         return null
     }
 
@@ -314,13 +314,13 @@ export class PresetManager {
      */
     buildSystemPrompt(id, context = {}, options = {}) {
         const { includeKnowledge = true, conversationId } = options
-        
+
         // 检查是否是已清除的上下文（#结束对话后）
         if (conversationId && this.isContextCleared(conversationId)) {
             // 返回基础提示词，不包含之前的人设和上下文
             return this.getCleanPrompt(id, context)
         }
-        
+
         const preset = this.get(id)
         if (!preset) return '你是一个有帮助的AI助手。'
 
@@ -396,10 +396,10 @@ export class PresetManager {
         }
 
         let prompt = parts.join('\n\n')
-        
+
         // 替换变量
         prompt = this.replaceVariables(prompt, context)
-        
+
         // 添加知识库内容
         if (includeKnowledge && this.knowledgeService) {
             const knowledgePrompt = this.knowledgeService.buildKnowledgePrompt(id)
@@ -407,7 +407,7 @@ export class PresetManager {
                 prompt += '\n\n' + knowledgePrompt
             }
         }
-        
+
         return prompt
     }
 
@@ -421,11 +421,11 @@ export class PresetManager {
     getCleanPrompt(id, context = {}) {
         const preset = this.get(id)
         if (!preset) return '你是一个有帮助的AI助手。'
-        
+
         // 只返回基础提示词，不包含累积的上下文
         let prompt = preset.systemPrompt || '你是一个有帮助的AI助手。'
         prompt = this.replaceVariables(prompt, context)
-        
+
         return prompt
     }
 
@@ -449,7 +449,7 @@ export class PresetManager {
     isContextCleared(conversationId) {
         const state = this.clearedContexts.get(conversationId)
         if (!state) return false
-        
+
         // 标记在第一次使用后自动失效
         if (state.isNewSession) {
             // 消费这个标记
@@ -502,10 +502,10 @@ export class PresetManager {
      */
     replaceVariables(text, context = {}) {
         if (!text) return text
-        
+
         const now = new Date()
         const weekdays = ['日', '一', '二', '三', '四', '五', '六']
-        
+
         // 内置变量
         const builtinVars = {
             date: now.toLocaleDateString('zh-CN'),
@@ -523,17 +523,17 @@ export class PresetManager {
             group_name: context.group_name || '',
             group_id: context.group_id || ''
         }
-        
+
         // 合并上下文变量（context优先）
         const vars = { ...builtinVars, ...context }
-        
+
         // 替换 {{variable}} 格式的变量
         let result = text.replace(/\{\{(\w+)\}\}/g, (match, varName) => {
             // 转换为 snake_case 查找
             const snakeName = varName.replace(/([A-Z])/g, '_$1').toLowerCase()
             return vars[varName] ?? vars[snakeName] ?? match
         })
-        
+
         // 替换 ${expression} 格式的表达式（使用 eval）
         // 提供 e 对象作为上下文，e 就是 event 对象
         const e = context.event || {}
@@ -546,7 +546,7 @@ export class PresetManager {
                 return match
             }
         })
-        
+
         return result
     }
 
@@ -571,17 +571,17 @@ export class PresetManager {
         if (!builtin) {
             throw new Error(`内置预设不存在: ${builtinId}`)
         }
-        
+
         // 深拷贝内置预设
         const newPreset = JSON.parse(JSON.stringify(builtin))
         delete newPreset.isBuiltin
         delete newPreset.isReadonly
-        
+
         // 应用覆盖
         Object.assign(newPreset, overrides)
         newPreset.name = overrides.name || `${builtin.name} (副本)`
         newPreset.sourceBuiltinId = builtinId // 记录来源
-        
+
         return this.create(newPreset)
     }
 
@@ -632,7 +632,7 @@ export class PresetManager {
             throw new Error(`Preset not found: ${id}`)
         }
         const preset = this.presets.get(id)
-        
+
         // 智能合并 persona：允许用空字符串清除旧值
         const mergePersona = (oldPersona, newPersona) => {
             if (!newPersona) return oldPersona || {}
@@ -649,7 +649,7 @@ export class PresetManager {
             }
             return merged
         }
-        
+
         // 深度合并嵌套对象
         const updated = {
             ...preset,
@@ -659,9 +659,9 @@ export class PresetManager {
             modelParams: { ...(preset.modelParams || {}), ...(data.modelParams || {}) },
             persona: mergePersona(preset.persona, data.persona),
             context: { ...(preset.context || {}), ...(data.context || {}) },
-            tools: { ...(preset.tools || {}), ...(data.tools || {}) },
+            tools: { ...(preset.tools || {}), ...(data.tools || {}) }
         }
-        
+
         this.presets.set(id, updated)
         await this.savePresets()
         return updated
@@ -672,19 +672,19 @@ export class PresetManager {
         if (this.builtinPresets.has(id)) {
             throw new Error('不能删除内置预设')
         }
-        
+
         // 检查预设是否存在
         const preset = this.presets.get(id)
         if (!preset) {
             return false
         }
-        
+
         // 检查是否是当前默认预设
         const defaultPresetId = config.get('presets.defaultId') || config.get('llm.defaultChatPresetId')
         if (id === defaultPresetId) {
             throw new Error('不能删除当前默认预设，请先设置其他预设为默认')
         }
-        
+
         if (this.presets.delete(id)) {
             await this.savePresets()
             return true
@@ -699,24 +699,24 @@ export class PresetManager {
      */
     loadDocumentContent(docPath) {
         if (!docPath) return null
-        
+
         // 支持的文档目录
         const personaDir = path.join(DATA_DIR, 'persona')
-        
+
         // 确保 persona 目录存在
         if (!fs.existsSync(personaDir)) {
             fs.mkdirSync(personaDir, { recursive: true })
         }
-        
+
         // 尝试多种路径
         const possiblePaths = [
-            docPath,                                    // 绝对路径
-            path.join(personaDir, docPath),             // persona目录
-            path.join(personaDir, `${docPath}.txt`),    // 添加.txt后缀
-            path.join(personaDir, `${docPath}.md`),     // 添加.md后缀
-            path.join(DATA_DIR, docPath)                // data目录
+            docPath, // 绝对路径
+            path.join(personaDir, docPath), // persona目录
+            path.join(personaDir, `${docPath}.txt`), // 添加.txt后缀
+            path.join(personaDir, `${docPath}.md`), // 添加.md后缀
+            path.join(DATA_DIR, docPath) // data目录
         ]
-        
+
         for (const filePath of possiblePaths) {
             try {
                 if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
@@ -728,7 +728,7 @@ export class PresetManager {
                 // 继续尝试下一个路径
             }
         }
-        
+
         console.warn(`[PresetManager] 人格文档不存在: ${docPath}`)
         return null
     }
@@ -741,60 +741,58 @@ export class PresetManager {
      */
     buildAcgPersona(characterName, acgData = {}) {
         const parts = []
-        
+
         if (characterName) {
             parts.push(`【ACG角色】你正在扮演「${characterName}」这个角色。`)
         }
-        
+
         if (acgData) {
             // 作品信息
             if (acgData.series || acgData.anime || acgData.game) {
                 const source = acgData.series || acgData.anime || acgData.game
                 parts.push(`来源作品：${source}`)
             }
-            
+
             // 角色属性
             if (acgData.gender) parts.push(`性别：${acgData.gender}`)
             if (acgData.age) parts.push(`年龄：${acgData.age}`)
             if (acgData.height) parts.push(`身高：${acgData.height}`)
             if (acgData.birthday) parts.push(`生日：${acgData.birthday}`)
-            
+
             // 性格设定
             if (acgData.personality) {
                 parts.push(`性格特点：${acgData.personality}`)
             }
-            
+
             // 说话方式
             if (acgData.speech) {
                 parts.push(`说话方式：${acgData.speech}`)
             }
-            
+
             // 口头禅
             if (acgData.catchphrase) {
                 parts.push(`口头禅：「${acgData.catchphrase}」`)
             }
-            
+
             // 角色关系
             if (acgData.relationships && Array.isArray(acgData.relationships)) {
-                const relParts = acgData.relationships.map(r => 
-                    `${r.name}（${r.relation}）`
-                ).join('、')
+                const relParts = acgData.relationships.map(r => `${r.name}（${r.relation}）`).join('、')
                 parts.push(`人物关系：${relParts}`)
             }
-            
+
             // 背景故事
             if (acgData.story) {
                 parts.push(`背景故事：${acgData.story}`)
             }
-            
+
             // 角色设定文档
             if (acgData.characterDocument) {
                 parts.push(`\n【角色详细设定】\n${acgData.characterDocument}`)
             }
         }
-        
+
         if (parts.length === 0) return null
-        
+
         return '\n' + parts.join('\n')
     }
 
@@ -808,12 +806,12 @@ export class PresetManager {
         const systemPrompt = `你现在是${characterName}，请以该角色的身份、性格、语气进行对话。
 始终保持角色特征，不要跳出角色。
 回复时使用角色特有的语气和说话方式。`
-        
+
         return this.create({
             name: `ACG-${characterName}`,
             description: `ACG角色扮演: ${characterName}`,
             systemPrompt,
-            temperature: 0.8,  // 稍高的温度让角色更有活力
+            temperature: 0.8, // 稍高的温度让角色更有活力
             persona: {
                 name: characterName,
                 acgCharacter: characterName,

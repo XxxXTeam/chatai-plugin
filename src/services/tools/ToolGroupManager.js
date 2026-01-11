@@ -14,16 +14,16 @@ export class ToolGroupManager {
      */
     async init() {
         if (this.initialized) return
-        
+
         await mcpManager.init()
         this.loadFromBuiltinCategories()
         this.initialized = true
-        
+
         logger.info(`[ToolGroupManager] 初始化完成，共 ${this.groups.size} 个工具组`)
     }
     loadFromBuiltinCategories() {
         this.groups.clear()
-        
+
         let index = 0
         for (const [key, category] of Object.entries(toolCategories)) {
             if (category.tools && category.tools.length > 0) {
@@ -38,7 +38,7 @@ export class ToolGroupManager {
                 index++
             }
         }
-        
+
         logger.debug(`[ToolGroupManager] 从内置分类加载 ${this.groups.size} 个工具组`)
     }
 
@@ -61,12 +61,12 @@ export class ToolGroupManager {
         return summary.sort((a, b) => a.index - b.index)
     }
 
-    /** 
+    /**
      * @returns {string} 调度提示词
      */
     buildDispatchPrompt() {
         const summary = this.getGroupSummary()
-        
+
         let prompt = `你是智能任务调度器。分析用户请求，拆分为一个或多个任务。
 
 ## 核心原则：
@@ -89,7 +89,7 @@ export class ToolGroupManager {
                 prompt += `[${group.index}] ${displayName}: ${group.description}\n`
             }
         }
-        
+
         prompt += `
 ## 返回格式（JSON）：
 {
@@ -124,29 +124,63 @@ export class ToolGroupManager {
     detectToolIntent(message) {
         if (!message || typeof message !== 'string') return false
         const msg = message.toLowerCase()
-        
+
         // 明确需要工具的关键词
         const toolKeywords = [
             // 时间相关
-            '几点', '时间', '日期', '今天', '明天', '昨天', '星期', '周几',
+            '几点',
+            '时间',
+            '日期',
+            '今天',
+            '明天',
+            '昨天',
+            '星期',
+            '周几',
             // 天气相关
-            '天气', '温度', '气温', '下雨', '下雪', '晴天', '阴天',
+            '天气',
+            '温度',
+            '气温',
+            '下雨',
+            '下雪',
+            '晴天',
+            '阴天',
             // 消息相关
-            '发消息', '发送', '艾特', '@', '私聊', '群发',
+            '发消息',
+            '发送',
+            '艾特',
+            '@',
+            '私聊',
+            '群发',
             // 群管理
-            '群成员', '群信息', '群列表', '踢人', '禁言', '解禁',
+            '群成员',
+            '群信息',
+            '群列表',
+            '踢人',
+            '禁言',
+            '解禁',
             // 查询操作
-            '查', '搜', '获取', '看看', '帮我', '告诉我',
+            '查',
+            '搜',
+            '获取',
+            '看看',
+            '帮我',
+            '告诉我',
             // 文件操作
-            '文件', '图片', '下载', '上传',
+            '文件',
+            '图片',
+            '下载',
+            '上传',
             // 系统操作
-            '执行', '运行', '设置', '配置'
+            '执行',
+            '运行',
+            '设置',
+            '配置'
         ]
-        
+
         for (const kw of toolKeywords) {
             if (msg.includes(kw)) return true
         }
-        
+
         return false
     }
 
@@ -159,51 +193,57 @@ export class ToolGroupManager {
     parseDispatchResponseV2(response, originalMessage = '') {
         // 智能默认：如果检测到工具意图，默认使用全量工具而非chat
         const hasToolIntent = this.detectToolIntent(originalMessage)
-        const defaultResult = { 
-            analysis: '', 
-            tasks: [{ type: hasToolIntent ? 'tool' : 'chat', priority: 1, params: hasToolIntent ? { toolGroups: this.getAllGroupIndexes() } : {} }], 
+        const defaultResult = {
+            analysis: '',
+            tasks: [
+                {
+                    type: hasToolIntent ? 'tool' : 'chat',
+                    priority: 1,
+                    params: hasToolIntent ? { toolGroups: this.getAllGroupIndexes() } : {}
+                }
+            ],
             executionMode: 'sequential',
             toolGroups: hasToolIntent ? this.getAllGroupIndexes() : []
         }
-        
+
         if (!response || typeof response !== 'string') {
             return defaultResult
         }
-        
+
         // 清理响应文本
         let cleanResponse = response.trim()
         // 移除可能的 markdown 代码块标记
         cleanResponse = cleanResponse.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
-        
+
         try {
             // 提取 JSON 对象（贪婪匹配最外层的大括号）
             const jsonMatch = cleanResponse.match(/\{[\s\S]*\}/)
             if (jsonMatch) {
                 let jsonStr = jsonMatch[0]
-                
+
                 // 尝试修复常见JSON格式问题
-                jsonStr = jsonStr.replace(/,\s*([\]}])/g, '$1')  // 移除尾随逗号
-                
+                jsonStr = jsonStr.replace(/,\s*([\]}])/g, '$1') // 移除尾随逗号
+
                 const parsed = JSON.parse(jsonStr)
-                
+
                 const analysis = parsed.analysis || ''
-                const executionMode = ['sequential', 'parallel'].includes(parsed.executionMode) 
-                    ? parsed.executionMode 
+                const executionMode = ['sequential', 'parallel'].includes(parsed.executionMode)
+                    ? parsed.executionMode
                     : 'sequential'
-                
+
                 // 解析任务列表
                 let tasks = []
                 if (Array.isArray(parsed.tasks) && parsed.tasks.length > 0) {
                     tasks = parsed.tasks.map((t, idx) => {
-                        const type = ['draw', 'image_understand', 'tool', 'search', 'chat'].includes(t.type) 
-                            ? t.type 
+                        const type = ['draw', 'image_understand', 'tool', 'search', 'chat'].includes(t.type)
+                            ? t.type
                             : 'chat'
-                        
+
                         // 验证并修正工具组索引
                         let params = t.params || {}
                         if (type === 'tool' && Array.isArray(params.toolGroups)) {
-                            params.toolGroups = params.toolGroups.filter(i => 
-                                typeof i === 'number' && this.groups.has(i)
+                            params.toolGroups = params.toolGroups.filter(
+                                i => typeof i === 'number' && this.groups.has(i)
                             )
                             // 如果工具组为空，降级为chat
                             if (params.toolGroups.length === 0) {
@@ -215,7 +255,7 @@ export class ToolGroupManager {
                                 }
                             }
                         }
-                        
+
                         return {
                             type,
                             priority: t.priority || idx + 1,
@@ -226,7 +266,7 @@ export class ToolGroupManager {
                 } else {
                     tasks = [{ type: 'chat', priority: 1, params: {} }]
                 }
-                
+
                 // 过滤无效任务
                 tasks = tasks.filter(t => {
                     if (t.type === 'tool') {
@@ -234,36 +274,40 @@ export class ToolGroupManager {
                     }
                     return true
                 })
-                
+
                 if (tasks.length === 0) {
                     tasks = [{ type: 'chat', priority: 1, params: {} }]
                 }
-                
+
                 // 提取所有工具组索引（用于兼容）
                 const toolGroups = tasks
                     .filter(t => t.type === 'tool' && Array.isArray(t.params?.toolGroups))
                     .flatMap(t => t.params.toolGroups)
-                
-                logger.debug(`[ToolGroupManager] 解析调度结果: 分析="${analysis}", 任务数=${tasks.length}, 工具组=[${toolGroups.join(',')}]`)
-                
+
+                logger.debug(
+                    `[ToolGroupManager] 解析调度结果: 分析="${analysis}", 任务数=${tasks.length}, 工具组=[${toolGroups.join(',')}]`
+                )
+
                 return { analysis, tasks, executionMode, toolGroups }
             }
         } catch (parseErr) {
-            logger.debug(`[ToolGroupManager] JSON解析失败: ${parseErr.message}, 响应: ${cleanResponse.substring(0, 200)}`)
+            logger.debug(
+                `[ToolGroupManager] JSON解析失败: ${parseErr.message}, 响应: ${cleanResponse.substring(0, 200)}`
+            )
         }
-        
+
         // 兼容旧格式：纯数组
         const indexes = this.parseDispatchResponse(response)
         if (indexes.length > 0) {
             logger.debug(`[ToolGroupManager] 使用旧格式解析，工具组=[${indexes.join(',')}]`)
-            return { 
-                analysis: '', 
-                tasks: [{ type: 'tool', priority: 1, params: { toolGroups: indexes } }], 
+            return {
+                analysis: '',
+                tasks: [{ type: 'tool', priority: 1, params: { toolGroups: indexes } }],
                 executionMode: 'sequential',
                 toolGroups: indexes
             }
         }
-        
+
         return defaultResult
     }
 
@@ -275,32 +319,32 @@ export class ToolGroupManager {
         if (!Array.isArray(indexes) || indexes.length === 0) {
             return []
         }
-        
+
         const toolNames = new Set()
-        
+
         for (const index of indexes) {
             const group = this.groups.get(index)
             if (group && group.enabled) {
                 group.tools.forEach(name => toolNames.add(name))
             }
         }
-        
+
         if (toolNames.size === 0) {
             return []
         }
-        
+
         // 从 MCP 获取完整工具定义
         const allTools = mcpManager.getTools(options)
         const selectedTools = allTools.filter(t => toolNames.has(t.name))
-        
+
         logger.debug(`[ToolGroupManager] 选中工具组 [${indexes.join(',')}]，返回 ${selectedTools.length} 个工具`)
-        
+
         return selectedTools
     }
 
     /**
      * 获取指定工具组
-     * 
+     *
      * @param {number} index - 工具组索引
      * @returns {Object|null} 工具组定义
      */
@@ -310,7 +354,7 @@ export class ToolGroupManager {
 
     /**
      * 获取所有工具组
-     * 
+     *
      * @returns {Array} 工具组列表
      */
     getAllGroups() {
@@ -329,7 +373,7 @@ export class ToolGroupManager {
 
     /**
      * 添加工具组
-     * 
+     *
      * @param {Object} group - 工具组定义
      */
     addGroup(group) {
@@ -348,14 +392,14 @@ export class ToolGroupManager {
 
     /**
      * 更新工具组
-     * 
+     *
      * @param {number} index - 工具组索引
      * @param {Object} updates - 更新内容
      */
     updateGroup(index, updates) {
         const group = this.groups.get(index)
         if (!group) return false
-        
+
         Object.assign(group, updates)
         this.groups.set(index, group)
         this.saveGroups()
@@ -364,7 +408,7 @@ export class ToolGroupManager {
 
     /**
      * 删除工具组
-     * 
+     *
      * @param {number} index - 工具组索引
      */
     deleteGroup(index) {
@@ -385,7 +429,7 @@ export class ToolGroupManager {
 
     /**
      * 查找工具所属的组
-     * 
+     *
      * @param {string} toolName - 工具名称
      * @returns {Object|null} 工具组
      */
@@ -400,7 +444,7 @@ export class ToolGroupManager {
 
     /**
      * 解析调度模型的响应，提取选中的工具组索引
-     * 
+     *
      * @param {string} response - 调度模型的响应
      * @returns {number[]} 工具组索引数组
      */
@@ -408,7 +452,7 @@ export class ToolGroupManager {
         if (!response || typeof response !== 'string') {
             return []
         }
-        
+
         // 尝试直接解析 JSON 数组
         try {
             // 提取 JSON 数组
@@ -422,15 +466,13 @@ export class ToolGroupManager {
         } catch {
             // 解析失败，尝试其他格式
         }
-        
+
         // 尝试提取数字
         const numbers = response.match(/\d+/g)
         if (numbers) {
-            return numbers
-                .map(n => parseInt(n, 10))
-                .filter(i => !isNaN(i) && this.groups.has(i))
+            return numbers.map(n => parseInt(n, 10)).filter(i => !isNaN(i) && this.groups.has(i))
         }
-        
+
         return []
     }
 }

@@ -133,10 +133,8 @@ class DatabaseService {
         // 限制查询长度为200字符
         let safeQuery = query.substring(0, 200)
 
-        // 转义 LIKE 特殊字符: % _ [ ] 
-        safeQuery = safeQuery
-            .replace(/[%_\[\]]/g, '\\$&')
-            .trim()
+        // 转义 LIKE 特殊字符: % _ [ ]
+        safeQuery = safeQuery.replace(/[%_\[\]]/g, '\\$&').trim()
 
         // 如果查询为空，返回空数组
         if (!safeQuery) {
@@ -259,17 +257,21 @@ class DatabaseService {
 
     /**
      * Save a message to the database (with deduplication)
-     * @param {string} conversationId 
-     * @param {Object} message 
+     * @param {string} conversationId
+     * @param {Object} message
      */
     saveMessage(conversationId, message) {
         // 去重：检查是否已存在相同 ID 的消息
         if (message.id) {
-            const existing = this.db.prepare(`
+            const existing = this.db
+                .prepare(
+                    `
                 SELECT id FROM messages 
                 WHERE conversation_id = ? AND content LIKE ?
                 LIMIT 1
-            `).get(conversationId, `%"id":"${message.id}"%`)
+            `
+                )
+                .get(conversationId, `%"id":"${message.id}"%`)
 
             if (existing) {
                 // 消息已存在，跳过保存
@@ -279,12 +281,16 @@ class DatabaseService {
 
         // 内容去重：检查最近5条消息是否有相同内容（防止重复触发）
         const contentHash = this.hashContent(message.content, message.role)
-        const recentDuplicate = this.db.prepare(`
+        const recentDuplicate = this.db
+            .prepare(
+                `
             SELECT id FROM messages 
             WHERE conversation_id = ? 
             ORDER BY timestamp DESC 
             LIMIT 5
-        `).all(conversationId)
+        `
+            )
+            .all(conversationId)
 
         for (const recent of recentDuplicate) {
             const recentMsg = this.db.prepare(`SELECT content, role FROM messages WHERE id = ?`).get(recent.id)
@@ -322,7 +328,7 @@ class DatabaseService {
 
     /**
      * 生成消息内容的简单哈希用于去重
-     * @param {any} content 
+     * @param {any} content
      * @param {string} role
      * @returns {string}
      */
@@ -331,7 +337,7 @@ class DatabaseService {
         let hash = 0
         for (let i = 0; i < str.length; i++) {
             const char = str.charCodeAt(i)
-            hash = ((hash << 5) - hash) + char
+            hash = (hash << 5) - hash + char
             hash = hash & hash
         }
         return hash.toString(16)
@@ -339,8 +345,8 @@ class DatabaseService {
 
     /**
      * Get messages for a conversation
-     * @param {string} conversationId 
-     * @param {number} [limit] 
+     * @param {string} conversationId
+     * @param {number} [limit]
      * @returns {Array}
      */
     getMessages(conversationId, limit = 100) {
@@ -404,7 +410,7 @@ class DatabaseService {
 
     /**
      * Delete a conversation
-     * @param {string} conversationId 
+     * @param {string} conversationId
      */
     deleteConversation(conversationId) {
         const stmt = this.db.prepare('DELETE FROM messages WHERE conversation_id = ?')
@@ -413,8 +419,8 @@ class DatabaseService {
 
     /**
      * Trim conversation to keep only last N messages
-     * @param {string} conversationId 
-     * @param {number} keepCount 
+     * @param {string} conversationId
+     * @param {number} keepCount
      */
     trimMessages(conversationId, keepCount) {
         const countStmt = this.db.prepare('SELECT COUNT(*) as count FROM messages WHERE conversation_id = ?')
@@ -534,10 +540,10 @@ class DatabaseService {
 
     /**
      * 清理过期会话（超过指定天数未活动）
-     * @param {number} days 
+     * @param {number} days
      */
     cleanupOldConversations(days = 30) {
-        const cutoff = Date.now() - (days * 24 * 60 * 60 * 1000)
+        const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
         const stmt = this.db.prepare(`
             DELETE FROM messages 
             WHERE conversation_id IN (
@@ -710,7 +716,7 @@ class DatabaseService {
         const keysToCheck = [
             userId,
             `user:${userId}`,
-            userId.replace('user:', '')  // 如果传入的是带前缀的
+            userId.replace('user:', '') // 如果传入的是带前缀的
         ]
 
         for (const key of keysToCheck) {
@@ -736,8 +742,8 @@ class DatabaseService {
 
     /**
      * 设置键值对
-     * @param {string} key 
-     * @param {any} value 
+     * @param {string} key
+     * @param {any} value
      */
     setKV(key, value) {
         this.ensureInit()
@@ -750,8 +756,8 @@ class DatabaseService {
 
     /**
      * 获取键值对
-     * @param {string} key 
-     * @param {any} defaultValue 
+     * @param {string} key
+     * @param {any} defaultValue
      * @returns {any}
      */
     getKV(key, defaultValue = null) {
@@ -770,7 +776,7 @@ class DatabaseService {
 
     /**
      * 删除键值对
-     * @param {string} key 
+     * @param {string} key
      */
     deleteKV(key) {
         this.ensureInit()
@@ -780,7 +786,7 @@ class DatabaseService {
 
     /**
      * 获取以prefix开头的所有键值对
-     * @param {string} prefix 
+     * @param {string} prefix
      * @returns {Object}
      */
     getKVByPrefix(prefix) {

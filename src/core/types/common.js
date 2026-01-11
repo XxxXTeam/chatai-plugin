@@ -13,7 +13,7 @@
 export const MultipleKeyStrategyChoice = {
     RANDOM: 'random',
     ROUND_ROBIN: 'round-robin',
-    CONVERSATION_HASH: 'conversation-hash',
+    CONVERSATION_HASH: 'conversation-hash'
 }
 
 /**
@@ -86,8 +86,7 @@ export class BaseClientOptions {
     }
 
     async init() {
-        this.initPromise = (async () => {
-        })()
+        this.initPromise = (async () => {})()
     }
 
     toString() {
@@ -101,7 +100,7 @@ export class BaseClientOptions {
             // historyManager: this.historyManager,
             // logger: this.logger,
             postProcessors: this.postProcessors?.map(p => p.id),
-            preProcessors: this.preProcessors?.map(p => p.id),
+            preProcessors: this.preProcessors?.map(p => p.id)
         }
         return JSON.stringify(json)
     }
@@ -124,13 +123,13 @@ export class BaseClientOptions {
  * @property {(msg: object | string, ...args: never[]) => void} error
  */
 
-export const DefaultLogger = new class DefaultLogger {
+export const DefaultLogger = new (class DefaultLogger {
     static COLORS = {
         reset: '\x1b[0m',
         debug: '\x1b[36m', // 青色
-        info: '\x1b[32m',  // 绿色
-        warn: '\x1b[33m',  // 黄色
-        error: '\x1b[31m', // 红色
+        info: '\x1b[32m', // 绿色
+        warn: '\x1b[33m', // 黄色
+        error: '\x1b[31m' // 红色
     }
 
     constructor(name = 'Chaite', enableColors = true) {
@@ -179,7 +178,7 @@ export const DefaultLogger = new class DefaultLogger {
     warn(msg, ...args) {
         console.log(this.formatMessage('WARN', msg, args), ...args)
     }
-}()
+})()
 
 export class ChaiteContext {
     /**

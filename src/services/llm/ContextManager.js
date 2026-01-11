@@ -4,17 +4,16 @@ import { redisClient } from '../../core/cache/RedisClient.js'
 import config from '../../../config/config.js'
 import historyManager from '../../core/utils/history.js'
 
-
 export class ContextManager {
     constructor() {
-        this.locks = new Map()          // 异步锁: key -> { promise, resolve, acquiredAt }
+        this.locks = new Map() // 异步锁: key -> { promise, resolve, acquiredAt }
         this.initialized = false
-        this.maxContextMessages = 20    // 最多20条上文
+        this.maxContextMessages = 20 // 最多20条上文
         this.requestCounters = new Map() // 请求计数器（用于检测并发）
-        this.messageQueues = new Map()  // 消息队列（确保消息不丢失）
+        this.messageQueues = new Map() // 消息队列（确保消息不丢失）
         this.processingFlags = new Map() // 处理中标记
         this.groupContextCache = new Map() // 群聊上下文缓存 (groupId -> context)
-        this.sessionStates = new Map()   // 会话状态 (conversationId -> state)
+        this.sessionStates = new Map() // 会话状态 (conversationId -> state)
     }
 
     /**
@@ -36,23 +35,23 @@ export class ContextManager {
     async acquireLock(key, timeout = 60000) {
         const maxLockDuration = 90000 // 锁最长持有时间 90秒
         const startTime = Date.now()
-        
+
         // 等待现有锁释放
         while (this.locks.has(key)) {
             const existingLock = this.locks.get(key)
-            
+
             // 检查现有锁是否过期
-            if (existingLock && (Date.now() - existingLock.acquiredAt > maxLockDuration)) {
+            if (existingLock && Date.now() - existingLock.acquiredAt > maxLockDuration) {
                 // 强制释放过期锁
                 this._forceRelease(key)
                 break
             }
-            
+
             // 检查等待超时
             if (Date.now() - startTime > timeout) {
                 throw new Error(`获取锁超时: ${key}`)
             }
-            
+
             // 等待锁释放
             if (existingLock?.promise) {
                 await Promise.race([
@@ -63,17 +62,19 @@ export class ContextManager {
                 await new Promise(r => setTimeout(r, 100))
             }
         }
-        
+
         // 创建新锁
         let lockResolve
-        const lockPromise = new Promise(resolve => { lockResolve = resolve })
-        
+        const lockPromise = new Promise(resolve => {
+            lockResolve = resolve
+        })
+
         this.locks.set(key, {
             acquiredAt: Date.now(),
             promise: lockPromise,
             resolve: lockResolve
         })
-        
+
         // 返回释放函数
         let released = false
         return () => {
@@ -112,7 +113,7 @@ export class ContextManager {
     recordRequest(conversationId) {
         const count = (this.requestCounters.get(conversationId) || 0) + 1
         this.requestCounters.set(conversationId, count)
-        
+
         // 5秒后自动减少计数
         setTimeout(() => {
             const current = this.requestCounters.get(conversationId) || 0
@@ -120,7 +121,7 @@ export class ContextManager {
                 this.requestCounters.set(conversationId, current - 1)
             }
         }, 5000)
-        
+
         return count
     }
 
@@ -148,13 +149,13 @@ export class ContextManager {
             ...message,
             enqueuedAt: Date.now()
         })
-        
+
         // 防止队列无限增长，最多保留100条
         if (queue.length > 100) {
             queue.shift()
             logger.warn(`[ContextManager] 消息队列过长，丢弃旧消息: ${conversationId}`)
         }
-        
+
         return queue.length
     }
 
@@ -208,7 +209,7 @@ export class ContextManager {
     isProcessing(conversationId) {
         const startTime = this.processingFlags.get(conversationId)
         if (!startTime) return false
-        
+
         // 超过60秒认为处理已超时，自动重置
         if (Date.now() - startTime > 60000) {
             this.processingFlags.delete(conversationId)
@@ -222,9 +223,9 @@ export class ContextManager {
      * @param {string} userId - 用户 uin
      * @param {string} [groupId] - 群号
      * @returns {string} 会话ID
-     * 
+     *
      * 隔离策略 (configurable):
-     * - 群聊: 
+     * - 群聊:
      *   - groupUserIsolation=false: 群共享上下文（默认）
      *   - groupUserIsolation=true: 每用户独立上下文
      * - 私聊:
@@ -243,7 +244,7 @@ export class ContextManager {
             // 群聊共享：同一群的所有用户共享上下文
             return `group:${groupId}`
         }
-        
+
         if (privateIsolation) {
             // 私聊隔离：每用户独立
             return `user:${userId}`
@@ -264,19 +265,23 @@ export class ContextManager {
         // 读取 autoContext 配置
         const autoContextConfig = config.get('context.autoContext') || {}
         const autoContextEnabled = autoContextConfig.enabled !== false
-        
+
         // 如果自动上下文禁用，返回空历史
         if (!autoContextEnabled) {
             logger.debug('[ContextManager] 自动上下文已禁用，不携带历史消息')
             return []
         }
-        
+
         // 优先使用 autoContext 配置的 maxHistoryMessages
-        const maxMessages = limit || autoContextConfig.maxHistoryMessages || config.get('context.maxMessages') || this.maxContextMessages
+        const maxMessages =
+            limit ||
+            autoContextConfig.maxHistoryMessages ||
+            config.get('context.maxMessages') ||
+            this.maxContextMessages
         const includeToolCalls = options.includeToolCalls ?? autoContextConfig.includeToolCalls ?? false
-        
+
         let history = await historyManager.getHistory(undefined, conversationId)
-        
+
         // 如果不包含工具调用，过滤掉 tool 角色的消息和包含 toolCalls 的消息
         if (!includeToolCalls) {
             history = history.filter(msg => {
@@ -285,16 +290,16 @@ export class ContextManager {
                 // 过滤掉包含 toolCalls 的 assistant 消息（但保留有文本内容的）
                 if (msg.role === 'assistant' && msg.toolCalls?.length > 0) {
                     // 检查是否有有意义的文本内容
-                    const hasText = Array.isArray(msg.content) 
+                    const hasText = Array.isArray(msg.content)
                         ? msg.content.some(c => c.type === 'text' && c.text?.trim())
-                        : (typeof msg.content === 'string' && msg.content.trim())
+                        : typeof msg.content === 'string' && msg.content.trim()
                     // 如果没有文本内容，过滤掉
                     if (!hasText) return false
                 }
                 return true
             })
         }
-        
+
         // 限制最多返回数量
         if (history.length > maxMessages) {
             return history.slice(-maxMessages)
@@ -305,7 +310,7 @@ export class ContextManager {
     /**
      * 构建带用户标签的上下文消息
      * 用于多用户群聊场景，AI可以区分不同用户的发言
-     * 
+     *
      * @param {Array} history - 历史消息
      * @param {Object} currentSender - 当前发送者信息
      * @param {Object} options - 额外选项
@@ -319,7 +324,7 @@ export class ContextManager {
         if (maxAge > 0) {
             filtered = history.filter(msg => {
                 if (!msg.timestamp) return true
-                return (now - msg.timestamp) < maxAge
+                return now - msg.timestamp < maxAge
             })
         }
 
@@ -330,13 +335,16 @@ export class ContextManager {
                 if (msg.sender && msg.sender.user_id) {
                     const label = msg.sender.card || msg.sender.nickname || `用户`
                     let labeledContent = this.addUserLabelToContent(msg.content, label, msg.sender.user_id)
-                    
+
                     // 添加时间戳（可选）
                     if (includeTimestamp && msg.timestamp) {
-                        const timeStr = new Date(msg.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+                        const timeStr = new Date(msg.timestamp).toLocaleTimeString('zh-CN', {
+                            hour: '2-digit',
+                            minute: '2-digit'
+                        })
                         labeledContent = this.prependTimeToContent(labeledContent, timeStr)
                     }
-                    
+
                     return {
                         ...msg,
                         content: labeledContent
@@ -362,11 +370,11 @@ export class ContextManager {
      */
     prependTimeToContent(content, timeStr) {
         if (!content) return content
-        
+
         if (typeof content === 'string') {
             return [{ type: 'text', text: `[${timeStr}] ${content}` }]
         }
-        
+
         if (Array.isArray(content)) {
             const labeled = [...content]
             const textIndex = labeled.findIndex(c => c.type === 'text')
@@ -378,7 +386,7 @@ export class ContextManager {
             }
             return labeled
         }
-        
+
         return content
     }
 
@@ -391,12 +399,12 @@ export class ContextManager {
      */
     addUserLabelToContent(content, label, userId) {
         if (!content) return content
-        
+
         // 如果是字符串，转换为数组格式
         if (typeof content === 'string') {
             return [{ type: 'text', text: `[${label}(${userId})]: ${content}` }]
         }
-        
+
         // 如果是数组，给第一个文本内容添加标签
         if (Array.isArray(content)) {
             const labeled = [...content]
@@ -409,7 +417,7 @@ export class ContextManager {
             }
             return labeled
         }
-        
+
         return content
     }
 
@@ -423,12 +431,8 @@ export class ContextManager {
             groupUserIsolation: isolation.groupUserIsolation ?? false,
             privateIsolation: isolation.privateIsolation ?? true,
             description: {
-                group: (isolation.groupUserIsolation ?? false) 
-                    ? '群聊用户独立上下文' 
-                    : '群聊共享上下文',
-                private: (isolation.privateIsolation ?? true)
-                    ? '私聊用户独立上下文'
-                    : '私聊共享上下文'
+                group: (isolation.groupUserIsolation ?? false) ? '群聊用户独立上下文' : '群聊共享上下文',
+                private: (isolation.privateIsolation ?? true) ? '私聊用户独立上下文' : '私聊共享上下文'
             }
         }
     }
@@ -455,7 +459,7 @@ export class ContextManager {
         if (existing) {
             try {
                 data = JSON.parse(existing)
-            } catch (e) { }
+            } catch (e) {}
         }
 
         data = { ...data, ...metadata, lastUpdated: Date.now() }
@@ -487,7 +491,7 @@ export class ContextManager {
                         id,
                         ...JSON.parse(data)
                     })
-                } catch (e) { }
+                } catch (e) {}
             } else {
                 // Cleanup if metadata missing
                 await redisClient.client.srem('active_contexts', id)
@@ -518,34 +522,39 @@ export class ContextManager {
             // 智能清理：保留最近对话和重要消息
             try {
                 const keepCount = maxMessages
-                
+
                 // 标记重要消息（包含关键信息的消息）
                 const importantIndicators = ['记住', '我是', '我叫', '我的', '重要', '记得', '别忘']
                 const importantMessages = []
                 const recentMessages = history.slice(-keepCount)
-                
+
                 // 从早期消息中提取重要内容
                 const earlyMessages = history.slice(0, -keepCount)
                 for (const msg of earlyMessages) {
-                    const content = Array.isArray(msg.content) 
-                        ? msg.content.filter(c => c.type === 'text').map(c => c.text).join('')
+                    const content = Array.isArray(msg.content)
+                        ? msg.content
+                              .filter(c => c.type === 'text')
+                              .map(c => c.text)
+                              .join('')
                         : msg.content
-                    
+
                     if (importantIndicators.some(ind => content?.includes(ind))) {
                         importantMessages.push(msg)
                         if (importantMessages.length >= 3) break // 最多保留3条重要消息
                     }
                 }
-                
+
                 // 合并重要消息和最近消息
                 const newHistory = [...importantMessages, ...recentMessages]
-                
+
                 // 如果仍然超出限制，截断
                 if (newHistory.length > maxMessages) {
                     await historyManager.trimHistory(conversationId, maxMessages)
                 }
-                
-                logger.debug(`[ContextManager] 智能清理: 保留${importantMessages.length}条重要+${recentMessages.length}条最近`)
+
+                logger.debug(
+                    `[ContextManager] 智能清理: 保留${importantMessages.length}条重要+${recentMessages.length}条最近`
+                )
                 return
             } catch (error) {
                 logger.error('[ContextManager] 智能清理失败，回退到截断模式', error)
@@ -555,7 +564,7 @@ export class ContextManager {
         // 默认/回退: 简单截断，保留最近的消息
         await historyManager.trimHistory(conversationId, maxMessages)
     }
-    
+
     /**
      * 缓存群聊上下文
      * @param {string} groupId
@@ -566,7 +575,7 @@ export class ContextManager {
             context,
             timestamp: Date.now()
         })
-        
+
         // 清理过期缓存
         if (this.groupContextCache.size > 100) {
             const expireTime = 30 * 60 * 1000 // 30分钟
@@ -587,13 +596,13 @@ export class ContextManager {
     getCachedGroupContext(groupId) {
         const cached = this.groupContextCache.get(groupId)
         if (!cached) return null
-        
+
         // 检查是否过期（5分钟）
         if (Date.now() - cached.timestamp > 5 * 60 * 1000) {
             this.groupContextCache.delete(groupId)
             return null
         }
-        
+
         return cached.context
     }
 
@@ -644,7 +653,7 @@ export class ContextManager {
     async getContextStats(conversationId) {
         const history = await historyManager.getHistory(undefined, conversationId)
         const maxMessages = config.get('context.maxMessages') || 20
-        
+
         return {
             messageCount: history.length,
             maxMessages,
@@ -661,24 +670,24 @@ export class ContextManager {
      */
     async checkAutoEnd(conversationId) {
         const autoEndConfig = config.get('context.autoEnd') || {}
-        
+
         if (!autoEndConfig.enabled) {
             return { shouldEnd: false, currentRounds: 0, maxRounds: 0 }
         }
-        
+
         const maxRounds = autoEndConfig.maxRounds || 50
         const history = await historyManager.getHistory(undefined, conversationId)
-        
+
         // 计算对话轮数（每次用户消息+AI回复算一轮）
         const userMessages = history.filter(m => m.role === 'user').length
         const currentRounds = userMessages
-        
+
         const shouldEnd = currentRounds >= maxRounds
-        
+
         if (shouldEnd) {
             logger.debug(`[ContextManager] 对话达到轮数限制: ${conversationId}, ${currentRounds}/${maxRounds}`)
         }
-        
+
         return {
             shouldEnd,
             currentRounds,
@@ -715,14 +724,14 @@ export class ContextManager {
      */
     async buildGroupContextSummary(groupId, options = {}) {
         const { includeMembers = true, includeTopics = true, maxLength = 500 } = options
-        
+
         const cached = this.getCachedGroupContext(groupId)
         if (cached?.summary) {
             return cached.summary
         }
-        
+
         const parts = []
-        
+
         // 获取群信息
         try {
             const bot = global.Bot
@@ -739,12 +748,12 @@ export class ContextManager {
         } catch (e) {
             // ignore
         }
-        
+
         const summary = parts.join('\n').substring(0, maxLength)
-        
+
         // 缓存摘要
         this.cacheGroupContext(groupId, { summary })
-        
+
         return summary
     }
 
@@ -767,7 +776,7 @@ export class ContextManager {
 
         try {
             // 处理和过滤消息
-            const processChats = (rawChats) => {
+            const processChats = rawChats => {
                 return rawChats.filter(chat => {
                     const messageId = chat.seq || chat.message_seq || chat.message_id
                     if (seenMessageIds.has(messageId)) {
@@ -844,7 +853,7 @@ export class ContextManager {
         let memberInfo = null
         try {
             const member = group.pickMember?.(senderId)
-            memberInfo = member?.info || await member?.getInfo?.(true)
+            memberInfo = member?.info || (await member?.getInfo?.(true))
             if (memberInfo) {
                 senderName = memberInfo.card || memberInfo.nickname || senderName
             }
@@ -881,7 +890,8 @@ export class ContextManager {
                     const originalMsg = originalMsgArray?.[0]
                     if (originalMsg?.sender) {
                         const originalSenderId = originalMsg.sender.user_id
-                        let originalSenderName = originalMsg.sender.card || originalMsg.sender.nickname || originalSenderId
+                        let originalSenderName =
+                            originalMsg.sender.card || originalMsg.sender.nickname || originalSenderId
                         const originalContent = this._extractMessageText(originalMsg.message)
                         messageHeader += `, 引用了${originalSenderName}(QQ:${originalSenderId})的消息"${originalContent.substring(0, 50)}"`
                     }
@@ -910,14 +920,14 @@ export class ContextManager {
             if (messageParts.message) return this._extractMessageText(messageParts.message, deepParse)
             return String(messageParts)
         }
-        
+
         const contentParts = []
         for (const msgPart of messageParts) {
             if (!msgPart) continue
-            
+
             const data = msgPart.data || msgPart
             const type = msgPart.type || data.type
-            
+
             switch (type) {
                 case 'text':
                     contentParts.push(data.text || msgPart.text || '')
@@ -1038,7 +1048,7 @@ export class ContextManager {
             let botName = bot.nickname || bot.uin
             try {
                 const botMember = group.pickMember?.(bot.uin)
-                const botInfo = botMember?.info || await botMember?.getInfo?.(true)
+                const botInfo = botMember?.info || (await botMember?.getInfo?.(true))
                 if (botInfo) {
                     botName = botInfo.card || botInfo.nickname || botName
                 }
@@ -1077,10 +1087,8 @@ export class ContextManager {
         // 格式化聊天历史
         if (chats && chats.length > 0) {
             systemPromptWithContext += `\n当你需要艾特(@)别人时，可以直接在回复中添加'@QQ'，其中QQ为你需要艾特(@)的人的QQ号，如'@123456'。以下是最近群内的聊天记录。请你仔细阅读这些记录，理解群内成员的对话内容和趋势，并以此为基础来生成你的回复。你的回复应该自然融入当前对话，就像一个真正的群成员一样：\n`
-            
-            const formattedChats = await Promise.all(
-                chats.map(chat => this.formatChatMessage(group, chat))
-            )
+
+            const formattedChats = await Promise.all(chats.map(chat => this.formatChatMessage(group, chat)))
             systemPromptWithContext += formattedChats.join('\n')
         }
 
@@ -1142,7 +1150,7 @@ export class ContextManager {
         /**
          * 检查消息是否包含引用
          */
-        const getNestedReply = (msg) => {
+        const getNestedReply = msg => {
             if (!msg) return null
             // 检查 source
             if (msg.source) {
@@ -1175,13 +1183,14 @@ export class ContextManager {
         // 格式化引用内容
         if (originalMsg) {
             const originalSenderId = originalMsg.user_id || originalMsg.sender?.user_id
-            let originalSenderName = originalMsg.sender?.card || originalMsg.sender?.nickname || originalSenderId || '未知用户'
-            
+            let originalSenderName =
+                originalMsg.sender?.card || originalMsg.sender?.nickname || originalSenderId || '未知用户'
+
             // 尝试获取更准确的昵称
             if (e.group?.pickMember && originalSenderId) {
                 try {
                     const member = e.group.pickMember(originalSenderId)
-                    const memberInfo = member?.info || await member?.getInfo?.(true)
+                    const memberInfo = member?.info || (await member?.getInfo?.(true))
                     if (memberInfo) {
                         originalSenderName = memberInfo.card || memberInfo.nickname || originalSenderName
                     }
@@ -1205,7 +1214,7 @@ export class ContextManager {
             }
 
             quoteText = ` 引用了${originalSenderName}(QQ:${originalSenderId})的消息"${originalContent}"`
-            
+
             const originalSeq = originalMsg.seq || originalMsg.message_seq || originalMsg.message_id
             if (originalSeq) {
                 quoteText += `(seq:${originalSeq})`
@@ -1224,22 +1233,24 @@ export class ContextManager {
             if (includeChain) {
                 let currentMsg = originalMsg
                 let depth = 0
-                
+
                 while (depth < maxDepth) {
                     const nestedReply = getNestedReply(currentMsg)
                     if (!nestedReply) break
-                    
+
                     const nestedMsg = await getMessage(nestedReply.message_id, nestedReply.seq)
                     if (!nestedMsg) break
-                    
+
                     const nestedSenderId = nestedMsg.user_id || nestedMsg.sender?.user_id
-                    const nestedSenderName = nestedMsg.sender?.card || nestedMsg.sender?.nickname || nestedSenderId || '未知'
-                    let nestedContent = nestedMsg.raw_message || this._extractMessageText(nestedMsg.message || nestedMsg, true)
-                    
+                    const nestedSenderName =
+                        nestedMsg.sender?.card || nestedMsg.sender?.nickname || nestedSenderId || '未知'
+                    let nestedContent =
+                        nestedMsg.raw_message || this._extractMessageText(nestedMsg.message || nestedMsg, true)
+
                     if (nestedContent.length > 300) {
                         nestedContent = nestedContent.substring(0, 300) + '...'
                     }
-                    
+
                     chain.push({
                         depth: depth + 1,
                         user_id: String(nestedSenderId || ''),
@@ -1247,12 +1258,12 @@ export class ContextManager {
                         content: nestedContent,
                         message_id: nestedMsg.message_id
                     })
-                    
+
                     // 在引用文本中添加嵌套引用信息
                     if (depth === 0) {
                         quoteText += `\n  └ 该消息引用了${nestedSenderName}的消息"${nestedContent.substring(0, 100)}${nestedContent.length > 100 ? '...' : ''}"`
                     }
-                    
+
                     currentMsg = nestedMsg
                     depth++
                 }

@@ -18,25 +18,32 @@ function isTRSSEnvironment() {
     return !!(global.Bot?.express && global.Bot?.server)
 }
 
-const isIPv4Address = (ip) => net.isIP(ip) === 4
-const isIPv6Address = (ip) => net.isIP(ip) === 6
+const isIPv4Address = ip => net.isIP(ip) === 4
+const isIPv6Address = ip => net.isIP(ip) === 6
 
 async function fetchPublicIp(endpoint, validator, timeoutMs = 1500) {
     try {
         const https = await import('node:https')
-        return await new Promise((resolve) => {
+        return await new Promise(resolve => {
             const timeout = setTimeout(() => resolve(null), timeoutMs)
-            const request = https.get(endpoint, { timeout: timeoutMs - 200 }, (res) => {
+            const request = https.get(endpoint, { timeout: timeoutMs - 200 }, res => {
                 let data = ''
-                res.on('data', (chunk) => data += chunk)
+                res.on('data', chunk => (data += chunk))
                 res.on('end', () => {
                     clearTimeout(timeout)
                     const ip = data.trim()
                     resolve(validator(ip) ? ip : null)
                 })
             })
-            request.on('error', () => { clearTimeout(timeout); resolve(null) })
-            request.on('timeout', () => { clearTimeout(timeout); request.destroy(); resolve(null) })
+            request.on('error', () => {
+                clearTimeout(timeout)
+                resolve(null)
+            })
+            request.on('timeout', () => {
+                clearTimeout(timeout)
+                request.destroy()
+                resolve(null)
+            })
         })
     } catch {
         return null
@@ -44,7 +51,7 @@ async function fetchPublicIp(endpoint, validator, timeoutMs = 1500) {
 }
 async function getLocalAddresses(port) {
     const addresses = { local: [], localIPv6: [], public: null, publicIPv6: null }
-    
+
     try {
         const interfaces = os.networkInterfaces()
         for (const name of Object.keys(interfaces)) {
@@ -61,7 +68,7 @@ async function getLocalAddresses(port) {
     } catch {
         addresses.local = [`http://127.0.0.1:${port}`]
     }
-    
+
     return addresses
 }
 
@@ -81,7 +88,7 @@ async function getPublicAddresses(port) {
 // 快速获取所有地址（本地+公网并行，总超时2秒）
 async function getServerAddressesFast(port) {
     const addresses = { local: [], localIPv6: [], public: null, publicIPv6: null }
-    
+
     // 本地地址（同步获取，很快）
     try {
         const interfaces = os.networkInterfaces()
@@ -99,7 +106,7 @@ async function getServerAddressesFast(port) {
     } catch {
         addresses.local = [`http://127.0.0.1:${port}`]
     }
-    
+
     // 公网地址（并行获取，总超时2秒）
     try {
         const publicPromise = Promise.all([
@@ -111,7 +118,7 @@ async function getServerAddressesFast(port) {
         if (publicIPv4) addresses.public = `http://${publicIPv4}:${port}`
         if (publicIPv6) addresses.publicIPv6 = `http://[${publicIPv6}]:${port}`
     } catch {}
-    
+
     return addresses
 }
 import {
@@ -167,13 +174,15 @@ class RequestSignatureValidator {
         const now = Date.now()
         const requestTime = parseInt(timestamp, 10)
         if (isNaN(requestTime) || Math.abs(now - requestTime) > 5 * 60 * 1000) {
-            chatLogger.warn(`[Auth] 时间戳过期: now=${now}, request=${requestTime}, diff=${Math.abs(now - requestTime)}ms`)
+            chatLogger.warn(
+                `[Auth] 时间戳过期: now=${now}, request=${requestTime}, diff=${Math.abs(now - requestTime)}ms`
+            )
             return { valid: false, error: 'Request timestamp expired' }
         }
 
         const fullPath = (req.originalUrl || req.path).split('?')[0]
         const expectedSignature = this.generateSignature(req.method, fullPath, timestamp, bodyHash, nonce)
-        
+
         // 签名验证 - 使用简单字符串比较
         if (signature !== expectedSignature) {
             chatLogger.warn(`[Auth] 签名不匹配:`)
@@ -183,14 +192,18 @@ class RequestSignatureValidator {
             chatLogger.warn(`  bodyHash: ${bodyHash}, nonce: ${nonce}`)
             return { valid: false, error: 'Invalid signature' }
         }
-        
+
         return { valid: true }
     }
 }
 
 class FingerprintValidator {
-    constructor() { this.bindings = new Map() }
-    bind(token, fingerprint) { this.bindings.set(token, fingerprint) }
+    constructor() {
+        this.bindings = new Map()
+    }
+    bind(token, fingerprint) {
+        this.bindings.set(token, fingerprint)
+    }
     validate(token, fingerprint) {
         const bound = this.bindings.get(token)
         return !bound || bound === fingerprint
@@ -214,8 +227,10 @@ class RequestIdValidator {
 }
 
 class AuthHandler {
-    constructor() { this.tokens = new Map() }
-    
+    constructor() {
+        this.tokens = new Map()
+    }
+
     generateToken(timeout = 5 * 60, permanent = false) {
         if (permanent) {
             let permanentToken = config.get('web.permanentAuthToken')
@@ -226,24 +241,24 @@ class AuthHandler {
             }
             return permanentToken
         }
-        
+
         const token = crypto.randomBytes(32).toString('hex')
         const expiry = Date.now() + timeout * 1000
         this.tokens.set(token, expiry)
         setTimeout(() => this.tokens.delete(token), timeout * 1000)
         return token
     }
-    
+
     validateToken(token, consume = true) {
         if (!token) return false
-        
+
         // 检查永久Token
         const permanentToken = config.get('web.permanentAuthToken')
         if (permanentToken && token === permanentToken) {
             chatLogger.debug('[Auth] 永久Token验证成功')
             return true
         }
-        
+
         // 检查临时Token
         const expiry = this.tokens.get(token)
         if (expiry && Date.now() < expiry) {
@@ -251,7 +266,7 @@ class AuthHandler {
             chatLogger.debug('[Auth] 临时Token验证成功')
             return true
         }
-        
+
         chatLogger.debug('[Auth] Token验证失败')
         return false
     }
@@ -273,13 +288,16 @@ class WebServer {
         this.app.use(express.json({ limit: '50mb' }))
         this.app.use(express.urlencoded({ extended: true }))
         this.app.use(cookieParser())
-        
+
         // CORS
         this.app.use((req, res, next) => {
             res.header('Access-Control-Allow-Origin', req.headers.origin || '*')
             res.header('Access-Control-Allow-Credentials', 'true')
             res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS')
-            res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Client-Fingerprint, X-Timestamp, X-Nonce, X-Body-Hash, X-Signature')
+            res.header(
+                'Access-Control-Allow-Headers',
+                'Content-Type, Authorization, X-Requested-With, X-Client-Fingerprint, X-Timestamp, X-Nonce, X-Body-Hash, X-Signature'
+            )
             if (req.method === 'OPTIONS') return res.sendStatus(204)
             next()
         })
@@ -323,14 +341,18 @@ class WebServer {
             if (!token) return res.redirect('/login/')
             const success = authHandler.validateToken(token, false)
             if (success) {
-                const jwtToken = jwt.sign({
-                    authenticated: true,
-                    loginTime: Date.now(),
-                    jti: crypto.randomUUID(),
-                    iss: 'chatai-panel',
-                    aud: 'chatai-client'
-                }, authKey, { expiresIn: '30d', algorithm: 'HS256' })
-                
+                const jwtToken = jwt.sign(
+                    {
+                        authenticated: true,
+                        loginTime: Date.now(),
+                        jti: crypto.randomUUID(),
+                        iss: 'chatai-panel',
+                        aud: 'chatai-client'
+                    },
+                    authKey,
+                    { expiresIn: '30d', algorithm: 'HS256' }
+                )
+
                 res.cookie('auth_token', jwtToken, {
                     httpOnly: true,
                     secure: req.secure,
@@ -338,7 +360,7 @@ class WebServer {
                     maxAge: 30 * 24 * 60 * 60 * 1000,
                     path: '/'
                 })
-                
+
                 // 返回一个中间页面，确保cookie被正确设置后再跳转
                 return res.send(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>登录中...</title>
@@ -355,29 +377,33 @@ window.location.href = '/';
                 const { token, password, fingerprint } = req.body
                 const clientFingerprint = fingerprint || req.headers['x-client-fingerprint']
                 const authToken = token || password
-                
+
                 // 验证Token（临时或永久）
                 if (!authToken || !authHandler.validateToken(authToken)) {
                     return res.status(401).json(ChaiteResponse.fail(null, 'Token 无效或已过期'))
                 }
-                
-                const jwtToken = jwt.sign({
-                    authenticated: true,
-                    loginTime: Date.now(),
-                    jti: crypto.randomUUID(),
-                    iss: 'chatai-panel',
-                    aud: 'chatai-client'
-                }, authKey, { expiresIn: '30d', algorithm: 'HS256' })
-                
+
+                const jwtToken = jwt.sign(
+                    {
+                        authenticated: true,
+                        loginTime: Date.now(),
+                        jti: crypto.randomUUID(),
+                        iss: 'chatai-panel',
+                        aud: 'chatai-client'
+                    },
+                    authKey,
+                    { expiresIn: '30d', algorithm: 'HS256' }
+                )
+
                 if (clientFingerprint) fingerprintValidator.bind(jwtToken, clientFingerprint)
-                
+
                 res.cookie('auth_token', jwtToken, {
                     httpOnly: true,
                     secure: req.secure,
                     sameSite: 'lax',
                     maxAge: 30 * 24 * 60 * 60 * 1000
                 })
-                
+
                 chatLogger.debug('[Auth] 登录成功')
                 res.json(ChaiteResponse.ok({ token: jwtToken, expiresIn: 30 * 24 * 60 * 60 }))
             } catch (error) {
@@ -388,20 +414,24 @@ window.location.href = '/';
         this.app.get('/api/auth/verify-token', async (req, res) => {
             const { token } = req.query
             const clientFingerprint = req.headers['x-client-fingerprint']
-            
+
             try {
                 if (!token) return res.status(400).json(ChaiteResponse.fail(null, 'Token is required'))
-                
+
                 const success = authHandler.validateToken(token)
                 if (success) {
-                    const jwtToken = jwt.sign({
-                        authenticated: true,
-                        loginTime: Date.now(),
-                        jti: crypto.randomUUID(),
-                        iss: 'chatai-panel',
-                        aud: 'chatai-client'
-                    }, authKey, { expiresIn: '30d', algorithm: 'HS256' })
-                    
+                    const jwtToken = jwt.sign(
+                        {
+                            authenticated: true,
+                            loginTime: Date.now(),
+                            jti: crypto.randomUUID(),
+                            iss: 'chatai-panel',
+                            aud: 'chatai-client'
+                        },
+                        authKey,
+                        { expiresIn: '30d', algorithm: 'HS256' }
+                    )
+
                     if (clientFingerprint) fingerprintValidator.bind(jwtToken, clientFingerprint)
                     res.json(ChaiteResponse.ok({ token: jwtToken, expiresIn: 30 * 24 * 60 * 60 }))
                 } else {
@@ -424,11 +454,13 @@ window.location.href = '/';
                 chatLogger.info('[ChatAI] 管理面板登录 Token (5分钟有效):')
                 chatLogger.info(token)
                 chatLogger.info('========================================')
-                res.json(ChaiteResponse.ok({ 
-                    success: true, 
-                    message: 'Token 已输出到 Yunzai 控制台',
-                    expiresIn: '5分钟'
-                }))
+                res.json(
+                    ChaiteResponse.ok({
+                        success: true,
+                        message: 'Token 已输出到 Yunzai 控制台',
+                        expiresIn: '5分钟'
+                    })
+                )
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
@@ -461,10 +493,12 @@ window.location.href = '/';
         this.app.get('/api/auth/token/status', auth, (req, res) => {
             try {
                 const permanentToken = config.get('web.permanentAuthToken')
-                res.json(ChaiteResponse.ok({ 
-                    hasPermanentToken: !!permanentToken,
-                    token: permanentToken || null
-                }))
+                res.json(
+                    ChaiteResponse.ok({
+                        hasPermanentToken: !!permanentToken,
+                        token: permanentToken || null
+                    })
+                )
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
@@ -483,7 +517,7 @@ window.location.href = '/';
         this.app.use('/api/logs', auth, logsRoutes)
         this.app.use('/api/placeholders', auth, logsRoutes)
         this.app.use('/api/memory', auth, memoryRoutes)
-        this.app.use('/api/group-admin', groupAdminRoutes)  
+        this.app.use('/api/group-admin', groupAdminRoutes)
         this.app.use('/api', auth, systemRoutes)
         this.app.use('/api/conversations', createConversationRoutes(auth))
         this.app.use('/api/context', createContextRoutes(auth))
@@ -504,13 +538,15 @@ window.location.href = '/';
         const mountPath = ''
         const baseLocalAddrs = this.addresses?.local || [`http://127.0.0.1:${this.port}`]
         const localUrls = baseLocalAddrs.map(addr => `${addr}${mountPath}/login/token?token=${token}`)
-        const localIPv6Urls = (this.addresses?.localIPv6 || []).map(addr => `${addr}${mountPath}/login/token?token=${token}`)
+        const localIPv6Urls = (this.addresses?.localIPv6 || []).map(
+            addr => `${addr}${mountPath}/login/token?token=${token}`
+        )
         const loginLinks = config.get('web.loginLinks') || []
         const customUrls = loginLinks.map(link => ({
             label: link.label,
             url: `${link.baseUrl.replace(/\/$/, '')}${mountPath}/login/token?token=${token}`
         }))
-        
+
         const configPublicUrl = config.get('web.publicUrl')
         const publicIPv6Base = this.addresses?.publicIPv6 || null
         let publicUrl = null
@@ -523,7 +559,8 @@ window.location.href = '/';
         }
 
         const publicIPv6Url = publicIPv6Base ? `${publicIPv6Base}${mountPath}/login/token?token=${token}` : null
-        const primaryLocalUrl = localUrls[0] || localIPv6Urls[0] || `http://127.0.0.1:${this.port}${mountPath}/login/token?token=${token}`
+        const primaryLocalUrl =
+            localUrls[0] || localIPv6Urls[0] || `http://127.0.0.1:${this.port}${mountPath}/login/token?token=${token}`
 
         return {
             localUrl: primaryLocalUrl,
@@ -535,7 +572,7 @@ window.location.href = '/';
             validity: permanent ? '永久有效' : '5分钟内有效',
             isPermanent: permanent,
             token,
-            mountPath  // 返回挂载路径供前端使用
+            mountPath // 返回挂载路径供前端使用
         }
     }
 
@@ -548,42 +585,37 @@ window.location.href = '/';
         } else {
             await this.startWithOwnPort()
         }
-        
+
         // 并行获取本地和公网地址（总超时2秒）
         this.addresses = await getServerAddressesFast(this.port)
         this.printStartupBanner()
-        
+
         // 异步启动周期任务调度服务
         schedulerService.init().catch(err => {
             chatLogger.warn('[WebServer] 调度服务启动失败:', err.message)
         })
-        
+
         return { port: this.port }
     }
-    
+
     /**
      * TRSS环境下共享端口启动
      */
     async startWithSharedPort() {
         const botExpress = global.Bot.express
         const botServer = global.Bot.server
-        
+
         // 获取TRSS服务器端口
         const address = botServer.address()
         this.port = address?.port || config.get('web.port') || 3000
         this.server = botServer
         this.sharedPort = true
-        
+
         // 挂载路径配置
         const mountPath = config.get('web.mountPath') || '/chatai'
         this.mountPath = mountPath
-        
-        const rootPaths = [
-            '/_next',      
-            '/assets',     
-            '/api',        
-            '/login',      
-        ]
+
+        const rootPaths = ['/_next', '/assets', '/api', '/login']
         botExpress.use(this.app)
         const quietPaths = [...rootPaths, mountPath]
         if (Array.isArray(botExpress.quiet)) {
@@ -592,10 +624,10 @@ window.location.href = '/';
         if (Array.isArray(botExpress.skip_auth)) {
             botExpress.skip_auth.push(...quietPaths)
         }
-        
+
         chatLogger.info(`[WebServer] TRSS环境已共享端口 ${this.port}`)
     }
-    
+
     /**
      * 独立端口启动
      */
@@ -607,7 +639,7 @@ window.location.href = '/';
                     this.server = server
                     resolve()
                 })
-                server.on('error', async (error) => {
+                server.on('error', async error => {
                     if (error.code === 'EADDRINUSE') {
                         if (retries > 0) {
                             chatLogger.warn(`[WebServer] 端口 ${port} 已被占用，尝试释放端口...`)
@@ -615,7 +647,9 @@ window.location.href = '/';
                             try {
                                 const fetch = (await import('node-fetch')).default
                                 await Promise.race([
-                                    fetch(`http://localhost:${port}/api/system/release_port`, { method: 'DELETE' }).catch(() => {}),
+                                    fetch(`http://localhost:${port}/api/system/release_port`, {
+                                        method: 'DELETE'
+                                    }).catch(() => {}),
                                     new Promise(r => setTimeout(r, 3000))
                                 ])
                                 await new Promise(r => setTimeout(r, 1000))
@@ -638,11 +672,11 @@ window.location.href = '/';
     printStartupBanner() {
         const startTime = Date.now() - (this.startTime || Date.now())
         const items = []
-        
+
         if (this.sharedPort) {
             items.push({ label: '模式', value: 'TRSS共享端口', color: colors.magenta })
         }
-        
+
         if (this.addresses.local?.length > 0) {
             items.push({ label: '本地地址', value: '', color: colors.yellow })
             for (const addr of this.addresses.local) {
@@ -663,7 +697,7 @@ window.location.href = '/';
             items.push({ label: '公网地址（IPv6）', value: '', color: colors.green })
             items.push({ label: '  ➜', value: this.addresses.publicIPv6, color: colors.green })
         }
-        
+
         chatLogger.successBanner(`ChatAI Panel v1.0.0 启动成功 ${startTime}ms`, items)
     }
 
@@ -677,23 +711,23 @@ window.location.href = '/';
             chatLogger.info('[WebServer] 管理面板已停止')
         }
     }
-    
+
     /**
      * 重载服务（用于热更新）
      */
     async reload() {
         chatLogger.info('[WebServer] 正在重载服务...')
-        
+
         // 如果是共享端口模式，不需要重启服务器
         if (this.sharedPort) {
             chatLogger.info('[WebServer] 共享端口模式，路由已自动更新')
             return true
         }
-        
+
         // 关闭现有服务器
-        await new Promise((resolve) => {
+        await new Promise(resolve => {
             if (this.server) {
-                this.server.close((err) => {
+                this.server.close(err => {
                     if (err) chatLogger.warn('[WebServer] 关闭服务时出现警告:', err.message)
                     resolve()
                 })
@@ -701,19 +735,19 @@ window.location.href = '/';
                 resolve()
             }
         })
-        
+
         // 等待端口释放
         await new Promise(r => setTimeout(r, 500))
-        
+
         // 重新初始化
         this.app = express()
         this.setupMiddleware()
         this.setupRoutes()
-        
+
         // 重新启动
         await this.startWithOwnPort()
         this.addresses = await getServerAddresses(this.port)
-        
+
         chatLogger.info('[WebServer] 服务重载完成')
         return true
     }

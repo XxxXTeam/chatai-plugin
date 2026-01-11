@@ -27,14 +27,17 @@ router.get('/version', async (req, res) => {
         const { execSync } = await import('node:child_process')
         const { fileURLToPath } = await import('node:url')
         const path = await import('node:path')
-        
+
         const __filename = fileURLToPath(import.meta.url)
         const pluginPath = path.resolve(path.dirname(__filename), '../../..')
-        
+
         // 获取所有远程仓库信息
         let remotes = []
         try {
-            const remotesOutput = execSync(`git -C "${pluginPath}" remote -v`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+            const remotesOutput = execSync(`git -C "${pluginPath}" remote -v`, {
+                encoding: 'utf-8',
+                stdio: ['pipe', 'pipe', 'pipe']
+            }).trim()
             for (const line of remotesOutput.split('\n')) {
                 const match = line.match(/^(\S+)\s+(\S+)\s+\(fetch\)/)
                 if (match) {
@@ -42,38 +45,50 @@ router.get('/version', async (req, res) => {
                 }
             }
         } catch {}
-        
+
         // 查找 chatgpt-plugin (内测) 和 chatai-plugin (公开) 的远程
         const betaRemote = remotes.find(r => r.url.includes('chatgpt-plugin'))
         const publicRemote = remotes.find(r => r.url.includes('chatai-plugin'))
-        
+
         // 获取提交信息
         let commitId = ''
         let branch = ''
         let commitTime = ''
-        
+
         try {
-            commitId = execSync(`git -C "${pluginPath}" rev-parse --short HEAD`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+            commitId = execSync(`git -C "${pluginPath}" rev-parse --short HEAD`, {
+                encoding: 'utf-8',
+                stdio: ['pipe', 'pipe', 'pipe']
+            }).trim()
         } catch {}
         try {
-            branch = execSync(`git -C "${pluginPath}" rev-parse --abbrev-ref HEAD`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+            branch = execSync(`git -C "${pluginPath}" rev-parse --abbrev-ref HEAD`, {
+                encoding: 'utf-8',
+                stdio: ['pipe', 'pipe', 'pipe']
+            }).trim()
         } catch {}
         try {
-            commitTime = execSync(`git -C "${pluginPath}" log -1 --format="%ci"`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+            commitTime = execSync(`git -C "${pluginPath}" log -1 --format="%ci"`, {
+                encoding: 'utf-8',
+                stdio: ['pipe', 'pipe', 'pipe']
+            }).trim()
         } catch {}
-        
+
         // 判断版本类型
         let type = 'unknown'
         let typeName = '本地版'
         let repoName = '本地仓库'
         let remoteUrl = ''
-        
+
         // 检查当前分支的上游追踪
         let upstream = ''
         try {
-            upstream = execSync(`git -C "${pluginPath}" rev-parse --abbrev-ref @{upstream}`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+            upstream = execSync(`git -C "${pluginPath}" rev-parse --abbrev-ref @{upstream}`, {
+                encoding: 'utf-8',
+                stdio: ['pipe', 'pipe', 'pipe']
+            }).trim()
         } catch {}
-        
+
         // 根据上游追踪判断版本类型
         if (upstream) {
             if (upstream.startsWith('gpt/') || upstream.includes('chatgpt')) {
@@ -88,7 +103,7 @@ router.get('/version', async (req, res) => {
                 remoteUrl = publicRemote?.url || ''
             }
         }
-        
+
         // 如果没有上游追踪，根据分支名和可用远程判断
         if (type === 'unknown') {
             if (/^(v3|dev|beta|test|alpha|canary|next)$/i.test(branch) && betaRemote) {
@@ -125,17 +140,19 @@ router.get('/version', async (req, res) => {
                 }
             }
         }
-        
-        res.json(ChaiteResponse.ok({
-            type,
-            typeName,
-            repoName,
-            remoteUrl,
-            commitId: commitId || 'unknown',
-            branch: branch || 'unknown',
-            commitTime,
-            shortTime: commitTime ? commitTime.split(' ').slice(0, 2).join(' ') : ''
-        }))
+
+        res.json(
+            ChaiteResponse.ok({
+                type,
+                typeName,
+                repoName,
+                remoteUrl,
+                commitId: commitId || 'unknown',
+                branch: branch || 'unknown',
+                commitTime,
+                shortTime: commitTime ? commitTime.split(' ').slice(0, 2).join(' ') : ''
+            })
+        )
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
@@ -169,24 +186,26 @@ router.get('/system/info', async (req, res) => {
     try {
         const { presetManager } = await import('../preset/PresetManager.js')
         await presetManager.init()
-        res.json(ChaiteResponse.ok({
-            version: '1.0.0',
-            systemInfo: {
-                nodejs: process.version,
-                platform: process.platform,
-                arch: process.arch,
-                memory: {
-                    used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB',
-                    total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + ' MB'
+        res.json(
+            ChaiteResponse.ok({
+                version: '1.0.0',
+                systemInfo: {
+                    nodejs: process.version,
+                    platform: process.platform,
+                    arch: process.arch,
+                    memory: {
+                        used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB',
+                        total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + ' MB'
+                    }
+                },
+                stats: {
+                    totalConversations: 0,
+                    activeUsers: 0,
+                    apiCalls: 0,
+                    presets: presetManager.getAll().length
                 }
-            },
-            stats: {
-                totalConversations: 0,
-                activeUsers: 0,
-                apiCalls: 0,
-                presets: presetManager.getAll().length
-            }
-        }))
+            })
+        )
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
@@ -380,14 +399,14 @@ router.get('/system/version', async (req, res) => {
         const execAsync = promisify(exec)
         const path = await import('path')
         const { fileURLToPath } = await import('url')
-        
+
         const __dirname = path.dirname(fileURLToPath(import.meta.url))
         const pluginPath = path.resolve(__dirname, '../../..')
-        
+
         let commitId = 'unknown'
         let commitTime = 'unknown'
         let branch = 'unknown'
-        
+
         try {
             const { stdout: id } = await execAsync(`git -C "${pluginPath}" rev-parse --short HEAD`)
             commitId = id.trim()
@@ -396,15 +415,17 @@ router.get('/system/version', async (req, res) => {
             const { stdout: br } = await execAsync(`git -C "${pluginPath}" rev-parse --abbrev-ref HEAD`)
             branch = br.trim()
         } catch {}
-        
-        res.json(ChaiteResponse.ok({
-            version: '1.0.0',
-            commitId,
-            commitTime,
-            branch,
-            nodejs: process.version,
-            platform: process.platform
-        }))
+
+        res.json(
+            ChaiteResponse.ok({
+                version: '1.0.0',
+                commitId,
+                commitTime,
+                branch,
+                nodejs: process.version,
+                platform: process.platform
+            })
+        )
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
@@ -416,17 +437,19 @@ router.get('/system/server-mode', async (req, res) => {
         const { getWebServer } = await import('../webServer.js')
         const config = (await import('../../../config/config.js')).default
         const webServer = getWebServer()
-        
+
         const isTRSS = !!(global.Bot?.express && global.Bot?.server)
         const sharePortConfig = config.get('web.sharePort') !== false
-        
-        res.json(ChaiteResponse.ok({
-            isTRSS,
-            sharePortEnabled: sharePortConfig,
-            currentMode: webServer?.sharedPort ? 'shared' : 'standalone',
-            port: webServer?.port,
-            canRestart: typeof Bot?.restart === 'function'
-        }))
+
+        res.json(
+            ChaiteResponse.ok({
+                isTRSS,
+                sharePortEnabled: sharePortConfig,
+                currentMode: webServer?.sharedPort ? 'shared' : 'standalone',
+                port: webServer?.port,
+                canRestart: typeof Bot?.restart === 'function'
+            })
+        )
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
@@ -437,19 +460,21 @@ router.put('/system/server-mode', async (req, res) => {
     try {
         const { sharePort } = req.body
         const config = (await import('../../../config/config.js')).default
-        
+
         if (typeof sharePort !== 'boolean') {
             return res.status(400).json(ChaiteResponse.fail(null, 'sharePort 必须是布尔值'))
         }
-        
+
         config.set('web.sharePort', sharePort)
         await config.save()
-        
-        res.json(ChaiteResponse.ok({ 
-            success: true, 
-            message: '配置已保存，重启后生效',
-            needRestart: true
-        }))
+
+        res.json(
+            ChaiteResponse.ok({
+                success: true,
+                message: '配置已保存，重启后生效',
+                needRestart: true
+            })
+        )
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
@@ -460,7 +485,7 @@ router.post('/system/restart', async (req, res) => {
     try {
         const { type = 'reload' } = req.body || {}
         res.json(ChaiteResponse.ok({ success: true, message: '正在重启...' }))
-        
+
         // 延迟执行重启
         setTimeout(async () => {
             try {

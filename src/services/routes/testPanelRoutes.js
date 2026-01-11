@@ -23,15 +23,15 @@ const activeBatchTests = new Map()
 router.post('/batch-test', async (req, res) => {
     const { channelId, models, concurrency = 3, clearPrevious = true } = req.body
     const testId = `test_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-    
+
     await channelManager.init()
     const channel = channelManager.get(channelId)
-    
+
     if (!channel) {
         return res.status(404).json(ApiResponse.fail(null, '渠道不存在'))
     }
 
-    const testModels = models && models.length > 0 ? models : (channel.models || [])
+    const testModels = models && models.length > 0 ? models : channel.models || []
     if (testModels.length === 0) {
         return res.status(400).json(ApiResponse.fail(null, '没有可测试的模型'))
     }
@@ -64,10 +64,10 @@ router.post('/batch-test', async (req, res) => {
         sendEvent('clear', { message: '清空上次结果' })
     }
 
-    sendEvent('start', { 
+    sendEvent('start', {
         testId,
-        total: testModels.length, 
-        channelId, 
+        total: testModels.length,
+        channelId,
         channelName: channel.name,
         concurrency
     })
@@ -81,15 +81,15 @@ router.post('/batch-test', async (req, res) => {
 
     const testSingleModel = async (model, idx) => {
         if (testState.aborted) return null
-        
+
         const startTime = Date.now()
         running++
-        
+
         sendEvent('testing', { model, index: idx, running })
 
         try {
             const { OpenAIClient } = await import('../../core/adapters/index.js')
-            
+
             let apiKey = channel.apiKey
             let keyInfo = null
             if (channel.apiKeys && channel.apiKeys.length > 0) {
@@ -110,7 +110,11 @@ router.post('/batch-test', async (req, res) => {
             )
 
             const elapsed = Date.now() - startTime
-            const replyText = response.contents?.filter(c => c?.type === 'text').map(c => c.text).join('') || ''
+            const replyText =
+                response.contents
+                    ?.filter(c => c?.type === 'text')
+                    .map(c => c.text)
+                    .join('') || ''
 
             const result = {
                 model,
@@ -120,7 +124,7 @@ router.post('/batch-test', async (req, res) => {
                 response: replyText.substring(0, 100),
                 keyInfo: keyInfo ? { name: keyInfo.keyName, index: keyInfo.keyIndex } : null
             }
-            
+
             results.push(result)
             sendEvent('result', result)
 
@@ -134,11 +138,10 @@ router.post('/batch-test', async (req, res) => {
                 duration: elapsed,
                 success: true,
                 source: 'batch-test',
-                responseText: replyText,
+                responseText: replyText
             })
 
             return result
-
         } catch (error) {
             const elapsed = Date.now() - startTime
             const result = {
@@ -159,16 +162,16 @@ router.post('/batch-test', async (req, res) => {
                 duration: elapsed,
                 success: false,
                 error: error.message,
-                source: 'batch-test',
+                source: 'batch-test'
             })
 
             return result
         } finally {
             running--
             completed++
-            sendEvent('progress', { 
-                completed, 
-                total: testModels.length, 
+            sendEvent('progress', {
+                completed,
+                total: testModels.length,
                 running,
                 successCount: results.filter(r => r.success).length,
                 failCount: results.filter(r => !r.success).length
@@ -179,7 +182,7 @@ router.post('/batch-test', async (req, res) => {
     // 并发执行测试
     const runBatch = async () => {
         const promises = []
-        
+
         while (modelIndex < testModels.length && !testState.aborted) {
             while (running < concurrency && modelIndex < testModels.length && !testState.aborted) {
                 const currentModel = testModels[modelIndex]
@@ -189,7 +192,7 @@ router.post('/batch-test', async (req, res) => {
             }
             await new Promise(r => setTimeout(r, 50))
         }
-        
+
         // 等待所有完成
         await Promise.all(promises)
     }
@@ -202,7 +205,7 @@ router.post('/batch-test', async (req, res) => {
 
     const successCount = results.filter(r => r.success).length
     const failCount = results.length - successCount
-    
+
     sendEvent('complete', {
         testId,
         total: testModels.length,
@@ -212,7 +215,9 @@ router.post('/batch-test', async (req, res) => {
         results: results.sort((a, b) => a.index - b.index)
     })
 
-    chatLogger.info(`[测试面板] 批量测试完成: 成功${successCount}, 失败${failCount}${testState.aborted ? ', 已中止' : ''}`)
+    chatLogger.info(
+        `[测试面板] 批量测试完成: 成功${successCount}, 失败${failCount}${testState.aborted ? ', 已中止' : ''}`
+    )
 
     activeBatchTests.delete(testId)
     res.end()
@@ -221,7 +226,7 @@ router.post('/batch-test', async (req, res) => {
 // POST /api/test-panel/batch-test-stop - 停止批量测试
 router.post('/batch-test-stop', async (req, res) => {
     const { testId } = req.body
-    
+
     if (testId) {
         const testState = activeBatchTests.get(testId)
         if (testState) {
@@ -261,17 +266,17 @@ router.get('/active-tests', async (req, res) => {
 router.post('/quick-test', async (req, res) => {
     const { channelId, model, message = '说一声你好' } = req.body
     const startTime = Date.now()
-    
+
     await channelManager.init()
     const channel = channelManager.get(channelId)
-    
+
     if (!channel) {
         return res.status(404).json(ApiResponse.fail(null, '渠道不存在'))
     }
 
     try {
         const { OpenAIClient } = await import('../../core/adapters/index.js')
-        
+
         let apiKey = channel.apiKey
         let keyInfo = null
         if (channel.apiKeys && channel.apiKeys.length > 0) {
@@ -288,32 +293,42 @@ router.post('/quick-test', async (req, res) => {
 
         const response = await client.sendMessage(
             { role: 'user', content: [{ type: 'text', text: message }] },
-            { 
-                model: model || channel.models?.[0], 
-                maxToken: 100, 
-                temperature: 0.7 
+            {
+                model: model || channel.models?.[0],
+                maxToken: 100,
+                temperature: 0.7
             }
         )
 
         const elapsed = Date.now() - startTime
-        const replyText = response.contents?.filter(c => c?.type === 'text').map(c => c.text).join('') || ''
+        const replyText =
+            response.contents
+                ?.filter(c => c?.type === 'text')
+                .map(c => c.text)
+                .join('') || ''
 
-        res.json(ApiResponse.ok({
-            success: true,
-            model: model || channel.models?.[0],
-            elapsed,
-            response: replyText,
-            keyInfo: keyInfo ? { name: keyInfo.keyName, index: keyInfo.keyIndex } : null
-        }))
-
+        res.json(
+            ApiResponse.ok({
+                success: true,
+                model: model || channel.models?.[0],
+                elapsed,
+                response: replyText,
+                keyInfo: keyInfo ? { name: keyInfo.keyName, index: keyInfo.keyIndex } : null
+            })
+        )
     } catch (error) {
         const elapsed = Date.now() - startTime
-        res.status(500).json(ApiResponse.fail({
-            success: false,
-            model: model || channel.models?.[0],
-            elapsed,
-            error: error.message
-        }, error.message))
+        res.status(500).json(
+            ApiResponse.fail(
+                {
+                    success: false,
+                    model: model || channel.models?.[0],
+                    elapsed,
+                    error: error.message
+                },
+                error.message
+            )
+        )
     }
 })
 
@@ -321,18 +336,20 @@ router.post('/quick-test', async (req, res) => {
 router.get('/channel-models/:id', async (req, res) => {
     await channelManager.init()
     const channel = channelManager.get(req.params.id)
-    
+
     if (!channel) {
         return res.status(404).json(ApiResponse.fail(null, '渠道不存在'))
     }
 
-    res.json(ApiResponse.ok({
-        channelId: channel.id,
-        channelName: channel.name,
-        models: channel.models || [],
-        status: channel.status,
-        testedAt: channel.testedAt
-    }))
+    res.json(
+        ApiResponse.ok({
+            channelId: channel.id,
+            channelName: channel.name,
+            models: channel.models || [],
+            status: channel.status,
+            testedAt: channel.testedAt
+        })
+    )
 })
 
 export default router

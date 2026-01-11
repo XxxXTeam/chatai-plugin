@@ -112,7 +112,7 @@ router.post('/test', async (req, res) => {
             baseUrl = channel.baseUrl
             models = channel.models
             advanced = channel.advanced || advanced
-            
+
             if (channel.apiKeys && channel.apiKeys.length > 0) {
                 const keyInfo = channelManager.getChannelKey(channel, { recordUsage: false })
                 apiKey = keyInfo.key
@@ -137,7 +137,7 @@ router.post('/test', async (req, res) => {
     }
 
     const testMessage = '说一声你好'
-    
+
     try {
         if (adapterType === 'openai') {
             const { OpenAIClient } = await import('../../core/adapters/index.js')
@@ -148,15 +148,15 @@ router.post('/test', async (req, res) => {
                 tools: []
             })
 
-            const testModel = (models && models.length > 0) ? models[0] : 'gpt-3.5-turbo'
+            const testModel = models && models.length > 0 ? models[0] : 'gpt-3.5-turbo'
             const useStreaming = advanced?.streaming?.enabled || false
             const temperature = advanced?.llm?.temperature ?? 0.7
             const maxTokens = advanced?.llm?.maxTokens || 100
-            
+
             const options = {
                 model: testModel,
                 maxToken: maxTokens,
-                temperature,
+                temperature
             }
 
             let replyText = ''
@@ -184,7 +184,10 @@ router.post('/test', async (req, res) => {
                 if (!response || !response.contents || !Array.isArray(response.contents)) {
                     return res.status(500).json(ApiResponse.fail(null, '连接失败: API响应格式不正确'))
                 }
-                replyText = response.contents.filter(c => c && c.type === 'text').map(c => c.text).join('')
+                replyText = response.contents
+                    .filter(c => c && c.type === 'text')
+                    .map(c => c.text)
+                    .join('')
                 apiUsage = response.usage
             }
 
@@ -201,7 +204,7 @@ router.post('/test', async (req, res) => {
                 success: true,
                 source: 'test',
                 responseText: replyText || '',
-                apiUsage,
+                apiUsage
             })
 
             if (id) {
@@ -213,15 +216,18 @@ router.post('/test', async (req, res) => {
                     await channelManager.saveToConfig()
                 }
             }
-            
-            res.json(ApiResponse.ok({
-                success: true,
-                message: `连接成功！耗时 ${elapsed}ms`,
-                testResponse: replyText,
-                elapsed,
-                model: testModel,
-                keyInfo: usedKeyIndex >= 0 ? { index: usedKeyIndex, name: usedKeyName, strategy: usedStrategy } : null
-            }))
+
+            res.json(
+                ApiResponse.ok({
+                    success: true,
+                    message: `连接成功！耗时 ${elapsed}ms`,
+                    testResponse: replyText,
+                    elapsed,
+                    model: testModel,
+                    keyInfo:
+                        usedKeyIndex >= 0 ? { index: usedKeyIndex, name: usedKeyName, strategy: usedStrategy } : null
+                })
+            )
         } else {
             res.json(ApiResponse.ok({ success: true, message: '该适配器暂不支持测试' }))
         }
@@ -238,7 +244,7 @@ router.post('/test', async (req, res) => {
             duration: elapsed,
             success: false,
             error: error.message,
-            source: 'test',
+            source: 'test'
         })
 
         if (id) {
@@ -269,8 +275,8 @@ router.post('/fetch-models', async (req, res) => {
                 apiKey: apiKey || config.get('openai.apiKey'),
                 baseURL: baseUrl || config.get('openai.baseUrl'),
                 defaultHeaders: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                },
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
             })
 
             const modelsList = await openai.models.list()
@@ -283,9 +289,8 @@ router.post('/fetch-models', async (req, res) => {
             let models = modelsList.data.map(m => m.id)
 
             if (isOfficialOpenAI) {
-                models = models.filter(id => 
-                    id.includes('gpt') || id.includes('text-embedding') || 
-                    id.includes('o1') || id.includes('o3')
+                models = models.filter(
+                    id => id.includes('gpt') || id.includes('text-embedding') || id.includes('o1') || id.includes('o3')
                 )
             }
 
@@ -302,10 +307,10 @@ router.post('/fetch-models', async (req, res) => {
 // POST /api/channels/batch-test - Batch test multiple models (JSON response)
 router.post('/batch-test', async (req, res) => {
     const { channelId, models, concurrency = 3 } = req.body
-    
+
     await channelManager.init()
     const channel = channelManager.get(channelId)
-    
+
     if (!channel) {
         return res.status(404).json(ApiResponse.fail(null, 'Channel not found'))
     }
@@ -316,12 +321,12 @@ router.post('/batch-test', async (req, res) => {
     }
 
     const results = []
-    
-    const testSingleModel = async (model) => {
+
+    const testSingleModel = async model => {
         const startTime = Date.now()
         try {
             const { OpenAIClient } = await import('../../core/adapters/index.js')
-            
+
             let apiKey = channel.apiKey
             let keyInfo = null
             if (channel.apiKeys && channel.apiKeys.length > 0) {
@@ -342,7 +347,11 @@ router.post('/batch-test', async (req, res) => {
             )
 
             const elapsed = Date.now() - startTime
-            const replyText = response.contents?.filter(c => c?.type === 'text').map(c => c.text).join('') || ''
+            const replyText =
+                response.contents
+                    ?.filter(c => c?.type === 'text')
+                    .map(c => c.text)
+                    .join('') || ''
 
             return {
                 model,
@@ -369,27 +378,29 @@ router.post('/batch-test', async (req, res) => {
     }
 
     const successCount = results.filter(r => r.success).length
-    res.json(ApiResponse.ok({
-        total: testModels.length,
-        success: successCount,
-        failed: testModels.length - successCount,
-        channelId,
-        channelName: channel.name,
-        results
-    }))
+    res.json(
+        ApiResponse.ok({
+            total: testModels.length,
+            success: successCount,
+            failed: testModels.length - successCount,
+            channelId,
+            channelName: channel.name,
+            results
+        })
+    )
 })
 
 // POST /api/channels/test-model - Test a single specific model
 router.post('/test-model', async (req, res) => {
     const { channelId, model } = req.body
-    
+
     if (!channelId || !model) {
         return res.status(400).json(ApiResponse.fail(null, 'channelId and model are required'))
     }
 
     await channelManager.init()
     const channel = channelManager.get(channelId)
-    
+
     if (!channel) {
         return res.status(404).json(ApiResponse.fail(null, 'Channel not found'))
     }
@@ -397,7 +408,7 @@ router.post('/test-model', async (req, res) => {
     const startTime = Date.now()
     try {
         const { OpenAIClient } = await import('../../core/adapters/index.js')
-        
+
         let apiKey = channel.apiKey
         let keyInfo = null
         if (channel.apiKeys && channel.apiKeys.length > 0) {
@@ -418,22 +429,30 @@ router.post('/test-model', async (req, res) => {
         )
 
         const elapsed = Date.now() - startTime
-        const replyText = response.contents?.filter(c => c?.type === 'text').map(c => c.text).join('') || ''
+        const replyText =
+            response.contents
+                ?.filter(c => c?.type === 'text')
+                .map(c => c.text)
+                .join('') || ''
 
-        res.json(ApiResponse.ok({
-            model,
-            success: true,
-            elapsed,
-            response: replyText.substring(0, 100),
-            keyInfo: keyInfo ? { name: keyInfo.keyName, index: keyInfo.keyIndex } : null
-        }))
+        res.json(
+            ApiResponse.ok({
+                model,
+                success: true,
+                elapsed,
+                response: replyText.substring(0, 100),
+                keyInfo: keyInfo ? { name: keyInfo.keyName, index: keyInfo.keyIndex } : null
+            })
+        )
     } catch (error) {
-        res.json(ApiResponse.ok({
-            model,
-            success: false,
-            elapsed: Date.now() - startTime,
-            error: error.message
-        }))
+        res.json(
+            ApiResponse.ok({
+                model,
+                success: false,
+                elapsed: Date.now() - startTime,
+                error: error.message
+            })
+        )
     }
 })
 

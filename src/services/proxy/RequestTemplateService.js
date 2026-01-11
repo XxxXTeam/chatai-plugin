@@ -3,7 +3,7 @@ import os from 'node:os'
 
 /**
  * 请求模板服务 - 支持占位符替换和自定义请求体/请求头
- * 
+ *
  * 占位符列表：
  * - {{API_KEY}} - API密钥
  * - {{MODEL}} - 模型名称
@@ -29,13 +29,13 @@ class RequestTemplateService {
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15'
         ]
-        
+
         // 默认请求头模板
         this.defaultHeadersTemplate = {
             'User-Agent': '{{USER_AGENT}}',
-            'Accept': 'application/json, text/plain, */*',
+            Accept: 'application/json, text/plain, */*',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
             'Content-Type': 'application/json'
         }
@@ -68,7 +68,7 @@ class RequestTemplateService {
 
     /**
      * 生成随机Nonce
-     * @param {number} length 
+     * @param {number} length
      * @returns {string}
      */
     generateNonce(length = 16) {
@@ -83,66 +83,66 @@ class RequestTemplateService {
      */
     getPlaceholderValue(placeholder, context = {}) {
         const now = new Date()
-        
+
         switch (placeholder.toUpperCase()) {
             case 'API_KEY':
             case 'APIKEY':
                 return context.apiKey || ''
-            
+
             case 'MODEL':
             case 'MODEL_NAME':
                 return context.model || ''
-            
+
             case 'USER_AGENT':
             case 'UA':
                 return context.userAgent || this.getRandomUserAgent()
-            
+
             case 'XFF':
             case 'X_FORWARDED_FOR':
             case 'X-FORWARDED-FOR':
                 return context.xff || this.generateRandomIP()
-            
+
             case 'RANDOM_IP':
             case 'RANDOMIP':
                 return this.generateRandomIP()
-            
+
             case 'TIMESTAMP':
             case 'TS':
                 return Math.floor(now.getTime() / 1000).toString()
-            
+
             case 'TIMESTAMP_MS':
                 return now.getTime().toString()
-            
+
             case 'DATE':
                 return now.toISOString().split('T')[0]
-            
+
             case 'DATETIME':
                 return now.toISOString()
-            
+
             case 'UUID':
                 return crypto.randomUUID()
-            
+
             case 'NONCE':
                 return this.generateNonce()
-            
+
             case 'NONCE32':
                 return this.generateNonce(32)
-            
+
             case 'HOSTNAME':
                 return os.hostname()
-            
+
             case 'BASE_URL':
             case 'BASEURL':
                 return context.baseUrl || ''
-            
+
             case 'CHANNEL_NAME':
             case 'CHANNELNAME':
                 return context.channelName || ''
-            
+
             case 'AUTHORIZATION':
             case 'AUTH':
                 return context.apiKey ? `Bearer ${context.apiKey}` : ''
-            
+
             default:
                 // 支持自定义占位符
                 if (context.custom && context.custom[placeholder]) {
@@ -160,7 +160,7 @@ class RequestTemplateService {
      */
     replaceplaceholders(template, context = {}) {
         if (!template || typeof template !== 'string') return template
-        
+
         return template.replace(/\{\{([^}]+)\}\}/g, (match, placeholder) => {
             return this.getPlaceholderValue(placeholder.trim(), context)
         })
@@ -174,9 +174,9 @@ class RequestTemplateService {
      */
     processObject(obj, context = {}) {
         if (!obj || typeof obj !== 'object') return obj
-        
+
         const result = Array.isArray(obj) ? [] : {}
-        
+
         for (const [key, value] of Object.entries(obj)) {
             if (typeof value === 'string') {
                 result[key] = this.replaceplaceholders(value, context)
@@ -186,7 +186,7 @@ class RequestTemplateService {
                 result[key] = value
             }
         }
-        
+
         return result
     }
 
@@ -199,7 +199,7 @@ class RequestTemplateService {
     buildHeaders(customHeaders, context = {}) {
         // 合并默认头和自定义头
         let headers = { ...this.defaultHeadersTemplate }
-        
+
         // 处理自定义头
         if (customHeaders) {
             if (typeof customHeaders === 'string') {
@@ -212,7 +212,7 @@ class RequestTemplateService {
             }
             headers = { ...headers, ...customHeaders }
         }
-        
+
         // 替换占位符
         return this.processObject(headers, context)
     }
@@ -225,7 +225,7 @@ class RequestTemplateService {
      */
     buildRequestBody(bodyTemplate, context = {}) {
         if (!bodyTemplate) return null
-        
+
         let template = bodyTemplate
         if (typeof template === 'string') {
             try {
@@ -235,20 +235,20 @@ class RequestTemplateService {
                 return null
             }
         }
-        
+
         return this.processObject(template, context)
     }
 
     /**
      * 验证JSON模板格式
-     * @param {string} jsonString 
+     * @param {string} jsonString
      * @returns {{ valid: boolean, error?: string, parsed?: Object }}
      */
     validateJsonTemplate(jsonString) {
         if (!jsonString || typeof jsonString !== 'string') {
             return { valid: true, parsed: {} }
         }
-        
+
         try {
             const parsed = JSON.parse(jsonString)
             return { valid: true, parsed }
@@ -278,14 +278,14 @@ class RequestTemplateService {
             { key: 'HOSTNAME', description: '主机名', example: 'server-01' },
             { key: 'BASE_URL', description: 'API基础URL', example: 'https://api.openai.com/v1' },
             { key: 'CHANNEL_NAME', description: '渠道名称', example: 'OpenAI官方' },
-            { key: 'AUTHORIZATION', description: 'Bearer认证头', example: 'Bearer sk-xxx...' },
+            { key: 'AUTHORIZATION', description: 'Bearer认证头', example: 'Bearer sk-xxx...' }
         ]
     }
 
     /**
      * 预览占位符替换结果
-     * @param {string} template 
-     * @param {Object} sampleContext 
+     * @param {string} template
+     * @param {Object} sampleContext
      * @returns {string}
      */
     previewTemplate(template, sampleContext = {}) {

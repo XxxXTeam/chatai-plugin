@@ -31,7 +31,7 @@ async function ensureScopeManager() {
  * ```js
  * const agent = await createChatAgent({ event: e })
  * const result = await agent.chat('你好')
- * 
+ *
  * const result = await chatAgent.sendMessage({
  *   userId: '123456',
  *   message: '你好',
@@ -50,7 +50,7 @@ export class ChatAgent {
         this.enableSkills = options.enableSkills !== false
         this.stream = options.stream || false
         this.debugMode = options.debugMode || false
-        
+
         this.skillsAgent = null
         this.conversationId = null
         this.initialized = false
@@ -68,11 +68,9 @@ export class ChatAgent {
         await mcpManager.init()
 
         // 确定会话ID
-        const cleanUserId = this.userId?.includes('_') 
-            ? this.userId.split('_').pop() 
-            : this.userId
-        
-        this.conversationId = this.groupId 
+        const cleanUserId = this.userId?.includes('_') ? this.userId.split('_').pop() : this.userId
+
+        this.conversationId = this.groupId
             ? `group:${this.groupId}`
             : contextManager.getConversationId(cleanUserId, null)
 
@@ -92,8 +90,8 @@ export class ChatAgent {
     }
 
     /**
-     * 发送消息 
-     * 
+     * 发送消息
+     *
      * @param {Object} options - 消息选项
      * @returns {Promise<Object>} 响应结果
      */
@@ -115,10 +113,10 @@ export class ChatAgent {
      */
     async chat(input, options = {}) {
         if (!this.initialized) await this.init()
-        
+
         const message = typeof input === 'string' ? input : input.text || ''
         const images = input.images || options.images || []
-        
+
         return await this.sendMessage({
             userId: this.userId,
             groupId: this.groupId,
@@ -159,18 +157,20 @@ export class ChatAgent {
         } = options
 
         // 调试信息
-        const debugInfo = debugMode ? {
-            request: {},
-            response: {},
-            context: {},
-            toolCalls: [],
-            timing: { start: Date.now() },
-            channel: {},
-            memory: {},
-            knowledge: {},
-            preset: {},
-            scope: {}
-        } : null
+        const debugInfo = debugMode
+            ? {
+                  request: {},
+                  response: {},
+                  context: {},
+                  toolCalls: [],
+                  timing: { start: Date.now() },
+                  channel: {},
+                  memory: {},
+                  knowledge: {},
+                  preset: {},
+                  scope: {}
+              }
+            : null
 
         if (!userId) {
             throw new Error('userId is required')
@@ -194,16 +194,18 @@ export class ChatAgent {
 
         // 构建消息内容
         const messageContent = await this._buildMessageContent(message, images)
-        
+
         const userMessage = {
             role: 'user',
             content: messageContent,
-            sender: event?.sender ? {
-                user_id: event.user_id || event.sender.user_id,
-                nickname: event.sender.nickname || '用户',
-                card: event.sender.card || '',
-                role: event.sender.role || 'member'
-            } : { user_id: userId, nickname: '用户', card: '', role: 'member' },
+            sender: event?.sender
+                ? {
+                      user_id: event.user_id || event.sender.user_id,
+                      nickname: event.sender.nickname || '用户',
+                      card: event.sender.card || '',
+                      role: event.sender.role || 'member'
+                  }
+                : { user_id: userId, nickname: '用户', card: '', role: 'member' },
             timestamp: Date.now(),
             source_type: groupId ? 'group' : 'private',
             ...(groupId && { group_id: groupId })
@@ -219,7 +221,8 @@ export class ChatAgent {
 
         // 确定预设
         await presetManager.init()
-        const effectivePresetId = presetId || preset?.id || scopePresetId || config.get('llm.defaultChatPresetId') || 'default'
+        const effectivePresetId =
+            presetId || preset?.id || scopePresetId || config.get('llm.defaultChatPresetId') || 'default'
         const currentPreset = preset || presetManager.get(effectivePresetId)
 
         // 确定是否启用工具
@@ -278,11 +281,23 @@ export class ChatAgent {
 
         // 添加记忆上下文
         if (config.get('memory.enabled') && !skipPersona) {
-            systemPrompt = await this._addMemoryContext(systemPrompt, userId, message, event, groupId, cleanUserId, debugInfo)
+            systemPrompt = await this._addMemoryContext(
+                systemPrompt,
+                userId,
+                message,
+                event,
+                groupId,
+                cleanUserId,
+                debugInfo
+            )
         }
 
         // 添加知识库上下文
-        systemPrompt = await this._addKnowledgeContext(systemPrompt, prefixPersona ? prefixPersona : effectivePresetId, debugInfo)
+        systemPrompt = await this._addKnowledgeContext(
+            systemPrompt,
+            prefixPersona ? prefixPersona : effectivePresetId,
+            debugInfo
+        )
 
         // 添加群聊环境信息
         if (groupId) {
@@ -323,7 +338,7 @@ export class ChatAgent {
         const channelLlm = channelAdvanced.llm || {}
         const channelStreaming = channelAdvanced.streaming || {}
         const presetParams = currentPreset?.modelParams || {}
-        
+
         const requestOptions = {
             model: llmModel,
             maxToken: overrideMaxTokens ?? presetParams.max_tokens ?? channelLlm.maxTokens ?? 4000,
@@ -348,7 +363,7 @@ export class ChatAgent {
                 llmModel,
                 debugInfo
             })
-            
+
             response = result.response
             finalUsage = result.usage
             allToolLogs = result.toolLogs || []
@@ -376,7 +391,10 @@ export class ChatAgent {
 
         // 更新上下文
         if (response?.length > 0) {
-            const textContent = response.filter(c => c.type === 'text').map(c => c.text).join('\n')
+            const textContent = response
+                .filter(c => c.type === 'text')
+                .map(c => c.text)
+                .join('\n')
             if (textContent.length > 50) {
                 await contextManager.updateContext(conversationId, {
                     lastInteraction: Date.now(),
@@ -386,7 +404,8 @@ export class ChatAgent {
 
             // 自动记忆提取
             if (config.get('memory.enabled') && config.get('memory.autoExtract') !== false) {
-                memoryManager.extractMemoryFromConversation(userId, message, textContent)
+                memoryManager
+                    .extractMemoryFromConversation(userId, message, textContent)
                     .catch(err => logger.warn('[ChatAgent] 自动记忆提取失败:', err.message))
             }
         }
@@ -416,7 +435,7 @@ export class ChatAgent {
      */
     async _buildMessageContent(message, images) {
         const content = []
-        
+
         if (message) {
             content.push({ type: 'text', text: message })
         }
@@ -434,7 +453,11 @@ export class ChatAgent {
                 }
 
                 if (typeof imageRef === 'string') {
-                    if (imageRef.startsWith('http://') || imageRef.startsWith('https://') || imageRef.startsWith('data:')) {
+                    if (
+                        imageRef.startsWith('http://') ||
+                        imageRef.startsWith('https://') ||
+                        imageRef.startsWith('data:')
+                    ) {
                         content.push({ type: 'image_url', image_url: { url: imageRef } })
                         continue
                     }
@@ -466,11 +489,9 @@ export class ChatAgent {
         try {
             const sm = await ensureScopeManager()
             const isPrivate = !groupId
-            const effectiveSettings = await sm.getEffectiveSettings(
-                groupId ? String(groupId) : null,
-                cleanUserId,
-                { isPrivate }
-            )
+            const effectiveSettings = await sm.getEffectiveSettings(groupId ? String(groupId) : null, cleanUserId, {
+                isPrivate
+            })
 
             if (effectiveSettings?.presetId) {
                 scopePresetId = effectiveSettings.presetId
@@ -566,7 +587,9 @@ export class ChatAgent {
             // 群聊记忆
             if (groupId && config.get('memory.groupContext.enabled')) {
                 const nickname = event?.sender?.card || event?.sender?.nickname
-                const groupMemory = await memoryManager.getGroupMemoryContext(String(groupId), cleanUserId, { nickname })
+                const groupMemory = await memoryManager.getGroupMemoryContext(String(groupId), cleanUserId, {
+                    nickname
+                })
                 if (groupMemory) {
                     const parts = []
                     if (groupMemory.userInfo?.length > 0) parts.push(`群成员信息：${groupMemory.userInfo.join('；')}`)
@@ -628,7 +651,7 @@ export class ChatAgent {
      */
     async _buildClientOptions(options) {
         const { model, channel, adapterType, event, presetId, tools, preset } = options
-        
+
         const clientOptions = {
             enableTools: tools?.length > 0,
             preSelectedTools: tools?.length > 0 ? tools : null,
@@ -664,14 +687,14 @@ export class ChatAgent {
      */
     async _sendWithFallback(client, userMessage, requestOptions, context) {
         const { channel, clientOptions, llmModel, debugInfo } = context
-        
+
         const fallbackConfig = config.get('llm.fallback') || {}
         const fallbackEnabled = fallbackConfig.enabled !== false
         const fallbackModels = fallbackConfig.models || []
         const maxRetries = fallbackConfig.maxRetries || 3
 
         const modelsToTry = [llmModel, ...fallbackModels.filter(m => m && m !== llmModel)]
-        
+
         let response = null
         let lastError = null
 
@@ -704,7 +727,7 @@ export class ChatAgent {
                         if (modelIndex > 0) {
                             logger.info(`[ChatAgent] 使用备选模型成功: ${currentModel}`)
                         }
-                        
+
                         return {
                             response: response.contents || [],
                             usage: response.usage || {},
@@ -728,7 +751,7 @@ export class ChatAgent {
         }
 
         if (lastError) throw lastError
-        
+
         return { response: [], usage: {}, toolLogs: [] }
     }
 
@@ -736,7 +759,21 @@ export class ChatAgent {
      * 记录统计
      */
     async _recordStats(options) {
-        const { channel, llmModel, requestStartTime, response, finalUsage, lastError, userId, groupId, stream, debugInfo, messages, systemPrompt, client } = options
+        const {
+            channel,
+            llmModel,
+            requestStartTime,
+            response,
+            finalUsage,
+            lastError,
+            userId,
+            groupId,
+            stream,
+            debugInfo,
+            messages,
+            systemPrompt,
+            client
+        } = options
 
         try {
             if (channel) {
@@ -750,7 +787,11 @@ export class ChatAgent {
             }
 
             const requestDuration = Date.now() - requestStartTime
-            const responseText = response?.filter(c => c.type === 'text').map(c => c.text).join('') || ''
+            const responseText =
+                response
+                    ?.filter(c => c.type === 'text')
+                    .map(c => c.text)
+                    .join('') || ''
 
             await statsService.recordApiCall({
                 channelId: channel?.id || `no-channel-${llmModel}`,
@@ -779,7 +820,7 @@ export class ChatAgent {
             const fullUserId = String(options.userId)
             const pureUserId = fullUserId.includes('_') ? fullUserId.split('_').pop() : fullUserId
             const groupId = options.event?.group_id ? String(options.event.group_id) : null
-            
+
             const currentConversationId = contextManager.getConversationId(pureUserId, groupId)
             await historyManager.deleteConversation(currentConversationId)
             await contextManager.cleanContext(currentConversationId)

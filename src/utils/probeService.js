@@ -1,6 +1,7 @@
 import config from '../../config/config.js'
 
-const defaultServer = () => config.get('features.probe.serverUrl') || process.env.PROBE_SERVER || 'http://127.0.0.1:8080'
+const defaultServer = () =>
+    config.get('features.probe.serverUrl') || process.env.PROBE_SERVER || 'http://127.0.0.1:8080'
 
 async function request(path, options = {}) {
     const url = `${defaultServer()}${path}`
@@ -61,7 +62,9 @@ export const probeService = {
         }
         tick()
 
-        return () => { stopped = true }
+        return () => {
+            stopped = true
+        }
     },
     maskIP(ip) {
         if (!ip) return ''

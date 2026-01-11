@@ -141,17 +141,17 @@ export const toolCategories = {
 export function getAllTools(options = {}) {
     const { enabledCategories, disabledTools = [] } = options
     const allTools = []
-    
+
     for (const [category, config] of Object.entries(toolCategories)) {
         if (enabledCategories && !enabledCategories.includes(category)) {
             continue
         }
-        
+
         // 过滤禁用的工具
         const tools = config.tools.filter(tool => !disabledTools.includes(tool.name))
         allTools.push(...tools)
     }
-    
+
     return allTools
 }
 

@@ -6,7 +6,7 @@ const logger = {
     info: (...args) => chatLogger.info('QQBot', ...args),
     warn: (...args) => chatLogger.warn('QQBot', ...args),
     error: (...args) => chatLogger.error('QQBot', ...args),
-    debug: (...args) => chatLogger.debug('QQBot', ...args),
+    debug: (...args) => chatLogger.debug('QQBot', ...args)
 }
 
 class QQBotInstance {
@@ -39,7 +39,7 @@ class QQBotInstance {
                 this.emit('open')
             })
 
-            this.ws.on('message', (data) => {
+            this.ws.on('message', data => {
                 try {
                     const payload = JSON.parse(data.toString())
                     this.handleMessage(payload)
@@ -56,7 +56,7 @@ class QQBotInstance {
                 this.attemptReconnect()
             })
 
-            this.ws.on('error', (err) => {
+            this.ws.on('error', err => {
                 logger.error(`Bot ${this.appid} WebSocket错误: ${err.message}`)
                 this.emit('error', err)
             })
@@ -173,7 +173,7 @@ class QQBotInstance {
             username: this.username,
             sessionId: this.sessionId,
             seq: this.seq,
-            reconnectAttempts: this.reconnectAttempts,
+            reconnectAttempts: this.reconnectAttempts
         }
     }
 }
@@ -195,7 +195,7 @@ class QQBotProxyService {
         }
 
         logger.info('初始化QQ官方Bot代理服务...')
-        
+
         const proxyUrl = cfg.proxyUrl || 'http://localhost:2173'
         const bots = cfg.bots || []
 
@@ -237,7 +237,7 @@ class QQBotProxyService {
             const response = await fetch(createUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ appid, secret, sandbox, intents }),
+                body: JSON.stringify({ appid, secret, sandbox, intents })
             })
 
             const result = await response.json()
@@ -273,7 +273,7 @@ class QQBotProxyService {
         // 注册配置中启用的事件
         for (const [eventName, enabled] of Object.entries(events)) {
             if (enabled) {
-                instance.on(eventName, (data) => {
+                instance.on(eventName, data => {
                     this.handleEvent(eventName, data, instance)
                 })
             }
@@ -340,7 +340,7 @@ class QQBotProxyService {
             enabled: config.get('qqBotProxy.enabled') || false,
             initialized: this.initialized,
             botCount: this.instances.size,
-            bots: statuses,
+            bots: statuses
         }
     }
 
@@ -357,7 +357,7 @@ class QQBotProxyService {
         const proxyUrl = config.get('qqBotProxy.proxyUrl') || 'http://localhost:2173'
         try {
             await fetch(`${proxyUrl}/bot/${instance.botId}`, {
-                method: 'DELETE',
+                method: 'DELETE'
             })
         } catch (err) {
             logger.warn(`通知代理服务器删除失败: ${err.message}`)

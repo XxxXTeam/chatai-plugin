@@ -27,7 +27,7 @@ export class LlmService {
 
         // 从渠道管理器加载配置
         await channelManager.init()
-        
+
         let apiKey, baseUrl, ClientClass, adapterType
 
         // 优先使用传入的选项
@@ -37,13 +37,13 @@ export class LlmService {
             adapterType = options.adapterType || 'openai'
         } else {
             const model = options.model || config.get('llm.defaultModel')
-            const channel = channelManager.getBestChannel(model) ||
-                            channelManager.getAll().find(c => c.enabled && c.apiKey)
-            
+            const channel =
+                channelManager.getBestChannel(model) || channelManager.getAll().find(c => c.enabled && c.apiKey)
+
             if (!channel) {
                 throw new Error('未找到可用的 API 渠道配置，请先配置渠道')
             }
-            
+
             apiKey = channelManager.getChannelKey(channel)
             baseUrl = channel.baseUrl
             adapterType = channel.adapterType || 'openai'
@@ -86,7 +86,7 @@ export class LlmService {
                     await presetManager.init()
                     toolsConfig = presetManager.getToolsConfig(options.presetId)
                 }
-                
+
                 // 获取所有工具 (MCP + 内置)
                 tools = await getAllTools({
                     toolsConfig,
@@ -106,12 +106,12 @@ export class LlmService {
             enableReasoning,
             reasoningEffort
         }
-        
+
         // 传递自定义请求头（支持 XFF/Auth/UA 等复写）
         if (options.customHeaders && Object.keys(options.customHeaders).length > 0) {
             clientConfig.customHeaders = options.customHeaders
         }
-        
+
         // 传递JSON模板配置（支持占位符）
         if (options.headersTemplate) {
             clientConfig.headersTemplate = options.headersTemplate
@@ -122,7 +122,7 @@ export class LlmService {
         if (options.channelName) {
             clientConfig.channelName = options.channelName
         }
-        
+
         const client = new ClientClass(clientConfig)
 
         return client
@@ -135,32 +135,32 @@ export class LlmService {
         // 从 channelManager 获取可用的 API 配置
         const { channelManager } = await import('./ChannelManager.js')
         await channelManager.init() // 确保已初始化
-        
+
         const embeddingModel = config.get('llm.embeddingModel')
         const defaultModel = config.get('llm.defaultModel')
-        
+
         // 优先查找包含 embedding 模型的渠道，然后是默认模型
         const channels = channelManager.getAll()
         let channel = channels.find(c => c.enabled && c.models?.includes(embeddingModel))
-        
+
         if (!channel) {
             channel = channels.find(c => c.enabled && c.models?.includes(defaultModel))
         }
-        
+
         // 回退：使用第一个可用的启用渠道
         if (!channel) {
             channel = channels.find(c => c.enabled && c.apiKey)
         }
-        
+
         if (!channel) {
             throw new Error('未找到可用的 API 渠道配置，请先配置渠道')
         }
-        
+
         // 根据渠道适配器类型返回正确的客户端
         const adapterType = channel.adapterType || 'openai'
-        const ClientClass = adapterType === 'gemini' ? GeminiClient :
-                           adapterType === 'claude' ? ClaudeClient : OpenAIClient
-        
+        const ClientClass =
+            adapterType === 'gemini' ? GeminiClient : adapterType === 'claude' ? ClaudeClient : OpenAIClient
+
         return new ClientClass({
             apiKey: channel.apiKey,
             baseUrl: channel.baseUrl,
@@ -178,30 +178,32 @@ export class LlmService {
     static async getChatClient(options = {}) {
         const { channelManager } = await import('./ChannelManager.js')
         await channelManager.init()
-        
+
         // 优先使用传入的 model 参数，否则使用默认模型
         const targetModel = options.model || config.get('llm.defaultModel')
         const channels = channelManager.getAll()
-        
+
         // 优先查找支持指定模型的渠道
         let channel = channels.find(c => c.enabled && c.models?.includes(targetModel))
-        
+
         // 回退：查找任何可用的启用渠道
         if (!channel) {
             channel = channels.find(c => c.enabled && c.apiKey)
         }
-        
+
         if (!channel) {
             throw new Error('未找到可用的 API 渠道配置')
         }
-        
+
         const adapterType = channel.adapterType || 'openai'
-        const ClientClass = adapterType === 'gemini' ? GeminiClient :
-                           adapterType === 'claude' ? ClaudeClient : OpenAIClient
-        
+        const ClientClass =
+            adapterType === 'gemini' ? GeminiClient : adapterType === 'claude' ? ClaudeClient : OpenAIClient
+
         const keyInfo = channelManager.getChannelKey(channel)
-        logger.debug(`[LlmService] getChatClient 选择渠道: ${channel.name}, 模型: ${targetModel}, 适配器: ${adapterType}`)
-        
+        logger.debug(
+            `[LlmService] getChatClient 选择渠道: ${channel.name}, 模型: ${targetModel}, 适配器: ${adapterType}`
+        )
+
         const client = new ClientClass({
             apiKey: keyInfo.key,
             baseUrl: channel.baseUrl,
@@ -213,7 +215,7 @@ export class LlmService {
             name: channel.name,
             model: targetModel
         }
-        
+
         return client
     }
 
@@ -228,7 +230,7 @@ export class LlmService {
         if (typeof defaultModel === 'string' && defaultModel.trim()) {
             return defaultModel.trim()
         }
-        
+
         // 兼容旧配置 chatModel
         const chatModel = config.get('llm.chatModel')
         if (chatModel) {
@@ -239,11 +241,11 @@ export class LlmService {
                 return chatModel.trim()
             }
         }
-        
+
         logger.warn('[LlmService] 未配置任何模型')
         return ''
     }
-    
+
     /**
      * 获取默认模型（getModel 的别名）
      * @returns {string} 模型名称
@@ -254,7 +256,7 @@ export class LlmService {
 
     /**
      * Get system prompt for a preset (basic version)
-     * @param {string} [presetId] 
+     * @param {string} [presetId]
      */
     static getSystemPrompt(presetId) {
         const id = presetId || config.get('llm.defaultChatPresetId') || 'default'

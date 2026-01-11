@@ -43,7 +43,7 @@ class RenderService {
         this.templateDir = path.join(__dirname, '../../resources/templates')
         this.useCanvas = !!canvasModule
         this.fontLoaded = false
-        
+
         // 数学公式检测正则表达式
         this.mathPatterns = {
             // LaTeX 块级公式 $$...$$
@@ -57,7 +57,8 @@ class RenderService {
             // \begin{...}...\end{...} 环境
             latexEnv: /\\begin\{[^}]+\}[\s\S]+?\\end\{[^}]+\}/g,
             // 常见数学命令
-            mathCommands: /\\(frac|sqrt|sum|int|prod|lim|sin|cos|tan|log|ln|exp|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|sigma|omega|infty|partial|nabla|cdot|times|div|pm|mp|leq|geq|neq|approx|equiv|subset|supset|cap|cup|in|notin|forall|exists|rightarrow|leftarrow|Rightarrow|Leftarrow|vec|hat|bar|dot|ddot|matrix|bmatrix|pmatrix|cases)\b/,
+            mathCommands:
+                /\\(frac|sqrt|sum|int|prod|lim|sin|cos|tan|log|ln|exp|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|sigma|omega|infty|partial|nabla|cdot|times|div|pm|mp|leq|geq|neq|approx|equiv|subset|supset|cap|cup|in|notin|forall|exists|rightarrow|leftarrow|Rightarrow|Leftarrow|vec|hat|bar|dot|ddot|matrix|bmatrix|pmatrix|cases)\b/,
             // 函数表示如 f(x), g(x), f'(x), f''(x)
             functionNotation: /\b[fghFGH]'*\s*\([^)]+\)/g,
             // 极限表示 lim(x→...) 或 lim_{x→...}
@@ -90,35 +91,36 @@ class RenderService {
         if (!text || typeof text !== 'string') {
             return { hasMath: false, confidence: 'low', matches: [], mathScore: 0 }
         }
-        
+
         const matches = []
         let confidence = 'low'
         let mathScore = 0
-        
+
         // 排除普通文本中的数字和常见格式
         // 如：日期、时间、版本号、货币、百分比等
         const excludePatterns = [
-            /\d{4}[-/]\d{1,2}[-/]\d{1,2}/g,  // 日期
-            /\d{1,2}:\d{2}(:\d{2})?/g,        // 时间
-            /v?\d+\.\d+(\.\d+)?/gi,           // 版本号
-            /[¥$€£]\s*\d+/g,                  // 货币
-            /\d+%/g,                           // 百分比
-            /\d+\s*(个|条|篇|次|人|天|小时|分钟|秒)/g,  // 中文计数
+            /\d{4}[-/]\d{1,2}[-/]\d{1,2}/g, // 日期
+            /\d{1,2}:\d{2}(:\d{2})?/g, // 时间
+            /v?\d+\.\d+(\.\d+)?/gi, // 版本号
+            /[¥$€£]\s*\d+/g, // 货币
+            /\d+%/g, // 百分比
+            /\d+\s*(个|条|篇|次|人|天|小时|分钟|秒)/g // 中文计数
         ]
-        
+
         let cleanText = text
         for (const pattern of excludePatterns) {
             cleanText = cleanText.replace(pattern, ' ')
         }
-        
+
         // 只检测明确的 LaTeX 语法
         const blockMatches = text.match(this.mathPatterns.blockLatex) || []
         if (blockMatches.length > 0) {
             // 验证块级公式内容确实包含数学元素
-            const validBlocks = blockMatches.filter(m => 
-                this.mathPatterns.mathCommands.test(m) || 
-                /[+\-*/=<>^_{}\\]/.test(m) ||
-                /[α-ωΑ-Ω∑∏∞∂√±≈≠≤≥∈∉]/.test(m)
+            const validBlocks = blockMatches.filter(
+                m =>
+                    this.mathPatterns.mathCommands.test(m) ||
+                    /[+\-*/=<>^_{}\\]/.test(m) ||
+                    /[α-ωΑ-Ω∑∏∞∂√±≈≠≤≥∈∉]/.test(m)
             )
             if (validBlocks.length > 0) {
                 matches.push(...validBlocks)
@@ -126,7 +128,7 @@ class RenderService {
                 mathScore += validBlocks.length * 10
             }
         }
-        
+
         // 检测 \[...\] 块级公式
         const bracketBlockMatches = text.match(this.mathPatterns.bracketBlock) || []
         if (bracketBlockMatches.length > 0) {
@@ -134,7 +136,7 @@ class RenderService {
             confidence = 'high'
             mathScore += bracketBlockMatches.length * 10
         }
-        
+
         // 检测 LaTeX 环境
         const envMatches = text.match(this.mathPatterns.latexEnv) || []
         if (envMatches.length > 0) {
@@ -142,7 +144,7 @@ class RenderService {
             confidence = 'high'
             mathScore += envMatches.length * 10
         }
-        
+
         // 检测行内 LaTeX 公式 $...$ - 更严格的验证
         const inlineMatches = text.match(this.mathPatterns.inlineLatex) || []
         if (inlineMatches.length > 0) {
@@ -155,7 +157,7 @@ class RenderService {
                 // 排除纯数字和简单文本
                 const isPureNumber = /^\$\s*\d+(\.\d+)?\s*\$$/.test(m)
                 const isSimpleText = /^\$\s*[a-zA-Z]+\s*\$$/.test(m) && m.length < 8
-                
+
                 return (hasLatexCmd || hasMathOps || hasVarNum || hasGreek) && !isPureNumber && !isSimpleText
             })
             if (validInline.length > 0) {
@@ -164,7 +166,7 @@ class RenderService {
                 mathScore += validInline.length * 5
             }
         }
-        
+
         // 检测 \(...\) 行内公式
         const bracketInlineMatches = text.match(this.mathPatterns.bracketInline) || []
         if (bracketInlineMatches.length > 0) {
@@ -172,56 +174,56 @@ class RenderService {
             if (confidence !== 'high') confidence = 'medium'
             mathScore += bracketInlineMatches.length * 5
         }
-        
+
         // 以下检测只在明确的数学上下文中才加分
         // 检测LaTeX数学命令 - 这是最可靠的指标
         if (this.mathPatterns.mathCommands.test(text)) {
             mathScore += 8
             if (confidence === 'low') confidence = 'medium'
         }
-        
+
         // 检测积分符号
         const integralMatches = text.match(this.mathPatterns.integralSymbol) || []
         mathScore += integralMatches.length * 5
-        
+
         // 检测数学符号 (∑, ∞, ∂ 等) - 只有这些才明确是数学
         const symbolMatches = text.match(this.mathPatterns.mathSymbols) || []
         mathScore += symbolMatches.length * 4
-        
+
         // 检测希腊字母
         const greekMatches = text.match(this.mathPatterns.greekLetters) || []
         mathScore += greekMatches.length * 3
-        
+
         // 检测下标上标 (₀-₉, ²³等)
         const subSupMatches = text.match(this.mathPatterns.subscriptSuperscript) || []
         mathScore += subSupMatches.length * 2
-        
+
         // 检测极限表示 lim(x→...)
         const limitMatches = text.match(this.mathPatterns.limitNotation) || []
         mathScore += limitMatches.length * 5
-        
+
         // 检测函数表示 f(x), g(x)
         const funcMatches = text.match(this.mathPatterns.functionNotation) || []
         mathScore += funcMatches.length * 2
-        
+
         // 检测三角函数 sin, cos, tan 等跟着变量
         const trigMatches = text.match(this.mathPatterns.trigFunctions) || []
         mathScore += trigMatches.length * 3
-        
+
         // 检测数学表达式模式（分数、幂等）
         const exprMatches = text.match(this.mathPatterns.mathExprPattern) || []
         mathScore += exprMatches.length * 3
-        
+
         // 提高阈值，避免误判
         if (mathScore >= 20 && confidence !== 'high') {
             confidence = 'high'
         } else if (mathScore >= 12 && confidence === 'low') {
             confidence = 'medium'
         }
-        
+
         // 提高判定阈值
         const hasMath = (mathScore >= 12 && matches.length > 0) || mathScore >= 20
-        
+
         return {
             hasMath,
             confidence,
@@ -239,7 +241,7 @@ class RenderService {
     convertToLatex(text) {
         if (!text) return text
         if (/\$[\s\S]+?\$/.test(text)) return text
-        
+
         let result = text
         result = result.replace(/\[([^\[\]]+)\]\/\[([^\[\]]+)\]/g, '\\frac{$1}{$2}')
         result = result.replace(/\[([^\[\]]+)\]\/([a-zA-Z0-9^{}]+)/g, '\\frac{$1}{$2}')
@@ -250,21 +252,32 @@ class RenderService {
         // 简单分数 a/b
         result = result.replace(/\b([a-zA-Z0-9]+)\/([a-zA-Z0-9^{}]+)\b/g, '\\frac{$1}{$2}')
         result = result.replace(/\^\{([^}]+)\}/g, '^{$1}') // 保持已有格式
-        result = result.replace(/\^(\d+)/g, '^{$1}')       // x^2 -> x^{2}
+        result = result.replace(/\^(\d+)/g, '^{$1}') // x^2 -> x^{2}
         result = result.replace(/\^([a-zA-Z])(?![a-zA-Z{])/g, '^{$1}') // x^n -> x^{n}
-        result = result.replace(/²/g, '^{2}')            // ² -> ^{2}
-        result = result.replace(/³/g, '^{3}')            // ³ -> ^{3}
+        result = result.replace(/²/g, '^{2}') // ² -> ^{2}
+        result = result.replace(/³/g, '^{3}') // ³ -> ^{3}
 
-        result = result.replace(/_\{([^}]+)\}/g, '_{$1}')  // 保持已有格式
-        result = result.replace(/_(\d+)/g, '_{$1}')        // x_1 -> x_{1}
+        result = result.replace(/_\{([^}]+)\}/g, '_{$1}') // 保持已有格式
+        result = result.replace(/_(\d+)/g, '_{$1}') // x_1 -> x_{1}
         result = result.replace(/_([a-zA-Z])(?![a-zA-Z{])/g, '_{$1}') // x_n -> x_{n}
         // Unicode下标
         result = result.replace(/[₀-₉]/g, m => `_{${m.charCodeAt(0) - 0x2080}}`)
         const greekMap = {
-            'α': '\\alpha', 'β': '\\beta', 'γ': '\\gamma', 'δ': '\\delta',
-            'ε': '\\epsilon', 'θ': '\\theta', 'λ': '\\lambda', 'μ': '\\mu',
-            'π': '\\pi', 'σ': '\\sigma', 'ω': '\\omega', 'ξ': '\\xi',
-            'η': '\\eta', 'ζ': '\\zeta', '∞': '\\infty'
+            α: '\\alpha',
+            β: '\\beta',
+            γ: '\\gamma',
+            δ: '\\delta',
+            ε: '\\epsilon',
+            θ: '\\theta',
+            λ: '\\lambda',
+            μ: '\\mu',
+            π: '\\pi',
+            σ: '\\sigma',
+            ω: '\\omega',
+            ξ: '\\xi',
+            η: '\\eta',
+            ζ: '\\zeta',
+            '∞': '\\infty'
         }
         for (const [g, l] of Object.entries(greekMap)) {
             result = result.replace(new RegExp(g, 'g'), l)
@@ -286,75 +299,81 @@ class RenderService {
         result = result.replace(/∂/g, '\\partial ')
         result = result.replace(/\b(sin|cos|tan|cot|sec|csc|ln|log|exp|lim|max|min|sup|inf)(?![a-zA-Z\\])/gi, '\\$1 ')
         // 修复LaTeX命令后紧跟字母的问题，如 \cdotx -> \cdot x
-        result = result.replace(/\\(cdot|times|to|pm|approx|neq|leq|geq|in|partial|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|sigma|omega|xi|eta|zeta|infty)([a-zA-Z])/g, '\\$1 $2')
+        result = result.replace(
+            /\\(cdot|times|to|pm|approx|neq|leq|geq|in|partial|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|sigma|omega|xi|eta|zeta|infty)([a-zA-Z])/g,
+            '\\$1 $2'
+        )
         const mathPattern = /\\[a-zA-Z]+|\^{|_{/
         if (!mathPattern.test(result)) return result
-        
+
         // 按行处理
-        return result.split('\n').map(line => {
-            // 纯中文行跳过
-            if (/^[\u4e00-\u9fa5，。：！？、\s~\-（）]+$/.test(line)) return line
-            if (!mathPattern.test(line)) return line
-            let processed = ''
-            let i = 0
-            
-            while (i < line.length) {
-                // 检查是否是数学表达式开始
-                const remaining = line.slice(i)
-                
-                // 匹配: \command 或 字母数字后跟^{或_{
-                const mathStart = remaining.match(/^([a-zA-Z0-9]*)(\\[a-zA-Z]+|\^{|_{)/)
-                
-                if (mathStart) {
-                    // 找到数学表达式开始
-                    let mathExpr = mathStart[1] // 前缀字母/数字
-                    let j = mathStart[1].length
-                    let braceDepth = 0
-                    
-                    // 继续扫描直到表达式结束
-                    while (j < remaining.length) {
-                        const ch = remaining[j]
-                        
-                        if (ch === '{') braceDepth++
-                        else if (ch === '}') braceDepth--
-                        
-                        // 检查是否到达表达式结尾
-                        if (braceDepth === 0) {
-                            const next = remaining[j + 1]
-                            // 如果下一个字符是中文或空格或特殊符号，表达式结束
-                            if (!next || /[\u4e00-\u9fa5，。：；]/.test(next)) {
-                                mathExpr += remaining.slice(mathStart[1].length, j + 1)
-                                break
+        return result
+            .split('\n')
+            .map(line => {
+                // 纯中文行跳过
+                if (/^[\u4e00-\u9fa5，。：！？、\s~\-（）]+$/.test(line)) return line
+                if (!mathPattern.test(line)) return line
+                let processed = ''
+                let i = 0
+
+                while (i < line.length) {
+                    // 检查是否是数学表达式开始
+                    const remaining = line.slice(i)
+
+                    // 匹配: \command 或 字母数字后跟^{或_{
+                    const mathStart = remaining.match(/^([a-zA-Z0-9]*)(\\[a-zA-Z]+|\^{|_{)/)
+
+                    if (mathStart) {
+                        // 找到数学表达式开始
+                        let mathExpr = mathStart[1] // 前缀字母/数字
+                        let j = mathStart[1].length
+                        let braceDepth = 0
+
+                        // 继续扫描直到表达式结束
+                        while (j < remaining.length) {
+                            const ch = remaining[j]
+
+                            if (ch === '{') braceDepth++
+                            else if (ch === '}') braceDepth--
+
+                            // 检查是否到达表达式结尾
+                            if (braceDepth === 0) {
+                                const next = remaining[j + 1]
+                                // 如果下一个字符是中文或空格或特殊符号，表达式结束
+                                if (!next || /[\u4e00-\u9fa5，。：；]/.test(next)) {
+                                    mathExpr += remaining.slice(mathStart[1].length, j + 1)
+                                    break
+                                }
+                                // 如果不是数学相关字符，结束
+                                if (!/[a-zA-Z0-9_^{}\\+\-=*/(.)\[\]\s]/.test(next)) {
+                                    mathExpr += remaining.slice(mathStart[1].length, j + 1)
+                                    break
+                                }
                             }
-                            // 如果不是数学相关字符，结束
-                            if (!/[a-zA-Z0-9_^{}\\+\-=*/(.)\[\]\s]/.test(next)) {
-                                mathExpr += remaining.slice(mathStart[1].length, j + 1)
-                                break
-                            }
+                            j++
                         }
-                        j++
-                    }
-                    if (j >= remaining.length) {
-                        mathExpr += remaining.slice(mathStart[1].length)
-                        j = remaining.length
-                    }
-                    
-                    // 包裹数学表达式
-                    if (mathExpr && /\\|\^{|_{/.test(mathExpr)) {
-                        processed += `$${mathExpr.trim()}$`
+                        if (j >= remaining.length) {
+                            mathExpr += remaining.slice(mathStart[1].length)
+                            j = remaining.length
+                        }
+
+                        // 包裹数学表达式
+                        if (mathExpr && /\\|\^{|_{/.test(mathExpr)) {
+                            processed += `$${mathExpr.trim()}$`
+                        } else {
+                            processed += mathExpr
+                        }
+                        i += j
                     } else {
-                        processed += mathExpr
+                        // 不是数学表达式，添加当前字符
+                        processed += line[i]
+                        i++
                     }
-                    i += j
-                } else {
-                    // 不是数学表达式，添加当前字符
-                    processed += line[i]
-                    i++
                 }
-            }
-            
-            return processed
-        }).join('\n')
+
+                return processed
+            })
+            .join('\n')
     }
 
     /**
@@ -364,12 +383,7 @@ class RenderService {
      * @returns {Promise<Buffer>} 图片Buffer
      */
     async renderMathContent(text, options = {}) {
-        const {
-            theme = 'light',
-            width = 800,
-            showTimestamp = false,
-            title = ''
-        } = options
+        const { theme = 'light', width = 800, showTimestamp = false, title = '' } = options
         const processedText = this.convertToLatex(text)
         return this.renderMarkdownToImage({
             markdown: processedText,
@@ -417,14 +431,14 @@ class RenderService {
         if (!canvasModule || this.fontLoaded) return
         try {
             const { GlobalFonts } = canvasModule
-            
+
             // 优先使用插件自带字体
             const pluginFontDir = path.join(PLUGIN_ROOT, 'data/font')
             const pluginFonts = [
                 { path: path.join(pluginFontDir, 'LXGWNeoXiHeiScreen.ttf'), name: 'LXGW' },
                 { path: path.join(pluginFontDir, 'InconsolataNerdFontPropo-Bold.ttf'), name: 'Inconsolata' }
             ]
-            
+
             for (const font of pluginFonts) {
                 if (fs.existsSync(font.path)) {
                     try {
@@ -436,7 +450,7 @@ class RenderService {
                     }
                 }
             }
-            
+
             // 回退到系统字体
             if (!this.fontLoaded) {
                 const systemFontPaths = [
@@ -455,7 +469,7 @@ class RenderService {
                     }
                 }
             }
-            
+
             if (!this.fontLoaded) {
                 logService.warn('[RenderService] 未找到中文字体，请将字体文件放入 data/font 目录')
             }
@@ -473,9 +487,9 @@ class RenderService {
         if (!canvasModule) {
             throw new Error('Canvas模块未加载')
         }
-        
+
         await this.loadFonts()
-        
+
         const {
             lines = [],
             width = 520,
@@ -495,12 +509,12 @@ class RenderService {
         } = options
 
         const { createCanvas } = canvasModule
-        
+
         // 计算内容高度
         const contentPadding = padding * 2
         let totalHeight = contentPadding + headerHeight
         const lineHeightPx = fontSize * lineHeight
-        
+
         // 预计算每行高度
         const parsedLines = lines.map(line => {
             const isTitle = line.startsWith('# ') || line.startsWith('## ')
@@ -508,26 +522,26 @@ class RenderService {
             const isList = line.startsWith('- ') || line.startsWith('• ') || /^\d+\.\s/.test(line)
             const isQuote = line.startsWith('> ')
             const isEmpty = !line.trim()
-            
+
             let height = lineHeightPx
             if (isTitle) height = fontSize * 1.8 * lineHeight
             else if (isSubtitle) height = fontSize * 1.4 * lineHeight
             else if (isEmpty) height = lineHeightPx * 0.5
-            
+
             return { text: line, height, isTitle, isSubtitle, isList, isQuote, isEmpty }
         })
-        
+
         totalHeight += parsedLines.reduce((sum, l) => sum + l.height, 0)
         totalHeight += 40 // footer
-        
+
         // 创建 Canvas
         const canvas = createCanvas(width, Math.max(totalHeight, 200))
         const ctx = canvas.getContext('2d')
-        
+
         // 绘制背景
         ctx.fillStyle = bgColor
         ctx.fillRect(0, 0, width, totalHeight)
-        
+
         // 绘制头部（如果有）
         if (headerBg && headerHeight > 0) {
             const gradient = ctx.createLinearGradient(0, 0, width, headerHeight)
@@ -536,7 +550,7 @@ class RenderService {
             gradient.addColorStop(1, '#FFD4C0')
             ctx.fillStyle = gradient
             ctx.fillRect(0, 0, width, headerHeight)
-            
+
             // 绘制标题
             if (title) {
                 ctx.font = `bold ${fontSize * 1.2}px ${fontFamily}`
@@ -549,25 +563,25 @@ class RenderService {
                 ctx.fillText(subtitle, padding, padding + fontSize * 1.2 + fontSize)
             }
         }
-        
+
         // 绘制内容
         let y = headerHeight + padding + fontSize
-        
+
         for (const line of parsedLines) {
             if (line.isEmpty) {
                 y += line.height
                 continue
             }
-            
+
             let text = line.text
             let x = padding
-            
+
             // 标题样式
             if (line.isTitle) {
                 text = text.replace(/^#{1,2}\s*/, '')
                 ctx.font = `600 ${fontSize * 1.3}px ${fontFamily}`
                 ctx.fillStyle = titleColor
-                
+
                 // 绘制左侧装饰条
                 const gradient = ctx.createLinearGradient(x, y - fontSize, x, y + 4)
                 gradient.addColorStop(0, '#FF8C42')
@@ -575,44 +589,44 @@ class RenderService {
                 ctx.fillStyle = gradient
                 ctx.fillRect(x, y - fontSize * 0.9, 4, fontSize * 1.1)
                 x += 12
-                
+
                 ctx.fillStyle = titleColor
                 ctx.fillText(text, x, y)
             } else if (line.isSubtitle) {
                 text = text.replace(/^###\s*/, '')
                 ctx.font = `600 ${fontSize * 1.1}px ${fontFamily}`
                 ctx.fillStyle = '#C06830'
-                
+
                 // 左侧边框
                 ctx.fillStyle = accentColor
                 ctx.fillRect(x, y - fontSize * 0.8, 3, fontSize)
                 x += 10
-                
+
                 ctx.fillStyle = '#C06830'
                 ctx.fillText(text, x, y)
             } else if (line.isList) {
                 // 列表项
                 text = text.replace(/^[-•]\s*/, '').replace(/^\d+\.\s*/, '')
                 ctx.font = `${fontSize}px ${fontFamily}`
-                
+
                 // 绘制列表标记
                 ctx.fillStyle = accentColor
                 ctx.fillText('◆', x + 4, y)
                 x += 20
-                
+
                 ctx.fillStyle = textColor
                 ctx.fillText(text, x, y)
             } else if (line.isQuote) {
                 text = text.replace(/^>\s*/, '')
-                
+
                 // 引用块背景
                 ctx.fillStyle = '#FFF8F2'
                 ctx.fillRect(x, y - fontSize * 0.9, width - padding * 2, fontSize * 1.4)
-                
+
                 // 左侧边框
                 ctx.fillStyle = '#FF9060'
                 ctx.fillRect(x, y - fontSize * 0.9, 4, fontSize * 1.4)
-                
+
                 ctx.font = `${fontSize * 0.95}px ${fontFamily}`
                 ctx.fillStyle = '#7A5545'
                 ctx.fillText(text, x + 12, y)
@@ -620,7 +634,7 @@ class RenderService {
                 // 普通文本
                 ctx.font = `${fontSize}px ${fontFamily}`
                 ctx.fillStyle = textColor
-                
+
                 // 处理加粗文本
                 const boldParts = text.split(/\*\*([^*]+)\*\*/g)
                 let currentX = x
@@ -637,23 +651,23 @@ class RenderService {
                     currentX += ctx.measureText(boldParts[i]).width
                 }
             }
-            
+
             y += line.height
         }
-        
+
         // 绘制底部
         if (footerText) {
             const footerY = totalHeight - 15
             ctx.font = `${fontSize * 0.75}px ${fontFamily}`
             ctx.fillStyle = '#B09080'
             ctx.fillText(footerText, padding, footerY)
-            
+
             const timestamp = new Date().toLocaleString('zh-CN')
             const timestampWidth = ctx.measureText(timestamp).width
             ctx.fillStyle = '#C0A090'
             ctx.fillText(timestamp, width - padding - timestampWidth, footerY)
         }
-        
+
         return canvas.toBuffer('image/png')
     }
 
@@ -674,7 +688,7 @@ class RenderService {
 
     /**
      * 清理Markdown内容（移除代码块标记等）
-     * @param {string} text 
+     * @param {string} text
      * @returns {string}
      */
     cleanMarkdown(text) {
@@ -685,18 +699,18 @@ class RenderService {
         // 移除结尾的 ``` 标记
         clean = clean.replace(/\n?```\s*$/i, '')
         // 移除无法渲染的 Emoji 字符（保留基本标点和中文）
-        clean = clean.replace(/[\u{1F300}-\u{1F9FF}]/gu, '')  // 常见 Emoji
-        clean = clean.replace(/[\u{2600}-\u{26FF}]/gu, '')    // 杂项符号
-        clean = clean.replace(/[\u{2700}-\u{27BF}]/gu, '')    // 装饰符号
-        clean = clean.replace(/[\u{1F600}-\u{1F64F}]/gu, '')  // 表情符号
-        clean = clean.replace(/[\u{1F680}-\u{1F6FF}]/gu, '')  // 交通和地图符号
-        clean = clean.replace(/[\u{1F1E0}-\u{1F1FF}]/gu, '')  // 国旗
+        clean = clean.replace(/[\u{1F300}-\u{1F9FF}]/gu, '') // 常见 Emoji
+        clean = clean.replace(/[\u{2600}-\u{26FF}]/gu, '') // 杂项符号
+        clean = clean.replace(/[\u{2700}-\u{27BF}]/gu, '') // 装饰符号
+        clean = clean.replace(/[\u{1F600}-\u{1F64F}]/gu, '') // 表情符号
+        clean = clean.replace(/[\u{1F680}-\u{1F6FF}]/gu, '') // 交通和地图符号
+        clean = clean.replace(/[\u{1F1E0}-\u{1F1FF}]/gu, '') // 国旗
         return clean.trim()
     }
 
     /**
      * 保护数学公式，避免被Markdown解析器处理
-     * @param {string} text 
+     * @param {string} text
      * @returns {{ text: string, expressions: string[] }}
      */
     protectMathExpressions(text) {
@@ -716,8 +730,8 @@ class RenderService {
 
     /**
      * 恢复数学公式
-     * @param {string} html 
-     * @param {string[]} expressions 
+     * @param {string} html
+     * @param {string[]} expressions
      * @returns {string}
      */
     restoreMathExpressions(html, expressions) {
@@ -868,13 +882,13 @@ class RenderService {
         } = options
 
         const cleanedMd = this.cleanMarkdown(markdown)
-        
+
         // 保护数学公式
         const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
         let html = marked(protectedMd)
         // 恢复数学公式
         html = this.restoreMathExpressions(html, expressions)
-        
+
         const styles = this.getThemeStyles(theme)
         const timestamp = new Date().toLocaleString('zh-CN', {
             year: 'numeric',
@@ -883,7 +897,7 @@ class RenderService {
             hour: '2-digit',
             minute: '2-digit'
         })
-        
+
         // 检测是否包含数学公式
         const hasMath = expressions.length > 0
 
@@ -935,7 +949,9 @@ class RenderService {
             </head>
             <body>
                 <div class="container">
-                    ${title ? `
+                    ${
+                        title
+                            ? `
                     <div class="header">
                         <div class="header-icon">${icon}</div>
                         <div>
@@ -944,11 +960,15 @@ class RenderService {
                         </div>
                     </div>
                     <hr>
-                    ` : ''}
+                    `
+                            : ''
+                    }
                     ${html}
                     ${showTimestamp ? `<div class="timestamp">生成时间：${timestamp}</div>` : ''}
                 </div>
-                ${hasMath ? `
+                ${
+                    hasMath
+                        ? `
                 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
                 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
                 <script>
@@ -966,7 +986,9 @@ class RenderService {
                         window.katexRendered = true;
                     });
                 </script>
-                ` : ''}
+                `
+                        : ''
+                }
             </body>
             </html>
         `
@@ -977,7 +999,7 @@ class RenderService {
             const page = await browser.newPage()
             await page.setViewport({ width, height: 600, deviceScaleFactor: 2 })
             await page.setContent(styledHtml, { waitUntil: 'networkidle0', timeout: 30000 })
-            
+
             // 等待 KaTeX 渲染完成
             if (hasMath) {
                 try {
@@ -987,7 +1009,7 @@ class RenderService {
                 }
                 await new Promise(r => setTimeout(r, 200))
             }
-            
+
             const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
             await page.close()
             return imageBuffer
@@ -1012,7 +1034,7 @@ class RenderService {
             hourlyActivity = [],
             theme = 'light',
             width = 520,
-            fastMode = true  // 优先使用Canvas快速渲染
+            fastMode = true // 优先使用Canvas快速渲染
         } = options
 
         // 快速模式：使用 Canvas 渲染（无头像、无图表，但速度快10倍+）
@@ -1041,34 +1063,39 @@ class RenderService {
         const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
         let html = marked(protectedMd)
         html = this.restoreMathExpressions(html, expressions)
-        
+
         const now = new Date()
         const dateStr = now.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
         const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
         const activityData = hourlyActivity.length === 24 ? hourlyActivity : Array(24).fill(0)
         const maxActivity = Math.max(...activityData, 1)
-        const activityBars = activityData.map((v, i) => {
-            const height = maxActivity > 0 ? Math.max(2, Math.round((v / maxActivity) * 50)) : 2
-            const color = v > 0 ? '#FFB347' : '#FFE8D8'
-            return `<div class="bar" style="height:${height}px;background:${color}"></div>`
-        }).join('')
-        const userCardsHtml = topUsers.length > 0 ? topUsers.map((u, i) => {
-            const gradients = [
-                'linear-gradient(135deg, #FF6B6B 0%, #FF8E8E 100%)',
-                'linear-gradient(135deg, #4ECDC4 0%, #6EE7DF 100%)',
-                'linear-gradient(135deg, #A78BFA 0%, #C4B5FD 100%)',
-                'linear-gradient(135deg, #F59E0B 0%, #FBBF24 100%)',
-                'linear-gradient(135deg, #10B981 0%, #34D399 100%)'
-            ]
-            const bgGradient = gradients[i % gradients.length]
-            const initial = (u.name || '?').charAt(0).toUpperCase()
-            const rankBadge = i === 0 ? '👑' : (i === 1 ? '🥈' : (i === 2 ? '🥉' : `#${i+1}`))
-            // 使用真实头像URL，如果没有则显示首字母
-            const avatarContent = u.avatar 
-                ? `<img src="${u.avatar}" class="avatar-img" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
-                : ''
-            const fallbackContent = `<div class="avatar-fallback" style="background:${bgGradient};display:${u.avatar ? 'none' : 'flex'}">${initial}</div>`
-            return `
+        const activityBars = activityData
+            .map((v, i) => {
+                const height = maxActivity > 0 ? Math.max(2, Math.round((v / maxActivity) * 50)) : 2
+                const color = v > 0 ? '#FFB347' : '#FFE8D8'
+                return `<div class="bar" style="height:${height}px;background:${color}"></div>`
+            })
+            .join('')
+        const userCardsHtml =
+            topUsers.length > 0
+                ? topUsers
+                      .map((u, i) => {
+                          const gradients = [
+                              'linear-gradient(135deg, #FF6B6B 0%, #FF8E8E 100%)',
+                              'linear-gradient(135deg, #4ECDC4 0%, #6EE7DF 100%)',
+                              'linear-gradient(135deg, #A78BFA 0%, #C4B5FD 100%)',
+                              'linear-gradient(135deg, #F59E0B 0%, #FBBF24 100%)',
+                              'linear-gradient(135deg, #10B981 0%, #34D399 100%)'
+                          ]
+                          const bgGradient = gradients[i % gradients.length]
+                          const initial = (u.name || '?').charAt(0).toUpperCase()
+                          const rankBadge = i === 0 ? '👑' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`
+                          // 使用真实头像URL，如果没有则显示首字母
+                          const avatarContent = u.avatar
+                              ? `<img src="${u.avatar}" class="avatar-img" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
+                              : ''
+                          const fallbackContent = `<div class="avatar-fallback" style="background:${bgGradient};display:${u.avatar ? 'none' : 'flex'}">${initial}</div>`
+                          return `
                 <div class="user-card">
                     <div class="user-rank">${rankBadge}</div>
                     <div class="user-avatar">
@@ -1078,7 +1105,9 @@ class RenderService {
                     <div class="user-name">${u.name || '用户'}</div>
                     <div class="user-count">${u.count} 条</div>
                 </div>`
-        }).join('') : ''
+                      })
+                      .join('')
+                : ''
 
         const beautifulHtml = `
 <!DOCTYPE html>
@@ -1514,11 +1543,15 @@ class RenderService {
                 <span>24时</span>
             </div>
         </div>
-        ${userCardsHtml ? `
+        ${
+            userCardsHtml
+                ? `
         <div class="users-section">
             <div class="users-title">👥 活跃成员 TOP${topUsers.length}</div>
             <div class="users-grid">${userCardsHtml}</div>
-        </div>` : ''}
+        </div>`
+                : ''
+        }
         <div class="content">
             ${html}
         </div>
@@ -1541,8 +1574,7 @@ class RenderService {
                 try {
                     await page.waitForSelector('.avatar-img', { timeout: 5000 })
                     await new Promise(r => setTimeout(r, 500))
-                } catch (e) {
-                }
+                } catch (e) {}
             }
             const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
             await page.close()
@@ -1562,7 +1594,7 @@ class RenderService {
      */
     async renderUserProfile(markdown, nickname, options = {}) {
         const { messageCount = 0, width = 480, userId = null, fastMode = true } = options
-        
+
         // 快速模式：使用 Canvas 渲染（无头像，但速度快10倍+）
         if (fastMode && this.useCanvas) {
             try {
@@ -1585,18 +1617,18 @@ class RenderService {
                 logService.warn('[RenderService] Canvas渲染失败，回退到Puppeteer:', e.message)
             }
         }
-        
+
         const cleanedMd = this.cleanMarkdown(markdown)
         const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
         let html = marked(protectedMd)
         html = this.restoreMathExpressions(html, expressions)
-        
+
         const now = new Date()
         const dateStr = now.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
         const initial = (nickname || '?').charAt(0).toUpperCase()
         // 生成真实头像URL
         const avatarUrl = userId ? `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=0` : null
-        
+
         const profileHtml = `
 <!DOCTYPE html>
 <html>
@@ -1979,12 +2011,7 @@ class RenderService {
      * @returns {Promise<Buffer>}
      */
     async renderWordCloud(words, options = {}) {
-        const {
-            title = '今日词云',
-            subtitle = '',
-            width = 800,
-            height = 600
-        } = options
+        const { title = '今日词云', subtitle = '', width = 800, height = 600 } = options
 
         if (!words || words.length === 0) {
             throw new Error('没有足够的词汇生成词云')
@@ -1992,12 +2019,12 @@ class RenderService {
 
         // 限制词数，避免太多词导致布局缓慢
         const maxWords = Math.min(words.length, 120)
-        
+
         // 归一化权重并按权重降序排序（大的在前，放中间）
         const maxWeight = Math.max(...words.map(w => w.weight))
         const minWeight = Math.min(...words.map(w => w.weight))
         const weightRange = maxWeight - minWeight || 1
-        
+
         const normalizedWords = words
             .slice(0, maxWords)
             .map(w => {
@@ -2111,27 +2138,29 @@ class RenderService {
                     const lowColors = ${JSON.stringify(lowWeightColors)};
                     
                     // 词云数据
-                    const words = ${JSON.stringify(normalizedWords.map((w, i, arr) => {
-                        // 根据排名选择颜色组
-                        const rank = i / arr.length
-                        let colorPool, colorIdx
-                        if (rank < 0.15) {
-                            colorPool = 'high'
-                            colorIdx = i % highWeightColors.length
-                        } else if (rank < 0.5) {
-                            colorPool = 'mid'
-                            colorIdx = (i - Math.floor(arr.length * 0.15)) % midWeightColors.length
-                        } else {
-                            colorPool = 'low'
-                            colorIdx = (i - Math.floor(arr.length * 0.5)) % lowWeightColors.length
-                        }
-                        return {
-                            word: w.word,
-                            size: w.size,
-                            colorPool,
-                            colorIdx
-                        }
-                    }))};
+                    const words = ${JSON.stringify(
+                        normalizedWords.map((w, i, arr) => {
+                            // 根据排名选择颜色组
+                            const rank = i / arr.length
+                            let colorPool, colorIdx
+                            if (rank < 0.15) {
+                                colorPool = 'high'
+                                colorIdx = i % highWeightColors.length
+                            } else if (rank < 0.5) {
+                                colorPool = 'mid'
+                                colorIdx = (i - Math.floor(arr.length * 0.15)) % midWeightColors.length
+                            } else {
+                                colorPool = 'low'
+                                colorIdx = (i - Math.floor(arr.length * 0.5)) % lowWeightColors.length
+                            }
+                            return {
+                                word: w.word,
+                                size: w.size,
+                                colorPool,
+                                colorIdx
+                            }
+                        })
+                    )};
                     
                     const container = document.getElementById('wordCloud');
                     const containerWidth = ${cloudWidth};
@@ -2241,10 +2270,15 @@ class RenderService {
             await page.setViewport({ width, height, deviceScaleFactor: 2 })
             await page.setContent(wordCloudHtml, { waitUntil: 'networkidle0', timeout: 30000 })
             // 等待词云布局完成
-            await page.waitForFunction(() => {
-                const words = document.querySelectorAll('.word');
-                return words.length > 0 && Array.from(words).some(w => w.style.opacity === '1');
-            }, { timeout: 8000 }).catch(() => {})
+            await page
+                .waitForFunction(
+                    () => {
+                        const words = document.querySelectorAll('.word')
+                        return words.length > 0 && Array.from(words).some(w => w.style.opacity === '1')
+                    },
+                    { timeout: 8000 }
+                )
+                .catch(() => {})
             const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
             await page.close()
             return imageBuffer

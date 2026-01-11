@@ -12,7 +12,7 @@ router.get('/', async (req, res) => {
         const { knowledgeService } = await import('../storage/KnowledgeService.js')
         await knowledgeService.init()
         const docs = knowledgeService.getAll()
-        
+
         // 列表模式只返回摘要
         const summaryDocs = docs.map(doc => ({
             ...doc,
@@ -20,7 +20,7 @@ router.get('/', async (req, res) => {
             contentLength: doc.content?.length || 0,
             truncated: (doc.content?.length || 0) > 500
         }))
-        
+
         res.json(ChaiteResponse.ok(summaryDocs))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))

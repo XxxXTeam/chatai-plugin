@@ -38,7 +38,7 @@ export async function callOneBotApi(bot, action, params = {}) {
             return await res.json()
         } catch {}
     }
-    
+
     return null
 }
 
@@ -53,7 +53,7 @@ export async function sendPoke(e, userId, groupId = null) {
     const platform = detectAdapter(e)
     userId = parseInt(userId)
     groupId = groupId ? parseInt(groupId) : null
-    
+
     try {
         if (platform === 'icqq' && bot.pickGroup) {
             if (groupId) {
@@ -92,13 +92,13 @@ export async function sendPoke(e, userId, groupId = null) {
                     if (result !== null) return true
                 } catch {}
             }
-            
+
             // 尝试直接方法调用
             if (typeof bot?.sendGroupPoke === 'function') {
                 await bot.sendGroupPoke(groupId, userId)
                 return true
             }
-            
+
             // 尝试发送戳一戳消息段
             try {
                 const pokeMsg = { type: 'poke', data: { qq: String(userId) } }
@@ -114,7 +114,7 @@ export async function sendPoke(e, userId, groupId = null) {
                     if (result !== null) return true
                 } catch {}
             }
-            
+
             if (typeof bot?.sendFriendPoke === 'function') {
                 await bot.sendFriendPoke(userId)
                 return true
@@ -123,7 +123,7 @@ export async function sendPoke(e, userId, groupId = null) {
     } catch (err) {
         logger.debug(`[EventAdapter] 发送戳一戳失败: ${err.message}`)
     }
-    
+
     return false
 }
 
@@ -137,13 +137,13 @@ export async function sendPoke(e, userId, groupId = null) {
 export async function sendReaction(e, messageId, emojiId, isSet = true) {
     const bot = getBot(e)
     const platform = detectAdapter(e)
-    
+
     try {
         // QQBot平台特殊处理
         if (isQQBotPlatform(e)) {
             return await sendQQBotReaction(e, messageId, emojiId, isSet)
         }
-        
+
         if (platform === 'icqq') {
             if (e.group_id && bot.pickGroup) {
                 const group = bot.pickGroup(parseInt(e.group_id))
@@ -157,13 +157,8 @@ export async function sendReaction(e, messageId, emojiId, isSet = true) {
                 }
             }
         }
-        const apis = [
-            'set_msg_emoji_like',
-            'set_group_reaction', 
-            'send_group_reaction',
-            'set_message_reaction'
-        ]
-        
+        const apis = ['set_msg_emoji_like', 'set_group_reaction', 'send_group_reaction', 'set_message_reaction']
+
         for (const api of apis) {
             try {
                 const result = await callOneBotApi(bot, api, {
@@ -181,11 +176,10 @@ export async function sendReaction(e, messageId, emojiId, isSet = true) {
             })
             if (result !== null) return true
         } catch {}
-        
     } catch (err) {
         logger.debug(`[EventAdapter] 发送表情回应失败: ${err.message}`)
     }
-    
+
     return false
 }
 
@@ -199,12 +193,12 @@ export async function sendReaction(e, messageId, emojiId, isSet = true) {
  */
 export async function sendQQBotReaction(e, messageId, emojiId, isSet = true) {
     const bot = getBot(e)
-    
+
     try {
         // 获取QQBot SDK实例
         const sdk = bot?.sdk
         if (!sdk) return false
-        
+
         // 频道消息表态
         if (e.group_id?.startsWith?.('qg_') || e.channel_id) {
             const channelId = e.channel_id || e.group_id?.replace?.(/^qg_\d+-/, '')
@@ -215,7 +209,7 @@ export async function sendQQBotReaction(e, messageId, emojiId, isSet = true) {
             }
             return true
         }
-        
+
         // 群消息暂不支持表态
         logger.debug('[EventAdapter] QQBot群消息暂不支持表情表态')
         return false
@@ -234,7 +228,7 @@ export async function sendQQBotReaction(e, messageId, emojiId, isSet = true) {
 export async function getUserNickname(e, userId, bot = null) {
     if (!userId) return '未知用户'
     bot = bot || getBot(e)
-    
+
     try {
         // 优先从事件中获取
         if (e?.sender?.user_id == userId) {
@@ -245,7 +239,7 @@ export async function getUserNickname(e, userId, bot = null) {
         if (userInfo?.card || userInfo?.nickname) {
             return userInfo.card || userInfo.nickname
         }
-        
+
         return String(userId)
     } catch {
         return String(userId)
@@ -262,14 +256,14 @@ export function getGroupName(e, bot = null) {
         bot = bot || getBot(e)
         const groupId = e?.group_id
         if (!groupId) return '未知群'
-        
+
         // 从缓存获取
         const groupInfo = bot?.gl?.get(groupId) || bot?.group_map?.get?.(groupId)
         if (groupInfo?.group_name) return groupInfo.group_name
-        
+
         // 从事件获取
         if (e?.group_name) return e.group_name
-        
+
         return String(groupId)
     } catch {
         return String(e?.group_id || '未知群')
@@ -283,16 +277,16 @@ export function getGroupName(e, bot = null) {
  */
 export function parsePokeEvent(e) {
     const selfId = getBotSelfId(e)
-    
+
     // 被戳者 - 兼容多种属性名
     const targetId = e.target_id || e.poke_uid || e.target_uid || e.poked_uid || e.to_id
-    
-    // 操作者 - 兼容多种属性名  
+
+    // 操作者 - 兼容多种属性名
     const operatorId = e.operator_id || e.user_id || e.sender_id || e.from_id || e.action_uid
-    
+
     // 是否群聊
     const isGroup = !!(e.group_id || e.discuss_id)
-    
+
     return {
         targetId,
         operatorId,
@@ -316,22 +310,22 @@ export function parseReactionEvent(e) {
     const userId = e.user_id || e.operator_id || e.sender_id
     const targetId = e.target_id || e.sender_id || e.target_user_id
     const isAdd = !(
-        e.set === false || 
-        e.set === 'remove' || 
+        e.set === false ||
+        e.set === 'remove' ||
         e.set === 0 ||
-        e.sub_type === 'remove' || 
-        e.sub_type === 'cancel' || 
+        e.sub_type === 'remove' ||
+        e.sub_type === 'cancel' ||
         e.sub_type === 'delete' ||
-        e.is_set === false || 
+        e.is_set === false ||
         e.is_set === 0 ||
-        e.action === 'remove' || 
+        e.action === 'remove' ||
         e.action === 'cancel' ||
-        e.operate === 'remove' || 
+        e.operate === 'remove' ||
         e.operate === 'cancel' ||
-        e.type === 'remove' || 
+        e.type === 'remove' ||
         e.type === 'cancel'
     )
-    
+
     return {
         emojiId,
         messageId,
@@ -351,19 +345,19 @@ export function parseReactionEvent(e) {
 export function parseRecallEvent(e) {
     // 消息ID
     const messageId = e.message_id || e.msg_id || e.recall?.message_id
-    
+
     // 消息序号
     const seq = e.seq || e.message_seq || e.recall?.seq || e.rand
-    
+
     // 操作者 (撤回者)
     const operatorId = e.operator_id || e.recall?.operator_id
-    
+
     // 原消息发送者
     const senderId = e.user_id || e.recall?.user_id || e.sender_id
-    
+
     // 是否自己撤回自己的消息
     const isSelfRecall = operatorId === senderId
-    
+
     return {
         messageId,
         seq,
@@ -383,16 +377,16 @@ export function parseRecallEvent(e) {
 export function parseBanEvent(e) {
     // 被禁言者
     const userId = e.user_id || e.target_id
-    
+
     // 操作者
     const operatorId = e.operator_id || e.admin_id
-    
+
     // 禁言时长(秒)，0 表示解禁
     const duration = e.duration || e.time || 0
-    
+
     // 是否解禁
     const isLift = duration === 0 || e.sub_type === 'lift_ban' || e.sub_type === 'unban'
-    
+
     return {
         userId,
         operatorId,
@@ -412,26 +406,31 @@ export function parseBanEvent(e) {
 export function parseMemberChangeEvent(e) {
     // 变动的用户
     const userId = e.user_id || e.target_id
-    
+
     // 操作者 (踢人时有)
     const operatorId = e.operator_id || e.admin_id
-    
+
     // 事件类型
     let changeType = 'unknown'
     if (e.sub_type === 'approve' || e.sub_type === 'invite' || e.notice_type === 'group_increase') {
         changeType = 'increase'
-    } else if (e.sub_type === 'leave' || e.sub_type === 'kick' || e.sub_type === 'kick_me' || e.notice_type === 'group_decrease') {
+    } else if (
+        e.sub_type === 'leave' ||
+        e.sub_type === 'kick' ||
+        e.sub_type === 'kick_me' ||
+        e.notice_type === 'group_decrease'
+    ) {
         changeType = 'decrease'
     }
-    
+
     // 细分类型
     let subType = e.sub_type || 'unknown'
     if (changeType === 'increase') {
         subType = e.sub_type === 'invite' ? 'invite' : 'approve'
     } else if (changeType === 'decrease') {
-        subType = e.sub_type === 'kick' ? 'kick' : (e.sub_type === 'kick_me' ? 'kick_me' : 'leave')
+        subType = e.sub_type === 'kick' ? 'kick' : e.sub_type === 'kick_me' ? 'kick_me' : 'leave'
     }
-    
+
     return {
         userId,
         operatorId,
@@ -477,20 +476,20 @@ export function parseAdminChangeEvent(e) {
 export function parseHonorEvent(e) {
     // 荣誉类型
     const honorType = e.honor_type || e.sub_type
-    
+
     // 获得者
     const userId = e.user_id || e.target_id
-    
+
     // 荣誉名称映射
     const honorNames = {
-        'talkative': '龙王',
-        'performer': '群聊之火',
-        'legend': '群聊炽焰',
-        'strong_newbie': '冒尖小春笋',
-        'emotion': '快乐源泉',
-        'lucky_king': '运气王'
+        talkative: '龙王',
+        performer: '群聊之火',
+        legend: '群聊炽焰',
+        strong_newbie: '冒尖小春笋',
+        emotion: '快乐源泉',
+        lucky_king: '运气王'
     }
-    
+
     return {
         userId,
         honorType,
@@ -512,7 +511,7 @@ export async function getOriginalMessage(e, bot = null, messageCache = null) {
     bot = bot || getBot(e)
     const messageId = e.message_id || e.seq || e.msg_id
     const groupId = e.group_id
-    
+
     try {
         // 1. 从缓存获取
         if (messageCache && messageId) {
@@ -522,7 +521,7 @@ export async function getOriginalMessage(e, bot = null, messageCache = null) {
                 if (parsed.content) return parsed
             }
         }
-        
+
         // 2. 从事件自带字段获取
         const eventFields = ['message', 'recall', 'content', 'raw_message', 'recalled_message']
         for (const field of eventFields) {
@@ -532,14 +531,14 @@ export async function getOriginalMessage(e, bot = null, messageCache = null) {
                 if (parsed.content) return parsed
             }
         }
-        
+
         // 3. 通过 API 获取
         const msg = await getMessage(e, messageId, groupId)
         if (msg) {
             const parsed = parseMessageContent(msg.message || msg.raw_message)
             if (parsed.content) return parsed
         }
-        
+
         // 4. icqq: 通过历史记录获取
         if (bot?.pickGroup && groupId) {
             const group = bot.pickGroup(parseInt(groupId))
@@ -555,7 +554,7 @@ export async function getOriginalMessage(e, bot = null, messageCache = null) {
     } catch (err) {
         logger.debug(`[EventAdapter] 获取原消息失败: ${err.message}`)
     }
-    
+
     return { content: '', type: 'unknown' }
 }
 
@@ -574,7 +573,7 @@ export function parseMessageContent(message) {
         }
     }
     if (typeof message === 'string') return { content: message, type: 'text' }
-    
+
     if (!Array.isArray(message)) {
         if (message.text) return { content: message.text, type: 'text' }
         if (message.raw_message) return { content: message.raw_message, type: 'text' }
@@ -584,15 +583,15 @@ export function parseMessageContent(message) {
         }
         return { content: '', type: 'unknown' }
     }
-    
+
     const parts = []
     let msgType = 'text'
-    
+
     for (const seg of message) {
         if (!seg) continue
         const type = seg.type || seg.Type
         const data = seg.data || seg
-        
+
         switch (type) {
             case 'text':
                 if (data.text) parts.push(data.text)
@@ -641,7 +640,7 @@ export function parseMessageContent(message) {
                 else if (type) parts.push(`[${type}]`)
         }
     }
-    
+
     return { content: parts.join('') || '', type: msgType }
 }
 
@@ -652,18 +651,18 @@ export function parseMessageContent(message) {
  */
 export function formatDuration(seconds) {
     if (seconds <= 0) return '0秒'
-    
+
     const days = Math.floor(seconds / 86400)
     const hours = Math.floor((seconds % 86400) / 3600)
     const minutes = Math.floor((seconds % 3600) / 60)
     const secs = seconds % 60
-    
+
     const parts = []
     if (days > 0) parts.push(`${days}天`)
     if (hours > 0) parts.push(`${hours}小时`)
     if (minutes > 0) parts.push(`${minutes}分钟`)
     if (secs > 0 && days === 0) parts.push(`${secs}秒`)
-    
+
     return parts.join('') || '0秒'
 }
 
@@ -676,7 +675,7 @@ export function formatDuration(seconds) {
  */
 export async function sendGroupMessage(bot, groupId, message) {
     if (!message || !groupId) return false
-    
+
     try {
         // icqq
         const group = bot?.pickGroup?.(parseInt(groupId))
@@ -684,13 +683,13 @@ export async function sendGroupMessage(bot, groupId, message) {
             await group.sendMsg(message)
             return true
         }
-        
+
         // OneBot
         if (bot?.sendGroupMsg) {
             await bot.sendGroupMsg(parseInt(groupId), message)
             return true
         }
-        
+
         // OneBot 下划线命名
         if (bot?.send_group_msg) {
             await bot.send_group_msg({ group_id: parseInt(groupId), message })
@@ -699,7 +698,7 @@ export async function sendGroupMessage(bot, groupId, message) {
     } catch (err) {
         logger.warn(`[EventAdapter] 发送群消息失败: ${err.message}`)
     }
-    
+
     return false
 }
 
@@ -775,7 +774,7 @@ export function parseQQBotAuditEvent(e) {
 export function buildQQBotButtons(buttons, options = {}) {
     const rows = []
     let currentRow = []
-    
+
     for (const btn of buttons) {
         const button = {
             id: btn.id || String(Date.now() + Math.random()),
@@ -786,7 +785,7 @@ export function buildQQBotButtons(buttons, options = {}) {
             },
             action: {}
         }
-        
+
         // 按钮类型
         if (btn.link || btn.url) {
             // 链接按钮
@@ -804,30 +803,30 @@ export function buildQQBotButtons(buttons, options = {}) {
             button.action.enter = btn.send !== false
             button.action.permission = { type: 2 }
         }
-        
+
         // 权限设置
         if (btn.permission === 'admin') {
             button.action.permission = { type: 1 }
         } else if (Array.isArray(btn.permission)) {
-            button.action.permission = { 
-                type: 0, 
-                specify_user_ids: btn.permission 
+            button.action.permission = {
+                type: 0,
+                specify_user_ids: btn.permission
             }
         }
-        
+
         currentRow.push(button)
-        
+
         // 每行最多5个按钮
         if (currentRow.length >= 5) {
             rows.push({ type: 'button', buttons: currentRow })
             currentRow = []
         }
     }
-    
+
     if (currentRow.length > 0) {
         rows.push({ type: 'button', buttons: currentRow })
     }
-    
+
     return rows
 }
 
@@ -842,7 +841,7 @@ export function buildQQBotMarkdown(content, options = {}) {
         type: 'markdown',
         content: content
     }
-    
+
     // 使用模板
     if (options.templateId) {
         msg.custom_template_id = options.templateId
@@ -854,7 +853,7 @@ export function buildQQBotMarkdown(content, options = {}) {
         }
         delete msg.content
     }
-    
+
     return msg
 }
 
@@ -889,15 +888,16 @@ export function buildQQBotArk(config) {
             kv: [
                 { key: '#DESC#', value: config.desc || '' },
                 { key: '#PROMPT#', value: config.prompt || config.title || '' },
-                { key: '#LIST#', obj: (config.list || []).map(item => ({
-                    obj_kv: [
-                        { key: 'desc', value: item.desc || item.text || '' }
-                    ]
-                }))}
+                {
+                    key: '#LIST#',
+                    obj: (config.list || []).map(item => ({
+                        obj_kv: [{ key: 'desc', value: item.desc || item.text || '' }]
+                    }))
+                }
             ]
         }
     }
-    
+
     // Ark 24 - 文本+缩略图
     if (config.type === 'text' || config.template === 24) {
         return {
@@ -912,7 +912,7 @@ export function buildQQBotArk(config) {
             ]
         }
     }
-    
+
     // 自定义Ark
     return {
         type: 'ark',
@@ -930,7 +930,7 @@ export function buildQQBotArk(config) {
 export function getQQBotAvatarUrl(e, userId = null) {
     const bot = getBot(e)
     userId = userId || e.user_id || e.sender?.user_id
-    
+
     // 频道用户
     if (String(userId).startsWith('qg_')) {
         const realUserId = String(userId).replace(/^qg_/, '')
@@ -938,14 +938,14 @@ export function getQQBotAvatarUrl(e, userId = null) {
         const userInfo = bot?.fl?.get?.(userId)
         if (userInfo?.avatar) return userInfo.avatar
     }
-    
+
     // QQ用户 (通过appid)
     const appid = bot?.info?.appid || bot?.uin
     if (appid && userId) {
         const realUserId = String(userId).replace(/^\d+:/, '')
         return `https://q.qlogo.cn/qqapp/${appid}/${realUserId}/0`
     }
-    
+
     return ''
 }
 
@@ -956,27 +956,27 @@ export function getQQBotAvatarUrl(e, userId = null) {
  */
 export function getQQBotMessageType(e) {
     if (!isQQBotPlatform(e)) return e.message_type || 'unknown'
-    
+
     // 频道私信
     if (e.message_type === 'private' && e.sub_type !== 'friend') {
         return 'direct'
     }
-    
+
     // 频道消息
     if (e.group_id?.startsWith?.('qg_') || e.message_type === 'guild') {
         return 'guild'
     }
-    
+
     // QQ群消息
     if (e.group_id && !String(e.group_id).startsWith('qg_')) {
         return 'group'
     }
-    
+
     // QQ私聊
     if (e.message_type === 'private') {
         return 'private'
     }
-    
+
     return e.message_type || 'unknown'
 }
 
@@ -987,7 +987,7 @@ export default {
     sendReaction,
     sendQQBotReaction,
     sendGroupMessage,
-    
+
     // 信息获取
     getUserNickname,
     getGroupName,
@@ -995,7 +995,7 @@ export default {
     parseMessageContent,
     getQQBotAvatarUrl,
     getQQBotMessageType,
-    
+
     // 事件解析
     parsePokeEvent,
     parseReactionEvent,
@@ -1005,18 +1005,18 @@ export default {
     parseEssenceEvent,
     parseAdminChangeEvent,
     parseHonorEvent,
-    
+
     // QQBot事件解析
     parseQQBotGuildEvent,
     parseQQBotCallbackEvent,
     parseQQBotAuditEvent,
-    
+
     // QQBot消息构建
     buildQQBotButtons,
     buildQQBotMarkdown,
     buildQQBotEmbed,
     buildQQBotArk,
-    
+
     // 工具函数
     formatDuration
 }
