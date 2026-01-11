@@ -217,8 +217,10 @@ export const groupStatsTools = [
                 
                 const result = await qqWebApi.getSpeakRank(bot, groupId, weekly)
                 
-                if (result?.ec === 0 || result?.retcode === 0) {
-                    const list = result.list || result.data?.list || []
+                // 响应结构: { retcode: 0, data: { speakRank: [...] } }
+                // speakRank 中每个元素: { nickname, uin, active(连续活跃天数), msgCount(发言次数) }
+                if (result?.retcode === 0) {
+                    const list = result.data?.speakRank || []
                     return {
                         success: true,
                         group_id: groupId,
@@ -226,15 +228,16 @@ export const groupStatsTools = [
                         total_ranked: list.length,
                         rank_list: list.map((m, i) => ({
                             rank: i + 1,
-                            user_id: m.uin || m.user_id,
-                            nickname: m.nick || m.nickname,
-                            message_count: m.msg_count || m.msgCount || m.count
+                            user_id: m.uin,
+                            nickname: m.nickname,
+                            message_count: m.msgCount,
+                            active_days: m.active
                         })),
-                        _tip: 'rank从1开始，message_count是该时间段内的发言条数'
+                        _tip: 'rank从1开始，message_count是该时间段内的发言条数，active_days是连续活跃天数'
                     }
                 }
                 
-                return { success: false, error: result?.em || result?.msg || '获取发言榜单失败' }
+                return { success: false, error: result?.msg || '获取发言榜单失败', _debug: result }
             } catch (err) {
                 return { success: false, error: `获取发言榜单失败: ${err.message}` }
             }
