@@ -259,13 +259,14 @@ export const messageTools = [
 
     {
         name: 'send_private_message',
-        description: '发送私聊消息给指定用户',
+        description: '发送私聊消息给指定用户。如果不是好友，会尝试通过群临时会话发送（需要提供group_id或在群聊中使用）',
         inputSchema: {
             type: 'object',
             properties: {
                 user_id: { type: 'string', description: '目标用户的QQ号' },
                 message: { type: 'string', description: '文本消息内容' },
-                image_url: { type: 'string', description: '图片URL（可选）' }
+                image_url: { type: 'string', description: '图片URL（可选）' },
+                group_id: { type: 'string', description: '群号（非好友时用于发送临时消息，不填则使用当前群）' }
             },
             required: ['user_id']
         },
@@ -275,9 +276,38 @@ export const messageTools = [
                 if (dedupResult.isDuplicate) {
                     return { success: false, error: `检测到重复发送(${dedupResult.count}次)，已跳过`, skipped: true }
                 }
-                const bot = ctx.getBot()
+                const e = ctx.getEvent()
+                const isValidQQBot = b => {
+                    if (!b?.uin || !b?.pickFriend || !b?.pickGroup) return false
+                    const uin = b.uin
+                    if (uin === 'stdin' || (typeof uin === 'string' && !/^\d+$/.test(uin))) return false
+                    if (!b.gl) return false
+                    return true
+                }
+
+                let bot = null
+                // 优先从 e.bot 获取
+                if (isValidQQBot(e?.bot)) {
+                    bot = e.bot
+                }
+                // 尝试从 Bot 对象中查找 QQ bot
+                if (!bot && global.Bot) {
+                    // TRSS-Yunzai: Bot 是一个对象，key 是 uin
+                    for (const key of Object.keys(global.Bot)) {
+                        // 排除 stdin 和非数字 key
+                        if (key === 'stdin' || !/^\d+$/.test(key)) continue
+                        const b = global.Bot[key]
+                        if (isValidQQBot(b)) {
+                            bot = b
+                            break
+                        }
+                    }
+                }
+                if (!bot) {
+                    return { success: false, error: '无法获取有效的QQ Bot实例，请确保有QQ账号在线' }
+                }
+
                 const userId = parseInt(args.user_id)
-                const friend = bot.pickFriend(userId)
 
                 const msgParts = []
                 if (args.message) msgParts.push(args.message)
@@ -286,9 +316,108 @@ export const messageTools = [
                 if (msgParts.length === 0) {
                     return { success: false, error: '消息内容不能为空' }
                 }
-                const result = await friend.sendMsg(msgParts.length === 1 ? msgParts[0] : msgParts)
+
+                const msgContent = msgParts.length === 1 ? msgParts[0] : msgParts
+
+                // 检查是否为好友
+                let isFriend = false
+                try {
+                    if (bot.fl?.has) {
+                        isFriend = bot.fl.has(userId)
+                    } else if (bot.fl?.get) {
+                        isFriend = !!bot.fl.get(userId)
+                    } else if (bot.getFriendList) {
+                        const friendList = await bot.getFriendList()
+                        isFriend = friendList?.some?.(f => f.user_id === userId || f.uin === userId)
+                    }
+                } catch {}
+
+                // 如果是好友，直接发送私聊
+                if (isFriend) {
+                    const friend = bot.pickFriend(userId)
+                    const result = await friend.sendMsg(msgContent)
+                    if (args.message) recordSentMessage(args.message)
+                    return { success: true, message_id: result.message_id, user_id: userId, method: 'friend' }
+                }
+
+                // 非好友，尝试通过群临时会话发送
+                let groupId = parseInt(args.group_id) || e?.group_id || 0
+                if (!groupId) {
+                    try {
+                        // 获取bot的群列表
+                        let groupList = []
+                        if (bot.gl?.keys) {
+                            groupList = Array.from(bot.gl.keys())
+                        } else if (bot.gl?.forEach) {
+                            bot.gl.forEach((_, gid) => groupList.push(gid))
+                        } else if (bot.getGroupList) {
+                            const list = await bot.getGroupList()
+                            groupList = list?.map?.(g => g.group_id || g.gid) || []
+                        }
+
+                        // 遍历群，查找目标用户所在的群
+                        for (const gid of groupList) {
+                            try {
+                                const group = bot.pickGroup?.(gid)
+                                if (!group) continue
+
+                                // 检查用户是否在该群
+                                let memberExists = false
+                                if (group.pickMember) {
+                                    const member = group.pickMember(userId)
+                                    // 检查成员是否有效
+                                    if (member?.info || member?.sendMsg) {
+                                        memberExists = true
+                                    }
+                                }
+                                if (!memberExists && group.getMemberMap) {
+                                    try {
+                                        const memberMap = await group.getMemberMap()
+                                        memberExists = memberMap?.has?.(userId)
+                                    } catch {}
+                                }
+
+                                if (memberExists) {
+                                    groupId = gid
+                                    break
+                                }
+                            } catch {}
+                        }
+                    } catch (searchErr) {
+                        // 搜索失败，继续尝试直接发送
+                    }
+                }
+
+                // 如果还是没有群号，返回错误
+                if (!groupId) {
+                    return {
+                        success: false,
+                        error: '目标用户不是好友，且无法找到共同群用于发送临时消息。请添加好友或提供group_id参数',
+                        is_friend: false
+                    }
+                }
+
+                // 通过群临时会话发送
+                const group = bot.pickGroup?.(groupId)
+                if (!group) {
+                    return { success: false, error: '无法获取群对象' }
+                }
+
+                const member = group.pickMember?.(userId)
+                if (!member) {
+                    return { success: false, error: '无法获取群成员对象，可能该用户不在群内' }
+                }
+
+                const result = await member.sendMsg(msgContent)
                 if (args.message) recordSentMessage(args.message)
-                return { success: true, message_id: result.message_id, user_id: userId }
+                return {
+                    success: true,
+                    message_id: result?.message_id,
+                    user_id: userId,
+                    group_id: groupId,
+                    method: 'temp',
+                    note: '已通过群临时会话发送（自动搜索共同群）'
+                }
             } catch (err) {
                 return { success: false, error: `发送私聊消息失败: ${err.message}` }
             }
@@ -3465,95 +3594,6 @@ export const forwardDataTools = [
                 return result
             } catch (err) {
                 return { success: false, error: `获取消息记录失败: ${err.message}` }
-            }
-        }
-    },
-
-    {
-        name: 'send_temp_message',
-        description: '发送临时消息给群成员（通过群临时会话）。可通过QQ号或昵称查找目标用户。',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                user_id: { type: 'string', description: '目标用户QQ号' },
-                nickname: { type: 'string', description: '通过昵称/群名片查找用户（与user_id二选一）' },
-                message: { type: 'string', description: '消息内容' },
-                group_id: { type: 'string', description: '群号（不填则使用当前群）' },
-                image_url: { type: 'string', description: '图片URL（可选）' }
-            },
-            required: ['message']
-        },
-        handler: async (args, ctx) => {
-            try {
-                const e = ctx.getEvent()
-                const bot = ctx.getBot()
-
-                if (!bot) {
-                    return { success: false, error: '无法获取Bot实例' }
-                }
-
-                const groupId = parseInt(args.group_id || e?.group_id)
-                if (!groupId) {
-                    return { success: false, error: '需要指定群号或在群聊中使用' }
-                }
-
-                const group = bot.pickGroup?.(groupId)
-                if (!group) {
-                    return { success: false, error: '无法获取群对象' }
-                }
-
-                let targetId = args.user_id
-                let matchedName = null
-
-                // 通过昵称查找
-                if (args.nickname && !targetId) {
-                    const memberList = await getGroupMemberList({ bot, event: e, groupId })
-                    const result = findMemberByName(memberList, args.nickname)
-
-                    if (result) {
-                        targetId = String(result.member.user_id || result.member.uid)
-                        matchedName = result.member.card || result.member.nickname || result.member.nick
-                    } else {
-                        return { success: false, error: `未找到昵称"${args.nickname}"的群成员` }
-                    }
-                }
-
-                if (!targetId) {
-                    return { success: false, error: '必须提供 user_id 或 nickname 参数' }
-                }
-
-                const userId = parseInt(targetId)
-
-                // 通过群成员对象发送临时消息
-                const member = group.pickMember?.(userId)
-                if (!member) {
-                    return { success: false, error: '无法获取群成员对象，可能该用户不在群内' }
-                }
-
-                // 构建消息内容
-                const msgParts = []
-                if (args.message) msgParts.push(args.message)
-                if (args.image_url) msgParts.push(segment.image(args.image_url))
-
-                if (msgParts.length === 0) {
-                    return { success: false, error: '消息内容不能为空' }
-                }
-
-                // 发送临时消息
-                const result = await member.sendMsg(msgParts.length === 1 ? msgParts[0] : msgParts)
-
-                if (args.message) recordSentMessage(args.message)
-
-                return {
-                    success: true,
-                    message_id: result?.message_id,
-                    user_id: userId,
-                    group_id: groupId,
-                    matched_name: matchedName,
-                    note: '已通过群临时会话发送'
-                }
-            } catch (err) {
-                return { success: false, error: `发送临时消息失败: ${err.message}` }
             }
         }
     }
