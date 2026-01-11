@@ -5,8 +5,7 @@
  */
 
 import { qqWebApi, getGroupMemberList } from './helpers.js'
-import _logger from '../../core/utils/logger.js'
-const logger = _logger.tag("mcp-groupStats")
+import { formatTimeToBeiJing } from '../../utils/common.js'
 
 function requireGroupId(args, ctx) {
     const gid = args.group_id || ctx.getEvent?.()?.group_id || ctx.getEvent?.()?.group?.group_id
@@ -29,27 +28,44 @@ export const groupStatsTools = [
                 const bot = ctx.getBot()
                 const groupId = requireGroupId(args, ctx)
                 
-                logger.debug(`[groupStats] get_group_level 群号=${groupId}, bot.bkn=${bot.bkn}`)
-                logger.debug(`[groupStats] cookies: qun.qq.com=${bot.cookies?.['qun.qq.com'] ? '有' : '无'}, qqweb.qq.com=${bot.cookies?.['qqweb.qq.com'] ? '有' : '无'}`)
-                
-                if (!bot.cookies?.['qun.qq.com'] && !bot.cookies?.['qqweb.qq.com']) {
-                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
+                // 群星级 API 必须使用 qqweb.qq.com 的 cookie
+                if (!bot.cookies?.['qqweb.qq.com']) {
+                    return { success: false, error: '需要 qqweb.qq.com 的 cookie 才能获取群星级，当前协议可能不支持' }
                 }
                 
                 const result = await qqWebApi.getGroupLevel(bot, groupId)
-                logger.debug(`[groupStats] get_group_level 结果:`, JSON.stringify(result))
                 
-                if (result?.ec === 0 || result?.retcode === 0) {
+                // 响应结构: { ec: 0, info: { uiGroupLevel, group_name, group_uin, ... } }
+                if (result?.ec === 0 || result?.errcode === 0) {
+                    const info = result.info || {}
+                    const level = info.uiGroupLevel
+                    
+                    // 如果没有 uiGroupLevel 字段，说明该群没有星级数据
+                    if (level === undefined || level === null) {
+                        return {
+                            success: true,
+                            group_id: groupId,
+                            level: null,
+                            level_name: '无星级',
+                            group_name: info.group_name || '',
+                            group_uin: info.group_uin || groupId,
+                            group_owner: info.group_owner,
+                            group_role: info.group_role,
+                            _tip: '该群暂无星级数据，可能是新群、不活跃的群或未开启星级功能'
+                        }
+                    }
+                    
                     return {
                         success: true,
                         group_id: groupId,
-                        level: result.lv || result.level,
-                        level_name: result.lvName || result.level_name,
-                        credit: result.credit,
-                        active_member_count: result.activeNum,
-                        total_member_count: result.memberNum,
-                        rank: result.rank,
-                        _tip: '群星级从LV1到LV5，等级越高表示群越活跃'
+                        level: level,
+                        level_name: `LV${level}`,
+                        level_stars: '⭐'.repeat(level),
+                        group_name: info.group_name || '',
+                        group_uin: info.group_uin || groupId,
+                        group_owner: info.group_owner,
+                        group_role: info.group_role,
+                        _tip: '群星级从LV1到LV5，等级越高表示群越活跃。level_stars是星级的星星表示'
                     }
                 }
                 
@@ -80,6 +96,7 @@ export const groupStatsTools = [
                 
                 const result = await qqWebApi.getDragonKing(bot, groupId)
                 
+                // 响应结构: { uin, nick, avatar, avatar_size(连续天数) }
                 if (result) {
                     return {
                         success: true,
@@ -89,7 +106,7 @@ export const groupStatsTools = [
                             user_id: result.uin || result.user_id,
                             nickname: result.nick || result.nickname,
                             avatar: result.avatar,
-                            consecutive_days: result.day_count || result.dayCount
+                            consecutive_days: result.avatar_size || result.day_count || result.dayCount || 0
                         },
                         _tip: '龙王是当日群内发言最多的成员，consecutive_days表示连续蝉联天数'
                     }
@@ -128,6 +145,30 @@ export const groupStatsTools = [
                 
                 const result = await qqWebApi.getSignInToday(bot, groupId)
                 
+                // 响应结构: { retCode: 0, response: { page: [{ total, infos: [...] }] } }
+                // infos 中每个元素: { uid, uidGroupNick, signedTimeStamp }
+                if (result?.retCode === 0 || result?.response?.page) {
+                    const page = result.response?.page?.[0] || {}
+                    const list = page.infos || []
+                    const total = page.total || list.length
+                    
+                    return {
+                        success: true,
+                        group_id: groupId,
+                        signed_count: total,
+                        signed_members: list.map(m => {
+                            const ts = m.signedTimeStamp || m.signTime || m.sign_time || 0
+                            return {
+                                user_id: m.uid || m.uin || m.user_id,
+                                nickname: m.uidGroupNick || m.nick || m.nickname || '',
+                                sign_time: ts ? formatTimeToBeiJing(ts) : ''
+                            }
+                        }),
+                        _tip: 'sign_time是打卡时间(北京时间)，signed_count是今日打卡人数'
+                    }
+                }
+                
+                // 兼容其他可能的响应格式
                 if (result?.retcode === 0 || result?.data) {
                     const data = result.data || result
                     const list = data.signedList || data.list || []
@@ -135,16 +176,19 @@ export const groupStatsTools = [
                         success: true,
                         group_id: groupId,
                         signed_count: list.length,
-                        signed_members: list.map(m => ({
-                            user_id: m.uin || m.user_id,
-                            nickname: m.nick || m.nickname,
-                            sign_time: m.signTime || m.sign_time
-                        })),
-                        _tip: 'sign_time是打卡时间戳(秒)，signed_count是今日打卡人数'
+                        signed_members: list.map(m => {
+                            const ts = m.signTime || m.sign_time || 0
+                            return {
+                                user_id: m.uin || m.user_id || m.uid,
+                                nickname: m.nick || m.nickname || '',
+                                sign_time: ts ? formatTimeToBeiJing(ts) : ''
+                            }
+                        }),
+                        _tip: 'sign_time是打卡时间(北京时间)，signed_count是今日打卡人数'
                     }
                 }
                 
-                return { success: false, error: result?.msg || '获取打卡列表失败' }
+                return { success: false, error: result?.msg || result?.message || '获取打卡列表失败' }
             } catch (err) {
                 return { success: false, error: `获取打卡列表失败: ${err.message}` }
             }
@@ -262,25 +306,42 @@ export const groupStatsTools = [
                 
                 const result = await qqWebApi.getLuckyList(bot, groupId, 0, limit)
                 
-                if (result?.retcode === 0 || result?.word_list) {
-                    const list = result.word_list || result.data?.word_list || []
-                    const equipped = result.equip_info || result.data?.equip_info
+                if (result?.retcode === 0 || result?.data?.word_list || result?.word_list) {
+                    const data = result.data || result
+                    const list = data.word_list || []
+                    const equipped = data.equip_info
+                    
+                    // 解析字符列表 - 字段在 word_info 里: { wording, word_id, word_desc }
+                    const parsedWords = list.map(w => {
+                        const info = w.word_info || w
+                        return {
+                            word_id: info.word_id || w.word_id,
+                            word: info.wording || info.word || w.wording || w.word,
+                            word_desc: info.word_desc || w.word_desc || '',
+                            word_type: info.word_type || w.word_type,
+                            is_currently_equipped: w.is_equip || info.is_equip || false
+                        }
+                    })
+                    
+                    // 解析当前装备的字符
+                    let currentEquipped = null
+                    if (equipped) {
+                        const eqInfo = equipped.word_info || equipped
+                        currentEquipped = {
+                            word_id: eqInfo.word_id || equipped.word_id,
+                            word: eqInfo.wording || eqInfo.word || equipped.wording || equipped.word,
+                            word_desc: eqInfo.word_desc || equipped.word_desc || '',
+                            word_type: eqInfo.word_type || equipped.word_type
+                        }
+                    }
+                    
                     return {
                         success: true,
                         group_id: groupId,
-                        total_owned: list.length,
-                        currently_equipped: equipped ? {
-                            word_id: equipped.word_id,
-                            word: equipped.word,
-                            word_type: equipped.word_type
-                        } : null,
-                        owned_words: list.map(w => ({
-                            word_id: w.word_id,
-                            word: w.word,
-                            word_type: w.word_type,
-                            is_currently_equipped: w.is_equip || false
-                        })),
-                        _tip: 'word_id用于装备字符，currently_equipped是当前佩戴的字符，owned_words是所有已拥有的字符'
+                        total_owned: parsedWords.length,
+                        currently_equipped: currentEquipped,
+                        owned_words: parsedWords,
+                        _tip: 'word_id用于装备字符，word是字符文字，word_desc是寓意说明，currently_equipped是当前佩戴的字符'
                     }
                 }
                 
@@ -311,20 +372,37 @@ export const groupStatsTools = [
                 
                 const result = await qqWebApi.drawLucky(bot, groupId)
                 
+                // 响应结构: { retcode: 0, data: { word_info: { wording, word_id, word_desc } } }
+                // retcode 11004 表示今天已经抽过了
+                if (result?.retcode === 11004) {
+                    return { success: false, error: '今天已经抽过了，明天再来抽取吧' }
+                }
+                
                 if (result?.retcode === 0) {
                     const data = result.data || result
-                    return {
-                        success: true,
-                        group_id: groupId,
-                        drawn_word: data.word,
-                        word_id: data.word_id,
-                        word_type: data.word_type,
-                        is_new_word: data.is_new || false,
-                        _tip: 'is_new_word为true表示抽到了新字符，false表示抽到了重复的字符'
+                    const wordInfo = data.word_info?.word_info || data.word_info || data
+                    
+                    if (wordInfo?.wording || wordInfo?.word) {
+                        return {
+                            success: true,
+                            group_id: groupId,
+                            drawn_word: wordInfo.wording || wordInfo.word,
+                            word_id: wordInfo.word_id,
+                            word_desc: wordInfo.word_desc || '',
+                            is_new_word: data.is_new || false,
+                            _tip: 'drawn_word是抽到的字符，word_desc是寓意说明，is_new_word为true表示抽到了新字符'
+                        }
+                    } else {
+                        return {
+                            success: true,
+                            group_id: groupId,
+                            drawn_word: null,
+                            _tip: '抽取成功但没有获得字符'
+                        }
                     }
                 }
                 
-                return { success: false, error: result?.msg || '抽取失败，可能今日已抽取过' }
+                return { success: false, error: result?.msg || '抽取失败，可能今日已抽取过', _debug: result }
             } catch (err) {
                 return { success: false, error: `抽取幸运字符失败: ${err.message}` }
             }
@@ -391,6 +469,11 @@ export const groupStatsTools = [
                 
                 const result = await qqWebApi.switchLucky(bot, groupId, args.enable)
                 
+                // retcode 11111 表示重复开启或关闭
+                if (result?.retcode === 11111) {
+                    return { success: false, error: '重复开启或关闭，当前状态已经是' + (args.enable ? '开启' : '关闭') }
+                }
+                
                 if (result?.retcode === 0) {
                     return {
                         success: true,
@@ -400,7 +483,7 @@ export const groupStatsTools = [
                     }
                 }
                 
-                return { success: false, error: result?.msg || '设置失败，可能没有管理员权限' }
+                return { success: false, error: result?.msg || '设置失败，可能没有管理员权限', _debug: result }
             } catch (err) {
                 return { success: false, error: `设置幸运字符开关失败: ${err.message}` }
             }
@@ -448,14 +531,18 @@ export const groupStatsTools = [
                         return aTime - bTime
                     })
                     .slice(0, limit)
-                    .map(m => ({
-                        user_id: m.user_id || m.uin,
-                        nickname: m.nickname || m.nick || '',
-                        card: m.card || '',
-                        join_time: m.join_time || m.joinTime,
-                        last_speak_time: m.last_sent_time || m.last_speak_time || m.lastSpeakTime || 0,
-                        role: m.role || 'member'
-                    }))
+                    .map(m => {
+                        const joinTs = m.join_time || m.joinTime || 0
+                        const speakTs = m.last_sent_time || m.last_speak_time || m.lastSpeakTime || 0
+                        return {
+                            user_id: m.user_id || m.uin,
+                            nickname: m.nickname || m.nick || '',
+                            card: m.card || '',
+                            join_time: joinTs ? formatTimeToBeiJing(joinTs) : '',
+                            last_speak_time: speakTs ? formatTimeToBeiJing(speakTs) : '从未发言',
+                            role: m.role || 'member'
+                        }
+                    })
                 
                 return {
                     success: true,
@@ -464,7 +551,7 @@ export const groupStatsTools = [
                     group_total_members: memberList.length,
                     inactive_count: inactiveMembers.length,
                     inactive_members: inactiveMembers,
-                    _tip: 'last_speak_time为0表示从未发言，join_time是入群时间戳(秒)，role可能是owner/admin/member'
+                    _tip: 'last_speak_time显示最后发言时间或"从未发言"，join_time是入群时间，role可能是owner/admin/member'
                 }
             } catch (err) {
                 return { success: false, error: `获取不活跃成员失败: ${err.message}` }
@@ -510,13 +597,17 @@ export const groupStatsTools = [
                         return bTime - aTime
                     })
                     .slice(0, limit)
-                    .map(m => ({
-                        user_id: m.user_id || m.uin,
-                        nickname: m.nickname || m.nick || '',
-                        card: m.card || '',
-                        join_time: m.join_time || m.joinTime,
-                        last_speak_time: m.last_sent_time || m.last_speak_time || m.lastSpeakTime || 0
-                    }))
+                    .map(m => {
+                        const joinTs = m.join_time || m.joinTime || 0
+                        const speakTs = m.last_sent_time || m.last_speak_time || m.lastSpeakTime || 0
+                        return {
+                            user_id: m.user_id || m.uin,
+                            nickname: m.nickname || m.nick || '',
+                            card: m.card || '',
+                            join_time: joinTs ? formatTimeToBeiJing(joinTs) : '',
+                            last_speak_time: speakTs ? formatTimeToBeiJing(speakTs) : '从未发言'
+                        }
+                    })
                 
                 return {
                     success: true,
@@ -525,7 +616,7 @@ export const groupStatsTools = [
                     group_total_members: memberList.length,
                     new_member_count: recentMembers.length,
                     new_members: recentMembers,
-                    _tip: 'join_time是入群时间戳(秒)，last_speak_time为0表示入群后从未发言，列表按入群时间倒序排列(最新的在前)'
+                    _tip: 'join_time是入群时间，last_speak_time显示最后发言时间或"从未发言"，列表按入群时间倒序排列(最新的在前)'
                 }
             } catch (err) {
                 return { success: false, error: `获取最近入群成员失败: ${err.message}` }

@@ -7,10 +7,11 @@
   "main": "index.js",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.37.0",
-    "@napi-rs/canvas": "^0.1.68",
     "@google/generative-ai": "^0.21.0",
+    "@napi-rs/canvas": "^0.1.68",
     "axios": "^1.13.2",
     "better-sqlite3": "12.4.1",
+    "cheerio": "^1.1.2",
     "cookie-parser": "^1.4.7",
     "eventsource": "^4.1.0",
     "express": "^4.21.2",
