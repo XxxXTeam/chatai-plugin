@@ -137,6 +137,59 @@ export class McpManager {
         await this.loadServers()
         this.initialized = true
     }
+
+    /**
+     * 完全重新初始化 MCP 模块
+     * 清除所有状态并重新加载所有工具
+     * @returns {Promise<{success: boolean, tools: number, servers: number}>}
+     */
+    async reinit() {
+        logger.info('[MCP] 开始完全重新初始化...')
+
+        // 停止文件监听器
+        builtinMcpServer.stopFileWatcher()
+
+        // 断开所有外部服务器连接
+        for (const [name, server] of this.servers) {
+            if (!server.isBuiltin && !server.isCustomTools && server.client) {
+                try {
+                    await server.client.disconnect()
+                } catch (e) {
+                    logger.debug(`[MCP] 断开服务器 ${name} 失败:`, e.message)
+                }
+            }
+        }
+
+        // 清除所有状态
+        this.tools.clear()
+        this.servers.clear()
+        this.resources.clear()
+        this.prompts.clear()
+        this.toolResultCache.clear()
+        this.initialized = false
+        this.initPromise = null
+
+        // 重置 BuiltinMcpServer 状态
+        builtinMcpServer.initialized = false
+        builtinMcpServer.tools = []
+        builtinMcpServer.modularTools = []
+        builtinMcpServer.jsTools.clear()
+        builtinMcpServer.toolCategories = {}
+
+        // 重新初始化
+        await this.init()
+
+        const toolCount = this.tools.size
+        const serverCount = this.servers.size
+
+        logger.info(`[MCP] 重新初始化完成: ${toolCount} 个工具, ${serverCount} 个服务器`)
+
+        return {
+            success: true,
+            tools: toolCount,
+            servers: serverCount
+        }
+    }
     async initBuiltinServer() {
         try {
             await builtinMcpServer.init()
@@ -972,18 +1025,32 @@ export class McpManager {
 
     /**
      * 热重载所有工具
+     * 通过完全重新初始化 MCP 模块来实现真正的热重载
      * @returns {Promise<{success: boolean, modularCount: number, jsCount: number, totalCount: number}>}
      */
     async reloadAllTools() {
         try {
-            const result = await builtinMcpServer.reloadAllTools()
+            // 使用完全重新初始化来确保所有工具正确加载
+            const result = await this.reinit()
 
-            // 刷新工具列表
-            await this.refreshBuiltinTools()
-            await this.reloadJsTools()
+            // 统计工具数量
+            let modularCount = 0
+            let jsCount = 0
+            for (const [, tool] of this.tools) {
+                if (tool.isJsTool) {
+                    jsCount++
+                } else if (tool.isBuiltin) {
+                    modularCount++
+                }
+            }
 
-            logger.info(`[MCP] 热重载完成: 总计 ${result.totalCount} 个工具`)
-            return result
+            logger.info(`[MCP] 热重载完成: ${modularCount} 模块化工具, ${jsCount} JS工具`)
+            return {
+                success: true,
+                modularCount,
+                jsCount,
+                totalCount: result.tools
+            }
         } catch (error) {
             logger.error('[MCP] 热重载所有工具失败:', error)
             throw error

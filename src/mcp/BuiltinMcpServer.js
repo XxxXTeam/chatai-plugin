@@ -202,7 +202,7 @@ export class BuiltinMcpServer {
         this.modularTools = [] // 分割后的模块化工具
         this.toolCategories = {} // 工具类别信息
         this.initialized = false
-        this.fileWatcher = null // 文件监听器
+        this.fileWatchers = [] // 文件监听器列表
         this.watcherEnabled = false
         this.reloadDebounceTimer = null
     }
@@ -224,6 +224,11 @@ export class BuiltinMcpServer {
             this.jsTools.size,
             'JS工具'
         )
+
+        // 自动启动文件监听器
+        this.startFileWatcher().catch(err => {
+            logger.debug('[BuiltinMCP] 自动启动文件监听器失败:', err.message)
+        })
     }
 
     /**
@@ -472,41 +477,64 @@ export class BuiltinMcpServer {
     }
 
     /**
-     * 启动文件监听器，自动检测JS工具变化并热重载
+     * 启动文件监听器，自动检测工具文件变化并热重载
+     * 同时监听内置工具目录和自定义JS工具目录
      */
     async startFileWatcher() {
-        if (this.fileWatcher) {
+        if (this.fileWatchers.length > 0) {
             logger.debug('[BuiltinMCP] 文件监听器已在运行')
             return
         }
 
-        const toolsDir = path.join(__dirname, '../../data/tools')
-        if (!fs.existsSync(toolsDir)) {
-            fs.mkdirSync(toolsDir, { recursive: true })
+        // 需要监听的目录列表
+        const watchDirs = [
+            { path: path.join(__dirname, '../../data/tools'), name: 'JS工具目录' },
+            { path: path.join(__dirname, './tools'), name: '内置工具目录' }
+        ]
+
+        // 处理文件变化的回调
+        const handleFileChange = async (dirName, filename) => {
+            if (!filename || !filename.endsWith('.js')) return
+
+            // 防抖：避免短时间内多次触发重载
+            if (this.reloadDebounceTimer) {
+                clearTimeout(this.reloadDebounceTimer)
+            }
+
+            this.reloadDebounceTimer = setTimeout(async () => {
+                logger.info(`[BuiltinMCP] 检测到${dirName}文件变化: ${filename}, 触发完全重载...`)
+                try {
+                    // 动态导入 mcpManager 避免循环依赖
+                    const { mcpManager } = await import('./McpManager.js')
+                    await mcpManager.reinit()
+                    logger.info(`[BuiltinMCP] 完全重载完成`)
+                } catch (err) {
+                    logger.error('[BuiltinMCP] 完全重载失败:', err.message)
+                }
+            }, 500)
         }
 
         try {
-            this.fileWatcher = fs.watch(toolsDir, { persistent: false }, (eventType, filename) => {
-                if (!filename || !filename.endsWith('.js')) return
-
-                // 防抖：避免短时间内多次触发重载
-                if (this.reloadDebounceTimer) {
-                    clearTimeout(this.reloadDebounceTimer)
+            for (const dir of watchDirs) {
+                // 确保目录存在
+                if (!fs.existsSync(dir.path)) {
+                    if (dir.path.includes('data/tools')) {
+                        fs.mkdirSync(dir.path, { recursive: true })
+                    } else {
+                        logger.debug(`[BuiltinMCP] 目录不存在，跳过监听: ${dir.path}`)
+                        continue
+                    }
                 }
 
-                this.reloadDebounceTimer = setTimeout(async () => {
-                    logger.info(`[BuiltinMCP] 检测到文件变化: ${filename}, 自动热重载...`)
-                    try {
-                        await this.loadJsTools()
-                        logger.info(`[BuiltinMCP] 热重载完成: ${this.jsTools.size} 个JS工具`)
-                    } catch (err) {
-                        logger.error('[BuiltinMCP] 热重载失败:', err.message)
-                    }
-                }, 500)
-            })
+                const watcher = fs.watch(dir.path, { persistent: false }, (eventType, filename) => {
+                    handleFileChange(dir.name, filename)
+                })
 
-            this.watcherEnabled = true
-            logger.info(`[BuiltinMCP] 文件监听器已启动: ${toolsDir}`)
+                this.fileWatchers.push({ watcher, path: dir.path, name: dir.name })
+                logger.info(`[BuiltinMCP] 文件监听器已启动: ${dir.name} (${dir.path})`)
+            }
+
+            this.watcherEnabled = this.fileWatchers.length > 0
         } catch (err) {
             logger.error('[BuiltinMCP] 启动文件监听器失败:', err.message)
         }
@@ -516,11 +544,18 @@ export class BuiltinMcpServer {
      * 停止文件监听器
      */
     stopFileWatcher() {
-        if (this.fileWatcher) {
-            this.fileWatcher.close()
-            this.fileWatcher = null
+        if (this.fileWatchers.length > 0) {
+            for (const { watcher, name } of this.fileWatchers) {
+                try {
+                    watcher.close()
+                    logger.debug(`[BuiltinMCP] 已停止监听: ${name}`)
+                } catch (e) {
+                    logger.debug(`[BuiltinMCP] 停止监听失败: ${name}`, e.message)
+                }
+            }
+            this.fileWatchers = []
             this.watcherEnabled = false
-            logger.info('[BuiltinMCP] 文件监听器已停止')
+            logger.info('[BuiltinMCP] 所有文件监听器已停止')
         }
         if (this.reloadDebounceTimer) {
             clearTimeout(this.reloadDebounceTimer)
@@ -530,14 +565,15 @@ export class BuiltinMcpServer {
 
     /**
      * 获取文件监听器状态
-     * @returns {{enabled: boolean, watchPath: string}}
+     * @returns {{enabled: boolean, watchPaths: Array, jsToolsCount: number}}
      */
     getWatcherStatus() {
-        const toolsDir = path.join(__dirname, '../../data/tools')
         return {
             enabled: this.watcherEnabled,
-            watchPath: toolsDir,
-            jsToolsCount: this.jsTools.size
+            watchPaths: this.fileWatchers.map(w => ({ path: w.path, name: w.name })),
+            watchCount: this.fileWatchers.length,
+            jsToolsCount: this.jsTools.size,
+            modularToolsCount: this.modularTools.length
         }
     }
 

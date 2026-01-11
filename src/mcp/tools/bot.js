@@ -3,10 +3,6 @@
  * 支持 NapCat 和 icqq 的 Bot 信息 API
  * 参考: https://napcat.apifox.cn/226656952e0
  */
-
-/**
- * 调用 OneBot API (支持 NapCat/go-cqhttp)
- */
 async function callOneBotApi(bot, action, params = {}) {
     if (bot.sendApi) {
         return await bot.sendApi(action, params)
@@ -49,8 +45,6 @@ export const botTools = [
                         avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${uin}&s=640`
                     }
                 }
-
-                // 尝试 NapCat/go-cqhttp API
                 try {
                     const result = await callOneBotApi(bot, 'get_login_info', {})
                     const data = result?.data || result

@@ -508,12 +508,18 @@ router.post('/builtin/disable-all', async (req, res) => {
     }
 })
 
-// POST /reload-all - 热重载所有工具
+// POST /reload-all - 热重载所有工具（完全重新初始化MCP模块）
 router.post('/reload-all', async (req, res) => {
     try {
-        await mcpManager.init()
-        const result = await mcpManager.reloadAllTools()
-        res.json(ChaiteResponse.ok(result))
+        // 使用 reinit 完全重新初始化，确保所有工具（包括内置工具和JS工具）都被正确重载
+        const result = await mcpManager.reinit()
+        res.json(
+            ChaiteResponse.ok({
+                success: true,
+                ...result,
+                message: `重载完成: ${result.tools} 个工具, ${result.servers} 个服务器`
+            })
+        )
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
