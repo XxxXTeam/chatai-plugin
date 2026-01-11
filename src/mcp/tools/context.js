@@ -49,7 +49,7 @@ export const contextTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const { contextManager } = await import('../../services/ContextManager.js')
+                const { contextManager } = await import('../../services/llm/ContextManager.js')
                 await contextManager.init()
 
                 const e = ctx.getEvent()
@@ -95,8 +95,9 @@ export const contextTools = [
                     return { success: false, error: '需要确认清除操作' }
                 }
 
-                const { contextManager } = await import('../../services/ContextManager.js')
+                const { contextManager } = await import('../../services/llm/ContextManager.js')
                 const historyManager = (await import('../../core/utils/history.js')).default
+                const { presetManager } = await import('../../services/preset/PresetManager.js')
                 await contextManager.init()
 
                 const e = ctx.getEvent()
@@ -108,12 +109,26 @@ export const contextTools = [
                 }
 
                 const conversationId = contextManager.getConversationId(userId, groupId)
+
+                // 清除历史记录
                 await historyManager.deleteConversation(conversationId)
+
+                // 清除上下文状态
+                await contextManager.cleanContext(conversationId)
                 contextManager.clearSessionState(conversationId)
+                contextManager.clearQueue(conversationId)
+
+                // 清除群组缓存
+                if (groupId) {
+                    contextManager.clearGroupContextCache(groupId)
+                }
+
+                // 标记上下文已清除（防止后续请求仍携带旧上下文）
+                presetManager.markContextCleared(conversationId)
 
                 return {
                     success: true,
-                    message: '对话历史已清除',
+                    message: '对话历史已清除，新会话将开始',
                     conversation_id: conversationId
                 }
             } catch (err) {

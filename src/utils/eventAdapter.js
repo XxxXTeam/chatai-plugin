@@ -950,6 +950,74 @@ export function getQQBotAvatarUrl(e, userId = null) {
 }
 
 /**
+ * 检查事件处理概率
+ * 根据配置的概率决定是否触发事件处理
+ * @param {string} eventType - 事件类型 (poke, recall, ban, memberIncrease 等)
+ * @param {string} [groupId] - 群组ID，用于检查群组特定配置
+ * @returns {Promise<{shouldTrigger: boolean, probability: number, randomValue: number}>}
+ */
+export async function checkEventProbability(eventType, groupId = null) {
+    try {
+        const config = (await import('../../config/config.js')).default
+        const eventConfig = config.get('events') || {}
+
+        // 检查事件处理是否启用
+        if (eventConfig.enabled === false) {
+            return { shouldTrigger: false, probability: 0, randomValue: 0, reason: 'events disabled' }
+        }
+
+        // 检查该事件类型是否启用
+        const enabledEvents = eventConfig.enabledEvents || ['poke', 'reaction', 'groupIncrease']
+        if (!enabledEvents.includes(eventType)) {
+            return { shouldTrigger: false, probability: 0, randomValue: 0, reason: 'event type disabled' }
+        }
+
+        // 获取概率配置：优先使用事件特定概率，否则使用全局概率
+        const eventProbabilities = eventConfig.eventProbabilities || {}
+        let probability = eventProbabilities[eventType] ?? eventConfig.probability ?? 1.0
+
+        // 处理百分比格式
+        if (probability > 1) {
+            probability = probability / 100
+        }
+        probability = Math.max(0, Math.min(1, probability))
+
+        // 概率为0直接返回不触发
+        if (probability === 0) {
+            return { shouldTrigger: false, probability: 0, randomValue: 0, reason: 'probability is 0' }
+        }
+
+        // 概率为1直接返回触发
+        if (probability >= 1) {
+            return { shouldTrigger: true, probability: 1, randomValue: 0, reason: 'probability is 100%' }
+        }
+
+        // 进行概率判定
+        const randomValue = Math.random()
+        const shouldTrigger = randomValue <= probability
+
+        if (global.logger) {
+            global.logger.debug(
+                `[EventProbability] ${eventType}: random=${randomValue.toFixed(4)}, probability=${probability}, trigger=${shouldTrigger}`
+            )
+        }
+
+        return {
+            shouldTrigger,
+            probability,
+            randomValue,
+            reason: shouldTrigger ? 'probability check passed' : 'probability check failed'
+        }
+    } catch (err) {
+        // 出错时默认触发
+        if (global.logger) {
+            global.logger.debug(`[EventProbability] 检查失败: ${err.message}, 默认触发`)
+        }
+        return { shouldTrigger: true, probability: 1, randomValue: 0, reason: 'error fallback' }
+    }
+}
+
+/**
  * 检测QQBot消息类型
  * @param {Object} e - 事件对象
  * @returns {string} 'group' | 'private' | 'guild' | 'direct'
@@ -1018,5 +1086,6 @@ export default {
     buildQQBotArk,
 
     // 工具函数
-    formatDuration
+    formatDuration,
+    checkEventProbability
 }

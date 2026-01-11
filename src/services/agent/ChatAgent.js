@@ -215,6 +215,12 @@ export class ChatAgent {
         const historyLimit = config.get('context.autoContext.maxHistoryMessages') || 30
         let history = skipHistory ? [] : await contextManager.getContextHistory(conversationId, historyLimit)
 
+        // 检查是否是结束对话后的新会话，如果是则清空历史（防止旧上下文传递）
+        if (presetManager.isContextCleared(conversationId)) {
+            history = []
+            logger.debug(`[ChatAgent] 检测到结束对话标记，清空历史上下文: ${conversationId}`)
+        }
+
         // 获取作用域配置
         const scopeConfig = await this._getScopeConfig(groupId, cleanUserId, event)
         const { scopePresetId, scopeModelId, scopeFeatures } = scopeConfig

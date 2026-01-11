@@ -124,6 +124,28 @@ export const toolsApi = {
         api.post('/api/tools/builtin/category/toggle', { category, enabled }),
     toggleTool: (toolName: string, enabled: boolean) =>
         api.post('/api/tools/builtin/tool/toggle', { toolName, enabled }),
+    // 一键操作
+    enableAll: () => api.post('/api/tools/builtin/enable-all'),
+    disableAll: () => api.post('/api/tools/builtin/disable-all'),
+    reloadAll: () => api.post('/api/tools/reload-all'),
+    getStats: () => api.get('/api/tools/stats'),
+    // 危险工具管理
+    getDangerous: () => api.get('/api/tools/dangerous'),
+    updateDangerous: (data: { dangerousTools?: string[]; allowDangerous?: boolean }) =>
+        api.put('/api/tools/dangerous', data),
+    toggleDangerous: (toolName: string, isDangerous: boolean) =>
+        api.post('/api/tools/dangerous/toggle', { toolName, isDangerous }),
+    // 事件概率配置
+    getEventProbability: () => api.get('/api/tools/event-probability'),
+    updateEventProbability: (data: {
+        enabled?: boolean
+        probability?: number
+        enabledEvents?: string[]
+        eventProbabilities?: Record<string, number>
+    }) => api.put('/api/tools/event-probability', data),
+    // 文件监听器
+    getWatcherStatus: () => api.get('/api/tools/watcher/status'),
+    toggleWatcher: (enabled: boolean) => api.post('/api/tools/watcher/toggle', { enabled }),
     // 自定义工具
     getCustom: () => api.get('/api/tools/custom'),
     createCustom: (data: Record<string, unknown>) => api.post('/api/tools/custom', data),

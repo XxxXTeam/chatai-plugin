@@ -202,6 +202,9 @@ export class BuiltinMcpServer {
         this.modularTools = [] // 分割后的模块化工具
         this.toolCategories = {} // 工具类别信息
         this.initialized = false
+        this.fileWatcher = null // 文件监听器
+        this.watcherEnabled = false
+        this.reloadDebounceTimer = null
     }
 
     /**
@@ -315,6 +318,111 @@ export class BuiltinMcpServer {
         await this.loadModularTools()
         return { success: true, disabledTools }
     }
+
+    /**
+     * 一键启用所有内部工具
+     * @returns {Promise<{success: boolean, enabledCount: number}>}
+     */
+    async enableAllTools() {
+        await config.set('builtinTools.enabled', true)
+        await config.set('builtinTools.enabledCategories', Object.keys(this.toolCategories))
+        await config.set('builtinTools.disabledTools', [])
+        await this.loadModularTools()
+        const enabledCount = this.modularTools.length + this.jsTools.size
+        logger.info(`[BuiltinMCP] 一键启用所有工具: ${enabledCount} 个`)
+        return { success: true, enabledCount }
+    }
+
+    /**
+     * 一键禁用所有内部工具
+     * @returns {Promise<{success: boolean, disabledCount: number}>}
+     */
+    async disableAllTools() {
+        const allToolNames = this.modularTools.map(t => t.name)
+        for (const [name] of this.jsTools) {
+            allToolNames.push(name)
+        }
+        await config.set('builtinTools.disabledTools', allToolNames)
+        await this.loadModularTools()
+        logger.info(`[BuiltinMCP] 一键禁用所有工具: ${allToolNames.length} 个`)
+        return { success: true, disabledCount: allToolNames.length }
+    }
+
+    /**
+     * 热重载所有工具（模块化工具和JS工具）
+     * @returns {Promise<{success: boolean, modularCount: number, jsCount: number}>}
+     */
+    async reloadAllTools() {
+        logger.info('[BuiltinMCP] 开始热重载所有工具...')
+
+        // 重新加载模块化工具
+        this.modularTools = []
+        await this.loadModularTools()
+
+        // 重新加载JS工具
+        await this.loadJsTools()
+
+        const result = {
+            success: true,
+            modularCount: this.modularTools.length,
+            jsCount: this.jsTools.size,
+            totalCount: this.modularTools.length + this.jsTools.size
+        }
+
+        logger.info(`[BuiltinMCP] 热重载完成: ${result.modularCount} 模块化工具, ${result.jsCount} JS工具`)
+        return result
+    }
+
+    /**
+     * 获取工具启用状态统计
+     * @returns {{total: number, enabled: number, disabled: number, categories: Object}}
+     */
+    getToolStats() {
+        const builtinConfig = config.get('builtinTools') || {}
+        const disabledTools = builtinConfig.disabledTools || []
+        const enabledCategories = builtinConfig.enabledCategories || Object.keys(this.toolCategories)
+
+        let total = 0
+        let enabled = 0
+        let disabled = 0
+        const categoryStats = {}
+
+        for (const [key, categoryConfig] of Object.entries(this.toolCategories)) {
+            const isCategoryEnabled = enabledCategories.includes(key)
+            const tools = categoryConfig.tools || []
+            const categoryEnabled = tools.filter(t => isCategoryEnabled && !disabledTools.includes(t.name)).length
+            const categoryDisabled = tools.length - categoryEnabled
+
+            categoryStats[key] = {
+                name: categoryConfig.name,
+                total: tools.length,
+                enabled: categoryEnabled,
+                disabled: categoryDisabled,
+                isCategoryEnabled
+            }
+
+            total += tools.length
+            enabled += categoryEnabled
+            disabled += categoryDisabled
+        }
+
+        // 统计JS工具
+        const jsToolsEnabled = Array.from(this.jsTools.keys()).filter(name => !disabledTools.includes(name)).length
+        const jsToolsDisabled = this.jsTools.size - jsToolsEnabled
+
+        return {
+            total: total + this.jsTools.size,
+            enabled: enabled + jsToolsEnabled,
+            disabled: disabled + jsToolsDisabled,
+            categories: categoryStats,
+            jsTools: {
+                total: this.jsTools.size,
+                enabled: jsToolsEnabled,
+                disabled: jsToolsDisabled
+            }
+        }
+    }
+
     async loadJsTools() {
         const toolsDir = path.join(__dirname, '../../data/tools')
         logger.debug(`[BuiltinMCP] 加载JS工具: ${toolsDir}`)
@@ -361,6 +469,76 @@ export class BuiltinMcpServer {
         }
 
         logger.debug(`[BuiltinMCP] JS工具加载完成: ${this.jsTools.size}`)
+    }
+
+    /**
+     * 启动文件监听器，自动检测JS工具变化并热重载
+     */
+    async startFileWatcher() {
+        if (this.fileWatcher) {
+            logger.debug('[BuiltinMCP] 文件监听器已在运行')
+            return
+        }
+
+        const toolsDir = path.join(__dirname, '../../data/tools')
+        if (!fs.existsSync(toolsDir)) {
+            fs.mkdirSync(toolsDir, { recursive: true })
+        }
+
+        try {
+            this.fileWatcher = fs.watch(toolsDir, { persistent: false }, (eventType, filename) => {
+                if (!filename || !filename.endsWith('.js')) return
+
+                // 防抖：避免短时间内多次触发重载
+                if (this.reloadDebounceTimer) {
+                    clearTimeout(this.reloadDebounceTimer)
+                }
+
+                this.reloadDebounceTimer = setTimeout(async () => {
+                    logger.info(`[BuiltinMCP] 检测到文件变化: ${filename}, 自动热重载...`)
+                    try {
+                        await this.loadJsTools()
+                        logger.info(`[BuiltinMCP] 热重载完成: ${this.jsTools.size} 个JS工具`)
+                    } catch (err) {
+                        logger.error('[BuiltinMCP] 热重载失败:', err.message)
+                    }
+                }, 500)
+            })
+
+            this.watcherEnabled = true
+            logger.info(`[BuiltinMCP] 文件监听器已启动: ${toolsDir}`)
+        } catch (err) {
+            logger.error('[BuiltinMCP] 启动文件监听器失败:', err.message)
+        }
+    }
+
+    /**
+     * 停止文件监听器
+     */
+    stopFileWatcher() {
+        if (this.fileWatcher) {
+            this.fileWatcher.close()
+            this.fileWatcher = null
+            this.watcherEnabled = false
+            logger.info('[BuiltinMCP] 文件监听器已停止')
+        }
+        if (this.reloadDebounceTimer) {
+            clearTimeout(this.reloadDebounceTimer)
+            this.reloadDebounceTimer = null
+        }
+    }
+
+    /**
+     * 获取文件监听器状态
+     * @returns {{enabled: boolean, watchPath: string}}
+     */
+    getWatcherStatus() {
+        const toolsDir = path.join(__dirname, '../../data/tools')
+        return {
+            enabled: this.watcherEnabled,
+            watchPath: toolsDir,
+            jsToolsCount: this.jsTools.size
+        }
     }
 
     /**

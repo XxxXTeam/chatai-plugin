@@ -70,7 +70,8 @@ import {
     getOriginalMessage,
     sendGroupMessage,
     formatDuration,
-    getBot
+    getBot,
+    checkEventProbability
 } from '../src/utils/eventAdapter.js'
 const messageCache = new Map()
 const MESSAGE_CACHE_TTL = 5 * 60 * 1000
@@ -401,6 +402,13 @@ async function handleGroupEvent(eventType, e, bot) {
     // 检查群组级别的事件处理开关
     const isEnabled = await isGroupEventEnabled(e.group_id, globalEnabled)
     if (!isEnabled) return
+
+    // 事件概率检查
+    const probCheck = await checkEventProbability(eventType, e.group_id)
+    if (!probCheck.shouldTrigger) {
+        logger.debug(`[GroupEvents] ${eventType} 概率检查未通过: ${probCheck.reason}`)
+        return
+    }
 
     const botIds = getBotIds()
     const userId = e.user_id || e.operator_id

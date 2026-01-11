@@ -20,7 +20,8 @@ const router = express.Router()
 router.get('/list', async (req, res) => {
     try {
         await mcpManager.init()
-        const tools = mcpManager.getTools()
+        // 不应用配置过滤，返回全部工具（前端需要显示禁用状态）
+        const tools = mcpManager.getTools({ applyConfig: false })
         const customTools = config.get('customTools') || []
         res.json(ChaiteResponse.ok([...tools, ...customTools]))
     } catch (error) {
@@ -478,6 +479,217 @@ router.delete('/logs', async (req, res) => {
         const { toolCallStats } = await import('../stats/ToolCallStats.js')
         await toolCallStats.clear()
         res.json(ChaiteResponse.ok({ success: true }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// ==================== 一键操作 & 热重载 ====================
+
+// POST /builtin/enable-all - 一键启用所有工具
+router.post('/builtin/enable-all', async (req, res) => {
+    try {
+        await mcpManager.init()
+        const result = await mcpManager.enableAllTools()
+        res.json(ChaiteResponse.ok(result))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// POST /builtin/disable-all - 一键禁用所有工具
+router.post('/builtin/disable-all', async (req, res) => {
+    try {
+        await mcpManager.init()
+        const result = await mcpManager.disableAllTools()
+        res.json(ChaiteResponse.ok(result))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// POST /reload-all - 热重载所有工具
+router.post('/reload-all', async (req, res) => {
+    try {
+        await mcpManager.init()
+        const result = await mcpManager.reloadAllTools()
+        res.json(ChaiteResponse.ok(result))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// GET /stats - 获取工具统计信息
+router.get('/stats', async (req, res) => {
+    try {
+        await mcpManager.init()
+        const stats = mcpManager.getToolStats()
+        res.json(ChaiteResponse.ok(stats))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// ==================== 危险工具管理 ====================
+
+// GET /dangerous - 获取危险工具列表和配置
+router.get('/dangerous', async (req, res) => {
+    try {
+        const builtinConfig = config.get('builtinTools') || {}
+        const dangerousTools = builtinConfig.dangerousTools || []
+        const allowDangerous = builtinConfig.allowDangerous || false
+
+        // 获取所有工具并标记危险状态
+        await mcpManager.init()
+        const allTools = mcpManager.getTools({ applyConfig: false })
+        const toolsWithDangerStatus = allTools.map(t => ({
+            name: t.name,
+            description: t.description,
+            serverName: t.serverName,
+            isDangerous: dangerousTools.includes(t.name)
+        }))
+
+        res.json(
+            ChaiteResponse.ok({
+                allowDangerous,
+                dangerousTools,
+                tools: toolsWithDangerStatus
+            })
+        )
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// PUT /dangerous - 更新危险工具配置
+router.put('/dangerous', async (req, res) => {
+    try {
+        const { dangerousTools, allowDangerous } = req.body
+        const builtinConfig = config.get('builtinTools') || {}
+
+        if (dangerousTools !== undefined) {
+            builtinConfig.dangerousTools = dangerousTools
+        }
+        if (allowDangerous !== undefined) {
+            builtinConfig.allowDangerous = allowDangerous
+        }
+
+        config.set('builtinTools', builtinConfig)
+        await mcpManager.refreshBuiltinTools()
+
+        res.json(
+            ChaiteResponse.ok({
+                success: true,
+                dangerousTools: builtinConfig.dangerousTools,
+                allowDangerous: builtinConfig.allowDangerous
+            })
+        )
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// POST /dangerous/toggle - 切换单个工具的危险状态
+router.post('/dangerous/toggle', async (req, res) => {
+    try {
+        const { toolName, isDangerous } = req.body
+        if (!toolName) {
+            return res.status(400).json(ChaiteResponse.fail(null, 'toolName is required'))
+        }
+
+        const builtinConfig = config.get('builtinTools') || {}
+        let dangerousTools = builtinConfig.dangerousTools || []
+
+        if (isDangerous) {
+            if (!dangerousTools.includes(toolName)) {
+                dangerousTools.push(toolName)
+            }
+        } else {
+            dangerousTools = dangerousTools.filter(t => t !== toolName)
+        }
+
+        builtinConfig.dangerousTools = dangerousTools
+        config.set('builtinTools', builtinConfig)
+
+        res.json(
+            ChaiteResponse.ok({
+                success: true,
+                toolName,
+                isDangerous,
+                dangerousTools
+            })
+        )
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// ==================== 事件处理概率配置 ====================
+
+// GET /event-probability - 获取事件处理概率配置
+router.get('/event-probability', async (req, res) => {
+    try {
+        const eventConfig = config.get('events') || {}
+        res.json(
+            ChaiteResponse.ok({
+                enabled: eventConfig.enabled !== false,
+                probability: eventConfig.probability ?? 0.5,
+                enabledEvents: eventConfig.enabledEvents || ['poke', 'reaction', 'groupIncrease'],
+                eventProbabilities: eventConfig.eventProbabilities || {}
+            })
+        )
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// PUT /event-probability - 更新事件处理概率配置
+router.put('/event-probability', async (req, res) => {
+    try {
+        const { enabled, probability, enabledEvents, eventProbabilities } = req.body
+        const eventConfig = config.get('events') || {}
+
+        if (enabled !== undefined) eventConfig.enabled = enabled
+        if (probability !== undefined) eventConfig.probability = probability
+        if (enabledEvents !== undefined) eventConfig.enabledEvents = enabledEvents
+        if (eventProbabilities !== undefined) eventConfig.eventProbabilities = eventProbabilities
+
+        config.set('events', eventConfig)
+
+        res.json(
+            ChaiteResponse.ok({
+                success: true,
+                config: eventConfig
+            })
+        )
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// ==================== 文件监听状态 ====================
+
+// GET /watcher/status - 获取文件监听器状态
+router.get('/watcher/status', async (req, res) => {
+    try {
+        const status = builtinMcpServer.getWatcherStatus ? builtinMcpServer.getWatcherStatus() : { enabled: false }
+        res.json(ChaiteResponse.ok(status))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// POST /watcher/toggle - 切换文件监听器
+router.post('/watcher/toggle', async (req, res) => {
+    try {
+        const { enabled } = req.body
+        if (enabled) {
+            builtinMcpServer.startFileWatcher && (await builtinMcpServer.startFileWatcher())
+        } else {
+            builtinMcpServer.stopFileWatcher && builtinMcpServer.stopFileWatcher()
+        }
+        const status = builtinMcpServer.getWatcherStatus ? builtinMcpServer.getWatcherStatus() : { enabled }
+        res.json(ChaiteResponse.ok(status))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }

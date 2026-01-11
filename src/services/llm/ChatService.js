@@ -295,6 +295,12 @@ export class ChatService {
         // 获取默认预设配置
         await presetManager.init()
 
+        // 检查是否是结束对话后的新会话，如果是则清空历史（防止旧上下文传递）
+        if (presetManager.isContextCleared(conversationId)) {
+            history = []
+            logger.debug(`[ChatService] 检测到结束对话标记，清空历史上下文: ${conversationId}`)
+        }
+
         // 从ScopeManager获取群组/用户的预设配置（支持群聊和私聊）
         let scopePresetId = null
         let scopePresetSource = null

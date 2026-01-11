@@ -671,6 +671,24 @@ export class McpManager {
         if (!tool) {
             throw new Error(`Tool not found: ${name}`)
         }
+
+        // 危险工具拦截检查
+        const builtinConfig = config.get('builtinTools') || {}
+        const dangerousTools = builtinConfig.dangerousTools || []
+        if (dangerousTools.includes(name) && !builtinConfig.allowDangerous) {
+            logger.warn(`[MCP] 危险工具被拦截: ${name}`)
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: `工具 "${name}" 被标记为危险工具，已被拦截。如需使用，请在配置中启用 allowDangerous。`
+                    }
+                ],
+                isError: true,
+                isDangerousBlocked: true
+            }
+        }
+
         if (options.useCache) {
             const cacheKey = `${name}:${JSON.stringify(args)}`
             const cached = this.toolResultCache.get(cacheKey)
@@ -950,6 +968,96 @@ export class McpManager {
             logger.error('[MCP] JS 工具热重载失败:', error)
             throw error
         }
+    }
+
+    /**
+     * 热重载所有工具
+     * @returns {Promise<{success: boolean, modularCount: number, jsCount: number, totalCount: number}>}
+     */
+    async reloadAllTools() {
+        try {
+            const result = await builtinMcpServer.reloadAllTools()
+
+            // 刷新工具列表
+            await this.refreshBuiltinTools()
+            await this.reloadJsTools()
+
+            logger.info(`[MCP] 热重载完成: 总计 ${result.totalCount} 个工具`)
+            return result
+        } catch (error) {
+            logger.error('[MCP] 热重载所有工具失败:', error)
+            throw error
+        }
+    }
+
+    /**
+     * 一键启用所有内部工具
+     * @returns {Promise<{success: boolean, enabledCount: number}>}
+     */
+    async enableAllTools() {
+        try {
+            const result = await builtinMcpServer.enableAllTools()
+            await this.refreshBuiltinTools()
+            return result
+        } catch (error) {
+            logger.error('[MCP] 一键启用工具失败:', error)
+            throw error
+        }
+    }
+
+    /**
+     * 一键禁用所有内部工具
+     * @returns {Promise<{success: boolean, disabledCount: number}>}
+     */
+    async disableAllTools() {
+        try {
+            const result = await builtinMcpServer.disableAllTools()
+            await this.refreshBuiltinTools()
+            return result
+        } catch (error) {
+            logger.error('[MCP] 一键禁用工具失败:', error)
+            throw error
+        }
+    }
+
+    /**
+     * 切换工具类别启用状态
+     * @param {string} category - 类别名称
+     * @param {boolean} enabled - 是否启用
+     */
+    async toggleCategory(category, enabled) {
+        try {
+            const result = await builtinMcpServer.toggleCategory(category, enabled)
+            await this.refreshBuiltinTools()
+            return result
+        } catch (error) {
+            logger.error('[MCP] 切换工具类别失败:', error)
+            throw error
+        }
+    }
+
+    /**
+     * 切换单个工具启用状态
+     * @param {string} toolName - 工具名称
+     * @param {boolean} enabled - 是否启用
+     */
+    async toggleTool(toolName, enabled) {
+        try {
+            const result = await builtinMcpServer.toggleTool(toolName, enabled)
+            await this.refreshBuiltinTools()
+            return result
+        } catch (error) {
+            logger.error('[MCP] 切换工具状态失败:', error)
+            throw error
+        }
+    }
+
+    /**
+     * 获取工具启用状态统计
+     * @returns {{total: number, enabled: number, disabled: number, categories: Object, jsTools: Object}}
+     */
+    getToolStats() {
+        return builtinMcpServer.getToolStats()
     }
 
     /**
