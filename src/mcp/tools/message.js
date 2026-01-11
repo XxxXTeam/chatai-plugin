@@ -3467,5 +3467,94 @@ export const forwardDataTools = [
                 return { success: false, error: `获取消息记录失败: ${err.message}` }
             }
         }
+    },
+
+    {
+        name: 'send_temp_message',
+        description: '发送临时消息给群成员（通过群临时会话）。可通过QQ号或昵称查找目标用户。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                user_id: { type: 'string', description: '目标用户QQ号' },
+                nickname: { type: 'string', description: '通过昵称/群名片查找用户（与user_id二选一）' },
+                message: { type: 'string', description: '消息内容' },
+                group_id: { type: 'string', description: '群号（不填则使用当前群）' },
+                image_url: { type: 'string', description: '图片URL（可选）' }
+            },
+            required: ['message']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const e = ctx.getEvent()
+                const bot = ctx.getBot()
+
+                if (!bot) {
+                    return { success: false, error: '无法获取Bot实例' }
+                }
+
+                const groupId = parseInt(args.group_id || e?.group_id)
+                if (!groupId) {
+                    return { success: false, error: '需要指定群号或在群聊中使用' }
+                }
+
+                const group = bot.pickGroup?.(groupId)
+                if (!group) {
+                    return { success: false, error: '无法获取群对象' }
+                }
+
+                let targetId = args.user_id
+                let matchedName = null
+
+                // 通过昵称查找
+                if (args.nickname && !targetId) {
+                    const memberList = await getGroupMemberList({ bot, event: e, groupId })
+                    const result = findMemberByName(memberList, args.nickname)
+
+                    if (result) {
+                        targetId = String(result.member.user_id || result.member.uid)
+                        matchedName = result.member.card || result.member.nickname || result.member.nick
+                    } else {
+                        return { success: false, error: `未找到昵称"${args.nickname}"的群成员` }
+                    }
+                }
+
+                if (!targetId) {
+                    return { success: false, error: '必须提供 user_id 或 nickname 参数' }
+                }
+
+                const userId = parseInt(targetId)
+
+                // 通过群成员对象发送临时消息
+                const member = group.pickMember?.(userId)
+                if (!member) {
+                    return { success: false, error: '无法获取群成员对象，可能该用户不在群内' }
+                }
+
+                // 构建消息内容
+                const msgParts = []
+                if (args.message) msgParts.push(args.message)
+                if (args.image_url) msgParts.push(segment.image(args.image_url))
+
+                if (msgParts.length === 0) {
+                    return { success: false, error: '消息内容不能为空' }
+                }
+
+                // 发送临时消息
+                const result = await member.sendMsg(msgParts.length === 1 ? msgParts[0] : msgParts)
+
+                if (args.message) recordSentMessage(args.message)
+
+                return {
+                    success: true,
+                    message_id: result?.message_id,
+                    user_id: userId,
+                    group_id: groupId,
+                    matched_name: matchedName,
+                    note: '已通过群临时会话发送'
+                }
+            } catch (err) {
+                return { success: false, error: `发送临时消息失败: ${err.message}` }
+            }
+        }
     }
 ]

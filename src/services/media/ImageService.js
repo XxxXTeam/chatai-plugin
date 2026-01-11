@@ -190,11 +190,16 @@ export class ImageService {
             const controller = new AbortController()
             const timeoutId = setTimeout(() => controller.abort(), timeout)
 
+            // QQ图片需要特殊的 Referer
+            const isQQPic = url.includes('gchat.qpic.cn') || url.includes('c2cpicdw.qpic.cn')
+            const referer = isQQPic ? 'https://qzone.qq.com/' : undefined
+
             const response = await fetch(url, {
                 method: 'HEAD',
                 signal: controller.signal,
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    ...(referer && { Referer: referer })
                 }
             })
 
@@ -207,7 +212,8 @@ export class ImageService {
                     signal: AbortSignal.timeout(timeout),
                     headers: {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        Range: 'bytes=0-1024' // 只获取前1KB验证
+                        Range: 'bytes=0-1024', // 只获取前1KB验证
+                        ...(referer && { Referer: referer })
                     }
                 })
 
@@ -272,10 +278,15 @@ export class ImageService {
         }
 
         // HTTP下载
+        // QQ图片需要特殊的 Referer
+        const isQQPic = url.includes('gchat.qpic.cn') || url.includes('c2cpicdw.qpic.cn')
+        const referer = isQQPic ? 'https://qzone.qq.com/' : undefined
+
         const response = await fetch(url, {
             signal: AbortSignal.timeout(timeout),
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                ...(referer && { Referer: referer })
             }
         })
 
