@@ -197,7 +197,7 @@ export class bym extends plugin {
                     ? groupBymModel
                     : configBymModel && typeof configBymModel === 'string' && configBymModel.trim()
                       ? configBymModel
-                      : LlmService.selectModel({ isRoleplay: true })
+                      : LlmService.getModel()
 
             if (groupBymModel && groupBymModel.trim()) {
                 logger.debug(`[BYM] 使用群组独立模型: ${bymModel}`)

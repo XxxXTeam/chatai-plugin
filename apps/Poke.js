@@ -4,7 +4,7 @@
  */
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'
-import { parsePokeEvent, sendPoke, getUserNickname, getBot } from '../src/utils/eventAdapter.js'
+import { parsePokeEvent, sendPoke, getUserNickname, getBot, checkEventProbability } from '../src/utils/eventAdapter.js'
 
 /**
  * 调用AI生成响应
@@ -51,6 +51,13 @@ export class AI_Poke extends plugin {
 
         // 功能开关
         if (!config.get('features.poke.enabled')) {
+            return false
+        }
+
+        // 事件概率检查
+        const probCheck = await checkEventProbability('poke', e.group_id)
+        if (!probCheck.shouldTrigger) {
+            logger.debug(`[AI-Poke] 概率检查未通过: ${probCheck.reason}`)
             return false
         }
 

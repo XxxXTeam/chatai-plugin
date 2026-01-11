@@ -195,6 +195,12 @@ export default function GroupsPage() {
         goodbyePrompt: '',
         pokeEnabled: 'inherit' as 'inherit' | 'on' | 'off',
         pokeBack: false,
+        pokeProbability: 'inherit' as 'inherit' | number, // 戳一戳概率
+        // 事件概率配置
+        welcomeProbability: 'inherit' as 'inherit' | number, // 入群欢迎概率
+        goodbyeProbability: 'inherit' as 'inherit' | number, // 退群通知概率
+        recallEnabled: 'inherit' as 'inherit' | 'on' | 'off', // 撤回响应
+        recallProbability: 'inherit' as 'inherit' | number, // 撤回响应概率
         // 定时总结配置
         summaryPushEnabled: 'inherit' as 'inherit' | 'on' | 'off',
         summaryPushIntervalType: 'day' as 'day' | 'hour',
@@ -284,6 +290,11 @@ export default function GroupsPage() {
             goodbyePrompt: '',
             pokeEnabled: 'inherit',
             pokeBack: false,
+            pokeProbability: 'inherit' as 'inherit' | number,
+            welcomeProbability: 'inherit' as 'inherit' | number,
+            goodbyeProbability: 'inherit' as 'inherit' | number,
+            recallEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+            recallProbability: 'inherit' as 'inherit' | number,
             summaryPushEnabled: 'inherit',
             summaryPushIntervalType: 'day',
             summaryPushIntervalValue: 1,
@@ -350,6 +361,11 @@ export default function GroupsPage() {
                 goodbyePrompt: settings.goodbyePrompt || '',
                 pokeEnabled: settings.pokeEnabled === undefined ? 'inherit' : settings.pokeEnabled ? 'on' : 'off',
                 pokeBack: settings.pokeBack ?? false,
+                pokeProbability: settings.pokeProbability === undefined ? 'inherit' : settings.pokeProbability,
+                welcomeProbability: settings.welcomeProbability === undefined ? 'inherit' : settings.welcomeProbability,
+                goodbyeProbability: settings.goodbyeProbability === undefined ? 'inherit' : settings.goodbyeProbability,
+                recallEnabled: settings.recallEnabled === undefined ? 'inherit' : settings.recallEnabled ? 'on' : 'off',
+                recallProbability: settings.recallProbability === undefined ? 'inherit' : settings.recallProbability,
                 summaryPushEnabled:
                     settings.summaryPushEnabled === undefined ? 'inherit' : settings.summaryPushEnabled ? 'on' : 'off',
                 summaryPushIntervalType: settings.summaryPushIntervalType || 'day',
@@ -415,6 +431,11 @@ export default function GroupsPage() {
                 goodbyePrompt: form.goodbyePrompt || undefined,
                 pokeEnabled: form.pokeEnabled === 'inherit' ? undefined : form.pokeEnabled === 'on',
                 pokeBack: form.pokeBack,
+                pokeProbability: form.pokeProbability === 'inherit' ? undefined : form.pokeProbability,
+                welcomeProbability: form.welcomeProbability === 'inherit' ? undefined : form.welcomeProbability,
+                goodbyeProbability: form.goodbyeProbability === 'inherit' ? undefined : form.goodbyeProbability,
+                recallEnabled: form.recallEnabled === 'inherit' ? undefined : form.recallEnabled === 'on',
+                recallProbability: form.recallProbability === 'inherit' ? undefined : form.recallProbability,
                 summaryPushEnabled:
                     form.summaryPushEnabled === 'inherit' ? undefined : form.summaryPushEnabled === 'on',
                 summaryPushIntervalType: form.summaryPushIntervalType,
@@ -828,6 +849,29 @@ export default function GroupsPage() {
                             </div>
                             {form.welcomeEnabled === 'on' && (
                                 <div className="space-y-2 pl-6">
+                                    <div className="flex items-center gap-2">
+                                        <Label className="text-xs w-20">触发概率</Label>
+                                        <Input
+                                            type="number"
+                                            min={0}
+                                            max={100}
+                                            className="w-20 h-7 text-xs"
+                                            placeholder="继承"
+                                            value={
+                                                form.welcomeProbability === 'inherit'
+                                                    ? ''
+                                                    : Math.round((form.welcomeProbability as number) * 100)
+                                            }
+                                            onChange={e => {
+                                                const val = e.target.value
+                                                setForm({
+                                                    ...form,
+                                                    welcomeProbability: val === '' ? 'inherit' : Number(val) / 100
+                                                })
+                                            }}
+                                        />
+                                        <span className="text-xs text-muted-foreground">%</span>
+                                    </div>
                                     <div className="space-y-1">
                                         <Label className="text-xs">固定欢迎语</Label>
                                         <Textarea
@@ -876,15 +920,40 @@ export default function GroupsPage() {
                                 </Select>
                             </div>
                             {form.goodbyeEnabled === 'on' && (
-                                <div className="space-y-1 pl-6">
-                                    <Label className="text-xs">AI告别提示词</Label>
-                                    <Textarea
-                                        value={form.goodbyePrompt}
-                                        placeholder="为离开成员生成告别消息时的提示..."
-                                        onChange={e => setForm({ ...form, goodbyePrompt: e.target.value })}
-                                        rows={2}
-                                        className="text-sm"
-                                    />
+                                <div className="space-y-2 pl-6">
+                                    <div className="flex items-center gap-2">
+                                        <Label className="text-xs w-20">触发概率</Label>
+                                        <Input
+                                            type="number"
+                                            min={0}
+                                            max={100}
+                                            className="w-20 h-7 text-xs"
+                                            placeholder="继承"
+                                            value={
+                                                form.goodbyeProbability === 'inherit'
+                                                    ? ''
+                                                    : Math.round((form.goodbyeProbability as number) * 100)
+                                            }
+                                            onChange={e => {
+                                                const val = e.target.value
+                                                setForm({
+                                                    ...form,
+                                                    goodbyeProbability: val === '' ? 'inherit' : Number(val) / 100
+                                                })
+                                            }}
+                                        />
+                                        <span className="text-xs text-muted-foreground">%</span>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <Label className="text-xs">AI告别提示词</Label>
+                                        <Textarea
+                                            value={form.goodbyePrompt}
+                                            placeholder="为离开成员生成告别消息时的提示..."
+                                            onChange={e => setForm({ ...form, goodbyePrompt: e.target.value })}
+                                            rows={2}
+                                            className="text-sm"
+                                        />
+                                    </div>
                                 </div>
                             )}
                         </div>
@@ -913,12 +982,87 @@ export default function GroupsPage() {
                                 </Select>
                             </div>
                             {form.pokeEnabled === 'on' && (
+                                <div className="space-y-2 pl-6">
+                                    <div className="flex items-center gap-2">
+                                        <Label className="text-xs w-20">触发概率</Label>
+                                        <Input
+                                            type="number"
+                                            min={0}
+                                            max={100}
+                                            className="w-20 h-7 text-xs"
+                                            placeholder="继承"
+                                            value={
+                                                form.pokeProbability === 'inherit'
+                                                    ? ''
+                                                    : Math.round((form.pokeProbability as number) * 100)
+                                            }
+                                            onChange={e => {
+                                                const val = e.target.value
+                                                setForm({
+                                                    ...form,
+                                                    pokeProbability: val === '' ? 'inherit' : Number(val) / 100
+                                                })
+                                            }}
+                                        />
+                                        <span className="text-xs text-muted-foreground">%</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <Switch
+                                            checked={form.pokeBack}
+                                            onCheckedChange={v => setForm({ ...form, pokeBack: v })}
+                                        />
+                                        <Label className="text-xs">戳回去（而非文字回复）</Label>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* 撤回响应 */}
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <MessageSquare className="h-4 w-4 text-orange-500" />
+                                    <Label className="text-sm font-medium">撤回响应</Label>
+                                </div>
+                                <Select
+                                    value={form.recallEnabled}
+                                    onValueChange={(v: 'inherit' | 'on' | 'off') =>
+                                        setForm({ ...form, recallEnabled: v })
+                                    }
+                                >
+                                    <SelectTrigger className="w-24">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="inherit">继承</SelectItem>
+                                        <SelectItem value="on">开启</SelectItem>
+                                        <SelectItem value="off">关闭</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            {form.recallEnabled === 'on' && (
                                 <div className="flex items-center gap-2 pl-6">
-                                    <Switch
-                                        checked={form.pokeBack}
-                                        onCheckedChange={v => setForm({ ...form, pokeBack: v })}
+                                    <Label className="text-xs w-20">触发概率</Label>
+                                    <Input
+                                        type="number"
+                                        min={0}
+                                        max={100}
+                                        className="w-20 h-7 text-xs"
+                                        placeholder="继承"
+                                        value={
+                                            form.recallProbability === 'inherit'
+                                                ? ''
+                                                : Math.round((form.recallProbability as number) * 100)
+                                        }
+                                        onChange={e => {
+                                            const val = e.target.value
+                                            setForm({
+                                                ...form,
+                                                recallProbability: val === '' ? 'inherit' : Number(val) / 100
+                                            })
+                                        }}
                                     />
-                                    <Label className="text-xs">戳回去（而非文字回复）</Label>
+                                    <span className="text-xs text-muted-foreground">%</span>
                                 </div>
                             )}
                         </div>
@@ -1729,74 +1873,6 @@ export default function GroupsPage() {
                             </div>
                         )}
                     </div>
-                </div>
-
-                {/* 定时总结推送配置 */}
-                <div className="space-y-3 pt-2">
-                    <div className="flex items-center gap-2">
-                        <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                        <Label>定时总结推送</Label>
-                    </div>
-                    <p className="text-xs text-muted-foreground">配置自动推送群聊总结</p>
-
-                    <div className="flex items-center justify-between">
-                        <Label className="text-sm">启用定时推送</Label>
-                        <Select
-                            value={form.summaryPushEnabled}
-                            onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, summaryPushEnabled: v })}
-                        >
-                            <SelectTrigger className="w-24">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="inherit">继承</SelectItem>
-                                <SelectItem value="on">开启</SelectItem>
-                                <SelectItem value="off">关闭</SelectItem>
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    {form.summaryPushEnabled === 'on' && (
-                        <div className="grid grid-cols-3 gap-2">
-                            <div className="space-y-1">
-                                <Label className="text-xs">间隔类型</Label>
-                                <Select
-                                    value={form.summaryPushIntervalType}
-                                    onValueChange={(v: 'day' | 'hour') =>
-                                        setForm({ ...form, summaryPushIntervalType: v })
-                                    }
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="day">天</SelectItem>
-                                        <SelectItem value="hour">小时</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-1">
-                                <Label className="text-xs">间隔值</Label>
-                                <Input
-                                    type="number"
-                                    min={1}
-                                    value={form.summaryPushIntervalValue}
-                                    onChange={e =>
-                                        setForm({ ...form, summaryPushIntervalValue: parseInt(e.target.value) || 1 })
-                                    }
-                                />
-                            </div>
-                            <div className="space-y-1">
-                                <Label className="text-xs">推送时间</Label>
-                                <Input
-                                    type="number"
-                                    min={0}
-                                    max={23}
-                                    value={form.summaryPushHour}
-                                    onChange={e => setForm({ ...form, summaryPushHour: parseInt(e.target.value) || 0 })}
-                                />
-                            </div>
-                        </div>
-                    )}
                 </div>
             </TabsContent>
         </Tabs>
