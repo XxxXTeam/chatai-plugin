@@ -5,8 +5,8 @@
  */
 
 import { qqWebApi, getGroupMemberList } from './helpers.js'
-import { createLogger } from '../../core/utils/logger.js'
-const logger = createLogger('mcp-groupStats')
+import _logger from '../../core/utils/logger.js'
+const logger = _logger.tag("mcp-groupStats")
 
 function requireGroupId(args, ctx) {
     const gid = args.group_id || ctx.getEvent?.()?.group_id || ctx.getEvent?.()?.group?.group_id

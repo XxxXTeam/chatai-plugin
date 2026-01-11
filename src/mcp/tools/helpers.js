@@ -2,8 +2,8 @@
  * MCP 工具辅助函数
  */
 
-import { createLogger } from '../../core/utils/logger.js'
-const logger = createLogger('mcp-helpers')
+import _logger from '../../core/utils/logger.js'
+const logger = _logger.tag("mcp-helper")
 
 /**
  * icqq 群操作封装
