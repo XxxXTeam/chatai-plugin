@@ -106,7 +106,7 @@ export const groupStatsTools = [
                             user_id: result.uin || result.user_id,
                             nickname: result.nick || result.nickname,
                             avatar: result.avatar,
-                            consecutive_days: result.avatar_size || result.day_count || result.dayCount || 0
+                            consecutive_days: result.day_count || "获取失败"
                         },
                         _tip: '龙王是当日群内发言最多的成员，consecutive_days表示连续蝉联天数'
                     }
