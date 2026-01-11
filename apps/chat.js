@@ -631,7 +631,11 @@ export class Chat extends plugin {
         for (const item of response) {
             switch (item.type) {
                 case 'text':
-                    if (item.text?.trim()) messages.push(item.text)
+                    if (item.text?.trim()) {
+                        // 处理 @+数字 模式，转换为真实at
+                        const processedParts = this.processAtMentions(item.text)
+                        messages.push(...processedParts)
+                    }
                     break
                 case 'image':
                 case 'image_url':
@@ -656,6 +660,158 @@ export class Chat extends plugin {
             }
         }
         return messages.length > 0 ? messages : null
+    }
+
+    /**
+     * 处理文本中的 @+数字 或 @+名字 模式，转换为真实at
+     * @param {string} text - 原始文本
+     * @returns {Array} 处理后的消息片段数组
+     */
+    processAtMentions(text) {
+        const e = this.e
+        if (!e?.isGroup || !e?.group_id) {
+            // 非群聊环境，直接返回原文本
+            return [text]
+        }
+
+        // 匹配 @数字 或 @名字 的模式（非真实at段）
+        // 格式: @123456789 或 @昵称
+        const atPattern = /@(\d{5,12}|[^\s@]{1,20})(?=\s|$|[，。！？,\.!?])/g
+
+        const parts = []
+        let lastIndex = 0
+        let match
+
+        while ((match = atPattern.exec(text)) !== null) {
+            const fullMatch = match[0]
+            const target = match[1]
+            const matchStart = match.index
+
+            // 添加匹配前的文本
+            if (matchStart > lastIndex) {
+                parts.push(text.slice(lastIndex, matchStart))
+            }
+
+            // 判断是数字还是名字
+            const isNumeric = /^\d+$/.test(target)
+            let atSegment = null
+
+            if (isNumeric) {
+                // 数字：直接作为QQ号尝试at
+                const userId = parseInt(target)
+                // 尝试验证用户是否在群内
+                const memberInGroup = this.findMemberInGroup(userId)
+                if (memberInGroup) {
+                    atSegment = segment.at(userId)
+                }
+            } else {
+                // 名字：尝试在群内查找
+                const foundMember = this.findMemberByName(target)
+                if (foundMember) {
+                    atSegment = segment.at(foundMember.user_id || foundMember.uid)
+                }
+            }
+
+            if (atSegment) {
+                parts.push(atSegment)
+            } else {
+                // 找不到用户，保留原文本
+                parts.push(fullMatch)
+            }
+
+            lastIndex = matchStart + fullMatch.length
+        }
+
+        // 添加剩余文本
+        if (lastIndex < text.length) {
+            parts.push(text.slice(lastIndex))
+        }
+
+        return parts.length > 0 ? parts : [text]
+    }
+
+    /**
+     * 在群内查找成员（通过QQ号）
+     * @param {number} userId - 用户QQ号
+     * @returns {Object|null} 成员信息
+     */
+    findMemberInGroup(userId) {
+        const e = this.e
+        if (!e?.group?.getMemberMap) {
+            // 尝试通过bot获取
+            const bot = e?.bot || Bot
+            const group = bot?.pickGroup?.(e.group_id)
+            if (group?.getMemberMap) {
+                try {
+                    // 同步方式获取（如果有缓存）
+                    const memberMap = group.gml || group._memberMap
+                    if (memberMap instanceof Map) {
+                        return memberMap.get(userId) || null
+                    }
+                } catch {}
+            }
+            return null
+        }
+        try {
+            const memberMap = e.group.gml || e.group._memberMap
+            if (memberMap instanceof Map) {
+                return memberMap.get(userId) || null
+            }
+        } catch {}
+        return null
+    }
+
+    /**
+     * 通过名字在群内查找成员
+     * @param {string} name - 昵称或群名片
+     * @returns {Object|null} 成员信息
+     */
+    findMemberByName(name) {
+        const e = this.e
+        if (!name) return null
+
+        const searchName = name.toLowerCase().trim()
+        let memberMap = null
+
+        // 获取成员Map
+        if (e?.group?.gml instanceof Map) {
+            memberMap = e.group.gml
+        } else if (e?.group?._memberMap instanceof Map) {
+            memberMap = e.group._memberMap
+        } else {
+            const bot = e?.bot || Bot
+            const group = bot?.pickGroup?.(e.group_id)
+            if (group?.gml instanceof Map) {
+                memberMap = group.gml
+            } else if (group?._memberMap instanceof Map) {
+                memberMap = group._memberMap
+            }
+        }
+
+        if (!memberMap) return null
+
+        // 遍历查找
+        for (const [uid, member] of memberMap) {
+            const card = (member.card || '').toLowerCase()
+            const nickname = (member.nickname || member.nick || '').toLowerCase()
+
+            // 精确匹配
+            if (card === searchName || nickname === searchName) {
+                return { ...member, user_id: uid }
+            }
+        }
+
+        // 模糊匹配
+        for (const [uid, member] of memberMap) {
+            const card = (member.card || '').toLowerCase()
+            const nickname = (member.nickname || member.nick || '').toLowerCase()
+
+            if (card.includes(searchName) || nickname.includes(searchName)) {
+                return { ...member, user_id: uid }
+            }
+        }
+
+        return null
     }
 
     /**

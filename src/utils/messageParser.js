@@ -366,11 +366,27 @@ export async function parseUserMessage(e, options = {}) {
                     if (imgUrl) {
                         try {
                             if (imgUrl.startsWith('http')) {
-                                contents.push({
-                                    type: 'image_url',
-                                    image_url: { url: imgUrl },
-                                    source: 'message'
-                                })
+                                // QQ图片需要预先下载（需要特殊referer）
+                                if (isQQPicUrl(imgUrl)) {
+                                    const imageData = await fetchImage(imgUrl)
+                                    if (imageData) {
+                                        contents.push({
+                                            type: 'image',
+                                            image: imageData.base64,
+                                            mimeType: imageData.mimeType,
+                                            source: 'message'
+                                        })
+                                    } else {
+                                        // 下载失败时记录文本
+                                        text += `[图片:${imgUrl.substring(0, 50)}...]`
+                                    }
+                                } else {
+                                    contents.push({
+                                        type: 'image_url',
+                                        image_url: { url: imgUrl },
+                                        source: 'message'
+                                    })
+                                }
                             } else if (imgUrl.startsWith('file://') || imgUrl.startsWith('/')) {
                                 const imageData = await fetchImage(imgUrl)
                                 if (imageData) {
@@ -1021,11 +1037,26 @@ async function parseReplyMessage(e, options) {
                             try {
                                 // 优先使用URL直接传递
                                 if (imgUrl.startsWith('http')) {
-                                    contents.push({
-                                        type: 'image_url',
-                                        image_url: { url: imgUrl },
-                                        source: 'reply'
-                                    })
+                                    // QQ图片需要预先下载（需要特殊referer）
+                                    if (isQQPicUrl(imgUrl)) {
+                                        const imageData = await fetchImage(imgUrl)
+                                        if (imageData) {
+                                            contents.push({
+                                                type: 'image',
+                                                image: imageData.base64,
+                                                mimeType: imageData.mimeType,
+                                                source: 'reply'
+                                            })
+                                        } else {
+                                            replyTextContent += `[图片:${imgUrl.substring(0, 30)}...]`
+                                        }
+                                    } else {
+                                        contents.push({
+                                            type: 'image_url',
+                                            image_url: { url: imgUrl },
+                                            source: 'reply'
+                                        })
+                                    }
                                 } else if (imgUrl.startsWith('file://') || imgUrl.startsWith('/')) {
                                     const imageData = await fetchImage(imgUrl)
                                     if (imageData) {
@@ -1462,11 +1493,24 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
                         forwardTexts.push(`${nickname}: [图片${imgUrl ? '' : '(无URL)'}]`)
                         msgInfo.content.push({ type: 'image', url: imgUrl })
                         if (imgUrl && imgUrl.startsWith('http')) {
-                            contents.push({
-                                type: 'image_url',
-                                image_url: { url: imgUrl },
-                                source: 'forward'
-                            })
+                            // QQ图片需要预先下载（需要特殊referer）
+                            if (isQQPicUrl(imgUrl)) {
+                                const imageData = await fetchImage(imgUrl)
+                                if (imageData) {
+                                    contents.push({
+                                        type: 'image',
+                                        image: imageData.base64,
+                                        mimeType: imageData.mimeType,
+                                        source: 'forward'
+                                    })
+                                }
+                            } else {
+                                contents.push({
+                                    type: 'image_url',
+                                    image_url: { url: imgUrl },
+                                    source: 'forward'
+                                })
+                            }
                         }
                     } else if (valType === 'video') {
                         // 视频 URL
@@ -1624,13 +1668,32 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
 }
 
 /**
- * 获取图片并转为 base64
+ * 检查是否为QQ图片URL（需要特殊referer处理）
  */
-async function fetchImage(url) {
+function isQQPicUrl(url) {
+    return url && (url.includes('gchat.qpic.cn') || url.includes('c2cpicdw.qpic.cn'))
+}
+
+/**
+ * 获取图片并转为 base64
+ * @param {string} url - 图片URL
+ * @param {Object} options - 选项
+ * @param {string} options.referer - 自定义Referer
+ */
+async function fetchImage(url, options = {}) {
     if (!url) return null
 
     try {
-        const response = await fetch(url)
+        // QQ图片需要特殊的 Referer
+        const isQQPic = isQQPicUrl(url)
+        const referer = options.referer || (isQQPic ? 'https://qzone.qq.com/' : undefined)
+
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                ...(referer && { Referer: referer })
+            }
+        })
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}`)
         }

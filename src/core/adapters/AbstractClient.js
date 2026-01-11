@@ -890,6 +890,8 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
             try {
                 const controller = new AbortController()
                 const timeoutId = setTimeout(() => controller.abort(), URL_TO_BASE64_CONFIG.timeout)
+                const isQQPic = url.includes('gchat.qpic.cn') || url.includes('c2cpicdw.qpic.cn')
+                const referer = isQQPic ? 'https://qzone.qq.com/' : new URL(url).origin + '/'
 
                 const response = await fetch(url, {
                     signal: controller.signal,
@@ -897,7 +899,7 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
                         'User-Agent': URL_TO_BASE64_CONFIG.userAgent,
                         Accept: '*/*',
                         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                        Referer: new URL(url).origin + '/'
+                        Referer: referer
                     }
                 })
 
@@ -923,22 +925,17 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
                 // 检测客户端错误（4xx）- 多种检测方式
                 const is4xxError =
                     (fetchErr.status >= 400 && fetchErr.status < 500) || /HTTP\s*4\d{2}/i.test(fetchErr.message)
-
-                // QQ 多媒体 URL 过期是常见情况，完全静默
                 const isQQMedia =
                     url.includes('multimedia.nt.qq.com.cn') ||
                     url.includes('gchat.qpic.cn') ||
                     url.includes('c2cpicdw.qpic.cn')
 
                 if (is4xxError || isQQMedia) {
-                    // 静默处理，只记录 debug 日志
                     logger.debug(
                         `[urlToBase64] 媒体获取失败(${fetchErr.status || '4xx'})，跳过: ${url.substring(0, 60)}...`
                     )
                     break
                 }
-
-                // 其他错误（5xx、网络等）才重试
                 if (attempt < maxRetries) {
                     logger.debug(`[urlToBase64] 第${attempt + 1}次获取失败，${retryDelay}ms后重试: ${fetchErr.message}`)
                     await new Promise(r => setTimeout(r, retryDelay))
