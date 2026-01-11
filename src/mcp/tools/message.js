@@ -296,6 +296,7 @@ export const messageTools = [
                     for (const key of Object.keys(global.Bot)) {
                         // 排除 stdin 和非数字 key
                         if (key === 'stdin' || !/^\d+$/.test(key)) continue
+                        if (global.Bot[key].adapter?.name == 'QQbot') continue
                         const b = global.Bot[key]
                         if (isValidQQBot(b)) {
                             bot = b
