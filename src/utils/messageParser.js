@@ -3203,11 +3203,11 @@ export const ProtobufUtils = {
         try {
             const pb = this.getPb()
             if (pb?.decode) {
-                return pb.decode(buffer)
-            }
-            // 尝试使用 decodePb
-            if (pb?.decodePb) {
                 return pb.decodePb(buffer)
+            }
+            // 尝试使用 decode
+            if (pb?.decodePb) {
+                return pb.decode(buffer)
             }
             return null
         } catch (err) {
