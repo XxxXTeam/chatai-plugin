@@ -27,11 +27,15 @@ export const groupStatsTools = [
                 const bot = ctx.getBot()
                 const groupId = requireGroupId(args, ctx)
                 
+                logger.debug(`[groupStats] get_group_level 群号=${groupId}, bot.bkn=${bot.bkn}`)
+                logger.debug(`[groupStats] cookies: qun.qq.com=${bot.cookies?.['qun.qq.com'] ? '有' : '无'}, qqweb.qq.com=${bot.cookies?.['qqweb.qq.com'] ? '有' : '无'}`)
+                
                 if (!bot.cookies?.['qun.qq.com'] && !bot.cookies?.['qqweb.qq.com']) {
                     return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
                 }
                 
                 const result = await qqWebApi.getGroupLevel(bot, groupId)
+                logger.debug(`[groupStats] get_group_level 结果:`, JSON.stringify(result))
                 
                 if (result?.ec === 0 || result?.retcode === 0) {
                     return {

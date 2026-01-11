@@ -528,11 +528,26 @@ export class PresetManager {
         const vars = { ...builtinVars, ...context }
         
         // 替换 {{variable}} 格式的变量
-        return text.replace(/\{\{(\w+)\}\}/g, (match, varName) => {
+        let result = text.replace(/\{\{(\w+)\}\}/g, (match, varName) => {
             // 转换为 snake_case 查找
             const snakeName = varName.replace(/([A-Z])/g, '_$1').toLowerCase()
             return vars[varName] ?? vars[snakeName] ?? match
         })
+        
+        // 替换 ${expression} 格式的表达式（使用 eval）
+        // 提供 e 对象作为上下文，e 就是 event 对象
+        const e = context.event || {}
+        result = result.replace(/\$\{([^}]+)\}/g, (match, expression) => {
+            try {
+                // eslint-disable-next-line no-eval
+                return eval(expression)
+            } catch (err) {
+                logger.debug(`[PresetManager] 表达式执行失败: ${expression}`, err.message)
+                return match
+            }
+        })
+        
+        return result
     }
 
     /**

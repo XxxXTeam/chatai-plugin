@@ -592,6 +592,9 @@ export default function GroupAdminPage() {
                   <div className="space-y-2">
                     <Label>独立人设</Label>
                     <Textarea value={form.systemPrompt} onChange={e => setForm({...form, systemPrompt: e.target.value})} placeholder="不填写则使用预设配置..." rows={3} className="font-mono text-sm" />
+                    <p className="text-xs text-muted-foreground">
+                      支持变量: {'{{user_name}}'} {'{{group_name}}'} {'{{date}}'} 等 | 表达式: {'${e.user_id}'} (e为event)
+                    </p>
                   </div>
 
                   <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">

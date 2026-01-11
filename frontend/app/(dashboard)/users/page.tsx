@@ -608,6 +608,9 @@ export default function UsersPage() {
                     rows={4}
                     className="font-mono text-sm resize-none"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    支持变量: {'{{user_name}}'} {'{{date}}'} 等 | 表达式: {'${e.user_id}'} (e为event)
+                  </p>
                 </div>
 
                 <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
@@ -716,6 +719,9 @@ export default function UsersPage() {
                     rows={4}
                     className="font-mono text-sm resize-none"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    支持变量: {'{{user_name}}'} {'{{date}}'} 等 | 表达式: {'${e.user_id}'} (e为event)
+                  </p>
                 </div>
 
                 <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
