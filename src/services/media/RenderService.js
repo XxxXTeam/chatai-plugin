@@ -1071,9 +1071,9 @@ class RenderService {
         const maxActivity = Math.max(...activityData, 1)
         const activityBars = activityData
             .map((v, i) => {
-                const height = maxActivity > 0 ? Math.max(2, Math.round((v / maxActivity) * 50)) : 2
-                const color = v > 0 ? '#FFB347' : '#FFE8D8'
-                return `<div class="bar" style="height:${height}px;background:${color}"></div>`
+                const height = maxActivity > 0 ? Math.max(4, Math.round((v / maxActivity) * 60)) : 4
+                const emptyClass = v === 0 ? ' empty' : ''
+                return `<div class="bar${emptyClass}" style="height:${height}px"></div>`
             })
             .join('')
         const userCardsHtml =
@@ -1115,161 +1115,269 @@ class RenderService {
 <head>
     <meta charset="UTF-8">
     <style>
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+        @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "WenQuanYi Micro Hei", sans-serif, "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji";
-            background: linear-gradient(180deg, #FFF8F5 0%, #FFFAF8 100%);
+            background: linear-gradient(135deg, #fdf6f0 0%, #f8f0ea 50%, #fff5f0 100%);
             min-height: 100vh;
-            padding: 15px;
+            padding: 16px;
             -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-            text-rendering: optimizeLegibility;
         }
         .container {
             max-width: ${width}px;
             margin: 0 auto;
-            background: #FFFCFA;
-            border-radius: 16px;
+            background: linear-gradient(180deg, #ffffff 0%, #fffcfa 100%);
+            border-radius: 24px;
             overflow: hidden;
-            box-shadow: 0 2px 12px rgba(255, 180, 150, 0.12);
-            border: 1px solid rgba(255, 210, 180, 0.25);
+            box-shadow: 0 4px 24px rgba(180, 120, 80, 0.08), 0 1px 3px rgba(180, 120, 80, 0.05);
+            border: 1px solid rgba(255, 200, 160, 0.2);
         }
-        /* 顶部头部 - 渐变粉橙色 */
+        /* 顶部头部 - 现代渐变 */
         .header {
-            background: linear-gradient(135deg, #FFEEE6 0%, #FFE0D0 50%, #FFD4C0 100%);
-            padding: 20px;
+            background: linear-gradient(135deg, #ff9a56 0%, #ff7b4d 50%, #ff6b3d 100%);
+            padding: 28px 24px 24px;
             position: relative;
-            min-height: 100px;
+            overflow: hidden;
+        }
+        .header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 200px;
+            height: 200px;
+            background: radial-gradient(circle, rgba(255,255,255,0.15) 0%, transparent 70%);
+            border-radius: 50%;
+        }
+        .header::after {
+            content: '';
+            position: absolute;
+            bottom: -30%;
+            left: -10%;
+            width: 150px;
+            height: 150px;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+            border-radius: 50%;
         }
         .header-main {
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
+            align-items: center;
+            position: relative;
+            z-index: 1;
         }
         .header-left { flex: 1; }
         .header-title {
-            font-size: 16px;
-            font-weight: 700;
-            color: #C75000;
+            font-size: 20px;
+            font-weight: 800;
+            color: #fff;
             margin-bottom: 6px;
-            line-height: 1.4;
+            line-height: 1.3;
+            text-shadow: 0 2px 4px rgba(180, 80, 20, 0.2);
+            letter-spacing: 0.5px;
         }
         .header-desc {
-            font-size: 11px;
-            color: #D07030;
+            font-size: 12px;
+            color: rgba(255,255,255,0.85);
+            font-weight: 500;
         }
         .header-right {
             text-align: right;
-            padding-left: 15px;
+            background: rgba(255,255,255,0.2);
+            backdrop-filter: blur(10px);
+            padding: 12px 16px;
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.25);
         }
         .header-date {
-            font-size: 10px;
-            color: #C08060;
+            font-size: 11px;
+            color: rgba(255,255,255,0.9);
+            margin-bottom: 2px;
         }
         .header-time {
-            font-size: 20px;
-            font-weight: 700;
-            color: #D06020;
+            font-size: 24px;
+            font-weight: 800;
+            color: #fff;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.15);
         }
-        /* 统计栏 */
+        /* 统计卡片 */
         .stats-row {
             display: flex;
             justify-content: center;
-            gap: 30px;
-            padding: 12px 20px;
-            background: #FFF9F5;
-            border-bottom: 1px solid rgba(255, 200, 170, 0.15);
+            gap: 12px;
+            padding: 20px 24px;
+            background: linear-gradient(180deg, #fff9f5 0%, #fffbf8 100%);
+            margin-top: -12px;
+            position: relative;
+            z-index: 2;
         }
-        .stat-box {
+        .stat-card {
+            flex: 1;
             text-align: center;
+            background: linear-gradient(135deg, #ffffff 0%, #fff8f4 100%);
+            padding: 16px 12px;
+            border-radius: 16px;
+            box-shadow: 0 2px 12px rgba(255, 150, 100, 0.1);
+            border: 1px solid rgba(255, 180, 140, 0.15);
+            transition: transform 0.2s ease;
+        }
+        .stat-card:hover { transform: translateY(-2px); }
+        .stat-icon {
+            font-size: 20px;
+            margin-bottom: 6px;
         }
         .stat-num {
-            font-size: 18px;
-            font-weight: 700;
-            color: #E07020;
+            font-size: 22px;
+            font-weight: 800;
+            background: linear-gradient(135deg, #ff7b4d 0%, #ff9a56 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
         .stat-txt {
-            font-size: 10px;
-            color: #B08060;
-            margin-top: 2px;
+            font-size: 11px;
+            color: #a08070;
+            margin-top: 4px;
+            font-weight: 500;
         }
         /* 活动图表 */
         .chart-section {
-            padding: 15px 20px;
-            background: #FFFBF8;
-            border-bottom: 1px solid rgba(255, 200, 170, 0.15);
+            padding: 20px 24px;
+            background: #fffbf8;
+        }
+        .chart-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .chart-icon {
+            width: 28px;
+            height: 28px;
+            background: linear-gradient(135deg, #ffb080 0%, #ff9060 100%);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
         }
         .chart-title {
-            font-size: 11px;
-            color: #A07050;
-            margin-bottom: 10px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #c06030;
+        }
+        .chart-container {
+            background: linear-gradient(180deg, #fff 0%, #fff8f4 100%);
+            border-radius: 16px;
+            padding: 16px;
+            border: 1px solid rgba(255, 180, 140, 0.12);
         }
         .chart-bars {
             display: flex;
             align-items: flex-end;
-            gap: 2px;
-            height: 65px;
-            padding: 0 5px;
+            gap: 3px;
+            height: 70px;
+            padding: 0 4px;
         }
         .bar {
             flex: 1;
-            min-width: 8px;
-            border-radius: 2px 2px 0 0;
-            transition: height 0.3s;
+            min-width: 10px;
+            border-radius: 4px 4px 0 0;
+            background: linear-gradient(180deg, #ffb347 0%, #ffd080 100%);
+            box-shadow: 0 -2px 4px rgba(255, 180, 100, 0.2);
+            transition: all 0.3s ease;
         }
+        .bar:hover { transform: scaleY(1.05); filter: brightness(1.05); }
+        .bar.empty { background: linear-gradient(180deg, #ffe8d8 0%, #fff0e8 100%); box-shadow: none; }
         .chart-labels {
             display: flex;
             justify-content: space-between;
-            margin-top: 5px;
-            padding: 0 5px;
+            margin-top: 10px;
+            padding: 0 4px;
         }
         .chart-labels span {
-            font-size: 9px;
-            color: #B0A090;
+            font-size: 10px;
+            color: #b0a090;
+            font-weight: 500;
         }
-        /* 活跃用户区域 */
+        /* 活跃用户 */
         .users-section {
-            padding: 16px 20px;
-            background: linear-gradient(180deg, #FFF9F5 0%, #FFFBF8 100%);
-            border-bottom: 1px solid rgba(255, 200, 170, 0.15);
+            padding: 20px 24px;
+            background: linear-gradient(180deg, #fff9f5 0%, #fffbf8 100%);
+        }
+        .users-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .users-icon {
+            width: 28px;
+            height: 28px;
+            background: linear-gradient(135deg, #ff8c60 0%, #ff7040 100%);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
         }
         .users-title {
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 600;
-            color: #C06030;
-            margin-bottom: 14px;
+            color: #c06030;
         }
         .users-grid {
             display: flex;
-            justify-content: space-between;
-            gap: 8px;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
         }
         .user-card {
-            flex: 1;
+            width: 80px;
             display: flex;
             flex-direction: column;
             align-items: center;
-            background: #FFF;
-            padding: 12px 8px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(200,150,100,0.08);
-            border: 1px solid rgba(255,200,170,0.15);
+            background: linear-gradient(180deg, #ffffff 0%, #fff8f4 100%);
+            padding: 14px 10px 12px;
+            border-radius: 16px;
+            box-shadow: 0 3px 12px rgba(200, 120, 80, 0.08);
+            border: 1px solid rgba(255, 180, 140, 0.12);
             position: relative;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .user-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(200, 120, 80, 0.12);
         }
         .user-rank {
             position: absolute;
-            top: -6px;
+            top: -8px;
             right: -4px;
-            font-size: 14px;
+            font-size: 16px;
+            filter: drop-shadow(0 2px 2px rgba(0,0,0,0.1));
         }
         .user-avatar {
-            width: 40px;
-            height: 40px;
+            width: 48px;
+            height: 48px;
             border-radius: 50%;
-            margin-bottom: 6px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+            margin-bottom: 8px;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.12);
             overflow: hidden;
             position: relative;
+            border: 3px solid #fff;
+        }
+        .user-card:first-child .user-avatar {
+            border-color: #ffd700;
+            box-shadow: 0 3px 12px rgba(255, 200, 0, 0.3);
+        }
+        .user-card:nth-child(2) .user-avatar {
+            border-color: #c0c0c0;
+        }
+        .user-card:nth-child(3) .user-avatar {
+            border-color: #cd7f32;
         }
         .user-avatar .avatar-img {
             width: 100%;
@@ -1281,226 +1389,253 @@ class RenderService {
             width: 100%;
             height: 100%;
             border-radius: 50%;
+            display: flex;
             align-items: center;
             justify-content: center;
             color: #FFF;
-            font-size: 16px;
+            font-size: 18px;
             font-weight: 700;
         }
         .user-name {
-            font-size: 10px;
+            font-size: 11px;
             font-weight: 600;
-            color: #605040;
+            color: #504030;
             max-width: 70px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
             text-align: center;
-            margin-bottom: 2px;
+            margin-bottom: 4px;
         }
         .user-count {
-            font-size: 9px;
-            color: #A09080;
-            background: #FFF5F0;
-            padding: 2px 6px;
-            border-radius: 8px;
+            font-size: 10px;
+            color: #ff7b4d;
+            background: linear-gradient(135deg, #fff5f0 0%, #ffe8e0 100%);
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-weight: 600;
         }
         /* 内容区 */
         .content {
-            padding: 18px 20px;
-        }
-        .section {
-            margin-bottom: 16px;
-        }
-        .section-header {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            margin-bottom: 10px;
-        }
-        .section-icon {
-            font-size: 14px;
-        }
-        .section-title {
-            font-size: 13px;
-            font-weight: 600;
-            color: #C06020;
+            padding: 24px;
         }
         .content h1, .content h2 {
             display: flex;
             align-items: center;
-            gap: 8px;
-            font-size: 14px;
-            font-weight: 600;
-            color: #B85520;
-            margin: 18px 0 12px 0;
-            padding-bottom: 8px;
-            border-bottom: 2px solid transparent;
-            background: linear-gradient(90deg, #FFE8DC, transparent) border-box;
-            border-image: linear-gradient(90deg, #FFB080, transparent) 1;
-            letter-spacing: 0.5px;
-        }
-        .content h1::before, .content h2::before {
-            content: '';
-            width: 4px;
-            height: 16px;
-            background: linear-gradient(180deg, #FF8C42, #FFB080);
-            border-radius: 2px;
-            flex-shrink: 0;
+            gap: 10px;
+            font-size: 15px;
+            font-weight: 700;
+            color: #c04510;
+            margin: 24px 0 14px 0;
+            padding: 12px 16px;
+            background: linear-gradient(135deg, #fff5f0 0%, #ffebe0 100%);
+            border-radius: 12px;
+            border-left: 4px solid;
+            border-image: linear-gradient(180deg, #ff8c42, #ffb080) 1;
+            letter-spacing: 0.3px;
         }
         .content h1:first-child, .content h2:first-child { margin-top: 0; }
         .content h3 {
-            font-size: 13px;
-            font-weight: 600;
-            color: #C06830;
-            margin: 14px 0 8px 0;
-            padding-left: 10px;
-            border-left: 3px solid #FFB080;
+            font-size: 14px;
+            font-weight: 700;
+            color: #d05820;
+            margin: 18px 0 10px 0;
+            padding-left: 14px;
+            border-left: 3px solid #ffb080;
+            position: relative;
+        }
+        .content h3::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: -2px;
+            bottom: -2px;
+            width: 3px;
+            background: linear-gradient(180deg, #ff8c42 0%, #ffb080 100%);
+            border-radius: 2px;
         }
         .content h4 {
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 600;
-            color: #D07840;
-            margin: 12px 0 6px 0;
+            color: #e06830;
+            margin: 14px 0 8px 0;
         }
         .content p {
-            font-size: 12.5px;
-            color: #4A4035;
-            line-height: 1.85;
-            margin: 10px 0;
+            font-size: 13px;
+            color: #4a4035;
+            line-height: 1.9;
+            margin: 12px 0;
             text-align: justify;
-            letter-spacing: 0.3px;
         }
         .content ul, .content ol {
+            padding-left: 8px;
+            margin: 12px 0;
+        }
+        .content ul { list-style-type: none; }
+        .content ul li {
+            position: relative;
             padding-left: 20px;
             margin: 10px 0;
         }
-        .content ul { list-style-type: none; }
         .content ul li::before {
-            content: '◆';
-            color: #FFB080;
-            font-size: 8px;
-            margin-right: 8px;
-            vertical-align: middle;
+            content: '';
+            position: absolute;
+            left: 4px;
+            top: 8px;
+            width: 6px;
+            height: 6px;
+            background: linear-gradient(135deg, #ff9060 0%, #ffb080 100%);
+            border-radius: 50%;
         }
-        .content ol { list-style-type: decimal; }
-        .content ol li::marker {
-            color: #E07030;
-            font-weight: 600;
+        .content ol { 
+            list-style-type: none;
+            counter-reset: item;
+        }
+        .content ol li {
+            counter-increment: item;
+            position: relative;
+            padding-left: 28px;
+            margin: 10px 0;
+        }
+        .content ol li::before {
+            content: counter(item);
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 20px;
+            height: 20px;
+            background: linear-gradient(135deg, #ff9060 0%, #ffb080 100%);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 700;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
         .content li {
-            font-size: 12.5px;
-            color: #4A4035;
+            font-size: 13px;
+            color: #4a4035;
             line-height: 1.85;
-            margin: 6px 0;
-            padding-left: 2px;
         }
         .content strong {
-            color: #C85520;
-            font-weight: 600;
-            background: linear-gradient(180deg, transparent 60%, rgba(255,176,128,0.3) 60%);
-            padding: 0 2px;
+            color: #d04510;
+            font-weight: 700;
+            background: linear-gradient(180deg, transparent 55%, rgba(255, 160, 100, 0.25) 55%);
+            padding: 0 3px;
+            border-radius: 2px;
         }
         .content em {
-            color: #B06030;
+            color: #c06030;
             font-style: italic;
         }
         .content blockquote {
-            background: linear-gradient(135deg, #FFF8F2 0%, #FFEFE6 100%);
-            border-left: 4px solid #FF9060;
-            padding: 12px 16px;
-            margin: 14px 0;
-            border-radius: 0 10px 10px 0;
-            font-size: 12px;
-            color: #7A5545;
-            box-shadow: 0 2px 8px rgba(255,144,96,0.1);
+            background: linear-gradient(135deg, #fff8f2 0%, #ffefe6 100%);
+            border-left: 4px solid;
+            border-image: linear-gradient(180deg, #ff9060, #ffb080) 1;
+            padding: 14px 18px 14px 20px;
+            margin: 16px 0;
+            border-radius: 0 14px 14px 0;
+            font-size: 12.5px;
+            color: #6a5545;
+            box-shadow: 0 2px 10px rgba(255, 144, 96, 0.08);
             position: relative;
         }
         .content blockquote::before {
             content: '"';
             position: absolute;
-            top: 6px;
-            left: 8px;
-            font-size: 24px;
-            color: #FFB080;
-            opacity: 0.5;
+            top: 8px;
+            left: 10px;
+            font-size: 28px;
+            color: #ffb080;
+            opacity: 0.4;
             font-family: Georgia, serif;
+            line-height: 1;
         }
         .content code {
-            background: linear-gradient(135deg, #FFF5ED 0%, #FFE8DC 100%);
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 11px;
-            color: #B85520;
-            font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
-            border: 1px solid rgba(255,140,66,0.2);
+            background: linear-gradient(135deg, #fff5ed 0%, #ffe8dc 100%);
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            color: #c04510;
+            font-family: "SF Mono", Monaco, "Cascadia Code", Consolas, monospace;
+            border: 1px solid rgba(255, 140, 66, 0.15);
         }
         .content pre {
-            background: linear-gradient(135deg, #FFF8F2 0%, #FFEFE6 100%);
-            padding: 14px 16px;
-            border-radius: 8px;
-            margin: 12px 0;
+            background: linear-gradient(135deg, #2d2d3a 0%, #1f1f2a 100%);
+            padding: 16px 18px;
+            border-radius: 12px;
+            margin: 14px 0;
             overflow-x: auto;
-            border: 1px solid rgba(255,140,66,0.15);
+            border: 1px solid rgba(100, 100, 120, 0.2);
         }
         .content pre code {
             background: none;
             border: none;
             padding: 0;
-            font-size: 11px;
+            font-size: 12px;
+            color: #e8e8f0;
         }
         .content hr {
             border: none;
-            height: 2px;
-            background: linear-gradient(90deg, transparent, #FFD0B0, #FFB080, #FFD0B0, transparent);
-            margin: 18px 0;
-            border-radius: 1px;
+            height: 1px;
+            background: linear-gradient(90deg, transparent 0%, #ffd0b0 20%, #ffb080 50%, #ffd0b0 80%, transparent 100%);
+            margin: 20px 0;
         }
         .content a {
-            color: #D06020;
+            color: #e05020;
             text-decoration: none;
-            border-bottom: 1px dashed #FFB080;
+            border-bottom: 1px dashed #ffb080;
             transition: all 0.2s ease;
         }
+        .content a:hover { border-bottom-style: solid; }
         .content table {
             width: 100%;
             border-collapse: collapse;
-            margin: 12px 0;
-            font-size: 12px;
-            border-radius: 8px;
+            margin: 14px 0;
+            font-size: 12.5px;
+            border-radius: 12px;
             overflow: hidden;
-            box-shadow: 0 2px 8px rgba(200,100,50,0.08);
+            box-shadow: 0 2px 12px rgba(200, 100, 50, 0.06);
         }
         .content th {
-            background: linear-gradient(135deg, #FFE8DC 0%, #FFD8C8 100%);
-            color: #A05020;
-            font-weight: 600;
-            padding: 10px 12px;
+            background: linear-gradient(135deg, #ffe8dc 0%, #ffd8c8 100%);
+            color: #a05020;
+            font-weight: 700;
+            padding: 12px 14px;
             text-align: left;
         }
         .content td {
-            padding: 8px 12px;
-            border-bottom: 1px solid #FFEEE4;
-            color: #5A4A40;
+            padding: 10px 14px;
+            border-bottom: 1px solid #fff0e8;
+            color: #5a4a40;
         }
         .content tr:last-child td { border-bottom: none; }
-        .content tr:nth-child(even) { background: #FFFAF6; }
+        .content tr:nth-child(even) { background: #fffaf6; }
         /* 底部 */
         .footer {
-            padding: 12px 20px;
-            background: linear-gradient(90deg, #FFF8F4 0%, #FFFAF6 100%);
-            border-top: 1px solid rgba(255, 200, 170, 0.15);
+            padding: 16px 24px;
+            background: linear-gradient(135deg, #fff8f4 0%, #fffaf6 50%, #fff5f0 100%);
+            border-top: 1px solid rgba(255, 180, 140, 0.12);
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
         .footer-left {
-            font-size: 10px;
-            color: #B09080;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: #b09080;
+            font-weight: 500;
+        }
+        .footer-left::before {
+            content: '✨';
+            font-size: 12px;
         }
         .footer-right {
-            font-size: 10px;
-            color: #C0A090;
+            font-size: 11px;
+            color: #c0a090;
         }
     </style>
 </head>
@@ -1509,45 +1644,56 @@ class RenderService {
         <div class="header">
             <div class="header-main">
                 <div class="header-left">
-                    <div class="header-title">📊 ${title}</div>
-                    <div class="header-desc">${subtitle || `基于 ${messageCount} 条消息`}</div>
+                    <div class="header-title">${title}</div>
+                    <div class="header-desc">${subtitle || '基于最近群聊消息的智能分析'}</div>
                 </div>
                 <div class="header-right">
-                    <div class="header-date">📅 ${dateStr}</div>
+                    <div class="header-date">${dateStr}</div>
                     <div class="header-time">${timeStr}</div>
                 </div>
             </div>
         </div>
         <div class="stats-row">
-            <div class="stat-box">
+            <div class="stat-card">
+                <div class="stat-icon">💬</div>
                 <div class="stat-num">${messageCount || '-'}</div>
-                <div class="stat-txt">消息数</div>
+                <div class="stat-txt">消息总数</div>
             </div>
-            <div class="stat-box">
+            <div class="stat-card">
+                <div class="stat-icon">👥</div>
                 <div class="stat-num">${participantCount || '-'}</div>
-                <div class="stat-txt">参与者</div>
+                <div class="stat-txt">参与成员</div>
             </div>
-            <div class="stat-box">
-                <div class="stat-num">🔥</div>
-                <div class="stat-txt">活跃</div>
+            <div class="stat-card">
+                <div class="stat-icon">⚡</div>
+                <div class="stat-num">${messageCount && participantCount ? Math.round(messageCount / participantCount) : '-'}</div>
+                <div class="stat-txt">人均发言</div>
             </div>
         </div>
         <div class="chart-section">
-            <div class="chart-title">📈 24小时活跃度</div>
-            <div class="chart-bars">${activityBars}</div>
-            <div class="chart-labels">
-                <span>0时</span>
-                <span>6时</span>
-                <span>12时</span>
-                <span>18时</span>
-                <span>24时</span>
+            <div class="chart-header">
+                <div class="chart-icon">📊</div>
+                <div class="chart-title">24小时活跃分布</div>
+            </div>
+            <div class="chart-container">
+                <div class="chart-bars">${activityBars}</div>
+                <div class="chart-labels">
+                    <span>0:00</span>
+                    <span>6:00</span>
+                    <span>12:00</span>
+                    <span>18:00</span>
+                    <span>24:00</span>
+                </div>
             </div>
         </div>
         ${
             userCardsHtml
                 ? `
         <div class="users-section">
-            <div class="users-title">👥 活跃成员 TOP${topUsers.length}</div>
+            <div class="users-header">
+                <div class="users-icon">🏆</div>
+                <div class="users-title">活跃排行 TOP${topUsers.length}</div>
+            </div>
             <div class="users-grid">${userCardsHtml}</div>
         </div>`
                 : ''
@@ -1556,7 +1702,7 @@ class RenderService {
             ${html}
         </div>
         <div class="footer">
-            <div class="footer-left">✨ AI 智能生成</div>
+            <div class="footer-left">AI 智能分析生成</div>
             <div class="footer-right">${now.toLocaleString('zh-CN')}</div>
         </div>
     </div>

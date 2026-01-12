@@ -1381,16 +1381,22 @@ export class ChatService {
     async clearHistory(userId, groupId = null) {
         await contextManager.init()
         const conversationId = contextManager.getConversationId(userId, groupId)
+        presetManager.markContextCleared(conversationId)
         await historyManager.deleteConversation(conversationId)
-        await contextManager.cleanContext(conversationId)
         contextManager.clearSessionState(conversationId)
+        contextManager.clearQueue(conversationId)
         if (groupId) {
             contextManager.clearGroupContextCache(String(groupId))
         }
-        contextManager.clearQueue(conversationId)
-        presetManager.markContextCleared(conversationId)
+        try {
+            const { redisClient } = await import('../../core/cache/RedisClient.js')
+            if (redisClient.isConnected) {
+                await redisClient.del(`context:${conversationId}`)
+                await redisClient.client.srem('active_contexts', conversationId)
+            }
+        } catch (e) {}
 
-        logger.debug(`[ChatService] 对话已清除: ${conversationId}, 群ID: ${groupId || '无'}`)
+        logger.info(`[ChatService] 对话已清除: ${conversationId}, 群ID: ${groupId || '无'}`)
     }
     isPureToolCallJson(text) {
         if (!text || typeof text !== 'string') return false
