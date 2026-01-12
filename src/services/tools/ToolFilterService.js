@@ -1,6 +1,13 @@
 /**
  * 工具过滤服务
  * 提供预设级别的工具禁用和调用防护
+ *
+ * 支持:
+ * - 内置工具过滤
+ * - 自定义JS工具过滤
+ * - 外部MCP服务器工具过滤
+ * - 按服务器名称过滤
+ * - 权限控制
  */
 import config from '../../../config/config.js'
 import { presetManager } from '../preset/PresetManager.js'
@@ -12,6 +19,8 @@ import { presetManager } from '../preset/PresetManager.js'
  * @property {string[]} disabledTools - 禁用的工具列表（黑名单模式）
  * @property {boolean} enableBuiltinTools - 是否启用内置工具
  * @property {boolean} enableMcpTools - 是否启用MCP工具
+ * @property {string[]} allowedMcpServers - 允许的MCP服务器列表
+ * @property {string[]} disabledMcpServers - 禁用的MCP服务器列表
  * @property {string[]} dangerousTools - 危险工具列表
  * @property {boolean} allowDangerous - 是否允许危险工具
  */
@@ -52,15 +61,19 @@ class ToolFilterService {
     getPresetToolConfig(presetId) {
         const preset = presetManager.get(presetId)
         const globalConfig = config.get('builtinTools') || {}
+        const mcpConfig = config.get('mcp') || {}
 
         // 合并全局配置和预设配置
         const presetTools = preset?.tools || {}
 
         return {
             enableBuiltinTools: presetTools.enableBuiltinTools ?? globalConfig.enabled ?? true,
-            enableMcpTools: presetTools.enableMcpTools ?? true,
+            enableMcpTools: presetTools.enableMcpTools ?? mcpConfig.enabled ?? true,
             allowedTools: presetTools.allowedTools || globalConfig.allowedTools || [],
             disabledTools: presetTools.disabledTools || globalConfig.disabledTools || [],
+            // MCP服务器过滤
+            allowedMcpServers: presetTools.allowedMcpServers || mcpConfig.allowedServers || [],
+            disabledMcpServers: presetTools.disabledMcpServers || mcpConfig.disabledServers || [],
             dangerousTools: globalConfig.dangerousTools || this.defaultDangerousTools,
             allowDangerous: globalConfig.allowDangerous ?? false
         }
@@ -88,15 +101,42 @@ class ToolFilterService {
 
         // 2. 检查是否启用MCP工具
         if (!toolConfig.enableMcpTools) {
-            filteredTools = filteredTools.filter(t => t.serverName === 'builtin' || t.isBuiltin)
+            filteredTools = filteredTools.filter(
+                t => t.serverName === 'builtin' || t.serverName === 'custom-tools' || t.isBuiltin
+            )
         }
+
+        // 3. MCP服务器过滤
+        if (toolConfig.allowedMcpServers && toolConfig.allowedMcpServers.length > 0) {
+            filteredTools = filteredTools.filter(t => {
+                // 内置工具和自定义工具不受此限制
+                if (t.serverName === 'builtin' || t.serverName === 'custom-tools' || t.isBuiltin) {
+                    return true
+                }
+                // 检查服务器是否在允许列表中
+                return toolConfig.allowedMcpServers.includes(t.serverName)
+            })
+        }
+
+        if (toolConfig.disabledMcpServers && toolConfig.disabledMcpServers.length > 0) {
+            filteredTools = filteredTools.filter(t => {
+                // 内置工具和自定义工具不受此限制
+                if (t.serverName === 'builtin' || t.serverName === 'custom-tools' || t.isBuiltin) {
+                    return true
+                }
+                // 检查服务器是否在禁用列表中
+                return !toolConfig.disabledMcpServers.includes(t.serverName)
+            })
+        }
+
+        // 4. 白名单模式
         if (toolConfig.allowedTools.length > 0) {
             filteredTools = filteredTools.filter(
                 t => toolConfig.allowedTools.includes(t.name) || toolConfig.allowedTools.includes(t.function?.name)
             )
         }
 
-        // 4. 黑名单模式：禁用指定的工具
+        // 5. 黑名单模式：禁用指定的工具
         if (toolConfig.disabledTools.length > 0) {
             filteredTools = filteredTools.filter(t => {
                 const name = t.name || t.function?.name
@@ -104,7 +144,7 @@ class ToolFilterService {
             })
         }
 
-        // 5. 危险工具过滤
+        // 6. 危险工具过滤
         if (!toolConfig.allowDangerous) {
             filteredTools = filteredTools.filter(t => {
                 const name = t.name || t.function?.name
@@ -112,7 +152,7 @@ class ToolFilterService {
             })
         }
 
-        // 6. 权限过滤（非管理员不能使用管理工具）
+        // 7. 权限过滤（非管理员不能使用管理工具）
         if (userPermission !== 'owner' && userPermission !== 'admin') {
             const adminOnlyTools = [
                 'kick_member',

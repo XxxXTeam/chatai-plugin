@@ -3,23 +3,43 @@ const logger = chatLogger
 import config from '../../../config/config.js'
 import { mcpManager } from '../../mcp/McpManager.js'
 import { toolCategories } from '../../mcp/tools/index.js'
+
+/**
+ * 工具组管理器
+ *
+ * 管理工具的分组和调度，支持:
+ * - 内置工具类别
+ * - 自定义JS工具
+ * - 外部MCP服务器工具
+ *
+ * @example
+ * ```js
+ * await toolGroupManager.init()
+ * const groups = toolGroupManager.getGroupSummary()
+ * const tools = await toolGroupManager.getToolsByGroupIndexes([0, 1])
+ * ```
+ */
 export class ToolGroupManager {
     constructor() {
         this.groups = new Map()
+        this.mcpServerGroups = new Map() // MCP服务器工具组
         this.initialized = false
     }
+
     /**
      * 初始化工具组
-     * 直接使用内置工具的 toolCategories 分类
+     * 加载内置工具类别和外部MCP服务器工具
      */
     async init() {
         if (this.initialized) return
 
         await mcpManager.init()
         this.loadFromBuiltinCategories()
+        this.loadFromMcpServers()
         this.initialized = true
 
-        logger.info(`[ToolGroupManager] 初始化完成，共 ${this.groups.size} 个工具组`)
+        const mcpCount = this.mcpServerGroups.size
+        logger.info(`[ToolGroupManager] 初始化完成，${this.groups.size} 个内置工具组，${mcpCount} 个MCP服务器组`)
     }
     loadFromBuiltinCategories() {
         this.groups.clear()
@@ -33,7 +53,8 @@ export class ToolGroupManager {
                     displayName: category.name,
                     description: category.description,
                     tools: category.tools.map(t => t.name),
-                    enabled: true
+                    enabled: true,
+                    source: 'builtin'
                 })
                 index++
             }
@@ -43,22 +64,83 @@ export class ToolGroupManager {
     }
 
     /**
-     * @returns {Array<{index: number, name: string, description: string}>}
+     * 从MCP服务器加载工具组
      */
-    getGroupSummary() {
-        const summary = []
-        for (const [index, group] of this.groups) {
-            if (group.enabled) {
-                summary.push({
-                    index: group.index,
-                    name: group.name,
-                    displayName: group.displayName || group.name,
-                    description: group.description,
-                    toolCount: group.tools.length
-                })
+    loadFromMcpServers() {
+        this.mcpServerGroups.clear()
+
+        const servers = mcpManager.getServers()
+        let index = this.groups.size // 继续从内置组之后编号
+
+        for (const server of servers) {
+            // 跳过内置和自定义工具服务器
+            if (server.name === 'builtin' || server.name === 'custom-tools') continue
+            if (server.status !== 'connected') continue
+
+            const serverInfo = mcpManager.getServer(server.name)
+            if (!serverInfo || !serverInfo.tools || serverInfo.tools.length === 0) continue
+
+            const group = {
+                index,
+                name: `mcp_${server.name}`,
+                displayName: `MCP: ${server.name}`,
+                description: `外部MCP服务器 ${server.name} 提供的工具`,
+                tools: serverInfo.tools.map(t => t.name),
+                enabled: true,
+                source: 'mcp',
+                serverName: server.name,
+                serverType: server.type
             }
+
+            this.groups.set(index, group)
+            this.mcpServerGroups.set(server.name, group)
+            index++
+        }
+
+        logger.debug(`[ToolGroupManager] 从MCP服务器加载 ${this.mcpServerGroups.size} 个工具组`)
+    }
+
+    /**
+     * 获取工具组摘要
+     * @param {Object} options - 选项
+     * @param {boolean} options.includeDisabled - 是否包含禁用的组
+     * @param {boolean} options.includeMcp - 是否包含MCP服务器组
+     * @returns {Array<{index: number, name: string, description: string, source: string}>}
+     */
+    getGroupSummary(options = {}) {
+        const { includeDisabled = false, includeMcp = true } = options
+        const summary = []
+
+        for (const [index, group] of this.groups) {
+            if (!includeDisabled && !group.enabled) continue
+            if (!includeMcp && group.source === 'mcp') continue
+
+            summary.push({
+                index: group.index,
+                name: group.name,
+                displayName: group.displayName || group.name,
+                description: group.description,
+                toolCount: group.tools.length,
+                source: group.source || 'builtin',
+                serverName: group.serverName,
+                enabled: group.enabled
+            })
         }
         return summary.sort((a, b) => a.index - b.index)
+    }
+
+    /**
+     * 获取MCP服务器工具组
+     */
+    getMcpServerGroups() {
+        return Array.from(this.mcpServerGroups.values())
+    }
+
+    /**
+     * 根据MCP服务器名获取工具组
+     */
+    getGroupByMcpServer(serverName) {
+        return this.mcpServerGroups.get(serverName) || null
     }
 
     /**
@@ -363,12 +445,28 @@ export class ToolGroupManager {
 
     /**
      * 获取所有启用的工具组索引
+     * @param {Object} options - 选项
+     * @param {boolean} options.includeMcp - 是否包含MCP服务器组
      * @returns {number[]}
      */
-    getAllGroupIndexes() {
+    getAllGroupIndexes(options = {}) {
+        const { includeMcp = true } = options
         return Array.from(this.groups.entries())
-            .filter(([_, g]) => g.enabled)
+            .filter(([_, g]) => {
+                if (!g.enabled) return false
+                if (!includeMcp && g.source === 'mcp') return false
+                return true
+            })
             .map(([idx, _]) => idx)
+    }
+
+    /**
+     * 刷新工具组（重新加载MCP服务器）
+     */
+    async refresh() {
+        this.loadFromBuiltinCategories()
+        this.loadFromMcpServers()
+        logger.info(`[ToolGroupManager] 刷新完成，${this.groups.size} 个工具组`)
     }
 
     /**
