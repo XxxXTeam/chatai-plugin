@@ -10,13 +10,26 @@ const logger = chatLogger
  *
  * @description 支持多种传输类型连接 MCP 服务器
  * - stdio: 标准输入输出（本地进程）
- * - npm/npx: npm 包形式的 MCP 服务器
+ * - npm/npx: npm 包形式的 MCP 服务器（如 @anthropic/mcp-server-filesystem）
  * - sse: Server-Sent Events
  * - http: HTTP 请求
  *
  * @example
  * ```js
+ * // stdio 模式
  * const client = new McpClient({ type: 'stdio', command: 'node', args: ['server.js'] })
+ *
+ * // npm 包模式
+ * const client = new McpClient({
+ *   type: 'npm',
+ *   package: '@anthropic/mcp-server-filesystem',
+ *   args: ['/path/to/allowed/dir'],
+ *   env: { DEBUG: 'true' }
+ * })
+ *
+ * // SSE 模式
+ * const client = new McpClient({ type: 'sse', url: 'http://localhost:3000/sse' })
+ *
  * await client.connect()
  * const tools = await client.listTools()
  * ```
@@ -27,10 +40,12 @@ export class McpClient {
      * @param {string} [config.type='stdio'] - 传输类型: stdio | npm | npx | sse | http
      * @param {string} [config.command] - stdio 模式的命令
      * @param {string[]} [config.args] - 命令参数
-     * @param {string} [config.package] - npm/npx 模式的包名
+     * @param {string} [config.package] - npm/npx 模式的包名（如 @anthropic/mcp-server-filesystem）
      * @param {string} [config.url] - SSE/HTTP 模式的 URL
      * @param {Object} [config.env] - 环境变量
      * @param {Object} [config.headers] - HTTP 请求头
+     * @param {number} [config.timeout=30000] - 连接超时时间（毫秒）
+     * @param {boolean} [config.autoReconnect=true] - 是否自动重连
      */
     constructor(config) {
         /** @type {Object} 客户端配置 */
@@ -52,7 +67,15 @@ export class McpClient {
         /** @type {number} 重连尝试次数 */
         this.reconnectAttempts = 0
         /** @type {number} 最大重连次数 */
-        this.maxReconnectAttempts = 5
+        this.maxReconnectAttempts = config.maxReconnectAttempts || 5
+        /** @type {number} 连接超时时间 */
+        this.timeout = config.timeout || 30000
+        /** @type {boolean} 是否自动重连 */
+        this.autoReconnect = config.autoReconnect !== false
+        /** @type {Object|null} 服务器信息 */
+        this.serverInfo = null
+        /** @type {string|null} 服务器名称 */
+        this.serverName = config.name || null
     }
 
     /**
@@ -95,40 +118,128 @@ export class McpClient {
 
     /**
      * 连接 npm 包形式的 MCP 服务器
-     * 配置示例: { type: 'npm', package: '@upstash/context7-mcp', env: { ... } }
+     *
+     * 支持的配置格式:
+     * 1. 简单格式: { type: 'npm', package: '@anthropic/mcp-server-filesystem', args: ['/path'] }
+     * 2. 完整格式: { type: 'npm', package: '@modelcontextprotocol/server-memory', env: { ... } }
+     * 3. 带作用域: { type: 'npm', package: '@anthropic/mcp-server-filesystem' }
+     *
+     * @example
+     * // 文件系统服务器
+     * { type: 'npm', package: '@anthropic/mcp-server-filesystem', args: ['/home/user/docs'] }
+     * // 记忆服务器
+     * { type: 'npm', package: '@modelcontextprotocol/server-memory' }
+     * // 自定义包
+     * { type: 'npm', package: 'my-mcp-server', env: { API_KEY: 'xxx' } }
      */
     async connectNpm() {
         if (this.process) return
 
-        const { package: pkg, args = [], env } = this.config
+        const { package: pkg, args = [], env = {}, cwd } = this.config
 
         if (!pkg) {
-            throw new Error('npm/npx type requires "package" field, e.g. "@upstash/context7-mcp"')
+            throw new Error('npm/npx type requires "package" field, e.g. "@anthropic/mcp-server-filesystem"')
         }
 
-        const npxArgs = ['-y', pkg, ...args]
-        logger.debug(`[MCP] Spawning npm server: npx ${npxArgs.join(' ')}`)
+        // 验证包名格式
+        const validPackagePattern = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/i
+        if (!validPackagePattern.test(pkg)) {
+            throw new Error(`Invalid npm package name: ${pkg}`)
+        }
 
-        this.process = spawn('npx', npxArgs, {
-            env: { ...process.env, ...env },
-            stdio: ['pipe', 'pipe', 'pipe'],
-            shell: process.platform === 'win32'
-        })
+        // 构建 npx 参数
+        // -y: 自动确认安装
+        // --prefer-offline: 优先使用本地缓存
+        const npxArgs = ['-y', '--prefer-offline', pkg, ...args]
+        const displayCmd = `npx ${npxArgs.join(' ')}`
+        logger.info(`[MCP] Starting npm server: ${displayCmd}`)
 
-        this.process.stdout.on('data', data => this.handleData(data))
-        this.process.stderr.on('data', data => {
-            logger.warn(`[MCP] Server stderr: ${data.toString()}`)
-        })
+        // 合并环境变量，支持 NODE_OPTIONS 等
+        const mergedEnv = {
+            ...process.env,
+            ...env,
+            // 确保 npm 包可以正确输出
+            FORCE_COLOR: '0',
+            NO_COLOR: '1'
+        }
 
-        this.process.on('close', code => {
-            logger.debug(`[MCP] Server exited with code ${code}`)
-            this.handleDisconnect()
-        })
+        try {
+            this.process = spawn('npx', npxArgs, {
+                env: mergedEnv,
+                stdio: ['pipe', 'pipe', 'pipe'],
+                shell: process.platform === 'win32',
+                cwd: cwd || process.cwd(),
+                windowsHide: true
+            })
 
-        this.process.on('error', error => {
-            logger.error(`[MCP] Process error:`, error)
-            this.handleDisconnect()
-        })
+            // 启动超时检测
+            const startupTimeout = setTimeout(() => {
+                if (!this.initialized) {
+                    logger.warn(`[MCP] npm server startup timeout: ${pkg}`)
+                }
+            }, this.timeout)
+
+            this.process.stdout.on('data', data => {
+                clearTimeout(startupTimeout)
+                this.handleData(data)
+            })
+
+            // stderr 可能包含启动日志，区分错误和信息
+            let stderrBuffer = ''
+            this.process.stderr.on('data', data => {
+                const text = data.toString()
+                stderrBuffer += text
+
+                // 过滤常见的 npm 信息日志
+                if (text.includes('npm warn') || text.includes('npm notice')) {
+                    logger.debug(`[MCP] npm info: ${text.trim()}`)
+                } else if (text.toLowerCase().includes('error') || text.toLowerCase().includes('failed')) {
+                    logger.error(`[MCP] Server stderr: ${text.trim()}`)
+                } else {
+                    logger.debug(`[MCP] Server output: ${text.trim()}`)
+                }
+            })
+
+            this.process.on('close', code => {
+                clearTimeout(startupTimeout)
+                if (code !== 0 && code !== null) {
+                    logger.warn(`[MCP] npm server exited with code ${code}`)
+                    if (stderrBuffer) {
+                        logger.debug(`[MCP] Last stderr: ${stderrBuffer.slice(-500)}`)
+                    }
+                }
+                this.handleDisconnect()
+            })
+
+            this.process.on('error', error => {
+                clearTimeout(startupTimeout)
+                logger.error(`[MCP] npm server error:`, error.message)
+                this.handleDisconnect()
+            })
+
+            // 等待进程启动
+            await new Promise((resolve, reject) => {
+                const checkInterval = setInterval(() => {
+                    if (this.process && this.process.pid) {
+                        clearInterval(checkInterval)
+                        logger.debug(`[MCP] npm server started with PID: ${this.process.pid}`)
+                        resolve()
+                    }
+                }, 50)
+
+                setTimeout(() => {
+                    clearInterval(checkInterval)
+                    if (!this.process || !this.process.pid) {
+                        reject(new Error(`npm server failed to start: ${pkg}`))
+                    } else {
+                        resolve()
+                    }
+                }, 5000)
+            })
+        } catch (error) {
+            logger.error(`[MCP] Failed to spawn npm server: ${error.message}`)
+            throw new Error(`Failed to start npm MCP server "${pkg}": ${error.message}`)
+        }
     }
 
     async connectStdio() {
@@ -286,10 +397,17 @@ export class McpClient {
     }
 
     handleDisconnect() {
+        const wasInitialized = this.initialized
         this.initialized = false
         this.stopHeartbeat()
 
         if (this.process) {
+            // 尝试优雅关闭
+            try {
+                this.process.kill('SIGTERM')
+            } catch (e) {
+                // 忽略
+            }
             this.process = null
         }
         if (this.eventSource) {
@@ -303,8 +421,10 @@ export class McpClient {
         }
         this.pendingRequests.clear()
 
-        // Attempt reconnection
-        this.attemptReconnect()
+        // 只有之前已初始化且允许自动重连时才尝试重连
+        if (wasInitialized && this.autoReconnect) {
+            this.attemptReconnect()
+        }
     }
 
     async attemptReconnect() {
@@ -622,16 +742,25 @@ export class McpClient {
                 protocolVersion: '2024-11-05',
                 capabilities: {
                     roots: { listChanged: false },
-                    sampling: {}
+                    sampling: {},
+                    tools: { listChanged: true }
                 },
                 clientInfo: {
-                    name: 'yunzai-new-plugin',
+                    name: 'chatgpt-plugin',
                     version: '1.0.0'
                 }
             })
 
             this.initialized = true
             this.serverCapabilities = result?.capabilities || {}
+            this.serverInfo = result?.serverInfo || null
+
+            // 记录服务器信息
+            if (this.serverInfo) {
+                logger.info(
+                    `[MCP] Connected to server: ${this.serverInfo.name || 'unknown'} v${this.serverInfo.version || '?'}`
+                )
+            }
 
             // Send initialized notification (only for stdio/npm/npx types with process)
             if ((this.type === 'stdio' || this.type === 'npm' || this.type === 'npx') && this.process) {
@@ -643,7 +772,8 @@ export class McpClient {
                 )
             }
 
-            logger.debug('[MCP] Initialized with capabilities:', Object.keys(this.serverCapabilities || {}))
+            const capabilities = Object.keys(this.serverCapabilities || {})
+            logger.debug(`[MCP] Server capabilities: ${capabilities.join(', ') || 'none'}`)
             return result
         } catch (error) {
             // 某些 MCP 服务器可能不支持 initialize，尝试继续
@@ -652,6 +782,31 @@ export class McpClient {
             this.serverCapabilities = {}
             return {}
         }
+    }
+
+    /**
+     * 获取服务器信息
+     * @returns {Object|null}
+     */
+    getServerInfo() {
+        return this.serverInfo
+    }
+
+    /**
+     * 获取服务器能力
+     * @returns {Object}
+     */
+    getCapabilities() {
+        return this.serverCapabilities || {}
+    }
+
+    /**
+     * 检查是否支持某个能力
+     * @param {string} capability - 能力名称
+     * @returns {boolean}
+     */
+    hasCapability(capability) {
+        return !!(this.serverCapabilities && this.serverCapabilities[capability])
     }
 
     /**

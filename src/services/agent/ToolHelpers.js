@@ -5,7 +5,6 @@
  * 保留此文件仅为兼容性，所有功能已迁移到 mcp/tools/helpers.js
  */
 
-// 重导出所有辅助函数
 export {
     icqqGroup,
     icqqFriend,
@@ -29,8 +28,6 @@ export {
     normalizeSegments,
     getMasterList
 } from '../../mcp/tools/helpers.js'
-
-// 兼容性别名
 export {
     icqqGroup as GroupAdapter,
     icqqFriend as UserAdapter,
@@ -39,8 +36,6 @@ export {
     filterMembers as MemberHelper,
     validateParams as ParamHelper
 } from '../../mcp/tools/helpers.js'
-
-// 默认导出兼容性对象
 import {
     icqqGroup,
     icqqFriend,

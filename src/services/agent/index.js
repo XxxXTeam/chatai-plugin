@@ -15,7 +15,24 @@ export {
     isDangerousTool,
     checkToolAvailable,
     getToolCallLimits,
-    convertMcpTools
+    convertMcpTools,
+    // MCP服务器管理
+    getMcpServers,
+    getMcpServer,
+    connectMcpServer,
+    disconnectMcpServer,
+    reloadMcpServer,
+    removeMcpServer,
+    getMcpServerTools,
+    reinitMcp,
+    // 工具类别管理
+    getToolCategories,
+    toggleCategory,
+    toggleTool,
+    getToolStats,
+    reloadAllTools,
+    enableAllTools,
+    disableAllTools
 } from './SkillsAgent.js'
 export {
     icqqGroup,
