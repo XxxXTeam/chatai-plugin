@@ -254,21 +254,26 @@ export class BuiltinMcpServer {
 
     /**
      * 加载分割后的模块化工具
+     * @param {boolean} forceReload - 强制重新加载（热重载时使用）
      */
-    async loadModularTools() {
+    async loadModularTools(forceReload = false) {
         try {
-            const { getAllTools, getCategoryInfo, toolCategories } = await import('./tools/index.js')
-
-            // 获取类别信息
-            this.toolCategories = toolCategories
+            // 动态导入，添加时间戳避免缓存
+            const timestamp = forceReload ? Date.now() : ''
+            const indexModule = await import(`./tools/index.js${timestamp ? `?t=${timestamp}` : ''}`)
+            const { getAllTools, loadToolModules } = indexModule
 
             // 获取工具配置
             const builtinConfig = config.get('builtinTools') || {}
             const enabledCategories = builtinConfig.enabledCategories // 未设置则启用所有
             const disabledTools = builtinConfig.disabledTools || []
 
-            // 加载工具
-            this.modularTools = getAllTools({ enabledCategories, disabledTools })
+            // 加载工具（强制重载时传递 forceReload 参数）
+            this.modularTools = await getAllTools({ enabledCategories, disabledTools, forceReload })
+
+            // 获取类别信息
+            const categories = await loadToolModules(forceReload)
+            this.toolCategories = categories
 
             logger.debug(`[BuiltinMCP] 加载模块化工具: ${this.modularTools.length} 个`)
         } catch (err) {
@@ -381,9 +386,9 @@ export class BuiltinMcpServer {
     async reloadAllTools() {
         logger.info('[BuiltinMCP] 开始热重载所有工具...')
 
-        // 重新加载模块化工具
+        // 重新加载模块化工具（强制重载）
         this.modularTools = []
-        await this.loadModularTools()
+        await this.loadModularTools(true)
 
         // 重新加载JS工具
         await this.loadJsTools()
