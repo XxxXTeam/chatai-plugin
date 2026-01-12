@@ -42,7 +42,7 @@ export const shellTools = [
         requireMaster: true, // 标记需要主人权限
         handler: async (args, context) => {
             // 主人权限检查
-            if (!context?.isMaster) {
+            if (!context?.event?.isMaster) {
                 return {
                     success: false,
                     error: '权限不足：execute_command 仅限主人使用'
