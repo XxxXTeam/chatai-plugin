@@ -365,7 +365,8 @@ router.post('/presets/update', async (req, res) => {
         for (const source of sourcesToUpdate) {
             const presets = await fetchRemotePresets(source.url)
             if (presets) {
-                const cacheFile = path.join(PRESET_CACHE_DIR, `${source.name.replace(/[^a-zA-Z0-9]/g, '_')}.json`)
+                // 使用 urlToFilename 与读取时保持一致
+                const cacheFile = path.join(PRESET_CACHE_DIR, `${urlToFilename(source.url)}.json`)
                 fs.writeFileSync(cacheFile, JSON.stringify(presets, null, 2))
                 results.push({ name: source.name, success: true, count: Array.isArray(presets) ? presets.length : 0 })
             } else {
@@ -423,7 +424,8 @@ router.post('/sources', async (req, res) => {
         // 立即尝试获取远程预设
         const presets = await fetchRemotePresets(url)
         if (presets) {
-            const cacheFile = path.join(PRESET_CACHE_DIR, `${name.replace(/[^a-zA-Z0-9]/g, '_')}.json`)
+            // 使用 urlToFilename 与读取时保持一致
+            const cacheFile = path.join(PRESET_CACHE_DIR, `${urlToFilename(url)}.json`)
             fs.writeFileSync(cacheFile, JSON.stringify(presets, null, 2))
         }
 

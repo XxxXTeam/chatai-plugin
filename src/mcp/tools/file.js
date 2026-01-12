@@ -97,12 +97,12 @@ export const fileTools = [
 
     {
         name: 'upload_group_file',
-        description: '上传文件到群（需要文件URL）',
+        description: '上传文件到群（需要文件URL或本地路径）',
         inputSchema: {
             type: 'object',
             properties: {
                 group_id: { type: 'string', description: '群号' },
-                file_url: { type: 'string', description: '文件URL' },
+                file_url: { type: 'string', description: '文件URL、本地路径或file://协议路径' },
                 name: { type: 'string', description: '文件名' },
                 folder_id: { type: 'string', description: '目标文件夹ID（可选）' }
             },
@@ -482,7 +482,10 @@ export const fileTools = [
             type: 'object',
             properties: {
                 user_id: { type: 'string', description: '用户QQ号' },
-                file_url: { type: 'string', description: '文件URL或本地路径' },
+                file_url: {
+                    type: 'string',
+                    description: '文件URL、本地路径或file://协议路径（如 file:///path/to/file）'
+                },
                 name: { type: 'string', description: '文件名' }
             },
             required: ['user_id', 'file_url', 'name']
@@ -595,7 +598,11 @@ export const fileTools = [
         inputSchema: {
             type: 'object',
             properties: {
-                file: { type: 'string', description: '文件URL或本地路径' },
+                file: {
+                    type: 'string',
+                    description:
+                        '文件URL、本地路径或file://协议路径（如 file:///path/to/file 或 file://C:/path/to/file）'
+                },
                 name: { type: 'string', description: '显示的文件名' },
                 target_type: { type: 'string', description: '目标类型: group/private', enum: ['group', 'private'] },
                 target_id: { type: 'string', description: '目标群号或用户QQ' }

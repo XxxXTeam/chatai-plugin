@@ -650,22 +650,45 @@ export class AICommands extends plugin {
 
             const msg = msgLines.join('\n')
 
-            // 尝试私聊发送（更安全）
+            // 尝试私聊/临时消息发送（更安全），失败则不发送到群
+            let sendSuccess = false
+            const bot = e.bot || global.Bot
             try {
-                if (e.friend || global.Bot?.pickFriend) {
-                    const friend = e.friend || global.Bot.pickFriend(e.user_id)
-                    if (friend?.sendMsg) {
+                // 优先判断是否为好友
+                if (bot?.pickFriend) {
+                    const friend = bot.pickFriend(e.user_id)
+                    // 检查是否真的是好友
+                    if (friend?.sendMsg && (friend.info || friend.class === 'Friend')) {
                         await friend.sendMsg(msg)
-                        await this.reply('✅ 管理面板链接已私聊发送，请查收', true)
-                        return true
+                        sendSuccess = true
+                    }
+                }
+                // 如果不是好友，尝试使用临时消息（通过群成员）
+                if (!sendSuccess && e.group_id && bot?.pickMember) {
+                    const member = bot.pickMember(e.group_id, e.user_id)
+                    if (member?.sendMsg) {
+                        await member.sendMsg(msg)
+                        sendSuccess = true
+                    }
+                }
+                // 回退到 pickUser
+                if (!sendSuccess && bot?.pickUser) {
+                    const user = bot.pickUser(e.user_id)
+                    if (user?.sendMsg) {
+                        await user.sendMsg(msg)
+                        sendSuccess = true
                     }
                 }
             } catch (err) {
-                logger.debug('[Commands] 私聊发送失败:', err.message)
+                logger.debug('[Commands] 私聊/临时消息发送失败:', err.message)
             }
 
-            // 私聊失败则在群里发送（带撤回提示）
-            await this.reply(msg + '\n\n⚠️ 建议30秒内复制链接后撤回本消息', true)
+            // 根据发送结果回复
+            if (sendSuccess) {
+                await this.reply('✅ 管理面板链接已私聊发送，请查收', true)
+            } else {
+                await this.reply('❌ 发送失败，请先添加Bot为好友或确保Bot有临时消息权限', true)
+            }
         } catch (error) {
             logger.error('[AI-Commands] Group admin panel error:', error)
             await this.reply('生成管理面板失败: ' + error.message, true)

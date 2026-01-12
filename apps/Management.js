@@ -344,19 +344,39 @@ export class AIManagement extends plugin {
         try {
             // 尝试发送合并转发
             const bot = this.e.bot || Bot
-            if (bot?.pickUser) {
-                const friend = bot.pickUser(userId)
-                if (friend?.sendMsg) {
-                    // 构建合并转发消息
-                    const forwardMsg = await this.makeForwardMsg(messages)
-                    if (forwardMsg) {
-                        await friend.sendMsg(forwardMsg)
-                        // 如果在群聊中，提示已私聊发送
-                        if (this.e.group_id) {
-                            await this.reply('✅ 管理面板链接已私聊发送，请查收', true)
-                        }
-                        return
+            // 优先判断是否为好友，否则使用临时消息
+            let target = null
+            if (bot?.pickFriend) {
+                const friend = bot.pickFriend(userId)
+                // 检查是否真的是好友（有sendMsg方法且不是临时会话对象）
+                if (friend?.sendMsg && (friend.info || friend.class === 'Friend')) {
+                    target = friend
+                }
+            }
+            // 如果不是好友且在群聊中，尝试使用临时消息
+            if (!target && this.e.group_id && bot?.pickMember) {
+                const member = bot.pickMember(this.e.group_id, userId)
+                if (member?.sendMsg) {
+                    target = member
+                }
+            }
+            // 回退到pickUser
+            if (!target && bot?.pickUser) {
+                const user = bot.pickUser(userId)
+                if (user?.sendMsg) {
+                    target = user
+                }
+            }
+            if (target?.sendMsg) {
+                // 构建合并转发消息
+                const forwardMsg = await this.makeForwardMsg(messages)
+                if (forwardMsg) {
+                    await target.sendMsg(forwardMsg)
+                    // 如果在群聊中，提示已私聊发送
+                    if (this.e.group_id) {
+                        await this.reply('✅ 管理面板链接已私聊发送，请查收', true)
                     }
+                    return
                 }
             }
 
@@ -436,18 +456,9 @@ export class AIManagement extends plugin {
                 await this.reply('✅ 管理面板链接已私聊发送，请查收', true)
             }
         } catch (err) {
-            logger.error('[Management] 私聊发送失败:', err)
-            // 私聊失败时在群里回复
-            if (isQQBot) {
-                const qrcode = await urlToQRCode(localUrl)
-                const fallbackMsg = [`管理面板（${validityText}）：\n请扫描二维码：`]
-                if (qrcode) {
-                    fallbackMsg.push({ type: 'image', file: qrcode })
-                }
-                await this.reply(fallbackMsg, true)
-            } else {
-                await this.reply(`管理面板（${validityText}）：\n${localUrl}${warningText}`, true)
-            }
+            logger.error('[Management] 私聊/临时消息发送失败:', err)
+            // 发送失败不在群里发送链接，提示用户添加好友
+            await this.reply('❌ 发送失败，请先添加Bot为好友或确保Bot有临时消息权限', true)
         }
     }
 
