@@ -783,16 +783,30 @@ export class McpManager {
                 }
                 result = await server.client.callTool(name, args)
             }
-            if (options.useCache) {
+
+            // 检查结果是否为错误（包括权限不足、工具禁用等情况）
+            const isResultError =
+                result?.isError === true ||
+                result?.success === false ||
+                result?.permissionDenied === true ||
+                result?.toolDisabled === true
+
+            if (options.useCache && !isResultError) {
+                // 只缓存成功的结果
                 const cacheKey = `${name}:${JSON.stringify(args)}`
                 this.toolResultCache.set(cacheKey, {
                     result,
                     timestamp: Date.now()
                 })
             }
-            logEntry.success = true
+
+            // 根据结果内容判断是否成功
+            logEntry.success = !isResultError
             logEntry.duration = Date.now() - startTime
             logEntry.result = result
+            if (isResultError) {
+                logEntry.error = result?.errorMessage || result?.error || 'Tool returned error result'
+            }
             this.addToolLog(logEntry)
 
             return result
@@ -838,18 +852,27 @@ export class McpManager {
                 const callStart = Date.now()
                 try {
                     const result = await this.callTool(call.name, call.args, options)
+                    // 检查结果是否为错误
+                    const isResultError =
+                        result?.isError === true ||
+                        result?.success === false ||
+                        result?.permissionDenied === true ||
+                        result?.toolDisabled === true
                     return {
                         name: call.name,
                         result,
                         duration: Date.now() - callStart,
-                        success: true
+                        success: !isResultError,
+                        isError: isResultError,
+                        errorMessage: isResultError ? result?.errorMessage || result?.error : undefined
                     }
                 } catch (error) {
                     return {
                         name: call.name,
                         error: error.message,
                         duration: Date.now() - callStart,
-                        success: false
+                        success: false,
+                        isError: true
                     }
                 }
             })

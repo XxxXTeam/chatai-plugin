@@ -2338,3 +2338,183 @@ export const qqWebApi = {
         })
     }
 }
+
+/**
+ * 获取 Bot 在指定群内的权限信息
+ * @param {Object} bot - Bot实例
+ * @param {number|string} groupId - 群号
+ * @returns {Promise<{role: 'owner'|'admin'|'member'|'unknown', isAdmin: boolean, isOwner: boolean, canKick: boolean, canMute: boolean, canRecall: boolean}>}
+ */
+export async function getBotPermission(bot, groupId) {
+    const result = {
+        role: 'unknown',
+        isAdmin: false,
+        isOwner: false,
+        canKick: false,
+        canMute: false,
+        canRecall: false,
+        canSetCard: false,
+        canSetTitle: false,
+        inGroup: false
+    }
+
+    if (!bot || !groupId) return result
+
+    const gid = parseInt(groupId)
+    const botId = bot.uin || bot.self_id
+
+    try {
+        // 方式1: 从 gl (群列表缓存) 获取
+        const groupInfo = bot.gl?.get(gid)
+        if (groupInfo) {
+            result.inGroup = true
+            // admin_flag: 是否是管理员
+            // owner_id: 群主QQ
+            if (groupInfo.owner_id === botId) {
+                result.role = 'owner'
+                result.isOwner = true
+                result.isAdmin = true
+            } else if (groupInfo.admin_flag) {
+                result.role = 'admin'
+                result.isAdmin = true
+            } else {
+                result.role = 'member'
+            }
+        }
+
+        // 方式2: 通过 pickGroup 获取成员信息
+        if (result.role === 'unknown' && bot.pickGroup) {
+            try {
+                const group = bot.pickGroup(gid)
+                const memberInfo = group?.pickMember?.(botId)?.info
+                if (memberInfo) {
+                    result.inGroup = true
+                    if (memberInfo.role === 'owner') {
+                        result.role = 'owner'
+                        result.isOwner = true
+                        result.isAdmin = true
+                    } else if (memberInfo.role === 'admin') {
+                        result.role = 'admin'
+                        result.isAdmin = true
+                    } else {
+                        result.role = 'member'
+                    }
+                }
+            } catch (e) {
+                // 忽略错误
+            }
+        }
+
+        // 方式3: OneBot API
+        if (result.role === 'unknown' && bot.sendApi) {
+            try {
+                const info = await bot.sendApi('get_group_member_info', {
+                    group_id: gid,
+                    user_id: botId
+                })
+                if (info?.data || info?.role) {
+                    result.inGroup = true
+                    const role = info?.data?.role || info?.role || 'member'
+                    result.role = role
+                    result.isOwner = role === 'owner'
+                    result.isAdmin = role === 'owner' || role === 'admin'
+                }
+            } catch (e) {
+                // 忽略错误
+            }
+        }
+
+        // 设置权限能力
+        if (result.isOwner) {
+            result.canKick = true
+            result.canMute = true
+            result.canRecall = true
+            result.canSetCard = true
+            result.canSetTitle = true
+        } else if (result.isAdmin) {
+            result.canKick = true
+            result.canMute = true
+            result.canRecall = true
+            result.canSetCard = true
+            result.canSetTitle = false // 只有群主能设置头衔
+        }
+    } catch (e) {
+        logger.debug(`[helpers] getBotPermission error: ${e.message}`)
+    }
+
+    return result
+}
+
+/**
+ * 检查工具执行结果是否为错误
+ * 用于判断工具返回的结果是否表示失败（如权限不足、被禁用等）
+ * @param {Object} result - 工具返回结果
+ * @returns {boolean} 是否为错误
+ */
+export function isToolResultError(result) {
+    if (!result) return true
+    // 显式标记为错误
+    if (result.isError === true) return true
+    // success 为 false
+    if (result.success === false) return true
+    // 有 error 字段
+    if (result.error) return true
+    // content 中包含错误
+    if (Array.isArray(result.content)) {
+        const textContent = result.content.find(c => c.type === 'text')
+        if (textContent?.text) {
+            const errorPatterns = [
+                /失败/,
+                /错误/,
+                /无权限/,
+                /被禁用/,
+                /被拦截/,
+                /不存在/,
+                /无法/,
+                /拒绝/,
+                /Error:/i,
+                /Failed/i,
+                /Permission denied/i,
+                /Forbidden/i
+            ]
+            for (const pattern of errorPatterns) {
+                if (pattern.test(textContent.text)) return true
+            }
+        }
+    }
+    return false
+}
+
+/**
+ * 创建权限不足的错误响应
+ * @param {string} action - 操作名称
+ * @param {string} requiredRole - 所需权限
+ * @param {string} currentRole - 当前权限
+ * @returns {Object} 错误响应
+ */
+export function permissionDeniedError(action, requiredRole, currentRole) {
+    return {
+        success: false,
+        error: `权限不足: 执行"${action}"需要${requiredRole}权限，当前Bot权限为${currentRole}`,
+        isError: true,
+        permissionDenied: true,
+        required: requiredRole,
+        current: currentRole
+    }
+}
+
+/**
+ * 创建工具被禁用的错误响应
+ * @param {string} toolName - 工具名称
+ * @param {string} reason - 禁用原因
+ * @returns {Object} 错误响应
+ */
+export function toolDisabledError(toolName, reason = '已被管理员禁用') {
+    return {
+        success: false,
+        error: `工具"${toolName}"${reason}，无法执行`,
+        isError: true,
+        toolDisabled: true,
+        toolName
+    }
+}

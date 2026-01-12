@@ -8,7 +8,14 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { detectFramework as getBotFramework, isMaster as checkIsMaster } from '../utils/platformAdapter.js'
 import config from '../../config/config.js'
-import { validateParams, paramError } from './tools/helpers.js'
+import {
+    validateParams,
+    paramError,
+    getBotPermission,
+    isToolResultError,
+    permissionDeniedError,
+    toolDisabledError
+} from './tools/helpers.js'
 
 // 懒加载统计服务
 let _statsService = null
@@ -141,6 +148,20 @@ class ToolContext {
     }
     isNT() {
         return this.getAdapter().isNT
+    }
+
+    /**
+     * 获取 Bot 在指定群内的权限信息
+     * @param {number|string} groupId - 群号，不传则使用当前事件的群号
+     * @returns {Promise<{role: string, isAdmin: boolean, isOwner: boolean, inGroup: boolean}>}
+     */
+    async getBotPermission(groupId) {
+        const gid = groupId || this.event?.group_id
+        if (!gid) {
+            return { role: 'unknown', isAdmin: false, isOwner: false, inGroup: false }
+        }
+        const bot = this.getBot()
+        return await getBotPermission(bot, gid)
     }
 
     /**
@@ -946,7 +967,8 @@ export class BuiltinMcpServer {
                         text: `危险工具 "${name}" 已被拦截。此工具可能执行踢人、禁言、撤回等危险操作。如需使用，请在管理面板的"工具管理-高级设置"中开启"允许危险操作"选项。`
                     }
                 ],
-                isError: true
+                isError: true,
+                toolDisabled: true
             }
         }
 
@@ -956,7 +978,80 @@ export class BuiltinMcpServer {
         // 获取用户信息用于统计
         const event = ctx.getEvent?.()
         const userId = event?.user_id?.toString()
-        const groupId = event?.group_id?.toString()
+        const groupId = event?.group_id?.toString() || args?.group_id?.toString()
+        const adminRequiredTools = [
+            'kick_member',
+            'mute_member',
+            'mute_all',
+            'set_group_admin',
+            'set_group_card',
+            'set_group_title',
+            'set_group_name',
+            'recall_message',
+            'send_group_notice',
+            'delete_group_notice'
+        ]
+        const ownerRequiredTools = ['set_group_admin', 'set_group_title']
+        const targetPermCheckTools = ['kick_member', 'mute_member']
+        if (groupId && (adminRequiredTools.includes(name) || ownerRequiredTools.includes(name))) {
+            try {
+                const bot = ctx.getBot?.() || ctx.bot || global.Bot
+                const botPerm = await getBotPermission(bot, groupId)
+
+                logger.debug(`[BuiltinMCP] Bot权限检查: 群${groupId}, role=${botPerm.role}, isAdmin=${botPerm.isAdmin}`)
+                if (!botPerm.inGroup && botPerm.role === 'unknown') {
+                    logger.warn(`[BuiltinMCP] 工具 ${name} 需要Bot在群内，但Bot可能不在该群`)
+                }
+                if (ownerRequiredTools.includes(name) && !botPerm.isOwner) {
+                    logger.warn(`[BuiltinMCP] 工具 ${name} 需要群主权限，当前Bot权限: ${botPerm.role}`)
+                    return this.formatResult(permissionDeniedError(name, '群主', botPerm.role || 'member'))
+                }
+
+                // 检查是否需要管理员权限
+                if (adminRequiredTools.includes(name) && !botPerm.isAdmin) {
+                    logger.warn(`[BuiltinMCP] 工具 ${name} 需要管理员权限，当前Bot权限: ${botPerm.role}`)
+                    return this.formatResult(permissionDeniedError(name, '管理员', botPerm.role || 'member'))
+                }
+
+                // 检查目标用户权限（踢人/禁言不能对权限相同或更高的人操作）
+                if (targetPermCheckTools.includes(name) && botPerm.isAdmin) {
+                    const targetUserIds = []
+                    // 收集所有目标用户ID
+                    if (args?.user_id) targetUserIds.push(String(args.user_id))
+                    if (args?.mutes && typeof args.mutes === 'object') {
+                        targetUserIds.push(...Object.keys(args.mutes))
+                    }
+                    if (args?.user_ids && Array.isArray(args.user_ids)) {
+                        targetUserIds.push(...args.user_ids.map(String))
+                    }
+
+                    // 检查每个目标用户的权限
+                    for (const targetId of targetUserIds) {
+                        const targetPerm = await this.getGroupMemberRole(bot, groupId, targetId)
+                        if (targetPerm === 'owner') {
+                            logger.warn(`[BuiltinMCP] 不能对群主(${targetId})执行 ${name}`)
+                            return this.formatResult({
+                                success: false,
+                                error: `无法对群主(${targetId})执行此操作，群主权限最高`,
+                                isError: true,
+                                permissionDenied: true
+                            })
+                        }
+                        if (targetPerm === 'admin' && !botPerm.isOwner) {
+                            logger.warn(`[BuiltinMCP] 管理员不能对其他管理员(${targetId})执行 ${name}`)
+                            return this.formatResult({
+                                success: false,
+                                error: `管理员无法对其他管理员(${targetId})执行此操作，只有群主可以`,
+                                isError: true,
+                                permissionDenied: true
+                            })
+                        }
+                    }
+                }
+            } catch (e) {
+                logger.debug(`[BuiltinMCP] 检查Bot权限失败: ${e.message}`)
+            }
+        }
 
         // 统计记录辅助函数
         const recordStats = async (result, error = null) => {
@@ -1126,6 +1221,9 @@ export class BuiltinMcpServer {
      * @returns {Object} 上下文包装器
      */
     createRequestContext(requestContext) {
+        // Bot权限缓存（避免重复查询）
+        let _botPermissionCache = null
+
         // 如果直接传入了 isMaster（如管理面板测试），创建简化上下文
         if (requestContext && requestContext.isMaster !== undefined && !requestContext.event) {
             const adapterInfo =
@@ -1148,6 +1246,10 @@ export class BuiltinMcpServer {
                 event: null,
                 isMaster: requestContext.isMaster,
                 isAdminTest: requestContext.isAdminTest || false,
+                getBotPermission: async groupId => {
+                    if (!groupId) return { role: 'unknown', isAdmin: false, isOwner: false, inGroup: false }
+                    return await getBotPermission(global.Bot, groupId)
+                },
                 registerCallback: (id, cb) => toolContext.registerCallback(id, cb),
                 executeCallback: (id, data) => toolContext.executeCallback(id, data)
             }
@@ -1184,7 +1286,20 @@ export class BuiltinMcpServer {
                 return _adapterInfo
             }
             const userId = requestContext.event?.user_id
+            const groupId = requestContext.event?.group_id
             const isMasterUser = userId ? checkIsMaster(userId) : false
+
+            // 获取Bot在当前群的权限（带缓存）
+            const getBotPerm = async gid => {
+                const targetGid = gid || groupId
+                if (!targetGid) return { role: 'unknown', isAdmin: false, isOwner: false, inGroup: false }
+                if (_botPermissionCache && _botPermissionCache.groupId === targetGid) {
+                    return _botPermissionCache.permission
+                }
+                const permission = await getBotPermission(getBot(), targetGid)
+                _botPermissionCache = { groupId: targetGid, permission }
+                return permission
+            }
 
             return {
                 getBot,
@@ -1196,6 +1311,9 @@ export class BuiltinMcpServer {
                 bot: getBot(),
                 event: requestContext.event,
                 isMaster: isMasterUser,
+                groupId,
+                userId,
+                getBotPermission: getBotPerm,
                 registerCallback: (id, cb) => toolContext.registerCallback(id, cb),
                 executeCallback: (id, data) => toolContext.executeCallback(id, data)
             }
@@ -1204,14 +1322,81 @@ export class BuiltinMcpServer {
     }
 
     /**
+     * 获取群成员的角色
+     * @param {Object} bot - Bot实例
+     * @param {number|string} groupId - 群号
+     * @param {number|string} userId - 用户QQ
+     * @returns {Promise<'owner'|'admin'|'member'|'unknown'>}
+     */
+    async getGroupMemberRole(bot, groupId, userId) {
+        if (!bot || !groupId || !userId) return 'unknown'
+
+        const gid = parseInt(groupId)
+        const uid = parseInt(userId)
+
+        try {
+            // 方式1: 从群列表缓存获取群主信息
+            const groupInfo = bot.gl?.get(gid)
+            if (groupInfo?.owner_id === uid) {
+                return 'owner'
+            }
+
+            // 方式2: 通过 pickGroup 获取成员信息
+            if (bot.pickGroup) {
+                try {
+                    const group = bot.pickGroup(gid)
+                    const memberInfo = group?.pickMember?.(uid)?.info
+                    if (memberInfo?.role) {
+                        return memberInfo.role
+                    }
+                    // 检查管理员列表
+                    const admins = group?.admin_list || []
+                    if (admins.includes(uid)) {
+                        return 'admin'
+                    }
+                } catch (e) {
+                    // 忽略
+                }
+            }
+
+            // 方式3: OneBot API
+            if (bot.sendApi) {
+                try {
+                    const info = await bot.sendApi('get_group_member_info', {
+                        group_id: gid,
+                        user_id: uid
+                    })
+                    const role = info?.data?.role || info?.role
+                    if (role) return role
+                } catch (e) {
+                    // 忽略
+                }
+            }
+        } catch (e) {
+            logger.debug(`[BuiltinMCP] getGroupMemberRole error: ${e.message}`)
+        }
+
+        return 'member' // 默认返回普通成员
+    }
+
+    /**
      * 格式化工具结果为 MCP 标准格式
+     * 增强错误检测：确保失败/禁用等情况正确标记为 isError
      */
     formatResult(result) {
         if (!result) {
-            return { content: [{ type: 'text', text: 'No result' }] }
+            return { content: [{ type: 'text', text: 'No result' }], isError: true }
         }
+
+        // 检查是否为错误结果
+        const hasError = isToolResultError(result)
+
         if (result.content && Array.isArray(result.content)) {
-            return result
+            // 确保 isError 正确传递
+            return {
+                ...result,
+                isError: result.isError === true || hasError
+            }
         }
         const content = []
 
@@ -1255,7 +1440,14 @@ export class BuiltinMcpServer {
             })
         }
 
-        return { content, isError: result.error ? true : false }
+        return {
+            content,
+            isError: hasError,
+            // 保留原始错误信息供上层使用
+            ...(result.error && { errorMessage: result.error }),
+            ...(result.permissionDenied && { permissionDenied: true }),
+            ...(result.toolDisabled && { toolDisabled: true })
+        }
     }
     defineTools() {
         return []
