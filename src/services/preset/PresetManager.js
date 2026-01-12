@@ -436,13 +436,15 @@ export class PresetManager {
     markContextCleared(conversationId) {
         this.clearedContexts.set(conversationId, {
             clearedAt: Date.now(),
-            isNewSession: true
+            useCount: 0, // 使用计数
+            maxUses: 3 // 最多保护3次请求
         })
         logger.debug(`[PresetManager] 标记上下文已清除: ${conversationId}`)
     }
 
     /**
      * 检查上下文是否已被清除
+     * 改进：使用时间窗口+使用次数双重保护，确保多次请求都能正确截断上下文
      * @param {string} conversationId
      * @returns {boolean}
      */
@@ -450,12 +452,28 @@ export class PresetManager {
         const state = this.clearedContexts.get(conversationId)
         if (!state) return false
 
-        // 标记在第一次使用后自动失效
-        if (state.isNewSession) {
-            // 消费这个标记
-            state.isNewSession = false
+        const now = Date.now()
+        const clearWindow = 60 * 1000 // 60秒保护窗口
+
+        // 检查是否在保护窗口内
+        if (now - state.clearedAt < clearWindow) {
+            // 增加使用计数
+            state.useCount = (state.useCount || 0) + 1
+
+            // 如果超过最大使用次数，移除标记（防止无限保护）
+            if (state.useCount > (state.maxUses || 3)) {
+                this.clearedContexts.delete(conversationId)
+                logger.debug(`[PresetManager] 上下文清除标记已过期(使用次数): ${conversationId}`)
+                return false
+            }
+
+            logger.debug(`[PresetManager] 上下文清除保护生效: ${conversationId}, 使用次数: ${state.useCount}`)
             return true
         }
+
+        // 超过时间窗口，移除标记
+        this.clearedContexts.delete(conversationId)
+        logger.debug(`[PresetManager] 上下文清除标记已过期(超时): ${conversationId}`)
         return false
     }
 
@@ -471,7 +489,7 @@ export class PresetManager {
      * 清理过期的上下文标记
      */
     cleanExpiredContextMarks() {
-        const expireTime = 30 * 60 * 1000 // 30分钟
+        const expireTime = 5 * 60 * 1000 // 5分钟（缩短过期时间）
         const now = Date.now()
         for (const [id, state] of this.clearedContexts) {
             if (now - state.clearedAt > expireTime) {
