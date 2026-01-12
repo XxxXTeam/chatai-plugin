@@ -2814,15 +2814,15 @@ export const messageTools = [
 
     {
         name: 'send_pb_message',
-        description: '发送 Protobuf 格式消息。用于发送特殊格式的消息，如富文本、长图文等。需要协议端支持。',
+        description:
+            '发送 Protobuf 格式消息或 OIDB 服务请求。支持 icqq/TRSS 的 sendOidb/sendUni，也支持 OneBot 的扩展 API。',
         inputSchema: {
             type: 'object',
             properties: {
                 pb_data: { type: 'string', description: 'Protobuf 数据（Base64编码）或 JSON 格式的 pb 结构' },
                 pb_type: {
                     type: 'string',
-                    description: 'PB消息类型: rich(富文本), long_msg(长消息), ark(卡片), custom(自定义)',
-                    enum: ['rich', 'long_msg', 'ark', 'custom']
+                    description: 'PB消息类型或OIDB命令，如: rich, long_msg, ark, custom, 或 OidbSvc.0x568_22 等'
                 },
                 group_id: { type: 'string', description: '目标群号' },
                 user_id: { type: 'string', description: '目标用户QQ号' }
@@ -2840,35 +2840,85 @@ export const messageTools = [
                 const targetGroupId = args.group_id ? parseInt(args.group_id) : e?.group_id
                 const targetUserId = args.user_id ? parseInt(args.user_id) : !targetGroupId ? e?.user_id : null
                 const isGroup = !!targetGroupId
+                const pbType = args.pb_type || 'custom'
 
                 let pbData = args.pb_data
                 let result = null
                 let method = ''
+
+                // 解析 JSON 格式的 pb_data
                 try {
                     if (typeof pbData === 'string' && pbData.startsWith('{')) {
                         pbData = JSON.parse(pbData)
                     }
                 } catch {}
+
+                // 解码 Base64 数据
+                let decodedData = pbData
+                if (typeof pbData === 'string' && !pbData.startsWith('{')) {
+                    try {
+                        decodedData = Buffer.from(pbData, 'base64')
+                    } catch {}
+                }
+
+                // 检查是否是 OIDB 服务命令
+                const isOidbCmd = pbType.startsWith('OidbSvc') || pbType.startsWith('oidb')
+
+                // icqq/TRSS: 使用 sendOidb 发送 OIDB 请求
+                if (isOidbCmd && (bot.sendOidb || bot.sendUni)) {
+                    try {
+                        const sendFn = bot.sendOidb || bot.sendUni
+                        result = await sendFn.call(bot, pbType, decodedData)
+                        method = 'icqq_oidb'
+                        return {
+                            success: true,
+                            method,
+                            cmd: pbType,
+                            response: result ? (Buffer.isBuffer(result) ? result.toString('base64') : result) : null
+                        }
+                    } catch (oidbErr) {
+                        return { success: false, error: `OIDB调用失败: ${oidbErr.message}`, cmd: pbType }
+                    }
+                }
+
+                // icqq: 使用 pickGroup/pickFriend 的方法
+                if (bot.pickGroup && isGroup && targetGroupId) {
+                    try {
+                        const group = bot.pickGroup(targetGroupId)
+                        if (group.sendOidb && isOidbCmd) {
+                            result = await group.sendOidb(pbType, decodedData)
+                            method = 'group_oidb'
+                            return {
+                                success: true,
+                                method,
+                                cmd: pbType,
+                                response: result ? (Buffer.isBuffer(result) ? result.toString('base64') : result) : null
+                            }
+                        }
+                    } catch {}
+                }
+
+                // OneBot API: send_pb_msg
                 if (bot.sendApi) {
                     try {
                         const apiParams = {
                             [isGroup ? 'group_id' : 'user_id']: isGroup ? targetGroupId : targetUserId,
                             pb_data: typeof pbData === 'string' ? pbData : JSON.stringify(pbData),
-                            pb_type: args.pb_type || 'custom'
+                            pb_type: pbType
                         }
-
                         result = await bot.sendApi('send_pb_msg', apiParams)
                         method = 'send_pb_msg'
-
                         if (result?.status === 'ok' || result?.retcode === 0 || result?.message_id) {
                             return {
                                 success: true,
                                 method,
                                 message_id: result.message_id || result.data?.message_id,
-                                pb_type: args.pb_type || 'custom'
+                                pb_type: pbType
                             }
                         }
                     } catch {}
+
+                    // 尝试 raw segment
                     try {
                         const rawSeg = { type: 'raw', data: { data: pbData } }
                         const apiName = isGroup ? 'send_group_msg' : 'send_private_msg'
@@ -2877,7 +2927,6 @@ export const messageTools = [
                             message: [rawSeg]
                         })
                         method = 'raw_segment'
-
                         if (result?.status === 'ok' || result?.retcode === 0 || result?.message_id) {
                             return {
                                 success: true,
@@ -2887,12 +2936,13 @@ export const messageTools = [
                         }
                     } catch {}
                 }
+
+                // icqq: sendPb/sendPbMsg
                 if (bot.sendPb || bot.sendPbMsg) {
                     try {
                         const sendFn = bot.sendPb || bot.sendPbMsg
-                        result = await sendFn.call(bot, isGroup ? targetGroupId : targetUserId, pbData, isGroup)
+                        result = await sendFn.call(bot, isGroup ? targetGroupId : targetUserId, decodedData, isGroup)
                         method = 'icqq_pb'
-
                         if (result) {
                             return {
                                 success: true,
@@ -2906,7 +2956,14 @@ export const messageTools = [
                 return {
                     success: false,
                     error: '当前协议端不支持 PB 消息发送',
-                    note: 'PB 消息需要特定协议端支持，如 NapCat 扩展版、TRSS 等'
+                    note: 'PB/OIDB 消息需要 icqq/TRSS 或支持扩展API的协议端',
+                    available_methods: {
+                        sendOidb: !!bot.sendOidb,
+                        sendUni: !!bot.sendUni,
+                        sendApi: !!bot.sendApi,
+                        sendPb: !!(bot.sendPb || bot.sendPbMsg),
+                        pickGroup: !!bot.pickGroup
+                    }
                 }
             } catch (err) {
                 return { success: false, error: `发送PB消息失败: ${err.message}` }

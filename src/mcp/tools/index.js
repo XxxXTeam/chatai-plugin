@@ -1,154 +1,130 @@
 /**
  * 内置工具加载器
  * 按类别组织工具，方便管理和扩展
+ * 支持热重载：使用动态导入 + 时间戳避免缓存
  */
 
-import { basicTools } from './basic.js'
-import { userTools } from './user.js'
-import { groupTools } from './group.js'
-import { messageTools, forwardDataTools } from './message.js'
-import { adminTools } from './admin.js'
-import { groupStatsTools } from './groupStats.js'
-import { fileTools } from './file.js'
-import { webTools } from './web.js'
-import { memoryTools } from './memory.js'
-import { contextTools } from './context.js'
-import { mediaTools } from './media.js'
-import { searchTools } from './search.js'
-import { utilsTools } from './utils.js'
-import { botTools } from './bot.js'
-import { voiceTools } from './voice.js'
-import { extraTools } from './extra.js'
-import { shellTools } from './shell.js'
+// 工具模块文件列表
+const toolModules = {
+    basic: { file: './basic.js', export: 'basicTools' },
+    user: { file: './user.js', export: 'userTools' },
+    group: { file: './group.js', export: 'groupTools' },
+    message: { file: './message.js', export: ['messageTools', 'forwardDataTools'] },
+    admin: { file: './admin.js', export: 'adminTools' },
+    groupStats: { file: './groupStats.js', export: 'groupStatsTools' },
+    file: { file: './file.js', export: 'fileTools' },
+    web: { file: './web.js', export: 'webTools' },
+    memory: { file: './memory.js', export: 'memoryTools' },
+    context: { file: './context.js', export: 'contextTools' },
+    media: { file: './media.js', export: 'mediaTools' },
+    search: { file: './search.js', export: 'searchTools' },
+    utils: { file: './utils.js', export: 'utilsTools' },
+    bot: { file: './bot.js', export: 'botTools' },
+    voice: { file: './voice.js', export: 'voiceTools' },
+    extra: { file: './extra.js', export: 'extraTools' },
+    shell: { file: './shell.js', export: 'shellTools' }
+}
 
-/**
- * 工具类别配置
- * 用于管理页面显示和工具开关
- */
-export const toolCategories = {
-    basic: {
-        name: '基础工具',
-        description: '时间获取、随机数等基础功能',
-        icon: 'Clock',
-        tools: basicTools
-    },
-    user: {
-        name: '用户信息',
-        description: '获取用户信息、好友列表等',
-        icon: 'User',
-        tools: userTools
-    },
-    group: {
-        name: '群组信息',
-        description: '获取群信息、成员列表等',
-        icon: 'Users',
-        tools: groupTools
-    },
-    message: {
-        name: '消息操作',
-        description: '发送消息、@用户、获取聊天记录、转发消息解析等',
-        icon: 'MessageSquare',
-        tools: [...messageTools, ...forwardDataTools]
-    },
-    admin: {
-        name: '群管理',
-        description: '禁言、踢人、设置群名片等管理功能',
-        icon: 'Shield',
-        tools: adminTools
-    },
-    groupStats: {
-        name: '群统计',
-        description: '群星级、龙王、发言榜、幸运字符、不活跃成员等',
-        icon: 'BarChart',
-        tools: groupStatsTools
-    },
-    file: {
-        name: '文件操作',
-        description: '群文件上传、下载、管理等',
-        icon: 'FolderOpen',
-        tools: fileTools
-    },
-    media: {
-        name: '媒体处理',
-        description: '图片解析、语音处理、二维码生成等',
-        icon: 'Image',
-        tools: mediaTools
-    },
-    web: {
-        name: '网页访问',
-        description: '访问网页、获取内容等',
-        icon: 'Globe',
-        tools: webTools
-    },
-    search: {
-        name: '搜索工具',
-        description: '网页搜索、Wiki查询、翻译等',
-        icon: 'Search',
-        tools: searchTools
-    },
-    utils: {
-        name: '实用工具',
-        description: '计算、编码转换、时间处理等',
-        icon: 'Wrench',
-        tools: utilsTools
-    },
-    memory: {
-        name: '记忆管理',
-        description: '用户记忆的增删改查',
-        icon: 'Brain',
-        tools: memoryTools
-    },
-    context: {
-        name: '上下文管理',
-        description: '对话上下文、群聊上下文等',
-        icon: 'History',
-        tools: contextTools
-    },
-    bot: {
-        name: 'Bot信息',
-        description: '获取机器人自身信息、状态、好友列表等',
-        icon: 'Bot',
-        tools: botTools
-    },
-    voice: {
-        name: '语音/声聊',
-        description: 'AI语音对话、TTS语音合成、语音识别等',
-        icon: 'Mic',
-        tools: voiceTools
-    },
-    extra: {
-        name: '扩展工具',
-        description: '天气查询、一言、骰子、倒计时、提醒、插画等',
-        icon: 'Sparkles',
-        tools: extraTools
-    },
+// 类别元信息
+const categoryMeta = {
+    basic: { name: '基础工具', description: '时间获取、随机数等基础功能', icon: 'Clock' },
+    user: { name: '用户信息', description: '获取用户信息、好友列表等', icon: 'User' },
+    group: { name: '群组信息', description: '获取群信息、成员列表等', icon: 'Users' },
+    message: { name: '消息操作', description: '发送消息、@用户、获取聊天记录、转发消息解析等', icon: 'MessageSquare' },
+    admin: { name: '群管理', description: '禁言、踢人、设置群名片等管理功能', icon: 'Shield' },
+    groupStats: { name: '群统计', description: '群星级、龙王、发言榜、幸运字符、不活跃成员等', icon: 'BarChart' },
+    file: { name: '文件操作', description: '群文件上传、下载、管理等', icon: 'FolderOpen' },
+    media: { name: '媒体处理', description: '图片解析、语音处理、二维码生成等', icon: 'Image' },
+    web: { name: '网页访问', description: '访问网页、获取内容等', icon: 'Globe' },
+    search: { name: '搜索工具', description: '网页搜索、Wiki查询、翻译等', icon: 'Search' },
+    utils: { name: '实用工具', description: '计算、编码转换、时间处理等', icon: 'Wrench' },
+    memory: { name: '记忆管理', description: '用户记忆的增删改查', icon: 'Brain' },
+    context: { name: '上下文管理', description: '对话上下文、群聊上下文等', icon: 'History' },
+    bot: { name: 'Bot信息', description: '获取机器人自身信息、状态、好友列表等', icon: 'Bot' },
+    voice: { name: '语音/声聊', description: 'AI语音对话、TTS语音合成、语音识别等', icon: 'Mic' },
+    extra: { name: '扩展工具', description: '天气查询、一言、骰子、倒计时、提醒、插画等', icon: 'Sparkles' },
     shell: {
         name: '系统命令',
         description: '执行Shell命令、获取系统信息、环境变量等（危险）',
         icon: 'Terminal',
-        tools: shellTools,
         dangerous: true
     }
 }
+
+// 缓存加载的工具类别
+let toolCategories = null
+let lastLoadTime = 0
+
+/**
+ * 动态加载工具模块
+ * @param {boolean} forceReload - 强制重新加载
+ */
+async function loadToolModules(forceReload = false) {
+    const now = Date.now()
+    if (toolCategories && !forceReload && now - lastLoadTime < 1000) {
+        return toolCategories
+    }
+
+    toolCategories = {}
+    const timestamp = now // 用于缓存破坏
+
+    for (const [category, moduleInfo] of Object.entries(toolModules)) {
+        try {
+            // 动态导入，添加时间戳避免缓存
+            const module = await import(`${moduleInfo.file}?t=${timestamp}`)
+
+            let tools = []
+            if (Array.isArray(moduleInfo.export)) {
+                // 多个导出合并
+                for (const exp of moduleInfo.export) {
+                    if (module[exp]) {
+                        tools = tools.concat(module[exp])
+                    }
+                }
+            } else {
+                tools = module[moduleInfo.export] || []
+            }
+
+            const meta = categoryMeta[category] || {}
+            toolCategories[category] = {
+                name: meta.name || category,
+                description: meta.description || '',
+                icon: meta.icon || 'Tool',
+                tools,
+                ...(meta.dangerous && { dangerous: true })
+            }
+        } catch (err) {
+            console.warn(`[BuiltinMCP] 加载工具模块 ${category} 失败:`, err.message)
+            toolCategories[category] = {
+                ...categoryMeta[category],
+                tools: []
+            }
+        }
+    }
+
+    lastLoadTime = now
+    return toolCategories
+}
+export { toolCategories }
 
 /**
  * 获取所有工具
  * @param {Object} options - 选项
  * @param {string[]} options.enabledCategories - 启用的类别
  * @param {string[]} options.disabledTools - 禁用的工具名称
- * @returns {Array} 工具数组
+ * @param {boolean} options.forceReload - 强制重新加载模块
+ * @returns {Promise<Array>} 工具数组
  */
-export function getAllTools(options = {}) {
-    const { enabledCategories, disabledTools = [] } = options
+export async function getAllTools(options = {}) {
+    const { enabledCategories, disabledTools = [], forceReload = false } = options
+    const categories = await loadToolModules(forceReload)
     const allTools = []
 
-    for (const [category, config] of Object.entries(toolCategories)) {
+    for (const [category, config] of Object.entries(categories)) {
         if (enabledCategories && !enabledCategories.includes(category)) {
             continue
         }
-
-        // 过滤禁用的工具
-        const tools = config.tools.filter(tool => !disabledTools.includes(tool.name))
+        const tools = (config.tools || []).filter(tool => !disabledTools.includes(tool.name))
         allTools.push(...tools)
     }
 
@@ -157,28 +133,42 @@ export function getAllTools(options = {}) {
 
 /**
  * 获取工具类别信息（用于管理页面）
- * @returns {Array} 类别信息数组
+ * @param {boolean} forceReload - 强制重新加载
+ * @returns {Promise<Array>} 类别信息数组
  */
-export function getCategoryInfo() {
-    return Object.entries(toolCategories).map(([key, config]) => ({
+export async function getCategoryInfo(forceReload = false) {
+    const categories = await loadToolModules(forceReload)
+    return Object.entries(categories).map(([key, config]) => ({
         key,
         name: config.name,
         description: config.description,
         icon: config.icon,
-        toolCount: config.tools.length,
-        tools: config.tools.map(t => ({ name: t.name, description: t.description }))
+        toolCount: (config.tools || []).length,
+        tools: (config.tools || []).map(t => ({ name: t.name, description: t.description }))
     }))
 }
 
 /**
  * 按名称获取工具
  * @param {string} name - 工具名称
- * @returns {Object|null} 工具定义
+ * @param {boolean} forceReload - 强制重新加载
+ * @returns {Promise<Object|null>} 工具定义
  */
-export function getToolByName(name) {
-    for (const config of Object.values(toolCategories)) {
-        const tool = config.tools.find(t => t.name === name)
+export async function getToolByName(name, forceReload = false) {
+    const categories = await loadToolModules(forceReload)
+    for (const config of Object.values(categories)) {
+        const tool = (config.tools || []).find(t => t.name === name)
         if (tool) return tool
     }
     return null
 }
+
+/**
+ * 强制重新加载所有工具模块
+ * @returns {Promise<Object>} 加载后的工具类别
+ */
+export async function reloadToolModules() {
+    return await loadToolModules(true)
+}
+
+export { loadToolModules }
