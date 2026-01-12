@@ -758,26 +758,70 @@ export const fileTools = [
         handler: async (args, ctx) => {
             try {
                 const bot = ctx.getBot()
-
+                const adapter = ctx.getAdapter?.()
+                const isIcqq = adapter?.adapter === 'icqq' || (bot.pickGroup && bot.pickFriend && !bot.sendApi)
+                if (isIcqq) {
+                    const ocrFn = bot.imageOcr || Bot?.imageOcr
+                    if (ocrFn) {
+                        const result = await ocrFn.call(bot, args.image)
+                        if (result?.wordslist || result?.texts) {
+                            const texts = result.wordslist || result.texts || []
+                            return {
+                                success: true,
+                                adapter: 'icqq',
+                                language: result.language || '',
+                                texts: texts.map(t => ({
+                                    text: t.words || t.text,
+                                    confidence: t.confidence,
+                                    coordinates: t.polygon || t.coordinates
+                                })),
+                                full_text: texts.map(t => t.words || t.text).join('\n')
+                            }
+                        }
+                    }
+                    return { success: false, error: 'icqq OCR调用失败，可能需要图片URL或已发送的图片' }
+                }
                 if (bot.sendApi) {
-                    const result = await bot.sendApi('ocr_image', { image: args.image })
-
-                    if (result?.data || result?.texts) {
-                        const texts = result.data?.texts || result.texts || []
-                        return {
-                            success: true,
-                            language: result.data?.language || result.language || '',
-                            texts: texts.map(t => ({
-                                text: t.text,
-                                confidence: t.confidence,
-                                coordinates: t.coordinates
-                            })),
-                            full_text: texts.map(t => t.text).join('\n')
+                    try {
+                        const result = await bot.sendApi('ocr_image', { image: args.image })
+                        if (result?.data || result?.texts) {
+                            const texts = result.data?.texts || result.texts || []
+                            return {
+                                success: true,
+                                adapter: 'onebot',
+                                language: result.data?.language || result.language || '',
+                                texts: texts.map(t => ({
+                                    text: t.text,
+                                    confidence: t.confidence,
+                                    coordinates: t.coordinates
+                                })),
+                                full_text: texts.map(t => t.text).join('\n')
+                            }
+                        }
+                    } catch (apiErr) {
+                        try {
+                            const result = await bot.sendApi('.ocr_image', { image: args.image })
+                            if (result?.data || result?.texts) {
+                                const texts = result.data?.texts || result.texts || []
+                                return {
+                                    success: true,
+                                    adapter: 'onebot',
+                                    language: result.data?.language || result.language || '',
+                                    texts: texts.map(t => ({
+                                        text: t.text,
+                                        confidence: t.confidence,
+                                        coordinates: t.coordinates
+                                    })),
+                                    full_text: texts.map(t => t.text).join('\n')
+                                }
+                            }
+                        } catch (e) {
+                            return { success: false, error: `OCR API不支持或调用失败: ${apiErr.message}` }
                         }
                     }
                 }
 
-                return { success: false, error: '当前协议不支持OCR' }
+                return { success: false, error: '当前协议不支持OCR，支持的协议: icqq, OneBot' }
             } catch (err) {
                 return { success: false, error: `OCR识别失败: ${err.message}` }
             }
