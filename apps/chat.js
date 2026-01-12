@@ -348,7 +348,8 @@ export class Chat extends plugin {
 
         // 前缀触发
         if (groupCfg.prefix) {
-            const result = this.checkPrefix(rawMsg, cfg.prefixes, cfg.prefixPersonas)
+            const cleanedForPrefix = this.cleanAtBot(rawMsg)
+            const result = this.checkPrefix(cleanedForPrefix, cfg.prefixes, cfg.prefixPersonas)
             if (result.matched) {
                 return {
                     triggered: true,
