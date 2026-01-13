@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { useState, useCallback } from 'react'
-import { cn } from '@/lib/utils'
+import { cn, generateUUID } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -20,10 +20,10 @@ interface KeyValueItem {
 function valueToItems(value: Record<string, string>): KeyValueItem[] {
     const entries = Object.entries(value || {})
     if (entries.length === 0) {
-        return [{ id: crypto.randomUUID(), key: '', value: '', enabled: true }]
+        return [{ id: generateUUID(), key: '', value: '', enabled: true }]
     }
     return entries.map(([k, v]) => ({
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         key: k,
         value: String(v),
         enabled: true
@@ -91,14 +91,14 @@ export function KeyValueTable({
     )
 
     const addItem = useCallback(() => {
-        setItems(prev => [...prev, { id: crypto.randomUUID(), key: '', value: '', enabled: true }])
+        setItems(prev => [...prev, { id: generateUUID(), key: '', value: '', enabled: true }])
     }, [])
 
     const removeItem = useCallback(
         (id: string) => {
             setItems(prev => {
                 if (prev.length <= 1) {
-                    const newItems = [{ id: crypto.randomUUID(), key: '', value: '', enabled: true }]
+                    const newItems = [{ id: generateUUID(), key: '', value: '', enabled: true }]
                     syncToParent(newItems)
                     return newItems
                 }
@@ -188,7 +188,7 @@ export function KeyValueTable({
                             size="icon"
                             className="h-7 w-7"
                             onClick={() => {
-                                setItems([{ id: crypto.randomUUID(), key: '', value: '', enabled: true }])
+                                setItems([{ id: generateUUID(), key: '', value: '', enabled: true }])
                                 onChange({})
                             }}
                             title="清空"
