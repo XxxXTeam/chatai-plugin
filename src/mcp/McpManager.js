@@ -782,6 +782,26 @@ export class McpManager {
                     throw new Error(`Server not available for tool: ${name}`)
                 }
                 result = await server.client.callTool(name, args)
+                const duration = Date.now() - startTime
+                const isError = result?.isError === true || result?.success === false
+                try {
+                    const { statsService } = await import('../services/stats/StatsService.js')
+                    if (statsService) {
+                        await statsService.recordToolCallFull({
+                            toolName: name,
+                            request: args,
+                            response: result,
+                            success: !isError,
+                            error: isError ? result?.errorMessage || result?.error || 'Tool error' : null,
+                            duration,
+                            userId: options.userId || options.context?.userId,
+                            groupId: options.context?.groupId,
+                            source: `mcp:${tool.serverName}`
+                        })
+                    }
+                } catch (statsErr) {
+                    logger.debug(`[MCP] Failed to record tool call stats: ${statsErr.message}`)
+                }
             }
 
             // 检查结果是否为错误（包括权限不足、工具禁用等情况）

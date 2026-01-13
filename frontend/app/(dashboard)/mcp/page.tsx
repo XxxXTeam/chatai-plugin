@@ -908,41 +908,45 @@ export default {
                                                         </CollapsibleTrigger>
                                                         <CollapsibleContent>
                                                             <CardContent className="pt-0">
-                                                                <div className="grid gap-2 sm:grid-cols-1 lg:grid-cols-2">
+                                                                <div className="space-y-2">
                                                                     {categoryTools.map(tool => (
                                                                         <div
                                                                             key={tool.name}
-                                                                            className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors group"
+                                                                            className="p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors"
                                                                         >
-                                                                            <div className="flex-1 min-w-0">
-                                                                                <div className="flex items-center gap-2">
-                                                                                    <Code className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                                                                                    <span className="font-medium text-sm truncate">
-                                                                                        {tool.name}
-                                                                                    </span>
+                                                                            <div className="flex items-start justify-between gap-2">
+                                                                                <div className="flex-1 min-w-0">
+                                                                                    <div className="flex items-center gap-2">
+                                                                                        <Code className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                                                                        <span className="font-medium text-sm truncate">
+                                                                                            {tool.name}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2 pl-5">
+                                                                                        {tool.description || '无描述'}
+                                                                                    </p>
                                                                                 </div>
-                                                                                <p className="text-xs text-muted-foreground mt-1 line-clamp-1 pl-5">
-                                                                                    {tool.description || '无描述'}
-                                                                                </p>
                                                                             </div>
-                                                                            <div className="flex gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                            <div className="flex gap-2 mt-2 pt-2 border-t border-border/50">
                                                                                 <Button
-                                                                                    variant="ghost"
-                                                                                    size="icon"
-                                                                                    className="h-7 w-7"
+                                                                                    variant="outline"
+                                                                                    size="sm"
+                                                                                    className="h-8 text-xs flex-1"
                                                                                     onClick={() =>
                                                                                         handleViewDetail(tool)
                                                                                     }
                                                                                 >
-                                                                                    <Eye className="h-3.5 w-3.5" />
+                                                                                    <Eye className="h-3.5 w-3.5 mr-1" />
+                                                                                    参数
                                                                                 </Button>
                                                                                 <Button
-                                                                                    variant="ghost"
-                                                                                    size="icon"
-                                                                                    className="h-7 w-7"
+                                                                                    variant="outline"
+                                                                                    size="sm"
+                                                                                    className="h-8 text-xs flex-1"
                                                                                     onClick={() => handleOpenTest(tool)}
                                                                                 >
-                                                                                    <Play className="h-3.5 w-3.5" />
+                                                                                    <Play className="h-3.5 w-3.5 mr-1" />
+                                                                                    测试
                                                                                 </Button>
                                                                             </div>
                                                                         </div>
@@ -980,75 +984,72 @@ export default {
                                 </Card>
                             ) : (
                                 <ScrollArea className="h-[500px]">
-                                    <div className="grid gap-3 sm:grid-cols-1 lg:grid-cols-2">
+                                    <div className="space-y-3">
                                         {externalTools.map(tool => (
-                                            <Card key={tool.name} className="hover:shadow-md transition-shadow group">
+                                            <Card key={tool.name} className="hover:shadow-md transition-shadow">
                                                 <CardContent className="p-4">
-                                                    <div className="flex items-start justify-between">
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="flex items-center gap-2 mb-2">
-                                                                <Server className="h-4 w-4 text-blue-500" />
-                                                                <span className="font-medium truncate">
-                                                                    {tool.name}
-                                                                </span>
-                                                                <Badge variant="outline" className="text-xs shrink-0">
-                                                                    {tool.serverName}
+                                                    <div className="flex items-center gap-2 mb-2 flex-wrap">
+                                                        <Server className="h-4 w-4 text-blue-500 shrink-0" />
+                                                        <span className="font-medium text-sm truncate">
+                                                            {tool.name}
+                                                        </span>
+                                                        <Badge variant="outline" className="text-xs shrink-0">
+                                                            {tool.serverName}
+                                                        </Badge>
+                                                    </div>
+                                                    <p className="text-sm text-muted-foreground line-clamp-2 mb-2">
+                                                        {tool.description || '无描述'}
+                                                    </p>
+                                                    {tool.inputSchema?.properties && (
+                                                        <div className="flex flex-wrap gap-1 mb-3">
+                                                            {Object.keys(tool.inputSchema.properties)
+                                                                .slice(0, 3)
+                                                                .map(param => (
+                                                                    <Badge
+                                                                        key={param}
+                                                                        variant="secondary"
+                                                                        className="text-xs"
+                                                                    >
+                                                                        {param}
+                                                                    </Badge>
+                                                                ))}
+                                                            {Object.keys(tool.inputSchema.properties).length > 3 && (
+                                                                <Badge variant="secondary" className="text-xs">
+                                                                    +
+                                                                    {Object.keys(tool.inputSchema.properties).length -
+                                                                        3}
                                                                 </Badge>
-                                                            </div>
-                                                            <p className="text-sm text-muted-foreground line-clamp-2">
-                                                                {tool.description || '无描述'}
-                                                            </p>
-                                                            {tool.inputSchema?.properties && (
-                                                                <div className="mt-2 flex flex-wrap gap-1">
-                                                                    {Object.keys(tool.inputSchema.properties)
-                                                                        .slice(0, 3)
-                                                                        .map(param => (
-                                                                            <Badge
-                                                                                key={param}
-                                                                                variant="secondary"
-                                                                                className="text-xs"
-                                                                            >
-                                                                                {param}
-                                                                            </Badge>
-                                                                        ))}
-                                                                    {Object.keys(tool.inputSchema.properties).length >
-                                                                        3 && (
-                                                                        <Badge variant="secondary" className="text-xs">
-                                                                            +
-                                                                            {Object.keys(tool.inputSchema.properties)
-                                                                                .length - 3}
-                                                                        </Badge>
-                                                                    )}
-                                                                </div>
                                                             )}
                                                         </div>
-                                                        <div className="flex gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                className="h-8 w-8"
-                                                                onClick={() => handleViewDetail(tool)}
-                                                            >
-                                                                <Eye className="h-4 w-4" />
-                                                            </Button>
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                className="h-8 w-8"
-                                                                onClick={() => handleOpenTest(tool)}
-                                                            >
-                                                                <Play className="h-4 w-4" />
-                                                            </Button>
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                className="h-8 w-8"
-                                                                onClick={() => handleCopyToJsTool(tool)}
-                                                                title="复制为 JS 工具"
-                                                            >
-                                                                <Copy className="h-4 w-4" />
-                                                            </Button>
-                                                        </div>
+                                                    )}
+                                                    <div className="flex gap-2 pt-2 border-t border-border/50">
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            className="h-8 text-xs flex-1"
+                                                            onClick={() => handleViewDetail(tool)}
+                                                        >
+                                                            <Eye className="h-3.5 w-3.5 mr-1" />
+                                                            参数
+                                                        </Button>
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            className="h-8 text-xs flex-1"
+                                                            onClick={() => handleOpenTest(tool)}
+                                                        >
+                                                            <Play className="h-3.5 w-3.5 mr-1" />
+                                                            测试
+                                                        </Button>
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className="h-8 w-8 shrink-0"
+                                                            onClick={() => handleCopyToJsTool(tool)}
+                                                            title="复制为 JS 工具"
+                                                        >
+                                                            <Copy className="h-3.5 w-3.5" />
+                                                        </Button>
                                                     </div>
                                                 </CardContent>
                                             </Card>
@@ -1294,7 +1295,7 @@ export default {
                         <div className="space-y-4">
                             <KeyValueTable
                                 title="参数列表"
-                                value={testArgs}
+                                value={testArgs || {}}
                                 onChange={setTestArgs}
                                 keyPlaceholder="参数名"
                                 valuePlaceholder="参数值"

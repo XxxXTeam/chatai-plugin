@@ -841,9 +841,115 @@ export default function ToolsPage() {
                         </Select>
                     </div>
 
-                    {/* 工具表格 - 移动端支持横向滑动 */}
-                    <ScrollArea className="h-[400px] sm:h-[500px]">
-                        <div className="min-w-[700px]">
+                    {/* 移动端卡片布局 */}
+                    <div className="block sm:hidden">
+                        <ScrollArea className="h-[400px]">
+                            <div className="space-y-2">
+                                {filteredTools.length === 0 ? (
+                                    <div className="text-center py-12 text-muted-foreground">暂无工具</div>
+                                ) : (
+                                    filteredTools.map(tool => {
+                                        const isDisabled = builtinConfig.disabledTools.includes(tool.name)
+                                        return (
+                                            <div
+                                                key={tool.name}
+                                                className={`p-3 border rounded-lg ${isDisabled ? 'opacity-50 bg-muted/30' : 'bg-card'}`}
+                                            >
+                                                <div className="flex items-start justify-between gap-2">
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center gap-2 flex-wrap">
+                                                            <span className="font-medium text-sm truncate">
+                                                                {tool.name}
+                                                            </span>
+                                                            <Badge
+                                                                variant={tool.isBuiltin ? 'default' : 'secondary'}
+                                                                className={`text-xs ${
+                                                                    tool.isBuiltin
+                                                                        ? 'bg-green-100 text-green-700'
+                                                                        : 'bg-blue-100 text-blue-700'
+                                                                }`}
+                                                            >
+                                                                {tool.isBuiltin ? '内置' : 'MCP'}
+                                                            </Badge>
+                                                            {builtinConfig.dangerousTools.includes(tool.name) && (
+                                                                <Badge variant="destructive" className="text-xs">
+                                                                    危险
+                                                                </Badge>
+                                                            )}
+                                                        </div>
+                                                        <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                                                            {tool.description || '无描述'}
+                                                        </p>
+                                                    </div>
+                                                    <Switch
+                                                        checked={!isDisabled}
+                                                        onCheckedChange={async checked => {
+                                                            try {
+                                                                await toolsApi.toggleTool(tool.name, checked)
+                                                                if (checked) {
+                                                                    setBuiltinConfig({
+                                                                        ...builtinConfig,
+                                                                        disabledTools:
+                                                                            builtinConfig.disabledTools.filter(
+                                                                                t => t !== tool.name
+                                                                            )
+                                                                    })
+                                                                } else {
+                                                                    setBuiltinConfig({
+                                                                        ...builtinConfig,
+                                                                        disabledTools: [
+                                                                            ...builtinConfig.disabledTools,
+                                                                            tool.name
+                                                                        ]
+                                                                    })
+                                                                }
+                                                                toast.success(
+                                                                    checked
+                                                                        ? `${tool.name} 已启用`
+                                                                        : `${tool.name} 已禁用`
+                                                                )
+                                                            } catch (error) {
+                                                                toast.error('切换失败')
+                                                            }
+                                                        }}
+                                                    />
+                                                </div>
+                                                <div className="mt-2 pt-2 border-t space-y-2">
+                                                    <div className="flex gap-2">
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            className="h-9 text-xs flex-1"
+                                                            onClick={() => viewDetail(tool)}
+                                                        >
+                                                            <Eye className="h-4 w-4 mr-1.5" />
+                                                            查看参数
+                                                        </Button>
+                                                        <Button
+                                                            variant="default"
+                                                            size="sm"
+                                                            className="h-9 text-xs flex-1"
+                                                            onClick={() => openTestModal(tool)}
+                                                        >
+                                                            <Play className="h-4 w-4 mr-1.5" />
+                                                            测试工具
+                                                        </Button>
+                                                    </div>
+                                                    <div className="text-xs text-muted-foreground text-center">
+                                                        来源: {tool.serverName || 'builtin'}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )
+                                    })
+                                )}
+                            </div>
+                        </ScrollArea>
+                    </div>
+
+                    {/* 桌面端表格布局 */}
+                    <div className="hidden sm:block">
+                        <ScrollArea className="h-[500px]">
                             <Table>
                                 <TableHeader>
                                     <TableRow>
@@ -911,7 +1017,7 @@ export default function ToolsPage() {
                                                             )}
                                                         </div>
                                                     </TableCell>
-                                                    <TableCell className="max-w-[200px] sm:max-w-[300px] truncate text-muted-foreground">
+                                                    <TableCell className="max-w-[300px] truncate text-muted-foreground">
                                                         {tool.description || '-'}
                                                     </TableCell>
                                                     <TableCell>
@@ -953,8 +1059,8 @@ export default function ToolsPage() {
                                     )}
                                 </TableBody>
                             </Table>
-                        </div>
-                    </ScrollArea>
+                        </ScrollArea>
+                    </div>
                 </CardContent>
             </Card>
 
