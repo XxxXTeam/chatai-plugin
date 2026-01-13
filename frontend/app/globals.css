@@ -1015,3 +1015,67 @@
     transform: translateX(400%);
   }
 }
+
+/* Switch 开关组件样式 */
+.ui-switch {
+  display: inline-flex;
+  height: 24px;
+  width: 44px;
+  flex-shrink: 0;
+  cursor: pointer;
+  align-items: center;
+  border-radius: 9999px;
+  padding: 2px;
+  transition: background-color 0.2s ease;
+  background-color: #e5e7eb;
+  border: 1px solid #d1d5db;
+}
+
+.ui-switch:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+.ui-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ui-switch[data-state="checked"] {
+  background-color: #18181b;
+  border-color: #18181b;
+}
+
+.dark .ui-switch {
+  background-color: #374151;
+  border-color: #4b5563;
+}
+
+.dark .ui-switch[data-state="checked"] {
+  background-color: #f4f4f5;
+  border-color: #f4f4f5;
+}
+
+.ui-switch-thumb {
+  pointer-events: none;
+  display: block;
+  height: 20px;
+  width: 20px;
+  border-radius: 9999px;
+  background-color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.2s ease;
+  transform: translateX(0);
+}
+
+.ui-switch[data-state="checked"] .ui-switch-thumb {
+  transform: translateX(20px);
+}
+
+.dark .ui-switch-thumb {
+  background-color: #18181b;
+}
+
+.dark .ui-switch[data-state="checked"] .ui-switch-thumb {
+  background-color: #18181b;
+}
