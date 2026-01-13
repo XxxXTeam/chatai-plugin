@@ -187,32 +187,34 @@ export default function DashboardPage() {
             <PageHeader title="仪表盘" description="系统概览与快捷入口" icon={LayoutDashboard} />
 
             {/* Stats Grid */}
-            <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4">
                 {stats.map((stat, index) => (
                     <Link
                         key={stat.title}
                         href={stat.href}
                         className="animate-fade-in-up"
-                        style={{ animationDelay: `${index * 100}ms` }}
+                        style={{ animationDelay: `${index * 50}ms` }}
                     >
                         <Card
-                            className={`group relative overflow-hidden transition-all duration-300 cursor-pointer h-full border border-border/40 shadow-sm hover:shadow-lg hover:-translate-y-1 bg-gradient-to-br ${stat.gradient}`}
+                            className={`group relative overflow-hidden transition-all duration-300 cursor-pointer h-full border border-border/40 shadow-sm hover:shadow-lg active:scale-[0.98] bg-gradient-to-br ${stat.gradient}`}
                         >
-                            <CardHeader className="flex flex-row items-center justify-between pb-2">
-                                <CardTitle className="text-sm font-medium text-muted-foreground/80">
+                            <CardHeader className="flex flex-row items-center justify-between pb-1 sm:pb-2 p-3 sm:p-4">
+                                <CardTitle className="text-xs sm:text-sm font-medium text-muted-foreground/80">
                                     {stat.title}
                                 </CardTitle>
                                 <div
-                                    className={`p-2 rounded-xl bg-background/50 backdrop-blur-sm group-hover:scale-110 transition-all duration-300 shadow-sm`}
+                                    className={`p-1.5 sm:p-2 rounded-lg sm:rounded-xl bg-background/50 backdrop-blur-sm group-hover:scale-110 transition-all duration-300 shadow-sm`}
                                 >
-                                    <stat.icon className={`h-5 w-5 ${stat.iconColor}`} />
+                                    <stat.icon className={`h-4 w-4 sm:h-5 sm:w-5 ${stat.iconColor}`} />
                                 </div>
                             </CardHeader>
-                            <CardContent>
-                                <div className={`text-3xl font-bold tracking-tight ${stat.textGradient}`}>
+                            <CardContent className="p-3 sm:p-4 pt-0">
+                                <div
+                                    className={`text-xl sm:text-2xl md:text-3xl font-bold tracking-tight ${stat.textGradient}`}
+                                >
                                     {stat.value}
                                 </div>
-                                <p className="text-xs text-muted-foreground/70 mt-1.5 font-medium">
+                                <p className="text-[10px] sm:text-xs text-muted-foreground/70 mt-1 sm:mt-1.5 font-medium truncate">
                                     {stat.description}
                                 </p>
                             </CardContent>
@@ -222,31 +224,31 @@ export default function DashboardPage() {
             </div>
 
             {/* 快捷入口 - 分组展示 */}
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-3 sm:gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3">
                 {quickGroups.map((group, groupIndex) => (
                     <Card
                         key={group.title}
                         className="glass-card overflow-hidden hover:shadow-md transition-shadow duration-300 animate-fade-in-up"
-                        style={{ animationDelay: `${200 + groupIndex * 100}ms` }}
+                        style={{ animationDelay: `${100 + groupIndex * 50}ms` }}
                     >
-                        <CardHeader className="pb-3 pt-4 border-b border-border/40 bg-muted/20">
-                            <CardTitle className="text-sm font-bold text-foreground/70 tracking-wide uppercase flex items-center gap-2">
-                                <span className="w-1 h-4 bg-primary rounded-full"></span>
+                        <CardHeader className="pb-2 sm:pb-3 pt-3 sm:pt-4 px-3 sm:px-4 border-b border-border/40 bg-muted/20">
+                            <CardTitle className="text-xs sm:text-sm font-bold text-foreground/70 tracking-wide uppercase flex items-center gap-2">
+                                <span className="w-1 h-3 sm:h-4 bg-primary rounded-full"></span>
                                 {group.title}
                             </CardTitle>
                         </CardHeader>
-                        <CardContent className="pt-4 pb-4">
-                            <div className="grid grid-cols-2 gap-3">
+                        <CardContent className="p-3 sm:p-4">
+                            <div className="grid grid-cols-3 sm:grid-cols-2 gap-2 sm:gap-3">
                                 {group.items.map(item => (
                                     <Link key={item.href} href={item.href}>
                                         <Button
                                             variant="ghost"
-                                            className="w-full h-auto flex flex-col gap-2 py-3 hover:bg-primary/5 hover:scale-[1.02] transition-all duration-300 rounded-xl group border border-transparent hover:border-primary/10"
+                                            className="w-full h-auto flex flex-col gap-1.5 sm:gap-2 py-2 sm:py-3 hover:bg-primary/5 active:scale-[0.98] transition-all duration-300 rounded-lg sm:rounded-xl group border border-transparent hover:border-primary/10"
                                         >
-                                            <div className="p-2 rounded-xl bg-muted/50 group-hover:bg-background group-hover:shadow-sm transition-all duration-300">
-                                                <item.icon className={`h-5 w-5 ${item.color}`} />
+                                            <div className="p-1.5 sm:p-2 rounded-lg sm:rounded-xl bg-muted/50 group-hover:bg-background group-hover:shadow-sm transition-all duration-300">
+                                                <item.icon className={`h-4 w-4 sm:h-5 sm:w-5 ${item.color}`} />
                                             </div>
-                                            <span className="text-xs font-medium text-muted-foreground group-hover:text-foreground transition-colors">
+                                            <span className="text-[10px] sm:text-xs font-medium text-muted-foreground group-hover:text-foreground transition-colors truncate max-w-full">
                                                 {item.label}
                                             </span>
                                         </Button>
@@ -259,46 +261,50 @@ export default function DashboardPage() {
             </div>
 
             {/* Status Cards */}
-            <div className="grid gap-4 md:grid-cols-2 animate-fade-in-up delay-300">
+            <div className="grid gap-3 sm:gap-4 grid-cols-1 md:grid-cols-2 animate-fade-in-up delay-300">
                 <Card className="glass-card hover:shadow-md transition-all duration-300">
-                    <CardHeader className="flex flex-row items-center justify-between border-b border-border/40 pb-4">
-                        <div>
-                            <CardTitle className="flex items-center gap-2 text-base">
-                                <div className="p-1.5 rounded-lg bg-blue-500/10 text-blue-500">
-                                    <Plug className="h-4 w-4" />
+                    <CardHeader className="flex flex-row items-center justify-between border-b border-border/40 pb-3 sm:pb-4 p-3 sm:p-4">
+                        <div className="min-w-0 flex-1">
+                            <CardTitle className="flex items-center gap-2 text-sm sm:text-base">
+                                <div className="p-1 sm:p-1.5 rounded-lg bg-blue-500/10 text-blue-500 flex-shrink-0">
+                                    <Plug className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                                 </div>
-                                渠道状态
+                                <span className="truncate">渠道状态</span>
                             </CardTitle>
-                            <CardDescription className="mt-1">API渠道连接状态监控</CardDescription>
+                            <CardDescription className="mt-0.5 sm:mt-1 text-xs sm:text-sm truncate">
+                                API渠道连接状态监控
+                            </CardDescription>
                         </div>
-                        <Link href="/channels">
+                        <Link href="/channels" className="flex-shrink-0 ml-2">
                             <Button
                                 variant="outline"
                                 size="sm"
-                                className="h-8 rounded-lg hover:bg-primary hover:text-primary-foreground transition-colors"
+                                className="h-7 sm:h-8 text-xs sm:text-sm rounded-lg hover:bg-primary hover:text-primary-foreground transition-colors"
                             >
-                                查看全部 <ArrowRight className="ml-1 h-3 w-3" />
+                                <span className="hidden sm:inline">查看全部</span>
+                                <span className="sm:hidden">查看</span>
+                                <ArrowRight className="ml-1 h-3 w-3" />
                             </Button>
                         </Link>
                     </CardHeader>
-                    <CardContent className="pt-4">
-                        <div className="space-y-3">
-                            {data?.channels.slice(0, 5).map(channel => (
+                    <CardContent className="p-3 sm:p-4 pt-3 sm:pt-4">
+                        <div className="space-y-2 sm:space-y-3">
+                            {data?.channels.slice(0, 4).map(channel => (
                                 <div
                                     key={channel.id}
                                     className="flex items-center justify-between p-2 hover:bg-muted/30 rounded-lg transition-colors group"
                                 >
-                                    <div className="flex items-center gap-3 overflow-hidden">
+                                    <div className="flex items-center gap-2 sm:gap-3 overflow-hidden min-w-0 flex-1">
                                         <span
-                                            className={`w-2 h-2 rounded-full ${channel.status === 'active' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : channel.status === 'error' ? 'bg-red-500' : 'bg-gray-400'}`}
+                                            className={`w-2 h-2 rounded-full flex-shrink-0 ${channel.status === 'active' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : channel.status === 'error' ? 'bg-red-500' : 'bg-gray-400'}`}
                                         />
-                                        <span className="text-sm font-medium truncate group-hover:text-primary transition-colors">
+                                        <span className="text-xs sm:text-sm font-medium truncate group-hover:text-primary transition-colors">
                                             {channel.name}
                                         </span>
                                     </div>
                                     <Badge
                                         variant="outline"
-                                        className={`${channel.status === 'active' ? 'bg-green-500/10 text-green-600 border-green-200' : channel.status === 'error' ? 'bg-red-500/10 text-red-600 border-red-200' : 'text-muted-foreground'}`}
+                                        className={`text-[10px] sm:text-xs flex-shrink-0 ${channel.status === 'active' ? 'bg-green-500/10 text-green-600 border-green-200' : channel.status === 'error' ? 'bg-red-500/10 text-red-600 border-red-200' : 'text-muted-foreground'}`}
                                     >
                                         {channel.status === 'active'
                                             ? '正常'
@@ -309,13 +315,13 @@ export default function DashboardPage() {
                                 </div>
                             ))}
                             {(!data?.channels || data.channels.length === 0) && (
-                                <div className="text-center py-8 flex flex-col items-center gap-2">
-                                    <div className="w-12 h-12 rounded-full bg-muted/50 flex items-center justify-center">
-                                        <Plug className="h-6 w-6 text-muted-foreground/50" />
+                                <div className="text-center py-6 sm:py-8 flex flex-col items-center gap-2">
+                                    <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-muted/50 flex items-center justify-center">
+                                        <Plug className="h-5 w-5 sm:h-6 sm:w-6 text-muted-foreground/50" />
                                     </div>
-                                    <p className="text-sm text-muted-foreground">暂无渠道配置</p>
+                                    <p className="text-xs sm:text-sm text-muted-foreground">暂无渠道配置</p>
                                     <Link href="/channels">
-                                        <Button size="sm" variant="secondary" className="mt-2">
+                                        <Button size="sm" variant="secondary" className="mt-2 text-xs sm:text-sm">
                                             添加渠道
                                         </Button>
                                     </Link>
