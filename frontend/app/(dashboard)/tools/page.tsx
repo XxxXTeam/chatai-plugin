@@ -236,6 +236,7 @@ export default function ToolsPage() {
 
     // 一键启用所有工具
     const enableAllTools = async () => {
+        if (!confirm(`确定要启用所有工具吗？\n这将启用 ${toolStats?.disabled || 0} 个当前禁用的工具。`)) return
         setEnablingAll(true)
         try {
             const res = (await toolsApi.enableAll()) as { data?: { enabledCount: number } }
@@ -251,6 +252,12 @@ export default function ToolsPage() {
 
     // 一键禁用所有工具
     const disableAllTools = async () => {
+        if (
+            !confirm(
+                `确定要禁用所有工具吗？\n这将禁用 ${toolStats?.enabled || 0} 个当前启用的工具，AI将无法使用任何工具。`
+            )
+        )
+            return
         setDisablingAll(true)
         try {
             const res = (await toolsApi.disableAll()) as { data?: { disabledCount: number } }

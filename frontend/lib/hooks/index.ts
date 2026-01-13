@@ -2,3 +2,6 @@ export { useResponsive, useMediaQuery, useIsTouchDevice, useSafeArea, breakpoint
 export type { Breakpoint } from './useResponsive'
 
 export { useApi, useList, useSubmit, useDelete } from './useApi'
+
+export { useSSE, useSkillsSSE } from './useSSE'
+export type { SSEEvent, SSEOptions, SSEStatus } from './useSSE'

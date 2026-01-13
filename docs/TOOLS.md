@@ -773,4 +773,388 @@ async run(args, context) {
 
 ---
 
+## 外部 MCP 服务器
+
+除了 JS 工具，还可以通过连接外部 MCP 服务器来扩展工具能力。支持四种连接类型：
+
+### 连接类型对比
+
+| 类型 | 适用场景 | 优点 | 缺点 |
+|------|----------|------|------|
+| npm | 使用 npm 包形式发布的 MCP 服务器 | 易用、自动安装 | 依赖 Node.js 环境 |
+| stdio | 本地进程，任意语言实现 | 灵活、高性能 | 需要手动管理进程 |
+| SSE | 远程服务，实时连接 | 持久连接、实时响应 | 需要稳定网络 |
+| HTTP | 远程服务，无状态 | 简单、易部署 | 每次请求新连接 |
+
+### npm 包形式
+
+最推荐的方式，使用 npm 发布的 MCP 服务器包：
+
+```json
+// data/mcp-servers.json
+{
+  "servers": {
+    "filesystem": {
+      "type": "npm",
+      "package": "@anthropic/mcp-server-filesystem",
+      "args": ["/home/user/documents"]
+    },
+    "memory": {
+      "type": "npm",
+      "package": "@modelcontextprotocol/server-memory"
+    },
+    "github": {
+      "type": "npm",
+      "package": "@anthropic/mcp-server-github",
+      "env": {
+        "GITHUB_TOKEN": "ghp_xxxxxxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+**常用 npm MCP 包：**
+
+| 包名 | 功能 | 环境变量 |
+|------|------|----------|
+| `@anthropic/mcp-server-filesystem` | 文件系统访问 | - |
+| `@modelcontextprotocol/server-memory` | 知识图谱记忆 | - |
+| `@anthropic/mcp-server-brave-search` | Brave 搜索 | `BRAVE_API_KEY` |
+| `@anthropic/mcp-server-github` | GitHub 操作 | `GITHUB_TOKEN` |
+| `@anthropic/mcp-server-fetch` | HTTP 请求 | - |
+| `@anthropic/mcp-server-puppeteer` | 浏览器自动化 | - |
+| `@anthropic/mcp-server-sqlite` | SQLite 数据库 | - |
+| `@anthropic/mcp-server-postgres` | PostgreSQL 数据库 | `POSTGRES_*` |
+| `@upstash/context7-mcp` | Context7 知识库 | `CONTEXT7_API_KEY` |
+
+### stdio 本地进程
+
+用于连接本地运行的 MCP 服务器进程：
+
+```json
+{
+  "servers": {
+    "python-server": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["mcp_server.py"],
+      "env": {
+        "PYTHONPATH": "/path/to/lib"
+      },
+      "cwd": "/path/to/server"
+    },
+    "node-server": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["server.js"]
+    }
+  }
+}
+```
+
+**Python MCP 服务器示例：**
+
+```python
+# mcp_server.py
+import json
+import sys
+
+def handle_request(request):
+    method = request.get('method')
+    
+    if method == 'initialize':
+        return {
+            'protocolVersion': '2024-11-05',
+            'capabilities': {'tools': {'listChanged': False}},
+            'serverInfo': {'name': 'my-server', 'version': '1.0.0'}
+        }
+    
+    if method == 'tools/list':
+        return {
+            'tools': [{
+                'name': 'my_tool',
+                'description': '我的工具',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'input': {'type': 'string'}
+                    }
+                }
+            }]
+        }
+    
+    if method == 'tools/call':
+        params = request.get('params', {})
+        return {
+            'content': [{
+                'type': 'text',
+                'text': f"处理结果: {params.get('arguments', {})}"
+            }]
+        }
+    
+    return {'error': {'code': -32601, 'message': 'Method not found'}}
+
+if __name__ == '__main__':
+    for line in sys.stdin:
+        request = json.loads(line)
+        response = {
+            'jsonrpc': '2.0',
+            'id': request.get('id'),
+            'result': handle_request(request)
+        }
+        print(json.dumps(response), flush=True)
+```
+
+### SSE 远程服务
+
+用于连接支持 Server-Sent Events 的远程 MCP 服务：
+
+```json
+{
+  "servers": {
+    "remote-sse": {
+      "type": "sse",
+      "url": "https://mcp.example.com/sse",
+      "headers": {
+        "Authorization": "Bearer your-api-key"
+      }
+    }
+  }
+}
+```
+
+**SSE 协议流程：**
+
+1. 客户端连接 SSE 端点
+2. 服务器发送 `endpoint` 事件，告知消息端点 URL
+3. 客户端通过 POST 发送请求到消息端点
+4. 服务器返回 202 Accepted，实际响应通过 SSE 流返回
+
+**服务端实现示例（Express.js）：**
+
+```javascript
+const express = require('express')
+const app = express()
+const sessions = new Map()
+
+// SSE 端点
+app.get('/sse', (req, res) => {
+    const sessionId = crypto.randomUUID()
+    
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    
+    // 发送消息端点
+    res.write(`event: endpoint\ndata: /messages?sessionId=${sessionId}\n\n`)
+    
+    sessions.set(sessionId, res)
+    
+    req.on('close', () => sessions.delete(sessionId))
+})
+
+// 消息端点
+app.post('/messages', express.json(), (req, res) => {
+    const { sessionId } = req.query
+    const sseRes = sessions.get(sessionId)
+    
+    if (!sseRes) {
+        return res.status(400).send('Invalid session')
+    }
+    
+    // 处理请求
+    const response = handleMcpRequest(req.body)
+    
+    // 通过 SSE 发送响应
+    sseRes.write(`event: message\ndata: ${JSON.stringify(response)}\n\n`)
+    
+    res.status(202).send('Accepted')
+})
+```
+
+### HTTP 无状态
+
+用于连接简单的 HTTP API 形式的 MCP 服务：
+
+```json
+{
+  "servers": {
+    "remote-http": {
+      "type": "http",
+      "url": "https://api.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer your-api-key",
+        "Content-Type": "application/json"
+      },
+      "timeout": 30000
+    }
+  }
+}
+```
+
+**HTTP 服务端示例：**
+
+```javascript
+app.post('/mcp', express.json(), (req, res) => {
+    const { method, params, id } = req.body
+    
+    let result
+    switch (method) {
+        case 'initialize':
+            result = {
+                protocolVersion: '2024-11-05',
+                capabilities: { tools: { listChanged: false } },
+                serverInfo: { name: 'http-server', version: '1.0.0' }
+            }
+            break
+        case 'tools/list':
+            result = { tools: [/* 工具列表 */] }
+            break
+        case 'tools/call':
+            result = handleToolCall(params)
+            break
+        default:
+            return res.json({
+                jsonrpc: '2.0',
+                id,
+                error: { code: -32601, message: 'Method not found' }
+            })
+    }
+    
+    res.json({ jsonrpc: '2.0', id, result })
+})
+```
+
+### 通过管理面板配置
+
+除了编辑 JSON 文件，也可以通过 Web 管理面板配置 MCP 服务器：
+
+1. 打开管理面板
+2. 进入「MCP 服务器」页面
+3. 点击「添加服务器」
+4. 选择类型并填写配置
+5. 点击「连接」测试
+
+### 调试外部服务器
+
+```yaml
+# 在 config.yaml 中启用 MCP 调试
+mcp:
+  enabled: true
+  debug: true  # 输出详细的连接和调用日志
+```
+
+**常见问题：**
+
+| 问题 | 可能原因 | 解决方案 |
+|------|----------|----------|
+| 连接超时 | 网络问题或服务器未启动 | 检查网络和服务器状态 |
+| 初始化失败 | 协议版本不兼容 | 确保服务器支持 2024-11-05 版本 |
+| 工具列表为空 | 服务器未正确返回工具 | 检查 tools/list 响应 |
+| npm 包启动失败 | 缺少依赖或权限问题 | 手动运行 npx 命令测试 |
+
+---
+
+## MCP 管理 API
+
+插件提供 HTTP API 用于管理 MCP 服务器和工具。
+
+### MCP 服务器 API
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/mcp/servers` | GET | 获取所有服务器列表 |
+| `/api/mcp/servers` | POST | 添加新服务器 |
+| `/api/mcp/servers/:name` | DELETE | 删除服务器 |
+| `/api/mcp/servers/:name/reconnect` | POST | 重连服务器 |
+| `/api/mcp/import` | POST | 导入 Claude Desktop 配置 |
+
+### 工具管理 API
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/tools` | GET | 获取所有工具 |
+| `/api/tools/test` | POST | 测试工具执行 |
+| `/api/tools/categories` | GET | 获取工具分类 |
+| `/api/tools/categories/:key/toggle` | POST | 切换分类启用状态 |
+| `/api/tools/builtin/config` | GET/PUT | 内置工具配置 |
+| `/api/tools/js` | GET | 获取 JS 工具列表 |
+| `/api/tools/js` | POST | 创建 JS 工具 |
+| `/api/tools/js/:name` | PUT | 更新 JS 工具 |
+| `/api/tools/js/:name` | DELETE | 删除 JS 工具 |
+| `/api/tools/reload` | POST | 重载所有工具 |
+
+### 示例：添加 MCP 服务器
+
+```javascript
+// 添加 npm 包类型的 MCP 服务器
+const response = await fetch('/api/mcp/servers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        name: 'filesystem',
+        config: {
+            type: 'npm',
+            package: '@anthropic/mcp-server-filesystem',
+            args: ['/home/user/documents']
+        }
+    })
+})
+```
+
+### 示例：测试工具
+
+```javascript
+// 测试工具执行
+const response = await fetch('/api/tools/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        toolName: 'get_current_time',
+        arguments: { timezone: 'Asia/Shanghai' }
+    })
+})
+```
+
+---
+
+## 常用 MCP 工具包推荐
+
+### 官方包
+
+| 包名 | 功能 | 环境变量 |
+|------|------|----------|
+| `@anthropic/mcp-server-filesystem` | 文件系统读写 | - |
+| `@anthropic/mcp-server-fetch` | HTTP 请求 | - |
+| `@anthropic/mcp-server-puppeteer` | 浏览器自动化 | - |
+| `@anthropic/mcp-server-sqlite` | SQLite 操作 | - |
+| `@anthropic/mcp-server-postgres` | PostgreSQL 操作 | `POSTGRES_*` |
+| `@anthropic/mcp-server-brave-search` | Brave 搜索 | `BRAVE_API_KEY` |
+| `@anthropic/mcp-server-github` | GitHub 操作 | `GITHUB_TOKEN` |
+| `@anthropic/mcp-server-memory` | 知识图谱记忆 | - |
+
+### 社区包
+
+| 包名 | 功能 | 环境变量 |
+|------|------|----------|
+| `@upstash/context7-mcp` | Context7 知识库 | `CONTEXT7_API_KEY` |
+| `mcp-server-discord` | Discord 机器人 | `DISCORD_TOKEN` |
+| `mcp-server-youtube` | YouTube 视频信息 | `YOUTUBE_API_KEY` |
+| `mcp-server-notion` | Notion 文档 | `NOTION_TOKEN` |
+| `mcp-server-slack` | Slack 集成 | `SLACK_TOKEN` |
+| `mcp-server-google-drive` | Google Drive | Google OAuth |
+| `mcp-server-todoist` | Todoist 任务 | `TODOIST_API_TOKEN` |
+| `mcp-server-weather` | 天气查询 | 各服务 API Key |
+
+---
+
+## 相关文档
+
+- [架构文档](ARCHITECTURE.md) - MCP 与 Skills 的关系说明
+- [开发者文档](DEVELOPMENT.md) - 项目开发与贡献指南
+- [MCP 官方文档](https://modelcontextprotocol.io/) - Model Context Protocol 规范
+
+---
+
 如有更多问题，欢迎提交 Issue 或加入交流群讨论。

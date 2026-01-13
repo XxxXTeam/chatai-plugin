@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -21,6 +21,8 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { mcpApi, toolsApi } from '@/lib/api'
 import { toast } from 'sonner'
+import { ConnectionStatus } from '@/components/mcp/ConnectionStatus'
+import { NpmPackageSelector, NpmPackageInfo } from '@/components/mcp/NpmPackageSelector'
 import {
     RefreshCw,
     Server,
@@ -146,7 +148,10 @@ export default function McpPage() {
     const [expandedCategory, setExpandedCategory] = useState<string | null>(null)
     const [togglingCategory, setTogglingCategory] = useState<string | null>(null)
 
-    const fetchData = async () => {
+    // NPM 包快速选择
+    const [showNpmSelector, setShowNpmSelector] = useState(false)
+
+    const fetchData = useCallback(async () => {
         try {
             const [serversRes, toolsRes, categoriesRes] = await Promise.all([
                 mcpApi.listServers(),
@@ -166,11 +171,26 @@ export default function McpPage() {
             setLoading(false)
             setRefreshing(false)
         }
-    }
+    }, [])
 
     useEffect(() => {
         fetchData()
-    }, [])
+    }, [fetchData])
+
+    // SSE 事件处理
+    const handleSSEEvent = useCallback(
+        (event: { event: string; data: Record<string, unknown> }) => {
+            // 根据事件类型刷新数据
+            if (
+                event.event.startsWith('server-') ||
+                event.event.startsWith('tool') ||
+                event.event.startsWith('category')
+            ) {
+                fetchData()
+            }
+        },
+        [fetchData]
+    )
 
     const handleRefresh = () => {
         setRefreshing(true)
@@ -188,6 +208,20 @@ export default function McpPage() {
             env: '',
             headers: ''
         })
+        setShowNpmSelector(false)
+    }
+
+    // 处理 NPM 包选择
+    const handleNpmPackageSelect = (pkg: NpmPackageInfo) => {
+        setServerForm({
+            ...serverForm,
+            name: pkg.name.toLowerCase().replace(/\s+/g, '-'),
+            type: 'npm',
+            package: pkg.package,
+            args: pkg.args || '',
+            env: pkg.env ? JSON.stringify(pkg.env, null, 2) : ''
+        })
+        setShowNpmSelector(false)
     }
 
     const handleAddServer = async () => {
@@ -448,11 +482,14 @@ export default {
     }
 
     return (
-        <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-bold">MCP 工具管理</h2>
-                <div className="flex gap-2">
-                    <Button variant="outline" onClick={handleRefresh} disabled={refreshing}>
+        <div className="space-y-6 animate-fade-in">
+            <div className="flex items-center justify-between flex-wrap gap-4">
+                <div className="flex items-center gap-3">
+                    <h2 className="text-2xl font-bold">MCP 工具管理</h2>
+                    <ConnectionStatus showDetails onEvent={handleSSEEvent} />
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                    <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
                         {refreshing ? (
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                         ) : (
@@ -460,11 +497,11 @@ export default {
                         )}
                         刷新
                     </Button>
-                    <Button variant="outline" onClick={() => setImportDialogOpen(true)}>
+                    <Button variant="outline" size="sm" onClick={() => setImportDialogOpen(true)}>
                         <FileJson className="mr-2 h-4 w-4" />
                         导入配置
                     </Button>
-                    <Button onClick={() => setAddDialogOpen(true)}>
+                    <Button size="sm" onClick={() => setAddDialogOpen(true)}>
                         <Plus className="mr-2 h-4 w-4" />
                         添加服务器
                     </Button>
@@ -472,13 +509,28 @@ export default {
             </div>
 
             {/* 统计卡片 */}
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-4">
                 <Card>
                     <CardHeader className="pb-2">
                         <CardTitle className="text-sm font-medium text-muted-foreground">服务器数</CardTitle>
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{servers.length}</div>
+                        <div className="flex items-center gap-2">
+                            <div className="text-2xl font-bold">{servers.length}</div>
+                            {servers.length > 0 && (
+                                <div className="flex items-center gap-1 text-xs">
+                                    <span className="flex items-center text-green-600">
+                                        <CheckCircle className="h-3 w-3 mr-0.5" />
+                                        {servers.filter(s => s.status === 'connected').length}
+                                    </span>
+                                    <span className="text-muted-foreground">/</span>
+                                    <span className="flex items-center text-gray-500">
+                                        <XCircle className="h-3 w-3 mr-0.5" />
+                                        {servers.filter(s => s.status !== 'connected').length}
+                                    </span>
+                                </div>
+                            )}
+                        </div>
                     </CardContent>
                 </Card>
                 <Card>
@@ -495,6 +547,14 @@ export default {
                     </CardHeader>
                     <CardContent>
                         <div className="text-2xl font-bold">{builtinTools.length}</div>
+                    </CardContent>
+                </Card>
+                <Card>
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm font-medium text-muted-foreground">外部工具</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-2xl font-bold">{externalTools.length}</div>
                     </CardContent>
                 </Card>
             </div>
@@ -522,11 +582,26 @@ export default {
                     ) : (
                         <div className="grid gap-4 md:grid-cols-2">
                             {servers.map(server => (
-                                <Card key={server.name}>
+                                <Card
+                                    key={server.name}
+                                    className={`transition-all border-l-4 ${server.status === 'connected' ? 'border-l-green-500' : 'border-l-gray-300'}`}
+                                >
                                     <CardHeader className="pb-3">
                                         <div className="flex items-center justify-between">
-                                            <CardTitle className="text-base">{server.name}</CardTitle>
-                                            <Badge variant={server.status === 'connected' ? 'default' : 'secondary'}>
+                                            <div className="flex items-center gap-2">
+                                                <div
+                                                    className={`w-2 h-2 rounded-full ${server.status === 'connected' ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`}
+                                                />
+                                                <CardTitle className="text-base">{server.name}</CardTitle>
+                                            </div>
+                                            <Badge
+                                                variant={server.status === 'connected' ? 'default' : 'secondary'}
+                                                className={
+                                                    server.status === 'connected'
+                                                        ? 'bg-green-100 text-green-700 hover:bg-green-100'
+                                                        : ''
+                                                }
+                                            >
                                                 {server.status === 'connected' ? (
                                                     <>
                                                         <CheckCircle className="h-3 w-3 mr-1" /> 已连接
@@ -538,8 +613,15 @@ export default {
                                                 )}
                                             </Badge>
                                         </div>
-                                        <CardDescription>
-                                            {server.config?.type || server.type || '未知类型'}
+                                        <CardDescription className="flex items-center gap-2">
+                                            <Badge variant="outline" className="text-xs">
+                                                {server.config?.type || server.type || '未知'}
+                                            </Badge>
+                                            {server.config?.package && (
+                                                <span className="text-xs text-muted-foreground truncate max-w-[150px]">
+                                                    {server.config.package}
+                                                </span>
+                                            )}
                                         </CardDescription>
                                     </CardHeader>
                                     <CardContent className="space-y-4">
@@ -846,40 +928,46 @@ export default {
 
             {/* 添加服务器对话框 */}
             <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-                <DialogContent className="w-[95vw] max-w-lg">
+                <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto">
                     <DialogHeader>
                         <DialogTitle>添加 MCP 服务器</DialogTitle>
-                        <DialogDescription>配置新的 MCP 服务器连接</DialogDescription>
+                        <DialogDescription>配置新的 MCP 服务器连接，或从常用包中快速选择</DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4 py-4">
-                        <div className="space-y-2">
-                            <Label>名称</Label>
-                            <Input
-                                value={serverForm.name}
-                                onChange={e => setServerForm({ ...serverForm, name: e.target.value })}
-                                placeholder="服务器名称"
-                            />
-                        </div>
-                        <div className="space-y-2">
-                            <Label>类型</Label>
-                            <Select
-                                value={serverForm.type}
-                                onValueChange={v => setServerForm({ ...serverForm, type: v })}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="stdio">Stdio (本地命令)</SelectItem>
-                                    <SelectItem value="npm">NPM 包 (npx)</SelectItem>
-                                    <SelectItem value="sse">SSE (Server-Sent Events)</SelectItem>
-                                    <SelectItem value="http">HTTP</SelectItem>
-                                </SelectContent>
-                            </Select>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <div className="space-y-2">
+                                <Label>名称</Label>
+                                <Input
+                                    value={serverForm.name}
+                                    onChange={e => setServerForm({ ...serverForm, name: e.target.value })}
+                                    placeholder="服务器名称"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>类型</Label>
+                                <Select
+                                    value={serverForm.type}
+                                    onValueChange={v => {
+                                        setServerForm({ ...serverForm, type: v })
+                                        if (v === 'npm') setShowNpmSelector(true)
+                                        else setShowNpmSelector(false)
+                                    }}
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="stdio">Stdio (本地命令)</SelectItem>
+                                        <SelectItem value="npm">NPM 包 (npx)</SelectItem>
+                                        <SelectItem value="sse">SSE (Server-Sent Events)</SelectItem>
+                                        <SelectItem value="http">HTTP</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
                         </div>
 
                         {serverForm.type === 'stdio' && (
-                            <>
+                            <div className="grid gap-4 sm:grid-cols-2">
                                 <div className="space-y-2">
                                     <Label>命令</Label>
                                     <Input
@@ -896,27 +984,59 @@ export default {
                                         placeholder="-y @modelcontextprotocol/server-filesystem /"
                                     />
                                 </div>
-                            </>
+                            </div>
                         )}
 
                         {serverForm.type === 'npm' && (
                             <>
-                                <div className="space-y-2">
-                                    <Label>NPM 包名</Label>
-                                    <Input
-                                        value={serverForm.package}
-                                        onChange={e => setServerForm({ ...serverForm, package: e.target.value })}
-                                        placeholder="@modelcontextprotocol/server-filesystem"
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <Label>参数 (空格分隔)</Label>
-                                    <Input
-                                        value={serverForm.args}
-                                        onChange={e => setServerForm({ ...serverForm, args: e.target.value })}
-                                        placeholder="/"
-                                    />
-                                </div>
+                                {/* NPM 包快速选择 */}
+                                {showNpmSelector && (
+                                    <div className="border rounded-lg p-4 bg-muted/30">
+                                        <div className="flex items-center justify-between mb-3">
+                                            <Label className="text-sm font-medium">快速选择常用包</Label>
+                                            <Button variant="ghost" size="sm" onClick={() => setShowNpmSelector(false)}>
+                                                手动输入
+                                            </Button>
+                                        </div>
+                                        <NpmPackageSelector
+                                            onSelect={handleNpmPackageSelect}
+                                            selectedPackage={serverForm.package}
+                                        />
+                                    </div>
+                                )}
+
+                                {!showNpmSelector && (
+                                    <>
+                                        <div className="flex items-center justify-between">
+                                            <Label className="text-sm font-medium">NPM 包配置</Label>
+                                            <Button variant="ghost" size="sm" onClick={() => setShowNpmSelector(true)}>
+                                                从列表选择
+                                            </Button>
+                                        </div>
+                                        <div className="grid gap-4 sm:grid-cols-2">
+                                            <div className="space-y-2">
+                                                <Label>NPM 包名</Label>
+                                                <Input
+                                                    value={serverForm.package}
+                                                    onChange={e =>
+                                                        setServerForm({ ...serverForm, package: e.target.value })
+                                                    }
+                                                    placeholder="@modelcontextprotocol/server-filesystem"
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label>参数 (空格分隔)</Label>
+                                                <Input
+                                                    value={serverForm.args}
+                                                    onChange={e =>
+                                                        setServerForm({ ...serverForm, args: e.target.value })
+                                                    }
+                                                    placeholder="/"
+                                                />
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
                             </>
                         )}
 
@@ -927,7 +1047,11 @@ export default {
                                     <Input
                                         value={serverForm.url}
                                         onChange={e => setServerForm({ ...serverForm, url: e.target.value })}
-                                        placeholder="http://localhost:8080/mcp"
+                                        placeholder={
+                                            serverForm.type === 'sse'
+                                                ? 'http://localhost:8080/sse'
+                                                : 'http://localhost:8080/mcp'
+                                        }
                                     />
                                 </div>
                                 <div className="space-y-2">

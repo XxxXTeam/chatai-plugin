@@ -1380,13 +1380,27 @@ export class ChatService {
 
     async clearHistory(userId, groupId = null) {
         await contextManager.init()
-        const conversationId = contextManager.getConversationId(userId, groupId)
+        let conversationId
+        if (groupId) {
+            conversationId = `group:${groupId}`
+        } else {
+            const cleanUserId = String(userId).includes('_') ? String(userId).split('_').pop() : String(userId)
+            conversationId = contextManager.getConversationId(cleanUserId, null)
+        }
         presetManager.markContextCleared(conversationId)
         await historyManager.deleteConversation(conversationId)
         contextManager.clearSessionState(conversationId)
         contextManager.clearQueue(conversationId)
         if (groupId) {
             contextManager.clearGroupContextCache(String(groupId))
+        }
+        const legacyId = groupId ? `group:${groupId}:user:${userId}` : null
+        if (legacyId && legacyId !== conversationId) {
+            try {
+                await historyManager.deleteConversation(legacyId)
+            } catch (e) {
+                // 忽略旧格式清理错误
+            }
         }
         try {
             const { redisClient } = await import('../../core/cache/RedisClient.js')
