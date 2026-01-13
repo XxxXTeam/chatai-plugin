@@ -603,6 +603,208 @@
   @apply p-4 sm:p-5 md:p-6;
 }
 
+@supports (padding: env(safe-area-inset-bottom)) {
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  
+  .safe-area-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  
+  .safe-area-inset {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+/* 移动端底部导航 */
+.mobile-nav {
+  @apply fixed bottom-0 left-0 right-0 z-50 bg-background/95 backdrop-blur-xl border-t border-border/50;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.mobile-nav-item {
+  @apply flex flex-col items-center justify-center gap-0.5 py-2 px-3 text-muted-foreground transition-all duration-200;
+}
+
+.mobile-nav-item.active {
+  @apply text-primary;
+}
+
+.mobile-nav-item:active {
+  @apply scale-95;
+}
+
+/* 移动端触摸优化 */
+@media (hover: none) and (pointer: coarse) {
+  /* 增大触摸目标 */
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  /* 禁用悬停效果 */
+  .no-hover-on-touch:hover {
+    background-color: transparent !important;
+  }
+  
+  /* 触摸反馈 */
+  .touch-feedback:active {
+    @apply bg-muted/50;
+    transform: scale(0.98);
+  }
+  
+  /* 更大的按钮 */
+  button, [role="button"] {
+    min-height: 40px;
+  }
+  
+  /* 滚动优化 */
+  .scroll-touch {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+}
+
+/* 移动端列表项 */
+.mobile-list-item {
+  @apply flex items-center gap-3 p-4 border-b border-border/30 active:bg-muted/30 transition-colors;
+}
+
+/* 移动端卡片 */
+.mobile-card {
+  @apply rounded-xl bg-card border border-border/50 overflow-hidden;
+}
+
+.mobile-card-header {
+  @apply px-4 py-3 border-b border-border/30 bg-muted/20;
+}
+
+.mobile-card-body {
+  @apply p-4;
+}
+
+/* 移动端表单优化 */
+@media (max-width: 640px) {
+  input, textarea, select {
+    font-size: 16px !important; /* 防止iOS缩放 */
+  }
+  
+  .form-group {
+    @apply space-y-3;
+  }
+  
+  .form-label {
+    @apply text-sm font-medium;
+  }
+}
+
+/* 移动端弹窗优化 */
+.mobile-sheet {
+  @apply fixed inset-x-0 bottom-0 z-50 rounded-t-2xl bg-background border-t border-border/50;
+  max-height: 90vh;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.mobile-sheet-handle {
+  @apply w-10 h-1 bg-muted-foreground/30 rounded-full mx-auto mt-2 mb-4;
+}
+
+/* 移动端页面过渡 */
+.page-transition {
+  @apply transition-all duration-200 ease-out;
+}
+
+.page-enter {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.page-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* 移动端下拉刷新指示器 */
+.pull-indicator {
+  @apply flex items-center justify-center h-12 text-muted-foreground;
+}
+
+/* 响应式网格 */
+.grid-responsive {
+  @apply grid gap-3 sm:gap-4;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+@media (max-width: 640px) {
+  .grid-responsive {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 移动端搜索框 */
+.mobile-search {
+  @apply w-full px-4 py-3 rounded-xl bg-muted/50 border border-border/50 text-base;
+}
+
+.mobile-search:focus {
+  @apply ring-2 ring-primary/20 border-primary/50 outline-none;
+}
+
+/* 浮动操作按钮 */
+.fab {
+  @apply fixed z-40 rounded-full shadow-xl transition-all duration-300;
+  @apply bg-gradient-to-br from-primary to-primary/80;
+  @apply hover:shadow-2xl hover:scale-105 active:scale-95;
+}
+
+.fab-primary {
+  @apply bottom-20 right-4 h-14 w-14;
+}
+
+.fab-secondary {
+  @apply bottom-36 right-4 h-12 w-12;
+}
+
+/* 骨架屏动画优化 */
+.skeleton-mobile {
+  @apply bg-muted/60 rounded-lg;
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes skeleton-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* 移动端标签页 */
+.mobile-tabs {
+  @apply flex overflow-x-auto gap-1 p-1 bg-muted/30 rounded-xl;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.mobile-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-tab {
+  @apply flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap;
+}
+
+.mobile-tab.active {
+  @apply bg-background text-foreground shadow-sm;
+}
+
+.mobile-tab:not(.active) {
+  @apply text-muted-foreground;
+}
+
 /* 交互反馈优化 */
 .interactive-scale {
   @apply transition-transform duration-150 ease-out active:scale-[0.98];

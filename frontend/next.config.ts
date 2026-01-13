@@ -8,12 +8,17 @@ const nextConfig: NextConfig = {
     images: {
         unoptimized: true
     },
-    productionBrowserSourceMaps: true,
+    productionBrowserSourceMaps: !isProd,
     compiler: {
         removeConsole: isProd ? { exclude: ['error', 'warn'] } : false
     },
     experimental: {
         optimizeCss: true
-    }
+    },
+    // 优化打包
+    poweredByHeader: false,
+    reactStrictMode: true,
+    // 压缩优化
+    compress: true
 }
 export default nextConfig

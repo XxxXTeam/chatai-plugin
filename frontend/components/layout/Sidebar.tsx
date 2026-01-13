@@ -14,7 +14,6 @@ import {
     Wrench,
     History,
     Palette,
-    Menu,
     UsersRound,
     ChevronDown,
     UserCog,
@@ -31,11 +30,9 @@ import {
     Link as LinkIcon,
     type LucideIcon
 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { useUiStore } from '@/lib/store'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 
 interface NavItem {
@@ -280,10 +277,10 @@ function NavContent({ pathname, onNavClick }: { pathname: string; onNavClick?: (
 
 export function Sidebar() {
     const pathname = usePathname()
-    const { sidebarOpen, toggleSidebar, setSidebarOpen } = useUiStore()
+    const { sidebarOpen, setSidebarOpen } = useUiStore()
 
     return (
-        <TooltipProvider>
+        <>
             {/* Desktop Sidebar */}
             <aside className="hidden lg:block w-64 glass-sidebar h-screen sticky top-0 transition-all duration-300">
                 <div className="flex h-16 items-center px-6 border-b border-border/40 backdrop-blur-md bg-background/20">
@@ -318,23 +315,6 @@ export function Sidebar() {
                     </ScrollArea>
                 </SheetContent>
             </Sheet>
-
-            {/* Mobile FAB */}
-            <Tooltip>
-                <TooltipTrigger asChild>
-                    <Button
-                        variant="default"
-                        size="icon"
-                        className="fixed bottom-4 right-4 z-40 lg:hidden shadow-xl rounded-full h-14 w-14 bg-gradient-to-br from-primary to-primary/80 hover:shadow-2xl hover:scale-105 transition-all duration-300"
-                        onClick={toggleSidebar}
-                    >
-                        <Menu className="h-6 w-6" />
-                    </Button>
-                </TooltipTrigger>
-                <TooltipContent side="left">
-                    <p>打开菜单</p>
-                </TooltipContent>
-            </Tooltip>
-        </TooltipProvider>
+        </>
     )
 }

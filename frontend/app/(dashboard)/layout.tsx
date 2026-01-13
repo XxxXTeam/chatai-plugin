@@ -2,6 +2,7 @@
 
 import { Sidebar } from '@/components/layout/Sidebar'
 import { Header } from '@/components/layout/Header'
+import { MobileNav } from '@/components/layout/MobileNav'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { systemApi } from '@/lib/api'
@@ -84,8 +85,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <Sidebar />
             <div className="flex flex-1 flex-col overflow-hidden">
                 <Header onSearchClick={() => setCommandPaletteOpen(true)} />
-                <main className="flex-1 overflow-y-auto p-4 md:p-6">{children}</main>
+                <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 pb-20 lg:pb-6 scroll-smooth">{children}</main>
             </div>
+
+            {/* 移动端底部导航 */}
+            <MobileNav />
 
             {/* 全局命令面板 */}
             <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />

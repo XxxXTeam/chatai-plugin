@@ -72,12 +72,6 @@ export const popularMcpPackages: NpmPackageInfo[] = [
         env: { POSTGRES_CONNECTION_STRING: '' }
     },
     {
-        name: 'Fetch',
-        package: '@modelcontextprotocol/server-fetch',
-        description: 'HTTP 请求工具',
-        category: '网络'
-    },
-    {
         name: 'Slack',
         package: '@modelcontextprotocol/server-slack',
         description: 'Slack 集成',

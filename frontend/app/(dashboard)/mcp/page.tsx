@@ -34,14 +34,12 @@ import {
     Trash2,
     RotateCcw,
     FileJson,
-    Pencil,
     Code,
     Eye,
     Play,
     Copy,
     ChevronDown,
     ChevronUp,
-    Settings2,
     Image,
     Search,
     Clock,
@@ -57,6 +55,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { CodeBlock } from '@/components/ui/code-block'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { KeyValueTable } from '@/components/ui/key-value-table'
 
 // 工具类别图标映射
 const categoryIcons: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -94,6 +93,8 @@ interface McpServer {
         args?: string[]
         url?: string
         package?: string
+        env?: Record<string, string>
+        headers?: Record<string, string>
     }
     toolsCount?: number
     resourcesCount?: number
@@ -129,8 +130,8 @@ export default function McpPage() {
         args: '',
         url: '',
         package: '',
-        env: '',
-        headers: ''
+        env: {} as Record<string, string>,
+        headers: {} as Record<string, string>
     })
 
     // 工具详情弹窗
@@ -139,9 +140,24 @@ export default function McpPage() {
 
     // 工具测试弹窗
     const [testDialogOpen, setTestDialogOpen] = useState(false)
-    const [testArgs, setTestArgs] = useState('{}')
+    const [testArgs, setTestArgs] = useState<Record<string, string>>({})
     const [testResult, setTestResult] = useState('')
     const [testLoading, setTestLoading] = useState(false)
+
+    // 服务器编辑弹窗
+    const [editDialogOpen, setEditDialogOpen] = useState(false)
+    const [editingServer, setEditingServer] = useState<McpServer | null>(null)
+    const [editForm, setEditForm] = useState({
+        name: '',
+        type: 'stdio',
+        command: '',
+        args: '',
+        url: '',
+        package: '',
+        env: {} as Record<string, string>,
+        headers: {} as Record<string, string>
+    })
+    const [editSaving, setEditSaving] = useState(false)
 
     // 工具类别
     const [categories, setCategories] = useState<ToolCategory[]>([])
@@ -205,8 +221,8 @@ export default function McpPage() {
             args: '',
             url: '',
             package: '',
-            env: '',
-            headers: ''
+            env: {},
+            headers: {}
         })
         setShowNpmSelector(false)
     }
@@ -219,7 +235,7 @@ export default function McpPage() {
             type: 'npm',
             package: pkg.package,
             args: pkg.args || '',
-            env: pkg.env ? JSON.stringify(pkg.env, null, 2) : ''
+            env: pkg.env || {}
         })
         setShowNpmSelector(false)
     }
@@ -261,25 +277,13 @@ export default function McpPage() {
                     return
                 }
                 config.url = serverForm.url
-                if (serverForm.headers) {
-                    try {
-                        config.headers = JSON.parse(serverForm.headers)
-                    } catch {
-                        toast.error('Headers 格式错误 (JSON)')
-                        setSaving(false)
-                        return
-                    }
+                if (Object.keys(serverForm.headers).length > 0) {
+                    config.headers = serverForm.headers
                 }
             }
 
-            if (serverForm.env) {
-                try {
-                    config.env = JSON.parse(serverForm.env)
-                } catch {
-                    toast.error('环境变量格式错误 (JSON)')
-                    setSaving(false)
-                    return
-                }
+            if (Object.keys(serverForm.env).length > 0) {
+                config.env = serverForm.env
             }
 
             await mcpApi.createServer({ name: serverForm.name, config })
@@ -354,17 +358,18 @@ export default function McpPage() {
     const handleOpenTest = (tool: McpTool) => {
         setSelectedTool(tool)
         // 生成默认参数
-        const defaultArgs: Record<string, unknown> = {}
+        const defaultArgs: Record<string, string> = {}
         if (tool.inputSchema?.properties) {
             Object.entries(tool.inputSchema.properties).forEach(([key, prop]) => {
                 if (prop.type === 'string') defaultArgs[key] = ''
-                else if (prop.type === 'number') defaultArgs[key] = 0
-                else if (prop.type === 'boolean') defaultArgs[key] = false
-                else if (prop.type === 'array') defaultArgs[key] = []
-                else if (prop.type === 'object') defaultArgs[key] = {}
+                else if (prop.type === 'number') defaultArgs[key] = '0'
+                else if (prop.type === 'boolean') defaultArgs[key] = 'false'
+                else if (prop.type === 'array') defaultArgs[key] = '[]'
+                else if (prop.type === 'object') defaultArgs[key] = '{}'
+                else defaultArgs[key] = ''
             })
         }
-        setTestArgs(JSON.stringify(defaultArgs, null, 2))
+        setTestArgs(defaultArgs)
         setTestResult('')
         setTestDialogOpen(true)
     }
@@ -375,7 +380,25 @@ export default function McpPage() {
         setTestLoading(true)
         setTestResult('')
         try {
-            const args = JSON.parse(testArgs)
+            // 将 Record<string, string> 转换为正确的类型
+            const args: Record<string, unknown> = {}
+            const schema = selectedTool.inputSchema?.properties || {}
+            Object.entries(testArgs).forEach(([key, value]) => {
+                const propType = schema[key]?.type
+                if (propType === 'number') {
+                    args[key] = Number(value) || 0
+                } else if (propType === 'boolean') {
+                    args[key] = value === 'true'
+                } else if (propType === 'array' || propType === 'object') {
+                    try {
+                        args[key] = JSON.parse(value)
+                    } catch {
+                        args[key] = value
+                    }
+                } else {
+                    args[key] = value
+                }
+            })
             const res = (await toolsApi.test({ toolName: selectedTool.name, arguments: args })) as { data?: unknown }
             if (res?.data !== undefined) {
                 setTestResult(JSON.stringify(res.data, null, 2))
@@ -390,6 +413,74 @@ export default function McpPage() {
             toast.error('测试失败: ' + msg)
         } finally {
             setTestLoading(false)
+        }
+    }
+
+    // 打开编辑服务器弹窗
+    const handleOpenEdit = async (server: McpServer) => {
+        try {
+            // 获取完整的服务器配置
+            const res = (await mcpApi.getServer(server.name)) as { data?: McpServer }
+            const fullServer = res?.data || server
+            setEditingServer(fullServer)
+            const config = fullServer.config || {}
+            // 优先使用 config.type，否则使用 server.type
+            const serverType = config.type || fullServer.type || 'stdio'
+            setEditForm({
+                name: fullServer.name,
+                type: serverType,
+                command: config.command || '',
+                args: config.args?.join(' ') || '',
+                url: config.url || '',
+                package: config.package || '',
+                env: config.env || {},
+                headers: config.headers || {}
+            })
+            setEditDialogOpen(true)
+        } catch (error) {
+            console.error('Failed to load server config:', error)
+            toast.error('加载服务器配置失败')
+        }
+    }
+
+    // 保存服务器编辑
+    const handleSaveEdit = async () => {
+        if (!editingServer) return
+        setEditSaving(true)
+        try {
+            const config: Record<string, unknown> = { type: editForm.type }
+
+            if (editForm.type === 'stdio') {
+                config.command = editForm.command
+                if (editForm.args) {
+                    config.args = editForm.args.split(' ').filter(a => a)
+                }
+            } else if (editForm.type === 'npm') {
+                config.package = editForm.package
+                if (editForm.args) {
+                    config.args = editForm.args.split(' ').filter(a => a)
+                }
+            } else {
+                config.url = editForm.url
+                if (Object.keys(editForm.headers).length > 0) {
+                    config.headers = editForm.headers
+                }
+            }
+
+            if (Object.keys(editForm.env).length > 0) {
+                config.env = editForm.env
+            }
+
+            await mcpApi.updateServer(editingServer.name, { config })
+            toast.success('服务器配置已更新')
+            setEditDialogOpen(false)
+            setEditingServer(null)
+            fetchData()
+        } catch (error: unknown) {
+            const err = error as { response?: { data?: { message?: string } } }
+            toast.error(err.response?.data?.message || '更新失败')
+        } finally {
+            setEditSaving(false)
         }
     }
 
@@ -625,37 +716,78 @@ export default {
                                         </CardDescription>
                                     </CardHeader>
                                     <CardContent className="space-y-4">
-                                        <div className="space-y-2 text-sm">
-                                            <div className="flex justify-between">
-                                                <span className="text-muted-foreground">工具数</span>
-                                                <span className="font-medium">{server.toolsCount || 0}</span>
-                                            </div>
-                                            <div className="flex justify-between">
-                                                <span className="text-muted-foreground">资源数</span>
-                                                <span className="font-medium">{server.resourcesCount || 0}</span>
-                                            </div>
-                                            {server.config?.command && (
-                                                <div className="flex justify-between">
-                                                    <span className="text-muted-foreground">命令</span>
-                                                    <span className="truncate max-w-[200px] font-mono text-xs">
-                                                        {server.config.command}
-                                                    </span>
-                                                </div>
-                                            )}
-                                            {server.config?.url && (
-                                                <div className="flex justify-between">
-                                                    <span className="text-muted-foreground">URL</span>
-                                                    <span className="truncate max-w-[200px] font-mono text-xs">
-                                                        {server.config.url}
-                                                    </span>
-                                                </div>
-                                            )}
-                                            {server.connectedAt && (
-                                                <div className="flex justify-between">
-                                                    <span className="text-muted-foreground">连接时间</span>
-                                                    <span>{new Date(server.connectedAt).toLocaleString('zh-CN')}</span>
-                                                </div>
-                                            )}
+                                        {/* 服务器信息表格 */}
+                                        <div className="border rounded-lg overflow-hidden text-sm">
+                                            <table className="w-full">
+                                                <tbody className="divide-y divide-border">
+                                                    <tr>
+                                                        <td className="px-3 py-2 text-muted-foreground bg-muted/30 w-24">
+                                                            工具数
+                                                        </td>
+                                                        <td className="px-3 py-2 font-medium">
+                                                            {server.toolsCount || 0}
+                                                        </td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td className="px-3 py-2 text-muted-foreground bg-muted/30">
+                                                            资源数
+                                                        </td>
+                                                        <td className="px-3 py-2 font-medium">
+                                                            {server.resourcesCount || 0}
+                                                        </td>
+                                                    </tr>
+                                                    {server.connectedAt && (
+                                                        <tr>
+                                                            <td className="px-3 py-2 text-muted-foreground bg-muted/30">
+                                                                连接时间
+                                                            </td>
+                                                            <td className="px-3 py-2">
+                                                                {new Date(server.connectedAt).toLocaleString('zh-CN')}
+                                                            </td>
+                                                        </tr>
+                                                    )}
+                                                    {server.config?.command && (
+                                                        <tr>
+                                                            <td className="px-3 py-2 text-muted-foreground bg-muted/30">
+                                                                命令
+                                                            </td>
+                                                            <td className="px-3 py-2 font-mono text-xs truncate max-w-[180px]">
+                                                                {server.config.command}
+                                                            </td>
+                                                        </tr>
+                                                    )}
+                                                    {server.config?.args && server.config.args.length > 0 && (
+                                                        <tr>
+                                                            <td className="px-3 py-2 text-muted-foreground bg-muted/30">
+                                                                参数
+                                                            </td>
+                                                            <td className="px-3 py-2 font-mono text-xs truncate max-w-[180px]">
+                                                                {server.config.args.join(' ')}
+                                                            </td>
+                                                        </tr>
+                                                    )}
+                                                    {server.config?.package && (
+                                                        <tr>
+                                                            <td className="px-3 py-2 text-muted-foreground bg-muted/30">
+                                                                NPM 包
+                                                            </td>
+                                                            <td className="px-3 py-2 font-mono text-xs truncate max-w-[180px]">
+                                                                {server.config.package}
+                                                            </td>
+                                                        </tr>
+                                                    )}
+                                                    {server.config?.url && (
+                                                        <tr>
+                                                            <td className="px-3 py-2 text-muted-foreground bg-muted/30">
+                                                                URL
+                                                            </td>
+                                                            <td className="px-3 py-2 font-mono text-xs truncate max-w-[180px]">
+                                                                {server.config.url}
+                                                            </td>
+                                                        </tr>
+                                                    )}
+                                                </tbody>
+                                            </table>
                                         </div>
                                         {/* 操作按钮 */}
                                         <div className="flex gap-2 pt-2 border-t">
@@ -672,6 +804,9 @@ export default {
                                                     <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
                                                 )}
                                                 重连
+                                            </Button>
+                                            <Button variant="outline" size="sm" onClick={() => handleOpenEdit(server)}>
+                                                <Code className="h-4 w-4" />
                                             </Button>
                                             <Button
                                                 variant="ghost"
@@ -1054,27 +1189,23 @@ export default {
                                         }
                                     />
                                 </div>
-                                <div className="space-y-2">
-                                    <Label>Headers (JSON 格式)</Label>
-                                    <Textarea
-                                        value={serverForm.headers}
-                                        onChange={e => setServerForm({ ...serverForm, headers: e.target.value })}
-                                        placeholder='{"Authorization": "Bearer xxx"}'
-                                        rows={3}
-                                    />
-                                </div>
+                                <KeyValueTable
+                                    title="请求头列表"
+                                    value={serverForm.headers}
+                                    onChange={headers => setServerForm({ ...serverForm, headers })}
+                                    keyPlaceholder="Header 名称"
+                                    valuePlaceholder="Header 值"
+                                />
                             </>
                         )}
 
-                        <div className="space-y-2">
-                            <Label>环境变量 (JSON 格式，可选)</Label>
-                            <Textarea
-                                value={serverForm.env}
-                                onChange={e => setServerForm({ ...serverForm, env: e.target.value })}
-                                placeholder='{"API_KEY": "xxx"}'
-                                rows={2}
-                            />
-                        </div>
+                        <KeyValueTable
+                            title="环境变量 (可选)"
+                            value={serverForm.env}
+                            onChange={env => setServerForm({ ...serverForm, env })}
+                            keyPlaceholder="变量名"
+                            valuePlaceholder="变量值"
+                        />
                     </div>
                     <DialogFooter>
                         <Button variant="outline" onClick={() => setAddDialogOpen(false)}>
@@ -1161,17 +1292,13 @@ export default {
                     </DialogHeader>
                     {selectedTool && (
                         <div className="space-y-4">
-                            <div>
-                                <Label>参数 (JSON)</Label>
-                                <Textarea
-                                    value={testArgs}
-                                    onChange={e => setTestArgs(e.target.value)}
-                                    placeholder='{"key": "value"}'
-                                    rows={8}
-                                    className="font-mono text-sm mt-2 bg-[#1e1e1e] text-[#d4d4d4] border-neutral-700"
-                                    style={{ fontFamily: "'Consolas', 'Monaco', 'Courier New', monospace" }}
-                                />
-                            </div>
+                            <KeyValueTable
+                                title="参数列表"
+                                value={testArgs}
+                                onChange={setTestArgs}
+                                keyPlaceholder="参数名"
+                                valuePlaceholder="参数值"
+                            />
                             <div className="flex gap-2">
                                 <Button onClick={handleTestTool} disabled={testLoading}>
                                     {testLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -1200,6 +1327,122 @@ export default {
                             )}
                         </div>
                     )}
+                </DialogContent>
+            </Dialog>
+
+            {/* 编辑服务器弹窗 */}
+            <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+                <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto">
+                    <DialogHeader>
+                        <DialogTitle>编辑服务器</DialogTitle>
+                        <DialogDescription>修改 {editingServer?.name} 的配置</DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 py-4">
+                        {/* 服务器名称（只读） */}
+                        <div className="space-y-2">
+                            <Label>名称</Label>
+                            <Input value={editForm.name} disabled className="bg-muted" />
+                        </div>
+
+                        {/* 类型选择 */}
+                        <div className="space-y-2">
+                            <Label>类型</Label>
+                            <Select value={editForm.type} onValueChange={v => setEditForm({ ...editForm, type: v })}>
+                                <SelectTrigger>
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="stdio">Stdio (本地命令)</SelectItem>
+                                    <SelectItem value="npm">NPM 包 (npx)</SelectItem>
+                                    <SelectItem value="sse">SSE (Server-Sent Events)</SelectItem>
+                                    <SelectItem value="http">HTTP</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        {/* Stdio 配置 */}
+                        {editForm.type === 'stdio' && (
+                            <div className="grid gap-4 sm:grid-cols-2">
+                                <div className="space-y-2">
+                                    <Label>命令</Label>
+                                    <Input
+                                        value={editForm.command}
+                                        onChange={e => setEditForm({ ...editForm, command: e.target.value })}
+                                        placeholder="例如: node, python"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>参数 (空格分隔)</Label>
+                                    <Input
+                                        value={editForm.args}
+                                        onChange={e => setEditForm({ ...editForm, args: e.target.value })}
+                                        placeholder="server.js --port 3000"
+                                    />
+                                </div>
+                            </div>
+                        )}
+
+                        {/* NPM 配置 */}
+                        {editForm.type === 'npm' && (
+                            <div className="grid gap-4 sm:grid-cols-2">
+                                <div className="space-y-2">
+                                    <Label>NPM 包名</Label>
+                                    <Input
+                                        value={editForm.package}
+                                        onChange={e => setEditForm({ ...editForm, package: e.target.value })}
+                                        placeholder="@modelcontextprotocol/server-filesystem"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>参数 (空格分隔)</Label>
+                                    <Input
+                                        value={editForm.args}
+                                        onChange={e => setEditForm({ ...editForm, args: e.target.value })}
+                                        placeholder="/"
+                                    />
+                                </div>
+                            </div>
+                        )}
+
+                        {/* SSE/HTTP 配置 */}
+                        {(editForm.type === 'sse' || editForm.type === 'http') && (
+                            <>
+                                <div className="space-y-2">
+                                    <Label>URL</Label>
+                                    <Input
+                                        value={editForm.url}
+                                        onChange={e => setEditForm({ ...editForm, url: e.target.value })}
+                                        placeholder="http://localhost:8080/mcp"
+                                    />
+                                </div>
+                                <KeyValueTable
+                                    title="请求头列表"
+                                    value={editForm.headers}
+                                    onChange={headers => setEditForm({ ...editForm, headers })}
+                                    keyPlaceholder="Header 名称"
+                                    valuePlaceholder="Header 值"
+                                />
+                            </>
+                        )}
+
+                        {/* 环境变量 */}
+                        <KeyValueTable
+                            title="环境变量 (可选)"
+                            value={editForm.env}
+                            onChange={env => setEditForm({ ...editForm, env })}
+                            keyPlaceholder="变量名"
+                            valuePlaceholder="变量值"
+                        />
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
+                            取消
+                        </Button>
+                        <Button onClick={handleSaveEdit} disabled={editSaving}>
+                            {editSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            保存
+                        </Button>
+                    </DialogFooter>
                 </DialogContent>
             </Dialog>
         </div>

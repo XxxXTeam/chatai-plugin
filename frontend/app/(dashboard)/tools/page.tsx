@@ -46,6 +46,7 @@ import {
 import { toolsApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { CodeBlock } from '@/components/ui/code-block'
+import { KeyValueTable } from '@/components/ui/key-value-table'
 
 interface Tool {
     name: string
@@ -117,7 +118,7 @@ export default function ToolsPage() {
     const [selectedTool, setSelectedTool] = useState<Tool | null>(null)
 
     // 测试状态
-    const [testArgs, setTestArgs] = useState('{}')
+    const [testArgs, setTestArgs] = useState<Record<string, string>>({})
     const [testResult, setTestResult] = useState('')
     const [testLoading, setTestLoading] = useState(false)
 
@@ -466,29 +467,31 @@ export default function ToolsPage() {
     // 打开测试弹窗
     const openTestModal = (tool: Tool) => {
         setSelectedTool(tool)
-        setTestArgs(JSON.stringify(getDefaultArgs(tool), null, 2))
+        setTestArgs(getDefaultArgs(tool))
         setTestResult('')
         setTestOpen(true)
     }
 
-    // 获取默认参数
-    const getDefaultArgs = (tool: Tool) => {
+    // 获取默认参数 (返回 Record<string, string> 用于表格显示)
+    const getDefaultArgs = (tool: Tool): Record<string, string> => {
         const params = tool.inputSchema || {}
-        const args: Record<string, unknown> = {}
+        const args: Record<string, string> = {}
 
         if (params.properties) {
             Object.keys(params.properties).forEach(key => {
                 const prop = params.properties![key]
                 if (prop.type === 'string') {
-                    args[key] = prop.default || ''
+                    args[key] = String(prop.default || '')
                 } else if (prop.type === 'number') {
-                    args[key] = prop.default || 0
+                    args[key] = String(prop.default || '0')
                 } else if (prop.type === 'boolean') {
-                    args[key] = prop.default || false
+                    args[key] = String(prop.default || 'false')
                 } else if (prop.type === 'array') {
-                    args[key] = prop.default || []
+                    args[key] = JSON.stringify(prop.default || [])
                 } else if (prop.type === 'object') {
-                    args[key] = prop.default || {}
+                    args[key] = JSON.stringify(prop.default || {})
+                } else {
+                    args[key] = ''
                 }
             })
         }
@@ -504,7 +507,25 @@ export default function ToolsPage() {
         setTestResult('')
 
         try {
-            const args = JSON.parse(testArgs)
+            // 将 Record<string, string> 转换为正确的类型
+            const args: Record<string, unknown> = {}
+            const schema = selectedTool.inputSchema?.properties || {}
+            Object.entries(testArgs).forEach(([key, value]) => {
+                const propType = schema[key]?.type
+                if (propType === 'number') {
+                    args[key] = Number(value) || 0
+                } else if (propType === 'boolean') {
+                    args[key] = value === 'true'
+                } else if (propType === 'array' || propType === 'object') {
+                    try {
+                        args[key] = JSON.parse(value)
+                    } catch {
+                        args[key] = value
+                    }
+                } else {
+                    args[key] = value
+                }
+            })
             const res = (await toolsApi.test({ toolName: selectedTool.name, arguments: args })) as { data?: unknown }
 
             if (res?.data !== undefined) {
@@ -983,26 +1004,19 @@ export default function ToolsPage() {
                     </DialogHeader>
                     {selectedTool && (
                         <div className="space-y-4">
-                            <div>
-                                <Label>参数 (JSON)</Label>
-                                <Textarea
-                                    value={testArgs}
-                                    onChange={e => setTestArgs(e.target.value)}
-                                    placeholder='{"key": "value"}'
-                                    rows={8}
-                                    className="font-mono text-sm mt-2 bg-[#1e1e1e] text-[#d4d4d4] border-neutral-700"
-                                    style={{ fontFamily: "'Consolas', 'Monaco', 'Courier New', monospace" }}
-                                />
-                            </div>
+                            <KeyValueTable
+                                title="参数列表"
+                                value={testArgs}
+                                onChange={setTestArgs}
+                                keyPlaceholder="参数名"
+                                valuePlaceholder="参数值"
+                            />
                             <div className="flex gap-2">
                                 <Button onClick={testTool} disabled={testLoading}>
                                     {testLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                     执行测试
                                 </Button>
-                                <Button
-                                    variant="outline"
-                                    onClick={() => setTestArgs(JSON.stringify(getDefaultArgs(selectedTool), null, 2))}
-                                >
+                                <Button variant="outline" onClick={() => setTestArgs(getDefaultArgs(selectedTool))}>
                                     重置参数
                                 </Button>
                             </div>
