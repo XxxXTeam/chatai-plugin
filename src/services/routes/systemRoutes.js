@@ -375,6 +375,79 @@ router.post('/stats/tool-calls/clear', async (req, res) => {
     }
 })
 
+// GET /system/monitor - 实时监控信息（内存、RPM、系统状态）
+router.get('/system/monitor', async (req, res) => {
+    try {
+        const { usageStats } = await import('../stats/UsageStats.js')
+        const os = await import('os')
+
+        // 计算内存信息
+        const memUsage = process.memoryUsage()
+        const totalMem = os.totalmem()
+        const freeMem = os.freemem()
+
+        // 计算 RPM（最近 1 分钟请求数）
+        const oneMinuteAgo = Date.now() - 60 * 1000
+        const fiveMinutesAgo = Date.now() - 5 * 60 * 1000
+        const recentRecords = await usageStats.getRecent(500, {})
+
+        const lastMinuteRequests = recentRecords.filter(r => r.timestamp >= oneMinuteAgo)
+        const lastFiveMinutesRequests = recentRecords.filter(r => r.timestamp >= fiveMinutesAgo)
+
+        const rpm = lastMinuteRequests.length
+        const rpm5 = Math.round(lastFiveMinutesRequests.length / 5)
+
+        // 计算成功率
+        const successCount = lastMinuteRequests.filter(r => r.success).length
+        const successRate = rpm > 0 ? Math.round((successCount / rpm) * 100) : 100
+
+        // 计算平均响应时间
+        const avgLatency =
+            lastMinuteRequests.length > 0
+                ? Math.round(
+                      lastMinuteRequests.reduce((sum, r) => sum + (r.duration || 0), 0) / lastMinuteRequests.length
+                  )
+                : 0
+
+        // 计算 token 使用
+        const tokensLastMinute = lastMinuteRequests.reduce((sum, r) => sum + (r.totalTokens || 0), 0)
+        const tokensLastFiveMinutes = lastFiveMinutesRequests.reduce((sum, r) => sum + (r.totalTokens || 0), 0)
+
+        res.json(
+            ChaiteResponse.ok({
+                memory: {
+                    heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+                    heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+                    rss: Math.round(memUsage.rss / 1024 / 1024),
+                    external: Math.round((memUsage.external || 0) / 1024 / 1024),
+                    systemTotal: Math.round(totalMem / 1024 / 1024),
+                    systemFree: Math.round(freeMem / 1024 / 1024),
+                    heapUsedPercent: Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100),
+                    systemUsedPercent: Math.round(((totalMem - freeMem) / totalMem) * 100)
+                },
+                api: {
+                    rpm, // 每分钟请求数
+                    rpm5, // 5分钟平均 RPM
+                    successRate, // 成功率
+                    avgLatency, // 平均延迟(ms)
+                    tokensLastMinute,
+                    tokensPerMinute: Math.round(tokensLastFiveMinutes / 5)
+                },
+                system: {
+                    uptime: Math.round(process.uptime()),
+                    nodeVersion: process.version,
+                    platform: process.platform,
+                    cpuCount: os.cpus().length,
+                    loadAvg: os.loadavg().map(v => Math.round(v * 100) / 100)
+                },
+                timestamp: Date.now()
+            })
+        )
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
 // DELETE /system/release_port - 释放端口（用于热重载）
 router.delete('/system/release_port', async (req, res) => {
     try {

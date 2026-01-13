@@ -254,7 +254,8 @@ export const systemApi = {
     getServerMode: () => api.get('/api/system/server-mode'),
     setServerMode: (sharePort: boolean) => api.put('/api/system/server-mode', { sharePort }),
     restart: (type: 'reload' | 'full' = 'reload') => api.post('/api/system/restart', { type }),
-    getVersion: () => api.get('/api/system/version')
+    getVersion: () => api.get('/api/system/version'),
+    getMonitor: () => api.get('/api/system/monitor')
 }
 
 export const tokenApi = {
@@ -405,6 +406,48 @@ export const imageGenApi = {
     updateBuiltinPreset: (uid: string, data: { keywords: string[]; prompt: string; needImage?: boolean }) =>
         api.put(`/api/imagegen/builtin-presets/${uid}`, data),
     deleteBuiltinPreset: (uid: string) => api.delete(`/api/imagegen/builtin-presets/${uid}`)
+}
+
+// Skills Agent API
+export const skillsApi = {
+    // 获取整体状态
+    getStatus: () => api.get('/api/skills/status'),
+    // 获取所有可用技能
+    getTools: (options?: { includeBuiltin?: boolean; includeMcp?: boolean; presetId?: string }) => {
+        const params = new URLSearchParams()
+        if (options?.includeBuiltin !== undefined) params.set('includeBuiltin', String(options.includeBuiltin))
+        if (options?.includeMcp !== undefined) params.set('includeMcp', String(options.includeMcp))
+        if (options?.presetId) params.set('presetId', options.presetId)
+        return api.get(`/api/skills/tools?${params.toString()}`)
+    },
+    // 按来源分类获取技能
+    getToolsBySource: () => api.get('/api/skills/tools/by-source'),
+    // 执行技能
+    execute: (toolName: string, args?: Record<string, unknown>, presetId?: string) =>
+        api.post('/api/skills/execute', { toolName, args, presetId }),
+    // 获取工具类别
+    getCategories: () => api.get('/api/skills/categories'),
+    // 切换类别启用状态
+    toggleCategory: (key: string, enabled: boolean) => api.post(`/api/skills/categories/${key}/toggle`, { enabled }),
+    // 切换单个工具启用状态
+    toggleTool: (name: string, enabled: boolean) => api.post(`/api/skills/tools/${name}/toggle`, { enabled }),
+    // 重载所有工具
+    reload: () => api.post('/api/skills/reload'),
+    // 启用所有工具
+    enableAll: () => api.post('/api/skills/enable-all'),
+    // 禁用所有工具
+    disableAll: () => api.post('/api/skills/disable-all'),
+    // 获取工具统计
+    getStats: () => api.get('/api/skills/stats'),
+    // MCP 服务器管理
+    mcp: {
+        listServers: () => api.get('/api/skills/mcp/servers'),
+        getServer: (name: string) => api.get(`/api/skills/mcp/servers/${name}`),
+        addServer: (name: string, config: Record<string, unknown>) =>
+            api.post('/api/skills/mcp/servers', { name, config }),
+        removeServer: (name: string) => api.delete(`/api/skills/mcp/servers/${name}`),
+        reconnectServer: (name: string) => api.post(`/api/skills/mcp/servers/${name}/reconnect`)
+    }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

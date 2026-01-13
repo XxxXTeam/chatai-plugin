@@ -135,6 +135,7 @@ import {
     channelRoutes,
     testPanelRoutes,
     groupAdminRoutes,
+    skillsRoutes,
     createConversationRoutes,
     createContextRoutes,
     createPresetRoutes,
@@ -312,7 +313,8 @@ class WebServer {
     authMiddleware(req, res, next) {
         const authHeader = req.headers.authorization
         const cookieToken = req.cookies?.auth_token
-        const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : cookieToken
+        const queryToken = req.query?.token // SSE 连接通过 query 参数传递 token
+        const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : cookieToken || queryToken
 
         if (!token) {
             chatLogger.warn(`[Auth] 无token: ${req.method} ${req.originalUrl}`)
@@ -518,6 +520,7 @@ window.location.href = '/';
         this.app.use('/api/placeholders', auth, logsRoutes)
         this.app.use('/api/memory', auth, memoryRoutes)
         this.app.use('/api/group-admin', groupAdminRoutes)
+        this.app.use('/api/skills', auth, skillsRoutes)
         this.app.use('/api', auth, systemRoutes)
         this.app.use('/api/conversations', createConversationRoutes(auth))
         this.app.use('/api/context', createContextRoutes(auth))

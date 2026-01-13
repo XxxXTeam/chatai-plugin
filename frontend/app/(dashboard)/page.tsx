@@ -16,7 +16,6 @@ import {
     Wrench,
     Settings,
     Users,
-    Activity,
     Palette,
     Server,
     ArrowRight,
@@ -24,6 +23,7 @@ import {
     LayoutDashboard,
     BookOpen
 } from 'lucide-react'
+import { SystemMonitor } from '@/components/dashboard/SystemMonitor'
 
 interface Channel {
     id: string
@@ -325,75 +325,7 @@ export default function DashboardPage() {
                     </CardContent>
                 </Card>
 
-                <Card className="glass-card hover:shadow-md transition-all duration-300">
-                    <CardHeader className="border-b border-border/40 pb-4">
-                        <CardTitle className="flex items-center gap-2 text-base">
-                            <div className="p-1.5 rounded-lg bg-purple-500/10 text-purple-500">
-                                <Activity className="h-4 w-4" />
-                            </div>
-                            系统状态
-                        </CardTitle>
-                        <CardDescription className="mt-1">核心服务与组件运行概览</CardDescription>
-                    </CardHeader>
-                    <CardContent className="pt-4">
-                        <div className="space-y-4">
-                            <div className="flex items-center justify-between p-2 rounded-lg bg-muted/20">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-8 h-8 rounded-full bg-green-500/10 flex items-center justify-center">
-                                        <Bot className="h-4 w-4 text-green-600" />
-                                    </div>
-                                    <span className="text-sm font-medium">AI Core</span>
-                                </div>
-                                <Badge className="bg-green-500/15 text-green-600 hover:bg-green-500/20 shadow-none border-0">
-                                    正常运行
-                                </Badge>
-                            </div>
-
-                            <div className="flex items-center justify-between p-2">
-                                <span className="text-sm text-muted-foreground">MCP服务</span>
-                                <Badge
-                                    variant={
-                                        (data?.config as { mcp?: { enabled?: boolean } })?.mcp?.enabled
-                                            ? 'default'
-                                            : 'secondary'
-                                    }
-                                    className="transition-colors"
-                                >
-                                    {(data?.config as { mcp?: { enabled?: boolean } })?.mcp?.enabled
-                                        ? '已启用'
-                                        : '已禁用'}
-                                </Badge>
-                            </div>
-
-                            <div className="flex items-center justify-between p-2">
-                                <span className="text-sm text-muted-foreground">伪人模式</span>
-                                <Badge
-                                    variant={
-                                        (data?.config as { bym?: { enable?: boolean } })?.bym?.enable
-                                            ? 'default'
-                                            : 'secondary'
-                                    }
-                                    className="transition-colors"
-                                >
-                                    {(data?.config as { bym?: { enable?: boolean } })?.bym?.enable
-                                        ? '已启用'
-                                        : '已禁用'}
-                                </Badge>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-3 mt-2">
-                                <div className="flex flex-col gap-1 p-3 rounded-xl bg-muted/30 text-center">
-                                    <span className="text-2xl font-bold">{data?.serversCount || 0}</span>
-                                    <span className="text-xs text-muted-foreground">MCP服务器</span>
-                                </div>
-                                <div className="flex flex-col gap-1 p-3 rounded-xl bg-muted/30 text-center">
-                                    <span className="text-2xl font-bold">{data?.toolsCount || 0}</span>
-                                    <span className="text-xs text-muted-foreground">可用工具</span>
-                                </div>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
+                <SystemMonitor />
             </div>
         </PageContainer>
     )

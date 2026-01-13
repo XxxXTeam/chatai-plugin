@@ -272,57 +272,78 @@ export class McpClient {
 
     async connectSSE() {
         const { url, headers = {} } = this.config
-        this.sseBaseUrl = url.replace(/\/sse\/?$/, '') // 移除末尾的 /sse
+        this.sseHeaders = headers
 
-        // 连接 SSE 端点获取 session
-        const sseUrl = url.endsWith('/sse') ? url : `${url}/sse`
-        logger.debug(`[MCP] Connecting to SSE endpoint: ${sseUrl}`)
+        // 解析 base URL
+        this.sseBaseUrl = url.replace(/\/(sse|mcp|message)\/?$/, '')
+        logger.debug(`[MCP] Connecting to SSE endpoint: ${url}`)
 
-        this.eventSource = new EventSource(sseUrl)
+        // 使用自定义 fetch 传递 headers
+        const eventSourceOptions =
+            Object.keys(headers).length > 0
+                ? {
+                      fetch: (input, init) =>
+                          fetch(input, {
+                              ...init,
+                              headers: { ...init?.headers, ...headers }
+                          })
+                  }
+                : {}
 
-        // 设置通用消息处理器
-        this.eventSource.onmessage = event => {
-            try {
-                const message = JSON.parse(event.data)
-                // 检查是否是 ping 响应（result 为空对象且有对应的 pending request）
-                const pending = message.id ? this.pendingRequests.get(message.id) : null
-                const isPing = pending?.method === 'ping'
-                if (!isPing) {
-                    logger.debug(`[MCP] SSE message received: ${event.data.substring(0, 200)}`)
-                }
-                this.handleMessage(message)
-            } catch (error) {
-                // 可能不是 JSON，忽略
-            }
-        }
+        this.eventSource = new EventSource(url, eventSourceOptions)
 
-        // 等待获取 endpoint
+        // 等待连接并获取消息端点
         await new Promise((resolve, reject) => {
+            let resolved = false
             const timeout = setTimeout(() => {
-                this.eventSource?.close()
-                reject(new Error('SSE connection timeout'))
-            }, 10000)
-
+                if (!resolved) {
+                    this.eventSource?.close()
+                    reject(new Error('SSE connection timeout'))
+                }
+            }, 15000)
             this.eventSource.addEventListener('endpoint', event => {
-                // 获取到消息端点，如 /messages?sessionId=xxx
                 this.sseMessageEndpoint = event.data
-                logger.debug(`[MCP] SSE message endpoint: ${this.sseMessageEndpoint}`)
-                clearTimeout(timeout)
-                resolve()
+                if (this.sseMessageEndpoint && !this.sseMessageEndpoint.startsWith('http')) {
+                    this.sseMessageEndpoint = this.sseBaseUrl + this.sseMessageEndpoint
+                }
+                logger.info(`[MCP] SSE endpoint received: ${this.sseMessageEndpoint}`)
+                if (!resolved) {
+                    resolved = true
+                    clearTimeout(timeout)
+                    resolve()
+                }
             })
+            this.eventSource.onmessage = event => {
+                try {
+                    const message = JSON.parse(event.data)
+                    logger.debug(`[MCP] SSE message:`, event.data.substring(0, 200))
+                    this.handleMessage(message)
+                } catch (error) {
+                    // 可能不是 JSON
+                }
+            }
 
             this.eventSource.onerror = error => {
-                if (error.type === 'error') {
-                    logger.warn(`[MCP] SSE connection error`)
-                }
-                if (this.eventSource?.readyState === EventSource.CLOSED) {
+                const readyState = this.eventSource?.readyState
+                const stateNames = { 0: 'CONNECTING', 1: 'OPEN', 2: 'CLOSED' }
+                logger.warn(`[MCP] SSE error, readyState=${stateNames[readyState] || readyState}`)
+                if (readyState === EventSource.CLOSED && !resolved) {
                     clearTimeout(timeout)
                     reject(new Error('SSE connection closed'))
                 }
             }
 
             this.eventSource.onopen = () => {
-                logger.debug(`[MCP] SSE connection opened`)
+                logger.info(`[MCP] SSE connection opened, waiting for endpoint event...`)
+                setTimeout(() => {
+                    if (!resolved) {
+                        this.sseMessageEndpoint = this.sseBaseUrl + '/message'
+                        logger.info(`[MCP] No endpoint event, using default: ${this.sseMessageEndpoint}`)
+                        resolved = true
+                        clearTimeout(timeout)
+                        resolve()
+                    }
+                }, 2000)
             }
         })
     }
@@ -354,8 +375,6 @@ export class McpClient {
     handleMessage(message) {
         const pending = this.pendingRequests.get(message.id)
         const isPing = pending?.method === 'ping'
-
-        // 不打印 ping 响应的日志（心跳每30秒调用一次，避免日志过多）
         if (!isPing) {
             const pendingIds = Array.from(this.pendingRequests.keys())
             logger.debug(
