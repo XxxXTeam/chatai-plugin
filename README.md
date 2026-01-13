@@ -11,7 +11,17 @@
 
 **一款功能强大的 Yunzai-Bot AI 聊天插件，集成多种 LLM 模型和丰富的工具调用能力**
 
+> 统一管理聊天、预设、工具与长/短期记忆，给 Yunzai 带来“全栈 AI”体验。
+
 [安装指南](#-安装) • [快速开始](#-快速开始) • [配置说明](#️-配置说明) • [工具开发](docs/TOOLS.md) • [开发文档](docs/DEVELOPMENT.md)
+
+**快速导航**
+- 🚀 [快速开始](#-快速开始)：命令与基础用法
+- ⚙️ [配置说明](#️-配置说明)：YAML 字段详解
+- 🛠️ [内置工具列表](#-内置工具列表)：可用 MCP 工具总览
+- 🌐 [Web 管理面板](#-web-管理面板)：界面功能预览
+- ❓ [常见问题](#-常见问题)：安装/运行排障
+- 💖 [鸣谢](#-鸣谢)：贡献与支持
 
 </div>
 
@@ -877,7 +887,7 @@ git commit -m "docs: 更新安装说明"
 
 ### 内测用户
 
-感谢以下用户在内测期间提供的宝贵建议、反馈和 Bug 报告：
+感谢以下用户在内测期间提供的宝贵建议与帮助，排名不分前后、反馈和 Bug 报告与功能提交：
 
 <table>
   <tr>
@@ -885,6 +895,18 @@ git commit -m "docs: 更新安装说明"
       <a href="https://github.com/haanxuan">
         <img src="https://github.com/haanxuan.png" width="80px;" alt="haanxuan"/><br/>
         <sub><b>haanxuan</b></sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/Admilkk">
+        <img src="https://github.com/Admilkk.png" width="80px;" alt="Admilkk"/><br/>
+        <sub><b>Admilkk</b></sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/MapleLeaf2007">
+        <img src="https://github.com/MapleLeaf2007.png" width="80px;" alt="MapleLeaf2007"/><br/>
+        <sub><b>MapleLeaf2007</b></sub>
       </a>
     </td>
     <td align="center">
@@ -899,10 +921,36 @@ git commit -m "docs: 更新安装说明"
         <sub><b>dndss</b></sub>
       </a>
     </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/DenFengLai">
+        <img src="https://github.com/DenFengLai.png" width="80px;" alt="DenFengLai"/><br/>
+        <sub><b>DenFengLai</b></sub>
+      </a>
+    </td>
     <td align="center">
       <a href="https://github.com/ColdMoonBUG">
         <img src="https://github.com/ColdMoonBUG.png" width="80px;" alt="ColdMoonBUG"/><br/>
         <sub><b>ColdMoonBUG</b></sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/chinoyui">
+        <img src="https://github.com/chinoyui.png" width="80px;" alt="chinoyui"/><br/>
+        <sub><b>chinoyui</b></sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/rufengOwO">
+        <img src="https://github.com/rufengOwO.png" width="80px;" alt="rufengOwO"/><br/>
+        <sub><b>rufengOwO</b></sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/3577641236">
+        <img src="https://github.com/3577641236.png" width="80px;" alt="3577641236"/><br/>
+        <sub><b>3577641236</b></sub>
       </a>
     </td>
   </tr>

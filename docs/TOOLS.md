@@ -13,6 +13,10 @@
 - [最佳实践](#最佳实践)
 - [示例工具](#示例工具)
 - [内置工具列表](#内置工具列表)
+- [进阶：可复用基类与热加载](#进阶可复用基类与热加载)
+- [上下文与判定示例](#上下文与判定示例)
+- [常见 Demo 模板](#常见-demo-模板)
+- [调试与测试](#调试与测试)
 
 ---
 
@@ -724,7 +728,47 @@ export default {
 
 ---
 
-## 调试技巧
+## 进阶：热加载机制
+
+工具系统支持热加载，无需重启即可更新工具。
+
+### 自动重载
+
+插件启动时会自动加载 `data/tools/` 目录下的所有 `.js` 文件。
+
+### 手动重载
+
+有三种方式可以手动重载工具：
+
+**方式一：管理面板**
+1. 打开 Web 管理面板
+2. 进入「工具管理」页面
+3. 点击「重载工具」按钮
+
+**方式二：API 调用**
+```javascript
+// 调用重载 API
+fetch('/api/tools/reload', { method: 'POST' })
+```
+
+**方式三：代码中重载**
+```javascript
+import { reloadToolModules } from '../../src/mcp/tools/index.js'
+
+// 强制重新加载所有工具模块
+await reloadToolModules()
+```
+
+### 热加载原理
+
+```javascript
+// 工具加载器使用动态导入 + 时间戳避免缓存
+const module = await import(`${moduleInfo.file}?t=${timestamp}`)
+```
+
+---
+
+## 调试与测试
 
 ### 1. 启用调试模式
 
@@ -734,40 +778,665 @@ basic:
   debug: true
 ```
 
-### 2. 查看工具调用日志
+调试模式下，所有工具调用都会在控制台输出详细日志，包括：
+- 工具调用参数
+- 执行耗时
+- 返回结果
+- 错误堆栈
 
-调试模式下，所有工具调用都会在控制台输出详细日志。
-
-### 3. 手动测试工具
-
-可以在管理面板的「工具管理」中测试工具执行。
-
----
-
-## 常见问题
-
-### Q: 工具没有被加载？
-
-1. 检查文件是否在 `data/tools/` 目录下
-2. 检查文件是否有 `export default`
-3. 检查是否有 `name` 和 `run` 函数
-4. 查看控制台是否有加载错误
-
-### Q: AI 不调用我的工具？
-
-1. 检查 `description` 是否清晰描述了工具功能
-2. 确保工具名称有意义
-3. 在对话中明确需要该功能
-
-### Q: 如何访问数据库？
+### 2. 使用日志记录
 
 ```javascript
 async run(args, context) {
-    // 使用内置的数据库服务
-    const { databaseService } = await import('../../src/services/storage/DatabaseService.js')
+    // 使用全局 logger
+    logger.debug('[MyTool] 开始执行:', JSON.stringify(args))
+    logger.info('[MyTool] 处理中...')
+    logger.warn('[MyTool] 警告信息')
+    logger.error('[MyTool] 错误信息', error)
     
-    // 或使用 Redis
-    const { redisClient } = await import('../../src/core/cache/RedisClient.js')
+    // 结构化日志
+    logger.debug('[MyTool] 执行完成', {
+        args,
+        duration: Date.now() - startTime,
+        result: result
+    })
+    
+    return result
+}
+```
+
+### 3. 管理面板测试
+
+在管理面板的「工具管理」中可以直接测试工具：
+
+1. 打开管理面板
+2. 进入「工具管理」 > 「JS 工具」
+3. 找到你的工具，点击「测试」
+4. 输入 JSON 格式的参数
+5. 查看执行结果
+
+### 4. API 测试
+
+```javascript
+// 通过 API 测试工具执行
+const response = await fetch('/api/tools/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        toolName: 'my_tool',
+        arguments: { param1: 'value1' }
+    })
+})
+
+const result = await response.json()
+console.log('执行结果:', result)
+```
+
+### 5. 单元测试示例
+
+```javascript
+// test/tools/my_tool.test.js
+import myTool from '../../data/tools/my_tool.js'
+
+// 模拟上下文
+const mockContext = {
+    getEvent: () => ({
+        user_id: '123456',
+        group_id: '789012',
+        sender: { nickname: '测试用户' },
+        reply: async (msg) => console.log('Reply:', msg)
+    }),
+    getBot: () => ({
+        uin: '10000',
+        nickname: 'TestBot'
+    }),
+    isIcqq: () => false,
+    isNapCat: () => true,
+    isNT: () => true
+}
+
+// 测试工具
+async function testMyTool() {
+    const result = await myTool.run(
+        { param1: 'test_value' },
+        mockContext
+    )
+    
+    console.log('测试结果:', result)
+    console.assert(result.success === true, '应该返回成功')
+}
+
+testMyTool()
+```
+
+---
+
+## 常见问题与解决方案
+
+### 工具加载问题
+
+#### Q: 工具没有被加载？
+
+**排查步骤：**
+
+1. **检查文件位置**
+   - 确保文件在 `data/tools/` 目录下
+   - 文件扩展名必须是 `.js`
+
+2. **检查导出格式**
+   ```javascript
+   // ✅ 正确：使用 export default
+   export default {
+       name: 'my_tool',
+       // ...
+   }
+   
+   // ❌ 错误：使用 module.exports
+   module.exports = {
+       name: 'my_tool',
+       // ...
+   }
+   ```
+
+3. **检查必要字段**
+   ```javascript
+   export default {
+       name: 'my_tool',        // 必须：工具名称
+       function: {             // 必须：或使用 description + parameters
+           name: 'my_tool',
+           description: '...',
+           parameters: { /* ... */ }
+       },
+       async run(args, ctx) {} // 必须：执行函数
+   }
+   ```
+
+4. **查看控制台错误**
+   ```bash
+   # 启动时查看加载日志
+   [BuiltinMCP] 加载工具模块 xxx 失败: Error message
+   ```
+
+#### Q: 工具名称冲突怎么办？
+
+自定义工具名称不能与内置工具重名。建议使用有意义的前缀：
+
+```javascript
+// ✅ 好的命名
+name: 'custom_weather_query'
+name: 'mybot_reminder'
+name: 'plugin_xxx_action'
+
+// ❌ 避免的命名（可能与内置冲突）
+name: 'get_weather'
+name: 'send_message'
+```
+
+### AI 调用问题
+
+#### Q: AI 不调用我的工具？
+
+**原因及解决方案：**
+
+1. **描述不够清晰**
+   ```javascript
+   // ❌ 差的描述
+   description: '获取数据'
+   
+   // ✅ 好的描述
+   description: '根据城市名称查询实时天气信息，返回温度、湿度、风力等详细数据'
+   ```
+
+2. **参数描述不明确**
+   ```javascript
+   // ❌ 缺少描述
+   properties: {
+       city: { type: 'string' }
+   }
+   
+   // ✅ 完整描述
+   properties: {
+       city: { 
+           type: 'string',
+           description: '城市名称，支持中文（如"北京"）或拼音（如"beijing"）'
+       }
+   }
+   ```
+
+3. **工具功能与需求不匹配**
+   - 确保用户的请求确实需要你的工具
+   - 尝试更明确地表达需求："请使用 xxx 工具..."
+
+4. **工具未启用**
+   - 检查管理面板中工具是否被启用
+   - 检查工具分类是否被禁用
+
+#### Q: 工具被调用但参数不对？
+
+使用参数验证：
+
+```javascript
+import { validateParams, paramError } from '../../src/mcp/tools/helpers.js'
+
+async run(args, context) {
+    // 验证参数
+    const validation = validateParams(args, this.function.parameters, context)
+    if (!validation.valid) {
+        return paramError(validation)
+    }
+    
+    // 继续执行...
+}
+```
+
+### 执行问题
+
+#### Q: 工具执行超时？
+
+添加超时控制：
+
+```javascript
+async run(args, context) {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 30000) // 30秒超时
+    
+    try {
+        const response = await fetch(url, {
+            signal: controller.signal
+        })
+        clearTimeout(timeoutId)
+        return { success: true, data: await response.json() }
+    } catch (error) {
+        clearTimeout(timeoutId)
+        if (error.name === 'AbortError') {
+            return { error: '请求超时，请稍后重试' }
+        }
+        return { error: error.message }
+    }
+}
+```
+
+#### Q: 如何处理异步操作？
+
+```javascript
+async run(args, context) {
+    const e = context.getEvent()
+    
+    // 方式1：等待完成后返回结果
+    const result = await someAsyncOperation()
+    return { success: true, data: result }
+    
+    // 方式2：立即返回，后台继续处理
+    // 适用于耗时操作，先给用户反馈
+    setImmediate(async () => {
+        const result = await longRunningTask()
+        await e.reply(`处理完成: ${result}`)
+    })
+    return { success: true, message: '正在处理中，请稍候...' }
+}
+```
+
+#### Q: 如何访问数据库？
+
+```javascript
+async run(args, context) {
+    // 方式1：使用 Redis（推荐用于缓存）
+    const redis = global.redis
+    if (redis) {
+        await redis.set('key', 'value', { EX: 3600 })
+        const value = await redis.get('key')
+    }
+    
+    // 方式2：使用内置数据库服务
+    const { DatabaseService } = await import('../../src/services/storage/DatabaseService.js')
+    const db = DatabaseService.getInstance()
+    // 使用 db 进行操作...
+    
+    // 方式3：使用 SQLite 直接操作
+    const Database = (await import('better-sqlite3')).default
+    const db = new Database('data/my_tool.db')
+    // ...
+}
+```
+
+### 权限问题
+
+#### Q: 如何检查用户权限？
+
+```javascript
+import { getMasterList } from '../../src/mcp/tools/helpers.js'
+
+async run(args, context) {
+    const e = context.getEvent()
+    const bot = context.getBot()
+    
+    // 检查是否为主人
+    const masters = await getMasterList(bot?.uin)
+    const isMaster = masters.includes(Number(e.user_id))
+    
+    // 检查是否为群管理员
+    const isAdmin = e.member?.is_admin || e.member?.is_owner
+    
+    // 检查是否为群主
+    const isOwner = e.member?.is_owner
+    
+    if (!isMaster && !isAdmin) {
+        return { error: '需要管理员权限' }
+    }
+    
+    // 继续执行...
+}
+```
+
+#### Q: 如何限制工具使用场景？
+
+```javascript
+async run(args, context) {
+    const e = context.getEvent()
+    
+    // 仅群聊可用
+    if (!e.group_id) {
+        return { error: '此工具仅在群聊中可用' }
+    }
+    
+    // 仅私聊可用
+    if (e.group_id) {
+        return { error: '此工具仅在私聊中可用' }
+    }
+    
+    // 限制特定群
+    const allowedGroups = ['123456', '789012']
+    if (!allowedGroups.includes(String(e.group_id))) {
+        return { error: '此群未授权使用该工具' }
+    }
+    
+    // 继续执行...
+}
+```
+
+### 消息发送问题
+
+#### Q: 如何发送各种类型的消息？
+
+```javascript
+import { compatSegment, sendMessage } from '../../src/mcp/tools/helpers.js'
+
+async run(args, context) {
+    const e = context.getEvent()
+    const bot = context.getBot()
+    
+    // 发送文本
+    await e.reply('Hello World')
+    
+    // 发送图片
+    await e.reply(compatSegment.image('https://example.com/image.png'))
+    
+    // 发送 @
+    await e.reply([compatSegment.at(e.user_id), ' 你好！'])
+    
+    // 发送组合消息
+    await e.reply([
+        compatSegment.text('看看这张图: '),
+        compatSegment.image('file:///path/to/image.png'),
+        compatSegment.text('\n觉得怎么样？')
+    ])
+    
+    // 发送到指定群/用户
+    await sendMessage({
+        bot,
+        groupId: '123456',  // 群号
+        // userId: '789012',  // 或用户QQ
+        message: 'Hello'
+    })
+    
+    return { success: true }
+}
+```
+
+#### Q: 如何发送合并转发？
+
+```javascript
+import { sendForwardMsgEnhanced } from '../../src/mcp/tools/helpers.js'
+
+async run(args, context) {
+    const e = context.getEvent()
+    const bot = context.getBot()
+    
+    const result = await sendForwardMsgEnhanced({
+        bot,
+        event: e,
+        messages: [
+            { user_id: '10000', nickname: '系统', content: '这是第一条消息' },
+            { user_id: '10000', nickname: '系统', content: '这是第二条消息' },
+            {
+                user_id: bot.uin,
+                nickname: bot.nickname,
+                content: [
+                    { type: 'text', text: '支持富文本: ' },
+                    { type: 'image', file: 'https://example.com/img.png' }
+                ]
+            }
+        ],
+        display: {
+            prompt: '点击查看详情',
+            summary: '共3条消息'
+        }
+    })
+    
+    return result
+}
+```
+
+---
+
+## 工具开发模板
+
+### 基础模板
+
+```javascript
+// data/tools/template_basic.js
+export default {
+    name: 'template_basic',
+    
+    function: {
+        name: 'template_basic',
+        description: '基础工具模板',
+        parameters: {
+            type: 'object',
+            properties: {
+                input: {
+                    type: 'string',
+                    description: '输入内容'
+                }
+            },
+            required: ['input']
+        }
+    },
+
+    async run(args, context) {
+        const { input } = args
+        
+        try {
+            // 你的逻辑
+            const result = `处理结果: ${input}`
+            
+            return {
+                success: true,
+                message: result
+            }
+        } catch (error) {
+            return {
+                success: false,
+                error: error.message
+            }
+        }
+    }
+}
+```
+
+### API 调用模板
+
+```javascript
+// data/tools/template_api.js
+export default {
+    name: 'template_api',
+    
+    function: {
+        name: 'template_api',
+        description: '调用外部 API 的工具模板',
+        parameters: {
+            type: 'object',
+            properties: {
+                query: {
+                    type: 'string',
+                    description: '查询内容'
+                }
+            },
+            required: ['query']
+        }
+    },
+
+    async run(args, context) {
+        const { query } = args
+        const API_URL = 'https://api.example.com/search'
+        
+        // 超时控制
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 15000)
+        
+        try {
+            const response = await fetch(`${API_URL}?q=${encodeURIComponent(query)}`, {
+                headers: {
+                    'User-Agent': 'ChatBot/1.0',
+                    // 'Authorization': 'Bearer YOUR_API_KEY'
+                },
+                signal: controller.signal
+            })
+            
+            clearTimeout(timeoutId)
+            
+            if (!response.ok) {
+                return { error: `API 请求失败: HTTP ${response.status}` }
+            }
+            
+            const data = await response.json()
+            
+            return {
+                success: true,
+                data: data
+            }
+        } catch (error) {
+            clearTimeout(timeoutId)
+            
+            if (error.name === 'AbortError') {
+                return { error: '请求超时' }
+            }
+            
+            return { error: `请求失败: ${error.message}` }
+        }
+    }
+}
+```
+
+### 群管理模板
+
+```javascript
+// data/tools/template_admin.js
+import { getMasterList } from '../../src/mcp/tools/helpers.js'
+
+export default {
+    name: 'template_admin',
+    
+    function: {
+        name: 'template_admin',
+        description: '群管理工具模板（需要管理员权限）',
+        parameters: {
+            type: 'object',
+            properties: {
+                target_user: {
+                    type: 'string',
+                    description: '目标用户QQ号'
+                },
+                action: {
+                    type: 'string',
+                    description: '操作类型',
+                    enum: ['warn', 'kick', 'ban']
+                }
+            },
+            required: ['target_user', 'action']
+        }
+    },
+
+    async run(args, context) {
+        const { target_user, action } = args
+        const e = context.getEvent()
+        const bot = context.getBot()
+        
+        // 检查是否在群聊
+        if (!e.group_id) {
+            return { error: '此工具仅在群聊中可用' }
+        }
+        
+        // 检查权限
+        const masters = await getMasterList(bot?.uin)
+        const isMaster = masters.includes(Number(e.user_id))
+        const isAdmin = e.member?.is_admin || e.member?.is_owner
+        
+        if (!isMaster && !isAdmin) {
+            return { error: '需要管理员权限' }
+        }
+        
+        // 执行操作
+        try {
+            switch (action) {
+                case 'warn':
+                    await e.reply([segment.at(target_user), ' 这是一个警告！'])
+                    break
+                case 'kick':
+                    // 踢人操作...
+                    break
+                case 'ban':
+                    // 禁言操作...
+                    break
+            }
+            
+            return {
+                success: true,
+                message: `已对 ${target_user} 执行 ${action} 操作`
+            }
+        } catch (error) {
+            return { error: `操作失败: ${error.message}` }
+        }
+    }
+}
+```
+
+### 定时任务模板
+
+```javascript
+// data/tools/template_scheduler.js
+
+// 存储活跃的定时任务
+const activeTimers = new Map()
+
+export default {
+    name: 'set_reminder',
+    
+    function: {
+        name: 'set_reminder',
+        description: '设置一个提醒，到时间后发送消息',
+        parameters: {
+            type: 'object',
+            properties: {
+                message: {
+                    type: 'string',
+                    description: '提醒内容'
+                },
+                delay_minutes: {
+                    type: 'integer',
+                    description: '延迟分钟数（1-60）'
+                }
+            },
+            required: ['message', 'delay_minutes']
+        }
+    },
+
+    async run(args, context) {
+        const { message, delay_minutes } = args
+        const e = context.getEvent()
+        
+        // 验证参数
+        if (delay_minutes < 1 || delay_minutes > 60) {
+            return { error: '延迟时间必须在 1-60 分钟之间' }
+        }
+        
+        const timerId = `reminder_${e.user_id}_${Date.now()}`
+        const delay = delay_minutes * 60 * 1000
+        
+        // 设置定时器
+        const timer = setTimeout(async () => {
+            try {
+                await e.reply([segment.at(e.user_id), ` 提醒: ${message}`])
+            } catch (err) {
+                console.error('发送提醒失败:', err)
+            } finally {
+                activeTimers.delete(timerId)
+            }
+        }, delay)
+        
+        activeTimers.set(timerId, {
+            timer,
+            userId: e.user_id,
+            message,
+            triggerTime: Date.now() + delay
+        })
+        
+        return {
+            success: true,
+            message: `已设置提醒，将在 ${delay_minutes} 分钟后提醒你: ${message}`,
+            reminder_id: timerId
+        }
+    }
 }
 ```
 
