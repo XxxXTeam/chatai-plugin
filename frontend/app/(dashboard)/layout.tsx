@@ -7,12 +7,15 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { systemApi } from '@/lib/api'
 import { CommandPalette, useCommandPalette } from '@/components/ui/command-palette'
+import { useResponsive } from '@/lib/hooks'
+import { cn } from '@/lib/utils'
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
     const router = useRouter()
     const [loading, setLoading] = useState(true)
     const [authenticated, setAuthenticated] = useState(false)
     const { open: commandPaletteOpen, setOpen: setCommandPaletteOpen } = useCommandPalette()
+    const { isMobile, mounted } = useResponsive()
 
     useEffect(() => {
         // 检查 URL 参数中的 auth_token（从后端重定向过来）
@@ -85,7 +88,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <Sidebar />
             <div className="flex flex-1 flex-col overflow-hidden">
                 <Header onSearchClick={() => setCommandPaletteOpen(true)} />
-                <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 pb-20 lg:pb-6 scroll-smooth">{children}</main>
+                <main
+                    className={cn(
+                        'flex-1 overflow-y-auto scroll-smooth',
+                        'p-3 sm:p-4 md:p-6',
+                        // 移动端底部导航占位
+                        mounted && isMobile ? 'pb-[calc(80px+env(safe-area-inset-bottom,0px))]' : 'pb-6'
+                    )}
+                >
+                    {children}
+                </main>
             </div>
 
             {/* 移动端底部导航 */}

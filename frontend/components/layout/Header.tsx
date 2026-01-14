@@ -12,6 +12,8 @@ import {
 import { useUiStore, useAuthStore } from '@/lib/store'
 import { useRouter } from 'next/navigation'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { useResponsive } from '@/lib/hooks'
+import { cn } from '@/lib/utils'
 
 interface HeaderProps {
     title?: string
@@ -22,6 +24,7 @@ export function Header({ title = 'ChatAi 管理面板', onSearchClick }: HeaderP
     const { toggleSidebar } = useUiStore()
     const { logout } = useAuthStore()
     const router = useRouter()
+    const { isMobile, isDesktop } = useResponsive()
 
     const handleLogout = () => {
         logout()
@@ -29,17 +32,39 @@ export function Header({ title = 'ChatAi 管理面板', onSearchClick }: HeaderP
     }
 
     return (
-        <header className="glass-panel flex h-16 items-center gap-4 px-4 md:px-6 transition-all duration-300">
-            <Button variant="ghost" size="icon" className="lg:hidden" onClick={toggleSidebar}>
-                <Menu className="h-5 w-5" />
-            </Button>
+        <header
+            className={cn(
+                'glass-panel flex items-center gap-2 sm:gap-4 px-3 sm:px-4 md:px-6 transition-all duration-300',
+                isMobile ? 'h-14' : 'h-16'
+            )}
+        >
+            {/* 移动端菜单按钮 */}
+            {!isDesktop && (
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={toggleSidebar}
+                    className="h-9 w-9 flex-shrink-0"
+                    aria-label="打开菜单"
+                >
+                    <Menu className="h-5 w-5" />
+                </Button>
+            )}
 
-            <div className="flex-1">
-                <h1 className="text-lg font-semibold md:text-xl tracking-tight text-foreground/80">{title}</h1>
+            {/* 标题 */}
+            <div className="flex-1 min-w-0">
+                <h1
+                    className={cn(
+                        'font-semibold tracking-tight text-foreground/80 truncate',
+                        isMobile ? 'text-base' : 'text-lg md:text-xl'
+                    )}
+                >
+                    {title}
+                </h1>
             </div>
 
-            {/* 搜索按钮 */}
-            {onSearchClick && (
+            {/* 搜索按钮 - 仅桌面端显示完整样式 */}
+            {onSearchClick && !isMobile && (
                 <Button
                     variant="outline"
                     size="sm"
@@ -47,16 +72,22 @@ export function Header({ title = 'ChatAi 管理面板', onSearchClick }: HeaderP
                     className="hidden sm:flex items-center gap-2 h-9 px-3 text-muted-foreground hover:text-foreground bg-background/50 border-border/50"
                 >
                     <Search className="h-4 w-4" />
-                    <span className="text-sm">搜索功能...</span>
-                    <kbd className="ml-2 pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border border-border/50 bg-muted/50 px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+                    <span className="text-sm hidden md:inline">搜索功能...</span>
+                    <kbd className="ml-2 pointer-events-none hidden lg:inline-flex h-5 select-none items-center gap-1 rounded border border-border/50 bg-muted/50 px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
                         <Command className="h-3 w-3" />K
                     </kbd>
                 </Button>
             )}
 
             {/* 移动端搜索图标 */}
-            {onSearchClick && (
-                <Button variant="ghost" size="icon" onClick={onSearchClick} className="sm:hidden">
+            {onSearchClick && isMobile && (
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={onSearchClick}
+                    className="h-9 w-9 flex-shrink-0"
+                    aria-label="搜索"
+                >
                     <Search className="h-5 w-5" />
                 </Button>
             )}
@@ -68,14 +99,18 @@ export function Header({ title = 'ChatAi 管理面板', onSearchClick }: HeaderP
                     <Button
                         variant="ghost"
                         size="icon"
-                        className="rounded-full overflow-hidden border border-primary/20 hover:border-primary/50 transition-colors w-9 h-9"
+                        className={cn(
+                            'rounded-full overflow-hidden border border-primary/20 hover:border-primary/50 transition-colors flex-shrink-0',
+                            isMobile ? 'w-8 h-8' : 'w-9 h-9'
+                        )}
+                        aria-label="用户菜单"
                     >
                         <div className="w-full h-full bg-gradient-to-tr from-primary/20 to-secondary/20 flex items-center justify-center">
-                            <User className="h-4 w-4 text-primary" />
+                            <User className={cn('text-primary', isMobile ? 'h-3.5 w-3.5' : 'h-4 w-4')} />
                         </div>
                     </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="glass-card border-border/50">
+                <DropdownMenuContent align="end" className="glass-card border-border/50 min-w-[160px]">
                     <DropdownMenuItem disabled className="font-medium">
                         <User className="mr-2 h-4 w-4" />
                         管理员

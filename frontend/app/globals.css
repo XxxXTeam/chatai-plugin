@@ -3,6 +3,23 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* 移动端视口修复 */
+:root {
+  /* 安全区域CSS变量 */
+  --sat: env(safe-area-inset-top, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  
+  /* 移动端底部导航高度 */
+  --mobile-nav-height: 64px;
+  --mobile-nav-height-safe: calc(64px + var(--sab));
+  
+  /* 移动端头部高度 */
+  --header-height: 56px;
+  --header-height-md: 64px;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -89,7 +106,7 @@
   --sidebar-primary: oklch(0.21 0.006 285.885);
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(0.92 0.004 286.32);
   --sidebar-ring: oklch(0.705 0.015 286.067);
 }
@@ -139,8 +156,40 @@
     @apply border-border outline-ring/50;
   }
 
+  html {
+    /* 防止iOS上的橡皮筋滚动效果 */
+    overscroll-behavior: none;
+    /* 确保100vh在移动端正确 */
+    height: -webkit-fill-available;
+  }
+
   body {
     @apply bg-background text-foreground;
+    /* 移动端优化 */
+    min-height: 100vh;
+    min-height: -webkit-fill-available;
+    /* 防止文本大小调整 */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    /* 优化触摸交互 */
+    -webkit-tap-highlight-color: transparent;
+    /* 防止拉伸选择 */
+    touch-action: manipulation;
+  }
+
+  /* 移动端输入框优化 - 防止iOS缩放 */
+  @media screen and (max-width: 767px) {
+    input[type="text"],
+    input[type="email"],
+    input[type="password"],
+    input[type="number"],
+    input[type="tel"],
+    input[type="url"],
+    input[type="search"],
+    textarea,
+    select {
+      font-size: 16px !important;
+    }
   }
 }
 
@@ -741,6 +790,27 @@
   .grid-responsive {
     grid-template-columns: 1fr;
   }
+}
+
+/* 移动端两列网格 */
+.grid-mobile-2 {
+  @apply grid gap-2 sm:gap-3;
+  grid-template-columns: repeat(2, 1fr);
+}
+
+@media (min-width: 768px) {
+  .grid-mobile-2 {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  }
+}
+
+/* 响应式Flex容器 */
+.flex-responsive {
+  @apply flex flex-col sm:flex-row gap-2 sm:gap-3;
+}
+
+.flex-responsive-reverse {
+  @apply flex flex-col-reverse sm:flex-row gap-2 sm:gap-3;
 }
 
 /* 移动端搜索框 */

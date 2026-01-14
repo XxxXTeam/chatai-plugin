@@ -47,6 +47,7 @@ import { toolsApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { CodeBlock } from '@/components/ui/code-block'
 import { KeyValueTable } from '@/components/ui/key-value-table'
+import { DeleteDialog } from '@/components/ui/delete-dialog'
 
 interface Tool {
     name: string
@@ -158,6 +159,8 @@ export default function ToolsPage() {
     const [enablingAll, setEnablingAll] = useState(false)
     const [disablingAll, setDisablingAll] = useState(false)
     const [togglingWatcher, setTogglingWatcher] = useState(false)
+    const [enableAllDialogOpen, setEnableAllDialogOpen] = useState(false)
+    const [disableAllDialogOpen, setDisableAllDialogOpen] = useState(false)
     const [jsForm, setJsForm] = useState({
         name: '',
         filename: '',
@@ -237,7 +240,6 @@ export default function ToolsPage() {
 
     // 一键启用所有工具
     const enableAllTools = async () => {
-        if (!confirm(`确定要启用所有工具吗？\n这将启用 ${toolStats?.disabled || 0} 个当前禁用的工具。`)) return
         setEnablingAll(true)
         try {
             const res = (await toolsApi.enableAll()) as { data?: { enabledCount: number } }
@@ -253,12 +255,6 @@ export default function ToolsPage() {
 
     // 一键禁用所有工具
     const disableAllTools = async () => {
-        if (
-            !confirm(
-                `确定要禁用所有工具吗？\n这将禁用 ${toolStats?.enabled || 0} 个当前启用的工具，AI将无法使用任何工具。`
-            )
-        )
-            return
         setDisablingAll(true)
         try {
             const res = (await toolsApi.disableAll()) as { data?: { disabledCount: number } }
@@ -655,7 +651,12 @@ export default function ToolsPage() {
 
                     {/* 一键操作按钮 */}
                     <div className="flex flex-wrap gap-2">
-                        <Button variant="outline" size="sm" onClick={enableAllTools} disabled={enablingAll}>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setEnableAllDialogOpen(true)}
+                            disabled={enablingAll}
+                        >
                             {enablingAll ? (
                                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                             ) : (
@@ -663,7 +664,12 @@ export default function ToolsPage() {
                             )}
                             一键启用
                         </Button>
-                        <Button variant="outline" size="sm" onClick={disableAllTools} disabled={disablingAll}>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setDisableAllDialogOpen(true)}
+                            disabled={disablingAll}
+                        >
                             {disablingAll ? (
                                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                             ) : (
@@ -1548,6 +1554,25 @@ export default function ToolsPage() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* 启用所有工具确认对话框 */}
+            <DeleteDialog
+                open={enableAllDialogOpen}
+                onOpenChange={setEnableAllDialogOpen}
+                title="启用所有工具"
+                description={`确定要启用所有工具吗？这将启用 ${toolStats?.disabled || 0} 个当前禁用的工具。`}
+                onConfirm={enableAllTools}
+                variant="default"
+            />
+
+            {/* 禁用所有工具确认对话框 */}
+            <DeleteDialog
+                open={disableAllDialogOpen}
+                onOpenChange={setDisableAllDialogOpen}
+                title="禁用所有工具"
+                description={`确定要禁用所有工具吗？这将禁用 ${toolStats?.enabled || 0} 个当前启用的工具，AI将无法使用任何工具。`}
+                onConfirm={disableAllTools}
+            />
         </div>
     )
 }

@@ -36,6 +36,7 @@ import {
 } from 'lucide-react'
 import { MarkdownEditor } from '@/components/ui/markdown-editor'
 import { useRouter } from 'next/navigation'
+import { DeleteDialog } from '@/components/ui/delete-dialog'
 
 interface KnowledgeDocument {
     id: string
@@ -66,6 +67,8 @@ export default function KnowledgePage() {
     const [searchQuery, setSearchQuery] = useState('')
     const [linkDialogOpen, setLinkDialogOpen] = useState(false)
     const [linkingDocId, setLinkingDocId] = useState<string | null>(null)
+    const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+    const [deletingDoc, setDeletingDoc] = useState<KnowledgeDocument | null>(null)
 
     // 导入对话框
     const [importDialogOpen, setImportDialogOpen] = useState(false)
@@ -201,16 +204,21 @@ export default function KnowledgePage() {
         }
     }
 
-    const handleDelete = async (id: string) => {
-        if (!confirm('确定删除此文档？')) return
+    const handleDelete = async () => {
+        if (!deletingDoc) return
         try {
-            await knowledgeApi.delete(id)
+            await knowledgeApi.delete(deletingDoc.id)
             toast.success('文档已删除')
             fetchDocuments()
         } catch (error) {
             toast.error('删除失败')
             console.error(error)
         }
+    }
+
+    const openDeleteDialog = (doc: KnowledgeDocument) => {
+        setDeletingDoc(doc)
+        setDeleteDialogOpen(true)
     }
 
     const handleLinkPreset = async (docId: string, presetId: string) => {
@@ -642,7 +650,7 @@ export default function KnowledgePage() {
                                     <Button
                                         variant="outline"
                                         size="sm"
-                                        onClick={() => handleDelete(doc.id)}
+                                        onClick={() => openDeleteDialog(doc)}
                                         title="删除"
                                     >
                                         <Trash2 className="h-4 w-4 text-destructive" />
@@ -741,6 +749,15 @@ export default function KnowledgePage() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* 删除确认对话框 */}
+            <DeleteDialog
+                open={deleteDialogOpen}
+                onOpenChange={setDeleteDialogOpen}
+                title="删除文档"
+                itemName={deletingDoc?.name}
+                onConfirm={handleDelete}
+            />
         </div>
     )
 }
