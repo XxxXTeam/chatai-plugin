@@ -56,6 +56,7 @@ import { Switch } from '@/components/ui/switch'
 import { CodeBlock } from '@/components/ui/code-block'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { KeyValueTable } from '@/components/ui/key-value-table'
+import { DeleteDialog } from '@/components/ui/delete-dialog'
 
 // 工具类别图标映射
 const categoryIcons: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -166,6 +167,8 @@ export default function McpPage() {
 
     // NPM 包快速选择
     const [showNpmSelector, setShowNpmSelector] = useState(false)
+    const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+    const [deletingServer, setDeletingServer] = useState<string | null>(null)
 
     const fetchData = useCallback(async () => {
         try {
@@ -313,16 +316,21 @@ export default function McpPage() {
         }
     }
 
-    const handleDeleteServer = async (name: string) => {
-        if (!confirm(`确定要删除服务器 "${name}" 吗？`)) return
+    const handleDeleteServer = async () => {
+        if (!deletingServer) return
         try {
-            await mcpApi.deleteServer(name)
+            await mcpApi.deleteServer(deletingServer)
             toast.success('服务器已删除')
             fetchData()
         } catch (error: unknown) {
             const err = error as { response?: { data?: { message?: string } } }
             toast.error(err.response?.data?.message || '删除失败')
         }
+    }
+
+    const openDeleteDialog = (name: string) => {
+        setDeletingServer(name)
+        setDeleteDialogOpen(true)
     }
 
     const handleImport = async () => {
@@ -812,7 +820,7 @@ export default {
                                                 variant="ghost"
                                                 size="sm"
                                                 className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                                onClick={() => handleDeleteServer(server.name)}
+                                                onClick={() => openDeleteDialog(server.name)}
                                             >
                                                 <Trash2 className="h-4 w-4" />
                                             </Button>
@@ -1446,6 +1454,15 @@ export default {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* 删除确认对话框 */}
+            <DeleteDialog
+                open={deleteDialogOpen}
+                onOpenChange={setDeleteDialogOpen}
+                title="删除服务器"
+                itemName={deletingServer || undefined}
+                onConfirm={handleDeleteServer}
+            />
         </div>
     )
 }

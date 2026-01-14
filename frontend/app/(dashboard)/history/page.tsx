@@ -12,6 +12,7 @@ import { toast } from 'sonner'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { RefreshCw, History, CheckCircle, XCircle, Clock, Loader2, Trash2, Search } from 'lucide-react'
+import { DeleteDialog } from '@/components/ui/delete-dialog'
 
 interface ToolLog {
     id?: string
@@ -36,6 +37,7 @@ export default function HistoryPage() {
     const [searchQuery, setSearchQuery] = useState('')
     const [toolFilter, setToolFilter] = useState<string>('all')
     const [clearing, setClearing] = useState(false)
+    const [clearDialogOpen, setClearDialogOpen] = useState(false)
 
     const fetchLogs = async () => {
         try {
@@ -51,7 +53,6 @@ export default function HistoryPage() {
     }
 
     const handleClearLogs = async () => {
-        if (!confirm('确定要清空所有调用记录吗？')) return
         setClearing(true)
         try {
             await toolsApi.clearLogs()
@@ -158,7 +159,7 @@ export default function HistoryPage() {
                     </Button>
                     <Button
                         variant="outline"
-                        onClick={handleClearLogs}
+                        onClick={() => setClearDialogOpen(true)}
                         disabled={clearing || logs.length === 0}
                         className="text-destructive hover:text-destructive"
                     >
@@ -328,6 +329,15 @@ export default function HistoryPage() {
                     </ScrollArea>
                 </DialogContent>
             </Dialog>
+
+            {/* 清空确认对话框 */}
+            <DeleteDialog
+                open={clearDialogOpen}
+                onOpenChange={setClearDialogOpen}
+                title="清空调用记录"
+                description="确定要清空所有调用记录吗？此操作不可撤销。"
+                onConfirm={handleClearLogs}
+            />
         </div>
     )
 }

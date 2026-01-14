@@ -1,8 +1,3 @@
-export { ResponsiveTable } from './ResponsiveTable'
-export type { Column, Action } from './ResponsiveTable'
-
-export { PageSkeleton, EmptyState } from './PageSkeleton'
-
 export {
     MobileButtonGroup,
     MobileButton,
@@ -10,5 +5,15 @@ export {
     MobileFormGrid,
     MobileActionBar,
     SafeAreaContainer,
-    TouchFriendlyItem
+    TouchFriendlyItem,
+    MobileCard,
+    ResponsiveWrapper,
+    MobileListItem,
+    MobileSectionHeader,
+    MobileEmptyState
 } from './MobileOptimized'
+
+export { ResponsiveTable } from './ResponsiveTable'
+export type { Column, Action } from './ResponsiveTable'
+
+export { PageSkeleton, EmptyState } from './PageSkeleton'

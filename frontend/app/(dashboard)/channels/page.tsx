@@ -50,6 +50,7 @@ import { Slider } from '@/components/ui/slider'
 import { ApiKeyManager, ApiKeyItem, keyStrategies, BatchTestPanel } from '@/components/channels'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ModelSelector } from '@/components/ModelSelector'
+import { DeleteDialog } from '@/components/ui/delete-dialog'
 
 interface Channel {
     id: string
@@ -382,6 +383,8 @@ export default function ChannelsPage() {
     const [customModelInput, setCustomModelInput] = useState('')
     const [batchTestOpen, setBatchTestOpen] = useState(false)
     const [batchTestChannel, setBatchTestChannel] = useState<Channel | null>(null)
+    const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+    const [deletingChannel, setDeletingChannel] = useState<Channel | null>(null)
 
     const [form, setForm] = useState({
         name: '',
@@ -591,16 +594,21 @@ export default function ChannelsPage() {
         }
     }
 
-    const handleDelete = async (id: string) => {
-        if (!confirm('确定删除此渠道？')) return
+    const handleDelete = async () => {
+        if (!deletingChannel) return
         try {
-            await channelsApi.delete(id)
+            await channelsApi.delete(deletingChannel.id)
             toast.success('渠道已删除')
             fetchChannels()
         } catch (error) {
             toast.error('删除失败')
             console.error(error)
         }
+    }
+
+    const openDeleteDialog = (channel: Channel) => {
+        setDeletingChannel(channel)
+        setDeleteDialogOpen(true)
     }
 
     const handleTest = async (channel: Channel) => {
@@ -2102,7 +2110,7 @@ export default function ChannelsPage() {
                                         variant="ghost"
                                         size="sm"
                                         className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                        onClick={() => handleDelete(channel.id)}
+                                        onClick={() => openDeleteDialog(channel)}
                                     >
                                         <Trash2 className="h-4 w-4" />
                                     </Button>
@@ -2155,6 +2163,15 @@ export default function ChannelsPage() {
                     models={batchTestChannel.models || []}
                 />
             )}
+
+            {/* 删除确认对话框 */}
+            <DeleteDialog
+                open={deleteDialogOpen}
+                onOpenChange={setDeleteDialogOpen}
+                title="删除渠道"
+                itemName={deletingChannel?.name}
+                onConfirm={handleDelete}
+            />
         </PageContainer>
     )
 }

@@ -20,6 +20,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Brain, Loader2, Plus, RefreshCw, Search, Sparkles, Trash2, Users } from 'lucide-react'
 import { memoryApi } from '@/lib/api'
 import { toast } from 'sonner'
+import { DeleteDialog } from '@/components/ui/delete-dialog'
 
 interface Memory {
     id: number
@@ -67,6 +68,11 @@ export default function MemoryPage() {
 
     // 总结
     const [summarizing, setSummarizing] = useState(false)
+
+    // 确认对话框
+    const [clearUserDialogOpen, setClearUserDialogOpen] = useState(false)
+    const [clearAllDialogOpen, setClearAllDialogOpen] = useState(false)
+    const [summarizeDialogOpen, setSummarizeDialogOpen] = useState(false)
 
     // 获取用户列表
     const fetchUserList = async () => {
@@ -147,8 +153,6 @@ export default function MemoryPage() {
     // 清空用户记忆
     const handleClearMemories = async () => {
         if (!userId) return
-        if (!confirm('确定清空该用户的所有记忆？')) return
-
         try {
             await memoryApi.clearUser(userId)
             toast.success('清空成功')
@@ -160,8 +164,6 @@ export default function MemoryPage() {
 
     // 清空所有用户记忆
     const handleClearAllMemories = async () => {
-        if (!confirm('确定清空所有用户的记忆？此操作不可恢复！')) return
-
         setLoading(true)
         try {
             const res = (await memoryApi.clearAll()) as ApiResponse<{ deletedCount: number }>
@@ -201,11 +203,6 @@ export default function MemoryPage() {
             toast.warning('请先选择用户')
             return
         }
-
-        if (!confirm(`确定要总结整理 ${userId} 的记忆？\n\n这将合并重复记忆并覆盖旧数据。`)) {
-            return
-        }
-
         setSummarizing(true)
         try {
             const res = (await memoryApi.summarize(userId)) as ApiResponse<{
@@ -283,7 +280,7 @@ export default function MemoryPage() {
                                 <RefreshCw className="mr-2 h-4 w-4" />
                                 刷新用户
                             </Button>
-                            <Button variant="destructive" size="sm" onClick={handleClearAllMemories}>
+                            <Button variant="destructive" size="sm" onClick={() => setClearAllDialogOpen(true)}>
                                 <Trash2 className="mr-2 h-4 w-4" />
                                 清空所有记忆
                             </Button>
@@ -325,7 +322,7 @@ export default function MemoryPage() {
                             <>
                                 <Button
                                     variant="secondary"
-                                    onClick={handleSummarize}
+                                    onClick={() => setSummarizeDialogOpen(true)}
                                     disabled={summarizing}
                                     title="合并重复记忆，覆盖旧数据"
                                 >
@@ -336,7 +333,7 @@ export default function MemoryPage() {
                                     )}
                                     总结整理
                                 </Button>
-                                <Button variant="destructive" onClick={handleClearMemories}>
+                                <Button variant="destructive" onClick={() => setClearUserDialogOpen(true)}>
                                     <Trash2 className="mr-2 h-4 w-4" />
                                     清空记忆
                                 </Button>
@@ -494,6 +491,34 @@ export default function MemoryPage() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* 清空用户记忆确认对话框 */}
+            <DeleteDialog
+                open={clearUserDialogOpen}
+                onOpenChange={setClearUserDialogOpen}
+                title="清空用户记忆"
+                description={`确定清空 ${userId} 的所有记忆？此操作不可撤销。`}
+                onConfirm={handleClearMemories}
+            />
+
+            {/* 清空所有记忆确认对话框 */}
+            <DeleteDialog
+                open={clearAllDialogOpen}
+                onOpenChange={setClearAllDialogOpen}
+                title="清空所有记忆"
+                description="确定清空所有用户的记忆？此操作不可恢复！"
+                onConfirm={handleClearAllMemories}
+            />
+
+            {/* 总结整理确认对话框 */}
+            <DeleteDialog
+                open={summarizeDialogOpen}
+                onOpenChange={setSummarizeDialogOpen}
+                title="总结整理记忆"
+                description={`确定要总结整理 ${userId} 的记忆？这将合并重复记忆并覆盖旧数据。`}
+                onConfirm={handleSummarize}
+                variant="default"
+            />
         </div>
     )
 }

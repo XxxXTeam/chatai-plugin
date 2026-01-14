@@ -3,8 +3,9 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, Settings, Bot, MessageSquare, MoreHorizontal } from 'lucide-react'
+import { LayoutDashboard, Bot, MoreHorizontal, Wrench, BarChart3 } from 'lucide-react'
 import { useUiStore } from '@/lib/store'
+import { useResponsive } from '@/lib/hooks'
 
 interface NavItem {
     href: string
@@ -27,16 +28,16 @@ const navItems: NavItem[] = [
         matchPaths: ['/channels']
     },
     {
-        href: '/conversations',
-        label: '对话',
-        icon: MessageSquare,
-        matchPaths: ['/conversations', '/history']
+        href: '/tools',
+        label: '工具',
+        icon: Wrench,
+        matchPaths: ['/tools', '/mcp']
     },
     {
-        href: '/settings',
-        label: '设置',
-        icon: Settings,
-        matchPaths: ['/settings', '/presets', '/scope']
+        href: '/stats',
+        label: '统计',
+        icon: BarChart3,
+        matchPaths: ['/stats', '/history', '/conversations']
     }
 ]
 
@@ -50,10 +51,16 @@ function isActive(pathname: string, item: NavItem): boolean {
 export function MobileNav() {
     const pathname = usePathname()
     const { toggleSidebar } = useUiStore()
+    const { isMobile, mounted } = useResponsive()
+
+    // 服务端渲染或桌面端不显示
+    if (!mounted || !isMobile) {
+        return null
+    }
 
     return (
-        <nav className="mobile-nav lg:hidden">
-            <div className="flex items-center justify-around px-2">
+        <nav className="mobile-nav" role="navigation" aria-label="底部导航">
+            <div className="flex items-center justify-around px-1 py-1">
                 {navItems.map(item => {
                     const active = isActive(pathname, item)
                     const Icon = item.icon
@@ -62,9 +69,15 @@ export function MobileNav() {
                         <Link
                             key={item.href}
                             href={item.href}
-                            className={cn('mobile-nav-item flex-1', active && 'active')}
+                            className={cn('mobile-nav-item flex-1 touch-feedback', active && 'active')}
+                            aria-current={active ? 'page' : undefined}
                         >
-                            <div className={cn('p-1.5 rounded-lg transition-colors', active && 'bg-primary/10')}>
+                            <div
+                                className={cn(
+                                    'p-2 rounded-xl transition-all duration-200',
+                                    active ? 'bg-primary/10 scale-105' : 'hover:bg-muted/50'
+                                )}
+                            >
                                 <Icon
                                     className={cn(
                                         'h-5 w-5 transition-colors',
@@ -74,7 +87,7 @@ export function MobileNav() {
                             </div>
                             <span
                                 className={cn(
-                                    'text-[10px] font-medium',
+                                    'text-[10px] font-medium mt-0.5 transition-colors',
                                     active ? 'text-primary' : 'text-muted-foreground'
                                 )}
                             >
@@ -85,11 +98,11 @@ export function MobileNav() {
                 })}
 
                 {/* 更多按钮 - 打开侧边栏 */}
-                <button onClick={toggleSidebar} className="mobile-nav-item flex-1">
-                    <div className="p-1.5 rounded-lg">
+                <button onClick={toggleSidebar} className="mobile-nav-item flex-1 touch-feedback" aria-label="打开菜单">
+                    <div className="p-2 rounded-xl hover:bg-muted/50 transition-all duration-200">
                         <MoreHorizontal className="h-5 w-5 text-muted-foreground" />
                     </div>
-                    <span className="text-[10px] font-medium text-muted-foreground">更多</span>
+                    <span className="text-[10px] font-medium mt-0.5 text-muted-foreground">更多</span>
                 </button>
             </div>
         </nav>

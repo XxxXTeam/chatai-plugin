@@ -43,6 +43,7 @@ import {
     Wand2
 } from 'lucide-react'
 import { PageHeader, PageContainer } from '@/components/layout/PageHeader'
+import { DeleteDialog } from '@/components/ui/delete-dialog'
 
 interface PersonaConfig {
     name?: string
@@ -96,6 +97,8 @@ export default function PresetsPage() {
     const [saving, setSaving] = useState(false)
     const [activeTab, setActiveTab] = useState('custom')
     const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
+    const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+    const [deletingPreset, setDeletingPreset] = useState<Preset | null>(null)
 
     const [form, setForm] = useState({
         name: '',
@@ -287,16 +290,21 @@ export default function PresetsPage() {
         }
     }
 
-    const handleDelete = async (id: string) => {
-        if (!confirm('确定删除此预设？')) return
+    const handleDelete = async () => {
+        if (!deletingPreset) return
         try {
-            await presetsApi.delete(id)
+            await presetsApi.delete(deletingPreset.id)
             toast.success('预设已删除')
             fetchPresets()
         } catch (error) {
             toast.error('删除失败')
             console.error(error)
         }
+    }
+
+    const openDeleteDialog = (preset: Preset) => {
+        setDeletingPreset(preset)
+        setDeleteDialogOpen(true)
     }
 
     const handleDuplicate = (preset: Preset) => {
@@ -871,7 +879,7 @@ export default function PresetsPage() {
                                             <Button
                                                 variant="outline"
                                                 size="sm"
-                                                onClick={() => handleDelete(preset.id)}
+                                                onClick={() => openDeleteDialog(preset)}
                                                 disabled={preset.isDefault}
                                                 title="删除"
                                             >
@@ -971,6 +979,15 @@ export default function PresetsPage() {
                     )}
                 </TabsContent>
             </Tabs>
+
+            {/* 删除确认对话框 */}
+            <DeleteDialog
+                open={deleteDialogOpen}
+                onOpenChange={setDeleteDialogOpen}
+                title="删除预设"
+                itemName={deletingPreset?.name}
+                onConfirm={handleDelete}
+            />
         </PageContainer>
     )
 }
