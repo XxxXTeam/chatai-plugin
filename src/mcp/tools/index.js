@@ -22,7 +22,8 @@ const toolModules = {
     bot: { file: './bot.js', export: 'botTools' },
     voice: { file: './voice.js', export: 'voiceTools' },
     extra: { file: './extra.js', export: 'extraTools' },
-    shell: { file: './shell.js', export: 'shellTools' }
+    shell: { file: './shell.js', export: 'shellTools' },
+    schedule: { file: './schedule.js', export: 'scheduleTools' }
 }
 
 // 类别元信息
@@ -48,6 +49,11 @@ const categoryMeta = {
         description: '执行Shell命令、获取系统信息、环境变量等（危险）',
         icon: 'Terminal',
         dangerous: true
+    },
+    schedule: {
+        name: '定时任务',
+        description: '创建、管理定时任务，支持周期执行、@用户、触发AI对话等',
+        icon: 'Clock'
     }
 }
 
