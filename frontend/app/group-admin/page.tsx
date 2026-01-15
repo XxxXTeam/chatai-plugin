@@ -156,13 +156,6 @@ export default function GroupAdminPage() {
         bymMaxTokens: 'inherit' as 'inherit' | number,
         // 模型配置
         chatModel: '',
-        toolModel: '',
-        dispatchModel: '',
-        imageModel: '',
-        drawModel: '',
-        searchModel: '',
-        roleplayModel: '',
-        profileModel: '',
         // 黑白名单
         listMode: 'none',
         blacklist: [] as string[],
@@ -372,13 +365,6 @@ export default function GroupAdminPage() {
                     bymTemperature: c.bym?.temperature === undefined ? 'inherit' : c.bym.temperature,
                     bymMaxTokens: c.bym?.maxTokens === undefined ? 'inherit' : c.bym.maxTokens,
                     chatModel: c.models?.chat || '',
-                    toolModel: c.models?.tools || '',
-                    dispatchModel: c.models?.dispatch || '',
-                    imageModel: c.models?.vision || '',
-                    drawModel: c.models?.image || '',
-                    searchModel: c.models?.search || '',
-                    roleplayModel: c.models?.bym || '',
-                    profileModel: c.models?.profile || '',
                     listMode: c.listMode || 'none',
                     blacklist: c.blacklist || [],
                     whitelist: c.whitelist || [],
@@ -447,14 +433,7 @@ export default function GroupAdminPage() {
                     },
                     models: {
                         chat: form.chatModel || undefined,
-                        tools: form.toolModel || undefined,
-                        dispatch: form.dispatchModel || undefined,
-                        vision: form.imageModel || undefined,
-                        image: form.drawModel || undefined,
-                        search: form.searchModel || undefined,
-                        bym: form.roleplayModel || undefined,
-                        summary: form.summaryModel || undefined,
-                        profile: form.profileModel || undefined
+                        summary: form.summaryModel || undefined
                     },
                     listMode: form.listMode,
                     blacklist: form.blacklist,
@@ -1389,60 +1368,11 @@ export default function GroupAdminPage() {
                                                 onChange={v => setForm({ ...form, chatModel: v })}
                                             />
                                             <ModelConfigItem
-                                                label="工具模型"
-                                                desc="需要调用工具时"
-                                                value={form.toolModel}
-                                                models={allModels}
-                                                onChange={v => setForm({ ...form, toolModel: v })}
-                                            />
-                                            <ModelConfigItem
-                                                label="调度模型"
-                                                desc="工具组分类"
-                                                value={form.dispatchModel}
-                                                models={allModels}
-                                                onChange={v => setForm({ ...form, dispatchModel: v })}
-                                            />
-                                            <ModelConfigItem
-                                                label="图像理解模型"
-                                                desc="分析图片"
-                                                value={form.imageModel}
-                                                models={allModels}
-                                                onChange={v => setForm({ ...form, imageModel: v })}
-                                            />
-                                            <ModelConfigItem
-                                                label="绘图模型"
-                                                desc="生成图片"
-                                                value={form.drawModel}
-                                                models={allModels}
-                                                onChange={v => setForm({ ...form, drawModel: v })}
-                                            />
-                                            <ModelConfigItem
-                                                label="搜索模型"
-                                                desc="联网搜索"
-                                                value={form.searchModel}
-                                                models={allModels}
-                                                onChange={v => setForm({ ...form, searchModel: v })}
-                                            />
-                                            <ModelConfigItem
-                                                label="伪人模型"
-                                                desc="模拟真人"
-                                                value={form.roleplayModel}
-                                                models={allModels}
-                                                onChange={v => setForm({ ...form, roleplayModel: v })}
-                                            />
-                                            <ModelConfigItem
                                                 label="总结模型"
                                                 desc="群聊总结"
                                                 value={form.summaryModel}
                                                 models={allModels}
                                                 onChange={v => setForm({ ...form, summaryModel: v })}
-                                            />
-                                            <ModelConfigItem
-                                                label="画像模型"
-                                                desc="用户画像分析"
-                                                value={form.profileModel}
-                                                models={allModels}
-                                                onChange={v => setForm({ ...form, profileModel: v })}
                                             />
                                         </div>
                                     </div>
