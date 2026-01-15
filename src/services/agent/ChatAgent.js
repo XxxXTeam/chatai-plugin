@@ -345,8 +345,17 @@ export class ChatAgent {
         const channelStreaming = channelAdvanced.streaming || {}
         const presetParams = currentPreset?.modelParams || {}
 
+        // 应用模型映射/重定向
+        const modelMapping = channel
+            ? channelManager.getActualModel(channel.id, llmModel)
+            : { actualModel: llmModel, mapped: false }
+        const actualModel = modelMapping.actualModel
+        if (modelMapping.mapped) {
+            logger.info(`[ChatAgent] 模型重定向: ${llmModel} -> ${actualModel} (渠道: ${channel?.name})`)
+        }
+
         const requestOptions = {
-            model: llmModel,
+            model: actualModel,
             maxToken: overrideMaxTokens ?? presetParams.max_tokens ?? channelLlm.maxTokens ?? 4000,
             temperature: overrideTemperature ?? presetParams.temperature ?? channelLlm.temperature ?? 0.7,
             topP: presetParams.top_p ?? channelLlm.topP,
@@ -726,7 +735,12 @@ export class ChatAgent {
 
             while (retryCount <= maxRetries) {
                 try {
-                    const currentRequestOptions = { ...requestOptions, model: currentModel }
+                    // 应用模型映射
+                    const currentChannel = modelIndex > 0 ? channelManager.getBestChannel(currentModel) : channel
+                    const mapping = currentChannel
+                        ? channelManager.getActualModel(currentChannel.id, currentModel)
+                        : { actualModel: currentModel }
+                    const currentRequestOptions = { ...requestOptions, model: mapping.actualModel }
                     response = await currentClient.sendMessage(userMessage, currentRequestOptions)
 
                     if (response?.contents?.length > 0 || response?.toolCallLogs?.length > 0) {

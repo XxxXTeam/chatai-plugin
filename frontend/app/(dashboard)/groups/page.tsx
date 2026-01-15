@@ -159,13 +159,6 @@ export default function GroupsPage() {
         systemPrompt: '',
         modelId: '__default__', // 默认模型（兼容旧配置）
         chatModel: '', // 对话模型
-        toolModel: '', // 工具模型
-        dispatchModel: '', // 调度模型
-        imageModel: '', // 图像理解模型
-        drawModel: '', // 绘图模型
-        searchModel: '', // 搜索模型
-        roleplayModel: '', // 伪人模型
-        profileModel: '', // 画像模型
         enabled: true,
         triggerMode: 'default',
         bymEnabled: 'inherit' as 'inherit' | 'on' | 'off',
@@ -255,13 +248,6 @@ export default function GroupsPage() {
             systemPrompt: '',
             modelId: '__default__',
             chatModel: '',
-            toolModel: '',
-            dispatchModel: '',
-            imageModel: '',
-            drawModel: '',
-            searchModel: '',
-            roleplayModel: '',
-            profileModel: '',
             enabled: true,
             triggerMode: 'default',
             bymEnabled: 'inherit',
@@ -321,13 +307,6 @@ export default function GroupsPage() {
                 systemPrompt: group.systemPrompt || settings.systemPrompt || '',
                 modelId: '__default__',
                 chatModel: savedChatModel,
-                toolModel: settings.toolModel || '',
-                dispatchModel: settings.dispatchModel || '',
-                imageModel: settings.imageModel || '',
-                drawModel: settings.drawModel || '',
-                searchModel: settings.searchModel || '',
-                roleplayModel: settings.roleplayModel || '',
-                profileModel: settings.profileModel || '',
                 enabled: group.enabled ?? settings.enabled ?? true,
                 triggerMode: settings.triggerMode || group.triggerMode || 'default',
                 bymEnabled: settings.bymEnabled === undefined ? 'inherit' : settings.bymEnabled ? 'on' : 'off',
@@ -396,13 +375,6 @@ export default function GroupsPage() {
                 presetId: form.presetId === '__default__' ? '' : form.presetId,
                 systemPrompt: form.systemPrompt || null,
                 chatModel: form.chatModel || undefined,
-                toolModel: form.toolModel || undefined,
-                dispatchModel: form.dispatchModel || undefined,
-                imageModel: form.imageModel || undefined,
-                drawModel: form.drawModel || undefined,
-                searchModel: form.searchModel || undefined,
-                roleplayModel: form.roleplayModel || undefined,
-                profileModel: form.profileModel || undefined,
                 enabled: form.enabled,
                 triggerMode: form.triggerMode,
                 bymEnabled: form.bymEnabled === 'inherit' ? undefined : form.bymEnabled === 'on',
@@ -1512,116 +1484,6 @@ export default function GroupsPage() {
                             <Select
                                 value={form.chatModel || '__default__'}
                                 onValueChange={v => setForm({ ...form, chatModel: v === '__default__' ? '' : v })}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="使用全局配置" />
-                                </SelectTrigger>
-                                <SelectContent className="max-h-[200px] overflow-y-auto">
-                                    <SelectItem value="__default__">使用全局配置</SelectItem>
-                                    {allModels.map(m => (
-                                        <SelectItem key={m} value={m}>
-                                            {m}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        <div className="space-y-1.5">
-                            <Label className="text-xs">
-                                工具模型 <span className="text-muted-foreground">（需要调用工具时）</span>
-                            </Label>
-                            <Select
-                                value={form.toolModel || '__default__'}
-                                onValueChange={v => setForm({ ...form, toolModel: v === '__default__' ? '' : v })}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="使用全局配置" />
-                                </SelectTrigger>
-                                <SelectContent className="max-h-[200px] overflow-y-auto">
-                                    <SelectItem value="__default__">使用全局配置</SelectItem>
-                                    {allModels.map(m => (
-                                        <SelectItem key={m} value={m}>
-                                            {m}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        <div className="space-y-1.5">
-                            <Label className="text-xs">
-                                调度模型 <span className="text-muted-foreground">（工具组分类）</span>
-                            </Label>
-                            <Select
-                                value={form.dispatchModel || '__default__'}
-                                onValueChange={v => setForm({ ...form, dispatchModel: v === '__default__' ? '' : v })}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="使用全局配置" />
-                                </SelectTrigger>
-                                <SelectContent className="max-h-[200px] overflow-y-auto">
-                                    <SelectItem value="__default__">使用全局配置</SelectItem>
-                                    {allModels.map(m => (
-                                        <SelectItem key={m} value={m}>
-                                            {m}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        <div className="space-y-1.5">
-                            <Label className="text-xs">
-                                图像理解模型 <span className="text-muted-foreground">（分析图片）</span>
-                            </Label>
-                            <Select
-                                value={form.imageModel || '__default__'}
-                                onValueChange={v => setForm({ ...form, imageModel: v === '__default__' ? '' : v })}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="使用全局配置" />
-                                </SelectTrigger>
-                                <SelectContent className="max-h-[200px] overflow-y-auto">
-                                    <SelectItem value="__default__">使用全局配置</SelectItem>
-                                    {allModels.map(m => (
-                                        <SelectItem key={m} value={m}>
-                                            {m}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        <div className="space-y-1.5">
-                            <Label className="text-xs">
-                                搜索模型 <span className="text-muted-foreground">（联网搜索）</span>
-                            </Label>
-                            <Select
-                                value={form.searchModel || '__default__'}
-                                onValueChange={v => setForm({ ...form, searchModel: v === '__default__' ? '' : v })}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="使用全局配置" />
-                                </SelectTrigger>
-                                <SelectContent className="max-h-[200px] overflow-y-auto">
-                                    <SelectItem value="__default__">使用全局配置</SelectItem>
-                                    {allModels.map(m => (
-                                        <SelectItem key={m} value={m}>
-                                            {m}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        <div className="space-y-1.5">
-                            <Label className="text-xs">
-                                画像模型 <span className="text-muted-foreground">（用户画像分析）</span>
-                            </Label>
-                            <Select
-                                value={form.profileModel || '__default__'}
-                                onValueChange={v => setForm({ ...form, profileModel: v === '__default__' ? '' : v })}
                             >
                                 <SelectTrigger>
                                     <SelectValue placeholder="使用全局配置" />

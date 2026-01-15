@@ -501,6 +501,11 @@ chatai-plugin/
 
 ![添加渠道](image/image12.png)
 
+*渠道高级配置*
+
+![渠道高级设置](image/image13.png)
+![渠道高级设置](image/image14.png)
+
 *添加新渠道：API类型、地址、密钥配置*
 
 </details>

@@ -14,6 +14,7 @@ export class MemoryManager {
         this.initialized = false
         this.pollInterval = null
         this.lastPollTime = new Map() // userId -> timestamp
+        this.lastSummarizeTime = new Map() // groupId/userId -> timestamp 记录上次总结时间
     }
 
     /**
@@ -1107,6 +1108,270 @@ ${existingMemoryList || '暂无'}
             }
         } catch (error) {
             logger.error(`[MemoryManager] 群记忆总结失败 [${groupId}]:`, error.message)
+            return { success: false, error: error.message }
+        }
+    }
+
+    /**
+     * 基于时间段的综合记忆总结
+     * 收集指定时间范围内的所有消息和群对话，进行综合总结
+     * @param {string} groupId - 群ID
+     * @param {Object} options - 配置选项
+     * @param {number} options.timeRange - 时间范围（毫秒），默认1小时
+     * @param {number} options.minMessages - 最少消息数，默认10
+     * @param {string} options.model - 指定使用的模型（可选）
+     * @returns {Object} 总结结果
+     */
+    async summarizeByTimeRange(groupId, options = {}) {
+        if (!config.get('memory.enabled')) {
+            return { success: false, error: '记忆功能未启用' }
+        }
+
+        const {
+            timeRange = 60 * 60 * 1000, // 默认1小时
+            minMessages = 10,
+            model = null
+        } = options
+
+        try {
+            await this.init()
+
+            const now = Date.now()
+            const startTime = now - timeRange
+
+            // 1. 从内存缓冲区获取时间范围内的消息
+            const bufferMessages = this.getGroupMessageBuffer(groupId) || []
+            const recentBufferMessages = bufferMessages.filter(m => m.timestamp >= startTime)
+
+            // 2. 从数据库获取持久化的消息（作为补充）
+            const conversationId = `group_summary_${groupId}`
+            let dbMessages = []
+            try {
+                dbMessages = databaseService.getMessages(conversationId, 200) || []
+                dbMessages = dbMessages.filter(m => (m.timestamp || 0) >= startTime)
+            } catch (e) {
+                // 数据库查询失败时继续使用缓冲区消息
+            }
+
+            // 3. 合并消息，去重
+            const allMessages = [...recentBufferMessages]
+            const existingContents = new Set(allMessages.map(m => m.content))
+
+            for (const dbMsg of dbMessages) {
+                const content = typeof dbMsg.content === 'string' ? dbMsg.content : dbMsg.content?.text || ''
+                if (content && !existingContents.has(content)) {
+                    allMessages.push({
+                        userId: dbMsg.metadata?.userId || 'unknown',
+                        nickname: dbMsg.metadata?.nickname || '未知',
+                        content: content,
+                        timestamp: dbMsg.timestamp || now
+                    })
+                    existingContents.add(content)
+                }
+            }
+
+            // 按时间排序
+            allMessages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+
+            if (allMessages.length < minMessages) {
+                return {
+                    success: false,
+                    error: `时间范围内消息不足（${allMessages.length}/${minMessages}）`,
+                    messageCount: allMessages.length
+                }
+            }
+
+            // 4. 获取现有记忆作为上下文
+            const existingTopics = databaseService.getMemories(`group:${groupId}:topics`, 10)
+            const existingRelations = databaseService.getMemories(`group:${groupId}:relations`, 10)
+            const existingUserInfos = databaseService.getMemoriesByPrefix(`group:${groupId}:user:`, 20)
+
+            const existingMemoryText = [
+                existingTopics.length > 0 ? `已知话题: ${existingTopics.map(t => t.content).join('; ')}` : '',
+                existingRelations.length > 0 ? `已知关系: ${existingRelations.map(r => r.content).join('; ')}` : '',
+                existingUserInfos.length > 0 ? `已知用户: ${existingUserInfos.map(u => u.content).join('; ')}` : ''
+            ]
+                .filter(Boolean)
+                .join('\n')
+
+            // 5. 构建对话文本
+            const timeRangeMinutes = Math.round(timeRange / 60000)
+            const dialogText = allMessages.map(m => `[${m.nickname}]: ${m.content.substring(0, 150)}`).join('\n')
+
+            // 6. 构建总结prompt
+            const prompt = `你是群聊记忆管理专家。请分析过去${timeRangeMinutes}分钟内的${allMessages.length}条群聊消息，提取有价值的信息。
+
+【重要规则】
+- 每条消息格式为 [昵称]: 内容，昵称是用户的群名片
+- 只提取用户自己透露的具体信息，不推测
+- 区分不同用户，按昵称分别记录
+- 忽略无意义的日常对话（如"哈哈"、"好的"等）
+
+【现有记忆（需要更新或保留）】
+${existingMemoryText || '暂无'}
+
+【最近${timeRangeMinutes}分钟的群聊记录】
+${dialogText}
+
+【总结要求】
+1. 综合现有记忆和新消息，生成更新后的完整记忆
+2. 删除过时或重复的信息
+3. 用户信息必须关联到具体昵称
+4. 话题必须是具体主题
+5. 关系必须指明具体人物
+
+【输出格式】
+每行一条，严格按以下格式：
+【用户:昵称】该用户的具体信息
+【话题】具体话题内容
+【关系】A和B：关系描述
+
+最多20条，没有有效信息则只输出"无"：`
+
+            // 7. 调用LLM进行总结
+            const startApiTime = Date.now()
+            const memoryModel = model || config.get('memory.model')
+            const client = await LlmService.getChatClient({ model: memoryModel || undefined })
+            const channelInfo = client._channelInfo || {}
+            const usedModel = channelInfo.model || config.get('llm.defaultModel')
+
+            const result = await client.sendMessage(
+                { role: 'user', content: [{ type: 'text', text: prompt }] },
+                {
+                    model: usedModel,
+                    maxToken: 800,
+                    disableHistorySave: true,
+                    temperature: 0.3
+                }
+            )
+
+            const responseText = result.contents?.[0]?.text?.trim() || ''
+
+            // 记录统计
+            try {
+                await statsService.recordApiCall({
+                    channelId: channelInfo.id || 'memory',
+                    channelName: channelInfo.name || '记忆服务',
+                    model: usedModel,
+                    duration: Date.now() - startApiTime,
+                    success: !!responseText && responseText !== '无',
+                    source: '时间段记忆总结',
+                    groupId,
+                    responseText,
+                    request: { model: usedModel, timeRange: timeRangeMinutes }
+                })
+            } catch (e) {
+                /* 统计失败不影响主流程 */
+            }
+
+            if (!responseText || responseText === '无' || responseText.length < 10) {
+                return {
+                    success: true,
+                    groupId,
+                    messageCount: allMessages.length,
+                    timeRangeMinutes,
+                    result: '无新的有效信息'
+                }
+            }
+
+            // 8. 解析并保存记忆
+            const lines = responseText.split('\n').filter(line => line.trim())
+            const newTopics = []
+            const newRelations = []
+            const newUserInfos = new Map()
+
+            for (const line of lines) {
+                if (this._isInvalidMemoryLine(line)) continue
+
+                const userMatch = line.match(/【用户[:：](.+?)】(.+)/)
+                if (userMatch) {
+                    const nickname = userMatch[1].trim()
+                    const info = userMatch[2].trim()
+                    if (info.length > 3 && info.length < 100) {
+                        const existing = newUserInfos.get(nickname) || []
+                        existing.push(info)
+                        newUserInfos.set(nickname, existing)
+                    }
+                    continue
+                }
+
+                const topicMatch = line.match(/【话题】(.+)/)
+                if (topicMatch) {
+                    const topic = topicMatch[1].trim()
+                    if (topic.length > 3 && topic.length < 100) {
+                        newTopics.push(topic)
+                    }
+                    continue
+                }
+
+                const relationMatch = line.match(/【关系】(.+)/)
+                if (relationMatch) {
+                    const relation = relationMatch[1].trim()
+                    if (relation.length > 3 && relation.length < 100) {
+                        newRelations.push(relation)
+                    }
+                }
+            }
+
+            // 9. 覆盖式保存记忆
+            if (newTopics.length > 0) {
+                databaseService.clearMemories(`group:${groupId}:topics`)
+                for (const topic of newTopics.slice(0, 10)) {
+                    databaseService.saveMemory(`group:${groupId}:topics`, topic, {
+                        source: 'time_range_summary',
+                        groupId,
+                        type: 'topic',
+                        timeRange: timeRangeMinutes
+                    })
+                }
+            }
+
+            if (newRelations.length > 0) {
+                databaseService.clearMemories(`group:${groupId}:relations`)
+                for (const relation of newRelations.slice(0, 10)) {
+                    databaseService.saveMemory(`group:${groupId}:relations`, relation, {
+                        source: 'time_range_summary',
+                        groupId,
+                        type: 'relation',
+                        timeRange: timeRangeMinutes
+                    })
+                }
+            }
+
+            if (newUserInfos.size > 0) {
+                for (const [nickname, infos] of newUserInfos) {
+                    const key = `group:${groupId}:user:${nickname}`
+                    databaseService.clearMemories(key)
+                    for (const info of infos.slice(0, 3)) {
+                        databaseService.saveMemory(key, info, {
+                            source: 'time_range_summary',
+                            groupId,
+                            type: 'user_info',
+                            timeRange: timeRangeMinutes
+                        })
+                    }
+                }
+            }
+
+            // 记录本次总结时间
+            this.lastSummarizeTime.set(groupId, now)
+
+            logger.info(
+                `[MemoryManager] 群 ${groupId} 时间段总结完成: 消息${allMessages.length}条, 话题${newTopics.length}, 关系${newRelations.length}, 用户${newUserInfos.size}`
+            )
+
+            return {
+                success: true,
+                groupId,
+                messageCount: allMessages.length,
+                timeRangeMinutes,
+                topics: newTopics.length,
+                relations: newRelations.length,
+                userInfos: newUserInfos.size,
+                model: usedModel
+            }
+        } catch (error) {
+            logger.error(`[MemoryManager] 时间段总结失败 [${groupId}]:`, error.message)
             return { success: false, error: error.message }
         }
     }

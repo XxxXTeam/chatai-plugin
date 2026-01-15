@@ -405,6 +405,12 @@ export class ChatService {
         logger.debug(
             `[ChatService] Channel: ${channel?.id}, hasAdvanced=${!!channel?.advanced}, streaming=${JSON.stringify(channel?.advanced?.streaming)}`
         )
+        // 调试：输出渠道的模型映射配置
+        if (channel?.overrides?.modelMapping && Object.keys(channel.overrides.modelMapping).length > 0) {
+            logger.info(
+                `[ChatService] 渠道 ${channel.name} 模型映射配置: ${JSON.stringify(channel.overrides.modelMapping)}`
+            )
+        }
 
         // 收集渠道调试信息
         if (debugInfo && channel) {
@@ -778,8 +784,21 @@ export class ChatService {
         const presetParams = currentPreset?.modelParams || {}
         const baseMaxToken = presetParams.max_tokens || presetParams.maxTokens || channelLlm.maxTokens || 4000
         const baseTemperature = presetParams.temperature ?? channelLlm.temperature ?? 0.7
+
+        // 应用模型映射/复写 - 框架内使用 llmModel，实际API请求使用 actualModel
+        logger.debug(
+            `[ChatService] 准备模型映射: channelId=${channel?.id}, llmModel=${llmModel}, overrides=${JSON.stringify(channel?.overrides)}`
+        )
+        const modelMapping = channel
+            ? channelManager.getActualModel(channel.id, llmModel)
+            : { actualModel: llmModel, originalModel: llmModel, mapped: false }
+        const actualModel = modelMapping.actualModel
+        logger.info(
+            `[ChatService] 模型映射结果: ${llmModel} -> ${actualModel} (mapped=${modelMapping.mapped}, 渠道: ${channel?.name})`
+        )
+
         const requestOptions = {
-            model: llmModel,
+            model: actualModel, // 使用映射后的实际模型名称
             maxToken: overrideMaxTokens ?? baseMaxToken,
             temperature: overrideTemperature ?? baseTemperature,
             topP: presetParams.top_p ?? presetParams.topP ?? channelLlm.topP,
@@ -935,7 +954,11 @@ export class ChatService {
 
                     while (retryCount <= (isMainModel ? maxRetries : 1)) {
                         try {
-                            const currentRequestOptions = { ...requestOptions, model: currentModel }
+                            // 应用模型映射 - 获取实际请求的模型名称
+                            const currentModelMapping = currentChannel
+                                ? channelManager.getActualModel(currentChannel.id, currentModel)
+                                : { actualModel: currentModel }
+                            const currentRequestOptions = { ...requestOptions, model: currentModelMapping.actualModel }
                             response = await currentClient.sendMessage(userMessage, currentRequestOptions)
 
                             const hasToolCallLogs = response?.toolCallLogs?.length > 0

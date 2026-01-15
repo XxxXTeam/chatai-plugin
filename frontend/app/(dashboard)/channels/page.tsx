@@ -51,6 +51,8 @@ import { ApiKeyManager, ApiKeyItem, keyStrategies, BatchTestPanel } from '@/comp
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ModelSelector } from '@/components/ModelSelector'
 import { DeleteDialog } from '@/components/ui/delete-dialog'
+import { ModelMappingEditor } from '@/components/ModelMappingEditor'
+import { ModelBadge } from '@/components/ModelBadge'
 
 interface Channel {
     id: string
@@ -410,6 +412,9 @@ export default function ChannelsPage() {
             },
             llm: { temperature: 0.7, maxTokens: 4000, topP: 1, frequencyPenalty: 0, presencePenalty: 0 }
         },
+        overrides: {
+            modelMapping: {} as Record<string, string>
+        },
         imageConfig: {
             transferMode: 'auto' as 'base64' | 'url' | 'auto',
             convertFormat: true,
@@ -496,6 +501,7 @@ export default function ChannelsPage() {
             headersTemplate: '',
             requestBodyTemplate: '',
             advanced: { ...defaultAdvanced },
+            overrides: { modelMapping: {} },
             imageConfig: { ...defaultImageConfig }
         })
         setEditingChannel(null)
@@ -528,6 +534,11 @@ export default function ChannelsPage() {
                     { ...defaultAdvanced },
                     (channel as unknown as { advanced?: typeof defaultAdvanced }).advanced || {}
                 ),
+                overrides: {
+                    modelMapping:
+                        (channel as unknown as { overrides?: { modelMapping?: Record<string, string> } }).overrides
+                            ?.modelMapping || {}
+                },
                 imageConfig: deepMerge(
                     { ...defaultImageConfig },
                     (channel as unknown as { imageConfig?: typeof defaultImageConfig }).imageConfig || {}
@@ -572,6 +583,7 @@ export default function ChannelsPage() {
                 customHeaders: form.customHeaders,
                 headersTemplate: form.headersTemplate,
                 requestBodyTemplate: form.requestBodyTemplate,
+                overrides: form.overrides,
                 imageConfig: form.imageConfig
             }
 
@@ -1247,12 +1259,11 @@ export default function ChannelsPage() {
                                                         .map(m => m.trim())
                                                         .filter(Boolean)
                                                         .map(model => (
-                                                            <Badge
+                                                            <span
                                                                 key={model}
-                                                                variant="secondary"
-                                                                className="gap-1 pr-1 text-xs font-normal"
+                                                                className="inline-flex items-center gap-0.5"
                                                             >
-                                                                <span className="max-w-[150px] truncate">{model}</span>
+                                                                <ModelBadge model={model} size="sm" />
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => {
@@ -1265,11 +1276,11 @@ export default function ChannelsPage() {
                                                                             models: newModels.join(', ')
                                                                         })
                                                                     }}
-                                                                    className="ml-1 rounded-full hover:bg-muted-foreground/20 p-0.5"
+                                                                    className="rounded-full hover:bg-destructive/20 p-0.5 text-muted-foreground hover:text-destructive transition-colors"
                                                                 >
                                                                     <X className="h-3 w-3" />
                                                                 </button>
-                                                            </Badge>
+                                                            </span>
                                                         ))}
                                                 </div>
                                             )}
@@ -1465,6 +1476,22 @@ export default function ChannelsPage() {
                                                             }
                                                         />
                                                     </div>
+                                                </div>
+
+                                                {/* 模型重定向设置 */}
+                                                <div className="space-y-3 p-3 border rounded-lg">
+                                                    <ModelMappingEditor
+                                                        value={form.overrides.modelMapping}
+                                                        onChange={mapping =>
+                                                            setForm({
+                                                                ...form,
+                                                                overrides: {
+                                                                    ...form.overrides,
+                                                                    modelMapping: mapping
+                                                                }
+                                                            })
+                                                        }
+                                                    />
                                                 </div>
 
                                                 {/* 图片处理设置 */}
@@ -2057,9 +2084,7 @@ export default function ChannelsPage() {
                                     {channel.models && channel.models.length > 0 ? (
                                         <div className="flex flex-wrap gap-1 max-h-[80px] overflow-y-auto">
                                             {channel.models.map(model => (
-                                                <Badge key={model} variant="secondary" className="text-xs font-normal">
-                                                    {model.length > 20 ? model.slice(0, 20) + '...' : model}
-                                                </Badge>
+                                                <ModelBadge key={model} model={model} size="sm" />
                                             ))}
                                         </div>
                                     ) : (

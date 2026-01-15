@@ -149,12 +149,21 @@ router.post('/test', async (req, res) => {
             })
 
             const testModel = models && models.length > 0 ? models[0] : 'gpt-3.5-turbo'
+            // 应用模型映射/重定向
+            let actualTestModel = testModel
+            if (id) {
+                const mapping = channelManager.getActualModel(id, testModel)
+                if (mapping.mapped) {
+                    actualTestModel = mapping.actualModel
+                    chatLogger.info(`[渠道测试] 模型重定向: ${testModel} -> ${actualTestModel}`)
+                }
+            }
             const useStreaming = advanced?.streaming?.enabled || false
             const temperature = advanced?.llm?.temperature ?? 0.7
             const maxTokens = advanced?.llm?.maxTokens || 100
 
             const options = {
-                model: testModel,
+                model: actualTestModel,
                 maxToken: maxTokens,
                 temperature
             }
@@ -341,9 +350,13 @@ router.post('/batch-test', async (req, res) => {
                 tools: []
             })
 
+            // 应用模型映射/重定向
+            const mapping = channelManager.getActualModel(channelId, model)
+            const actualModel = mapping.actualModel
+
             const response = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
-                { model, maxToken: 50, temperature: 0.7 }
+                { model: actualModel, maxToken: 50, temperature: 0.7 }
             )
 
             const elapsed = Date.now() - startTime
@@ -423,9 +436,16 @@ router.post('/test-model', async (req, res) => {
             tools: []
         })
 
+        // 应用模型映射/重定向
+        const mapping = channelManager.getActualModel(channelId, model)
+        const actualModel = mapping.actualModel
+        if (mapping.mapped) {
+            chatLogger.info(`[单模型测试] 模型重定向: ${model} -> ${actualModel}`)
+        }
+
         const response = await client.sendMessage(
             { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
-            { model, maxToken: 50, temperature: 0.7 }
+            { model: actualModel, maxToken: 50, temperature: 0.7 }
         )
 
         const elapsed = Date.now() - startTime

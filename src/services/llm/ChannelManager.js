@@ -664,6 +664,12 @@ export class ChannelManager {
 
                 // 选择测试模型：优先使用指定模型，其次使用渠道配置的第一个模型，最后使用默认模型
                 const testModel = model || channel.models?.[0] || 'gpt-3.5-turbo'
+                // 应用模型映射/重定向
+                const mapping = this.getActualModel(id, testModel)
+                const actualModel = mapping.actualModel
+                if (mapping.mapped) {
+                    logger.info(`[ChannelManager] 健康检查模型重定向: ${testModel} -> ${actualModel}`)
+                }
 
                 const client = new OpenAIClient({
                     apiKey: apiKey,
@@ -676,7 +682,7 @@ export class ChannelManager {
                     const testStartTime = Date.now()
                     const response = await client.sendMessage(
                         { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
-                        { model: testModel, maxToken: 20 }
+                        { model: actualModel, maxToken: 20 }
                     )
 
                     const replyText =
@@ -749,10 +755,14 @@ export class ChannelManager {
                 })
 
                 const testModel = model || channel.models?.[0] || 'gemini-pro'
+                // 应用模型映射/重定向
+                const mapping = this.getActualModel(id, testModel)
+                const actualModel = mapping.actualModel
+
                 const geminiStartTime = Date.now()
                 const response = await client.sendMessage(
-                    { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
-                    { model: testModel, maxToken: 20 }
+                    { role: 'user', content: [{ type: 'text', text: '你好' }] },
+                    { model: actualModel, maxToken: 20 }
                 )
 
                 const replyText =
@@ -798,10 +808,14 @@ export class ChannelManager {
                 })
 
                 const testModel = model || channel.models?.[0] || 'claude-3-haiku-20240307'
+                // 应用模型映射/重定向
+                const mapping = this.getActualModel(id, testModel)
+                const actualModel = mapping.actualModel
+
                 const claudeStartTime = Date.now()
                 const response = await client.sendMessage(
                     { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
-                    { model: testModel, maxToken: 20 }
+                    { model: actualModel, maxToken: 20 }
                 )
 
                 const replyText =
@@ -937,6 +951,117 @@ export class ChannelManager {
             result = candidates[0]
         }
         return result
+    }
+
+    /**
+     * 获取实际请求的模型名称
+     * @param {string} channelId - 渠道ID
+     * @param {string} requestedModel - 请求的模型名称
+     * @returns {Object} { actualModel: 实际请求的模型, originalModel: 原始请求模型, mapped: 是否进行了映射 }
+     */
+    getActualModel(channelId, requestedModel) {
+        const channel = this.channels.get(channelId)
+        if (!channel) {
+            logger.debug(`[ChannelManager] getActualModel: 渠道 ${channelId} 不存在`)
+            return { actualModel: requestedModel, originalModel: requestedModel, mapped: false }
+        }
+
+        const modelMapping = channel.overrides?.modelMapping || {}
+        const mappingKeys = Object.keys(modelMapping)
+        if (mappingKeys.length > 0) {
+            logger.debug(
+                `[ChannelManager] 渠道 ${channel.name} 模型映射配置: ${JSON.stringify(modelMapping)}, 请求模型: ${requestedModel}`
+            )
+        }
+
+        if (modelMapping[requestedModel]) {
+            const actualModel = modelMapping[requestedModel]
+            logger.debug(`[ChannelManager] 模型映射: ${requestedModel} -> ${actualModel} (渠道: ${channel.name})`)
+            return { actualModel, originalModel: requestedModel, mapped: true }
+        }
+        for (const [pattern, target] of Object.entries(modelMapping)) {
+            if (pattern.includes('*')) {
+                const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$', 'i')
+                if (regex.test(requestedModel)) {
+                    logger.debug(
+                        `[ChannelManager] 模型映射(通配符): ${requestedModel} -> ${target} (渠道: ${channel.name})`
+                    )
+                    return { actualModel: target, originalModel: requestedModel, mapped: true }
+                }
+            }
+        }
+
+        return { actualModel: requestedModel, originalModel: requestedModel, mapped: false }
+    }
+
+    /**
+     * 获取渠道的模型映射配置
+     * @param {string} channelId - 渠道ID
+     * @returns {Object} 模型映射配置
+     */
+    getModelMapping(channelId) {
+        const channel = this.channels.get(channelId)
+        return channel?.overrides?.modelMapping || {}
+    }
+
+    /**
+     * 设置渠道的模型映射配置
+     * @param {string} channelId - 渠道ID
+     * @param {Object} mapping - 模型映射配置，如 { "glm4": "gemini-1.5-pro" }
+     * @returns {boolean} 是否成功
+     */
+    async setModelMapping(channelId, mapping) {
+        const channel = this.channels.get(channelId)
+        if (!channel) return false
+
+        if (!channel.overrides) {
+            channel.overrides = {}
+        }
+        channel.overrides.modelMapping = mapping || {}
+
+        await this.saveToConfig()
+        logger.info(`[ChannelManager] 更新渠道 ${channel.name} 的模型映射: ${JSON.stringify(mapping)}`)
+        return true
+    }
+
+    /**
+     * 添加单个模型映射
+     * @param {string} channelId - 渠道ID
+     * @param {string} fromModel - 源模型名称（框架内使用）
+     * @param {string} toModel - 目标模型名称（实际API请求）
+     * @returns {boolean} 是否成功
+     */
+    async addModelMapping(channelId, fromModel, toModel) {
+        const channel = this.channels.get(channelId)
+        if (!channel) return false
+
+        if (!channel.overrides) {
+            channel.overrides = {}
+        }
+        if (!channel.overrides.modelMapping) {
+            channel.overrides.modelMapping = {}
+        }
+
+        channel.overrides.modelMapping[fromModel] = toModel
+        await this.saveToConfig()
+        logger.info(`[ChannelManager] 渠道 ${channel.name} 添加模型映射: ${fromModel} -> ${toModel}`)
+        return true
+    }
+
+    /**
+     * 删除单个模型映射
+     * @param {string} channelId - 渠道ID
+     * @param {string} fromModel - 源模型名称
+     * @returns {boolean} 是否成功
+     */
+    async removeModelMapping(channelId, fromModel) {
+        const channel = this.channels.get(channelId)
+        if (!channel?.overrides?.modelMapping) return false
+
+        delete channel.overrides.modelMapping[fromModel]
+        await this.saveToConfig()
+        logger.info(`[ChannelManager] 渠道 ${channel.name} 删除模型映射: ${fromModel}`)
+        return true
     }
 
     /**
@@ -1367,7 +1492,8 @@ export class ChannelManager {
                 // 请求头/请求体JSON模板
                 headersTemplate: ch.headersTemplate,
                 requestBodyTemplate: ch.requestBodyTemplate,
-                // 保存状态信息
+                overrides: ch.overrides,
+                imageConfig: ch.imageConfig,
                 status: ch.status,
                 lastHealthCheck: ch.lastHealthCheck,
                 testedAt: ch.testedAt
