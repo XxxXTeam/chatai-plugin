@@ -392,6 +392,8 @@ export default function ChannelsPage() {
         name: '',
         adapterType: 'openai',
         baseUrl: '',
+        modelsPath: '', // 自定义模型获取路径
+        chatPath: '', // 自定义对话路径
         apiKey: '',
         apiKeys: [] as ApiKeyItem[], // 多API Key
         strategy: 'round-robin', // 轮询策略
@@ -490,6 +492,8 @@ export default function ChannelsPage() {
             name: '',
             adapterType: 'openai',
             baseUrl: '',
+            modelsPath: '',
+            chatPath: '',
             apiKey: '',
             apiKeys: [],
             strategy: 'round-robin',
@@ -519,6 +523,8 @@ export default function ChannelsPage() {
                 name: channel.name || '',
                 adapterType: channel.adapterType || 'openai',
                 baseUrl: channel.baseUrl || '',
+                modelsPath: ((channel as unknown as Record<string, unknown>).modelsPath as string) || '',
+                chatPath: ((channel as unknown as Record<string, unknown>).chatPath as string) || '',
                 apiKey: channel.apiKey || '',
                 apiKeys: channel.apiKeys || [],
                 strategy: channel.strategy || 'round-robin',
@@ -584,7 +590,9 @@ export default function ChannelsPage() {
                 headersTemplate: form.headersTemplate,
                 requestBodyTemplate: form.requestBodyTemplate,
                 overrides: form.overrides,
-                imageConfig: form.imageConfig
+                imageConfig: form.imageConfig,
+                modelsPath: form.modelsPath || undefined,
+                chatPath: form.chatPath || undefined
             }
 
             if (editingChannel) {
@@ -647,23 +655,9 @@ export default function ChannelsPage() {
         }
     }
 
-    // 检测 URL 是否已包含自定义路径
-    const _hasCustomPath = (url: string) => {
-        try {
-            const parsed = new URL(url)
-            const path = parsed.pathname.replace(/\/+$/, '')
-            return path && path !== ''
-        } catch {
-            return /\/v\d+/.test(url) || /\/api\//.test(url) || /\/openai\//.test(url)
-        }
-    }
     const getApiPathPreview = (baseUrl: string, adapterType: string) => {
         if (!baseUrl) return '（留空使用SDK默认地址）'
-
-        // 移除尾部斜杠
         const cleanUrl = baseUrl.replace(/\/+$/, '')
-
-        // 根据适配器类型显示完整路径
         switch (adapterType) {
             case 'openai':
                 return `${cleanUrl}/chat/completions`
@@ -686,7 +680,8 @@ export default function ChannelsPage() {
             const res = (await channelsApi.fetchModels({
                 adapterType: form.adapterType,
                 baseUrl: form.baseUrl || '', // 留空让后端使用SDK默认地址
-                apiKey: form.apiKey
+                apiKey: form.apiKey,
+                modelsPath: form.modelsPath || undefined // 自定义模型获取路径
             })) as { data?: { models?: unknown[] }; models?: unknown[] }
             const models = res?.data?.models || res?.models || []
             if (Array.isArray(models) && models.length > 0) {
@@ -1093,6 +1088,63 @@ export default function ChannelsPage() {
                                                 )}
                                             </div>
                                         </div>
+                                        {/* 自定义路径配置 */}
+                                        <Collapsible>
+                                            <CollapsibleTrigger asChild>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="w-full justify-between text-xs text-muted-foreground"
+                                                >
+                                                    <span>自定义API路径（高级）</span>
+                                                    <ChevronDown className="h-3 w-3" />
+                                                </Button>
+                                            </CollapsibleTrigger>
+                                            <CollapsibleContent className="space-y-3 pt-2">
+                                                <div className="grid gap-2">
+                                                    <Label htmlFor="modelsPath" className="text-xs">
+                                                        模型列表路径
+                                                    </Label>
+                                                    <Input
+                                                        id="modelsPath"
+                                                        value={form.modelsPath}
+                                                        onChange={e => setForm({ ...form, modelsPath: e.target.value })}
+                                                        placeholder="/models（留空使用默认）"
+                                                        className="h-8 text-sm"
+                                                    />
+                                                    <p className="text-xs text-muted-foreground">
+                                                        获取模型列表的路径，完整URL = BaseURL + 此路径
+                                                        {form.baseUrl && form.modelsPath && (
+                                                            <span className="block text-blue-500 dark:text-blue-400 font-mono mt-1">
+                                                                → {form.baseUrl.replace(/\/+$/, '')}
+                                                                {form.modelsPath}
+                                                            </span>
+                                                        )}
+                                                    </p>
+                                                </div>
+                                                <div className="grid gap-2">
+                                                    <Label htmlFor="chatPath" className="text-xs">
+                                                        对话接口路径
+                                                    </Label>
+                                                    <Input
+                                                        id="chatPath"
+                                                        value={form.chatPath}
+                                                        onChange={e => setForm({ ...form, chatPath: e.target.value })}
+                                                        placeholder="/chat/completions（留空使用默认）"
+                                                        className="h-8 text-sm"
+                                                    />
+                                                    <p className="text-xs text-muted-foreground">
+                                                        发送对话请求的路径，完整URL = BaseURL + 此路径
+                                                        {form.baseUrl && form.chatPath && (
+                                                            <span className="block text-blue-500 dark:text-blue-400 font-mono mt-1">
+                                                                → {form.baseUrl.replace(/\/+$/, '')}
+                                                                {form.chatPath}
+                                                            </span>
+                                                        )}
+                                                    </p>
+                                                </div>
+                                            </CollapsibleContent>
+                                        </Collapsible>
                                         {/* API Key 配置区域 */}
                                         <div className="grid gap-3">
                                             <div className="flex items-center justify-between">

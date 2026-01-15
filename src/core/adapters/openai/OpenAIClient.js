@@ -215,11 +215,21 @@ export class OpenAIClient extends AbstractClient {
             baseURL: this.baseUrl,
             defaultHeaders: mergedHeaders
         }
-
-        // 如果有代理配置，添加到客户端选项
         if (channelProxy) {
             clientOptions.httpAgent = channelProxy
             logger.debug('[OpenAI适配器] 使用代理:', proxyService.getProfileForScope('channel')?.name)
+        }
+        if (this.chatPath) {
+            const customChatPath = this.chatPath
+            const originalBaseUrl = this.baseUrl?.replace(/\/+$/, '') || ''
+            clientOptions.fetch = async (url, init) => {
+                let newUrl = url.toString()
+                if (newUrl.includes('/chat/completions')) {
+                    newUrl = originalBaseUrl + customChatPath
+                    logger.debug(`[OpenAI适配器] 使用自定义对话路径: ${newUrl}`)
+                }
+                return fetch(newUrl, init)
+            }
         }
 
         const client = new OpenAI(clientOptions)

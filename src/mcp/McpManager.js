@@ -406,24 +406,20 @@ export class McpManager {
 
     async disconnectServer(name) {
         const server = this.servers.get(name)
-        if (!server || !server.client) return
+        if (!server) return
 
         try {
-            // Remove tools from this server
             for (const [toolName, tool] of this.tools) {
                 if (tool.serverName === name) {
                     this.tools.delete(toolName)
+                    this.clearToolCache(toolName)
                 }
             }
-
-            // Remove resources from this server
             for (const [uri, resource] of this.resources) {
                 if (resource.serverName === name) {
                     this.resources.delete(uri)
                 }
             }
-
-            // Remove prompts from this server
             for (const [promptName, prompt] of this.prompts) {
                 if (prompt.serverName === name) {
                     this.prompts.delete(promptName)
@@ -431,14 +427,42 @@ export class McpManager {
             }
 
             // Disconnect client
-            await server.client.disconnect()
+            if (server.client) {
+                await server.client.disconnect()
+            }
 
             this.servers.delete(name)
             logger.info(`[MCP] Disconnected from server: ${name}`)
             return true
         } catch (error) {
             logger.error(`[MCP] Error disconnecting from server ${name}:`, error)
+            this.servers.delete(name)
             return false
+        }
+    }
+
+    /**
+     * 清除指定工具的缓存
+     * @param {string} toolName - 工具名称
+     */
+    clearToolCache(toolName) {
+        // 遍历缓存，删除该工具的所有缓存条目
+        for (const [cacheKey] of this.toolResultCache) {
+            if (cacheKey.startsWith(`${toolName}:`)) {
+                this.toolResultCache.delete(cacheKey)
+            }
+        }
+    }
+
+    /**
+     * 清除指定服务器所有工具的缓存
+     * @param {string} serverName - 服务器名称
+     */
+    clearServerCache(serverName) {
+        for (const [toolName, tool] of this.tools) {
+            if (tool.serverName === serverName) {
+                this.clearToolCache(toolName)
+            }
         }
     }
 

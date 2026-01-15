@@ -1226,6 +1226,8 @@ export class AbstractClient {
         this.features = options.features || []
         this.tools = options.tools || []
         this.baseUrl = options.baseUrl || ''
+        this.chatPath = options.chatPath || '' // 自定义对话接口路径
+        this.modelsPath = options.modelsPath || '' // 自定义模型列表路径
         this.apiKey = options.apiKey || ''
         this.multipleKeyStrategy = options.multipleKeyStrategy || MultipleKeyStrategyChoice.RANDOM
         this.logger = options.logger || DefaultLogger

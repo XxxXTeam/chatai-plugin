@@ -674,6 +674,7 @@ export class ChannelManager {
                 const client = new OpenAIClient({
                     apiKey: apiKey,
                     baseUrl: channel.baseUrl,
+                    chatPath: channel.chatPath, // 自定义对话路径
                     features: ['chat'],
                     tools: []
                 })
