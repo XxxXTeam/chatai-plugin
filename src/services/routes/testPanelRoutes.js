@@ -100,12 +100,13 @@ router.post('/batch-test', async (req, res) => {
             const client = new OpenAIClient({
                 apiKey,
                 baseUrl: channel.baseUrl,
+                chatPath: channel.chatPath, // 自定义对话路径
                 features: ['chat'],
                 tools: []
             })
 
             const response = await client.sendMessage(
-                { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
+                { role: 'user', content: [{ type: 'text', text: '你好' }] },
                 { model, maxToken: 50, temperature: 0.7 }
             )
 
@@ -287,6 +288,7 @@ router.post('/quick-test', async (req, res) => {
         const client = new OpenAIClient({
             apiKey,
             baseUrl: channel.baseUrl,
+            chatPath: channel.chatPath, // 自定义对话路径
             features: ['chat'],
             tools: []
         })

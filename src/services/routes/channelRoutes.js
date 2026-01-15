@@ -96,7 +96,7 @@ router.get('/:id', async (req, res) => {
 
 // POST /api/channels/test - Test single channel
 router.post('/test', async (req, res) => {
-    let { id, adapterType, baseUrl, apiKey, apiKeys, models, advanced, strategy } = req.body
+    let { id, adapterType, baseUrl, apiKey, apiKeys, models, advanced, strategy, chatPath } = req.body
     const startTime = Date.now()
 
     let usedKeyIndex = -1
@@ -110,6 +110,7 @@ router.post('/test', async (req, res) => {
             channelName = channel.name || id
             adapterType = channel.adapterType
             baseUrl = channel.baseUrl
+            chatPath = channel.chatPath // 获取渠道的自定义对话路径
             models = channel.models
             advanced = channel.advanced || advanced
 
@@ -144,6 +145,7 @@ router.post('/test', async (req, res) => {
             const client = new OpenAIClient({
                 apiKey: apiKey || config.get('openai.apiKey'),
                 baseUrl: baseUrl || config.get('openai.baseUrl'),
+                chatPath: chatPath, // 自定义对话路径
                 features: ['chat'],
                 tools: []
             })
@@ -271,7 +273,7 @@ router.post('/test', async (req, res) => {
 
 // POST /api/channels/fetch-models
 router.post('/fetch-models', async (req, res) => {
-    let { adapterType, baseUrl, apiKey } = req.body
+    let { adapterType, baseUrl, apiKey, modelsPath } = req.body
 
     if (baseUrl) {
         baseUrl = normalizeBaseUrl(baseUrl, adapterType)
@@ -279,6 +281,41 @@ router.post('/fetch-models', async (req, res) => {
 
     try {
         if (adapterType === 'openai') {
+            // 如果有自定义 modelsPath，使用自定义路径获取模型
+            if (modelsPath) {
+                const finalUrl = (baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '') + modelsPath
+                chatLogger.debug(`[获取模型] 使用自定义路径: ${finalUrl}`)
+
+                const response = await fetch(finalUrl, {
+                    method: 'GET',
+                    headers: {
+                        Authorization: `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    }
+                })
+
+                if (!response.ok) {
+                    const text = await response.text()
+                    throw new Error(`API请求失败: ${response.status} ${text}`)
+                }
+
+                const data = await response.json()
+                let models = []
+
+                // 支持不同的响应格式
+                if (Array.isArray(data)) {
+                    models = data.map(m => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean)
+                } else if (data.data && Array.isArray(data.data)) {
+                    models = data.data.map(m => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean)
+                } else if (data.models && Array.isArray(data.models)) {
+                    models = data.models.map(m => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean)
+                }
+
+                return res.json(ApiResponse.ok({ models: models.sort() }))
+            }
+
+            // 默认使用 OpenAI SDK
             const OpenAI = (await import('openai')).default
             const openai = new OpenAI({
                 apiKey: apiKey || config.get('openai.apiKey'),
@@ -346,6 +383,7 @@ router.post('/batch-test', async (req, res) => {
             const client = new OpenAIClient({
                 apiKey,
                 baseUrl: channel.baseUrl,
+                chatPath: channel.chatPath,
                 features: ['chat'],
                 tools: []
             })
@@ -432,6 +470,7 @@ router.post('/test-model', async (req, res) => {
         const client = new OpenAIClient({
             apiKey,
             baseUrl: channel.baseUrl,
+            chatPath: channel.chatPath, // 自定义对话路径
             features: ['chat'],
             tools: []
         })

@@ -925,7 +925,9 @@ export class ChatService {
                 let channelSwitched = false
                 let totalRetryCount = 0
                 let currentKeyIndex = clientOptions.keyIndex ?? -1
-                const switchChain = [channel?.name || channel?.id || 'unknown'] // 记录渠道切换链
+                const switchChain = [] // 记录渠道/Key切换链
+                const initialChannelInfo = channel?.name || channel?.id || 'unknown'
+                switchChain.push({ type: 'init', channel: initialChannelInfo })
 
                 for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
                     const currentModel = modelsToTry[modelIndex]
@@ -1008,12 +1010,20 @@ export class ChatService {
                             }
 
                             // 空响应重试耗尽，尝试切换Key
+                            let switched = false
                             if (enableKeyRotation && currentChannel && currentKeyIndex >= 0) {
                                 const nextKey = channelManager.getNextAvailableKey(currentChannel.id, currentKeyIndex)
                                 if (nextKey) {
                                     logger.info(
-                                        `[ChatService] 空响应后切换Key: ${currentChannel.name} Key#${nextKey.keyIndex + 1}`
+                                        `[ChatService] 空响应后切换Key: ${currentChannel.name} Key#${currentKeyIndex + 1} -> Key#${nextKey.keyIndex + 1}`
                                     )
+                                    switchChain.push({
+                                        type: 'key',
+                                        channel: currentChannel.name,
+                                        fromKey: currentKeyIndex + 1,
+                                        toKey: nextKey.keyIndex + 1,
+                                        reason: 'empty'
+                                    })
                                     currentKeyIndex = nextKey.keyIndex
                                     const newClientOptions = {
                                         ...clientOptions,
@@ -1022,12 +1032,13 @@ export class ChatService {
                                     }
                                     currentClient = await LlmService.createClient(newClientOptions)
                                     emptyRetryCount = 0 // 重置空响应计数
+                                    switched = true
                                     continue
                                 }
                             }
 
                             // 尝试切换渠道
-                            if (enableChannelSwitch && isMainModel) {
+                            if (!switched && enableChannelSwitch && isMainModel) {
                                 const altChannels = channelManager.getAvailableChannels(currentModel, {
                                     excludeChannelId: currentChannel?.id
                                 })
@@ -1037,10 +1048,15 @@ export class ChatService {
                                     logger.info(
                                         `[ChatService] 空响应后切换渠道: ${currentChannel?.name} -> ${altChannel.name}`
                                     )
+                                    switchChain.push({
+                                        type: 'channel',
+                                        from: currentChannel?.name,
+                                        to: altChannel.name,
+                                        reason: 'empty'
+                                    })
                                     currentChannel = altChannel
                                     currentKeyIndex = altKeyInfo.keyIndex
                                     channelSwitched = true
-                                    switchChain.push(altChannel.name || altChannel.id)
                                     const altClientOptions = {
                                         ...clientOptions,
                                         adapterType: altChannel.adapterType,
@@ -1050,11 +1066,30 @@ export class ChatService {
                                     }
                                     currentClient = await LlmService.createClient(altClientOptions)
                                     emptyRetryCount = 0
+                                    switched = true
                                     continue
                                 }
                             }
 
-                            // 无法处理空响应，进入下一个模型
+                            // 无法切换Key或渠道，但仍有重试次数时继续重试（单渠道单Key场景）
+                            retryCount++
+                            totalRetryCount++
+                            if (retryCount <= (isMainModel ? maxRetries : 1)) {
+                                logger.info(
+                                    `[ChatService] 空响应，无可切换选项，延迟后重试 (${retryCount}/${maxRetries})`
+                                )
+                                switchChain.push({
+                                    type: 'retry',
+                                    channel: currentChannel?.name,
+                                    reason: 'empty',
+                                    attempt: retryCount
+                                })
+                                await new Promise(r => setTimeout(r, retryDelay * retryCount))
+                                emptyRetryCount = 0 // 重置空响应计数，给重试一个机会
+                                continue
+                            }
+
+                            // 重试次数耗尽，进入下一个模型
                             break
                         } catch (modelError) {
                             lastError = modelError
@@ -1091,13 +1126,26 @@ export class ChatService {
                                 })
                             }
 
-                            // 认证错误: 尝试切换Key
-                            if (errorType === 'auth' && enableKeyRotation && currentChannel && currentKeyIndex >= 0) {
+                            // 判断是否应该尝试切换（认证、配额、超时、网络、服务器错误都应该尝试切换）
+                            const shouldTrySwitch = ['auth', 'quota', 'timeout', 'network', 'server'].includes(
+                                errorType
+                            )
+                            let errorSwitched = false
+
+                            // 尝试切换Key（认证错误优先切换Key）
+                            if (shouldTrySwitch && enableKeyRotation && currentChannel && currentKeyIndex >= 0) {
                                 const nextKey = channelManager.getNextAvailableKey(currentChannel.id, currentKeyIndex)
                                 if (nextKey) {
                                     logger.info(
-                                        `[ChatService] 认证失败后切换Key: ${currentChannel.name} Key#${nextKey.keyIndex + 1}`
+                                        `[ChatService] ${errorType}错误后切换Key: ${currentChannel.name} Key#${currentKeyIndex + 1} -> Key#${nextKey.keyIndex + 1}`
                                     )
+                                    switchChain.push({
+                                        type: 'key',
+                                        channel: currentChannel.name,
+                                        fromKey: currentKeyIndex + 1,
+                                        toKey: nextKey.keyIndex + 1,
+                                        reason: errorType
+                                    })
                                     currentKeyIndex = nextKey.keyIndex
                                     const newClientOptions = {
                                         ...clientOptions,
@@ -1105,12 +1153,13 @@ export class ChatService {
                                         keyIndex: nextKey.keyIndex
                                     }
                                     currentClient = await LlmService.createClient(newClientOptions)
+                                    errorSwitched = true
                                     continue // 不增加retryCount，直接重试
                                 }
                             }
 
-                            // 配额/限流错误: 尝试切换渠道
-                            if ((errorType === 'quota' || errorType === 'auth') && enableChannelSwitch && isMainModel) {
+                            // Key切换失败，尝试切换渠道
+                            if (!errorSwitched && shouldTrySwitch && enableChannelSwitch && isMainModel) {
                                 const altChannels = channelManager.getAvailableChannels(currentModel, {
                                     excludeChannelId: currentChannel?.id
                                 })
@@ -1120,10 +1169,15 @@ export class ChatService {
                                     logger.info(
                                         `[ChatService] ${errorType}错误后切换渠道: ${currentChannel?.name} -> ${altChannel.name}`
                                     )
+                                    switchChain.push({
+                                        type: 'channel',
+                                        from: currentChannel?.name,
+                                        to: altChannel.name,
+                                        reason: errorType
+                                    })
                                     currentChannel = altChannel
                                     currentKeyIndex = altKeyInfo.keyIndex
                                     channelSwitched = true
-                                    switchChain.push(altChannel.name || altChannel.id)
                                     const altClientOptions = {
                                         ...clientOptions,
                                         adapterType: altChannel.adapterType,
@@ -1132,17 +1186,27 @@ export class ChatService {
                                         keyIndex: altKeyInfo.keyIndex
                                     }
                                     currentClient = await LlmService.createClient(altClientOptions)
+                                    errorSwitched = true
                                     continue
                                 }
                             }
 
+                            // 无法切换Key或渠道，使用普通重试（单渠道单Key场景）
                             retryCount++
                             totalRetryCount++
 
                             if (retryCount <= (isMainModel ? maxRetries : 1)) {
                                 // 指数退避延迟
                                 const delay = Math.min(retryDelay * Math.pow(2, retryCount - 1), 10000)
-                                logger.debug(`[ChatService] ${delay}ms后重试...`)
+                                logger.info(
+                                    `[ChatService] 无可切换选项，${delay}ms后重试 (${retryCount}/${maxRetries})`
+                                )
+                                switchChain.push({
+                                    type: 'retry',
+                                    channel: currentChannel?.name,
+                                    reason: errorType,
+                                    attempt: retryCount
+                                })
                                 await new Promise(r => setTimeout(r, delay))
                             }
                         }
@@ -1195,7 +1259,16 @@ export class ChatService {
                           }
                         : null
                     debugInfo.totalRetryCount = totalRetryCount
-                    debugInfo.switchChain = switchChain.length > 1 ? switchChain : null
+                    // 格式化switchChain为可读字符串数组
+                    const formattedChain = switchChain.map(s => {
+                        if (s.type === 'init') return `初始: ${s.channel}`
+                        if (s.type === 'key') return `Key切换: ${s.channel} #${s.fromKey}->#${s.toKey} (${s.reason})`
+                        if (s.type === 'channel') return `渠道切换: ${s.from}->${s.to} (${s.reason})`
+                        if (s.type === 'retry') return `重试: ${s.channel} #${s.attempt} (${s.reason})`
+                        return JSON.stringify(s)
+                    })
+                    debugInfo.switchChain = formattedChain.length > 1 ? formattedChain : null
+                    debugInfo.switchChainRaw = switchChain.length > 1 ? switchChain : null
                 }
             }
 

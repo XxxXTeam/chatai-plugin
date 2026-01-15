@@ -85,12 +85,12 @@ export class McpClient {
      */
     async connect() {
         if (this.initialized) return
+        await this.ensureDisconnected()
 
         try {
             if (this.type === 'stdio') {
                 await this.connectStdio()
             } else if (this.type === 'npm' || this.type === 'npx') {
-                // npm 包形式的 MCP 服务器，如 @upstash/context7-mcp
                 await this.connectNpm()
             } else if (this.type === 'sse') {
                 await this.connectSSE()
@@ -99,11 +99,7 @@ export class McpClient {
             } else {
                 throw new Error(`Unsupported transport type: ${this.type}`)
             }
-
-            // HTTP 类型也需要初始化以获取服务器能力
             await this.initialize()
-
-            // 只有非 HTTP 类型才需要心跳（HTTP 是无状态的）
             if (this.type !== 'http') {
                 this.startHeartbeat()
             }
@@ -133,7 +129,10 @@ export class McpClient {
      * { type: 'npm', package: 'my-mcp-server', env: { API_KEY: 'xxx' } }
      */
     async connectNpm() {
-        if (this.process) return
+        // 如果存在旧进程，先终止
+        if (this.process) {
+            await this.terminateProcess()
+        }
 
         const { package: pkg, args = [], env = {}, cwd } = this.config
 
@@ -243,7 +242,10 @@ export class McpClient {
     }
 
     async connectStdio() {
-        if (this.process) return
+        // 如果存在旧进程，先终止
+        if (this.process) {
+            await this.terminateProcess()
+        }
 
         const { command, args, env } = this.config
 
@@ -908,15 +910,82 @@ export class McpClient {
     }
 
     /**
+     * 终止当前进程（用于重连前清理）
+     * @returns {Promise<void>}
+     */
+    async terminateProcess() {
+        if (!this.process) return
+
+        const pid = this.process.pid
+        logger.debug(`[MCP] Terminating process PID: ${pid}`)
+
+        return new Promise(resolve => {
+            const forceKillTimeout = setTimeout(() => {
+                if (this.process) {
+                    try {
+                        this.process.kill('SIGKILL')
+                        logger.warn(`[MCP] Force killed process PID: ${pid}`)
+                    } catch (e) {
+                        // 忽略
+                    }
+                }
+                this.process = null
+                resolve()
+            }, 3000)
+
+            try {
+                this.process.once('exit', () => {
+                    clearTimeout(forceKillTimeout)
+                    this.process = null
+                    logger.debug(`[MCP] Process ${pid} terminated gracefully`)
+                    resolve()
+                })
+                this.process.kill('SIGTERM')
+            } catch (e) {
+                clearTimeout(forceKillTimeout)
+                this.process = null
+                resolve()
+            }
+        })
+    }
+
+    /**
+     * 确保在重连前断开现有连接
+     * @returns {Promise<void>}
+     */
+    async ensureDisconnected() {
+        this.stopHeartbeat()
+        this.autoReconnect = false // 临时禁用自动重连
+
+        if (this.process) {
+            await this.terminateProcess()
+        }
+
+        if (this.eventSource) {
+            this.eventSource.close()
+            this.eventSource = null
+        }
+
+        // 拒绝所有待处理请求
+        for (const [id, { reject }] of this.pendingRequests) {
+            reject(new Error('Connection reset for reconnect'))
+        }
+        this.pendingRequests.clear()
+        this.messageBuffer = ''
+
+        this.autoReconnect = this.config.autoReconnect !== false // 恢复自动重连设置
+    }
+
+    /**
      * 断开与 MCP 服务器的连接
      * @returns {Promise<void>}
      */
     async disconnect() {
         this.stopHeartbeat()
+        this.autoReconnect = false // 禁用自动重连
 
         if (this.process) {
-            this.process.kill()
-            this.process = null
+            await this.terminateProcess()
         }
 
         if (this.eventSource) {
