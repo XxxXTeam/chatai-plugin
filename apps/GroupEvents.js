@@ -74,8 +74,14 @@ import {
     checkEventProbability
 } from '../src/utils/eventAdapter.js'
 const messageCache = new Map()
-const MESSAGE_CACHE_TTL = 5 * 60 * 1000
-const MESSAGE_CACHE_MAX = 1000
+const MESSAGE_CACHE_TTL = 10 * 60 * 1000 // 10分钟
+const MESSAGE_CACHE_MAX = 2000
+
+// 按群索引的消息缓存
+const groupMessageIndex = new Map() // groupId -> Set<messageId>
+
+export { messageCache }
+
 export function cacheGroupMessage(e) {
     if (!e?.message_id || !e?.group_id) return
 
@@ -90,15 +96,63 @@ export function cacheGroupMessage(e) {
 
     messageCache.set(e.message_id, cacheData)
 
+    // 维护群消息索引
+    const groupId = String(e.group_id)
+    if (!groupMessageIndex.has(groupId)) {
+        groupMessageIndex.set(groupId, new Set())
+    }
+    groupMessageIndex.get(groupId).add(e.message_id)
+
     // 清理过期和超量缓存
     if (messageCache.size > MESSAGE_CACHE_MAX) {
         const now = Date.now()
         for (const [key, val] of messageCache) {
             if (now - val.time > MESSAGE_CACHE_TTL || messageCache.size > MESSAGE_CACHE_MAX) {
                 messageCache.delete(key)
+                // 也从索引中删除
+                const gid = String(val.group_id)
+                groupMessageIndex.get(gid)?.delete(key)
             }
         }
     }
+}
+
+/**
+ * 获取群最近消息（供主动聊天使用）
+ * @param {string} groupId - 群ID
+ * @param {number} limit - 最大数量
+ * @returns {Array} 消息列表
+ */
+export function getRecentGroupMessages(groupId, limit = 30) {
+    groupId = String(groupId)
+    const messageIds = groupMessageIndex.get(groupId)
+    if (!messageIds || messageIds.size === 0) return []
+
+    const now = Date.now()
+    const messages = []
+
+    for (const msgId of messageIds) {
+        const msg = messageCache.get(msgId)
+        if (msg && now - msg.time < MESSAGE_CACHE_TTL) {
+            messages.push({
+                userId: msg.user_id,
+                nickname: msg.sender?.nickname || msg.sender?.card || '',
+                content: msg.raw_message || '',
+                time: msg.time
+            })
+        }
+    }
+
+    // 按时间排序并取最近的
+    return messages.sort((a, b) => a.time - b.time).slice(-limit)
+}
+
+/**
+ * 获取群消息数量
+ */
+export function getGroupMessageCount(groupId) {
+    groupId = String(groupId)
+    return groupMessageIndex.get(groupId)?.size || 0
 }
 
 /**

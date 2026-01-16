@@ -27,6 +27,47 @@ class StatsService {
             lastUpdate: Date.now()
         }
         this.loaded = false
+
+        // 实时RPM跟踪（滑动窗口）
+        this.requestTimestamps = [] // 请求时间戳数组
+        this.rpmWindowMs = 60 * 1000 // 1分钟窗口
+        this.rpm5WindowMs = 5 * 60 * 1000 // 5分钟窗口
+        this.maxTimestamps = 10000 // 最多保留的时间戳数
+    }
+
+    /**
+     * 记录一次请求时间戳
+     */
+    recordRequestTimestamp() {
+        const now = Date.now()
+        this.requestTimestamps.push(now)
+        const cutoff = now - this.rpm5WindowMs
+        while (this.requestTimestamps.length > 0 && this.requestTimestamps[0] < cutoff) {
+            this.requestTimestamps.shift()
+        }
+        if (this.requestTimestamps.length > this.maxTimestamps) {
+            this.requestTimestamps = this.requestTimestamps.slice(-this.maxTimestamps)
+        }
+    }
+
+    /**
+     * 获取实时RPM统计
+     * @returns {{ rpm: number, rpm5: number, successRate: number }}
+     */
+    getRealTimeRpm() {
+        const now = Date.now()
+        const oneMinuteAgo = now - this.rpmWindowMs
+        const fiveMinutesAgo = now - this.rpm5WindowMs
+
+        // 计算最近1分钟和5分钟的请求数
+        const lastMinuteCount = this.requestTimestamps.filter(t => t >= oneMinuteAgo).length
+        const lastFiveMinutesCount = this.requestTimestamps.filter(t => t >= fiveMinutesAgo).length
+
+        return {
+            rpm: lastMinuteCount,
+            rpm5: lastFiveMinutesCount > 0 ? Math.round(lastFiveMinutesCount / 5) : 0,
+            totalRequests: this.requestTimestamps.length
+        }
     }
 
     /**
@@ -186,6 +227,9 @@ class StatsService {
      * @returns {Promise<string>} 记录ID
      */
     async recordApiCall(options) {
+        // 记录请求时间戳用于实时RPM计算
+        this.recordRequestTimestamp()
+
         const {
             channelId,
             channelName,

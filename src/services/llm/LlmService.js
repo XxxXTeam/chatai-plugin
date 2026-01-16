@@ -28,13 +28,15 @@ export class LlmService {
         // 从渠道管理器加载配置
         await channelManager.init()
 
-        let apiKey, baseUrl, ClientClass, adapterType
+        let apiKey, baseUrl, ClientClass, adapterType, chatPath, modelsPath
 
         // 优先使用传入的选项
         if (options.apiKey && options.baseUrl) {
             apiKey = options.apiKey
             baseUrl = options.baseUrl
             adapterType = options.adapterType || 'openai'
+            chatPath = options.chatPath || ''
+            modelsPath = options.modelsPath || ''
         } else {
             const model = options.model || config.get('llm.defaultModel')
             const channel =
@@ -47,6 +49,8 @@ export class LlmService {
             apiKey = channelManager.getChannelKey(channel)
             baseUrl = channel.baseUrl
             adapterType = channel.adapterType || 'openai'
+            chatPath = channel.chatPath || ''
+            modelsPath = channel.modelsPath || ''
         }
 
         // 根据适配器类型选择客户端类
@@ -101,6 +105,8 @@ export class LlmService {
         const clientConfig = {
             apiKey,
             baseUrl,
+            chatPath, // 自定义对话路径
+            modelsPath, // 自定义模型列表路径
             features: ['chat'],
             tools,
             enableReasoning,
