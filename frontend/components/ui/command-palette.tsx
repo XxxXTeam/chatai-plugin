@@ -37,8 +37,9 @@ import {
     Hand,
     Clock,
     UserPlus,
+    Heart,
     Shield,
-    Hash,
+    Key,
     type LucideIcon
 } from 'lucide-react'
 
@@ -112,6 +113,15 @@ const commandItems: CommandItem[] = [
         group: '配置中心 / 基础设置'
     },
     {
+        id: 'settings-proactive',
+        label: '主动消息',
+        description: '配置主动消息/推送频率与内容',
+        icon: Sparkles,
+        href: '/settings?tab=proactive',
+        keywords: ['主动', '推送', '主动消息', 'proactive'],
+        group: '配置中心 / 基础设置'
+    },
+    {
         id: 'settings-tools',
         label: '工具调用配置',
         description: '工具执行和显示设置',
@@ -136,6 +146,15 @@ const commandItems: CommandItem[] = [
         icon: Sparkles,
         href: '/settings?tab=features',
         keywords: ['高级', '功能', 'feature', '总结', '画像'],
+        group: '配置中心 / 基础设置'
+    },
+    {
+        id: 'settings-admin',
+        label: '管理与安全',
+        description: '敏感操作、登录提醒等管理配置',
+        icon: Shield,
+        href: '/settings?tab=admin',
+        keywords: ['管理', '安全', '敏感', 'login', 'admin'],
         group: '配置中心 / 基础设置'
     },
 
@@ -272,6 +291,15 @@ const commandItems: CommandItem[] = [
         action: 'add'
     },
     {
+        id: 'knowledge-detail',
+        label: '知识库详情',
+        description: '查看或编辑知识库文档',
+        icon: BookOpen,
+        href: '/knowledge/[id]',
+        keywords: ['知识库', '详情', '编辑', 'knowledge', 'doc'],
+        group: 'AI扩展 / 知识库'
+    },
+    {
         id: 'memory',
         label: '记忆管理',
         description: '管理AI长期记忆',
@@ -307,6 +335,15 @@ const commandItems: CommandItem[] = [
         icon: MessageSquare,
         href: '/conversations',
         keywords: ['对话', 'chat', '历史', 'conversation'],
+        group: '数据记录'
+    },
+    {
+        id: 'conversations-detail',
+        label: '对话详情',
+        description: '查看单个对话的消息记录',
+        icon: MessageSquare,
+        href: '/conversations/detail',
+        keywords: ['对话', '详情', 'conversation', 'detail'],
         group: '数据记录'
     },
     {

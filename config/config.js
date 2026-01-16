@@ -138,9 +138,13 @@ class Config {
                 baseProbability: 0.05, // 基础触发概率 (5%)
                 nightProbabilityMultiplier: 0.2, // 凌晨(0-6点)概率乘数
                 activeProbabilityMultiplier: 1.5, // 群活跃时概率乘数
+                lowActiveProbabilityMultiplier: 0.2, // 群低活跃时概率乘数
                 // 时间配置
                 nightHoursStart: 0, // 凌晨开始时间
                 nightHoursEnd: 6, // 凌晨结束时间
+                inactiveMinutesLimit: 180, // 最近活跃距离现在超过该分钟则不主动触发
+                lowActiveWindowMinutes: 60, // 低活跃检测窗口
+                lowActiveMinMessages: 3, // 窗口内消息低于此阈值判定为低活跃
                 // AI配置
                 model: '', // 使用的模型（留空使用默认）
                 systemPrompt:
@@ -258,6 +262,16 @@ class Config {
                 maxMessages: 20,
                 maxTokens: 4000,
                 cleaningStrategy: 'auto', // 'auto', 'manual'
+                autoSummarize: {
+                    enabled: true,
+                    intervalMinutes: 10,
+                    maxMessagesBefore: 60, // 超过此消息数且长时间未活跃则总结
+                    minInactiveMinutes: 30, // 在该时间段无人发言才会总结
+                    retainMessagesAfterSummary: 0, // 总结后保留的最近消息数量
+                    model: '', // 为空使用默认模型
+                    maxTokens: 400, // 总结输出长度
+                    windowMessages: 80 // 参与总结的最多消息数
+                },
                 // 隔离模式配置
                 isolation: {
                     groupUserIsolation: false, // 群聊用户隔离（false=群共享上下文, true=每用户独立）
