@@ -75,6 +75,7 @@ class Config {
             },
             admin: {
                 masterQQ: [], // 主人QQ列表，留空使用Yunzai配置
+                pluginAuthorQQ: [],
                 loginNotifyPrivate: true, // 登录链接私聊推送
                 sensitiveCommandMasterOnly: true // 敏感命令仅主人可用
             },
@@ -126,6 +127,35 @@ class Config {
                 presetMap: {},
                 // 仅伪人模式可用的功能
                 exclusiveFeatures: ['groupSummary', 'userPortrait']
+            },
+            // 主动聊天配置
+            proactiveChat: {
+                enabled: false, // 全局开关
+                // 轮询配置
+                pollInterval: 5, // 轮询间隔（分钟）
+                minMessagesBeforeTrigger: 10, // 触发前最少需要的群消息数
+                // 概率配置
+                baseProbability: 0.05, // 基础触发概率 (5%)
+                nightProbabilityMultiplier: 0.2, // 凌晨(0-6点)概率乘数
+                activeProbabilityMultiplier: 1.5, // 群活跃时概率乘数
+                // 时间配置
+                nightHoursStart: 0, // 凌晨开始时间
+                nightHoursEnd: 6, // 凌晨结束时间
+                // AI配置
+                model: '', // 使用的模型（留空使用默认）
+                systemPrompt:
+                    '你是群里的一员，正在查看群聊记录。根据最近的聊天内容，自然地参与讨论或发起新话题。保持简短、口语化、有趣。',
+                maxTokens: 150,
+                temperature: 0.9,
+                // 群配置
+                enabledGroups: [], // 启用的群列表，空表示所有群
+                blacklistGroups: [], // 黑名单群
+                // 防刷屏
+                cooldownMinutes: 30, // 同一群触发后的冷却时间（分钟）
+                maxDailyMessages: 20, // 每日每群最大主动消息数
+                // 记忆和上下文
+                useGroupContext: true, // 使用群聊上下文
+                contextMessageCount: 20 // 携带的上下文消息数
             },
             // 工具调用配置
             tools: {

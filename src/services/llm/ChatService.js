@@ -465,6 +465,13 @@ export class ChatService {
             clientOptions.keyIndex = keyInfo.keyIndex
             clientOptions.keyObj = keyInfo.keyObj
             clientOptions.channelName = channel.name
+            // 传递自定义路径配置
+            if (channel.chatPath) {
+                clientOptions.chatPath = channel.chatPath
+            }
+            if (channel.modelsPath) {
+                clientOptions.modelsPath = channel.modelsPath
+            }
             // 传递渠道的自定义请求头
             if (channel.customHeaders && Object.keys(channel.customHeaders).length > 0) {
                 clientOptions.customHeaders = channel.customHeaders

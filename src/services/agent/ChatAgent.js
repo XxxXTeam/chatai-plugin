@@ -683,6 +683,13 @@ export class ChatAgent {
             clientOptions.keyIndex = keyInfo.keyIndex
             clientOptions.channelName = channel.name
 
+            // 传递自定义路径配置
+            if (channel.chatPath) {
+                clientOptions.chatPath = channel.chatPath
+            }
+            if (channel.modelsPath) {
+                clientOptions.modelsPath = channel.modelsPath
+            }
             if (channel.customHeaders) {
                 clientOptions.customHeaders = channel.customHeaders
             }

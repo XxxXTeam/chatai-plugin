@@ -203,7 +203,11 @@ export default function GroupsPage() {
         summaryPushModel: '', // 定时总结使用的模型
         customPrefix: '',
         knowledgeIds: [] as string[],
-        inheritFrom: [] as string[]
+        inheritFrom: [] as string[],
+        proactiveChatEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+        proactiveChatProbability: 'inherit' as 'inherit' | number,
+        proactiveChatCooldown: 'inherit' as 'inherit' | number,
+        proactiveChatMaxDaily: 'inherit' as 'inherit' | number
     })
 
     const fetchData = async () => {
@@ -289,7 +293,11 @@ export default function GroupsPage() {
             summaryPushModel: '',
             customPrefix: '',
             knowledgeIds: [],
-            inheritFrom: []
+            inheritFrom: [],
+            proactiveChatEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+            proactiveChatProbability: 'inherit' as 'inherit' | number,
+            proactiveChatCooldown: 'inherit' as 'inherit' | number,
+            proactiveChatMaxDaily: 'inherit' as 'inherit' | number
         })
         setEditingGroup(null)
     }
@@ -354,7 +362,19 @@ export default function GroupsPage() {
                 summaryPushModel: settings.summaryPushModel || '',
                 customPrefix: settings.customPrefix || '',
                 knowledgeIds: group.knowledgeIds || [],
-                inheritFrom: group.inheritFrom || []
+                inheritFrom: group.inheritFrom || [],
+                proactiveChatEnabled:
+                    settings.proactiveChatEnabled === undefined
+                        ? 'inherit'
+                        : settings.proactiveChatEnabled
+                          ? 'on'
+                          : 'off',
+                proactiveChatProbability:
+                    settings.proactiveChatProbability === undefined ? 'inherit' : settings.proactiveChatProbability,
+                proactiveChatCooldown:
+                    settings.proactiveChatCooldown === undefined ? 'inherit' : settings.proactiveChatCooldown,
+                proactiveChatMaxDaily:
+                    settings.proactiveChatMaxDaily === undefined ? 'inherit' : settings.proactiveChatMaxDaily
             })
         } else {
             resetForm()
@@ -417,7 +437,14 @@ export default function GroupsPage() {
                 summaryPushModel: form.summaryPushModel || undefined,
                 customPrefix: form.customPrefix || undefined,
                 knowledgeIds: form.knowledgeIds.length > 0 ? form.knowledgeIds : undefined,
-                inheritFrom: form.inheritFrom.length > 0 ? form.inheritFrom : undefined
+                inheritFrom: form.inheritFrom.length > 0 ? form.inheritFrom : undefined,
+                proactiveChatEnabled:
+                    form.proactiveChatEnabled === 'inherit' ? undefined : form.proactiveChatEnabled === 'on',
+                proactiveChatProbability:
+                    form.proactiveChatProbability === 'inherit' ? undefined : form.proactiveChatProbability,
+                proactiveChatCooldown:
+                    form.proactiveChatCooldown === 'inherit' ? undefined : form.proactiveChatCooldown,
+                proactiveChatMaxDaily: form.proactiveChatMaxDaily === 'inherit' ? undefined : form.proactiveChatMaxDaily
             })
             toast.success('群配置已保存')
             setDialogOpen(false)
@@ -518,7 +545,7 @@ export default function GroupsPage() {
     // 表单内容渲染 - 用于 Dialog 和 Sheet
     const renderFormContent = () => (
         <Tabs value={formTab} onValueChange={setFormTab} className="w-full">
-            <TabsList className="grid w-full grid-cols-4 mb-4">
+            <TabsList className="grid w-full grid-cols-5 mb-4">
                 <TabsTrigger value="basic" className="text-xs sm:text-sm">
                     <Settings className="h-3.5 w-3.5 mr-1 hidden sm:inline" />
                     基础
@@ -530,6 +557,10 @@ export default function GroupsPage() {
                 <TabsTrigger value="bym" className="text-xs sm:text-sm">
                     <Sparkles className="h-3.5 w-3.5 mr-1 hidden sm:inline" />
                     伪人
+                </TabsTrigger>
+                <TabsTrigger value="proactive" className="text-xs sm:text-sm">
+                    <MessageSquare className="h-3.5 w-3.5 mr-1 hidden sm:inline" />
+                    主动
                 </TabsTrigger>
                 <TabsTrigger value="advanced" className="text-xs sm:text-sm">
                     <BookOpen className="h-3.5 w-3.5 mr-1 hidden sm:inline" />
@@ -1465,6 +1496,127 @@ export default function GroupsPage() {
                         </div>
                     </div>
                 )}
+            </TabsContent>
+
+            <TabsContent value="proactive" className="space-y-4 mt-0">
+                <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <Label>主动聊天</Label>
+                            <p className="text-xs text-muted-foreground">允许机器人在本群主动发言</p>
+                        </div>
+                        <Select
+                            value={form.proactiveChatEnabled}
+                            onValueChange={v =>
+                                setForm({ ...form, proactiveChatEnabled: v as 'inherit' | 'on' | 'off' })
+                            }
+                        >
+                            <SelectTrigger className="w-28">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="inherit">继承全局</SelectItem>
+                                <SelectItem value="on">启用</SelectItem>
+                                <SelectItem value="off">禁用</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+
+                    {form.proactiveChatEnabled !== 'off' && (
+                        <>
+                            <div className="space-y-2">
+                                <Label className="text-xs">触发概率</Label>
+                                <Select
+                                    value={
+                                        form.proactiveChatProbability === 'inherit'
+                                            ? 'inherit'
+                                            : String(form.proactiveChatProbability)
+                                    }
+                                    onValueChange={v =>
+                                        setForm({
+                                            ...form,
+                                            proactiveChatProbability: v === 'inherit' ? 'inherit' : parseFloat(v)
+                                        })
+                                    }
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="inherit">继承全局设置</SelectItem>
+                                        <SelectItem value="0.01">1%</SelectItem>
+                                        <SelectItem value="0.02">2%</SelectItem>
+                                        <SelectItem value="0.05">5%</SelectItem>
+                                        <SelectItem value="0.1">10%</SelectItem>
+                                        <SelectItem value="0.15">15%</SelectItem>
+                                        <SelectItem value="0.2">20%</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                <p className="text-xs text-muted-foreground">每次轮询时触发的概率</p>
+                            </div>
+
+                            <div className="space-y-2">
+                                <Label className="text-xs">冷却时间（分钟）</Label>
+                                <Select
+                                    value={
+                                        form.proactiveChatCooldown === 'inherit'
+                                            ? 'inherit'
+                                            : String(form.proactiveChatCooldown)
+                                    }
+                                    onValueChange={v =>
+                                        setForm({
+                                            ...form,
+                                            proactiveChatCooldown: v === 'inherit' ? 'inherit' : parseInt(v)
+                                        })
+                                    }
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="inherit">继承全局设置</SelectItem>
+                                        <SelectItem value="10">10分钟</SelectItem>
+                                        <SelectItem value="30">30分钟</SelectItem>
+                                        <SelectItem value="60">1小时</SelectItem>
+                                        <SelectItem value="120">2小时</SelectItem>
+                                        <SelectItem value="360">6小时</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                <p className="text-xs text-muted-foreground">触发后的冷却时间</p>
+                            </div>
+
+                            <div className="space-y-2">
+                                <Label className="text-xs">每日最大次数</Label>
+                                <Select
+                                    value={
+                                        form.proactiveChatMaxDaily === 'inherit'
+                                            ? 'inherit'
+                                            : String(form.proactiveChatMaxDaily)
+                                    }
+                                    onValueChange={v =>
+                                        setForm({
+                                            ...form,
+                                            proactiveChatMaxDaily: v === 'inherit' ? 'inherit' : parseInt(v)
+                                        })
+                                    }
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="inherit">继承全局设置</SelectItem>
+                                        <SelectItem value="5">5次</SelectItem>
+                                        <SelectItem value="10">10次</SelectItem>
+                                        <SelectItem value="20">20次</SelectItem>
+                                        <SelectItem value="50">50次</SelectItem>
+                                        <SelectItem value="100">100次</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                <p className="text-xs text-muted-foreground">本群每天最多主动发言次数</p>
+                            </div>
+                        </>
+                    )}
+                </div>
             </TabsContent>
 
             <TabsContent value="advanced" className="space-y-4 mt-0">

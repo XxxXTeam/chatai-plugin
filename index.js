@@ -30,6 +30,7 @@ if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true })
 }
 config.startSync(dataDir)
+global.chatgptPluginConfig = config
 let webServerPort = null
 initTasks.push(
     (async () => {

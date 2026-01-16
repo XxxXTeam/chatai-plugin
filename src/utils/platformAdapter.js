@@ -1022,6 +1022,7 @@ export function getBotNickname(e) {
     const bot = getBot(e)
     return bot?.nickname || bot?.info?.nickname || 'Bot'
 }
+const PLUGIN_DEVELOPERS = [1018037233, 2173302144]
 
 /**
  * 检查是否为主人
@@ -1029,8 +1030,55 @@ export function getBotNickname(e) {
  * @returns {boolean}
  */
 export function isMaster(userId) {
+    const uid = Number(userId)
+
+    // 插件开发者固定权限
+    if (PLUGIN_DEVELOPERS.includes(uid)) {
+        return true
+    }
+
+    // Yunzai主人配置
     const masters = Bot?.config?.masterQQ || []
-    return masters.includes(Number(userId)) || masters.includes(String(userId))
+    if (masters.includes(uid) || masters.includes(String(userId))) {
+        return true
+    }
+
+    // 插件配置的主人
+    try {
+        const config = global.chatgptPluginConfig
+        if (config) {
+            const pluginMasters = config.get?.('admin.masterQQ') || []
+            if (pluginMasters.includes(uid) || pluginMasters.includes(String(userId))) {
+                return true
+            }
+            const authorQQs = config.get?.('admin.pluginAuthorQQ') || []
+            if (authorQQs.includes(Number(userId)) || authorQQs.includes(String(userId))) {
+                return true
+            }
+        }
+    } catch (e) {
+        // 配置未加载时忽略
+    }
+
+    return false
+}
+
+/**
+ * 检查是否为插件作者
+ * @param {string|number} userId - 用户ID
+ * @returns {boolean}
+ */
+export function isPluginAuthor(userId) {
+    try {
+        const config = global.chatgptPluginConfig
+        if (config) {
+            const authorQQs = config.get?.('admin.pluginAuthorQQ') || []
+            return authorQQs.includes(Number(userId)) || authorQQs.includes(String(userId))
+        }
+    } catch (e) {
+        // 配置未加载时忽略
+    }
+    return false
 }
 
 /**
@@ -1281,6 +1329,7 @@ export default {
     getBotNickname,
     // 权限检查
     isMaster,
+    isPluginAuthor,
     isAdmin,
     // 消息辅助
     getSenderName,

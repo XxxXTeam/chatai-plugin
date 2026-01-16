@@ -115,6 +115,10 @@ interface GroupConfig {
     presets: Preset[]
     channels: Channel[]
     knowledgeBases?: { id: string; name: string }[]
+    proactiveChatEnabled?: boolean
+    proactiveChatProbability?: number
+    proactiveChatCooldown?: number
+    proactiveChatMaxDaily?: number
 }
 
 export default function GroupAdminPage() {
@@ -175,7 +179,12 @@ export default function GroupAdminPage() {
         pokeEnabled: 'inherit' as 'inherit' | 'on' | 'off',
         pokeBack: false,
         // 知识库
-        knowledgeIds: [] as string[]
+        knowledgeIds: [] as string[],
+        // 主动聊天
+        proactiveChatEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+        proactiveChatProbability: 'inherit' as 'inherit' | number,
+        proactiveChatCooldown: 'inherit' as 'inherit' | number,
+        proactiveChatMaxDaily: 'inherit' as 'inherit' | number
     })
 
     const [knowledgeBases, setKnowledgeBases] = useState<{ id: string; name: string }[]>([])
@@ -383,7 +392,18 @@ export default function GroupAdminPage() {
                     goodbyePrompt: c.goodbyePrompt || '',
                     pokeEnabled: c.pokeEnabled === undefined ? 'inherit' : c.pokeEnabled === true ? 'on' : 'off',
                     pokeBack: c.pokeBack || false,
-                    knowledgeIds: c.knowledgeIds || []
+                    knowledgeIds: c.knowledgeIds || [],
+                    // 主动聊天
+                    proactiveChatEnabled:
+                        c.proactiveChatEnabled === undefined
+                            ? 'inherit'
+                            : c.proactiveChatEnabled === true
+                              ? 'on'
+                              : 'off',
+                    proactiveChatProbability:
+                        c.proactiveChatProbability === undefined ? 'inherit' : c.proactiveChatProbability,
+                    proactiveChatCooldown: c.proactiveChatCooldown === undefined ? 'inherit' : c.proactiveChatCooldown,
+                    proactiveChatMaxDaily: c.proactiveChatMaxDaily === undefined ? 'inherit' : c.proactiveChatMaxDaily
                 })
                 // 设置知识库列表
                 if (c.knowledgeBases) setKnowledgeBases(c.knowledgeBases)
@@ -453,7 +473,16 @@ export default function GroupAdminPage() {
                     goodbyePrompt: form.goodbyePrompt || undefined,
                     pokeEnabled: form.pokeEnabled === 'inherit' ? undefined : form.pokeEnabled === 'on',
                     pokeBack: form.pokeBack,
-                    knowledgeIds: form.knowledgeIds.length > 0 ? form.knowledgeIds : undefined
+                    knowledgeIds: form.knowledgeIds.length > 0 ? form.knowledgeIds : undefined,
+                    // 主动聊天
+                    proactiveChatEnabled:
+                        form.proactiveChatEnabled === 'inherit' ? undefined : form.proactiveChatEnabled === 'on',
+                    proactiveChatProbability:
+                        form.proactiveChatProbability === 'inherit' ? undefined : form.proactiveChatProbability,
+                    proactiveChatCooldown:
+                        form.proactiveChatCooldown === 'inherit' ? undefined : form.proactiveChatCooldown,
+                    proactiveChatMaxDaily:
+                        form.proactiveChatMaxDaily === 'inherit' ? undefined : form.proactiveChatMaxDaily
                 })
             })
             if (!res.ok) {
@@ -577,6 +606,10 @@ export default function GroupAdminPage() {
                                 <TabsTrigger value="bym">
                                     <Sparkles className="h-4 w-4 mr-1 hidden sm:inline" />
                                     伪人
+                                </TabsTrigger>
+                                <TabsTrigger value="proactive">
+                                    <MessageSquare className="h-4 w-4 mr-1 hidden sm:inline" />
+                                    主动
                                 </TabsTrigger>
                                 <TabsTrigger value="advanced">
                                     <BookOpen className="h-4 w-4 mr-1 hidden sm:inline" />
@@ -1346,6 +1379,133 @@ export default function GroupAdminPage() {
                                             </div>
                                         </div>
                                     )}
+                                </TabsContent>
+
+                                {/* 主动聊天 */}
+                                <TabsContent value="proactive" className="space-y-4 mt-0">
+                                    <div className="space-y-4">
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <Label>主动聊天</Label>
+                                                <p className="text-xs text-muted-foreground">
+                                                    允许机器人在本群主动发言
+                                                </p>
+                                            </div>
+                                            <Select
+                                                value={form.proactiveChatEnabled}
+                                                onValueChange={v =>
+                                                    setForm({
+                                                        ...form,
+                                                        proactiveChatEnabled: v as 'inherit' | 'on' | 'off'
+                                                    })
+                                                }
+                                            >
+                                                <SelectTrigger className="w-28">
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="inherit">继承全局</SelectItem>
+                                                    <SelectItem value="on">启用</SelectItem>
+                                                    <SelectItem value="off">禁用</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+
+                                        {form.proactiveChatEnabled !== 'off' && (
+                                            <>
+                                                <div className="space-y-2">
+                                                    <Label className="text-xs">触发概率</Label>
+                                                    <Select
+                                                        value={
+                                                            form.proactiveChatProbability === 'inherit'
+                                                                ? 'inherit'
+                                                                : String(form.proactiveChatProbability)
+                                                        }
+                                                        onValueChange={v =>
+                                                            setForm({
+                                                                ...form,
+                                                                proactiveChatProbability:
+                                                                    v === 'inherit' ? 'inherit' : parseFloat(v)
+                                                            })
+                                                        }
+                                                    >
+                                                        <SelectTrigger>
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="inherit">继承全局设置</SelectItem>
+                                                            <SelectItem value="0.01">1%</SelectItem>
+                                                            <SelectItem value="0.02">2%</SelectItem>
+                                                            <SelectItem value="0.05">5%</SelectItem>
+                                                            <SelectItem value="0.1">10%</SelectItem>
+                                                            <SelectItem value="0.15">15%</SelectItem>
+                                                            <SelectItem value="0.2">20%</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+
+                                                <div className="space-y-2">
+                                                    <Label className="text-xs">冷却时间（分钟）</Label>
+                                                    <Select
+                                                        value={
+                                                            form.proactiveChatCooldown === 'inherit'
+                                                                ? 'inherit'
+                                                                : String(form.proactiveChatCooldown)
+                                                        }
+                                                        onValueChange={v =>
+                                                            setForm({
+                                                                ...form,
+                                                                proactiveChatCooldown:
+                                                                    v === 'inherit' ? 'inherit' : parseInt(v)
+                                                            })
+                                                        }
+                                                    >
+                                                        <SelectTrigger>
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="inherit">继承全局设置</SelectItem>
+                                                            <SelectItem value="10">10分钟</SelectItem>
+                                                            <SelectItem value="30">30分钟</SelectItem>
+                                                            <SelectItem value="60">1小时</SelectItem>
+                                                            <SelectItem value="120">2小时</SelectItem>
+                                                            <SelectItem value="360">6小时</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+
+                                                <div className="space-y-2">
+                                                    <Label className="text-xs">每日最大次数</Label>
+                                                    <Select
+                                                        value={
+                                                            form.proactiveChatMaxDaily === 'inherit'
+                                                                ? 'inherit'
+                                                                : String(form.proactiveChatMaxDaily)
+                                                        }
+                                                        onValueChange={v =>
+                                                            setForm({
+                                                                ...form,
+                                                                proactiveChatMaxDaily:
+                                                                    v === 'inherit' ? 'inherit' : parseInt(v)
+                                                            })
+                                                        }
+                                                    >
+                                                        <SelectTrigger>
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="inherit">继承全局设置</SelectItem>
+                                                            <SelectItem value="5">5次</SelectItem>
+                                                            <SelectItem value="10">10次</SelectItem>
+                                                            <SelectItem value="20">20次</SelectItem>
+                                                            <SelectItem value="50">50次</SelectItem>
+                                                            <SelectItem value="100">100次</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
                                 </TabsContent>
 
                                 {/* 高级设置 */}

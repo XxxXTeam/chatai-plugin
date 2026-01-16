@@ -112,6 +112,9 @@ export class ChannelManager {
                 customHeaders: channelConfig.customHeaders || {},
                 headersTemplate: channelConfig.headersTemplate || '',
                 requestBodyTemplate: channelConfig.requestBodyTemplate || '',
+                // 自定义路径配置
+                chatPath: channelConfig.chatPath || '',
+                modelsPath: channelConfig.modelsPath || '',
                 // 多APIKey支持
                 apiKeys: this.normalizeApiKeys(channelConfig.apiKeys || []),
                 strategy: channelConfig.strategy || KeyStrategy.ROUND_ROBIN,
@@ -208,6 +211,8 @@ export class ChannelManager {
             customHeaders: channelData.customHeaders || {},
             headersTemplate: channelData.headersTemplate || '',
             requestBodyTemplate: channelData.requestBodyTemplate || '',
+            chatPath: channelData.chatPath || '',
+            modelsPath: channelData.modelsPath || '',
             overrides: {
                 temperature: channelData.overrides?.temperature, // 温度 0-2
                 maxTokens: channelData.overrides?.maxTokens, // 最大输出token
@@ -305,7 +310,9 @@ export class ChannelManager {
             'overrides',
             'endpoints',
             'auth',
-            'imageConfig' // 新增图片处理配置字段
+            'imageConfig',
+            'chatPath', // 自定义对话路径
+            'modelsPath' // 自定义模型列表路径
         ]
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
@@ -1495,9 +1502,23 @@ export class ChannelManager {
                 requestBodyTemplate: ch.requestBodyTemplate,
                 overrides: ch.overrides,
                 imageConfig: ch.imageConfig,
+                // 自定义路径配置
+                chatPath: ch.chatPath,
+                modelsPath: ch.modelsPath,
+                endpoints: ch.endpoints,
+                // 认证方式
+                auth: ch.auth,
+                // 高级配置
+                timeout: ch.timeout,
+                retry: ch.retry,
+                quota: ch.quota,
+                weight: ch.weight,
+                // 状态
                 status: ch.status,
                 lastHealthCheck: ch.lastHealthCheck,
-                testedAt: ch.testedAt
+                testedAt: ch.testedAt,
+                errorCount: ch.errorCount,
+                lastErrorTime: ch.lastErrorTime
             }))
 
         config.set('channels', channelsArray)

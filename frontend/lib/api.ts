@@ -40,7 +40,14 @@ export const configApi = {
     updateContext: <T extends object>(data: T) => api.put('/api/config/context', data as Record<string, unknown>),
     // 登录链接配置
     getLinks: () => api.get('/api/config/links'),
-    updateLinks: (data: { loginLinks?: string[]; publicUrl?: string }) => api.put('/api/config/links', data)
+    updateLinks: (data: { loginLinks?: string[]; publicUrl?: string }) => api.put('/api/config/links', data),
+    // 主动聊天配置
+    getProactiveChat: () => api.get('/api/config/proactive-chat'),
+    updateProactiveChat: <T extends object>(data: T) =>
+        api.put('/api/config/proactive-chat', data as Record<string, unknown>),
+    // 管理员配置
+    getAdmin: () => api.get('/api/config/admin'),
+    updateAdmin: <T extends object>(data: T) => api.put('/api/config/admin', data as Record<string, unknown>)
 }
 export const channelsApi = {
     list: (withStats = false) => api.get(`/api/channels/list?withStats=${withStats}`),

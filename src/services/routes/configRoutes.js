@@ -211,4 +211,46 @@ router.put('/links', async (req, res) => {
     }
 })
 
+// GET /config/proactive-chat - 获取主动聊天配置
+router.get('/proactive-chat', (req, res) => {
+    try {
+        res.json(ChaiteResponse.ok(config.get('proactiveChat') || {}))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// PUT /config/proactive-chat - 更新主动聊天配置
+router.put('/proactive-chat', async (req, res) => {
+    try {
+        const current = config.get('proactiveChat') || {}
+        config.set('proactiveChat', { ...current, ...req.body })
+        chatLogger.debug('[ConfigRoutes] 主动聊天配置已保存')
+        res.json(ChaiteResponse.ok({ success: true }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// GET /config/admin - 获取管理员配置
+router.get('/admin', (req, res) => {
+    try {
+        res.json(ChaiteResponse.ok(config.get('admin') || {}))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// PUT /config/admin - 更新管理员配置
+router.put('/admin', async (req, res) => {
+    try {
+        const current = config.get('admin') || {}
+        config.set('admin', { ...current, ...req.body })
+        chatLogger.debug('[ConfigRoutes] 管理员配置已保存')
+        res.json(ChaiteResponse.ok({ success: true }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
 export default router

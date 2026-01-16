@@ -386,16 +386,18 @@ router.get('/system/monitor', async (req, res) => {
         const totalMem = os.totalmem()
         const freeMem = os.freemem()
 
-        // 计算 RPM（最近 1 分钟请求数）
-        const oneMinuteAgo = Date.now() - 60 * 1000
-        const fiveMinutesAgo = Date.now() - 5 * 60 * 1000
-        const recentRecords = await usageStats.getRecent(500, {})
+        // 使用实时RPM统计
+        const rpmStats = statsService.getRealTimeRpm()
+        const rpm = rpmStats.rpm
+        const rpm5 = rpmStats.rpm5
 
-        const lastMinuteRequests = recentRecords.filter(r => r.timestamp >= oneMinuteAgo)
-        const lastFiveMinutesRequests = recentRecords.filter(r => r.timestamp >= fiveMinutesAgo)
-
-        const rpm = lastMinuteRequests.length
-        const rpm5 = Math.round(lastFiveMinutesRequests.length / 5)
+        // 获取最近记录用于成功率和延迟计算
+        const now = Date.now()
+        const oneMinuteAgo = now - 60 * 1000
+        const recentRecords = await usageStats.getRecent(200, {})
+        const lastMinuteRequests = recentRecords.filter(r => r.timestamp && r.timestamp >= oneMinuteAgo)
+        const fiveMinutesAgo = now - 5 * 60 * 1000
+        const lastFiveMinutesRequests = recentRecords.filter(r => r.timestamp && r.timestamp >= fiveMinutesAgo)
 
         // 计算成功率
         const successCount = lastMinuteRequests.filter(r => r.success).length

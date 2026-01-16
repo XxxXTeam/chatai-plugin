@@ -139,6 +139,19 @@ router.post('/test', async (req, res) => {
 
     const testMessage = '说一声你好'
 
+    // 获取渠道的完整配置（与实际对话一致）
+    let customHeaders = {}
+    let headersTemplate = ''
+    let requestBodyTemplate = ''
+    if (id) {
+        const channel = channelManager.get(id)
+        if (channel) {
+            customHeaders = channel.customHeaders || {}
+            headersTemplate = channel.headersTemplate || ''
+            requestBodyTemplate = channel.requestBodyTemplate || ''
+        }
+    }
+
     try {
         if (adapterType === 'openai') {
             const { OpenAIClient } = await import('../../core/adapters/index.js')
@@ -146,6 +159,9 @@ router.post('/test', async (req, res) => {
                 apiKey: apiKey || config.get('openai.apiKey'),
                 baseUrl: baseUrl || config.get('openai.baseUrl'),
                 chatPath: chatPath, // 自定义对话路径
+                customHeaders, // 自定义请求头
+                headersTemplate, // 请求头模板
+                requestBodyTemplate, // 请求体模板
                 features: ['chat'],
                 tools: []
             })

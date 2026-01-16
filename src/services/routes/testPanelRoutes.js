@@ -101,6 +101,9 @@ router.post('/batch-test', async (req, res) => {
                 apiKey,
                 baseUrl: channel.baseUrl,
                 chatPath: channel.chatPath, // 自定义对话路径
+                customHeaders: channel.customHeaders || {},
+                headersTemplate: channel.headersTemplate || '',
+                requestBodyTemplate: channel.requestBodyTemplate || '',
                 features: ['chat'],
                 tools: []
             })

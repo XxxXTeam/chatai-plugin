@@ -6,8 +6,13 @@ import { chatLogger } from '../../core/utils/logger.js'
 import { segment } from '../../utils/messageParser.js'
 import { icqqGroup, icqqFriend } from './helpers.js'
 import crypto from 'crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const logger = chatLogger
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 // 任务存储 Map: taskId -> TaskInfo
 const scheduledTasks = new Map()
@@ -18,8 +23,34 @@ const taskTimers = new Map()
 // 扫描定时器
 let scanInterval = null
 
+// 主动聊天定时器
+let proactiveChatInterval = null
+
 // 是否已初始化
 let initialized = false
+
+// 主动聊天统计: groupId -> { lastTrigger: timestamp, dailyCount: number, date: string }
+const proactiveChatStats = new Map()
+
+// 获取群消息的函数（懒加载）
+let _getRecentGroupMessages = null
+let _getGroupMessageCount = null
+
+async function loadGroupMessageFunctions() {
+    if (!_getRecentGroupMessages) {
+        try {
+            const { getRecentGroupMessages, getGroupMessageCount } = await import('../../../apps/GroupEvents.js')
+            _getRecentGroupMessages = getRecentGroupMessages
+            _getGroupMessageCount = getGroupMessageCount
+        } catch (e) {
+            logger.debug('[ProactiveChat] 加载GroupEvents失败:', e.message)
+        }
+    }
+    return { getRecentGroupMessages: _getRecentGroupMessages, getGroupMessageCount: _getGroupMessageCount }
+}
+
+// 持久化文件路径
+const TASKS_FILE = path.join(__dirname, '../../../data/scheduled_tasks.json')
 
 /**
  * 任务数据结构
@@ -49,10 +80,303 @@ let initialized = false
  */
 
 /**
+ * 保存任务到文件
+ */
+async function saveTasks() {
+    try {
+        const tasksData = Array.from(scheduledTasks.values()).map(task => ({
+            ...task,
+            // 不保存回调函数
+            action: {
+                ...task.action,
+                callback: undefined
+            }
+        }))
+        const dir = path.dirname(TASKS_FILE)
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true })
+        }
+        fs.writeFileSync(TASKS_FILE, JSON.stringify(tasksData, null, 2), 'utf-8')
+        logger.debug(`[ScheduleTools] 已保存 ${tasksData.length} 个任务`)
+    } catch (err) {
+        logger.warn('[ScheduleTools] 保存任务失败:', err.message)
+    }
+}
+
+/**
+ * 从文件加载任务
+ */
+async function loadTasks() {
+    try {
+        if (!fs.existsSync(TASKS_FILE)) {
+            logger.debug('[ScheduleTools] 任务文件不存在，跳过加载')
+            return
+        }
+        const data = fs.readFileSync(TASKS_FILE, 'utf-8')
+        const tasksData = JSON.parse(data)
+        const now = Date.now()
+        let loadedCount = 0
+        let expiredCount = 0
+
+        for (const task of tasksData) {
+            // 跳过已过期的任务
+            if (task.expireAt > 0 && now >= task.expireAt) {
+                expiredCount++
+                continue
+            }
+            // 跳过已达到最大执行次数的任务
+            if (task.maxExecutions > 0 && task.executedCount >= task.maxExecutions) {
+                expiredCount++
+                continue
+            }
+            scheduledTasks.set(task.id, task)
+            loadedCount++
+        }
+
+        logger.info(`[ScheduleTools] 已加载 ${loadedCount} 个任务，跳过 ${expiredCount} 个过期任务`)
+    } catch (err) {
+        logger.warn('[ScheduleTools] 加载任务失败:', err.message)
+    }
+}
+
+/**
+ * 获取主动聊天配置
+ */
+function getProactiveChatConfig() {
+    try {
+        const config = global.chatgptPluginConfig
+        if (config) {
+            return config.get?.('proactiveChat') || {}
+        }
+    } catch (e) {}
+    return {}
+}
+
+/**
+ * 检查是否在凌晨时段
+ */
+function isNightTime() {
+    const config = getProactiveChatConfig()
+    const hour = new Date().getHours()
+    const start = config.nightHoursStart ?? 0
+    const end = config.nightHoursEnd ?? 6
+    return hour >= start && hour < end
+}
+
+/**
+ * 计算主动聊天触发概率
+ */
+function calculateProactiveChatProbability(groupId) {
+    const config = getProactiveChatConfig()
+    let probability = config.baseProbability ?? 0.05
+
+    // 凌晨降低概率
+    if (isNightTime()) {
+        probability *= config.nightProbabilityMultiplier ?? 0.2
+    }
+
+    // 检查群活跃度
+    const cache = groupMessageCache.get(groupId)
+    if (cache && cache.messages.length > 20) {
+        probability *= config.activeProbabilityMultiplier ?? 1.5
+    }
+
+    return Math.min(probability, 0.5) // 最高不超过50%
+}
+
+/**
+ * 检查群是否可以触发主动聊天
+ */
+function canTriggerProactiveChat(groupId) {
+    const config = getProactiveChatConfig()
+    if (!config.enabled) return false
+
+    // 检查白名单/黑名单
+    const enabledGroups = config.enabledGroups || []
+    const blacklistGroups = config.blacklistGroups || []
+
+    if (blacklistGroups.includes(groupId) || blacklistGroups.includes(Number(groupId))) {
+        return false
+    }
+    if (enabledGroups.length > 0 && !enabledGroups.includes(groupId) && !enabledGroups.includes(Number(groupId))) {
+        return false
+    }
+
+    // 检查冷却时间
+    const stats = proactiveChatStats.get(groupId)
+    if (stats) {
+        const cooldownMs = (config.cooldownMinutes ?? 30) * 60 * 1000
+        if (Date.now() - stats.lastTrigger < cooldownMs) {
+            return false
+        }
+
+        // 检查每日限制
+        const today = new Date().toISOString().split('T')[0]
+        if (stats.date === today && stats.dailyCount >= (config.maxDailyMessages ?? 20)) {
+            return false
+        }
+    }
+
+    return true
+}
+
+/**
+ * 检查群消息数量是否足够触发
+ */
+async function hasEnoughMessages(groupId) {
+    const config = getProactiveChatConfig()
+    const { getGroupMessageCount } = await loadGroupMessageFunctions()
+    if (!getGroupMessageCount) return false
+
+    const count = getGroupMessageCount(groupId)
+    return count >= (config.minMessagesBeforeTrigger ?? 10)
+}
+
+/**
+ * 执行主动聊天
+ */
+async function executeProactiveChat(groupId) {
+    const config = getProactiveChatConfig()
+    const { getRecentGroupMessages } = await loadGroupMessageFunctions()
+    if (!getRecentGroupMessages) {
+        logger.debug('[ProactiveChat] 无法获取群消息函数')
+        return
+    }
+
+    // 触发时获取消息
+    const contextCount = config.contextMessageCount ?? 20
+    const recentMessages = getRecentGroupMessages(groupId, contextCount)
+
+    if (!recentMessages || recentMessages.length === 0) {
+        logger.debug(`[ProactiveChat] 群${groupId} 无消息可用`)
+        return
+    }
+
+    try {
+        // 构建上下文
+        const contextText = recentMessages.map(m => `${m.nickname || m.userId}: ${m.content}`).join('\n')
+
+        // 调用AI生成回复
+        const { chatService } = await import('../../services/llm/ChatService.js')
+        const systemPrompt = config.systemPrompt || '你是群里的一员，根据最近的聊天内容自然地参与讨论。'
+        const prompt = `最近的群聊记录:\n${contextText}\n\n请根据上述聊天内容，自然地发言或发起一个有趣的话题。`
+
+        const result = await chatService.sendMessage({
+            userId: 'proactive_chat',
+            groupId: groupId,
+            message: prompt,
+            mode: 'chat',
+            options: {
+                systemPrompt,
+                model: config.model || undefined,
+                maxTokens: config.maxTokens ?? 150,
+                temperature: config.temperature ?? 0.9
+            }
+        })
+
+        // 提取回复文本
+        let responseText = ''
+        if (result.response && Array.isArray(result.response)) {
+            responseText = result.response
+                .filter(c => c.type === 'text')
+                .map(c => c.text)
+                .join('\n')
+        }
+
+        if (!responseText || responseText.trim() === '') {
+            logger.debug(`[ProactiveChat] 群${groupId} AI回复为空，跳过`)
+            return
+        }
+
+        // 发送消息
+        const bot = getBot()
+        if (bot) {
+            await sendToGroup(bot, groupId, responseText)
+            logger.info(`[ProactiveChat] 群${groupId} 主动发言成功`)
+
+            // 更新统计
+            const today = new Date().toISOString().split('T')[0]
+            const stats = proactiveChatStats.get(groupId) || { lastTrigger: 0, dailyCount: 0, date: today }
+            if (stats.date !== today) {
+                stats.dailyCount = 0
+                stats.date = today
+            }
+            stats.lastTrigger = Date.now()
+            stats.dailyCount++
+            proactiveChatStats.set(groupId, stats)
+        }
+    } catch (err) {
+        logger.error(`[ProactiveChat] 群${groupId} 执行失败:`, err.message)
+    }
+}
+
+/**
+ * 主动聊天轮询
+ */
+async function proactiveChatPoll() {
+    const config = getProactiveChatConfig()
+    if (!config.enabled) return
+
+    // 获取有消息的群列表
+    const { getRecentGroupMessages } = await loadGroupMessageFunctions()
+    if (!getRecentGroupMessages) {
+        logger.debug('[ProactiveChat] 无法获取群消息函数')
+        return
+    }
+
+    // 从BotPickGroup获取活跃群列表
+    const activeGroups = await getActiveGroups()
+
+    for (const groupId of activeGroups) {
+        // 检查是否有足够消息
+        if (!(await hasEnoughMessages(groupId))) continue
+        if (!canTriggerProactiveChat(groupId)) continue
+
+        // 计算概率并随机触发
+        const probability = calculateProactiveChatProbability(groupId)
+        if (Math.random() < probability) {
+            logger.info(`[ProactiveChat] 群${groupId} 触发主动聊天 (概率: ${(probability * 100).toFixed(1)}%)`)
+            await executeProactiveChat(groupId)
+        }
+    }
+}
+
+/**
+ * 获取活跃群列表
+ */
+async function getActiveGroups() {
+    const groups = []
+    try {
+        const bot = getBot()
+        if (!bot) return groups
+
+        // 尝试获取群列表
+        if (bot.gl && bot.gl instanceof Map) {
+            for (const [groupId] of bot.gl) {
+                groups.push(String(groupId))
+            }
+        } else if (bot.getGroupList) {
+            const list = await bot.getGroupList()
+            if (Array.isArray(list)) {
+                for (const g of list) {
+                    groups.push(String(g.group_id || g.id))
+                }
+            }
+        }
+    } catch (e) {
+        logger.debug('[ProactiveChat] 获取群列表失败:', e.message)
+    }
+    return groups
+}
+
+/**
  * 初始化定时任务调度器
  */
-function initScheduler() {
+async function initScheduler() {
     if (initialized) return
+
+    // 加载持久化的任务
+    await loadTasks()
 
     // 每分钟扫描一次待执行的任务
     scanInterval = setInterval(() => {
@@ -67,6 +391,27 @@ function initScheduler() {
             logger.warn('[ScheduleTools] 首次扫描失败:', err.message)
         })
     }, 5000)
+
+    // 主动聊天轮询
+    const startProactiveChatPoll = () => {
+        const config = getProactiveChatConfig()
+        const intervalMs = (config.pollInterval ?? 5) * 60 * 1000
+
+        if (proactiveChatInterval) {
+            clearInterval(proactiveChatInterval)
+        }
+
+        proactiveChatInterval = setInterval(() => {
+            proactiveChatPoll().catch(err => {
+                logger.warn('[ProactiveChat] 轮询失败:', err.message)
+            })
+        }, intervalMs)
+
+        logger.info(`[ProactiveChat] 主动聊天轮询已启动，间隔: ${config.pollInterval ?? 5}分钟`)
+    }
+
+    // 延迟启动主动聊天轮询
+    setTimeout(startProactiveChatPoll, 10000)
 
     initialized = true
     logger.info('[ScheduleTools] 定时任务调度器已启动')
@@ -107,12 +452,14 @@ async function scanAndExecuteTasks() {
     logger.debug(`[ScheduleTools] 发现 ${tasksToExecute.length} 个待执行任务`)
 
     // 并发执行任务
+    let tasksChanged = false
     await Promise.allSettled(
         tasksToExecute.map(async task => {
             try {
                 await executeTask(task)
                 task.executedCount++
                 task.lastRunAt = now
+                tasksChanged = true
 
                 // 计算下次执行时间
                 if (task.type === 'interval') {
@@ -129,6 +476,11 @@ async function scanAndExecuteTasks() {
             }
         })
     )
+
+    // 保存任务状态
+    if (tasksChanged) {
+        await saveTasks()
+    }
 }
 
 /**
@@ -937,6 +1289,9 @@ export const scheduleTools = [
 
             scheduledTasks.set(taskId, task)
 
+            // 保存任务到文件
+            await saveTasks()
+
             logger.info(`[ScheduleTools] 创建任务: ${taskId} (${name}) by ${creatorId} in group ${groupId}`)
 
             // 生成操作描述
@@ -1119,6 +1474,7 @@ export const scheduleTools = [
             }
 
             scheduledTasks.delete(taskToDelete.id)
+            await saveTasks()
             logger.info(`[ScheduleTools] 删除任务: ${taskToDelete.id} (${taskToDelete.name}) by ${userId}`)
 
             return {
@@ -1267,6 +1623,7 @@ export const scheduleTools = [
                 return { success: true, message: '没有需要修改的内容' }
             }
 
+            await saveTasks()
             logger.info(`[ScheduleTools] 修改任务: ${task.id} - ${changes.join(', ')}`)
 
             return {
@@ -1447,4 +1804,15 @@ export const scheduleTools = [
     }
 ]
 
-export { scheduledTasks, initScheduler, scanAndExecuteTasks, parseInterval, parseDuration }
+export {
+    scheduledTasks,
+    initScheduler,
+    scanAndExecuteTasks,
+    parseInterval,
+    parseDuration,
+    saveTasks,
+    loadTasks,
+    proactiveChatStats,
+    proactiveChatPoll,
+    getProactiveChatConfig
+}
