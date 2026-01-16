@@ -32,6 +32,85 @@ let initialized = false
 // 主动聊天统计: groupId -> { lastTrigger: timestamp, dailyCount: number, date: string }
 const proactiveChatStats = new Map()
 
+// 群组设置缓存: groupId -> { settings, timestamp }
+const groupSettingsCache = new Map()
+const GROUP_SETTINGS_CACHE_TTL = 60 * 1000 // 缓存1分钟
+
+// ScopeManager懒加载
+let _scopeManager = null
+async function getScopeManager() {
+    if (!_scopeManager) {
+        try {
+            const { databaseService } = await import('../../services/storage/DatabaseService.js')
+            const { getScopeManager: getSM } = await import('../../services/scope/ScopeManager.js')
+            await databaseService.init()
+            _scopeManager = getSM(databaseService)
+            await _scopeManager.init()
+        } catch (e) {
+            logger.debug('[ProactiveChat] 加载ScopeManager失败:', e.message)
+        }
+    }
+    return _scopeManager
+}
+
+/**
+ * 获取群组主动聊天设置（带缓存）
+ * @param {string} groupId
+ * @returns {Promise<Object>} 群组设置
+ */
+async function getGroupProactiveChatSettings(groupId) {
+    const now = Date.now()
+    const cached = groupSettingsCache.get(groupId)
+    if (cached && now - cached.timestamp < GROUP_SETTINGS_CACHE_TTL) {
+        return cached.settings
+    }
+
+    try {
+        const scopeManager = await getScopeManager()
+        if (!scopeManager) return {}
+
+        const groupSettings = await scopeManager.getGroupSettings(groupId)
+        const settings = groupSettings?.settings || {}
+        groupSettingsCache.set(groupId, { settings, timestamp: now })
+        return settings
+    } catch (e) {
+        logger.debug(`[ProactiveChat] 获取群${groupId}设置失败:`, e.message)
+        return {}
+    }
+}
+
+/**
+ * 获取群组的合并配置（群组设置覆盖全局配置）
+ * @param {string} groupId
+ * @returns {Promise<Object>} 合并后的配置
+ */
+async function getMergedProactiveChatConfig(groupId) {
+    const globalConfig = getProactiveChatConfig()
+    const groupSettings = await getGroupProactiveChatSettings(groupId)
+
+    return {
+        // 全局配置作为默认值
+        ...globalConfig,
+        // 群组设置覆盖（仅当群组明确设置时）
+        enabled:
+            groupSettings.proactiveChatEnabled !== undefined
+                ? groupSettings.proactiveChatEnabled
+                : globalConfig.enabled,
+        baseProbability:
+            groupSettings.proactiveChatProbability !== undefined
+                ? groupSettings.proactiveChatProbability
+                : globalConfig.baseProbability,
+        cooldownMinutes:
+            groupSettings.proactiveChatCooldown !== undefined
+                ? groupSettings.proactiveChatCooldown
+                : globalConfig.cooldownMinutes,
+        maxDailyMessages:
+            groupSettings.proactiveChatMaxDaily !== undefined
+                ? groupSettings.proactiveChatMaxDaily
+                : globalConfig.maxDailyMessages
+    }
+}
+
 // 获取群消息的函数（懒加载）
 let _getRecentGroupMessages = null
 let _getGroupMessageCount = null
@@ -164,10 +243,11 @@ function isNightTime() {
 }
 
 /**
- * 计算主动聊天触发概率
+ * 计算主动聊天触发概率（支持群组设置覆盖全局）
  */
-function calculateProactiveChatProbability(groupId) {
-    const config = getProactiveChatConfig()
+async function calculateProactiveChatProbability(groupId) {
+    // 获取合并后的配置（群组设置优先）
+    const config = await getMergedProactiveChatConfig(groupId)
     let probability = config.baseProbability ?? 0.05
 
     // 凌晨降低概率
@@ -175,48 +255,82 @@ function calculateProactiveChatProbability(groupId) {
         probability *= config.nightProbabilityMultiplier ?? 0.2
     }
 
-    // 检查群活跃度
-    const cache = groupMessageCache.get(groupId)
-    if (cache && cache.messages.length > 20) {
-        probability *= config.activeProbabilityMultiplier ?? 1.5
+    // 检查群活跃度（通过消息数量判断）
+    try {
+        const { getGroupMessageCount } = await loadGroupMessageFunctions()
+        if (getGroupMessageCount) {
+            const count = getGroupMessageCount(groupId)
+            if (count > 20) {
+                probability *= config.activeProbabilityMultiplier ?? 1.5
+            }
+        }
+    } catch (e) {
+        // 获取消息数量失败，忽略活跃度加成
     }
 
     return Math.min(probability, 0.5) // 最高不超过50%
 }
 
 /**
- * 检查群是否可以触发主动聊天
+ * 检查群是否可以触发主动聊天（支持群组设置覆盖全局）
  */
-function canTriggerProactiveChat(groupId) {
-    const config = getProactiveChatConfig()
-    if (!config.enabled) return false
+async function canTriggerProactiveChat(groupId) {
+    // 获取合并后的配置（群组设置优先）
+    const config = await getMergedProactiveChatConfig(groupId)
+    const globalConfig = getProactiveChatConfig()
 
-    // 检查白名单/黑名单
-    const enabledGroups = config.enabledGroups || []
-    const blacklistGroups = config.blacklistGroups || []
+    // 检查是否启用（群组设置优先，否则看全局）
+    if (!config.enabled) {
+        logger.debug(
+            `[ProactiveChat] 群${groupId} 跳过: 未启用 (全局=${globalConfig.enabled}, 群组覆盖=${config.enabled})`
+        )
+        return false
+    }
+
+    // 检查白名单/黑名单（使用全局配置）
+    const enabledGroups = globalConfig.enabledGroups || []
+    const blacklistGroups = globalConfig.blacklistGroups || []
 
     if (blacklistGroups.includes(groupId) || blacklistGroups.includes(Number(groupId))) {
+        logger.debug(`[ProactiveChat] 群${groupId} 跳过: 在黑名单中`)
         return false
     }
-    if (enabledGroups.length > 0 && !enabledGroups.includes(groupId) && !enabledGroups.includes(Number(groupId))) {
+    // 如果群组有独立设置，跳过白名单检查
+    const groupSettings = await getGroupProactiveChatSettings(groupId)
+    const hasGroupOverride = groupSettings.proactiveChatEnabled !== undefined
+    if (
+        !hasGroupOverride &&
+        enabledGroups.length > 0 &&
+        !enabledGroups.includes(groupId) &&
+        !enabledGroups.includes(Number(groupId))
+    ) {
+        logger.debug(`[ProactiveChat] 群${groupId} 跳过: 不在白名单中且无群组覆盖`)
         return false
     }
 
-    // 检查冷却时间
+    // 检查冷却时间（使用合并后的配置）
     const stats = proactiveChatStats.get(groupId)
     if (stats) {
         const cooldownMs = (config.cooldownMinutes ?? 30) * 60 * 1000
-        if (Date.now() - stats.lastTrigger < cooldownMs) {
+        const elapsed = Date.now() - stats.lastTrigger
+        if (elapsed < cooldownMs) {
+            const remaining = Math.ceil((cooldownMs - elapsed) / 60000)
+            logger.debug(`[ProactiveChat] 群${groupId} 跳过: 冷却中 (剩余${remaining}分钟)`)
             return false
         }
 
-        // 检查每日限制
+        // 检查每日限制（使用合并后的配置）
         const today = new Date().toISOString().split('T')[0]
-        if (stats.date === today && stats.dailyCount >= (config.maxDailyMessages ?? 20)) {
+        const maxDaily = config.maxDailyMessages ?? 20
+        if (stats.date === today && stats.dailyCount >= maxDaily) {
+            logger.debug(`[ProactiveChat] 群${groupId} 跳过: 已达每日上限 (${stats.dailyCount}/${maxDaily})`)
             return false
         }
     }
 
+    logger.debug(
+        `[ProactiveChat] 群${groupId} 通过检查: 启用=${config.enabled}, 概率=${config.baseProbability}, 有群组覆盖=${hasGroupOverride}`
+    )
     return true
 }
 
@@ -233,33 +347,36 @@ async function hasEnoughMessages(groupId) {
 }
 
 /**
- * 执行主动聊天
+ * 执行主动聊天、
  */
 async function executeProactiveChat(groupId) {
     const config = getProactiveChatConfig()
-    const { getRecentGroupMessages } = await loadGroupMessageFunctions()
-    if (!getRecentGroupMessages) {
-        logger.debug('[ProactiveChat] 无法获取群消息函数')
-        return
-    }
 
-    // 触发时获取消息
-    const contextCount = config.contextMessageCount ?? 20
-    const recentMessages = getRecentGroupMessages(groupId, contextCount)
-
-    if (!recentMessages || recentMessages.length === 0) {
-        logger.debug(`[ProactiveChat] 群${groupId} 无消息可用`)
-        return
+    // 尝试获取最近消息作为上下文（可选）
+    let recentMessages = []
+    try {
+        const { getRecentGroupMessages } = await loadGroupMessageFunctions()
+        if (getRecentGroupMessages) {
+            const contextCount = config.contextMessageCount ?? 20
+            recentMessages = getRecentGroupMessages(groupId, contextCount) || []
+        }
+    } catch (e) {
+        logger.debug(`[ProactiveChat] 获取群${groupId}消息失败:`, e.message)
     }
 
     try {
-        // 构建上下文
-        const contextText = recentMessages.map(m => `${m.nickname || m.userId}: ${m.content}`).join('\n')
-
-        // 调用AI生成回复
+        // 构建提示词（有消息时使用上下文，无消息时发起话题）
         const { chatService } = await import('../../services/llm/ChatService.js')
-        const systemPrompt = config.systemPrompt || '你是群里的一员，根据最近的聊天内容自然地参与讨论。'
-        const prompt = `最近的群聊记录:\n${contextText}\n\n请根据上述聊天内容，自然地发言或发起一个有趣的话题。`
+        const systemPrompt = config.systemPrompt || '你是群里的一员，自然地参与讨论或发起有趣的话题。'
+
+        let prompt
+        if (recentMessages.length > 0) {
+            const contextText = recentMessages.map(m => `${m.nickname || m.userId}: ${m.content}`).join('\n')
+            prompt = `最近的群聊记录:\n${contextText}\n\n请根据上述聊天内容，自然地发言或发起一个有趣的话题。`
+        } else {
+            // 无消息时，主动发起话题
+            prompt = '群里好像有点安静，请主动发起一个有趣的话题或打个招呼，让群里热闹起来。'
+        }
 
         const result = await chatService.sendMessage({
             userId: 'proactive_chat',
@@ -311,34 +428,52 @@ async function executeProactiveChat(groupId) {
 }
 
 /**
- * 主动聊天轮询
+ * 主动聊天轮询（支持群组设置覆盖全局配置）
+ * 每隔 pollInterval 分钟扫描所有群，每个群独立判断是否触发
  */
 async function proactiveChatPoll() {
-    const config = getProactiveChatConfig()
-    if (!config.enabled) return
+    const globalConfig = getProactiveChatConfig()
+    logger.info(
+        `[ProactiveChat] === 开始轮询 === 全局开关=${globalConfig.enabled}, 轮询间隔=${globalConfig.pollInterval ?? 5}分钟`
+    )
 
-    // 获取有消息的群列表
-    const { getRecentGroupMessages } = await loadGroupMessageFunctions()
-    if (!getRecentGroupMessages) {
-        logger.debug('[ProactiveChat] 无法获取群消息函数')
+    // 获取所有Bot群列表（无论是否活跃）
+    const allGroups = await getActiveGroups()
+
+    if (allGroups.length === 0) {
+        logger.info('[ProactiveChat] 轮询结束: 无可用群列表')
         return
     }
 
-    // 从BotPickGroup获取活跃群列表
-    const activeGroups = await getActiveGroups()
+    logger.info(`[ProactiveChat] 扫描 ${allGroups.length} 个群...`)
 
-    for (const groupId of activeGroups) {
-        // 检查是否有足够消息
-        if (!(await hasEnoughMessages(groupId))) continue
-        if (!canTriggerProactiveChat(groupId)) continue
+    let passedCount = 0
+    let triggeredCount = 0
 
-        // 计算概率并随机触发
-        const probability = calculateProactiveChatProbability(groupId)
-        if (Math.random() < probability) {
-            logger.info(`[ProactiveChat] 群${groupId} 触发主动聊天 (概率: ${(probability * 100).toFixed(1)}%)`)
+    for (const groupId of allGroups) {
+        // 检查是否可以触发（群组设置覆盖全局，包含冷却和每日限制检查）
+        if (!(await canTriggerProactiveChat(groupId))) continue
+        passedCount++
+
+        // 计算概率并随机触发（群组设置覆盖全局）
+        const probability = await calculateProactiveChatProbability(groupId)
+        const roll = Math.random()
+        const triggered = roll < probability
+
+        logger.debug(
+            `[ProactiveChat] 群${groupId} 概率判断: 概率=${(probability * 100).toFixed(1)}%, 随机=${(roll * 100).toFixed(1)}%, 触发=${triggered}`
+        )
+
+        if (triggered) {
+            triggeredCount++
+            logger.info(`[ProactiveChat] 群${groupId} 触发主动聊天!`)
             await executeProactiveChat(groupId)
         }
     }
+
+    logger.info(
+        `[ProactiveChat] === 轮询结束 === 总群数=${allGroups.length}, 通过检查=${passedCount}, 触发=${triggeredCount}`
+    )
 }
 
 /**
@@ -1814,5 +1949,7 @@ export {
     loadTasks,
     proactiveChatStats,
     proactiveChatPoll,
-    getProactiveChatConfig
+    getProactiveChatConfig,
+    getMergedProactiveChatConfig,
+    getGroupProactiveChatSettings
 }
