@@ -344,6 +344,11 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                 pokeBack: settings.pokeBack || false,
                 // 知识库
                 knowledgeIds: groupSettings?.knowledgeIds || [],
+                // 主动聊天
+                proactiveChatEnabled: settings.proactiveChatEnabled,
+                proactiveChatProbability: settings.proactiveChatProbability,
+                proactiveChatCooldown: settings.proactiveChatCooldown,
+                proactiveChatMaxDaily: settings.proactiveChatMaxDaily,
                 // 辅助数据
                 presets,
                 channels,
@@ -417,6 +422,11 @@ router.put('/config', groupAdminAuth, async (req, res) => {
             summaryPushIntervalValue: body.summaryPush?.intervalValue,
             summaryPushHour: body.summaryPush?.pushHour,
             summaryPushMessageCount: body.summaryPush?.messageCount,
+            // 主动聊天
+            proactiveChatEnabled: body.proactiveChatEnabled,
+            proactiveChatProbability: body.proactiveChatProbability,
+            proactiveChatCooldown: body.proactiveChatCooldown,
+            proactiveChatMaxDaily: body.proactiveChatMaxDaily,
             // 事件处理扩展
             welcomeEnabled: body.welcomeEnabled,
             welcomeMessage: body.welcomeMessage,
