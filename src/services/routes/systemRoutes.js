@@ -379,6 +379,7 @@ router.post('/stats/tool-calls/clear', async (req, res) => {
 router.get('/system/monitor', async (req, res) => {
     try {
         const { usageStats } = await import('../stats/UsageStats.js')
+        const { statsService } = await import('../stats/StatsService.js')
         const os = await import('os')
 
         // 计算内存信息

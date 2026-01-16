@@ -81,6 +81,38 @@ const MESSAGE_CACHE_MAX = 2000
 const groupMessageIndex = new Map() // groupId -> Set<messageId>
 
 export { messageCache }
+export function getGroupRecentActivity(groupId, options = {}) {
+    groupId = String(groupId)
+    const {
+        windowMs = 60 * 60 * 1000, // 默认1小时窗口
+        maxMessages = 200
+    } = options
+
+    const messageIds = groupMessageIndex.get(groupId)
+    if (!messageIds || messageIds.size === 0) {
+        return { lastActiveAt: 0, recentCount: 0 }
+    }
+
+    const now = Date.now()
+    let lastActiveAt = 0
+    let recentCount = 0
+    let scanned = 0
+    for (const msgId of Array.from(messageIds).reverse()) {
+        scanned++
+        if (scanned > maxMessages) break
+        const msg = messageCache.get(msgId)
+        if (!msg) continue
+        const ts = msg.time
+        if (ts > lastActiveAt) lastActiveAt = ts
+        if (now - ts <= windowMs) {
+            recentCount++
+        } else {
+            continue
+        }
+    }
+
+    return { lastActiveAt, recentCount }
+}
 
 export function cacheGroupMessage(e) {
     if (!e?.message_id || !e?.group_id) return

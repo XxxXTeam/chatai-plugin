@@ -40,10 +40,12 @@ import {
     Tags,
     BookOpen,
     Library,
-    Wand2
+    Wand2,
+    Search
 } from 'lucide-react'
 import { PageHeader, PageContainer } from '@/components/layout/PageHeader'
 import { DeleteDialog } from '@/components/ui/delete-dialog'
+import { SearchInput } from '@/components/ui/search-input'
 
 interface PersonaConfig {
     name?: string
@@ -99,6 +101,7 @@ export default function PresetsPage() {
     const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
     const [deletingPreset, setDeletingPreset] = useState<Preset | null>(null)
+    const [searchQuery, setSearchQuery] = useState('')
 
     const [form, setForm] = useState({
         name: '',
@@ -167,6 +170,45 @@ export default function PresetsPage() {
         }
         loadData()
     }, [])
+
+    // 模糊搜索函数
+    const fuzzyMatch = (text: string, query: string): boolean => {
+        const lowerText = text.toLowerCase()
+        const lowerQuery = query.toLowerCase()
+        if (lowerText.includes(lowerQuery)) return true
+        // 支持拼音首字母匹配
+        let queryIndex = 0
+        for (let i = 0; i < lowerText.length && queryIndex < lowerQuery.length; i++) {
+            if (lowerText[i] === lowerQuery[queryIndex]) {
+                queryIndex++
+            }
+        }
+        return queryIndex === lowerQuery.length
+    }
+
+    // 搜索预设
+    const searchPresets = (preset: Preset, query: string): boolean => {
+        if (!query.trim()) return true
+        const searchTexts = [
+            preset.name,
+            preset.description || '',
+            preset.systemPrompt || '',
+            preset.persona?.name || '',
+            preset.persona?.personality || '',
+            preset.persona?.speakingStyle || '',
+            preset.category || '',
+            ...(preset.persona?.traits || []),
+            ...(preset.persona?.likes || []),
+            ...(preset.persona?.dislikes || [])
+        ]
+        return searchTexts.some(text => fuzzyMatch(text, query))
+    }
+
+    // 过滤后的预设列表
+    const filteredPresets = presets.filter(p => searchPresets(p, searchQuery))
+    const filteredBuiltinPresets = builtinPresets
+        .filter(p => !selectedCategory || p.category === selectedCategory)
+        .filter(p => searchPresets(p, searchQuery))
 
     const handleUseBuiltin = async (builtinId: string) => {
         try {
@@ -772,20 +814,42 @@ export default function PresetsPage() {
             />
 
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+                <div className="mb-4">
+                    <SearchInput
+                        value={searchQuery}
+                        onChange={setSearchQuery}
+                        placeholder="搜索预设名称、描述、人设、标签..."
+                        className="max-w-md"
+                    />
+                </div>
+
                 <TabsList className="grid w-full max-w-md grid-cols-2">
                     <TabsTrigger value="custom" className="flex items-center gap-2">
                         <Palette className="h-4 w-4" />
-                        我的预设 ({presets.length})
+                        我的预设 ({searchQuery ? `${filteredPresets.length}/` : ''}
+                        {presets.length})
                     </TabsTrigger>
                     <TabsTrigger value="builtin" className="flex items-center gap-2">
                         <Library className="h-4 w-4" />
-                        内置预设库 ({builtinPresets.length})
+                        内置预设库 ({searchQuery ? `${filteredBuiltinPresets.length}/` : ''}
+                        {builtinPresets.length})
                     </TabsTrigger>
                 </TabsList>
 
                 {/* 自定义预设 */}
                 <TabsContent value="custom" className="mt-4">
-                    {presets.length === 0 ? (
+                    {filteredPresets.length === 0 && searchQuery ? (
+                        <Card>
+                            <CardContent className="flex flex-col items-center justify-center py-12">
+                                <Search className="h-12 w-12 text-muted-foreground mb-4" />
+                                <p className="text-muted-foreground">未找到匹配的预设</p>
+                                <p className="text-sm text-muted-foreground mt-2">尝试其他关键词搜索</p>
+                                <Button variant="outline" className="mt-4" onClick={() => setSearchQuery('')}>
+                                    清除搜索
+                                </Button>
+                            </CardContent>
+                        </Card>
+                    ) : presets.length === 0 ? (
                         <Card>
                             <CardContent className="flex flex-col items-center justify-center py-12">
                                 <Palette className="h-12 w-12 text-muted-foreground mb-4" />
@@ -805,7 +869,7 @@ export default function PresetsPage() {
                         </Card>
                     ) : (
                         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                            {presets.map(preset => (
+                            {filteredPresets.map(preset => (
                                 <Card key={preset.id} className={preset.isDefault ? 'border-primary' : ''}>
                                     <CardHeader className="pb-3">
                                         <div className="flex items-center justify-between">
@@ -917,59 +981,53 @@ export default function PresetsPage() {
                     </div>
 
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                        {builtinPresets
-                            .filter(p => !selectedCategory || p.category === selectedCategory)
-                            .map(preset => (
-                                <Card key={preset.id} className="border-dashed">
-                                    <CardHeader className="pb-3">
-                                        <div className="flex items-center justify-between">
-                                            <CardTitle className="text-base flex items-center gap-2">
-                                                {preset.name}
-                                                <Badge variant="secondary" className="text-xs">
-                                                    内置
-                                                </Badge>
-                                            </CardTitle>
-                                        </div>
-                                        <CardDescription className="line-clamp-2">
-                                            {preset.description || '无描述'}
-                                        </CardDescription>
-                                    </CardHeader>
-                                    <CardContent className="space-y-3">
-                                        <div className="text-sm text-muted-foreground line-clamp-3 bg-muted/50 p-2 rounded">
-                                            {preset.systemPrompt?.substring(0, 120) || '无系统提示词'}
-                                            {(preset.systemPrompt?.length || 0) > 120 ? '...' : ''}
-                                        </div>
-                                        {preset.persona?.name && (
-                                            <div className="flex flex-wrap gap-1">
-                                                <Badge variant="outline" className="text-xs">
-                                                    {preset.persona.name}
-                                                </Badge>
-                                                {preset.persona.traits?.slice(0, 2).map(trait => (
-                                                    <Badge key={trait} variant="outline" className="text-xs">
-                                                        {trait}
-                                                    </Badge>
-                                                ))}
-                                            </div>
-                                        )}
-                                        {preset.category && categories[preset.category] && (
+                        {filteredBuiltinPresets.map(preset => (
+                            <Card key={preset.id} className="border-dashed">
+                                <CardHeader className="pb-3">
+                                    <div className="flex items-center justify-between">
+                                        <CardTitle className="text-base flex items-center gap-2">
+                                            {preset.name}
                                             <Badge variant="secondary" className="text-xs">
-                                                {categories[preset.category].icon} {categories[preset.category].name}
+                                                内置
                                             </Badge>
-                                        )}
-                                        <Button
-                                            className="w-full"
-                                            size="sm"
-                                            onClick={() => handleUseBuiltin(preset.id)}
-                                        >
-                                            <Wand2 className="mr-2 h-4 w-4" />
-                                            使用此预设
-                                        </Button>
-                                    </CardContent>
-                                </Card>
-                            ))}
+                                        </CardTitle>
+                                    </div>
+                                    <CardDescription className="line-clamp-2">
+                                        {preset.description || '无描述'}
+                                    </CardDescription>
+                                </CardHeader>
+                                <CardContent className="space-y-3">
+                                    <div className="text-sm text-muted-foreground line-clamp-3 bg-muted/50 p-2 rounded">
+                                        {preset.systemPrompt?.substring(0, 120) || '无系统提示词'}
+                                        {(preset.systemPrompt?.length || 0) > 120 ? '...' : ''}
+                                    </div>
+                                    {preset.persona?.name && (
+                                        <div className="flex flex-wrap gap-1">
+                                            <Badge variant="outline" className="text-xs">
+                                                {preset.persona.name}
+                                            </Badge>
+                                            {preset.persona.traits?.slice(0, 2).map(trait => (
+                                                <Badge key={trait} variant="outline" className="text-xs">
+                                                    {trait}
+                                                </Badge>
+                                            ))}
+                                        </div>
+                                    )}
+                                    {preset.category && categories[preset.category] && (
+                                        <Badge variant="secondary" className="text-xs">
+                                            {categories[preset.category].icon} {categories[preset.category].name}
+                                        </Badge>
+                                    )}
+                                    <Button className="w-full" size="sm" onClick={() => handleUseBuiltin(preset.id)}>
+                                        <Wand2 className="mr-2 h-4 w-4" />
+                                        使用此预设
+                                    </Button>
+                                </CardContent>
+                            </Card>
+                        ))}
                     </div>
 
-                    {builtinPresets.filter(p => !selectedCategory || p.category === selectedCategory).length === 0 && (
+                    {filteredBuiltinPresets.length === 0 && (
                         <Card>
                             <CardContent className="flex flex-col items-center justify-center py-12">
                                 <Library className="h-12 w-12 text-muted-foreground mb-4" />

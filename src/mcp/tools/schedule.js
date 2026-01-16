@@ -114,18 +114,25 @@ async function getMergedProactiveChatConfig(groupId) {
 // 获取群消息的函数（懒加载）
 let _getRecentGroupMessages = null
 let _getGroupMessageCount = null
+let _getGroupRecentActivity = null
 
 async function loadGroupMessageFunctions() {
-    if (!_getRecentGroupMessages) {
+    if (!_getRecentGroupMessages || !_getGroupMessageCount || !_getGroupRecentActivity) {
         try {
-            const { getRecentGroupMessages, getGroupMessageCount } = await import('../../../apps/GroupEvents.js')
+            const { getRecentGroupMessages, getGroupMessageCount, getGroupRecentActivity } =
+                await import('../../../apps/GroupEvents.js')
             _getRecentGroupMessages = getRecentGroupMessages
             _getGroupMessageCount = getGroupMessageCount
+            _getGroupRecentActivity = getGroupRecentActivity
         } catch (e) {
             logger.debug('[ProactiveChat] 加载GroupEvents失败:', e.message)
         }
     }
-    return { getRecentGroupMessages: _getRecentGroupMessages, getGroupMessageCount: _getGroupMessageCount }
+    return {
+        getRecentGroupMessages: _getRecentGroupMessages,
+        getGroupMessageCount: _getGroupMessageCount,
+        getGroupRecentActivity: _getGroupRecentActivity
+    }
 }
 
 // 持久化文件路径
@@ -257,11 +264,27 @@ async function calculateProactiveChatProbability(groupId) {
 
     // 检查群活跃度（通过消息数量判断）
     try {
-        const { getGroupMessageCount } = await loadGroupMessageFunctions()
+        const { getGroupMessageCount, getGroupRecentActivity } = await loadGroupMessageFunctions()
         if (getGroupMessageCount) {
             const count = getGroupMessageCount(groupId)
             if (count > 20) {
                 probability *= config.activeProbabilityMultiplier ?? 1.5
+            }
+        }
+        // 低活跃窗口概率下调
+        if (getGroupRecentActivity) {
+            const windowMs = (config.lowActiveWindowMinutes ?? 60) * 60 * 1000
+            const { recentCount } = getGroupRecentActivity(groupId, {
+                windowMs,
+                maxMessages: 300
+            })
+            if (recentCount < (config.lowActiveMinMessages ?? 3)) {
+                probability *= config.lowActiveProbabilityMultiplier ?? 0.2
+                logger.debug(
+                    `[ProactiveChat] 群${groupId} 低活跃下调概率: recent=${recentCount}, multiplier=${
+                        config.lowActiveProbabilityMultiplier ?? 0.2
+                    }`
+                )
             }
         }
     } catch (e) {
@@ -326,6 +349,29 @@ async function canTriggerProactiveChat(groupId) {
             logger.debug(`[ProactiveChat] 群${groupId} 跳过: 已达每日上限 (${stats.dailyCount}/${maxDaily})`)
             return false
         }
+    }
+
+    // 检查近期活跃度，避免长时间无人消息时主动触发
+    try {
+        const { getGroupRecentActivity } = await loadGroupMessageFunctions()
+        if (getGroupRecentActivity) {
+            const inactiveLimitMs = (config.inactiveMinutesLimit ?? 180) * 60 * 1000
+            const { lastActiveAt } = getGroupRecentActivity(groupId, {
+                windowMs: inactiveLimitMs,
+                maxMessages: 500
+            })
+            const inactiveDuration = Date.now() - (lastActiveAt || 0)
+            if (!lastActiveAt || inactiveDuration >= inactiveLimitMs) {
+                logger.debug(
+                    `[ProactiveChat] 群${groupId} 跳过: 长时间无活跃 (last=${lastActiveAt || '无'}, limit=${
+                        config.inactiveMinutesLimit ?? 180
+                    }min)`
+                )
+                return false
+            }
+        }
+    } catch (e) {
+        logger.debug('[ProactiveChat] 活跃度检查失败:', e.message)
     }
 
     logger.debug(

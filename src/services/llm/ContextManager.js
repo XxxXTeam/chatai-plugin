@@ -3,6 +3,7 @@ const logger = chatLogger
 import { redisClient } from '../../core/cache/RedisClient.js'
 import config from '../../../config/config.js'
 import historyManager from '../../core/utils/history.js'
+import { databaseService } from '../storage/DatabaseService.js'
 
 export class ContextManager {
     constructor() {
@@ -14,6 +15,7 @@ export class ContextManager {
         this.processingFlags = new Map() // 处理中标记
         this.groupContextCache = new Map() // 群聊上下文缓存 (groupId -> context)
         this.sessionStates = new Map() // 会话状态 (conversationId -> state)
+        this.autoSummarizeTimer = null
     }
 
     /**
@@ -24,6 +26,7 @@ export class ContextManager {
         await redisClient.init()
         this.initialized = true
         logger.debug('[ContextManager] Initialized')
+        this.startAutoSummarize()
     }
 
     /**
@@ -103,6 +106,158 @@ export class ContextManager {
      */
     releaseLock(key) {
         this._forceRelease(key)
+    }
+
+    /**
+     * 启动自动总结定时任务
+     */
+    startAutoSummarize() {
+        const cfg = config.get('context.autoSummarize') || {}
+        if (!cfg.enabled) return
+
+        const intervalMs = (cfg.intervalMinutes || 10) * 60 * 1000
+        if (this.autoSummarizeTimer) {
+            clearInterval(this.autoSummarizeTimer)
+        }
+
+        this.autoSummarizeTimer = setInterval(() => {
+            this.runAutoSummarize().catch(err => {
+                logger.debug('[ContextManager] 自动总结失败:', err.message)
+            })
+        }, intervalMs)
+
+        logger.debug(`[ContextManager] 自动总结已启动, 间隔 ${cfg.intervalMinutes || 10} 分钟`)
+    }
+
+    /**
+     * 扫描并总结长时间未活跃的长对话
+     */
+    async runAutoSummarize() {
+        const cfg = config.get('context.autoSummarize') || {}
+        if (!cfg.enabled) return
+
+        try {
+            if (!databaseService.initialized) {
+                databaseService.init()
+            }
+        } catch (e) {
+            logger.debug('[ContextManager] 初始化数据库失败，跳过自动总结:', e.message)
+            return
+        }
+
+        const maxMessagesBefore = cfg.maxMessagesBefore ?? 60
+        const minInactiveMs = (cfg.minInactiveMinutes ?? 30) * 60 * 1000
+        const windowMessages = cfg.windowMessages ?? 80
+        const now = Date.now()
+
+        const conversations = databaseService.getConversations()
+        let processed = 0
+        for (const conv of conversations) {
+            if (processed >= 20) break // 单次最多处理20个，避免阻塞
+            if ((conv.messageCount || 0) < maxMessagesBefore) continue
+
+            const updatedAt = conv.updatedAt || conv.lastMessage || 0
+            if (!updatedAt || now - updatedAt < minInactiveMs) continue
+
+            // 避免频繁总结同一会话
+            const state = this.sessionStates.get(conv.id)
+            if (state?.lastSummarizedAt && now - state.lastSummarizedAt < minInactiveMs / 2) continue
+
+            const success = await this.summarizeConversation(conv.id, {
+                windowMessages,
+                maxTokens: cfg.maxTokens ?? 400,
+                model: cfg.model || null
+            })
+
+            if (success) {
+                processed++
+                this.sessionStates.set(conv.id, {
+                    ...(state || {}),
+                    lastSummarizedAt: Date.now()
+                })
+            }
+        }
+
+        if (processed > 0) {
+            logger.debug(`[ContextManager] 自动总结完成: ${processed} 个会话`)
+        }
+    }
+
+    /**
+     * 总结指定会话并重置为短上下文
+     * @param {string} conversationId
+     * @param {Object} options
+     * @returns {Promise<boolean>}
+     */
+    async summarizeConversation(conversationId, options = {}) {
+        try {
+            const history = await historyManager.getHistory(undefined, conversationId)
+            if (!history || history.length === 0) return false
+
+            const windowMessages = options.windowMessages ?? 80
+            const slice = history.slice(-windowMessages)
+
+            const dialogText = slice
+                .map(msg => {
+                    const roleLabel = msg.role === 'assistant' ? '助手' : msg.role === 'system' ? '系统' : '用户'
+                    const text = Array.isArray(msg.content)
+                        ? msg.content
+                              .filter(c => c.type === 'text')
+                              .map(c => c.text || '')
+                              .join('')
+                        : typeof msg.content === 'string'
+                          ? msg.content
+                          : ''
+                    return `${roleLabel}: ${text}`.trim()
+                })
+                .filter(Boolean)
+                .join('\n')
+
+            if (!dialogText || dialogText.length < 50) return false
+
+            const model = options.model || config.get('llm.defaultModel')
+            const prompt = `你是对话总结助手，请用简洁的中文总结以下对话要点，并标记未解决事项。
+
+【对话记录】
+${dialogText}
+
+【输出要求】
+1. 用条目列出要点，保持简短。
+2. 如果有未解决/待办，单独列出“未解决”部分，没有则写“未解决：无”.
+3. 总结长度控制在${options.maxTokens || 400}字内。`
+
+            const { LlmService } = await import('./LlmService.js')
+            const client = await LlmService.getChatClient({ model })
+            const result = await client.sendMessage(
+                { role: 'user', content: [{ type: 'text', text: prompt }] },
+                {
+                    model,
+                    maxToken: options.maxTokens || 400,
+                    temperature: 0.2,
+                    disableHistorySave: true
+                }
+            )
+            const summaryText = result.contents?.[0]?.text?.trim()
+            if (!summaryText) return false
+
+            // 重置会话并保存总结
+            await historyManager.deleteConversation(conversationId)
+            await historyManager.saveHistory(
+                {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: `【对话已总结】\n${summaryText}` }],
+                    timestamp: Date.now(),
+                    metadata: { summarized: true }
+                },
+                conversationId
+            )
+
+            logger.debug(`[ContextManager] 会话已总结并重置: ${conversationId}`)
+            return true
+        } catch (err) {
+            logger.debug('[ContextManager] 总结会话失败:', err.message)
+            return false
+        }
     }
 
     /**
