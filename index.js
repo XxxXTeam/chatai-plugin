@@ -3,15 +3,18 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import config from './config/config.js'
 import { chatLogger, c, icons } from './src/core/utils/logger.js'
+import { telemetryService } from './src/services/telemetry/index.js'
+import { getFullVersionInfo } from './src/utils/version.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const pluginName = 'ChatAI'
-const pluginVersion = '1.0.0'
+const versionInfo = getFullVersionInfo()
+const pluginVersion = versionInfo.displayVersion
 const startTime = Date.now()
 
-chatLogger.banner(`${pluginName} v${pluginVersion}`, '正在加载...')
+chatLogger.banner(`${pluginName} ${pluginVersion}`, '正在加载...')
 const initTasks = []
 initTasks.push(
     (async () => {
@@ -39,6 +42,26 @@ initTasks.push(
         const result = await webServer.start()
         webServerPort = result?.port || config.get('webServer.port') || 3000
         return { name: 'WebServer', status: 'ok', port: webServerPort }
+    })()
+)
+initTasks.push(
+    (async () => {
+        try {
+            const result = await telemetryService.init({
+                pluginName,
+                version: pluginVersion,
+                branch: versionInfo.branch,
+                commit: versionInfo.commit
+            })
+            return {
+                name: 'Telemetry',
+                status: result.success ? 'ok' : 'warn',
+                globalStartups: result.globalStartups || 0,
+                announcements: result.announcements || []
+            }
+        } catch (err) {
+            return { name: 'Telemetry', status: 'warn', error: err.message, globalStartups: 0 }
+        }
     })()
 )
 initTasks.push(
@@ -108,10 +131,14 @@ const customCount = skillsResult?.customCount || 0
 const mcpServerCount = skillsResult?.mcpServerCount || 0
 const webResult = initResults.find(r => r?.name === 'WebServer')
 const finalWebPort = webResult?.port || webServerPort || config.get('webServer.port') || 3000
+const telemetryResult = initResults.find(r => r?.name === 'Telemetry')
+const globalStartups = telemetryResult?.globalStartups || 0
+const announcements = telemetryResult?.announcements || []
 const statsItems = [
     { label: `${icons.module} 模块`, value: `${loadStats.success} 个`, color: c.green },
     { label: `${icons.tool} 技能`, value: `${skillCount} 个`, color: c.cyan },
     { label: `${icons.web} Web服务`, value: `端口 ${finalWebPort}`, color: c.yellow },
+    { label: `🌐 插件全网累计启动`, value: `${globalStartups} 次`, color: c.magenta },
     { label: `${icons.time} 耗时`, value: `${loadTime}ms`, color: c.gray }
 ]
 if (mcpServerCount > 0) {
@@ -123,7 +150,13 @@ if (loadStats.failed > 0) {
         chatLogger.error('Plugin', `${p.name}: ${p.error}`)
     })
 }
-chatLogger.successBanner(`${pluginName} 加载完成`, statsItems)
+chatLogger.successBanner(`${pluginName} ${pluginVersion} 加载完成`, statsItems)
+if (announcements.length > 0) {
+    for (const ann of announcements) {
+        const icon = ann.type === 'warning' ? '⚠️' : ann.type === 'update' ? '🆕' : 'ℹ️'
+        chatLogger.info('公告', `${icon} ${ann.title}: ${ann.content}`)
+    }
+}
 let _skillsModule = null
 async function loadSkillsModule() {
     if (!_skillsModule) {
