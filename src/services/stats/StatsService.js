@@ -5,6 +5,7 @@
 import { databaseService } from '../storage/DatabaseService.js'
 import { toolCallStats } from './ToolCallStats.js'
 import { usageStats } from './UsageStats.js'
+import { telemetryService } from '../telemetry/index.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -310,7 +311,20 @@ class StatsService {
             logger.warn('[StatsService] 更新内存统计失败:', err.message)
         }
 
-        // 2. 记录到Redis详细统计（异步）
+        // 2. 记录到遥测服务（异步，不含敏感信息）
+        try {
+            telemetryService.recordUsage({
+                model: model || 'unknown',
+                inputTokens,
+                outputTokens,
+                success,
+                duration
+            })
+        } catch (err) {
+            logger.debug('[StatsService] 遥测记录失败:', err.message)
+        }
+
+        // 3. 记录到Redis详细统计（异步）
         let recordId = null
         try {
             recordId = await usageStats.record({
