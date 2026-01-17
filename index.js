@@ -67,6 +67,17 @@ initTasks.push(
 initTasks.push(
     (async () => {
         try {
+            const res = await fetch('https://v1.openel.top/')
+            const data = await res.json()
+            return { name: 'Hitokoto', status: 'ok', data }
+        } catch (err) {
+            return { name: 'Hitokoto', status: 'warn', error: err.message }
+        }
+    })()
+)
+initTasks.push(
+    (async () => {
+        try {
             const { createSkillsAgent, SkillsAgent } = await import('./src/services/agent/index.js')
             const defaultAgent = await createSkillsAgent({})
             const skillCount = defaultAgent.skills?.size || 0
@@ -134,12 +145,22 @@ const finalWebPort = webResult?.port || webServerPort || config.get('webServer.p
 const telemetryResult = initResults.find(r => r?.name === 'Telemetry')
 const globalStartups = telemetryResult?.globalStartups || 0
 const announcements = telemetryResult?.announcements || []
+const hitokotoResult = initResults.find(r => r?.name === 'Hitokoto')
 const statsItems = [
     { label: `${icons.module} 模块`, value: `${loadStats.success} 个`, color: c.green },
     { label: `${icons.tool} 技能`, value: `${skillCount} 个`, color: c.cyan },
     { label: `${icons.web} Web服务`, value: `端口 ${finalWebPort}`, color: c.yellow },
     { label: `🌐 插件全网累计启动`, value: `${globalStartups} 次`, color: c.magenta },
-    { label: `${icons.time} 耗时`, value: `${loadTime}ms`, color: c.gray }
+    { label: `${icons.time} 耗时`, value: `${loadTime}ms`, color: c.gray },
+    ...(hitokotoResult?.status === 'ok' && hitokotoResult.data
+        ? [
+              {
+                  label: `${hitokotoResult.data.hitokoto || hitokotoResult.data.content || hitokotoResult.data.text}`,
+                  value: hitokotoResult.data.from || hitokotoResult.data.source || '',
+                  color: c.white
+              }
+          ]
+        : [])
 ]
 if (mcpServerCount > 0) {
     statsItems.splice(2, 0, { label: `🔌 MCP服务器`, value: `${mcpServerCount} 个`, color: c.magenta })
