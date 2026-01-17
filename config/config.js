@@ -134,29 +134,71 @@ class Config {
                 // 轮询配置
                 pollInterval: 5, // 轮询间隔（分钟）
                 minMessagesBeforeTrigger: 10, // 触发前最少需要的群消息数
+                maxConcurrentTriggers: 3, // 单次轮询最大触发群数
+
                 // 概率配置
                 baseProbability: 0.05, // 基础触发概率 (5%)
-                nightProbabilityMultiplier: 0.2, // 凌晨(0-6点)概率乘数
-                activeProbabilityMultiplier: 1.5, // 群活跃时概率乘数
-                lowActiveProbabilityMultiplier: 0.2, // 群低活跃时概率乘数
-                // 时间配置
-                nightHoursStart: 0, // 凌晨开始时间
-                nightHoursEnd: 6, // 凌晨结束时间
+                maxProbability: 0.5, // 最大触发概率上限 (50%)
+
+                // 时段配置 - 静默时段不主动发言
+                quietHoursStart: 0, // 静默开始时间（0-23，支持跨天如23表示23:00开始）
+                quietHoursEnd: 6, // 静默结束时间（0-23）
+                allowQuietHoursOverride: false, // 是否允许在静默时段触发
+
+                // 时段概率乘数 - 不同时段的触发概率调整
+                timePeriodMultipliers: {
+                    late_night: 0.1, // 深夜 (0:00-5:00) 大幅降低
+                    early_morning: 0.3, // 清晨 (5:00-7:00) 降低
+                    morning: 1.0, // 上午 (7:00-12:00) 正常
+                    afternoon: 1.2, // 下午 (12:00-18:00) 略高
+                    evening: 1.5, // 傍晚 (18:00-21:00) 最活跃
+                    night: 0.8 // 晚上 (21:00-24:00) 略低
+                },
+
+                // 星期乘数 - 不同日期的触发概率调整
+                useWeekdayMultiplier: true, // 是否启用星期乘数
+                weekdayMultipliers: {
+                    0: 1.3, // 周日
+                    1: 0.8, // 周一（工作日开始，较低）
+                    2: 0.9, // 周二
+                    3: 1.0, // 周三
+                    4: 1.0, // 周四
+                    5: 1.2, // 周五
+                    6: 1.4 // 周六（周末，较高）
+                },
+
+                // 活跃度检测配置
+                highFreqMessagesPerMinute: 2, // 判定为高频对话的消息速率（条/分钟）
+                activeMessagesIn30Min: 15, // 30分钟内达到此消息数判定为活跃
+                lowMessagesIn30Min: 3, // 30分钟内低于此消息数判定为低活跃
+                deadMinutesWithoutMessage: 120, // 超过此分钟数无消息判定为死群
                 inactiveMinutesLimit: 180, // 最近活跃距离现在超过该分钟则不主动触发
-                lowActiveWindowMinutes: 60, // 低活跃检测窗口
-                lowActiveMinMessages: 3, // 窗口内消息低于此阈值判定为低活跃
+
+                // 活跃度级别乘数
+                activityMultipliers: {
+                    dead: 0, // 死群不触发
+                    low: 0.3, // 低活跃降低概率
+                    normal: 1.0, // 正常
+                    active: 1.5, // 活跃提高概率
+                    high_freq: 0.1 // 高频对话中大幅降低（避免打扰）
+                },
+
                 // AI配置
                 model: '', // 使用的模型（留空使用默认）
                 systemPrompt:
                     '你是群里的一员，正在查看群聊记录。根据最近的聊天内容，自然地参与讨论或发起新话题。保持简短、口语化、有趣。',
                 maxTokens: 150,
                 temperature: 0.9,
+
                 // 群配置
                 enabledGroups: [], // 启用的群列表，空表示所有群
                 blacklistGroups: [], // 黑名单群
+
                 // 防刷屏
                 cooldownMinutes: 30, // 同一群触发后的冷却时间（分钟）
                 maxDailyMessages: 20, // 每日每群最大主动消息数
+                maxHourlyMessages: 5, // 每小时每群最大主动消息数
+
                 // 记忆和上下文
                 useGroupContext: true, // 使用群聊上下文
                 contextMessageCount: 20 // 携带的上下文消息数
