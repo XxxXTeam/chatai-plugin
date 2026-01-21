@@ -412,18 +412,35 @@ export class Chat extends plugin {
     }
 
     /**
-     * 清理@机器人
+     * 清理@机器人（保留其他@）
+     * 支持多种格式：CQ码、纯文本@botId、@机器人昵称
      */
     cleanAtBot(text) {
         if (!text) return ''
         const e = this.e
         const botId = e.self_id || e.bot?.uin || Bot?.uin
         if (!botId) return text
-        return text
-            .replace(new RegExp(`\\s*@${botId}\\s*`, 'g'), ' ')
-            .replace(new RegExp(`\\s*@${e.bot?.nickname || ''}\\s*`, 'gi'), ' ')
-            .replace(/\s+/g, ' ')
-            .trim()
+
+        let result = text
+
+        // 1. 清理CQ码格式: [CQ:at,qq=botId] 或 [CQ:at,qq=botId,text=xxx]
+        result = result.replace(new RegExp(`\\[CQ:at,qq=${botId}[^\\]]*\\]`, 'gi'), '')
+
+        // 2. 清理纯文本@botId格式（注意保留后续内容）
+        // 使用前瞻确保不会误删其他@：只删除@botId后面跟着空白或结尾的情况
+        result = result.replace(new RegExp(`@${botId}(?=\\s|$|@)`, 'g'), '')
+
+        // 3. 清理@机器人昵称（如果有）
+        const botNickname = e.bot?.nickname
+        if (botNickname) {
+            const escapedNickname = botNickname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+            result = result.replace(new RegExp(`@${escapedNickname}(?=\\s|$|@)`, 'gi'), '')
+        }
+
+        // 4. 清理多余空格，保留单个空格分隔
+        result = result.replace(/\s+/g, ' ').trim()
+
+        return result
     }
 
     /**

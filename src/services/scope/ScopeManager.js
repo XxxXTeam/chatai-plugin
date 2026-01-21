@@ -52,6 +52,17 @@ export class ScopeManager {
           updatedAt INTEGER
         )
       `)
+            this.db.db.exec(`
+        CREATE TABLE IF NOT EXISTS group_usage_limits (
+          groupId TEXT NOT NULL,
+          date TEXT NOT NULL,
+          usageCount INTEGER DEFAULT 0,
+          userUsage TEXT,
+          createdAt INTEGER,
+          updatedAt INTEGER,
+          PRIMARY KEY (groupId, date)
+        )
+      `)
             try {
                 this.db.db.exec(`ALTER TABLE group_scopes ADD COLUMN knowledgeIds TEXT`)
             } catch (e) {
@@ -62,8 +73,6 @@ export class ScopeManager {
             } catch (e) {
                 /* 列已存在 */
             }
-
-            // 创建群用户组合作用域表（支持群内用户独立人格）
             this.db.db.exec(`
         CREATE TABLE IF NOT EXISTS group_user_scopes (
           groupId TEXT NOT NULL,
@@ -1526,6 +1535,271 @@ export class ScopeManager {
             },
             hasCustomPrompt: !!groupSettings.systemPrompt,
             knowledgeCount: (groupSettings.knowledgeIds || []).length
+        }
+    }
+
+    /**
+     * 获取群组独立渠道配置
+     * @param {string} groupId 群组ID
+     * @returns {Promise<Object|null>} 渠道配置
+     */
+    async getGroupChannelConfig(groupId) {
+        await this.init()
+        const groupSettings = await this.getGroupSettings(groupId)
+        if (!groupSettings) return null
+
+        const settings = groupSettings.settings || {}
+        return {
+            // 群独立渠道配置
+            channelId: settings.independentChannelId || null,
+            baseUrl: settings.independentBaseUrl || null,
+            apiKey: settings.independentApiKey || null,
+            adapterType: settings.independentAdapterType || 'openai',
+            forbidGlobal: settings.forbidGlobalModel === true,
+            modelId: settings.chatModel || settings.modelId || null
+        }
+    }
+
+    /**
+     * 设置群组独立渠道配置
+     * @param {string} groupId 群组ID
+     * @param {Object} channelConfig 渠道配置
+     * @returns {Promise<boolean>}
+     */
+    async setGroupChannelConfig(groupId, channelConfig) {
+        const existingSettings = (await this.getGroupSettings(groupId)) || {}
+        const existingInner = existingSettings.settings || {}
+
+        const updateData = {
+            ...existingInner,
+            independentChannelId: channelConfig.channelId,
+            independentBaseUrl: channelConfig.baseUrl,
+            independentApiKey: channelConfig.apiKey,
+            independentAdapterType: channelConfig.adapterType || 'openai',
+            forbidGlobalModel: channelConfig.forbidGlobal === true
+        }
+
+        if (channelConfig.modelId) {
+            updateData.chatModel = channelConfig.modelId
+        }
+
+        return await this.setGroupSettings(groupId, updateData)
+    }
+
+    /**
+     * 检查群组是否禁用全局模型
+     * @param {string} groupId 群组ID
+     * @returns {Promise<boolean>}
+     */
+    async isGlobalModelForbidden(groupId) {
+        if (!groupId) return false
+        const channelConfig = await this.getGroupChannelConfig(groupId)
+        return channelConfig?.forbidGlobal === true
+    }
+
+    /**
+     * 检查群组是否有独立渠道配置
+     * @param {string} groupId 群组ID
+     * @returns {Promise<boolean>}
+     */
+    async hasIndependentChannel(groupId) {
+        if (!groupId) return false
+        const channelConfig = await this.getGroupChannelConfig(groupId)
+        return !!(channelConfig?.baseUrl && channelConfig?.apiKey)
+    }
+
+    // ==================== 群组使用次数限制 ====================
+
+    /**
+     * 获取群组使用限制配置
+     * @param {string} groupId 群组ID
+     * @returns {Promise<Object>}
+     */
+    async getGroupUsageLimitConfig(groupId) {
+        await this.init()
+        const groupSettings = await this.getGroupSettings(groupId)
+        const settings = groupSettings?.settings || {}
+
+        return {
+            // 每日群总限制 (0=无限制)
+            dailyGroupLimit: settings.dailyGroupLimit || 0,
+            // 每日用户限制 (0=无限制)
+            dailyUserLimit: settings.dailyUserLimit || 0,
+            // 限制提示消息
+            limitMessage: settings.usageLimitMessage || '今日使用次数已达上限，请明天再试'
+        }
+    }
+
+    /**
+     * 设置群组使用限制配置
+     * @param {string} groupId 群组ID
+     * @param {Object} limitConfig 限制配置
+     * @returns {Promise<boolean>}
+     */
+    async setGroupUsageLimitConfig(groupId, limitConfig) {
+        const existingSettings = (await this.getGroupSettings(groupId)) || {}
+        const existingInner = existingSettings.settings || {}
+
+        return await this.setGroupSettings(groupId, {
+            ...existingInner,
+            dailyGroupLimit: limitConfig.dailyGroupLimit || 0,
+            dailyUserLimit: limitConfig.dailyUserLimit || 0,
+            usageLimitMessage: limitConfig.limitMessage
+        })
+    }
+
+    /**
+     * 获取当日使用统计
+     * @param {string} groupId 群组ID
+     * @returns {Promise<Object>}
+     */
+    async getDailyUsage(groupId) {
+        await this.init()
+        const today = new Date().toISOString().split('T')[0]
+
+        try {
+            const stmt = this.db.db.prepare('SELECT * FROM group_usage_limits WHERE groupId = ? AND date = ?')
+            const row = stmt.get(groupId, today)
+
+            if (!row) {
+                return { groupId, date: today, usageCount: 0, userUsage: {} }
+            }
+
+            return {
+                groupId: row.groupId,
+                date: row.date,
+                usageCount: row.usageCount || 0,
+                userUsage: row.userUsage ? JSON.parse(row.userUsage) : {}
+            }
+        } catch (error) {
+            logger.error(`[ScopeManager] 获取使用统计失败 (${groupId}):`, error)
+            return { groupId, date: today, usageCount: 0, userUsage: {} }
+        }
+    }
+
+    /**
+     * 增加使用次数
+     * @param {string} groupId 群组ID
+     * @param {string} userId 用户ID
+     * @returns {Promise<{success: boolean, groupCount: number, userCount: number}>}
+     */
+    async incrementUsage(groupId, userId) {
+        await this.init()
+        const today = new Date().toISOString().split('T')[0]
+        const now = Date.now()
+
+        try {
+            const current = await this.getDailyUsage(groupId)
+            const newGroupCount = current.usageCount + 1
+            const userUsage = current.userUsage
+            const newUserCount = (userUsage[userId] || 0) + 1
+            userUsage[userId] = newUserCount
+
+            const stmt = this.db.db.prepare(`
+                INSERT OR REPLACE INTO group_usage_limits 
+                (groupId, date, usageCount, userUsage, createdAt, updatedAt)
+                VALUES (?, ?, ?, ?, COALESCE((SELECT createdAt FROM group_usage_limits WHERE groupId = ? AND date = ?), ?), ?)
+            `)
+            stmt.run(groupId, today, newGroupCount, JSON.stringify(userUsage), groupId, today, now, now)
+
+            return { success: true, groupCount: newGroupCount, userCount: newUserCount }
+        } catch (error) {
+            logger.error(`[ScopeManager] 增加使用次数失败 (${groupId}):`, error)
+            return { success: false, groupCount: 0, userCount: 0 }
+        }
+    }
+
+    /**
+     * 检查是否超过使用限制
+     * @param {string} groupId 群组ID
+     * @param {string} userId 用户ID
+     * @returns {Promise<{allowed: boolean, reason?: string, groupRemaining?: number, userRemaining?: number}>}
+     */
+    async checkUsageLimit(groupId, userId) {
+        if (!groupId) return { allowed: true }
+
+        const limitConfig = await this.getGroupUsageLimitConfig(groupId)
+        const { dailyGroupLimit, dailyUserLimit, limitMessage } = limitConfig
+
+        // 无限制
+        if (dailyGroupLimit <= 0 && dailyUserLimit <= 0) {
+            return { allowed: true }
+        }
+
+        const usage = await this.getDailyUsage(groupId)
+        const groupCount = usage.usageCount
+        const userCount = usage.userUsage[userId] || 0
+
+        // 检查群总限制
+        if (dailyGroupLimit > 0 && groupCount >= dailyGroupLimit) {
+            return {
+                allowed: false,
+                reason: limitMessage || `本群今日使用次数已达上限(${dailyGroupLimit}次)`,
+                groupRemaining: 0,
+                userRemaining: dailyUserLimit > 0 ? Math.max(0, dailyUserLimit - userCount) : -1
+            }
+        }
+
+        // 检查用户限制
+        if (dailyUserLimit > 0 && userCount >= dailyUserLimit) {
+            return {
+                allowed: false,
+                reason: limitMessage || `您今日在本群的使用次数已达上限(${dailyUserLimit}次)`,
+                groupRemaining: dailyGroupLimit > 0 ? Math.max(0, dailyGroupLimit - groupCount) : -1,
+                userRemaining: 0
+            }
+        }
+
+        return {
+            allowed: true,
+            groupRemaining: dailyGroupLimit > 0 ? dailyGroupLimit - groupCount : -1,
+            userRemaining: dailyUserLimit > 0 ? dailyUserLimit - userCount : -1
+        }
+    }
+
+    /**
+     * 重置群组使用统计
+     * @param {string} groupId 群组ID
+     * @param {string} date 日期 (可选，默认今日)
+     * @returns {Promise<boolean>}
+     */
+    async resetUsage(groupId, date = null) {
+        await this.init()
+        const targetDate = date || new Date().toISOString().split('T')[0]
+
+        try {
+            const stmt = this.db.db.prepare('DELETE FROM group_usage_limits WHERE groupId = ? AND date = ?')
+            stmt.run(groupId, targetDate)
+            logger.info(`[ScopeManager] 已重置群 ${groupId} 在 ${targetDate} 的使用统计`)
+            return true
+        } catch (error) {
+            logger.error(`[ScopeManager] 重置使用统计失败:`, error)
+            return false
+        }
+    }
+
+    /**
+     * 获取群组使用统计摘要
+     * @param {string} groupId 群组ID
+     * @returns {Promise<Object>}
+     */
+    async getUsageSummary(groupId) {
+        const limitConfig = await this.getGroupUsageLimitConfig(groupId)
+        const usage = await this.getDailyUsage(groupId)
+
+        const userUsageList = Object.entries(usage.userUsage)
+            .map(([userId, count]) => ({ userId, count }))
+            .sort((a, b) => b.count - a.count)
+
+        return {
+            date: usage.date,
+            groupCount: usage.usageCount,
+            dailyGroupLimit: limitConfig.dailyGroupLimit,
+            dailyUserLimit: limitConfig.dailyUserLimit,
+            groupRemaining:
+                limitConfig.dailyGroupLimit > 0 ? Math.max(0, limitConfig.dailyGroupLimit - usage.usageCount) : -1,
+            topUsers: userUsageList.slice(0, 10),
+            totalUsers: userUsageList.length
         }
     }
 }

@@ -952,14 +952,16 @@ export function getQQBotAvatarUrl(e, userId = null) {
 /**
  * 检查事件处理概率
  * 根据配置的概率决定是否触发事件处理
- * @param {string} eventType - 事件类型 (poke, recall, ban, memberIncrease 等)
+ * 支持群组独立概率配置，开启后默认100%
+ * @param {string} eventType - 事件类型 (welcome, goodbye, poke, recall, ban, luckyKing, honor, essence, admin 等)
  * @param {string} [groupId] - 群组ID，用于检查群组特定配置
- * @returns {Promise<{shouldTrigger: boolean, probability: number, randomValue: number}>}
+ * @returns {Promise<{shouldTrigger: boolean, probability: number, randomValue: number, reason: string}>}
  */
 export async function checkEventProbability(eventType, groupId = null) {
     try {
         const config = (await import('../../config/config.js')).default
         const eventConfig = config.get('events') || {}
+        const featuresConfig = config.get('features') || {}
 
         // 检查事件处理是否启用
         if (eventConfig.enabled === false) {
@@ -972,9 +974,58 @@ export async function checkEventProbability(eventType, groupId = null) {
             return { shouldTrigger: false, probability: 0, randomValue: 0, reason: 'event type disabled' }
         }
 
-        // 获取概率配置：优先使用事件特定概率，否则使用全局概率
-        const eventProbabilities = eventConfig.eventProbabilities || {}
-        let probability = eventProbabilities[eventType] ?? eventConfig.probability ?? 1.0
+        // 获取全局概率配置（从 features.{eventType}.probability 或 events.eventProbabilities）
+        const getGlobalProbability = () => {
+            // 优先从 features 配置中读取
+            const featureConfig = featuresConfig[eventType]
+            if (featureConfig?.probability !== undefined) {
+                return featureConfig.probability
+            }
+            // 回退到 events.eventProbabilities
+            const eventProbabilities = eventConfig.eventProbabilities || {}
+            return eventProbabilities[eventType] ?? eventConfig.probability ?? 1.0
+        }
+
+        let probability = 1.0 // 默认100%
+
+        // 尝试获取群组特定的概率配置
+        if (groupId) {
+            try {
+                const { getScopeManager } = await import('../services/scope/ScopeManager.js')
+                const { databaseService } = await import('../services/storage/DatabaseService.js')
+                if (!databaseService.initialized) {
+                    await databaseService.init()
+                }
+                const scopeManager = getScopeManager(databaseService)
+                await scopeManager.init()
+
+                const groupSettings = await scopeManager.getGroupSettings(String(groupId))
+                const settings = groupSettings?.settings || {}
+
+                // 根据事件类型获取群组概率配置
+                const probabilityKey = `${eventType}Probability`
+                const groupProbability = settings[probabilityKey]
+
+                if (groupProbability !== undefined && groupProbability !== 'inherit') {
+                    probability = typeof groupProbability === 'number' ? groupProbability : 1.0
+                    if (global.logger) {
+                        global.logger.debug(`[EventProbability] 使用群组 ${groupId} 配置: ${eventType}=${probability}`)
+                    }
+                } else {
+                    // 使用全局概率配置
+                    probability = getGlobalProbability()
+                }
+            } catch (err) {
+                if (global.logger) {
+                    global.logger.debug(`[EventProbability] 获取群组配置失败: ${err.message}，使用全局配置`)
+                }
+                // 回退到全局配置
+                probability = getGlobalProbability()
+            }
+        } else {
+            // 无群组ID，使用全局配置
+            probability = getGlobalProbability()
+        }
 
         // 处理百分比格式
         if (probability > 1) {
@@ -998,7 +1049,7 @@ export async function checkEventProbability(eventType, groupId = null) {
 
         if (global.logger) {
             global.logger.debug(
-                `[EventProbability] ${eventType}: random=${randomValue.toFixed(4)}, probability=${probability}, trigger=${shouldTrigger}`
+                `[EventProbability] ${eventType}${groupId ? `(群${groupId})` : ''}: random=${randomValue.toFixed(4)}, probability=${probability}, trigger=${shouldTrigger}`
             )
         }
 

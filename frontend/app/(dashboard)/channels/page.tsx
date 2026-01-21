@@ -98,7 +98,7 @@ const PRESET_CATEGORIES: ChannelPresetCategory[] = [
     {
         name: '内置免费API',
         icon: '🆓',
-        presets: ['free-glm', 'free-xiaomi', 'free-gemini', 'free-grok', 'free-api', 'free-gemini2', 'free-opencode']
+        presets: ['free-glm', 'free-xiaomi', 'free-gemini', 'free-grok', 'free-api', 'free-gemini2', 'free-opencode', 'free-gemini3']
     },
     { name: '国际厂商', icon: '🌍', presets: ['openai', 'gemini', 'claude', 'grok', 'mistral', 'cohere', 'groq'] },
     {
@@ -178,6 +178,14 @@ const CHANNEL_PRESETS: Record<string, ChannelPreset> = {
         apiKey: 'sk-MiJEspoHHYVl6Wx63pCzRSGU596rJRao70PgAYNkBNfnNQTAqHomGaQejmWeLwAz',
         models: 'glm-4.7-free, grok-code, big-pickle, gpt-5-nano',
         description: '免费opencode对话接口'
+    },
+    'free-gemini3': {
+        name: '免费Gemini',
+        adapterType: 'openai',
+        baseUrl: 'https://www.coffeecatai.com/api/proxy/openai',
+        apiKey: 'sk-MiJEspoHHYVl6Wx63pCzRSGU596rJRao70PgAYNkBNfnNQTAqHomGaQejmWeLwAz',
+        models: 'x-ai/grok-4.1-fast,google/gemini-2.5-flash-lite',
+        description: '免费grok和Gemini2.5'
     },
     // ========== 国际厂商 ==========
     openai: {
@@ -876,6 +884,11 @@ export default function ChannelsPage() {
                                                             'free-gemini': {
                                                                 type: 'info',
                                                                 message: '免费Gemini - 需手动获取API Key',
+                                                                url: preset.authUrl
+                                                            },
+                                                            'free-gemini3': {
+                                                                type: 'info',
+                                                                message: '免费Gemini',
                                                                 url: preset.authUrl
                                                             },
                                                             'free-grok': {
