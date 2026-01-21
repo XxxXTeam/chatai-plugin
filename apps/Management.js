@@ -101,6 +101,34 @@ export class AIManagement extends plugin {
                     reg: `^${cmdPrefix}设置(模型|model)\\s*(.+)$`,
                     fnc: 'setModel',
                     permission: 'master'
+                },
+                {
+                    reg: `^${cmdPrefix}群渠道设置$`,
+                    fnc: 'viewGroupChannel'
+                },
+                {
+                    reg: `^${cmdPrefix}群渠道(开启|关闭)独立$`,
+                    fnc: 'toggleGroupIndependent'
+                },
+                {
+                    reg: `^${cmdPrefix}群(禁用|启用)全局$`,
+                    fnc: 'toggleForbidGlobal'
+                },
+                {
+                    reg: `^${cmdPrefix}群限制设置$`,
+                    fnc: 'viewUsageLimit'
+                },
+                {
+                    reg: `^${cmdPrefix}群限制\\s+(\\d+)\\s*(\\d*)$`,
+                    fnc: 'setUsageLimit'
+                },
+                {
+                    reg: `^${cmdPrefix}群使用统计$`,
+                    fnc: 'viewUsageStats'
+                },
+                {
+                    reg: `^${cmdPrefix}群重置统计$`,
+                    fnc: 'resetUsageStats'
                 }
             ]
         })
@@ -727,6 +755,15 @@ ${cmdPrefix}群绘图开启/关闭 - 本群绘图功能
 ${cmdPrefix}设置群人格 <内容> - 设置群人格
 ${cmdPrefix}清除群人格 - 清除群人格设定
 
+━━━━ 群渠道与限制 ━━━━
+${cmdPrefix}群渠道设置 - 查看群独立渠道配置
+${cmdPrefix}群禁用全局 - 禁用全局渠道
+${cmdPrefix}群启用全局 - 启用全局渠道
+${cmdPrefix}群限制设置 - 查看使用限制
+${cmdPrefix}群限制 100 20 - 设置群/用户限制
+${cmdPrefix}群使用统计 - 查看今日使用情况
+${cmdPrefix}群重置统计 - 重置今日统计
+
 ━━━━ 主人命令 ━━━━
 ${cmdPrefix}管理面板 - Web管理面板(临时)
 ${cmdPrefix}管理面板 永久 - Web管理面板(永久)
@@ -870,6 +907,310 @@ ${cmdPrefix}结束全部对话 - 清除所有对话
 
         config.set('llm.defaultModel', model)
         await this.reply(`默认模型已设置为: ${model}`, true)
+        return true
+    }
+
+    // ==================== 群独立渠道配置 ====================
+
+    /**
+     * 查看群渠道设置
+     */
+    async viewGroupChannel() {
+        if (!this.e.isGroup) {
+            await this.reply('此命令仅可在群聊中使用', true)
+            return true
+        }
+
+        const isAdmin = await this.isGroupAdmin()
+        if (!isAdmin) {
+            await this.reply('此命令需要群管理员或群主权限', true)
+            return true
+        }
+
+        try {
+            const groupId = String(this.e.group_id)
+            if (!databaseService.initialized) {
+                await databaseService.init()
+            }
+            const scopeManager = getScopeManager(databaseService)
+            await scopeManager.init()
+
+            const channelConfig = await scopeManager.getGroupChannelConfig(groupId)
+            const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
+
+            let msg = `📡 本群渠道配置\n━━━━━━━━━━━━\n`
+
+            if (channelConfig?.baseUrl && channelConfig?.apiKey) {
+                msg += `🔗 独立渠道: ✅ 已配置\n`
+                msg += `📍 接口地址: ${channelConfig.baseUrl.substring(0, 30)}...\n`
+                msg += `🔑 API Key: ${channelConfig.apiKey.substring(0, 8)}****\n`
+                msg += `🤖 适配器: ${channelConfig.adapterType || 'openai'}\n`
+            } else {
+                msg += `🔗 独立渠道: ❌ 未配置\n`
+            }
+
+            msg += `\n🚫 禁用全局: ${channelConfig?.forbidGlobal ? '✅ 是' : '❌ 否'}\n`
+
+            if (channelConfig?.modelId) {
+                msg += `🎯 独立模型: ${channelConfig.modelId}\n`
+            }
+
+            msg += `\n━━━━━━━━━━━━\n`
+            msg += `💡 渠道优先级: 群独立 > 全局\n`
+            msg += `📌 禁用全局后需配置独立渠道才能使用\n`
+            msg += `\n管理命令:\n`
+            msg += `${cmdPrefix}群禁用全局 - 禁用全局渠道\n`
+            msg += `${cmdPrefix}群启用全局 - 启用全局渠道`
+
+            await this.reply(msg, true)
+        } catch (err) {
+            await this.reply(`获取渠道配置失败: ${err.message}`, true)
+        }
+        return true
+    }
+
+    /**
+     * 切换禁用全局模型
+     */
+    async toggleForbidGlobal() {
+        if (!this.e.isGroup) {
+            await this.reply('此命令仅可在群聊中使用', true)
+            return true
+        }
+
+        const isAdmin = await this.isGroupAdmin()
+        if (!isAdmin) {
+            await this.reply('此命令需要群管理员或群主权限', true)
+            return true
+        }
+
+        try {
+            const groupId = String(this.e.group_id)
+            const action = this.e.msg.includes('禁用')
+
+            if (!databaseService.initialized) {
+                await databaseService.init()
+            }
+            const scopeManager = getScopeManager(databaseService)
+            await scopeManager.init()
+
+            // 如果要禁用全局，检查是否有独立渠道
+            if (action) {
+                const hasIndependent = await scopeManager.hasIndependentChannel(groupId)
+                if (!hasIndependent) {
+                    await this.reply(
+                        '⚠️ 警告：本群尚未配置独立渠道，禁用全局后将无法使用AI功能！\n请先在管理面板配置群独立渠道',
+                        true
+                    )
+                }
+            }
+
+            const channelConfig = (await scopeManager.getGroupChannelConfig(groupId)) || {}
+            await scopeManager.setGroupChannelConfig(groupId, {
+                ...channelConfig,
+                forbidGlobal: action
+            })
+
+            await this.reply(`本群已${action ? '禁用' : '启用'}全局渠道`, true)
+        } catch (err) {
+            await this.reply(`设置失败: ${err.message}`, true)
+        }
+        return true
+    }
+
+    /**
+     * 切换群独立渠道模式（占位，实际配置需通过管理面板）
+     */
+    async toggleGroupIndependent() {
+        if (!this.e.isGroup) {
+            await this.reply('此命令仅可在群聊中使用', true)
+            return true
+        }
+
+        const isAdmin = await this.isGroupAdmin()
+        if (!isAdmin) {
+            await this.reply('此命令需要群管理员或群主权限', true)
+            return true
+        }
+
+        await this.reply('群独立渠道需要通过管理面板配置\n请使用 #群管理面板 获取管理链接', true)
+        return true
+    }
+
+    // ==================== 群使用限制 ====================
+
+    /**
+     * 查看群使用限制设置
+     */
+    async viewUsageLimit() {
+        if (!this.e.isGroup) {
+            await this.reply('此命令仅可在群聊中使用', true)
+            return true
+        }
+
+        const isAdmin = await this.isGroupAdmin()
+        if (!isAdmin) {
+            await this.reply('此命令需要群管理员或群主权限', true)
+            return true
+        }
+
+        try {
+            const groupId = String(this.e.group_id)
+            if (!databaseService.initialized) {
+                await databaseService.init()
+            }
+            const scopeManager = getScopeManager(databaseService)
+            await scopeManager.init()
+
+            const limitConfig = await scopeManager.getGroupUsageLimitConfig(groupId)
+            const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
+
+            let msg = `📊 本群使用限制\n━━━━━━━━━━━━\n`
+            msg += `📈 每日群总限制: ${limitConfig.dailyGroupLimit > 0 ? limitConfig.dailyGroupLimit + '次' : '无限制'}\n`
+            msg += `👤 每日用户限制: ${limitConfig.dailyUserLimit > 0 ? limitConfig.dailyUserLimit + '次' : '无限制'}\n`
+
+            if (limitConfig.limitMessage && limitConfig.limitMessage !== '今日使用次数已达上限，请明天再试') {
+                msg += `💬 限制提示: ${limitConfig.limitMessage.substring(0, 50)}...\n`
+            }
+
+            msg += `\n━━━━━━━━━━━━\n`
+            msg += `💡 设置命令:\n`
+            msg += `${cmdPrefix}群限制 100 20 - 设置群100次/用户20次\n`
+            msg += `${cmdPrefix}群限制 0 0 - 取消限制\n`
+            msg += `${cmdPrefix}群使用统计 - 查看今日使用情况\n`
+            msg += `${cmdPrefix}群重置统计 - 重置今日统计`
+
+            await this.reply(msg, true)
+        } catch (err) {
+            await this.reply(`获取限制配置失败: ${err.message}`, true)
+        }
+        return true
+    }
+
+    /**
+     * 设置群使用限制
+     */
+    async setUsageLimit() {
+        if (!this.e.isGroup) {
+            await this.reply('此命令仅可在群聊中使用', true)
+            return true
+        }
+
+        const isAdmin = await this.isGroupAdmin()
+        if (!isAdmin) {
+            await this.reply('此命令需要群管理员或群主权限', true)
+            return true
+        }
+
+        try {
+            const groupId = String(this.e.group_id)
+            const match = this.e.msg.match(/群限制\s+(\d+)\s*(\d*)/)
+            if (!match) {
+                await this.reply('格式错误，请使用: #ai群限制 群次数 用户次数', true)
+                return true
+            }
+
+            const dailyGroupLimit = parseInt(match[1]) || 0
+            const dailyUserLimit = parseInt(match[2]) || 0
+
+            if (!databaseService.initialized) {
+                await databaseService.init()
+            }
+            const scopeManager = getScopeManager(databaseService)
+            await scopeManager.init()
+
+            await scopeManager.setGroupUsageLimitConfig(groupId, {
+                dailyGroupLimit,
+                dailyUserLimit
+            })
+
+            let msg = `✅ 使用限制已更新\n`
+            msg += `📈 每日群总限制: ${dailyGroupLimit > 0 ? dailyGroupLimit + '次' : '无限制'}\n`
+            msg += `👤 每日用户限制: ${dailyUserLimit > 0 ? dailyUserLimit + '次' : '无限制'}`
+
+            await this.reply(msg, true)
+        } catch (err) {
+            await this.reply(`设置失败: ${err.message}`, true)
+        }
+        return true
+    }
+
+    /**
+     * 查看群使用统计
+     */
+    async viewUsageStats() {
+        if (!this.e.isGroup) {
+            await this.reply('此命令仅可在群聊中使用', true)
+            return true
+        }
+
+        const isAdmin = await this.isGroupAdmin()
+        if (!isAdmin) {
+            await this.reply('此命令需要群管理员或群主权限', true)
+            return true
+        }
+
+        try {
+            const groupId = String(this.e.group_id)
+            if (!databaseService.initialized) {
+                await databaseService.init()
+            }
+            const scopeManager = getScopeManager(databaseService)
+            await scopeManager.init()
+
+            const summary = await scopeManager.getUsageSummary(groupId)
+
+            let msg = `📊 本群今日使用统计\n━━━━━━━━━━━━\n`
+            msg += `📅 日期: ${summary.date}\n`
+            msg += `📈 群使用次数: ${summary.groupCount}`
+            if (summary.dailyGroupLimit > 0) {
+                msg += ` / ${summary.dailyGroupLimit} (剩余${summary.groupRemaining})`
+            }
+            msg += `\n`
+            msg += `👥 活跃用户数: ${summary.totalUsers}\n`
+
+            if (summary.topUsers.length > 0) {
+                msg += `\n🏆 使用排行:\n`
+                summary.topUsers.forEach((u, i) => {
+                    msg += `${i + 1}. ${u.userId}: ${u.count}次\n`
+                })
+            }
+
+            await this.reply(msg, true)
+        } catch (err) {
+            await this.reply(`获取统计失败: ${err.message}`, true)
+        }
+        return true
+    }
+
+    /**
+     * 重置群使用统计
+     */
+    async resetUsageStats() {
+        if (!this.e.isGroup) {
+            await this.reply('此命令仅可在群聊中使用', true)
+            return true
+        }
+
+        const isAdmin = await this.isGroupAdmin()
+        if (!isAdmin) {
+            await this.reply('此命令需要群管理员或群主权限', true)
+            return true
+        }
+
+        try {
+            const groupId = String(this.e.group_id)
+            if (!databaseService.initialized) {
+                await databaseService.init()
+            }
+            const scopeManager = getScopeManager(databaseService)
+            await scopeManager.init()
+
+            await scopeManager.resetUsage(groupId)
+            await this.reply('✅ 今日使用统计已重置', true)
+        } catch (err) {
+            await this.reply(`重置失败: ${err.message}`, true)
+        }
         return true
     }
 }

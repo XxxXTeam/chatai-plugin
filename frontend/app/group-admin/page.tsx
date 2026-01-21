@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Slider } from '@/components/ui/slider'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from 'sonner'
 import {
@@ -34,10 +35,8 @@ import {
     UserPlus,
     UserMinus,
     Brain,
-    Cpu,
     Smile,
-    Hash,
-    ToggleLeft
+    Server
 } from 'lucide-react'
 
 interface Channel {
@@ -66,13 +65,6 @@ interface GroupConfig {
     imageGenEnabled?: boolean | string
     summaryEnabled?: boolean | string
     eventHandler?: boolean | string
-    welcomeEnabled?: boolean | string
-    welcomeMessage?: string
-    welcomePrompt?: string
-    goodbyeEnabled?: boolean | string
-    goodbyePrompt?: string
-    pokeEnabled?: boolean | string
-    pokeBack?: boolean
     emojiThief: {
         enabled: boolean
         independent: boolean
@@ -89,6 +81,37 @@ interface GroupConfig {
         modelId: string
         temperature?: number
         maxTokens?: number
+        proactive?: {
+            enabled?: boolean
+            probability?: number
+            cooldown?: number
+            maxDaily?: number
+            minMessages?: number
+            keywords?: string[]
+            timeRange?: { start?: number; end?: number }
+        }
+        style?: {
+            replyLength?: string
+            useEmoji?: boolean
+            personalityStrength?: number
+        }
+    }
+    chat?: {
+        enabled?: boolean
+        contextLength?: number
+        temperature?: number
+        maxTokens?: number
+        streamReply?: boolean
+        quoteReply?: boolean
+        showThinking?: boolean
+    }
+    imageGen?: {
+        enabled?: boolean
+        modelId?: string
+        size?: string
+        quality?: string
+        style?: string
+        maxDailyLimit?: number
     }
     models: {
         chat: string
@@ -104,21 +127,41 @@ interface GroupConfig {
     blacklist: string[]
     whitelist: string[]
     listMode: string
-    summaryPush: {
-        enabled: boolean
-        intervalType: 'day' | 'hour'
-        intervalValue: number
-        pushHour?: number
-        messageCount?: number
+    summary?: {
+        enabled?: boolean
+        modelId?: string
+        push?: {
+            enabled: boolean
+            intervalType: 'day' | 'hour'
+            intervalValue: number
+            pushHour?: number
+            messageCount?: number
+        }
+    }
+    events?: {
+        enabled?: boolean
+        welcome?: { enabled?: boolean; message?: string; prompt?: string; useAI?: boolean }
+        goodbye?: { enabled?: boolean; prompt?: string; useAI?: boolean }
+        poke?: { enabled?: boolean; pokeBack?: boolean; message?: string }
+    }
+    independentChannel?: {
+        hasChannel?: boolean
+        baseUrl?: string
+        apiKey?: string
+        adapterType?: string
+        forbidGlobal?: boolean
+    }
+    usageLimit?: {
+        dailyGroupLimit?: number
+        dailyUserLimit?: number
+        limitMessage?: string
+        chatLimit?: number
+        imageLimit?: number
     }
     knowledgeIds?: string[]
     presets: Preset[]
     channels: Channel[]
     knowledgeBases?: { id: string; name: string }[]
-    proactiveChatEnabled?: boolean
-    proactiveChatProbability?: number
-    proactiveChatCooldown?: number
-    proactiveChatMaxDaily?: number
 }
 
 export default function GroupAdminPage() {
@@ -140,6 +183,9 @@ export default function GroupAdminPage() {
         toolsEnabled: 'inherit' as 'inherit' | 'on' | 'off',
         imageGenEnabled: 'inherit' as 'inherit' | 'on' | 'off',
         imageGenModel: '',
+        imageGenSize: '1024x1024',
+        imageGenQuality: 'standard',
+        imageGenDailyLimit: 0,
         summaryEnabled: 'inherit' as 'inherit' | 'on' | 'off',
         summaryModel: '',
         eventEnabled: 'inherit' as 'inherit' | 'on' | 'off',
@@ -158,6 +204,22 @@ export default function GroupAdminPage() {
         bymModel: '',
         bymTemperature: 'inherit' as 'inherit' | number,
         bymMaxTokens: 'inherit' as 'inherit' | number,
+        bymReplyLength: 'medium',
+        bymUseEmoji: true,
+        // 伪人 - 主动发言
+        proactiveChatEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+        proactiveChatProbability: 'inherit' as 'inherit' | number,
+        proactiveChatCooldown: 'inherit' as 'inherit' | number,
+        proactiveChatMaxDaily: 'inherit' as 'inherit' | number,
+        proactiveChatMinMessages: 5,
+        proactiveChatTimeStart: 8,
+        proactiveChatTimeEnd: 23,
+        // 聊天配置
+        chatEnabled: true,
+        chatContextLength: 20,
+        chatStreamReply: true,
+        chatQuoteReply: false,
+        chatShowThinking: true,
         // 模型配置
         chatModel: '',
         // 黑白名单
@@ -174,17 +236,38 @@ export default function GroupAdminPage() {
         welcomeEnabled: 'inherit' as 'inherit' | 'on' | 'off',
         welcomeMessage: '',
         welcomePrompt: '',
+        welcomeProbability: 'inherit' as 'inherit' | number,
         goodbyeEnabled: 'inherit' as 'inherit' | 'on' | 'off',
         goodbyePrompt: '',
+        goodbyeProbability: 'inherit' as 'inherit' | number,
         pokeEnabled: 'inherit' as 'inherit' | 'on' | 'off',
         pokeBack: false,
+        pokeProbability: 'inherit' as 'inherit' | number,
+        // 其他事件
+        recallEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+        recallProbability: 'inherit' as 'inherit' | number,
+        banEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+        banProbability: 'inherit' as 'inherit' | number,
+        luckyKingEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+        luckyKingProbability: 'inherit' as 'inherit' | number,
+        honorEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+        honorProbability: 'inherit' as 'inherit' | number,
+        essenceEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+        essenceProbability: 'inherit' as 'inherit' | number,
+        adminEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+        adminProbability: 'inherit' as 'inherit' | number,
         // 知识库
         knowledgeIds: [] as string[],
-        // 主动聊天
-        proactiveChatEnabled: 'inherit' as 'inherit' | 'on' | 'off',
-        proactiveChatProbability: 'inherit' as 'inherit' | number,
-        proactiveChatCooldown: 'inherit' as 'inherit' | number,
-        proactiveChatMaxDaily: 'inherit' as 'inherit' | number
+        // 群独立渠道
+        independentChannelEnabled: false,
+        independentBaseUrl: '',
+        independentApiKey: '',
+        independentAdapterType: 'openai',
+        forbidGlobalModel: false,
+        // 使用限制
+        dailyGroupLimit: 0,
+        dailyUserLimit: 0,
+        usageLimitMessage: ''
     })
 
     const [knowledgeBases, setKnowledgeBases] = useState<{ id: string; name: string }[]>([])
@@ -377,33 +460,75 @@ export default function GroupAdminPage() {
                     listMode: c.listMode || 'none',
                     blacklist: c.blacklist || [],
                     whitelist: c.whitelist || [],
-                    summaryPushEnabled: c.summaryPush?.enabled || false,
-                    summaryPushIntervalType: c.summaryPush?.intervalType || 'day',
-                    summaryPushIntervalValue: c.summaryPush?.intervalValue || 1,
-                    summaryPushHour: c.summaryPush?.pushHour ?? 20,
-                    summaryPushMessageCount: c.summaryPush?.messageCount || 100,
+                    summaryPushEnabled: c.summary?.push?.enabled || false,
+                    summaryPushIntervalType: c.summary?.push?.intervalType || 'day',
+                    summaryPushIntervalValue: c.summary?.push?.intervalValue || 1,
+                    summaryPushHour: c.summary?.push?.pushHour ?? 20,
+                    summaryPushMessageCount: c.summary?.push?.messageCount || 100,
                     // 事件处理扩展
                     welcomeEnabled:
-                        c.welcomeEnabled === undefined ? 'inherit' : c.welcomeEnabled === true ? 'on' : 'off',
-                    welcomeMessage: c.welcomeMessage || '',
-                    welcomePrompt: c.welcomePrompt || '',
+                        c.events?.welcome?.enabled === undefined ? 'inherit' : c.events?.welcome?.enabled ? 'on' : 'off',
+                    welcomeMessage: c.events?.welcome?.message || '',
+                    welcomePrompt: c.events?.welcome?.prompt || '',
+                    welcomeProbability: (c.events?.welcome as { probability?: number })?.probability ?? 'inherit',
                     goodbyeEnabled:
-                        c.goodbyeEnabled === undefined ? 'inherit' : c.goodbyeEnabled === true ? 'on' : 'off',
-                    goodbyePrompt: c.goodbyePrompt || '',
-                    pokeEnabled: c.pokeEnabled === undefined ? 'inherit' : c.pokeEnabled === true ? 'on' : 'off',
-                    pokeBack: c.pokeBack || false,
+                        c.events?.goodbye?.enabled === undefined ? 'inherit' : c.events?.goodbye?.enabled ? 'on' : 'off',
+                    goodbyePrompt: c.events?.goodbye?.prompt || '',
+                    goodbyeProbability: (c.events?.goodbye as { probability?: number })?.probability ?? 'inherit',
+                    pokeEnabled: c.events?.poke?.enabled === undefined ? 'inherit' : c.events?.poke?.enabled ? 'on' : 'off',
+                    pokeBack: c.events?.poke?.pokeBack || false,
+                    pokeProbability: (c.events?.poke as { probability?: number })?.probability ?? 'inherit',
+                    // 其他事件
+                    recallEnabled: (c.events as { recall?: { enabled?: boolean } })?.recall?.enabled === undefined ? 'inherit' : (c.events as { recall?: { enabled?: boolean } })?.recall?.enabled ? 'on' : 'off',
+                    recallProbability: (c.events as { recall?: { probability?: number } })?.recall?.probability ?? 'inherit',
+                    banEnabled: (c.events as { ban?: { enabled?: boolean } })?.ban?.enabled === undefined ? 'inherit' : (c.events as { ban?: { enabled?: boolean } })?.ban?.enabled ? 'on' : 'off',
+                    banProbability: (c.events as { ban?: { probability?: number } })?.ban?.probability ?? 'inherit',
+                    luckyKingEnabled: (c.events as { luckyKing?: { enabled?: boolean } })?.luckyKing?.enabled === undefined ? 'inherit' : (c.events as { luckyKing?: { enabled?: boolean } })?.luckyKing?.enabled ? 'on' : 'off',
+                    luckyKingProbability: (c.events as { luckyKing?: { probability?: number } })?.luckyKing?.probability ?? 'inherit',
+                    honorEnabled: (c.events as { honor?: { enabled?: boolean } })?.honor?.enabled === undefined ? 'inherit' : (c.events as { honor?: { enabled?: boolean } })?.honor?.enabled ? 'on' : 'off',
+                    honorProbability: (c.events as { honor?: { probability?: number } })?.honor?.probability ?? 'inherit',
+                    essenceEnabled: (c.events as { essence?: { enabled?: boolean } })?.essence?.enabled === undefined ? 'inherit' : (c.events as { essence?: { enabled?: boolean } })?.essence?.enabled ? 'on' : 'off',
+                    essenceProbability: (c.events as { essence?: { probability?: number } })?.essence?.probability ?? 'inherit',
+                    adminEnabled: (c.events as { admin?: { enabled?: boolean } })?.admin?.enabled === undefined ? 'inherit' : (c.events as { admin?: { enabled?: boolean } })?.admin?.enabled ? 'on' : 'off',
+                    adminProbability: (c.events as { admin?: { probability?: number } })?.admin?.probability ?? 'inherit',
                     knowledgeIds: c.knowledgeIds || [],
-                    // 主动聊天
+                    // 伪人 - 主动发言
                     proactiveChatEnabled:
-                        c.proactiveChatEnabled === undefined
+                        c.bym?.proactive?.enabled === undefined
                             ? 'inherit'
-                            : c.proactiveChatEnabled === true
+                            : c.bym?.proactive?.enabled
                               ? 'on'
                               : 'off',
                     proactiveChatProbability:
-                        c.proactiveChatProbability === undefined ? 'inherit' : c.proactiveChatProbability,
-                    proactiveChatCooldown: c.proactiveChatCooldown === undefined ? 'inherit' : c.proactiveChatCooldown,
-                    proactiveChatMaxDaily: c.proactiveChatMaxDaily === undefined ? 'inherit' : c.proactiveChatMaxDaily
+                        c.bym?.proactive?.probability === undefined ? 'inherit' : c.bym?.proactive?.probability,
+                    proactiveChatCooldown: c.bym?.proactive?.cooldown === undefined ? 'inherit' : c.bym?.proactive?.cooldown,
+                    proactiveChatMaxDaily: c.bym?.proactive?.maxDaily === undefined ? 'inherit' : c.bym?.proactive?.maxDaily,
+                    proactiveChatMinMessages: c.bym?.proactive?.minMessages ?? 5,
+                    proactiveChatTimeStart: c.bym?.proactive?.timeRange?.start ?? 8,
+                    proactiveChatTimeEnd: c.bym?.proactive?.timeRange?.end ?? 23,
+                    // 伪人 - 回复风格
+                    bymReplyLength: c.bym?.style?.replyLength || 'medium',
+                    bymUseEmoji: c.bym?.style?.useEmoji ?? true,
+                    // 聊天配置
+                    chatEnabled: c.chat?.enabled ?? true,
+                    chatContextLength: c.chat?.contextLength ?? 20,
+                    chatStreamReply: c.chat?.streamReply ?? true,
+                    chatQuoteReply: c.chat?.quoteReply ?? false,
+                    chatShowThinking: c.chat?.showThinking ?? true,
+                    // 绘图配置
+                    imageGenSize: c.imageGen?.size || '1024x1024',
+                    imageGenQuality: c.imageGen?.quality || 'standard',
+                    imageGenDailyLimit: c.imageGen?.maxDailyLimit ?? 0,
+                    // 群独立渠道
+                    independentChannelEnabled: c.independentChannel?.hasChannel || false,
+                    independentBaseUrl: c.independentChannel?.baseUrl || '',
+                    independentApiKey: c.independentChannel?.apiKey || '',
+                    independentAdapterType: c.independentChannel?.adapterType || 'openai',
+                    forbidGlobalModel: c.independentChannel?.forbidGlobal || false,
+                    // 使用限制
+                    dailyGroupLimit: c.usageLimit?.dailyGroupLimit || 0,
+                    dailyUserLimit: c.usageLimit?.dailyUserLimit || 0,
+                    usageLimitMessage: c.usageLimit?.limitMessage || ''
                 })
                 // 设置知识库列表
                 if (c.knowledgeBases) setKnowledgeBases(c.knowledgeBases)
@@ -449,7 +574,36 @@ export default function GroupAdminPage() {
                         probability: form.bymProbability === 'inherit' ? undefined : form.bymProbability,
                         modelId: form.bymModel || undefined,
                         temperature: form.bymTemperature === 'inherit' ? undefined : form.bymTemperature,
-                        maxTokens: form.bymMaxTokens === 'inherit' ? undefined : form.bymMaxTokens
+                        maxTokens: form.bymMaxTokens === 'inherit' ? undefined : form.bymMaxTokens,
+                        proactive: {
+                            enabled: form.proactiveChatEnabled === 'inherit' ? undefined : form.proactiveChatEnabled === 'on',
+                            probability: form.proactiveChatProbability === 'inherit' ? undefined : form.proactiveChatProbability,
+                            cooldown: form.proactiveChatCooldown === 'inherit' ? undefined : form.proactiveChatCooldown,
+                            maxDaily: form.proactiveChatMaxDaily === 'inherit' ? undefined : form.proactiveChatMaxDaily,
+                            minMessages: form.proactiveChatMinMessages,
+                            timeRange: {
+                                start: form.proactiveChatTimeStart,
+                                end: form.proactiveChatTimeEnd
+                            }
+                        },
+                        style: {
+                            replyLength: form.bymReplyLength,
+                            useEmoji: form.bymUseEmoji
+                        }
+                    },
+                    chat: {
+                        enabled: form.chatEnabled,
+                        contextLength: form.chatContextLength,
+                        streamReply: form.chatStreamReply,
+                        quoteReply: form.chatQuoteReply,
+                        showThinking: form.chatShowThinking
+                    },
+                    imageGen: {
+                        enabled: form.imageGenEnabled === 'inherit' ? undefined : form.imageGenEnabled === 'on',
+                        modelId: form.imageGenModel || undefined,
+                        size: form.imageGenSize,
+                        quality: form.imageGenQuality,
+                        maxDailyLimit: form.imageGenDailyLimit
                     },
                     models: {
                         chat: form.chatModel || undefined,
@@ -458,31 +612,72 @@ export default function GroupAdminPage() {
                     listMode: form.listMode,
                     blacklist: form.blacklist,
                     whitelist: form.whitelist,
-                    summaryPush: {
-                        enabled: form.summaryPushEnabled,
-                        intervalType: form.summaryPushIntervalType,
-                        intervalValue: form.summaryPushIntervalValue,
-                        pushHour: form.summaryPushHour,
-                        messageCount: form.summaryPushMessageCount
+                    summary: {
+                        enabled: form.summaryEnabled === 'inherit' ? undefined : form.summaryEnabled === 'on',
+                        modelId: form.summaryModel || undefined,
+                        push: {
+                            enabled: form.summaryPushEnabled,
+                            intervalType: form.summaryPushIntervalType,
+                            intervalValue: form.summaryPushIntervalValue,
+                            pushHour: form.summaryPushHour,
+                            messageCount: form.summaryPushMessageCount
+                        }
                     },
-                    // 事件处理扩展
-                    welcomeEnabled: form.welcomeEnabled === 'inherit' ? undefined : form.welcomeEnabled === 'on',
-                    welcomeMessage: form.welcomeMessage || undefined,
-                    welcomePrompt: form.welcomePrompt || undefined,
-                    goodbyeEnabled: form.goodbyeEnabled === 'inherit' ? undefined : form.goodbyeEnabled === 'on',
-                    goodbyePrompt: form.goodbyePrompt || undefined,
-                    pokeEnabled: form.pokeEnabled === 'inherit' ? undefined : form.pokeEnabled === 'on',
-                    pokeBack: form.pokeBack,
-                    knowledgeIds: form.knowledgeIds.length > 0 ? form.knowledgeIds : undefined,
-                    // 主动聊天
-                    proactiveChatEnabled:
-                        form.proactiveChatEnabled === 'inherit' ? undefined : form.proactiveChatEnabled === 'on',
-                    proactiveChatProbability:
-                        form.proactiveChatProbability === 'inherit' ? undefined : form.proactiveChatProbability,
-                    proactiveChatCooldown:
-                        form.proactiveChatCooldown === 'inherit' ? undefined : form.proactiveChatCooldown,
-                    proactiveChatMaxDaily:
-                        form.proactiveChatMaxDaily === 'inherit' ? undefined : form.proactiveChatMaxDaily
+                    events: {
+                        enabled: form.eventEnabled === 'inherit' ? undefined : form.eventEnabled === 'on',
+                        welcome: {
+                            enabled: form.welcomeEnabled === 'inherit' ? undefined : form.welcomeEnabled === 'on',
+                            message: form.welcomeMessage || undefined,
+                            prompt: form.welcomePrompt || undefined,
+                            probability: form.welcomeProbability === 'inherit' ? undefined : form.welcomeProbability
+                        },
+                        goodbye: {
+                            enabled: form.goodbyeEnabled === 'inherit' ? undefined : form.goodbyeEnabled === 'on',
+                            prompt: form.goodbyePrompt || undefined,
+                            probability: form.goodbyeProbability === 'inherit' ? undefined : form.goodbyeProbability
+                        },
+                        poke: {
+                            enabled: form.pokeEnabled === 'inherit' ? undefined : form.pokeEnabled === 'on',
+                            pokeBack: form.pokeBack,
+                            probability: form.pokeProbability === 'inherit' ? undefined : form.pokeProbability
+                        },
+                        recall: {
+                            enabled: form.recallEnabled === 'inherit' ? undefined : form.recallEnabled === 'on',
+                            probability: form.recallProbability === 'inherit' ? undefined : form.recallProbability
+                        },
+                        ban: {
+                            enabled: form.banEnabled === 'inherit' ? undefined : form.banEnabled === 'on',
+                            probability: form.banProbability === 'inherit' ? undefined : form.banProbability
+                        },
+                        luckyKing: {
+                            enabled: form.luckyKingEnabled === 'inherit' ? undefined : form.luckyKingEnabled === 'on',
+                            probability: form.luckyKingProbability === 'inherit' ? undefined : form.luckyKingProbability
+                        },
+                        honor: {
+                            enabled: form.honorEnabled === 'inherit' ? undefined : form.honorEnabled === 'on',
+                            probability: form.honorProbability === 'inherit' ? undefined : form.honorProbability
+                        },
+                        essence: {
+                            enabled: form.essenceEnabled === 'inherit' ? undefined : form.essenceEnabled === 'on',
+                            probability: form.essenceProbability === 'inherit' ? undefined : form.essenceProbability
+                        },
+                        admin: {
+                            enabled: form.adminEnabled === 'inherit' ? undefined : form.adminEnabled === 'on',
+                            probability: form.adminProbability === 'inherit' ? undefined : form.adminProbability
+                        }
+                    },
+                    independentChannel: {
+                        baseUrl: form.independentBaseUrl || undefined,
+                        apiKey: form.independentApiKey || undefined,
+                        adapterType: form.independentAdapterType,
+                        forbidGlobal: form.forbidGlobalModel
+                    },
+                    usageLimit: {
+                        dailyGroupLimit: form.dailyGroupLimit,
+                        dailyUserLimit: form.dailyUserLimit,
+                        limitMessage: form.usageLimitMessage || undefined
+                    },
+                    knowledgeIds: form.knowledgeIds.length > 0 ? form.knowledgeIds : undefined
                 })
             })
             if (!res.ok) {
@@ -594,7 +789,7 @@ export default function GroupAdminPage() {
                 <Card>
                     <CardContent className="pt-6">
                         <Tabs value={formTab} onValueChange={setFormTab}>
-                            <TabsList className="grid w-full grid-cols-4 mb-4">
+                            <TabsList className="grid w-full grid-cols-5 mb-4">
                                 <TabsTrigger value="basic">
                                     <Settings className="h-4 w-4 mr-1 hidden sm:inline" />
                                     基础
@@ -607,9 +802,9 @@ export default function GroupAdminPage() {
                                     <Sparkles className="h-4 w-4 mr-1 hidden sm:inline" />
                                     伪人
                                 </TabsTrigger>
-                                <TabsTrigger value="proactive">
+                                <TabsTrigger value="channel">
                                     <MessageSquare className="h-4 w-4 mr-1 hidden sm:inline" />
-                                    主动
+                                    对话
                                 </TabsTrigger>
                                 <TabsTrigger value="advanced">
                                     <BookOpen className="h-4 w-4 mr-1 hidden sm:inline" />
@@ -745,12 +940,70 @@ export default function GroupAdminPage() {
                                         onChange={v => setForm({ ...form, imageGenEnabled: v })}
                                     />
                                     {form.imageGenEnabled === 'on' && (
-                                        <ModelSubSelect
-                                            label="绘图模型"
-                                            value={form.imageGenModel}
-                                            models={allModels}
-                                            onChange={v => setForm({ ...form, imageGenModel: v })}
-                                        />
+                                        <div className="ml-4 pl-4 border-l-2 border-muted space-y-3">
+                                            <div className="space-y-1">
+                                                <Label className="text-xs">绘图模型</Label>
+                                                <Select
+                                                    value={form.imageGenModel || '__default__'}
+                                                    onValueChange={v => setForm({ ...form, imageGenModel: v === '__default__' ? '' : v })}
+                                                >
+                                                    <SelectTrigger>
+                                                        <SelectValue placeholder="继承全局" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="__default__">继承全局</SelectItem>
+                                                        {allModels.map(m => (
+                                                            <SelectItem key={m} value={m}>{m}</SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <div className="space-y-1">
+                                                    <Label className="text-xs">图片尺寸</Label>
+                                                    <Select
+                                                        value={form.imageGenSize}
+                                                        onValueChange={v => setForm({ ...form, imageGenSize: v })}
+                                                    >
+                                                        <SelectTrigger>
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="1024x1024">1024x1024</SelectItem>
+                                                            <SelectItem value="1792x1024">1792x1024 (横)</SelectItem>
+                                                            <SelectItem value="1024x1792">1024x1792 (竖)</SelectItem>
+                                                            <SelectItem value="512x512">512x512</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <Label className="text-xs">图片质量</Label>
+                                                    <Select
+                                                        value={form.imageGenQuality}
+                                                        onValueChange={v => setForm({ ...form, imageGenQuality: v })}
+                                                    >
+                                                        <SelectTrigger>
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="standard">标准</SelectItem>
+                                                            <SelectItem value="hd">高清</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <Label className="text-xs">每日限制（0=无限）</Label>
+                                                <Input
+                                                    type="number"
+                                                    min={0}
+                                                    value={form.imageGenDailyLimit}
+                                                    onChange={e => setForm({ ...form, imageGenDailyLimit: parseInt(e.target.value) || 0 })}
+                                                    placeholder="0"
+                                                    className="w-24"
+                                                />
+                                            </div>
+                                        </div>
                                     )}
 
                                     <FeatureItem
@@ -804,7 +1057,22 @@ export default function GroupAdminPage() {
                                                     </Select>
                                                 </div>
                                                 {form.welcomeEnabled === 'on' && (
-                                                    <div className="space-y-2 pl-6">
+                                                    <div className="space-y-3 pl-6">
+                                                        <div className="space-y-2">
+                                                            <div className="flex items-center justify-between">
+                                                                <Label className="text-xs">响应概率</Label>
+                                                                <span className="text-xs text-muted-foreground">
+                                                                    {Math.round((form.welcomeProbability === 'inherit' ? 1 : form.welcomeProbability as number) * 100)}%
+                                                                </span>
+                                                            </div>
+                                                            <Slider
+                                                                value={[form.welcomeProbability === 'inherit' ? 1 : form.welcomeProbability as number]}
+                                                                onValueChange={([v]) => setForm({ ...form, welcomeProbability: v })}
+                                                                min={0}
+                                                                max={1}
+                                                                step={0.05}
+                                                            />
+                                                        </div>
                                                         <div className="space-y-1">
                                                             <Label className="text-xs">
                                                                 固定欢迎语（不使用AI生成）
@@ -859,17 +1127,34 @@ export default function GroupAdminPage() {
                                                     </Select>
                                                 </div>
                                                 {form.goodbyeEnabled === 'on' && (
-                                                    <div className="space-y-1 pl-6">
-                                                        <Label className="text-xs">AI告别提示词</Label>
-                                                        <Textarea
-                                                            value={form.goodbyePrompt}
-                                                            placeholder="为离开成员生成告别消息时的提示..."
-                                                            onChange={e =>
-                                                                setForm({ ...form, goodbyePrompt: e.target.value })
-                                                            }
-                                                            rows={2}
-                                                            className="text-sm"
-                                                        />
+                                                    <div className="space-y-3 pl-6">
+                                                        <div className="space-y-2">
+                                                            <div className="flex items-center justify-between">
+                                                                <Label className="text-xs">响应概率</Label>
+                                                                <span className="text-xs text-muted-foreground">
+                                                                    {Math.round((form.goodbyeProbability === 'inherit' ? 1 : form.goodbyeProbability as number) * 100)}%
+                                                                </span>
+                                                            </div>
+                                                            <Slider
+                                                                value={[form.goodbyeProbability === 'inherit' ? 1 : form.goodbyeProbability as number]}
+                                                                onValueChange={([v]) => setForm({ ...form, goodbyeProbability: v })}
+                                                                min={0}
+                                                                max={1}
+                                                                step={0.05}
+                                                            />
+                                                        </div>
+                                                        <div className="space-y-1">
+                                                            <Label className="text-xs">AI告别提示词</Label>
+                                                            <Textarea
+                                                                value={form.goodbyePrompt}
+                                                                placeholder="为离开成员生成告别消息时的提示..."
+                                                                onChange={e =>
+                                                                    setForm({ ...form, goodbyePrompt: e.target.value })
+                                                                }
+                                                                rows={2}
+                                                                className="text-sm"
+                                                            />
+                                                        </div>
                                                     </div>
                                                 )}
                                             </div>
@@ -898,12 +1183,215 @@ export default function GroupAdminPage() {
                                                     </Select>
                                                 </div>
                                                 {form.pokeEnabled === 'on' && (
-                                                    <div className="flex items-center gap-2 pl-6">
-                                                        <Switch
-                                                            checked={form.pokeBack}
-                                                            onCheckedChange={v => setForm({ ...form, pokeBack: v })}
-                                                        />
-                                                        <Label className="text-xs">戳回去（而非文字回复）</Label>
+                                                    <div className="space-y-3 pl-6">
+                                                        <div className="space-y-2">
+                                                            <div className="flex items-center justify-between">
+                                                                <Label className="text-xs">响应概率</Label>
+                                                                <span className="text-xs text-muted-foreground">
+                                                                    {Math.round((form.pokeProbability === 'inherit' ? 1 : form.pokeProbability as number) * 100)}%
+                                                                </span>
+                                                            </div>
+                                                            <Slider
+                                                                value={[form.pokeProbability === 'inherit' ? 1 : form.pokeProbability as number]}
+                                                                onValueChange={([v]) => setForm({ ...form, pokeProbability: v })}
+                                                                min={0}
+                                                                max={1}
+                                                                step={0.05}
+                                                            />
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            <Switch
+                                                                checked={form.pokeBack}
+                                                                onCheckedChange={v => setForm({ ...form, pokeBack: v })}
+                                                            />
+                                                            <Label className="text-xs">戳回去（而非文字回复）</Label>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* 撤回响应 */}
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-sm">🔄</span>
+                                                        <Label className="text-sm font-medium">撤回响应</Label>
+                                                    </div>
+                                                    <Select value={form.recallEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => {
+                                                        const updates: Partial<typeof form> = { recallEnabled: v }
+                                                        if (v === 'on' && form.recallProbability === 'inherit') updates.recallProbability = 1.0
+                                                        setForm({ ...form, ...updates })
+                                                    }}>
+                                                        <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="inherit">继承</SelectItem>
+                                                            <SelectItem value="on">开启</SelectItem>
+                                                            <SelectItem value="off">关闭</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                                {form.recallEnabled === 'on' && (
+                                                    <div className="pl-6 space-y-2">
+                                                        <div className="flex items-center gap-2">
+                                                            <Label className="text-xs w-12">概率</Label>
+                                                            <Slider value={[form.recallProbability === 'inherit' ? 1 : form.recallProbability as number]} onValueChange={([v]) => setForm({ ...form, recallProbability: v })} min={0} max={1} step={0.05} className="flex-1" />
+                                                            <span className="text-xs w-10 text-right">{Math.round((form.recallProbability === 'inherit' ? 1 : form.recallProbability as number) * 100)}%</span>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* 禁言响应 */}
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-sm">🔇</span>
+                                                        <Label className="text-sm font-medium">禁言响应</Label>
+                                                    </div>
+                                                    <Select value={form.banEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => {
+                                                        const updates: Partial<typeof form> = { banEnabled: v }
+                                                        if (v === 'on' && form.banProbability === 'inherit') updates.banProbability = 1.0
+                                                        setForm({ ...form, ...updates })
+                                                    }}>
+                                                        <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="inherit">继承</SelectItem>
+                                                            <SelectItem value="on">开启</SelectItem>
+                                                            <SelectItem value="off">关闭</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                                {form.banEnabled === 'on' && (
+                                                    <div className="pl-6 space-y-2">
+                                                        <div className="flex items-center gap-2">
+                                                            <Label className="text-xs w-12">概率</Label>
+                                                            <Slider value={[form.banProbability === 'inherit' ? 1 : form.banProbability as number]} onValueChange={([v]) => setForm({ ...form, banProbability: v })} min={0} max={1} step={0.05} className="flex-1" />
+                                                            <span className="text-xs w-10 text-right">{Math.round((form.banProbability === 'inherit' ? 1 : form.banProbability as number) * 100)}%</span>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* 运气王响应 */}
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-sm">🧧</span>
+                                                        <Label className="text-sm font-medium">运气王响应</Label>
+                                                    </div>
+                                                    <Select value={form.luckyKingEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => {
+                                                        const updates: Partial<typeof form> = { luckyKingEnabled: v }
+                                                        if (v === 'on' && form.luckyKingProbability === 'inherit') updates.luckyKingProbability = 1.0
+                                                        setForm({ ...form, ...updates })
+                                                    }}>
+                                                        <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="inherit">继承</SelectItem>
+                                                            <SelectItem value="on">开启</SelectItem>
+                                                            <SelectItem value="off">关闭</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                                {form.luckyKingEnabled === 'on' && (
+                                                    <div className="pl-6 space-y-2">
+                                                        <div className="flex items-center gap-2">
+                                                            <Label className="text-xs w-12">概率</Label>
+                                                            <Slider value={[form.luckyKingProbability === 'inherit' ? 1 : form.luckyKingProbability as number]} onValueChange={([v]) => setForm({ ...form, luckyKingProbability: v })} min={0} max={1} step={0.05} className="flex-1" />
+                                                            <span className="text-xs w-10 text-right">{Math.round((form.luckyKingProbability === 'inherit' ? 1 : form.luckyKingProbability as number) * 100)}%</span>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* 荣誉变更响应 */}
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-sm">🏆</span>
+                                                        <Label className="text-sm font-medium">荣誉变更</Label>
+                                                    </div>
+                                                    <Select value={form.honorEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => {
+                                                        const updates: Partial<typeof form> = { honorEnabled: v }
+                                                        if (v === 'on' && form.honorProbability === 'inherit') updates.honorProbability = 1.0
+                                                        setForm({ ...form, ...updates })
+                                                    }}>
+                                                        <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="inherit">继承</SelectItem>
+                                                            <SelectItem value="on">开启</SelectItem>
+                                                            <SelectItem value="off">关闭</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                                {form.honorEnabled === 'on' && (
+                                                    <div className="pl-6 space-y-2">
+                                                        <div className="flex items-center gap-2">
+                                                            <Label className="text-xs w-12">概率</Label>
+                                                            <Slider value={[form.honorProbability === 'inherit' ? 1 : form.honorProbability as number]} onValueChange={([v]) => setForm({ ...form, honorProbability: v })} min={0} max={1} step={0.05} className="flex-1" />
+                                                            <span className="text-xs w-10 text-right">{Math.round((form.honorProbability === 'inherit' ? 1 : form.honorProbability as number) * 100)}%</span>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* 精华消息响应 */}
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-sm">⭐</span>
+                                                        <Label className="text-sm font-medium">精华消息</Label>
+                                                    </div>
+                                                    <Select value={form.essenceEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => {
+                                                        const updates: Partial<typeof form> = { essenceEnabled: v }
+                                                        if (v === 'on' && form.essenceProbability === 'inherit') updates.essenceProbability = 1.0
+                                                        setForm({ ...form, ...updates })
+                                                    }}>
+                                                        <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="inherit">继承</SelectItem>
+                                                            <SelectItem value="on">开启</SelectItem>
+                                                            <SelectItem value="off">关闭</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                                {form.essenceEnabled === 'on' && (
+                                                    <div className="pl-6 space-y-2">
+                                                        <div className="flex items-center gap-2">
+                                                            <Label className="text-xs w-12">概率</Label>
+                                                            <Slider value={[form.essenceProbability === 'inherit' ? 1 : form.essenceProbability as number]} onValueChange={([v]) => setForm({ ...form, essenceProbability: v })} min={0} max={1} step={0.05} className="flex-1" />
+                                                            <span className="text-xs w-10 text-right">{Math.round((form.essenceProbability === 'inherit' ? 1 : form.essenceProbability as number) * 100)}%</span>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* 管理员变更响应 */}
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-sm">👑</span>
+                                                        <Label className="text-sm font-medium">管理员变更</Label>
+                                                    </div>
+                                                    <Select value={form.adminEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => {
+                                                        const updates: Partial<typeof form> = { adminEnabled: v }
+                                                        if (v === 'on' && form.adminProbability === 'inherit') updates.adminProbability = 1.0
+                                                        setForm({ ...form, ...updates })
+                                                    }}>
+                                                        <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="inherit">继承</SelectItem>
+                                                            <SelectItem value="on">开启</SelectItem>
+                                                            <SelectItem value="off">关闭</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                                {form.adminEnabled === 'on' && (
+                                                    <div className="pl-6 space-y-2">
+                                                        <div className="flex items-center gap-2">
+                                                            <Label className="text-xs w-12">概率</Label>
+                                                            <Slider value={[form.adminProbability === 'inherit' ? 1 : form.adminProbability as number]} onValueChange={([v]) => setForm({ ...form, adminProbability: v })} min={0} max={1} step={0.05} className="flex-1" />
+                                                            <span className="text-xs w-10 text-right">{Math.round((form.adminProbability === 'inherit' ? 1 : form.adminProbability as number) * 100)}%</span>
+                                                        </div>
                                                     </div>
                                                 )}
                                             </div>
@@ -1377,134 +1865,332 @@ export default function GroupAdminPage() {
                                                     )}
                                                 </div>
                                             </div>
+
+                                            {/* 主动发言（伪人扩展） */}
+                                            <div className="border-t pt-4 mt-4">
+                                                <div className="flex items-center justify-between mb-3">
+                                                    <div className="flex items-center gap-2">
+                                                        <MessageSquare className="h-4 w-4 text-green-500" />
+                                                        <Label className="font-medium">主动发言</Label>
+                                                    </div>
+                                                    <Select
+                                                        value={form.proactiveChatEnabled}
+                                                        onValueChange={v =>
+                                                            setForm({
+                                                                ...form,
+                                                                proactiveChatEnabled: v as 'inherit' | 'on' | 'off'
+                                                            })
+                                                        }
+                                                    >
+                                                        <SelectTrigger className="w-24">
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="inherit">继承</SelectItem>
+                                                            <SelectItem value="on">开启</SelectItem>
+                                                            <SelectItem value="off">关闭</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                                <p className="text-xs text-muted-foreground mb-3">
+                                                    伪人模式下允许机器人主动发言
+                                                </p>
+
+                                                {form.proactiveChatEnabled !== 'off' && (
+                                                    <div className="space-y-3 ml-4 pl-4 border-l-2 border-muted">
+                                                        <div className="grid grid-cols-2 gap-3">
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs">触发概率</Label>
+                                                                <Select
+                                                                    value={
+                                                                        form.proactiveChatProbability === 'inherit'
+                                                                            ? 'inherit'
+                                                                            : String(form.proactiveChatProbability)
+                                                                    }
+                                                                    onValueChange={v =>
+                                                                        setForm({
+                                                                            ...form,
+                                                                            proactiveChatProbability:
+                                                                                v === 'inherit' ? 'inherit' : parseFloat(v)
+                                                                        })
+                                                                    }
+                                                                >
+                                                                    <SelectTrigger>
+                                                                        <SelectValue />
+                                                                    </SelectTrigger>
+                                                                    <SelectContent>
+                                                                        <SelectItem value="inherit">继承</SelectItem>
+                                                                        <SelectItem value="0.02">2%</SelectItem>
+                                                                        <SelectItem value="0.05">5%</SelectItem>
+                                                                        <SelectItem value="0.1">10%</SelectItem>
+                                                                        <SelectItem value="0.2">20%</SelectItem>
+                                                                    </SelectContent>
+                                                                </Select>
+                                                            </div>
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs">冷却(分钟)</Label>
+                                                                <Select
+                                                                    value={
+                                                                        form.proactiveChatCooldown === 'inherit'
+                                                                            ? 'inherit'
+                                                                            : String(form.proactiveChatCooldown)
+                                                                    }
+                                                                    onValueChange={v =>
+                                                                        setForm({
+                                                                            ...form,
+                                                                            proactiveChatCooldown:
+                                                                                v === 'inherit' ? 'inherit' : parseInt(v)
+                                                                        })
+                                                                    }
+                                                                >
+                                                                    <SelectTrigger>
+                                                                        <SelectValue />
+                                                                    </SelectTrigger>
+                                                                    <SelectContent>
+                                                                        <SelectItem value="inherit">继承</SelectItem>
+                                                                        <SelectItem value="5">5分钟</SelectItem>
+                                                                        <SelectItem value="10">10分钟</SelectItem>
+                                                                        <SelectItem value="30">30分钟</SelectItem>
+                                                                        <SelectItem value="60">1小时</SelectItem>
+                                                                    </SelectContent>
+                                                                </Select>
+                                                            </div>
+                                                        </div>
+                                                        <div className="grid grid-cols-2 gap-3">
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs">每日上限</Label>
+                                                                <Select
+                                                                    value={
+                                                                        form.proactiveChatMaxDaily === 'inherit'
+                                                                            ? 'inherit'
+                                                                            : String(form.proactiveChatMaxDaily)
+                                                                    }
+                                                                    onValueChange={v =>
+                                                                        setForm({
+                                                                            ...form,
+                                                                            proactiveChatMaxDaily:
+                                                                                v === 'inherit' ? 'inherit' : parseInt(v)
+                                                                        })
+                                                                    }
+                                                                >
+                                                                    <SelectTrigger>
+                                                                        <SelectValue />
+                                                                    </SelectTrigger>
+                                                                    <SelectContent>
+                                                                        <SelectItem value="inherit">继承</SelectItem>
+                                                                        <SelectItem value="5">5次</SelectItem>
+                                                                        <SelectItem value="10">10次</SelectItem>
+                                                                        <SelectItem value="20">20次</SelectItem>
+                                                                        <SelectItem value="50">50次</SelectItem>
+                                                                    </SelectContent>
+                                                                </Select>
+                                                            </div>
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs">最少消息</Label>
+                                                                <Input
+                                                                    type="number"
+                                                                    min={1}
+                                                                    max={50}
+                                                                    value={form.proactiveChatMinMessages}
+                                                                    onChange={e =>
+                                                                        setForm({
+                                                                            ...form,
+                                                                            proactiveChatMinMessages: parseInt(e.target.value) || 5
+                                                                        })
+                                                                    }
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                        <div className="grid grid-cols-2 gap-3">
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs">活跃时段开始</Label>
+                                                                <Input
+                                                                    type="number"
+                                                                    min={0}
+                                                                    max={23}
+                                                                    value={form.proactiveChatTimeStart}
+                                                                    onChange={e =>
+                                                                        setForm({
+                                                                            ...form,
+                                                                            proactiveChatTimeStart: parseInt(e.target.value) || 8
+                                                                        })
+                                                                    }
+                                                                />
+                                                            </div>
+                                                            <div className="space-y-1">
+                                                                <Label className="text-xs">活跃时段结束</Label>
+                                                                <Input
+                                                                    type="number"
+                                                                    min={0}
+                                                                    max={23}
+                                                                    value={form.proactiveChatTimeEnd}
+                                                                    onChange={e =>
+                                                                        setForm({
+                                                                            ...form,
+                                                                            proactiveChatTimeEnd: parseInt(e.target.value) || 23
+                                                                        })
+                                                                    }
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* 回复风格 */}
+                                            <div className="border-t pt-4 mt-4">
+                                                <div className="flex items-center gap-2 mb-3">
+                                                    <Smile className="h-4 w-4 text-yellow-500" />
+                                                    <Label className="font-medium">回复风格</Label>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <div className="space-y-1">
+                                                        <Label className="text-xs">回复长度</Label>
+                                                        <Select
+                                                            value={form.bymReplyLength}
+                                                            onValueChange={v => setForm({ ...form, bymReplyLength: v })}
+                                                        >
+                                                            <SelectTrigger>
+                                                                <SelectValue />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value="short">简短</SelectItem>
+                                                                <SelectItem value="medium">适中</SelectItem>
+                                                                <SelectItem value="long">详细</SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </div>
+                                                    <div className="flex items-center gap-2 pt-5">
+                                                        <Switch
+                                                            checked={form.bymUseEmoji}
+                                                            onCheckedChange={v => setForm({ ...form, bymUseEmoji: v })}
+                                                        />
+                                                        <Label className="text-sm">使用表情</Label>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </div>
                                     )}
                                 </TabsContent>
 
-                                {/* 主动聊天 */}
-                                <TabsContent value="proactive" className="space-y-4 mt-0">
+                                {/* 渠道与限制 */}
+                                <TabsContent value="channel" className="space-y-4 mt-0">
+                                    {/* 聊天配置 */}
                                     <div className="space-y-4">
-                                        <div className="flex items-center justify-between">
-                                            <div>
-                                                <Label>主动聊天</Label>
-                                                <p className="text-xs text-muted-foreground">
-                                                    允许机器人在本群主动发言
-                                                </p>
+                                        <div className="flex items-center gap-2">
+                                            <MessageSquare className="h-4 w-4 text-blue-500" />
+                                            <Label className="text-base font-medium">聊天配置</Label>
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                            配置本群的聊天行为和回复方式
+                                        </p>
+
+                                        <div className="space-y-3 p-3 rounded-lg border bg-card">
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <div className="space-y-1">
+                                                    <Label className="text-xs">上下文长度</Label>
+                                                    <Input
+                                                        type="number"
+                                                        min={1}
+                                                        max={100}
+                                                        value={form.chatContextLength}
+                                                        onChange={e => setForm({ ...form, chatContextLength: parseInt(e.target.value) || 20 })}
+                                                    />
+                                                </div>
+                                                <div className="flex items-center gap-2 pt-5">
+                                                    <Switch
+                                                        checked={form.chatEnabled}
+                                                        onCheckedChange={v => setForm({ ...form, chatEnabled: v })}
+                                                    />
+                                                    <Label className="text-sm">启用对话</Label>
+                                                </div>
                                             </div>
-                                            <Select
-                                                value={form.proactiveChatEnabled}
-                                                onValueChange={v =>
-                                                    setForm({
-                                                        ...form,
-                                                        proactiveChatEnabled: v as 'inherit' | 'on' | 'off'
-                                                    })
-                                                }
-                                            >
-                                                <SelectTrigger className="w-28">
-                                                    <SelectValue />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value="inherit">继承全局</SelectItem>
-                                                    <SelectItem value="on">启用</SelectItem>
-                                                    <SelectItem value="off">禁用</SelectItem>
-                                                </SelectContent>
-                                            </Select>
+                                            <div className="grid grid-cols-3 gap-3">
+                                                <div className="flex items-center gap-2">
+                                                    <Switch
+                                                        checked={form.chatStreamReply}
+                                                        onCheckedChange={v => setForm({ ...form, chatStreamReply: v })}
+                                                    />
+                                                    <Label className="text-xs">流式回复</Label>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <Switch
+                                                        checked={form.chatQuoteReply}
+                                                        onCheckedChange={v => setForm({ ...form, chatQuoteReply: v })}
+                                                    />
+                                                    <Label className="text-xs">引用回复</Label>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <Switch
+                                                        checked={form.chatShowThinking}
+                                                        onCheckedChange={v => setForm({ ...form, chatShowThinking: v })}
+                                                    />
+                                                    <Label className="text-xs">显示思考</Label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* 群独立渠道 */}
+                                    <div className="space-y-4 border-t pt-4 mt-4">
+                                        <div className="flex items-center gap-2">
+                                            <Server className="h-4 w-4 text-purple-500" />
+                                            <Label className="text-base font-medium">群独立渠道</Label>
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                            为本群配置独立的API渠道，优先级高于全局配置
+                                        </p>
+
+                                        <div className="space-y-3 p-3 rounded-lg border bg-card">
+                                            <div className="space-y-2">
+                                                <Label className="text-sm">API地址</Label>
+                                                <Input
+                                                    value={form.independentBaseUrl}
+                                                    onChange={e => setForm({ ...form, independentBaseUrl: e.target.value })}
+                                                    placeholder="https://api.openai.com/v1"
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label className="text-sm">API Key</Label>
+                                                <Input
+                                                    type="password"
+                                                    value={form.independentApiKey}
+                                                    onChange={e => setForm({ ...form, independentApiKey: e.target.value })}
+                                                    placeholder="sk-..."
+                                                />
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <div className="space-y-2">
+                                                    <Label className="text-sm">适配器类型</Label>
+                                                    <Select
+                                                        value={form.independentAdapterType}
+                                                        onValueChange={v => setForm({ ...form, independentAdapterType: v })}
+                                                    >
+                                                        <SelectTrigger>
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="openai">OpenAI</SelectItem>
+                                                            <SelectItem value="azure">Azure</SelectItem>
+                                                            <SelectItem value="claude">Claude</SelectItem>
+                                                            <SelectItem value="gemini">Gemini</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <Label className="text-sm">独立模型</Label>
+                                                    <Input
+                                                        value={form.chatModel}
+                                                        onChange={e => setForm({ ...form, chatModel: e.target.value })}
+                                                        placeholder="gpt-4o"
+                                                    />
+                                                </div>
+                                            </div>
                                         </div>
 
-                                        {form.proactiveChatEnabled !== 'off' && (
-                                            <>
-                                                <div className="space-y-2">
-                                                    <Label className="text-xs">触发概率</Label>
-                                                    <Select
-                                                        value={
-                                                            form.proactiveChatProbability === 'inherit'
-                                                                ? 'inherit'
-                                                                : String(form.proactiveChatProbability)
-                                                        }
-                                                        onValueChange={v =>
-                                                            setForm({
-                                                                ...form,
-                                                                proactiveChatProbability:
-                                                                    v === 'inherit' ? 'inherit' : parseFloat(v)
-                                                            })
-                                                        }
-                                                    >
-                                                        <SelectTrigger>
-                                                            <SelectValue />
-                                                        </SelectTrigger>
-                                                        <SelectContent>
-                                                            <SelectItem value="inherit">继承全局设置</SelectItem>
-                                                            <SelectItem value="0.01">1%</SelectItem>
-                                                            <SelectItem value="0.02">2%</SelectItem>
-                                                            <SelectItem value="0.05">5%</SelectItem>
-                                                            <SelectItem value="0.1">10%</SelectItem>
-                                                            <SelectItem value="0.15">15%</SelectItem>
-                                                            <SelectItem value="0.2">20%</SelectItem>
-                                                        </SelectContent>
-                                                    </Select>
-                                                </div>
-
-                                                <div className="space-y-2">
-                                                    <Label className="text-xs">冷却时间（分钟）</Label>
-                                                    <Select
-                                                        value={
-                                                            form.proactiveChatCooldown === 'inherit'
-                                                                ? 'inherit'
-                                                                : String(form.proactiveChatCooldown)
-                                                        }
-                                                        onValueChange={v =>
-                                                            setForm({
-                                                                ...form,
-                                                                proactiveChatCooldown:
-                                                                    v === 'inherit' ? 'inherit' : parseInt(v)
-                                                            })
-                                                        }
-                                                    >
-                                                        <SelectTrigger>
-                                                            <SelectValue />
-                                                        </SelectTrigger>
-                                                        <SelectContent>
-                                                            <SelectItem value="inherit">继承全局设置</SelectItem>
-                                                            <SelectItem value="10">10分钟</SelectItem>
-                                                            <SelectItem value="30">30分钟</SelectItem>
-                                                            <SelectItem value="60">1小时</SelectItem>
-                                                            <SelectItem value="120">2小时</SelectItem>
-                                                            <SelectItem value="360">6小时</SelectItem>
-                                                        </SelectContent>
-                                                    </Select>
-                                                </div>
-
-                                                <div className="space-y-2">
-                                                    <Label className="text-xs">每日最大次数</Label>
-                                                    <Select
-                                                        value={
-                                                            form.proactiveChatMaxDaily === 'inherit'
-                                                                ? 'inherit'
-                                                                : String(form.proactiveChatMaxDaily)
-                                                        }
-                                                        onValueChange={v =>
-                                                            setForm({
-                                                                ...form,
-                                                                proactiveChatMaxDaily:
-                                                                    v === 'inherit' ? 'inherit' : parseInt(v)
-                                                            })
-                                                        }
-                                                    >
-                                                        <SelectTrigger>
-                                                            <SelectValue />
-                                                        </SelectTrigger>
-                                                        <SelectContent>
-                                                            <SelectItem value="inherit">继承全局设置</SelectItem>
-                                                            <SelectItem value="5">5次</SelectItem>
-                                                            <SelectItem value="10">10次</SelectItem>
-                                                            <SelectItem value="20">20次</SelectItem>
-                                                            <SelectItem value="50">50次</SelectItem>
-                                                            <SelectItem value="100">100次</SelectItem>
-                                                        </SelectContent>
-                                                    </Select>
-                                                </div>
-                                            </>
-                                        )}
+                                        <p className="text-xs text-muted-foreground mt-2">
+                                            配置独立渠道后，本群将优先使用此渠道进行对话
+                                        </p>
                                     </div>
                                 </TabsContent>
 
@@ -1519,7 +2205,7 @@ export default function GroupAdminPage() {
                                             为本群配置各场景独立模型（留空使用全局配置）
                                         </p>
 
-                                        <div className="space-y-3">
+                                        <div className="grid grid-cols-2 gap-3">
                                             <ModelConfigItem
                                                 label="对话模型"
                                                 desc="主模型"
@@ -1533,6 +2219,20 @@ export default function GroupAdminPage() {
                                                 value={form.summaryModel}
                                                 models={allModels}
                                                 onChange={v => setForm({ ...form, summaryModel: v })}
+                                            />
+                                            <ModelConfigItem
+                                                label="伪人模型"
+                                                desc="伪人回复"
+                                                value={form.bymModel}
+                                                models={allModels}
+                                                onChange={v => setForm({ ...form, bymModel: v })}
+                                            />
+                                            <ModelConfigItem
+                                                label="绘图模型"
+                                                desc="图像生成"
+                                                value={form.imageGenModel}
+                                                models={allModels}
+                                                onChange={v => setForm({ ...form, imageGenModel: v })}
                                             />
                                         </div>
                                     </div>

@@ -1,36 +1,18 @@
-# Dependencies
 node_modules/
 frontend/node_modules/
-
-# Build outputs
 dist/
 build/
 .next/
 frontend/.next/
-
-# Data files
+frontend/
 data/
-
-# Resources (built frontend assets)
 resources/
-
-# Logs
 *.log
-
-# Config files that shouldn't be formatted
 config/*.json
-
-# Lock files
 package-lock.json
 pnpm-lock.yaml
 yarn.lock
-
-# Generated files
 *.min.js
 *.bundle.js
-
-# Markdown files
 *.md
-
-# GitHub
 .github/

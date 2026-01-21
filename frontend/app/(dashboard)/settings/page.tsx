@@ -629,13 +629,6 @@ export default function SettingsPage() {
                         伪人
                     </TabsTrigger>
                     <TabsTrigger
-                        value="proactive"
-                        className="data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg px-3 py-1.5 text-sm transition-all"
-                    >
-                        <Sparkles className="h-4 w-4 mr-1.5" />
-                        主动
-                    </TabsTrigger>
-                    <TabsTrigger
                         value="tools"
                         className="data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg px-3 py-1.5 text-sm transition-all"
                     >
@@ -1334,21 +1327,16 @@ export default function SettingsPage() {
                             </div>
                         </CardContent>
                     </Card>
-                </TabsContent>
 
-                {/* 主动聊天配置 */}
-                <TabsContent value="proactive" className="space-y-4">
-                    <Alert>
-                        <Info className="h-4 w-4" />
-                        <AlertDescription>
-                            主动聊天功能可以让机器人在群聊中随机主动发言，根据最近的聊天内容自然参与讨论。
-                        </AlertDescription>
-                    </Alert>
-
+                    {/* 主动聊天 - 伪人扩展 */}
                     <Card>
                         <CardHeader>
-                            <CardTitle>主动聊天设置</CardTitle>
-                            <CardDescription>配置机器人主动发言的行为</CardDescription>
+                            <CardTitle className="flex items-center gap-2">
+                                <Sparkles className="h-4 w-4" />
+                                主动聊天
+                                <Badge variant="secondary" className="text-xs">伪人扩展</Badge>
+                            </CardTitle>
+                            <CardDescription>让机器人在群聊中随机主动发言，根据聊天内容自然参与讨论</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
                             <div className="flex items-center justify-between">
@@ -1364,229 +1352,82 @@ export default function SettingsPage() {
                                     onCheckedChange={v => updateConfig('proactiveChat.enabled', v)}
                                 />
                             </div>
-                            <Separator />
-                            <div className="grid gap-2">
-                                <Label>轮询间隔（分钟）</Label>
-                                <Input
-                                    type="number"
-                                    min={1}
-                                    max={60}
-                                    value={
-                                        (config as unknown as { proactiveChat?: { pollInterval?: number } })
-                                            ?.proactiveChat?.pollInterval ?? 5
-                                    }
-                                    onChange={e => updateConfig('proactiveChat.pollInterval', parseInt(e.target.value))}
-                                />
-                                <p className="text-xs text-muted-foreground">每隔多少分钟检查一次是否触发主动聊天</p>
-                            </div>
-                            <div className="grid gap-2">
-                                <Label>基础触发概率</Label>
-                                <div className="flex items-center gap-4">
-                                    <Slider
-                                        value={[
-                                            (config as unknown as { proactiveChat?: { baseProbability?: number } })
-                                                ?.proactiveChat?.baseProbability ?? 0.05
-                                        ]}
-                                        onValueChange={([v]) => updateConfig('proactiveChat.baseProbability', v)}
-                                        min={0}
-                                        max={0.5}
-                                        step={0.01}
-                                        className="flex-1"
-                                    />
-                                    <span className="text-sm w-16 text-right">
-                                        {Math.round(
-                                            ((config as unknown as { proactiveChat?: { baseProbability?: number } })
-                                                ?.proactiveChat?.baseProbability ?? 0.05) * 100
-                                        )}
-                                        %
-                                    </span>
-                                </div>
-                                <p className="text-xs text-muted-foreground">每次轮询时触发主动聊天的概率</p>
-                            </div>
-                            <div className="grid gap-2">
-                                <Label>凌晨概率倍数</Label>
-                                <div className="flex items-center gap-4">
-                                    <Slider
-                                        value={[
-                                            (
-                                                config as unknown as {
-                                                    proactiveChat?: { nightProbabilityMultiplier?: number }
+                            {(config as unknown as { proactiveChat?: { enabled?: boolean } })?.proactiveChat?.enabled && (
+                                <>
+                                    <Separator />
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="grid gap-2">
+                                            <Label className="text-xs">轮询间隔(分钟)</Label>
+                                            <Input
+                                                type="number"
+                                                min={1}
+                                                max={60}
+                                                value={
+                                                    (config as unknown as { proactiveChat?: { pollInterval?: number } })
+                                                        ?.proactiveChat?.pollInterval ?? 5
                                                 }
-                                            )?.proactiveChat?.nightProbabilityMultiplier ?? 0.2
-                                        ]}
-                                        onValueChange={([v]) =>
-                                            updateConfig('proactiveChat.nightProbabilityMultiplier', v)
-                                        }
-                                        min={0}
-                                        max={1}
-                                        step={0.1}
-                                        className="flex-1"
-                                    />
-                                    <span className="text-sm w-16 text-right">
-                                        {(
-                                            config as unknown as {
-                                                proactiveChat?: { nightProbabilityMultiplier?: number }
-                                            }
-                                        )?.proactiveChat?.nightProbabilityMultiplier ?? 0.2}
-                                        x
-                                    </span>
-                                </div>
-                                <p className="text-xs text-muted-foreground">凌晨0-6点时概率乘以此倍数</p>
-                            </div>
-                            <div className="grid gap-2">
-                                <Label>冷却时间（分钟）</Label>
-                                <Input
-                                    type="number"
-                                    min={1}
-                                    max={1440}
-                                    value={
-                                        (config as unknown as { proactiveChat?: { cooldownMinutes?: number } })
-                                            ?.proactiveChat?.cooldownMinutes ?? 30
-                                    }
-                                    onChange={e =>
-                                        updateConfig('proactiveChat.cooldownMinutes', parseInt(e.target.value))
-                                    }
-                                />
-                                <p className="text-xs text-muted-foreground">同一个群触发后的冷却时间</p>
-                            </div>
-                            <div className="grid gap-2">
-                                <Label>每日最大次数</Label>
-                                <Input
-                                    type="number"
-                                    min={1}
-                                    max={100}
-                                    value={
-                                        (config as unknown as { proactiveChat?: { maxDailyMessages?: number } })
-                                            ?.proactiveChat?.maxDailyMessages ?? 20
-                                    }
-                                    onChange={e =>
-                                        updateConfig('proactiveChat.maxDailyMessages', parseInt(e.target.value))
-                                    }
-                                />
-                                <p className="text-xs text-muted-foreground">每个群每天最多主动发言次数</p>
-                            </div>
-                            <div className="grid gap-2">
-                                <Label>最少消息数</Label>
-                                <Input
-                                    type="number"
-                                    min={1}
-                                    max={100}
-                                    value={
-                                        (config as unknown as { proactiveChat?: { minMessagesBeforeTrigger?: number } })
-                                            ?.proactiveChat?.minMessagesBeforeTrigger ?? 10
-                                    }
-                                    onChange={e =>
-                                        updateConfig('proactiveChat.minMessagesBeforeTrigger', parseInt(e.target.value))
-                                    }
-                                />
-                                <p className="text-xs text-muted-foreground">群内至少有多少条消息才会触发</p>
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>群组过滤</CardTitle>
-                            <CardDescription>配置哪些群启用主动聊天</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="grid gap-2">
-                                <Label>启用群白名单</Label>
-                                <DynamicTags
-                                    value={
-                                        (config as unknown as { proactiveChat?: { enabledGroups?: string[] } })
-                                            ?.proactiveChat?.enabledGroups || []
-                                    }
-                                    onChange={v => updateConfig('proactiveChat.enabledGroups', v)}
-                                    placeholder="输入群号后回车"
-                                />
-                                <p className="text-xs text-muted-foreground">
-                                    留空表示所有群都启用，有值时仅这些群启用
-                                </p>
-                            </div>
-                            <div className="grid gap-2">
-                                <Label>禁用群黑名单</Label>
-                                <DynamicTags
-                                    value={
-                                        (config as unknown as { proactiveChat?: { blacklistGroups?: string[] } })
-                                            ?.proactiveChat?.blacklistGroups || []
-                                    }
-                                    onChange={v => updateConfig('proactiveChat.blacklistGroups', v)}
-                                    placeholder="输入群号后回车"
-                                />
-                                <p className="text-xs text-muted-foreground">这些群将不会触发主动聊天</p>
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>AI配置</CardTitle>
-                            <CardDescription>配置主动聊天使用的AI参数</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="grid gap-2">
-                                <Label>系统提示词</Label>
-                                <Textarea
-                                    value={
-                                        (config as unknown as { proactiveChat?: { systemPrompt?: string } })
-                                            ?.proactiveChat?.systemPrompt || ''
-                                    }
-                                    onChange={e => updateConfig('proactiveChat.systemPrompt', e.target.value)}
-                                    placeholder="你是群里的一员，根据最近的聊天内容自然地参与讨论。"
-                                    rows={3}
-                                />
-                            </div>
-                            <div className="grid gap-2">
-                                <Label>上下文消息数</Label>
-                                <Input
-                                    type="number"
-                                    min={5}
-                                    max={50}
-                                    value={
-                                        (config as unknown as { proactiveChat?: { contextMessageCount?: number } })
-                                            ?.proactiveChat?.contextMessageCount ?? 20
-                                    }
-                                    onChange={e =>
-                                        updateConfig('proactiveChat.contextMessageCount', parseInt(e.target.value))
-                                    }
-                                />
-                                <p className="text-xs text-muted-foreground">参考最近多少条消息作为上下文</p>
-                            </div>
-                            <div className="grid gap-2">
-                                <Label>最大回复长度</Label>
-                                <Input
-                                    type="number"
-                                    min={50}
-                                    max={500}
-                                    value={
-                                        (config as unknown as { proactiveChat?: { maxTokens?: number } })?.proactiveChat
-                                            ?.maxTokens ?? 150
-                                    }
-                                    onChange={e => updateConfig('proactiveChat.maxTokens', parseInt(e.target.value))}
-                                />
-                            </div>
-                            <div className="grid gap-2">
-                                <Label>温度 (0-1)</Label>
-                                <div className="flex items-center gap-4">
-                                    <Slider
-                                        value={[
-                                            (config as unknown as { proactiveChat?: { temperature?: number } })
-                                                ?.proactiveChat?.temperature ?? 0.9
-                                        ]}
-                                        onValueChange={([v]) => updateConfig('proactiveChat.temperature', v)}
-                                        min={0}
-                                        max={1}
-                                        step={0.1}
-                                        className="flex-1"
-                                    />
-                                    <span className="text-sm w-12 text-right">
-                                        {(config as unknown as { proactiveChat?: { temperature?: number } })
-                                            ?.proactiveChat?.temperature ?? 0.9}
-                                    </span>
-                                </div>
-                                <p className="text-xs text-muted-foreground">较高的温度会使回复更有创意和随机</p>
-                            </div>
+                                                onChange={e => updateConfig('proactiveChat.pollInterval', parseInt(e.target.value))}
+                                            />
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <Label className="text-xs">冷却时间(分钟)</Label>
+                                            <Input
+                                                type="number"
+                                                min={1}
+                                                max={1440}
+                                                value={
+                                                    (config as unknown as { proactiveChat?: { cooldownMinutes?: number } })
+                                                        ?.proactiveChat?.cooldownMinutes ?? 30
+                                                }
+                                                onChange={e => updateConfig('proactiveChat.cooldownMinutes', parseInt(e.target.value))}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="grid gap-2">
+                                            <Label className="text-xs">每日最大次数</Label>
+                                            <Input
+                                                type="number"
+                                                min={1}
+                                                max={100}
+                                                value={
+                                                    (config as unknown as { proactiveChat?: { maxDailyMessages?: number } })
+                                                        ?.proactiveChat?.maxDailyMessages ?? 20
+                                                }
+                                                onChange={e => updateConfig('proactiveChat.maxDailyMessages', parseInt(e.target.value))}
+                                            />
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <Label className="text-xs">最少消息数</Label>
+                                            <Input
+                                                type="number"
+                                                min={1}
+                                                max={100}
+                                                value={
+                                                    (config as unknown as { proactiveChat?: { minMessagesBeforeTrigger?: number } })
+                                                        ?.proactiveChat?.minMessagesBeforeTrigger ?? 10
+                                                }
+                                                onChange={e => updateConfig('proactiveChat.minMessagesBeforeTrigger', parseInt(e.target.value))}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <div className="flex justify-between">
+                                            <Label className="text-xs">基础触发概率</Label>
+                                            <span className="text-xs text-muted-foreground">
+                                                {Math.round(((config as unknown as { proactiveChat?: { baseProbability?: number } })?.proactiveChat?.baseProbability ?? 0.05) * 100)}%
+                                            </span>
+                                        </div>
+                                        <Slider
+                                            value={[(config as unknown as { proactiveChat?: { baseProbability?: number } })?.proactiveChat?.baseProbability ?? 0.05]}
+                                            onValueChange={([v]) => updateConfig('proactiveChat.baseProbability', v)}
+                                            min={0}
+                                            max={0.5}
+                                            step={0.01}
+                                        />
+                                    </div>
+                                </>
+                            )}
                         </CardContent>
                     </Card>
                 </TabsContent>
@@ -1887,6 +1728,22 @@ export default function SettingsPage() {
                             </div>
                             {config.features?.poke?.enabled && (
                                 <>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label>响应概率</Label>
+                                            <span className="text-sm text-muted-foreground">
+                                                {Math.round(((config.features?.poke as { probability?: number })?.probability ?? 1) * 100)}%
+                                            </span>
+                                        </div>
+                                        <Slider
+                                            value={[(config.features?.poke as { probability?: number })?.probability ?? 1]}
+                                            onValueChange={([v]) => updateConfig('features.poke.probability', v)}
+                                            min={0}
+                                            max={1}
+                                            step={0.05}
+                                        />
+                                        <p className="text-xs text-muted-foreground">全局默认概率，群组可覆盖</p>
+                                    </div>
                                     <div className="flex items-center justify-between">
                                         <Label>自动回戳</Label>
                                         <Switch
@@ -1988,6 +1845,21 @@ export default function SettingsPage() {
                             </div>
                             {config.features?.recall?.enabled && (
                                 <>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label>响应概率</Label>
+                                            <span className="text-sm text-muted-foreground">
+                                                {Math.round(((config.features?.recall as { probability?: number })?.probability ?? 1) * 100)}%
+                                            </span>
+                                        </div>
+                                        <Slider
+                                            value={[(config.features?.recall as { probability?: number })?.probability ?? 1]}
+                                            onValueChange={([v]) => updateConfig('features.recall.probability', v)}
+                                            min={0}
+                                            max={1}
+                                            step={0.05}
+                                        />
+                                    </div>
                                     <div className="flex items-center justify-between">
                                         <div>
                                             <Label>AI响应</Label>
@@ -2033,6 +1905,22 @@ export default function SettingsPage() {
                             </div>
                             {config.features?.welcome?.enabled && (
                                 <>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label>响应概率</Label>
+                                            <span className="text-sm text-muted-foreground">
+                                                {Math.round(((config.features?.welcome as { probability?: number })?.probability ?? 1) * 100)}%
+                                            </span>
+                                        </div>
+                                        <Slider
+                                            value={[(config.features?.welcome as { probability?: number })?.probability ?? 1]}
+                                            onValueChange={([v]) => updateConfig('features.welcome.probability', v)}
+                                            min={0}
+                                            max={1}
+                                            step={0.05}
+                                        />
+                                        <p className="text-xs text-muted-foreground">全局默认概率，群组可覆盖</p>
+                                    </div>
                                     <div className="grid gap-2">
                                         <Label>默认欢迎语</Label>
                                         <Input
@@ -2077,6 +1965,22 @@ export default function SettingsPage() {
                             </div>
                             {config.features?.goodbye?.enabled && (
                                 <>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label>响应概率</Label>
+                                            <span className="text-sm text-muted-foreground">
+                                                {Math.round(((config.features?.goodbye as { probability?: number })?.probability ?? 1) * 100)}%
+                                            </span>
+                                        </div>
+                                        <Slider
+                                            value={[(config.features?.goodbye as { probability?: number })?.probability ?? 1]}
+                                            onValueChange={([v]) => updateConfig('features.goodbye.probability', v)}
+                                            min={0}
+                                            max={1}
+                                            step={0.05}
+                                        />
+                                        <p className="text-xs text-muted-foreground">全局默认概率，群组可覆盖</p>
+                                    </div>
                                     <div className="flex items-center justify-between">
                                         <div>
                                             <Label>AI响应</Label>
@@ -2124,6 +2028,21 @@ export default function SettingsPage() {
                             </div>
                             {(config.features as { ban?: { enabled?: boolean } })?.ban?.enabled && (
                                 <>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label>响应概率</Label>
+                                            <span className="text-sm text-muted-foreground">
+                                                {Math.round(((config.features as { ban?: { probability?: number } })?.ban?.probability ?? 1) * 100)}%
+                                            </span>
+                                        </div>
+                                        <Slider
+                                            value={[(config.features as { ban?: { probability?: number } })?.ban?.probability ?? 1]}
+                                            onValueChange={([v]) => updateConfig('features.ban.probability', v)}
+                                            min={0}
+                                            max={1}
+                                            step={0.05}
+                                        />
+                                    </div>
                                     <div className="flex items-center justify-between">
                                         <div>
                                             <Label>AI响应</Label>
@@ -2174,6 +2093,21 @@ export default function SettingsPage() {
                             </div>
                             {config.features?.luckyKing?.enabled && (
                                 <>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label>响应概率</Label>
+                                            <span className="text-sm text-muted-foreground">
+                                                {Math.round(((config.features?.luckyKing as { probability?: number })?.probability ?? 1) * 100)}%
+                                            </span>
+                                        </div>
+                                        <Slider
+                                            value={[(config.features?.luckyKing as { probability?: number })?.probability ?? 1]}
+                                            onValueChange={([v]) => updateConfig('features.luckyKing.probability', v)}
+                                            min={0}
+                                            max={1}
+                                            step={0.05}
+                                        />
+                                    </div>
                                     <div className="flex items-center justify-between">
                                         <div>
                                             <Label>祝贺他人</Label>
@@ -2222,8 +2156,24 @@ export default function SettingsPage() {
                                 />
                             </div>
                             {config.features?.honor?.enabled && (
-                                <div className="grid gap-2">
-                                    <Label>自定义提示词</Label>
+                                <>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label>响应概率</Label>
+                                            <span className="text-sm text-muted-foreground">
+                                                {Math.round(((config.features?.honor as { probability?: number })?.probability ?? 1) * 100)}%
+                                            </span>
+                                        </div>
+                                        <Slider
+                                            value={[(config.features?.honor as { probability?: number })?.probability ?? 1]}
+                                            onValueChange={([v]) => updateConfig('features.honor.probability', v)}
+                                            min={0}
+                                            max={1}
+                                            step={0.05}
+                                        />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label>自定义提示词</Label>
                                     <Textarea
                                         value={(config.features?.honor as { prompt?: string })?.prompt || ''}
                                         onChange={e => updateConfig('features.honor.prompt', e.target.value)}
@@ -2233,7 +2183,8 @@ export default function SettingsPage() {
                                     <p className="text-xs text-muted-foreground">
                                         支持占位符: {'{honor}'} 荣誉名称(龙王/群聊之火等), {'{group_name}'}
                                     </p>
-                                </div>
+                                    </div>
+                                </>
                             )}
                         </CardContent>
                     </Card>
@@ -2254,18 +2205,35 @@ export default function SettingsPage() {
                                 />
                             </div>
                             {config.features?.essence?.enabled && (
-                                <div className="grid gap-2">
-                                    <Label>自定义提示词</Label>
-                                    <Textarea
-                                        value={(config.features?.essence as { prompt?: string })?.prompt || ''}
-                                        onChange={e => updateConfig('features.essence.prompt', e.target.value)}
-                                        placeholder="[事件通知] {operator} 把你之前发的消息设置成了精华消息！请简短表达一下。"
-                                        rows={2}
-                                    />
-                                    <p className="text-xs text-muted-foreground">
-                                        支持占位符: {'{operator}'} 操作者昵称, {'{group_name}'}
-                                    </p>
-                                </div>
+                                <>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label>响应概率</Label>
+                                            <span className="text-sm text-muted-foreground">
+                                                {Math.round(((config.features?.essence as { probability?: number })?.probability ?? 1) * 100)}%
+                                            </span>
+                                        </div>
+                                        <Slider
+                                            value={[(config.features?.essence as { probability?: number })?.probability ?? 1]}
+                                            onValueChange={([v]) => updateConfig('features.essence.probability', v)}
+                                            min={0}
+                                            max={1}
+                                            step={0.05}
+                                        />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label>自定义提示词</Label>
+                                        <Textarea
+                                            value={(config.features?.essence as { prompt?: string })?.prompt || ''}
+                                            onChange={e => updateConfig('features.essence.prompt', e.target.value)}
+                                            placeholder="[事件通知] {operator} 把你之前发的消息设置成了精华消息！请简短表达一下。"
+                                            rows={2}
+                                        />
+                                        <p className="text-xs text-muted-foreground">
+                                            支持占位符: {'{operator}'} 操作者昵称, {'{group_name}'}
+                                        </p>
+                                    </div>
+                                </>
                             )}
                         </CardContent>
                     </Card>
@@ -2288,20 +2256,37 @@ export default function SettingsPage() {
                                 />
                             </div>
                             {(config.features as { admin?: { enabled?: boolean } })?.admin?.enabled && (
-                                <div className="grid gap-2">
-                                    <Label>自定义提示词</Label>
-                                    <Textarea
-                                        value={
-                                            (config.features as { admin?: { prompt?: string } })?.admin?.prompt || ''
-                                        }
-                                        onChange={e => updateConfig('features.admin.prompt', e.target.value)}
-                                        placeholder="[事件通知] 你{action}！请简短表达一下。"
-                                        rows={2}
-                                    />
-                                    <p className="text-xs text-muted-foreground">
-                                        支持占位符: {'{action}'} (被设置成了群管理员/的管理员身份被取消了)
-                                    </p>
-                                </div>
+                                <>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label>响应概率</Label>
+                                            <span className="text-sm text-muted-foreground">
+                                                {Math.round(((config.features as { admin?: { probability?: number } })?.admin?.probability ?? 1) * 100)}%
+                                            </span>
+                                        </div>
+                                        <Slider
+                                            value={[(config.features as { admin?: { probability?: number } })?.admin?.probability ?? 1]}
+                                            onValueChange={([v]) => updateConfig('features.admin.probability', v)}
+                                            min={0}
+                                            max={1}
+                                            step={0.05}
+                                        />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label>自定义提示词</Label>
+                                        <Textarea
+                                            value={
+                                                (config.features as { admin?: { prompt?: string } })?.admin?.prompt || ''
+                                            }
+                                            onChange={e => updateConfig('features.admin.prompt', e.target.value)}
+                                            placeholder="[事件通知] 你{action}！请简短表达一下。"
+                                            rows={2}
+                                        />
+                                        <p className="text-xs text-muted-foreground">
+                                            支持占位符: {'{action}'} (被设置成了群管理员/的管理员身份被取消了)
+                                        </p>
+                                    </div>
+                                </>
                             )}
                         </CardContent>
                     </Card>

@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
+import { Slider } from '@/components/ui/slider'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
@@ -90,7 +91,18 @@ export default function ScopeManagerPage() {
         summaryEnabled: 'inherit' as 'inherit' | 'on' | 'off',
         eventEnabled: 'inherit' as 'inherit' | 'on' | 'off',
         customPrefix: '',
-        triggerMode: 'default'
+        triggerMode: 'default',
+        // 事件详细配置
+        welcomeEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+        welcomeMessage: '',
+        welcomePrompt: '',
+        welcomeProbability: 'inherit' as 'inherit' | number,
+        goodbyeEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+        goodbyePrompt: '',
+        goodbyeProbability: 'inherit' as 'inherit' | number,
+        pokeEnabled: 'inherit' as 'inherit' | 'on' | 'off',
+        pokeBack: false,
+        pokeProbability: 'inherit' as 'inherit' | number
     })
     const [groupUserForm, setGroupUserForm] = useState({ groupId: '', userId: '', systemPrompt: '', presetId: '' })
     const [privateForm, setPrivateForm] = useState({ userId: '', systemPrompt: '', presetId: '' })
@@ -247,7 +259,18 @@ export default function ScopeManagerPage() {
                     settings.summaryEnabled === undefined ? 'inherit' : settings.summaryEnabled ? 'on' : 'off',
                 eventEnabled: settings.eventEnabled === undefined ? 'inherit' : settings.eventEnabled ? 'on' : 'off',
                 customPrefix: settings.customPrefix || '',
-                triggerMode: settings.triggerMode || 'default'
+                triggerMode: settings.triggerMode || 'default',
+                // 事件详细配置
+                welcomeEnabled: settings.welcomeEnabled === undefined ? 'inherit' : settings.welcomeEnabled ? 'on' : 'off',
+                welcomeMessage: settings.welcomeMessage || '',
+                welcomePrompt: settings.welcomePrompt || '',
+                welcomeProbability: settings.welcomeProbability ?? 'inherit',
+                goodbyeEnabled: settings.goodbyeEnabled === undefined ? 'inherit' : settings.goodbyeEnabled ? 'on' : 'off',
+                goodbyePrompt: settings.goodbyePrompt || '',
+                goodbyeProbability: settings.goodbyeProbability ?? 'inherit',
+                pokeEnabled: settings.pokeEnabled === undefined ? 'inherit' : settings.pokeEnabled ? 'on' : 'off',
+                pokeBack: settings.pokeBack || false,
+                pokeProbability: settings.pokeProbability ?? 'inherit'
             })
         } else {
             setEditMode(false)
@@ -260,7 +283,17 @@ export default function ScopeManagerPage() {
                 summaryEnabled: 'inherit',
                 eventEnabled: 'inherit',
                 customPrefix: '',
-                triggerMode: 'default'
+                triggerMode: 'default',
+                welcomeEnabled: 'inherit',
+                welcomeMessage: '',
+                welcomePrompt: '',
+                welcomeProbability: 'inherit',
+                goodbyeEnabled: 'inherit',
+                goodbyePrompt: '',
+                goodbyeProbability: 'inherit',
+                pokeEnabled: 'inherit',
+                pokeBack: false,
+                pokeProbability: 'inherit'
             })
         }
         setGroupDialogOpen(true)
@@ -281,7 +314,18 @@ export default function ScopeManagerPage() {
                 summaryEnabled: groupForm.summaryEnabled === 'inherit' ? undefined : groupForm.summaryEnabled === 'on',
                 eventEnabled: groupForm.eventEnabled === 'inherit' ? undefined : groupForm.eventEnabled === 'on',
                 customPrefix: groupForm.customPrefix || undefined,
-                triggerMode: groupForm.triggerMode
+                triggerMode: groupForm.triggerMode,
+                // 事件详细配置
+                welcomeEnabled: groupForm.welcomeEnabled === 'inherit' ? undefined : groupForm.welcomeEnabled === 'on',
+                welcomeMessage: groupForm.welcomeMessage || undefined,
+                welcomePrompt: groupForm.welcomePrompt || undefined,
+                welcomeProbability: groupForm.welcomeProbability === 'inherit' ? undefined : groupForm.welcomeProbability,
+                goodbyeEnabled: groupForm.goodbyeEnabled === 'inherit' ? undefined : groupForm.goodbyeEnabled === 'on',
+                goodbyePrompt: groupForm.goodbyePrompt || undefined,
+                goodbyeProbability: groupForm.goodbyeProbability === 'inherit' ? undefined : groupForm.goodbyeProbability,
+                pokeEnabled: groupForm.pokeEnabled === 'inherit' ? undefined : groupForm.pokeEnabled === 'on',
+                pokeBack: groupForm.pokeBack,
+                pokeProbability: groupForm.pokeProbability === 'inherit' ? undefined : groupForm.pokeProbability
             })
             toast.success('保存成功')
             setGroupDialogOpen(false)
@@ -999,6 +1043,161 @@ export default function ScopeManagerPage() {
                                         </SelectContent>
                                     </Select>
                                 </div>
+                                {/* 事件详细配置 */}
+                                {groupForm.eventEnabled !== 'off' && (
+                                    <div className="ml-4 pl-4 border-l-2 border-muted space-y-3 pt-2">
+                                        {/* 入群欢迎 */}
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-xs font-medium">👋 入群欢迎</span>
+                                                <Select
+                                                    value={groupForm.welcomeEnabled}
+                                                    onValueChange={(v: 'inherit' | 'on' | 'off') => {
+                                                        const updates: Partial<typeof groupForm> = { welcomeEnabled: v }
+                                                        if (v === 'on' && groupForm.welcomeProbability === 'inherit') {
+                                                            updates.welcomeProbability = 1.0
+                                                        }
+                                                        setGroupForm({ ...groupForm, ...updates })
+                                                    }}
+                                                >
+                                                    <SelectTrigger className="w-24 h-7 text-xs">
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="inherit">继承</SelectItem>
+                                                        <SelectItem value="on">开启</SelectItem>
+                                                        <SelectItem value="off">关闭</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            {groupForm.welcomeEnabled === 'on' && (
+                                                <div className="space-y-2 pl-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-muted-foreground w-12">概率</span>
+                                                        <Slider
+                                                            value={[groupForm.welcomeProbability === 'inherit' ? 1 : groupForm.welcomeProbability as number]}
+                                                            onValueChange={([v]) => setGroupForm({ ...groupForm, welcomeProbability: v })}
+                                                            min={0} max={1} step={0.05}
+                                                            className="flex-1"
+                                                        />
+                                                        <span className="text-xs w-10 text-right">
+                                                            {Math.round((groupForm.welcomeProbability === 'inherit' ? 1 : groupForm.welcomeProbability as number) * 100)}%
+                                                        </span>
+                                                    </div>
+                                                    <Input
+                                                        value={groupForm.welcomeMessage}
+                                                        onChange={e => setGroupForm({ ...groupForm, welcomeMessage: e.target.value })}
+                                                        placeholder="固定欢迎语（留空使用AI）"
+                                                        className="h-7 text-xs"
+                                                    />
+                                                    <Textarea
+                                                        value={groupForm.welcomePrompt}
+                                                        onChange={e => setGroupForm({ ...groupForm, welcomePrompt: e.target.value })}
+                                                        placeholder="AI欢迎提示词"
+                                                        rows={2}
+                                                        className="text-xs"
+                                                    />
+                                                </div>
+                                            )}
+                                        </div>
+                                        {/* 退群告别 */}
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-xs font-medium">👋 退群告别</span>
+                                                <Select
+                                                    value={groupForm.goodbyeEnabled}
+                                                    onValueChange={(v: 'inherit' | 'on' | 'off') => {
+                                                        const updates: Partial<typeof groupForm> = { goodbyeEnabled: v }
+                                                        if (v === 'on' && groupForm.goodbyeProbability === 'inherit') {
+                                                            updates.goodbyeProbability = 1.0
+                                                        }
+                                                        setGroupForm({ ...groupForm, ...updates })
+                                                    }}
+                                                >
+                                                    <SelectTrigger className="w-24 h-7 text-xs">
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="inherit">继承</SelectItem>
+                                                        <SelectItem value="on">开启</SelectItem>
+                                                        <SelectItem value="off">关闭</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            {groupForm.goodbyeEnabled === 'on' && (
+                                                <div className="space-y-2 pl-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-muted-foreground w-12">概率</span>
+                                                        <Slider
+                                                            value={[groupForm.goodbyeProbability === 'inherit' ? 1 : groupForm.goodbyeProbability as number]}
+                                                            onValueChange={([v]) => setGroupForm({ ...groupForm, goodbyeProbability: v })}
+                                                            min={0} max={1} step={0.05}
+                                                            className="flex-1"
+                                                        />
+                                                        <span className="text-xs w-10 text-right">
+                                                            {Math.round((groupForm.goodbyeProbability === 'inherit' ? 1 : groupForm.goodbyeProbability as number) * 100)}%
+                                                        </span>
+                                                    </div>
+                                                    <Textarea
+                                                        value={groupForm.goodbyePrompt}
+                                                        onChange={e => setGroupForm({ ...groupForm, goodbyePrompt: e.target.value })}
+                                                        placeholder="AI告别提示词"
+                                                        rows={2}
+                                                        className="text-xs"
+                                                    />
+                                                </div>
+                                            )}
+                                        </div>
+                                        {/* 戳一戳 */}
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-xs font-medium">👆 戳一戳</span>
+                                                <Select
+                                                    value={groupForm.pokeEnabled}
+                                                    onValueChange={(v: 'inherit' | 'on' | 'off') => {
+                                                        const updates: Partial<typeof groupForm> = { pokeEnabled: v }
+                                                        if (v === 'on' && groupForm.pokeProbability === 'inherit') {
+                                                            updates.pokeProbability = 1.0
+                                                        }
+                                                        setGroupForm({ ...groupForm, ...updates })
+                                                    }}
+                                                >
+                                                    <SelectTrigger className="w-24 h-7 text-xs">
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="inherit">继承</SelectItem>
+                                                        <SelectItem value="on">开启</SelectItem>
+                                                        <SelectItem value="off">关闭</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            {groupForm.pokeEnabled === 'on' && (
+                                                <div className="space-y-2 pl-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-muted-foreground w-12">概率</span>
+                                                        <Slider
+                                                            value={[groupForm.pokeProbability === 'inherit' ? 1 : groupForm.pokeProbability as number]}
+                                                            onValueChange={([v]) => setGroupForm({ ...groupForm, pokeProbability: v })}
+                                                            min={0} max={1} step={0.05}
+                                                            className="flex-1"
+                                                        />
+                                                        <span className="text-xs w-10 text-right">
+                                                            {Math.round((groupForm.pokeProbability === 'inherit' ? 1 : groupForm.pokeProbability as number) * 100)}%
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <Switch
+                                                            checked={groupForm.pokeBack}
+                                                            onCheckedChange={v => setGroupForm({ ...groupForm, pokeBack: v })}
+                                                        />
+                                                        <span className="text-xs">戳回去</span>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
 

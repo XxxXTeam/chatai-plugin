@@ -300,7 +300,7 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                     triggerRate: settings.emojiThiefTriggerRate ? Math.round(settings.emojiThiefTriggerRate * 100) : 5,
                     triggerMode: settings.emojiThiefTriggerMode || 'off'
                 },
-                // 伪人配置
+                // 伪人配置（含主动发言）
                 bym: {
                     enabled: settings.bymEnabled,
                     presetId: settings.bymPresetId,
@@ -308,7 +308,51 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                     probability: settings.bymProbability,
                     modelId: settings.bymModel,
                     temperature: settings.bymTemperature,
-                    maxTokens: settings.bymMaxTokens
+                    maxTokens: settings.bymMaxTokens,
+                    // 主动发言（伪人扩展）
+                    proactive: {
+                        enabled: settings.proactiveChatEnabled || false,
+                        probability: settings.proactiveChatProbability ?? 0.05,
+                        cooldown: settings.proactiveChatCooldown ?? 300,
+                        maxDaily: settings.proactiveChatMaxDaily ?? 10,
+                        minMessages: settings.proactiveChatMinMessages ?? 5,
+                        keywords: settings.proactiveChatKeywords || [],
+                        timeRange: {
+                            start: settings.proactiveChatTimeStart ?? 8,
+                            end: settings.proactiveChatTimeEnd ?? 23
+                        }
+                    },
+                    // 回复风格
+                    style: {
+                        replyLength: settings.bymReplyLength || 'medium',
+                        useEmoji: settings.bymUseEmoji ?? true,
+                        personalityStrength: settings.bymPersonalityStrength ?? 0.7
+                    }
+                },
+                // 聊天配置
+                chat: {
+                    enabled: settings.chatEnabled ?? true,
+                    contextLength: settings.chatContextLength ?? 20,
+                    temperature: settings.chatTemperature,
+                    maxTokens: settings.chatMaxTokens,
+                    streamReply: settings.chatStreamReply ?? true,
+                    quoteReply: settings.chatQuoteReply ?? false,
+                    showThinking: settings.chatShowThinking ?? true,
+                    autoRecall: {
+                        enabled: settings.chatAutoRecallEnabled ?? false,
+                        delay: settings.chatAutoRecallDelay ?? 60
+                    }
+                },
+                // 绘图配置
+                imageGen: {
+                    enabled: settings.imageGenEnabled,
+                    modelId: settings.drawModel || settings.imageGenModel,
+                    size: settings.imageGenSize || '1024x1024',
+                    quality: settings.imageGenQuality || 'standard',
+                    style: settings.imageGenStyle || 'vivid',
+                    negativePrompt: settings.imageGenNegativePrompt || '',
+                    maxDailyLimit: settings.imageGenDailyLimit ?? 0,
+                    cooldown: settings.imageGenCooldown ?? 0
                 },
                 // 模型配置
                 models: {
@@ -326,29 +370,74 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                 listMode: settings.listMode || 'none',
                 blacklist: settings.blacklist || [],
                 whitelist: settings.whitelist || [],
-                // 定时推送
-                summaryPush: {
-                    enabled: settings.summaryPushEnabled || false,
-                    intervalType: settings.summaryPushIntervalType || 'day',
-                    intervalValue: settings.summaryPushIntervalValue || 1,
-                    pushHour: settings.summaryPushHour ?? 20,
-                    messageCount: settings.summaryPushMessageCount || 100
-                },
-                // 事件处理扩展
-                welcomeEnabled: settings.welcomeEnabled,
-                welcomeMessage: settings.welcomeMessage || '',
-                welcomePrompt: settings.welcomePrompt || '',
-                goodbyeEnabled: settings.goodbyeEnabled,
-                goodbyePrompt: settings.goodbyePrompt || '',
-                pokeEnabled: settings.pokeEnabled,
-                pokeBack: settings.pokeBack || false,
                 // 知识库
                 knowledgeIds: groupSettings?.knowledgeIds || [],
-                // 主动聊天
-                proactiveChatEnabled: settings.proactiveChatEnabled,
-                proactiveChatProbability: settings.proactiveChatProbability,
-                proactiveChatCooldown: settings.proactiveChatCooldown,
-                proactiveChatMaxDaily: settings.proactiveChatMaxDaily,
+                // 群独立渠道配置
+                independentChannel: {
+                    hasChannel: !!(settings.independentBaseUrl && settings.independentApiKey),
+                    baseUrl: settings.independentBaseUrl || '',
+                    apiKey: settings.independentApiKey ? '****' + settings.independentApiKey.slice(-4) : '',
+                    adapterType: settings.independentAdapterType || 'openai',
+                    forbidGlobal: settings.forbidGlobalModel || false
+                },
+                // 使用限制
+                usageLimit: {
+                    dailyGroupLimit: settings.dailyGroupLimit || 0,
+                    dailyUserLimit: settings.dailyUserLimit || 0,
+                    limitMessage: settings.usageLimitMessage || '',
+                    // 分功能限制
+                    chatLimit: settings.chatDailyLimit ?? 0,
+                    imageLimit: settings.imageDailyLimit ?? 0,
+                    toolsLimit: settings.toolsDailyLimit ?? 0
+                },
+                // 总结配置
+                summary: {
+                    enabled: settings.summaryEnabled,
+                    modelId: settings.summaryModel,
+                    autoTrigger: settings.summaryAutoTrigger ?? false,
+                    triggerCount: settings.summaryTriggerCount ?? 100,
+                    includeImages: settings.summaryIncludeImages ?? false,
+                    maxLength: settings.summaryMaxLength ?? 500,
+                    // 定时推送
+                    push: {
+                        enabled: settings.summaryPushEnabled || false,
+                        intervalType: settings.summaryPushIntervalType || 'day',
+                        intervalValue: settings.summaryPushIntervalValue || 1,
+                        pushHour: settings.summaryPushHour ?? 20,
+                        messageCount: settings.summaryPushMessageCount || 100
+                    }
+                },
+                // 工具调用配置
+                tools: {
+                    enabled: settings.toolsEnabled,
+                    allowedTools: settings.allowedTools || [],
+                    blockedTools: settings.blockedTools || [],
+                    autoApprove: settings.toolsAutoApprove ?? true,
+                    maxCalls: settings.toolsMaxCalls ?? 5
+                },
+                // 事件处理配置
+                events: {
+                    enabled: settings.eventEnabled,
+                    welcome: {
+                        enabled: settings.welcomeEnabled,
+                        message: settings.welcomeMessage || '',
+                        prompt: settings.welcomePrompt || '',
+                        probability: settings.welcomeProbability,
+                        useAI: settings.welcomeUseAI ?? false
+                    },
+                    goodbye: {
+                        enabled: settings.goodbyeEnabled,
+                        prompt: settings.goodbyePrompt || '',
+                        probability: settings.goodbyeProbability,
+                        useAI: settings.goodbyeUseAI ?? false
+                    },
+                    poke: {
+                        enabled: settings.pokeEnabled,
+                        pokeBack: settings.pokeBack ?? false,
+                        probability: settings.pokeProbability,
+                        message: settings.pokeMessage || ''
+                    }
+                },
                 // 辅助数据
                 presets,
                 channels,
@@ -394,7 +483,7 @@ router.put('/config', groupAdminAuth, async (req, res) => {
             emojiThiefStealRate: body.emojiThief?.probability ? body.emojiThief.probability / 100 : undefined,
             emojiThiefTriggerRate: body.emojiThief?.triggerRate ? body.emojiThief.triggerRate / 100 : undefined,
             emojiThiefTriggerMode: body.emojiThief?.triggerMode,
-            // 伪人
+            // 伪人（含主动发言）
             bymEnabled: body.bym?.enabled,
             bymPresetId: body.bym?.presetId,
             bymPrompt: body.bym?.prompt,
@@ -402,6 +491,38 @@ router.put('/config', groupAdminAuth, async (req, res) => {
             bymModel: body.bym?.modelId,
             bymTemperature: body.bym?.temperature,
             bymMaxTokens: body.bym?.maxTokens,
+            // 伪人 - 主动发言
+            proactiveChatEnabled: body.bym?.proactive?.enabled,
+            proactiveChatProbability: body.bym?.proactive?.probability,
+            proactiveChatCooldown: body.bym?.proactive?.cooldown,
+            proactiveChatMaxDaily: body.bym?.proactive?.maxDaily,
+            proactiveChatMinMessages: body.bym?.proactive?.minMessages,
+            proactiveChatKeywords: body.bym?.proactive?.keywords,
+            proactiveChatTimeStart: body.bym?.proactive?.timeRange?.start,
+            proactiveChatTimeEnd: body.bym?.proactive?.timeRange?.end,
+            // 伪人 - 回复风格
+            bymReplyLength: body.bym?.style?.replyLength,
+            bymUseEmoji: body.bym?.style?.useEmoji,
+            bymPersonalityStrength: body.bym?.style?.personalityStrength,
+            // 聊天配置
+            chatEnabled: body.chat?.enabled,
+            chatContextLength: body.chat?.contextLength,
+            chatTemperature: body.chat?.temperature,
+            chatMaxTokens: body.chat?.maxTokens,
+            chatStreamReply: body.chat?.streamReply,
+            chatQuoteReply: body.chat?.quoteReply,
+            chatShowThinking: body.chat?.showThinking,
+            chatAutoRecallEnabled: body.chat?.autoRecall?.enabled,
+            chatAutoRecallDelay: body.chat?.autoRecall?.delay,
+            // 绘图配置
+            imageGenEnabled: body.imageGen?.enabled,
+            imageGenModel: body.imageGen?.modelId,
+            imageGenSize: body.imageGen?.size,
+            imageGenQuality: body.imageGen?.quality,
+            imageGenStyle: body.imageGen?.style,
+            imageGenNegativePrompt: body.imageGen?.negativePrompt,
+            imageGenDailyLimit: body.imageGen?.maxDailyLimit,
+            imageGenCooldown: body.imageGen?.cooldown,
             // 模型
             chatModel: body.models?.chat,
             toolModel: body.models?.tools,
@@ -416,25 +537,55 @@ router.put('/config', groupAdminAuth, async (req, res) => {
             listMode: body.listMode,
             blacklist: body.blacklist,
             whitelist: body.whitelist,
-            // 定时推送
-            summaryPushEnabled: body.summaryPush?.enabled,
-            summaryPushIntervalType: body.summaryPush?.intervalType,
-            summaryPushIntervalValue: body.summaryPush?.intervalValue,
-            summaryPushHour: body.summaryPush?.pushHour,
-            summaryPushMessageCount: body.summaryPush?.messageCount,
-            // 主动聊天
-            proactiveChatEnabled: body.proactiveChatEnabled,
-            proactiveChatProbability: body.proactiveChatProbability,
-            proactiveChatCooldown: body.proactiveChatCooldown,
-            proactiveChatMaxDaily: body.proactiveChatMaxDaily,
-            // 事件处理扩展
-            welcomeEnabled: body.welcomeEnabled,
-            welcomeMessage: body.welcomeMessage,
-            welcomePrompt: body.welcomePrompt,
-            goodbyeEnabled: body.goodbyeEnabled,
-            goodbyePrompt: body.goodbyePrompt,
-            pokeEnabled: body.pokeEnabled,
-            pokeBack: body.pokeBack
+            // 总结配置
+            summaryEnabled: body.summary?.enabled,
+            summaryModel: body.summary?.modelId ?? body.models?.summary,
+            summaryAutoTrigger: body.summary?.autoTrigger,
+            summaryTriggerCount: body.summary?.triggerCount,
+            summaryIncludeImages: body.summary?.includeImages,
+            summaryMaxLength: body.summary?.maxLength,
+            // 总结 - 定时推送
+            summaryPushEnabled: body.summary?.push?.enabled,
+            summaryPushIntervalType: body.summary?.push?.intervalType,
+            summaryPushIntervalValue: body.summary?.push?.intervalValue,
+            summaryPushHour: body.summary?.push?.pushHour,
+            summaryPushMessageCount: body.summary?.push?.messageCount,
+            // 工具配置
+            toolsEnabled: body.tools?.enabled ?? body.toolsEnabled,
+            allowedTools: body.tools?.allowedTools,
+            blockedTools: body.tools?.blockedTools,
+            toolsAutoApprove: body.tools?.autoApprove,
+            toolsMaxCalls: body.tools?.maxCalls,
+            // 事件处理
+            eventEnabled: body.events?.enabled ?? body.eventHandler,
+            welcomeEnabled: body.events?.welcome?.enabled,
+            welcomeMessage: body.events?.welcome?.message,
+            welcomePrompt: body.events?.welcome?.prompt,
+            welcomeProbability: body.events?.welcome?.probability,
+            welcomeUseAI: body.events?.welcome?.useAI,
+            goodbyeEnabled: body.events?.goodbye?.enabled,
+            goodbyePrompt: body.events?.goodbye?.prompt,
+            goodbyeProbability: body.events?.goodbye?.probability,
+            goodbyeUseAI: body.events?.goodbye?.useAI,
+            pokeEnabled: body.events?.poke?.enabled,
+            pokeBack: body.events?.poke?.pokeBack,
+            pokeProbability: body.events?.poke?.probability,
+            pokeMessage: body.events?.poke?.message,
+            // 群独立渠道配置
+            independentBaseUrl: body.independentChannel?.baseUrl,
+            independentApiKey:
+                body.independentChannel?.apiKey && !body.independentChannel.apiKey.startsWith('****')
+                    ? body.independentChannel.apiKey
+                    : undefined,
+            independentAdapterType: body.independentChannel?.adapterType,
+            forbidGlobalModel: body.independentChannel?.forbidGlobal,
+            // 使用限制
+            dailyGroupLimit: body.usageLimit?.dailyGroupLimit,
+            dailyUserLimit: body.usageLimit?.dailyUserLimit,
+            usageLimitMessage: body.usageLimit?.limitMessage,
+            chatDailyLimit: body.usageLimit?.chatLimit,
+            imageDailyLimit: body.usageLimit?.imageLimit,
+            toolsDailyLimit: body.usageLimit?.toolsLimit
         }
 
         // 知识库单独处理（存储在 knowledgeIds 字段）
@@ -453,12 +604,12 @@ router.put('/config', groupAdminAuth, async (req, res) => {
 
         // 更新调度任务
         schedulerService.updateGroupTask(groupId, {
-            summaryPushEnabled: body.summaryPush?.enabled,
-            summaryPushIntervalType: body.summaryPush?.intervalType,
-            summaryPushIntervalValue: body.summaryPush?.intervalValue,
-            summaryPushHour: body.summaryPush?.pushHour,
-            summaryPushMessageCount: body.summaryPush?.messageCount,
-            summaryModel: body.models?.summary
+            summaryPushEnabled: body.summary?.push?.enabled,
+            summaryPushIntervalType: body.summary?.push?.intervalType,
+            summaryPushIntervalValue: body.summary?.push?.intervalValue,
+            summaryPushHour: body.summary?.push?.pushHour,
+            summaryPushMessageCount: body.summary?.push?.messageCount,
+            summaryModel: body.summary?.modelId ?? body.models?.summary
         })
 
         chatLogger.info(`[GroupAdmin] 群 ${groupId} 配置已更新 (操作者: ${req.groupAdmin.userId})`)
@@ -663,6 +814,201 @@ router.post('/scheduler/trigger', groupAdminAuth, async (req, res) => {
         const { groupId } = req.groupAdmin
         await schedulerService.triggerSummaryNow(groupId)
         res.json(ChaiteResponse.ok({ success: true, message: '总结推送已触发' }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * GET /api/group-admin/channel - 获取群独立渠道配置
+ */
+router.get('/channel', groupAdminAuth, async (req, res) => {
+    try {
+        const { groupId } = req.groupAdmin
+        const db = getDatabase()
+        const scopeManager = getScopeManager(db)
+        await scopeManager.init()
+
+        const channelConfig = await scopeManager.getGroupChannelConfig(groupId)
+
+        res.json(
+            ChaiteResponse.ok({
+                groupId,
+                hasIndependentChannel: !!(channelConfig?.baseUrl && channelConfig?.apiKey),
+                channelId: channelConfig?.channelId || null,
+                baseUrl: channelConfig?.baseUrl || '',
+                apiKey: channelConfig?.apiKey ? '****' + channelConfig.apiKey.slice(-4) : '',
+                adapterType: channelConfig?.adapterType || 'openai',
+                forbidGlobal: channelConfig?.forbidGlobal || false,
+                modelId: channelConfig?.modelId || ''
+            })
+        )
+    } catch (error) {
+        chatLogger.error('[GroupAdmin] 获取渠道配置失败:', error)
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * PUT /api/group-admin/channel - 更新群独立渠道配置
+ */
+router.put('/channel', groupAdminAuth, async (req, res) => {
+    try {
+        const { groupId } = req.groupAdmin
+        const { baseUrl, apiKey, adapterType, forbidGlobal, modelId } = req.body
+
+        const db = getDatabase()
+        const scopeManager = getScopeManager(db)
+        await scopeManager.init()
+
+        // 获取现有配置
+        const existing = (await scopeManager.getGroupChannelConfig(groupId)) || {}
+
+        // 构建更新数据（只更新提供的字段）
+        const updateData = {
+            channelId: existing.channelId,
+            baseUrl: baseUrl !== undefined ? baseUrl : existing.baseUrl,
+            apiKey: apiKey !== undefined && apiKey !== '' && !apiKey.startsWith('****') ? apiKey : existing.apiKey,
+            adapterType: adapterType !== undefined ? adapterType : existing.adapterType,
+            forbidGlobal: forbidGlobal !== undefined ? forbidGlobal : existing.forbidGlobal,
+            modelId: modelId !== undefined ? modelId : existing.modelId
+        }
+
+        await scopeManager.setGroupChannelConfig(groupId, updateData)
+
+        chatLogger.info(`[GroupAdmin] 群 ${groupId} 渠道配置已更新 (操作者: ${req.groupAdmin.userId})`)
+
+        res.json(ChaiteResponse.ok({ success: true }))
+    } catch (error) {
+        chatLogger.error('[GroupAdmin] 更新渠道配置失败:', error)
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * DELETE /api/group-admin/channel - 清除群独立渠道配置
+ */
+router.delete('/channel', groupAdminAuth, async (req, res) => {
+    try {
+        const { groupId } = req.groupAdmin
+        const db = getDatabase()
+        const scopeManager = getScopeManager(db)
+        await scopeManager.init()
+
+        await scopeManager.setGroupChannelConfig(groupId, {
+            channelId: null,
+            baseUrl: null,
+            apiKey: null,
+            adapterType: 'openai',
+            forbidGlobal: false,
+            modelId: null
+        })
+
+        chatLogger.info(`[GroupAdmin] 群 ${groupId} 渠道配置已清除`)
+
+        res.json(ChaiteResponse.ok({ success: true }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// ==================== 群使用限制 ====================
+
+/**
+ * GET /api/group-admin/usage-limit - 获取群使用限制配置
+ */
+router.get('/usage-limit', groupAdminAuth, async (req, res) => {
+    try {
+        const { groupId } = req.groupAdmin
+        const db = getDatabase()
+        const scopeManager = getScopeManager(db)
+        await scopeManager.init()
+
+        const limitConfig = await scopeManager.getGroupUsageLimitConfig(groupId)
+
+        res.json(
+            ChaiteResponse.ok({
+                groupId,
+                dailyGroupLimit: limitConfig.dailyGroupLimit,
+                dailyUserLimit: limitConfig.dailyUserLimit,
+                limitMessage: limitConfig.limitMessage
+            })
+        )
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * PUT /api/group-admin/usage-limit - 更新群使用限制配置
+ */
+router.put('/usage-limit', groupAdminAuth, async (req, res) => {
+    try {
+        const { groupId } = req.groupAdmin
+        const { dailyGroupLimit, dailyUserLimit, limitMessage } = req.body
+
+        const db = getDatabase()
+        const scopeManager = getScopeManager(db)
+        await scopeManager.init()
+
+        await scopeManager.setGroupUsageLimitConfig(groupId, {
+            dailyGroupLimit: dailyGroupLimit || 0,
+            dailyUserLimit: dailyUserLimit || 0,
+            limitMessage: limitMessage || undefined
+        })
+
+        chatLogger.info(`[GroupAdmin] 群 ${groupId} 使用限制已更新: 群${dailyGroupLimit}/用户${dailyUserLimit}`)
+
+        res.json(ChaiteResponse.ok({ success: true }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * GET /api/group-admin/usage-stats - 获取群使用统计
+ */
+router.get('/usage-stats', groupAdminAuth, async (req, res) => {
+    try {
+        const { groupId } = req.groupAdmin
+        const db = getDatabase()
+        const scopeManager = getScopeManager(db)
+        await scopeManager.init()
+
+        const summary = await scopeManager.getUsageSummary(groupId)
+
+        res.json(
+            ChaiteResponse.ok({
+                groupId,
+                date: summary.date,
+                groupCount: summary.groupCount,
+                dailyGroupLimit: summary.dailyGroupLimit,
+                dailyUserLimit: summary.dailyUserLimit,
+                groupRemaining: summary.groupRemaining,
+                topUsers: summary.topUsers,
+                totalUsers: summary.totalUsers
+            })
+        )
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * POST /api/group-admin/usage-stats/reset - 重置群使用统计
+ */
+router.post('/usage-stats/reset', groupAdminAuth, async (req, res) => {
+    try {
+        const { groupId } = req.groupAdmin
+        const db = getDatabase()
+        const scopeManager = getScopeManager(db)
+        await scopeManager.init()
+
+        await scopeManager.resetUsage(groupId)
+
+        chatLogger.info(`[GroupAdmin] 群 ${groupId} 使用统计已重置`)
+
+        res.json(ChaiteResponse.ok({ success: true, message: '使用统计已重置' }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }

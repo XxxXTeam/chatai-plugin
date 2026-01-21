@@ -164,6 +164,38 @@ export class ChatService {
         const pureUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
         const cleanUserId = pureUserId?.includes('_') ? pureUserId.split('_').pop() : pureUserId
 
+        // ==================== 群组使用限制检查 ====================
+        if (groupId) {
+            const sm = await ensureScopeManager()
+
+            // 检查使用次数限制
+            const usageCheck = await sm.checkUsageLimit(String(groupId), cleanUserId)
+            if (!usageCheck.allowed) {
+                logger.info(`[ChatService] 群 ${groupId} 用户 ${cleanUserId} 使用次数已达限制`)
+                throw new Error(usageCheck.reason || '使用次数已达上限')
+            }
+
+            // 检查是否禁用全局模型
+            const forbidGlobal = await sm.isGlobalModelForbidden(String(groupId))
+            if (forbidGlobal) {
+                const hasIndependentChannel = await sm.hasIndependentChannel(String(groupId))
+                if (!hasIndependentChannel) {
+                    logger.warn(`[ChatService] 群 ${groupId} 禁用全局模型但未配置独立渠道`)
+                    throw new Error('本群已禁用全局模型，请联系管理员配置群独立渠道后使用')
+                }
+            }
+        }
+
+        // ==================== 群独立渠道配置 ====================
+        let groupChannelConfig = null
+        if (groupId) {
+            const sm = await ensureScopeManager()
+            groupChannelConfig = await sm.getGroupChannelConfig(String(groupId))
+            if (groupChannelConfig?.baseUrl && groupChannelConfig?.apiKey) {
+                logger.info(`[ChatService] 群 ${groupId} 使用独立渠道配置`)
+            }
+        }
+
         // 群聊始终使用共享上下文，确保所有用户能看到彼此的对话
         // 用户独立人设通过 systemPrompt 实现，而非隔离历史记录
         let conversationId
@@ -401,9 +433,40 @@ export class ChatService {
             setToolContext({ event, bot: event.bot || Bot })
         }
         await channelManager.init()
-        const channel = channelManager.getBestChannel(llmModel)
+
+        // ==================== 渠道选择：群独立 > 全局 ====================
+        let channel = null
+        let channelSource = 'global'
+
+        // 优先使用群独立渠道配置
+        if (groupChannelConfig?.baseUrl && groupChannelConfig?.apiKey) {
+            // 构建群独立渠道对象
+            channel = {
+                id: `group-${groupId}-independent`,
+                name: `群${groupId}独立渠道`,
+                adapterType: groupChannelConfig.adapterType || 'openai',
+                baseUrl: groupChannelConfig.baseUrl,
+                apiKey: groupChannelConfig.apiKey,
+                enabled: true,
+                priority: 1000, // 最高优先级
+                models: groupChannelConfig.modelId ? [groupChannelConfig.modelId] : [],
+                advanced: {},
+                overrides: {}
+            }
+            channelSource = 'group-independent'
+            // 如果群配置了独立模型，使用群独立模型
+            if (groupChannelConfig.modelId) {
+                llmModel = groupChannelConfig.modelId
+                logger.info(`[ChatService] 使用群独立模型: ${llmModel}`)
+            }
+            logger.info(`[ChatService] 使用群独立渠道: ${channel.name} (${channel.baseUrl})`)
+        } else {
+            // 使用全局渠道
+            channel = channelManager.getBestChannel(llmModel)
+        }
+
         logger.debug(
-            `[ChatService] Channel: ${channel?.id}, hasAdvanced=${!!channel?.advanced}, streaming=${JSON.stringify(channel?.advanced?.streaming)}`
+            `[ChatService] Channel: ${channel?.id}, source=${channelSource}, hasAdvanced=${!!channel?.advanced}, streaming=${JSON.stringify(channel?.advanced?.streaming)}`
         )
         // 调试：输出渠道的模型映射配置
         if (channel?.overrides?.modelMapping && Object.keys(channel.overrides.modelMapping).length > 0) {
@@ -1432,6 +1495,21 @@ export class ChatService {
             }
         } catch (e) {
             logger.warn('[ChatService] 检查自动结束失败:', e.message)
+        }
+
+        // ==================== 记录群组使用次数 ====================
+        if (groupId && finalResponse?.length > 0) {
+            try {
+                const sm = await ensureScopeManager()
+                const usageResult = await sm.incrementUsage(String(groupId), cleanUserId)
+                if (usageResult.success) {
+                    logger.debug(
+                        `[ChatService] 群 ${groupId} 使用次数: 群${usageResult.groupCount}, 用户${usageResult.userCount}`
+                    )
+                }
+            } catch (e) {
+                logger.warn('[ChatService] 记录使用次数失败:', e.message)
+            }
         }
 
         return {
