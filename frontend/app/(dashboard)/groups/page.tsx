@@ -2,12 +2,11 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { scopeApi, presetsApi } from '@/lib/api'
 import { toast } from 'sonner'
@@ -21,7 +20,10 @@ import {
     Search,
     Power,
     PowerOff,
-    MoreHorizontal
+    MoreHorizontal,
+    MessageSquare,
+    Zap,
+    AlertCircle
 } from 'lucide-react'
 import {
     DropdownMenu,
@@ -32,6 +34,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { DeleteDialog } from '@/components/ui/delete-dialog'
 import { cn } from '@/lib/utils'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 
 interface GroupScope {
     groupId: string
@@ -61,6 +64,7 @@ export default function GroupsPage() {
     const [groups, setGroups] = useState<GroupScope[]>([])
     const [presets, setPresets] = useState<Preset[]>([])
     const [loading, setLoading] = useState(true)
+    const [error, setError] = useState<string | null>(null)
     const [searchQuery, setSearchQuery] = useState('')
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
     const [deletingGroup, setDeletingGroup] = useState<GroupScope | null>(null)
@@ -69,16 +73,24 @@ export default function GroupsPage() {
     const [togglingGroup, setTogglingGroup] = useState<string | null>(null)
 
     const fetchData = async () => {
+        setLoading(true)
+        setError(null)
         try {
             const [groupsRes, presetsRes] = await Promise.all([
                 scopeApi.getGroups(),
                 presetsApi.list()
             ])
-            setGroups(groupsRes?.data || [])
-            setPresets(presetsRes?.data || [])
+            
+            // 兼容不同的API返回格式
+            const groupsData = Array.isArray(groupsRes) ? groupsRes : (groupsRes?.data || [])
+            const presetsData = Array.isArray(presetsRes) ? presetsRes : (presetsRes?.data || [])
+
+            setGroups(groupsData)
+            setPresets(presetsData)
         } catch (error) {
+            console.error('Fetch groups error:', error)
+            setError('加载群组数据失败，请检查网络连接或后端服务状态。')
             toast.error('加载数据失败')
-            console.error(error)
         } finally {
             setLoading(false)
         }
@@ -94,10 +106,12 @@ export default function GroupsPage() {
         try {
             await scopeApi.deleteGroup(deletingGroup.groupId)
             toast.success('群组配置已删除')
-            fetchData()
+            // Optimistic update or refresh
+            setGroups(prev => prev.filter(g => g.groupId !== deletingGroup.groupId))
         } catch (error) {
-            toast.error('删除失败')
             console.error(error)
+            toast.error('删除失败')
+            fetchData() // Revert state on error
         } finally {
             setDeleting(false)
             setDeleteDialogOpen(false)
@@ -108,16 +122,17 @@ export default function GroupsPage() {
     const handleToggleEnabled = async (group: GroupScope) => {
         setTogglingGroup(group.groupId)
         try {
+            const newEnabled = !group.enabled
             await scopeApi.updateGroup(group.groupId, {
-                enabled: !group.enabled
+                enabled: newEnabled
             })
             setGroups(prev =>
-                prev.map(g => (g.groupId === group.groupId ? { ...g, enabled: !g.enabled } : g))
+                prev.map(g => (g.groupId === group.groupId ? { ...g, enabled: newEnabled } : g))
             )
-            toast.success(group.enabled ? '已禁用' : '已启用')
+            toast.success(newEnabled ? '已启用' : '已禁用')
         } catch (error) {
-            toast.error('操作失败')
             console.error(error)
+            toast.error('操作失败')
         } finally {
             setTogglingGroup(null)
         }
@@ -145,17 +160,28 @@ export default function GroupsPage() {
 
     if (loading) {
         return (
-            <div className="container py-6 space-y-6">
+            <div className="container max-w-7xl py-6 space-y-6 animate-in fade-in duration-500">
                 <div className="flex items-center justify-between">
-                    <Skeleton className="h-8 w-32" />
+                    <div className="space-y-2">
+                        <Skeleton className="h-8 w-32" />
+                        <Skeleton className="h-4 w-48" />
+                    </div>
                     <Skeleton className="h-10 w-24" />
                 </div>
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                     {[...Array(6)].map((_, i) => (
-                        <Card key={i}>
-                            <CardContent className="p-4">
+                        <Card key={i} className="overflow-hidden">
+                            <CardContent className="p-6">
+                                <div className="flex justify-between items-start mb-4">
+                                    <Skeleton className="h-12 w-12 rounded-full" />
+                                    <Skeleton className="h-6 w-16" />
+                                </div>
                                 <Skeleton className="h-6 w-32 mb-2" />
-                                <Skeleton className="h-4 w-48" />
+                                <Skeleton className="h-4 w-24 mb-4" />
+                                <div className="flex gap-2">
+                                    <Skeleton className="h-5 w-16" />
+                                    <Skeleton className="h-5 w-16" />
+                                </div>
                             </CardContent>
                         </Card>
                     ))}
@@ -164,57 +190,75 @@ export default function GroupsPage() {
         )
     }
 
+    if (error) {
+        return (
+            <div className="container max-w-7xl py-6 flex flex-col items-center justify-center min-h-[50vh] space-y-4">
+                <Alert variant="destructive" className="max-w-lg">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>错误</AlertTitle>
+                    <AlertDescription>{error}</AlertDescription>
+                </Alert>
+                <Button onClick={fetchData} variant="outline">
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    重试
+                </Button>
+            </div>
+        )
+    }
+
     return (
-        <div className="container py-6 space-y-6">
-            {/* 头部 */}
+        <div className="container max-w-7xl py-6 space-y-6">
+            {/* Header */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
-                    <h1 className="text-2xl font-bold flex items-center gap-2">
-                        <Users className="h-6 w-6" />
+                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+                        <Users className="h-8 w-8 text-primary" />
                         群组管理
                     </h1>
-                    <p className="text-sm text-muted-foreground">配置群聊个性化设置和独立人设</p>
+                    <p className="text-muted-foreground mt-1">配置群聊个性化设置、独立人设和权限管理</p>
                 </div>
                 <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => fetchData()}>
-                        <RefreshCw className="h-4 w-4 mr-1" />
+                    <Button variant="outline" size="sm" onClick={fetchData} className="h-9">
+                        <RefreshCw className="h-4 w-4 mr-2" />
                         刷新
                     </Button>
-                    <Button size="sm" onClick={() => router.push('/groups/edit?id=new')}>
-                        <Plus className="h-4 w-4 mr-1" />
-                        添加群
+                    <Button size="sm" onClick={() => router.push('/groups/edit?id=new')} className="h-9">
+                        <Plus className="h-4 w-4 mr-2" />
+                        添加群组
                     </Button>
                 </div>
             </div>
 
-            {/* 统计和筛选 */}
-            <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-                <div className="flex gap-4 text-sm">
+            {/* Filters */}
+            <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between bg-card p-4 rounded-lg border shadow-sm">
+                <div className="flex gap-6 text-sm">
                     <div className="flex items-center gap-2">
-                        <span className="text-muted-foreground">总数</span>
-                        <Badge variant="secondary">{groups.length}</Badge>
+                        <span className="text-muted-foreground">总群组</span>
+                        <Badge variant="secondary" className="px-2 min-w-[2rem] justify-center">{groups.length}</Badge>
                     </div>
                     <div className="flex items-center gap-2">
-                        <span className="text-muted-foreground">已启用</span>
-                        <Badge variant="default">{groups.filter(g => g.enabled).length}</Badge>
+                        <span className="text-muted-foreground">活跃中</span>
+                        <Badge variant="default" className="bg-green-500/15 text-green-600 hover:bg-green-500/25 border-green-200 dark:border-green-900 px-2 min-w-[2rem] justify-center">
+                            {groups.filter(g => g.enabled).length}
+                        </Badge>
                     </div>
                 </div>
-                <div className="flex gap-2 w-full sm:w-auto">
-                    <div className="relative flex-1 sm:w-64">
+                <div className="flex gap-2 w-full sm:w-auto flex-1 sm:flex-none justify-end">
+                    <div className="relative flex-1 sm:w-64 max-w-xs">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                         <Input
-                            placeholder="搜索群号或群名称..."
+                            placeholder="搜索群号或名称..."
                             value={searchQuery}
                             onChange={e => setSearchQuery(e.target.value)}
-                            className="pl-9"
+                            className="pl-9 h-9"
                         />
                     </div>
                     <Select value={statusFilter} onValueChange={(v: 'all' | 'enabled' | 'disabled') => setStatusFilter(v)}>
-                        <SelectTrigger className="w-28">
+                        <SelectTrigger className="w-[110px] h-9">
                             <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                            <SelectItem value="all">全部</SelectItem>
+                            <SelectItem value="all">全部状态</SelectItem>
                             <SelectItem value="enabled">已启用</SelectItem>
                             <SelectItem value="disabled">已禁用</SelectItem>
                         </SelectContent>
@@ -222,16 +266,18 @@ export default function GroupsPage() {
                 </div>
             </div>
 
-            {/* 群组列表 */}
+            {/* Grid */}
             {filteredGroups.length === 0 ? (
-                <Card>
-                    <CardContent className="flex flex-col items-center justify-center py-12">
-                        <Users className="h-12 w-12 text-muted-foreground mb-4" />
-                        <p className="text-lg font-medium mb-2">
+                <Card className="border-dashed">
+                    <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+                        <div className="w-16 h-16 bg-muted/50 rounded-full flex items-center justify-center mb-4">
+                            <Users className="h-8 w-8 text-muted-foreground" />
+                        </div>
+                        <h3 className="text-lg font-semibold mb-2">
                             {searchQuery ? '未找到匹配的群组' : '暂无群组配置'}
-                        </p>
-                        <p className="text-sm text-muted-foreground mb-4">
-                            {searchQuery ? '尝试修改搜索条件' : '点击上方按钮添加群组'}
+                        </h3>
+                        <p className="text-sm text-muted-foreground mb-6 max-w-sm">
+                            {searchQuery ? '请尝试更换搜索关键词或筛选条件' : '您还没有配置任何群组，点击下方按钮开始配置第一个群组'}
                         </p>
                         {!searchQuery && (
                             <Button onClick={() => router.push('/groups/edit?id=new')}>
@@ -242,54 +288,30 @@ export default function GroupsPage() {
                     </CardContent>
                 </Card>
             ) : (
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                     {filteredGroups.map(group => (
                         <Card
                             key={group.groupId}
                             className={cn(
-                                'transition-all hover:shadow-md cursor-pointer',
-                                !group.enabled && 'opacity-60'
+                                'group transition-all hover:shadow-md cursor-pointer border-l-4',
+                                group.enabled ? 'border-l-green-500' : 'border-l-muted opacity-80'
                             )}
                             onClick={() => router.push(`/groups/edit?id=${group.groupId}`)}
                         >
-                            <CardContent className="p-4">
-                                <div className="flex items-start justify-between">
-                                    <div className="flex-1 min-w-0">
-                                        <div className="flex items-center gap-2 mb-1">
-                                            <h3 className="font-semibold truncate">
-                                                {group.groupName || group.groupId}
-                                            </h3>
-                                            <Badge variant={group.enabled ? 'default' : 'secondary'} className="shrink-0">
-                                                {group.enabled ? '已启用' : '已禁用'}
-                                            </Badge>
-                                        </div>
-                                        {group.groupName && (
-                                            <p className="text-xs text-muted-foreground mb-2">
-                                                群号: {group.groupId}
-                                            </p>
-                                        )}
-                                        <div className="flex flex-wrap gap-1.5 mt-2">
-                                            {group.presetId && (
-                                                <Badge variant="outline" className="text-xs">
-                                                    预设: {getPresetName(group.presetId)}
-                                                </Badge>
-                                            )}
-                                            {group.triggerMode && group.triggerMode !== 'default' && (
-                                                <Badge variant="outline" className="text-xs">
-                                                    {triggerModeNames[group.triggerMode] || group.triggerMode}
-                                                </Badge>
-                                            )}
-                                            {group.settings?.bymEnabled && (
-                                                <Badge variant="outline" className="text-xs">伪人</Badge>
-                                            )}
-                                            {(group.settings?.independentChannels as unknown[])?.length > 0 && (
-                                                <Badge variant="outline" className="text-xs">独立渠道</Badge>
-                                            )}
+                            <CardContent className="p-5">
+                                <div className="flex items-start justify-between mb-3">
+                                    <div className="flex-1 min-w-0 mr-2">
+                                        <h3 className="font-semibold truncate text-base mb-1" title={group.groupName || group.groupId}>
+                                            {group.groupName || '未命名群组'}
+                                        </h3>
+                                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono bg-muted/50 px-1.5 py-0.5 rounded w-fit">
+                                            <span>#</span>
+                                            {group.groupId}
                                         </div>
                                     </div>
                                     <DropdownMenu>
                                         <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+                                            <Button variant="ghost" size="icon" className="h-8 w-8 -mr-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                                 <MoreHorizontal className="h-4 w-4" />
                                             </Button>
                                         </DropdownMenuTrigger>
@@ -321,7 +343,7 @@ export default function GroupsPage() {
                                             </DropdownMenuItem>
                                             <DropdownMenuSeparator />
                                             <DropdownMenuItem
-                                                className="text-destructive"
+                                                className="text-destructive focus:text-destructive"
                                                 onClick={e => {
                                                     e.stopPropagation()
                                                     setDeletingGroup(group)
@@ -334,18 +356,47 @@ export default function GroupsPage() {
                                         </DropdownMenuContent>
                                     </DropdownMenu>
                                 </div>
+
+                                <div className="space-y-3">
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {group.presetId && (
+                                            <Badge variant="outline" className="text-xs font-normal">
+                                                <MessageSquare className="h-3 w-3 mr-1 opacity-70" />
+                                                {getPresetName(group.presetId)}
+                                            </Badge>
+                                        )}
+                                        {group.triggerMode && group.triggerMode !== 'default' && (
+                                            <Badge variant="outline" className="text-xs font-normal">
+                                                <Zap className="h-3 w-3 mr-1 opacity-70" />
+                                                {triggerModeNames[group.triggerMode] || group.triggerMode}
+                                            </Badge>
+                                        )}
+                                    </div>
+                                    
+                                    {/* Features Indicator */}
+                                    <div className="flex items-center gap-3 pt-2 border-t text-xs text-muted-foreground">
+                                        <div className={cn("flex items-center gap-1", group.settings?.bymEnabled ? "text-primary" : "opacity-50")}>
+                                            <div className={cn("w-1.5 h-1.5 rounded-full", group.settings?.bymEnabled ? "bg-primary" : "bg-muted-foreground")} />
+                                            伪人
+                                        </div>
+                                        <div className={cn("flex items-center gap-1", (group.settings?.independentChannels as unknown[])?.length > 0 ? "text-primary" : "opacity-50")}>
+                                            <div className={cn("w-1.5 h-1.5 rounded-full", (group.settings?.independentChannels as unknown[])?.length > 0 ? "bg-primary" : "bg-muted-foreground")} />
+                                            独立渠道
+                                        </div>
+                                    </div>
+                                </div>
                             </CardContent>
                         </Card>
                     ))}
                 </div>
             )}
 
-            {/* 删除确认对话框 */}
+            {/* Delete Dialog */}
             <DeleteDialog
                 open={deleteDialogOpen}
                 onOpenChange={setDeleteDialogOpen}
                 title="删除群组配置"
-                description={`确定要删除群组 ${deletingGroup?.groupName || deletingGroup?.groupId} 的配置吗？此操作不可撤销。`}
+                description={`确定要删除群组 "${deletingGroup?.groupName || deletingGroup?.groupId}" 的配置吗？删除后将恢复默认设置，此操作不可撤销。`}
                 onConfirm={handleDelete}
                 loading={deleting}
             />

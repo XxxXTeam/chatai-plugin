@@ -473,6 +473,12 @@ export class bym extends plugin {
                 }
             }
 
+            // 获取伪人工具配置
+            const bymEnableTools =
+                groupBymConfig?.bymEnableTools !== undefined
+                    ? groupBymConfig.bymEnableTools
+                    : config.get('bym.enableTools') || false
+
             // 使用 chatService.sendMessage 来正确处理上下文
             const { chatService } = await import('../src/services/llm/ChatService.js')
 
@@ -488,7 +494,7 @@ export class bym extends plugin {
                 model: bymModel,
                 prefixPersona: systemPrompt, // 使用伪人系统提示
                 event: e,
-                disableTools: true, // 伪人模式不使用工具（ChatService参数名）
+                disableTools: !bymEnableTools, // 伪人模式是否使用工具
                 temperature: bymTemperature,
                 maxTokens: bymMaxTokens
             })

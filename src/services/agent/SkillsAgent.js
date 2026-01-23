@@ -292,8 +292,33 @@ export class SkillsAgent {
         return Array.from(this.skills.values()).map(s => ({
             function: { name: s.name, description: s.description, parameters: s.inputSchema },
             run: async args => {
-                const result = await this.execute(s.name, args)
-                return typeof result === 'string' ? result : JSON.stringify(result)
+                const startTime = Date.now()
+                try {
+                    const result = await this.execute(s.name, args)
+                    const duration = Date.now() - startTime
+
+                    // 如果结果已经是格式化的对象且包含 status，则直接返回
+                    if (result && typeof result === 'object' && result.status) {
+                        return JSON.stringify(result)
+                    }
+
+                    // 包装为标准格式
+                    const isError = result?.isError === true
+                    const formattedResult = {
+                        status: isError ? 'error' : 'success',
+                        tool: s.name,
+                        content: isError ? result.content?.[0]?.text || '执行失败' : result,
+                        metadata: { duration }
+                    }
+                    return JSON.stringify(formattedResult)
+                } catch (error) {
+                    return JSON.stringify({
+                        status: 'error',
+                        tool: s.name,
+                        content: error.message,
+                        metadata: { duration: Date.now() - startTime }
+                    })
+                }
             }
         }))
     }

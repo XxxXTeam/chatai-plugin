@@ -131,19 +131,35 @@ registerFromChaiteConverter('gemini', source => {
         case 'tool': {
             return source.content
                 .filter(tcr => tcr.name && tcr.name.trim())
-                .map(tcr => ({
-                    role: 'function',
-                    parts: [
-                        {
-                            functionResponse: {
-                                name: tcr.name,
-                                response: {
-                                    content: tcr.content || ''
+                .map(tcr => {
+                    let responseContent = tcr.content || ''
+
+                    // 尝试解析 JSON，使 Gemini 获得结构化数据
+                    if (typeof responseContent === 'string' && responseContent.startsWith('{')) {
+                        try {
+                            const parsed = JSON.parse(responseContent)
+                            // 如果是格式化的工具结果，直接使用内容部分或整个对象
+                            responseContent = parsed
+                        } catch (e) {
+                            // 解析失败则保留原样
+                        }
+                    }
+
+                    return {
+                        role: 'function',
+                        parts: [
+                            {
+                                functionResponse: {
+                                    name: tcr.name,
+                                    response:
+                                        typeof responseContent === 'object'
+                                            ? responseContent
+                                            : { content: responseContent }
                                 }
                             }
-                        }
-                    ]
-                }))
+                        ]
+                    }
+                })
         }
         default: {
             throw new Error(`Unknown role: ${source.role}`)

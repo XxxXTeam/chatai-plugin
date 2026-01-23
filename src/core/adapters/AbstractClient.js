@@ -1336,6 +1336,27 @@ export class AbstractClient {
                     }
                 }
 
+                // 检查当前响应中的工具调用是否已经全部执行过
+                const filteredToolCalls = deduplicatedToolCalls.filter(tc => {
+                    const sig = this.buildToolCallSignature([tc])
+                    if (options._executedToolSignatures?.has(sig)) {
+                        this.logger.info(`[Tool] 过滤已执行过的重复调用: ${tc.function?.name}`)
+                        return false
+                    }
+                    return true
+                })
+
+                if (filteredToolCalls.length === 0 && deduplicatedToolCalls.length > 0) {
+                    this.logger.warn(`[Tool] 模型返回的所有工具调用均已执行过，停止递归以防止死循环`)
+                    return {
+                        id: modelResponse.id,
+                        model: options.model,
+                        contents: modelResponse.content,
+                        usage: modelResponse.usage,
+                        toolCallLogs: options._toolCallLogs || []
+                    }
+                }
+
                 const intermediateTextContent = modelResponse.content?.filter(c => c.type === 'text') || []
                 let intermediateText = intermediateTextContent
                     .map(c => c.text)
@@ -1360,7 +1381,14 @@ export class AbstractClient {
                 }
 
                 // 执行工具调用
-                const { toolCallResults, toolCallLogs } = await this.executeToolCalls(deduplicatedToolCalls, options)
+                const { toolCallResults, toolCallLogs } = await this.executeToolCalls(filteredToolCalls, options)
+
+                // 记录已成功执行的签名
+                if (!options._executedToolSignatures) options._executedToolSignatures = new Set()
+                for (const tc of filteredToolCalls) {
+                    const sig = this.buildToolCallSignature([tc])
+                    options._executedToolSignatures.add(sig)
+                }
 
                 // 记录日志
                 if (!options._toolCallLogs) options._toolCallLogs = []
@@ -1652,7 +1680,7 @@ export class AbstractClient {
         options._lastSimplifiedSignature = undefined
         options._toolCallSignatureHistory = new Map()
         options._simplifiedSignatureHistory = new Map() // 用于检测功能相似的调用
-        options._successfulToolCalls = new Set() // 追踪已成功执行的工具调用
+        options._executedToolSignatures = new Set() // 追踪已成功执行的工具调用签名
         options._toolCallLogs = []
     }
 
@@ -1729,7 +1757,7 @@ export class AbstractClient {
         options._lastSimplifiedSignature = undefined
         options._toolCallSignatureHistory?.clear()
         options._simplifiedSignatureHistory?.clear()
-        options._successfulToolCalls?.clear()
+        options._executedToolSignatures?.clear()
     }
 
     /**
@@ -1763,12 +1791,39 @@ export class AbstractClient {
      * @returns {string}
      */
     buildToolCallSignature(toolCalls) {
-        return JSON.stringify(
-            toolCalls.map(tc => ({
-                name: tc.function?.name,
-                arguments: tc.function?.arguments
-            }))
-        )
+        if (!toolCalls || toolCalls.length === 0) return ''
+
+        // 对工具调用进行排序并规范化参数，确保签名的一致性
+        const normalizedCalls = toolCalls
+            .map(tc => {
+                const name = tc.function?.name || tc.name
+                let args = tc.function?.arguments || tc.arguments
+
+                // 规范化参数为排序后的 JSON 字符串
+                let normalizedArgs = ''
+                try {
+                    const parsedArgs = typeof args === 'string' ? JSON.parse(args) : args
+                    if (parsedArgs && typeof parsedArgs === 'object') {
+                        // 排序 keys 以保证签名一致
+                        const sortedArgs = {}
+                        Object.keys(parsedArgs)
+                            .sort()
+                            .forEach(key => {
+                                sortedArgs[key] = parsedArgs[key]
+                            })
+                        normalizedArgs = JSON.stringify(sortedArgs)
+                    } else {
+                        normalizedArgs = JSON.stringify(parsedArgs)
+                    }
+                } catch (e) {
+                    normalizedArgs = String(args)
+                }
+
+                return `${name}:${normalizedArgs}`
+            })
+            .sort()
+
+        return normalizedCalls.join('|')
     }
 
     /**
@@ -1919,44 +1974,101 @@ export class AbstractClient {
         }
 
         const tool = this.tools.find(t => t.function?.name === fcName || t.name === fcName)
+        const startTime = Date.now()
 
         if (tool) {
-            const startTime = Date.now()
-            let toolResult
+            let result
             let isError = false
 
             try {
-                toolResult = await tool.run(fcArgs, this.context)
-                if (typeof toolResult !== 'string') {
-                    toolResult = JSON.stringify(toolResult)
+                result = await tool.run(fcArgs, this.context)
+
+                // 如果返回的是字符串且看起来像 JSON，尝试解析它以检查是否有 status
+                if (typeof result === 'string' && result.startsWith('{')) {
+                    try {
+                        const parsed = JSON.parse(result)
+                        if (parsed.status) {
+                            // 已经是格式化的结果
+                            const duration = Date.now() - startTime
+                            return {
+                                toolResult: {
+                                    tool_call_id: toolCall.id,
+                                    content: result,
+                                    type: 'tool',
+                                    name: fcName
+                                },
+                                log: {
+                                    name: fcName,
+                                    args: fcArgs,
+                                    result: result.length > 500 ? result.substring(0, 500) + '...' : result,
+                                    duration,
+                                    isError: parsed.status === 'error'
+                                }
+                            }
+                        }
+                    } catch (e) {}
+                }
+
+                // 包装为标准格式
+                const formattedResult = {
+                    status: 'success',
+                    tool: fcName,
+                    content: result,
+                    metadata: { duration: Date.now() - startTime }
+                }
+                const resultStr = JSON.stringify(formattedResult)
+
+                return {
+                    toolResult: {
+                        tool_call_id: toolCall.id,
+                        content: resultStr,
+                        type: 'tool',
+                        name: fcName
+                    },
+                    log: {
+                        name: fcName,
+                        args: fcArgs,
+                        result: resultStr.length > 500 ? resultStr.substring(0, 500) + '...' : resultStr,
+                        duration: Date.now() - startTime,
+                        isError: false
+                    }
                 }
             } catch (err) {
-                toolResult = `执行失败: ${err.message}`
-                isError = true
-            }
-
-            const duration = Date.now() - startTime
-
-            return {
-                toolResult: {
-                    tool_call_id: toolCall.id,
-                    content: toolResult,
-                    type: 'tool',
-                    name: fcName
-                },
-                log: {
-                    name: fcName,
-                    args: fcArgs,
-                    result: toolResult.length > 500 ? toolResult.substring(0, 500) + '...' : toolResult,
-                    duration,
-                    isError
+                const duration = Date.now() - startTime
+                const errorResult = JSON.stringify({
+                    status: 'error',
+                    tool: fcName,
+                    content: err.message,
+                    metadata: { duration }
+                })
+                return {
+                    toolResult: {
+                        tool_call_id: toolCall.id,
+                        content: errorResult,
+                        type: 'tool',
+                        name: fcName
+                    },
+                    log: {
+                        name: fcName,
+                        args: fcArgs,
+                        result: errorResult,
+                        duration,
+                        isError: true
+                    }
                 }
             }
         } else {
+            const duration = Date.now() - startTime
+            const notFoundResult = JSON.stringify({
+                status: 'error',
+                tool: fcName,
+                content: `工具 "${fcName}" 不存在或未启用`,
+                metadata: { duration }
+            })
             return {
                 toolResult: {
                     tool_call_id: toolCall.id,
-                    content: `工具 "${fcName}" 不存在或未启用`,
+                    content: notFoundResult,
                     type: 'tool',
                     name: fcName
                 },
@@ -1964,7 +2076,7 @@ export class AbstractClient {
                     name: fcName,
                     args: fcArgs,
                     result: '工具不存在',
-                    duration: 0,
+                    duration,
                     isError: true
                 }
             }
