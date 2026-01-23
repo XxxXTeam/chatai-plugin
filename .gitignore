@@ -43,3 +43,5 @@ apps/Probe.js.bak
 demo.py
 WARP.md
 data/instance.json
+.trae/
+.vscode/

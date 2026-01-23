@@ -10,8 +10,10 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Slider } from '@/components/ui/slider'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { toast } from 'sonner'
 import {
     AlertCircle,
@@ -36,8 +38,35 @@ import {
     UserMinus,
     Brain,
     Smile,
-    Server
+    Server,
+    Trash2,
+    Eye,
+    EyeOff,
+    Plus
 } from 'lucide-react'
+
+// 群独立渠道接口（完整配置）
+interface IndependentChannel {
+    id: string
+    name: string
+    baseUrl: string
+    apiKey: string
+    adapterType: string
+    models: string[]
+    enabled: boolean
+    priority: number
+    // 高级配置
+    modelsPath?: string
+    chatPath?: string
+    customHeaders?: Record<string, string>
+    // 图片处理
+    imageConfig?: {
+        transferMode?: 'base64' | 'url' | 'auto'
+        compress?: boolean
+        quality?: number
+        maxSize?: number
+    }
+}
 
 interface Channel {
     id: string
@@ -150,6 +179,7 @@ interface GroupConfig {
         apiKey?: string
         adapterType?: string
         forbidGlobal?: boolean
+        channels?: IndependentChannel[]
     }
     usageLimit?: {
         dailyGroupLimit?: number
@@ -162,6 +192,10 @@ interface GroupConfig {
     presets: Preset[]
     channels: Channel[]
     knowledgeBases?: { id: string; name: string }[]
+    emojiStats?: {
+        total: number
+        images: { name: string; url: string }[]
+    }
 }
 
 export default function GroupAdminPage() {
@@ -170,6 +204,12 @@ export default function GroupAdminPage() {
     const [groupId, setGroupId] = useState<string>('')
     const [error, setError] = useState<string>('')
     const [formTab, setFormTab] = useState('basic')
+    const [emojiStats, setEmojiStats] = useState<{ total: number; images: { name: string; url: string }[] }>({
+        total: 0,
+        images: []
+    })
+    const [showApiKey, setShowApiKey] = useState(false)
+    const [viewEmoji, setViewEmoji] = useState<{ name: string; url: string } | null>(null)
 
     const [form, setForm] = useState({
         groupId: '',
@@ -264,6 +304,7 @@ export default function GroupAdminPage() {
         independentApiKey: '',
         independentAdapterType: 'openai',
         forbidGlobalModel: false,
+        independentChannels: [] as IndependentChannel[],
         // 使用限制
         dailyGroupLimit: 0,
         dailyUserLimit: 0,
@@ -273,6 +314,31 @@ export default function GroupAdminPage() {
     const [knowledgeBases, setKnowledgeBases] = useState<{ id: string; name: string }[]>([])
     const [presets, setPresets] = useState<Preset[]>([])
     const [allModels, setAllModels] = useState<string[]>([])
+
+    // 渠道编辑相关状态
+    const [channelDialogOpen, setChannelDialogOpen] = useState(false)
+    const [editingChannelIndex, setEditingChannelIndex] = useState<number | null>(null)
+    const [channelForm, setChannelForm] = useState({
+        name: '',
+        baseUrl: '',
+        apiKey: '',
+        adapterType: 'openai',
+        models: '',
+        enabled: true,
+        priority: 0,
+        // 高级配置
+        modelsPath: '',
+        chatPath: '',
+        // 图片处理
+        imageTransferMode: 'auto' as 'base64' | 'url' | 'auto',
+        imageCompress: true,
+        imageQuality: 85,
+        imageMaxSize: 4096
+    })
+    const [fetchingModels, setFetchingModels] = useState(false)
+    const [modelSelectorOpen, setModelSelectorOpen] = useState(false)
+    const [availableModels, setAvailableModels] = useState<string[]>([])
+    const [selectedModels, setSelectedModels] = useState<string[]>([])
 
     // 登录状态
     const [needLogin, setNeedLogin] = useState(false)
@@ -525,6 +591,7 @@ export default function GroupAdminPage() {
                     independentApiKey: c.independentChannel?.apiKey || '',
                     independentAdapterType: c.independentChannel?.adapterType || 'openai',
                     forbidGlobalModel: c.independentChannel?.forbidGlobal || false,
+                    independentChannels: c.independentChannel?.channels || [],
                     // 使用限制
                     dailyGroupLimit: c.usageLimit?.dailyGroupLimit || 0,
                     dailyUserLimit: c.usageLimit?.dailyUserLimit || 0,
@@ -532,6 +599,8 @@ export default function GroupAdminPage() {
                 })
                 // 设置知识库列表
                 if (c.knowledgeBases) setKnowledgeBases(c.knowledgeBases)
+                // 设置表情统计
+                if (c.emojiStats) setEmojiStats(c.emojiStats)
             } else {
                 throw new Error(data.message || '加载失败')
             }
@@ -670,7 +739,8 @@ export default function GroupAdminPage() {
                         baseUrl: form.independentBaseUrl || undefined,
                         apiKey: form.independentApiKey || undefined,
                         adapterType: form.independentAdapterType,
-                        forbidGlobal: form.forbidGlobalModel
+                        forbidGlobal: form.forbidGlobalModel,
+                        channels: form.independentChannels.length > 0 ? form.independentChannels : undefined
                     },
                     usageLimit: {
                         dailyGroupLimit: form.dailyGroupLimit,
@@ -694,6 +764,46 @@ export default function GroupAdminPage() {
             toast.error(err.message)
         } finally {
             setSaving(false)
+        }
+    }
+
+    const deleteEmoji = async (fileName: string) => {
+        if (!confirm('确定要删除这个表情吗？')) return
+        try {
+            const res = await fetch(`/api/group-admin/emoji/delete?file=${encodeURIComponent(fileName)}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${getToken()}` }
+            })
+            if (res.ok) {
+                toast.success('已删除')
+                setEmojiStats({
+                    ...emojiStats,
+                    total: emojiStats.total - 1,
+                    images: emojiStats.images.filter(img => img.name !== fileName)
+                })
+            } else {
+                throw new Error('删除失败')
+            }
+        } catch (err: any) {
+            toast.error(err.message)
+        }
+    }
+
+    const clearEmojis = async () => {
+        if (!confirm('确定要清空所有表情吗？此操作不可撤销！')) return
+        try {
+            const res = await fetch('/api/group-admin/emoji/clear', {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${getToken()}` }
+            })
+            if (res.ok) {
+                toast.success('已清空')
+                setEmojiStats({ total: 0, images: [] })
+            } else {
+                throw new Error('清空失败')
+            }
+        } catch (err: any) {
+            toast.error(err.message)
         }
     }
 
@@ -812,7 +922,7 @@ export default function GroupAdminPage() {
                                 </TabsTrigger>
                             </TabsList>
 
-                            <ScrollArea className="h-[60vh] pr-4">
+                            <ScrollArea className="h-[calc(100vh-250px)] sm:h-[65vh] pr-4 -mr-4">
                                 {/* 基础设置 */}
                                 <TabsContent value="basic" className="space-y-4 mt-0">
                                     <div className="grid gap-4 sm:grid-cols-2">
@@ -1399,16 +1509,21 @@ export default function GroupAdminPage() {
                                     )}
 
                                     <FeatureItem
-                                        icon={<Palette className="h-4 w-4" />}
+                                        icon={<Palette className="h-4 w-4 text-pink-500" />}
                                         title="表情小偷"
                                         desc="收集并发送表情包"
                                         value={form.emojiThiefEnabled}
                                         onChange={v => setForm({ ...form, emojiThiefEnabled: v })}
                                     />
                                     {form.emojiThiefEnabled !== 'off' && (
-                                        <div className="ml-4 pl-4 border-l-2 border-muted space-y-3">
-                                            <div className="flex items-center justify-between">
-                                                <Label className="text-sm">独立存储</Label>
+                                        <div className="ml-4 pl-4 border-l-2 border-muted space-y-4">
+                                            <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
+                                                <div className="space-y-1">
+                                                    <Label className="text-sm font-medium">独立存储</Label>
+                                                    <p className="text-xs text-muted-foreground">
+                                                        开启后本群表情独立存储，不与其他群共享
+                                                    </p>
+                                                </div>
                                                 <Switch
                                                     checked={form.emojiThiefSeparateFolder}
                                                     onCheckedChange={v =>
@@ -1418,7 +1533,7 @@ export default function GroupAdminPage() {
                                             </div>
                                             <div className="grid grid-cols-2 gap-3">
                                                 <div className="space-y-1">
-                                                    <Label className="text-xs">最大数量</Label>
+                                                    <Label className="text-xs">最大存储数量</Label>
                                                     <Input
                                                         type="number"
                                                         min={10}
@@ -1430,10 +1545,11 @@ export default function GroupAdminPage() {
                                                                 emojiThiefMaxCount: parseInt(e.target.value) || 500
                                                             })
                                                         }
+                                                        className="h-8"
                                                     />
                                                 </div>
                                                 <div className="space-y-1">
-                                                    <Label className="text-xs">偷取概率 (%)</Label>
+                                                    <Label className="text-xs">收集概率 (%)</Label>
                                                     <Input
                                                         type="number"
                                                         min={1}
@@ -1445,6 +1561,7 @@ export default function GroupAdminPage() {
                                                                 emojiThiefStealRate: parseInt(e.target.value) / 100
                                                             })
                                                         }
+                                                        className="h-8"
                                                     />
                                                 </div>
                                             </div>
@@ -1462,14 +1579,14 @@ export default function GroupAdminPage() {
                                                                 | 'bym_random'
                                                         ) => setForm({ ...form, emojiThiefTriggerMode: v })}
                                                     >
-                                                        <SelectTrigger>
+                                                        <SelectTrigger className="h-8">
                                                             <SelectValue />
                                                         </SelectTrigger>
                                                         <SelectContent>
-                                                            <SelectItem value="off">关闭</SelectItem>
-                                                            <SelectItem value="chat_follow">聊天触发</SelectItem>
-                                                            <SelectItem value="chat_random">聊天随机</SelectItem>
-                                                            <SelectItem value="bym_follow">伪人触发</SelectItem>
+                                                            <SelectItem value="off">关闭自动发送</SelectItem>
+                                                            <SelectItem value="chat_follow">对话跟随</SelectItem>
+                                                            <SelectItem value="chat_random">对话随机</SelectItem>
+                                                            <SelectItem value="bym_follow">伪人跟随</SelectItem>
                                                             <SelectItem value="bym_random">伪人随机</SelectItem>
                                                         </SelectContent>
                                                     </Select>
@@ -1487,6 +1604,7 @@ export default function GroupAdminPage() {
                                                                 emojiThiefTriggerRate: parseInt(e.target.value) / 100
                                                             })
                                                         }
+                                                        className="h-8"
                                                         disabled={
                                                             form.emojiThiefTriggerMode === 'off' ||
                                                             form.emojiThiefTriggerMode === 'chat_follow' ||
@@ -1495,9 +1613,43 @@ export default function GroupAdminPage() {
                                                     />
                                                 </div>
                                             </div>
-                                            <p className="text-xs text-muted-foreground">
-                                                触发模式100%发送，随机模式按概率发送
-                                            </p>
+
+                                            {/* 表情库管理预览 */}
+                                            <div className="mt-4 p-3 rounded-lg border bg-card">
+                                                <div className="flex items-center justify-between mb-3">
+                                                    <div className="flex items-center gap-2">
+                                                        <Smile className="h-4 w-4 text-yellow-500" />
+                                                        <span className="text-sm font-medium">表情库预览</span>
+                                                        <Badge variant="secondary" className="text-[10px]">{emojiStats.total} 张</Badge>
+                                                    </div>
+                                                    <Button variant="ghost" size="sm" className="h-7 text-xs text-destructive hover:text-destructive" onClick={clearEmojis}>
+                                                        <Trash2 className="h-3 w-3 mr-1" /> 清空
+                                                    </Button>
+                                                </div>
+                                                
+                                                {emojiStats.images.length > 0 ? (
+                                                    <div className="grid grid-cols-5 gap-2 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
+                                                        {emojiStats.images.map((img, idx) => (
+                                                            <div key={idx} className="relative group aspect-square rounded border bg-muted/50 overflow-hidden cursor-pointer" onClick={() => setViewEmoji(img)}>
+                                                                <img src={img.url} alt={img.name} className="w-full h-full object-cover" />
+                                                                <button 
+                                                                    className="absolute top-0 right-0 p-1 bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        deleteEmoji(img.name);
+                                                                    }}
+                                                                >
+                                                                    <X className="h-3 w-3" />
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-center py-4 text-xs text-muted-foreground">
+                                                        暂无表情，开启收集后会自动抓取
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     )}
 
@@ -2133,64 +2285,135 @@ export default function GroupAdminPage() {
 
                                     {/* 群独立渠道 */}
                                     <div className="space-y-4 border-t pt-4 mt-4">
-                                        <div className="flex items-center gap-2">
-                                            <Server className="h-4 w-4 text-purple-500" />
-                                            <Label className="text-base font-medium">群独立渠道</Label>
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <Server className="h-4 w-4 text-purple-500" />
+                                                <Label className="text-base font-medium">群独立渠道</Label>
+                                            </div>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => {
+                                                    setEditingChannelIndex(null)
+                                                    setChannelForm({
+                                                        name: '',
+                                                        baseUrl: '',
+                                                        apiKey: '',
+                                                        adapterType: 'openai',
+                                                        models: '',
+                                                        enabled: true,
+                                                        priority: 0,
+                                                        modelsPath: '',
+                                                        chatPath: '',
+                                                        imageTransferMode: 'auto',
+                                                        imageCompress: true,
+                                                        imageQuality: 85,
+                                                        imageMaxSize: 4096
+                                                    })
+                                                    setChannelDialogOpen(true)
+                                                }}
+                                            >
+                                                <Plus className="h-4 w-4 mr-2" />
+                                                添加渠道
+                                            </Button>
                                         </div>
                                         <p className="text-xs text-muted-foreground">
-                                            为本群配置独立的API渠道，优先级高于全局配置
+                                            配置本群专用的API渠道，优先级高于全局配置。支持配置多个渠道，按优先级顺序调用。
                                         </p>
 
-                                        <div className="space-y-3 p-3 rounded-lg border bg-card">
-                                            <div className="space-y-2">
-                                                <Label className="text-sm">API地址</Label>
-                                                <Input
-                                                    value={form.independentBaseUrl}
-                                                    onChange={e => setForm({ ...form, independentBaseUrl: e.target.value })}
-                                                    placeholder="https://api.openai.com/v1"
-                                                />
+                                        {form.independentChannels.length === 0 ? (
+                                            <div className="text-center py-8 text-muted-foreground border rounded-lg border-dashed">
+                                                <Server className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                                                <p>暂无独立渠道</p>
+                                                <p className="text-xs">点击上方按钮添加渠道</p>
                                             </div>
-                                            <div className="space-y-2">
-                                                <Label className="text-sm">API Key</Label>
-                                                <Input
-                                                    type="password"
-                                                    value={form.independentApiKey}
-                                                    onChange={e => setForm({ ...form, independentApiKey: e.target.value })}
-                                                    placeholder="sk-..."
-                                                />
+                                        ) : (
+                                            <div className="space-y-3">
+                                                {form.independentChannels.map((channel, index) => (
+                                                    <div key={channel.id} className="p-4 rounded-lg border bg-card">
+                                                        <div className="flex items-start justify-between">
+                                                            <div className="flex-1">
+                                                                <div className="flex items-center gap-2">
+                                                                    <h4 className="font-medium">{channel.name}</h4>
+                                                                    <Badge variant={channel.enabled ? 'default' : 'secondary'}>
+                                                                        {channel.enabled ? '启用' : '禁用'}
+                                                                    </Badge>
+                                                                    <Badge variant="outline">{channel.adapterType}</Badge>
+                                                                    <Badge variant="outline">权重: {channel.priority}</Badge>
+                                                                </div>
+                                                                <p className="text-xs text-muted-foreground mt-1 truncate">
+                                                                    {channel.baseUrl || '使用默认地址'}
+                                                                </p>
+                                                                <div className="flex gap-2 mt-2">
+                                                                    {channel.models.slice(0, 3).map(model => (
+                                                                        <Badge key={model} variant="secondary" className="text-xs font-normal">
+                                                                            {model}
+                                                                        </Badge>
+                                                                    ))}
+                                                                    {channel.models.length > 3 && (
+                                                                        <Badge variant="secondary" className="text-xs font-normal">
+                                                                            +{channel.models.length - 3}
+                                                                        </Badge>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex gap-1">
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="icon"
+                                                                    onClick={() => {
+                                                                        setEditingChannelIndex(index)
+                                                                        setChannelForm({
+                                                                            name: channel.name,
+                                                                            baseUrl: channel.baseUrl,
+                                                                            apiKey: channel.apiKey,
+                                                                            adapterType: channel.adapterType,
+                                                                            models: channel.models.join(','),
+                                                                            enabled: channel.enabled,
+                                                                            priority: channel.priority,
+                                                                            modelsPath: channel.modelsPath || '',
+                                                                            chatPath: channel.chatPath || '',
+                                                                            imageTransferMode: channel.imageConfig?.transferMode || 'auto',
+                                                                            imageCompress: channel.imageConfig?.compress ?? true,
+                                                                            imageQuality: channel.imageConfig?.quality ?? 85,
+                                                                            imageMaxSize: channel.imageConfig?.maxSize ?? 4096
+                                                                        })
+                                                                        setChannelDialogOpen(true)
+                                                                    }}
+                                                                >
+                                                                    <Settings className="h-4 w-4" />
+                                                                </Button>
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="icon"
+                                                                    className="text-destructive"
+                                                                    onClick={() => {
+                                                                        if (confirm('确定要删除这个渠道吗？')) {
+                                                                            const newChannels = [...form.independentChannels]
+                                                                            newChannels.splice(index, 1)
+                                                                            setForm({ ...form, independentChannels: newChannels })
+                                                                        }
+                                                                    }}
+                                                                >
+                                                                    <Trash2 className="h-4 w-4" />
+                                                                </Button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
                                             </div>
-                                            <div className="grid grid-cols-2 gap-3">
-                                                <div className="space-y-2">
-                                                    <Label className="text-sm">适配器类型</Label>
-                                                    <Select
-                                                        value={form.independentAdapterType}
-                                                        onValueChange={v => setForm({ ...form, independentAdapterType: v })}
-                                                    >
-                                                        <SelectTrigger>
-                                                            <SelectValue />
-                                                        </SelectTrigger>
-                                                        <SelectContent>
-                                                            <SelectItem value="openai">OpenAI</SelectItem>
-                                                            <SelectItem value="azure">Azure</SelectItem>
-                                                            <SelectItem value="claude">Claude</SelectItem>
-                                                            <SelectItem value="gemini">Gemini</SelectItem>
-                                                        </SelectContent>
-                                                    </Select>
-                                                </div>
-                                                <div className="space-y-2">
-                                                    <Label className="text-sm">独立模型</Label>
-                                                    <Input
-                                                        value={form.chatModel}
-                                                        onChange={e => setForm({ ...form, chatModel: e.target.value })}
-                                                        placeholder="gpt-4o"
-                                                    />
-                                                </div>
+                                        )}
+
+                                        <div className="flex items-center justify-between p-2 rounded bg-muted/50 mt-2">
+                                            <div className="space-y-0.5">
+                                                <Label className="text-xs font-medium">禁用全局渠道</Label>
+                                                <p className="text-[10px] text-muted-foreground text-orange-500">开启后本群仅使用独立渠道</p>
                                             </div>
+                                            <Switch
+                                                checked={form.forbidGlobalModel}
+                                                onCheckedChange={v => setForm({ ...form, forbidGlobalModel: v })}
+                                            />
                                         </div>
-
-                                        <p className="text-xs text-muted-foreground mt-2">
-                                            配置独立渠道后，本群将优先使用此渠道进行对话
-                                        </p>
                                     </div>
                                 </TabsContent>
 
@@ -2294,6 +2517,324 @@ export default function GroupAdminPage() {
                     <p>ChatGPT Plugin 群管理面板 · 群 {groupId}</p>
                 </div>
             </div>
+
+            {/* 表情大图预览对话框 */}
+            <Dialog open={!!viewEmoji} onOpenChange={v => !v && setViewEmoji(null)}>
+                <DialogContent className="max-w-sm sm:max-w-md p-0 overflow-hidden bg-transparent border-none shadow-none">
+                    {viewEmoji && (
+                        <div className="relative group">
+                            <img src={viewEmoji.url} alt={viewEmoji.name} className="w-full h-auto rounded-lg shadow-2xl bg-background/10 backdrop-blur-sm" />
+                            <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Button variant="secondary" size="sm" onClick={() => deleteEmoji(viewEmoji.name)}>
+                                    <Trash2 className="h-4 w-4 mr-1" /> 删除
+                                </Button>
+                                <Button variant="secondary" size="sm" onClick={() => setViewEmoji(null)}>
+                                    关闭
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
+
+            {/* 渠道编辑对话框 */}
+            <Dialog open={channelDialogOpen} onOpenChange={setChannelDialogOpen}>
+                <DialogContent className="max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle>
+                            {editingChannelIndex !== null ? '编辑渠道' : '添加渠道'}
+                        </DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4 py-4">
+                        <div className="space-y-2">
+                            <Label>渠道名称</Label>
+                            <Input
+                                value={channelForm.name}
+                                onChange={e => setChannelForm({ ...channelForm, name: e.target.value })}
+                                placeholder="例如：OpenAI-1"
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Base URL</Label>
+                            <Input
+                                value={channelForm.baseUrl}
+                                onChange={e => setChannelForm({ ...channelForm, baseUrl: e.target.value })}
+                                placeholder="https://api.openai.com/v1"
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>API Key</Label>
+                            <Input
+                                type="password"
+                                value={channelForm.apiKey}
+                                onChange={e => setChannelForm({ ...channelForm, apiKey: e.target.value })}
+                                placeholder="sk-..."
+                            />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <Label>适配器类型</Label>
+                                <Select
+                                    value={channelForm.adapterType}
+                                    onValueChange={v => setChannelForm({ ...channelForm, adapterType: v })}
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="openai">OpenAI</SelectItem>
+                                        <SelectItem value="azure">Azure</SelectItem>
+                                        <SelectItem value="claude">Claude</SelectItem>
+                                        <SelectItem value="gemini">Gemini</SelectItem>
+                                        <SelectItem value="ollama">Ollama</SelectItem>
+                                        <SelectItem value="deepseek">DeepSeek</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>权重 (优先级)</Label>
+                                <Input
+                                    type="number"
+                                    value={channelForm.priority}
+                                    onChange={e => setChannelForm({ ...channelForm, priority: parseInt(e.target.value) || 0 })}
+                                />
+                            </div>
+                        </div>
+                        <div className="space-y-2">
+                            <Label>可用模型 (逗号分隔)</Label>
+                            <div className="flex gap-2">
+                                <Input
+                                    value={channelForm.models}
+                                    onChange={e => setChannelForm({ ...channelForm, models: e.target.value })}
+                                    placeholder="gpt-4o,gpt-4-turbo..."
+                                    className="flex-1"
+                                />
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={async () => {
+                                        if (!channelForm.baseUrl || !channelForm.apiKey) {
+                                            toast.error('请先填写 Base URL 和 API Key')
+                                            return
+                                        }
+                                        setFetchingModels(true)
+                                        try {
+                                            const res = await fetch('/api/admin/models/fetch', {
+                                                method: 'POST',
+                                                headers: {
+                                                    'Content-Type': 'application/json',
+                                                    Authorization: `Bearer ${getToken()}`
+                                                },
+                                                body: JSON.stringify({
+                                                    baseUrl: channelForm.baseUrl,
+                                                    apiKey: channelForm.apiKey,
+                                                    adapterType: channelForm.adapterType
+                                                })
+                                            })
+                                            const data = await res.json()
+                                            if (data.code === 0) {
+                                                setAvailableModels(data.data)
+                                                setSelectedModels(channelForm.models.split(',').filter(Boolean))
+                                                setModelSelectorOpen(true)
+                                            } else {
+                                                toast.error(data.message || '获取失败')
+                                            }
+                                        } catch (err: any) {
+                                            toast.error(err.message)
+                                        } finally {
+                                            setFetchingModels(false)
+                                        }
+                                    }}
+                                    disabled={fetchingModels}
+                                >
+                                    {fetchingModels ? (
+                                        <RefreshCw className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                        <RefreshCw className="h-4 w-4" />
+                                    )}
+                                </Button>
+                            </div>
+                        </div>
+
+                        {/* 高级配置 */}
+                        <div className="border-t pt-4">
+                            <Label className="mb-2 block">高级配置</Label>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <Label className="text-xs">模型列表路径</Label>
+                                    <Input
+                                        value={channelForm.modelsPath}
+                                        onChange={e => setChannelForm({ ...channelForm, modelsPath: e.target.value })}
+                                        placeholder="data"
+                                        className="h-8 text-sm"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label className="text-xs">聊天接口路径</Label>
+                                    <Input
+                                        value={channelForm.chatPath}
+                                        onChange={e => setChannelForm({ ...channelForm, chatPath: e.target.value })}
+                                        placeholder="/chat/completions"
+                                        className="h-8 text-sm"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 图片处理配置 */}
+                        <div className="border-t pt-4">
+                            <Label className="mb-2 block">图片处理</Label>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <Label className="text-xs">传输模式</Label>
+                                    <Select
+                                        value={channelForm.imageTransferMode}
+                                        onValueChange={(v: any) => setChannelForm({ ...channelForm, imageTransferMode: v })}
+                                    >
+                                        <SelectTrigger className="h-8">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="auto">自动 (Auto)</SelectItem>
+                                            <SelectItem value="base64">Base64</SelectItem>
+                                            <SelectItem value="url">URL链接</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label className="text-xs">压缩图片</Label>
+                                    <div className="flex items-center gap-2 h-8">
+                                        <Switch
+                                            checked={channelForm.imageCompress}
+                                            onCheckedChange={v => setChannelForm({ ...channelForm, imageCompress: v })}
+                                        />
+                                        <span className="text-xs text-muted-foreground">
+                                            {channelForm.imageCompress ? '开启' : '关闭'}
+                                        </span>
+                                    </div>
+                                </div>
+                                {channelForm.imageCompress && (
+                                    <>
+                                        <div className="space-y-2">
+                                            <Label className="text-xs">质量 (1-100)</Label>
+                                            <Input
+                                                type="number"
+                                                value={channelForm.imageQuality}
+                                                onChange={e => setChannelForm({ ...channelForm, imageQuality: parseInt(e.target.value) || 85 })}
+                                                min={1}
+                                                max={100}
+                                                className="h-8 text-sm"
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label className="text-xs">最大尺寸 (px)</Label>
+                                            <Input
+                                                type="number"
+                                                value={channelForm.imageMaxSize}
+                                                onChange={e => setChannelForm({ ...channelForm, imageMaxSize: parseInt(e.target.value) || 4096 })}
+                                                min={100}
+                                                className="h-8 text-sm"
+                                            />
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 pt-2">
+                            <Switch
+                                checked={channelForm.enabled}
+                                onCheckedChange={v => setChannelForm({ ...channelForm, enabled: v })}
+                            />
+                            <Label>启用此渠道</Label>
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setChannelDialogOpen(false)}>
+                            取消
+                        </Button>
+                        <Button
+                            onClick={() => {
+                                if (!channelForm.name || !channelForm.baseUrl || !channelForm.apiKey) {
+                                    toast.error('请填写必要信息')
+                                    return
+                                }
+                                const newChannel: IndependentChannel = {
+                                    id: editingChannelIndex !== null
+                                        ? form.independentChannels[editingChannelIndex].id
+                                        : Math.random().toString(36).substring(7),
+                                    name: channelForm.name,
+                                    baseUrl: channelForm.baseUrl,
+                                    apiKey: channelForm.apiKey,
+                                    adapterType: channelForm.adapterType,
+                                    models: channelForm.models.split(',').filter(Boolean),
+                                    enabled: channelForm.enabled,
+                                    priority: channelForm.priority,
+                                    modelsPath: channelForm.modelsPath || undefined,
+                                    chatPath: channelForm.chatPath || undefined,
+                                    imageConfig: {
+                                        transferMode: channelForm.imageTransferMode,
+                                        compress: channelForm.imageCompress,
+                                        quality: channelForm.imageQuality,
+                                        maxSize: channelForm.imageMaxSize
+                                    }
+                                }
+                                const newChannels = [...form.independentChannels]
+                                if (editingChannelIndex !== null) {
+                                    newChannels[editingChannelIndex] = newChannel
+                                } else {
+                                    newChannels.push(newChannel)
+                                }
+                                setForm({ ...form, independentChannels: newChannels })
+                                setChannelDialogOpen(false)
+                            }}
+                        >
+                            {editingChannelIndex !== null ? '更新' : '添加'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* 模型选择器 */}
+            <Dialog open={modelSelectorOpen} onOpenChange={setModelSelectorOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>选择模型</DialogTitle>
+                    </DialogHeader>
+                    <ScrollArea className="h-[300px] pr-4">
+                        <div className="space-y-2">
+                            {availableModels.map(model => (
+                                <div key={model} className="flex items-center gap-2">
+                                    <Checkbox
+                                        checked={selectedModels.includes(model)}
+                                        onCheckedChange={checked => {
+                                            if (checked) {
+                                                setSelectedModels([...selectedModels, model])
+                                            } else {
+                                                setSelectedModels(selectedModels.filter(m => m !== model))
+                                            }
+                                        }}
+                                    />
+                                    <Label className="text-sm font-normal">{model}</Label>
+                                </div>
+                            ))}
+                        </div>
+                    </ScrollArea>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setModelSelectorOpen(false)}>
+                            取消
+                        </Button>
+                        <Button
+                            onClick={() => {
+                                setChannelForm({ ...channelForm, models: selectedModels.join(',') })
+                                setModelSelectorOpen(false)
+                            }}
+                        >
+                            确认
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

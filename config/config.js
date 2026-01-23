@@ -114,6 +114,7 @@ class Config {
             },
             bym: {
                 enable: false,
+                enableTools: false, // 是否允许伪人模式使用工具
                 probability: 0.02,
                 temperature: 0.9,
                 maxTokens: 100,

@@ -3,6 +3,8 @@
  */
 import express from 'express'
 import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import jwt from 'jsonwebtoken'
 import { ChaiteResponse, getDatabase } from './shared.js'
 import { getScopeManager } from '../scope/ScopeManager.js'
@@ -277,6 +279,28 @@ router.get('/config', groupAdminAuth, async (req, res) => {
             chatLogger.debug('[GroupAdmin] 获取知识库列表失败:', e.message)
         }
 
+        // 获取表情统计
+        let emojiStats = { total: 0, images: [] }
+        try {
+            const { emojiThiefService } = await import('../../../apps/EmojiThief.js')
+            const groupIdStr = String(groupId)
+            const config = await emojiThiefService.getGroupConfig(groupIdStr)
+            const emojiPath = emojiThiefService.getEmojiDir(groupIdStr, config.separateFolder)
+
+            if (emojiPath && fs.existsSync(emojiPath)) {
+                const files = fs.readdirSync(emojiPath).filter(f => /\.(jpg|jpeg|png|gif|webp)$/i.test(f))
+                emojiStats = {
+                    total: files.length,
+                    images: files.slice(0, 50).map(f => ({
+                        name: f,
+                        url: `/api/group-admin/emoji/view?groupId=${groupId}&file=${encodeURIComponent(f)}`
+                    }))
+                }
+            }
+        } catch (e) {
+            chatLogger.debug('[GroupAdmin] 获取表情统计失败:', e.message)
+        }
+
         res.json(
             ChaiteResponse.ok({
                 groupId,
@@ -378,7 +402,25 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                     baseUrl: settings.independentBaseUrl || '',
                     apiKey: settings.independentApiKey ? '****' + settings.independentApiKey.slice(-4) : '',
                     adapterType: settings.independentAdapterType || 'openai',
-                    forbidGlobal: settings.forbidGlobalModel || false
+                    forbidGlobal: settings.forbidGlobalModel || false,
+                    channels: (() => {
+                        if (!settings.independentChannels) return []
+                        try {
+                            const channels =
+                                typeof settings.independentChannels === 'string'
+                                    ? JSON.parse(settings.independentChannels)
+                                    : settings.independentChannels
+                            if (Array.isArray(channels)) {
+                                return channels.map(ch => ({
+                                    ...ch,
+                                    apiKey: ch.apiKey ? '****' + ch.apiKey.slice(-4) : ''
+                                }))
+                            }
+                            return []
+                        } catch (e) {
+                            return []
+                        }
+                    })()
                 },
                 // 使用限制
                 usageLimit: {
@@ -438,6 +480,8 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                         message: settings.pokeMessage || ''
                     }
                 },
+                // 表情小偷管理
+                emojiStats,
                 // 辅助数据
                 presets,
                 channels,
@@ -461,6 +505,33 @@ router.put('/config', groupAdminAuth, async (req, res) => {
         await scopeManager.init()
 
         const body = req.body
+
+        // 处理 masked apiKey
+        let newChannels = body.independentChannel?.channels
+        if (newChannels && Array.isArray(newChannels)) {
+            const existingGroupSettings = await scopeManager.getGroupSettings(groupId)
+            const existingSettings = existingGroupSettings?.settings || {}
+            let existingChannels = existingSettings.independentChannels || []
+            if (typeof existingChannels === 'string') {
+                try {
+                    existingChannels = JSON.parse(existingChannels)
+                } catch (e) {
+                    existingChannels = []
+                }
+            }
+
+            newChannels = newChannels.map(ch => {
+                if (ch.apiKey && ch.apiKey.startsWith('****')) {
+                    const oldCh = Array.isArray(existingChannels)
+                        ? existingChannels.find(old => old.id === ch.id)
+                        : null
+                    if (oldCh) {
+                        return { ...ch, apiKey: oldCh.apiKey }
+                    }
+                }
+                return ch
+            })
+        }
 
         // 构建更新数据
         const updateData = {
@@ -579,6 +650,7 @@ router.put('/config', groupAdminAuth, async (req, res) => {
                     : undefined,
             independentAdapterType: body.independentChannel?.adapterType,
             forbidGlobalModel: body.independentChannel?.forbidGlobal,
+            independentChannels: newChannels,
             // 使用限制
             dailyGroupLimit: body.usageLimit?.dailyGroupLimit,
             dailyUserLimit: body.usageLimit?.dailyUserLimit,
@@ -1011,6 +1083,93 @@ router.post('/usage-stats/reset', groupAdminAuth, async (req, res) => {
         res.json(ChaiteResponse.ok({ success: true, message: '使用统计已重置' }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * DELETE /api/group-admin/emoji/clear - 清空群表情
+ */
+router.delete('/emoji/clear', groupAdminAuth, async (req, res) => {
+    try {
+        const { groupId } = req.groupAdmin
+        const { emojiThiefService } = await import('../../../apps/EmojiThief.js')
+        const config = await emojiThiefService.getGroupConfig(groupId)
+        const emojiDir = emojiThiefService.getEmojiDir(groupId, config.separateFolder)
+
+        if (emojiDir && fs.existsSync(emojiDir)) {
+            const files = fs.readdirSync(emojiDir)
+            let count = 0
+            for (const file of files) {
+                if (/\.(jpg|jpeg|png|gif|webp)$/i.test(file)) {
+                    fs.unlinkSync(path.join(emojiDir, file))
+                    count++
+                }
+            }
+            res.json(ChaiteResponse.ok({ success: true, count }))
+        } else {
+            res.json(ChaiteResponse.fail(null, '未找到表情目录'))
+        }
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * DELETE /api/group-admin/emoji/delete - 删除单个表情
+ */
+router.delete('/emoji/delete', groupAdminAuth, async (req, res) => {
+    try {
+        const { groupId } = req.groupAdmin
+        const { file } = req.query
+
+        if (!file) return res.status(400).json(ChaiteResponse.fail(null, '缺少参数'))
+
+        const { emojiThiefService } = await import('../../../apps/EmojiThief.js')
+        const config = await emojiThiefService.getGroupConfig(groupId)
+        const emojiDir = emojiThiefService.getEmojiDir(groupId, config.separateFolder)
+
+        if (emojiDir) {
+            const filePath = path.join(emojiDir, path.basename(String(file)))
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath)
+                res.json(ChaiteResponse.ok({ success: true }))
+            } else {
+                res.status(404).json(ChaiteResponse.fail(null, '文件不存在'))
+            }
+        } else {
+            res.status(400).json(ChaiteResponse.fail(null, '未找到表情目录'))
+        }
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * GET /api/group-admin/emoji/view - 查看表情图片
+ */
+router.get('/emoji/view', groupAdminAuth, async (req, res) => {
+    try {
+        const { groupId } = req.groupAdmin
+        const { file } = req.query
+
+        if (!file) return res.status(400).send('缺少参数')
+
+        const { emojiThiefService } = await import('../../../apps/EmojiThief.js')
+        const config = await emojiThiefService.getGroupConfig(groupId)
+        const emojiDir = emojiThiefService.getEmojiDir(groupId, config.separateFolder)
+
+        if (emojiDir) {
+            const filePath = path.join(emojiDir, path.basename(String(file)))
+            if (fs.existsSync(filePath)) {
+                res.sendFile(filePath)
+            } else {
+                res.status(404).send('文件不存在')
+            }
+        } else {
+            res.status(400).send('目录不存在')
+        }
+    } catch (error) {
+        res.status(500).send(error.message)
     }
 })
 

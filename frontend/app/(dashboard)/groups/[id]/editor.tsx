@@ -45,44 +45,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Slider } from '@/components/ui/slider'
-
-// 群独立渠道接口（完整配置）
-interface IndependentChannel {
-    id: string
-    name: string
-    baseUrl: string
-    apiKey: string
-    adapterType: string
-    models: string[]
-    enabled: boolean
-    priority: number
-    // 高级配置
-    modelsPath?: string
-    chatPath?: string
-    customHeaders?: Record<string, string>
-    // 图片处理
-    imageConfig?: {
-        transferMode?: 'base64' | 'url' | 'auto'
-        compress?: boolean
-        quality?: number
-        maxSize?: number
-    }
-}
+import { FeatureSwitch } from '@/components/group-form/feature-switch'
+import { EventConfig } from '@/components/group-form/event-config'
+import { ProbabilitySlider } from '@/components/group-form/probability-slider'
+import { FormNumberInput } from '@/components/group-form/form-number-input'
+import { ModelSelect } from '@/components/group-form/model-select'
+import { IndependentChannel, Channel, Preset } from '@/lib/types'
 
 interface GroupEditorProps {
     id: string
-}
-
-interface Channel {
-    id: string
-    name: string
-    provider?: string
-    models?: string[]
-}
-
-interface Preset {
-    id: string
-    name: string
 }
 
 export function GroupEditor({ id }: GroupEditorProps) {
@@ -262,9 +233,9 @@ export function GroupEditor({ id }: GroupEditorProps) {
                         bymEnabled: settings.bymEnabled === undefined ? 'inherit' : settings.bymEnabled ? 'on' : 'off',
                         bymPresetId: settings.bymPresetId || '',
                         bymPrompt: settings.bymPrompt || '',
-                        bymProbability: settings.bymProbability ?? 'inherit',
-                        bymTemperature: settings.bymTemperature ?? 'inherit',
-                        bymMaxTokens: settings.bymMaxTokens ?? 'inherit',
+                        bymProbability: settings.bymProbability === undefined || settings.bymProbability === 'inherit' ? 'inherit' : Number(settings.bymProbability),
+                        bymTemperature: settings.bymTemperature === undefined || settings.bymTemperature === 'inherit' ? 'inherit' : Number(settings.bymTemperature),
+                        bymMaxTokens: settings.bymMaxTokens === undefined || settings.bymMaxTokens === 'inherit' ? 'inherit' : Number(settings.bymMaxTokens),
                         proactiveChatEnabled: settings.proactiveChatEnabled === undefined ? 'inherit' : settings.proactiveChatEnabled ? 'on' : 'off',
                         proactiveChatProbability: settings.proactiveChatProbability ?? 'inherit',
                         proactiveChatCooldown: settings.proactiveChatCooldown ?? 'inherit',
@@ -441,7 +412,7 @@ export function GroupEditor({ id }: GroupEditorProps) {
     }
 
     return (
-        <div className="container max-w-4xl px-4 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6">
+        <div className="container max-w-4xl px-4 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6 flex-1 h-full flex flex-col">
             {/* 头部 */}
             <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 sm:gap-3 min-w-0">
@@ -594,21 +565,13 @@ export function GroupEditor({ id }: GroupEditorProps) {
                                     </Select>
                                 </div>
                                 <div className="space-y-2">
-                                    <Label>对话模型</Label>
-                                    <Select
-                                        value={form.chatModel || '__default__'}
-                                        onValueChange={v => setForm({ ...form, chatModel: v === '__default__' ? '' : v })}
-                                    >
-                                        <SelectTrigger>
-                                            <SelectValue placeholder="使用全局" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="__default__">使用全局</SelectItem>
-                                            {allModels.map(m => (
-                                                <SelectItem key={m} value={m}>{m}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
+                                    <ModelSelect
+                                        label="对话模型"
+                                        value={form.chatModel}
+                                        models={allModels}
+                                        onChange={v => setForm({ ...form, chatModel: v })}
+                                        placeholder="使用全局"
+                                    />
                                 </div>
                             </div>
                             <div className="space-y-2">
@@ -633,16 +596,13 @@ export function GroupEditor({ id }: GroupEditorProps) {
                         </CardHeader>
                         <CardContent className="space-y-4">
                             <div className="grid grid-cols-4 gap-3">
-                                <div className="space-y-1">
-                                    <Label className="text-xs">上下文长度</Label>
-                                    <Input
-                                        type="number"
-                                        min={1}
-                                        max={100}
-                                        value={form.chatContextLength}
-                                        onChange={e => setForm({ ...form, chatContextLength: parseInt(e.target.value) || 20 })}
-                                    />
-                                </div>
+                                <FormNumberInput
+                                    label="上下文长度"
+                                    min={1}
+                                    max={100}
+                                    value={form.chatContextLength}
+                                    onChange={e => setForm({ ...form, chatContextLength: parseInt(e.target.value) || 20 })}
+                                />
                                 <div className="flex items-center justify-between">
                                     <Label className="text-xs">流式回复</Label>
                                     <Switch
@@ -695,21 +655,13 @@ export function GroupEditor({ id }: GroupEditorProps) {
                             />
                             {form.imageGenEnabled === 'on' && (
                                 <div className="ml-12 p-3 rounded-lg bg-muted/50 space-y-2">
-                                    <Label className="text-xs">绘图模型</Label>
-                                    <Select
-                                        value={form.imageGenModel || '__default__'}
-                                        onValueChange={v => setForm({ ...form, imageGenModel: v === '__default__' ? '' : v })}
-                                    >
-                                        <SelectTrigger>
-                                            <SelectValue placeholder="继承全局" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="__default__">继承全局</SelectItem>
-                                            {allModels.filter(m => m.includes('dall') || m.includes('flux') || m.includes('image')).map(m => (
-                                                <SelectItem key={m} value={m}>{m}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
+                                    <ModelSelect
+                                        label="绘图模型"
+                                        value={form.imageGenModel}
+                                        models={allModels.filter(m => m.includes('dall') || m.includes('flux') || m.includes('image'))}
+                                        onChange={v => setForm({ ...form, imageGenModel: v })}
+                                        placeholder="继承全局"
+                                    />
                                 </div>
                             )}
 
@@ -724,21 +676,13 @@ export function GroupEditor({ id }: GroupEditorProps) {
                             {form.summaryEnabled === 'on' && (
                                 <div className="ml-12 p-3 rounded-lg bg-muted/50 space-y-3">
                                     <div className="space-y-2">
-                                        <Label className="text-xs">总结模型</Label>
-                                        <Select
-                                            value={form.summaryModel || '__default__'}
-                                            onValueChange={v => setForm({ ...form, summaryModel: v === '__default__' ? '' : v })}
-                                        >
-                                            <SelectTrigger>
-                                                <SelectValue placeholder="继承全局" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="__default__">继承全局</SelectItem>
-                                                {allModels.map(m => (
-                                                    <SelectItem key={m} value={m}>{m}</SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
+                                        <ModelSelect
+                                            label="总结模型"
+                                            value={form.summaryModel}
+                                            models={allModels}
+                                            onChange={v => setForm({ ...form, summaryModel: v })}
+                                            placeholder="继承全局"
+                                        />
                                     </div>
                                     {/* 定时推送 */}
                                     <div className="flex items-center justify-between pt-2 border-t">
@@ -768,40 +712,27 @@ export function GroupEditor({ id }: GroupEditorProps) {
                                                     </SelectContent>
                                                 </Select>
                                             </div>
-                                            <div className="space-y-1">
-                                                <Label className="text-xs">间隔值</Label>
-                                                <Input
-                                                    type="number"
-                                                    min={1}
-                                                    value={form.summaryPushIntervalValue}
-                                                    onChange={e => setForm({ ...form, summaryPushIntervalValue: parseInt(e.target.value) || 1 })}
+                                            <FormNumberInput
+                                                label="间隔值"
+                                                min={1}
+                                                value={form.summaryPushIntervalValue}
+                                                onChange={e => setForm({ ...form, summaryPushIntervalValue: parseInt(e.target.value) || 1 })}
+                                            />
+                                            {form.summaryPushIntervalType === 'day' && (
+                                                <FormNumberInput
+                                                    label="推送时间(点)"
+                                                    min={0}
+                                                    max={23}
+                                                    value={form.summaryPushHour}
+                                                    onChange={e => setForm({ ...form, summaryPushHour: parseInt(e.target.value) || 20 })}
                                                 />
-                                            </div>
-                                            <div className="space-y-1">
-                                                <Label className="text-xs">{form.summaryPushIntervalType === 'day' ? '推送时间(点)' : '消息数量'}</Label>
-                                                <Input
-                                                    type="number"
-                                                    min={form.summaryPushIntervalType === 'day' ? 0 : 10}
-                                                    max={form.summaryPushIntervalType === 'day' ? 23 : undefined}
-                                                    value={form.summaryPushIntervalType === 'day' ? form.summaryPushHour : form.summaryPushMessageCount}
-                                                    onChange={e => {
-                                                        if (form.summaryPushIntervalType === 'day') {
-                                                            setForm({ ...form, summaryPushHour: parseInt(e.target.value) || 20 })
-                                                        } else {
-                                                            setForm({ ...form, summaryPushMessageCount: parseInt(e.target.value) || 100 })
-                                                        }
-                                                    }}
-                                                />
-                                            </div>
-                                            <div className="space-y-1">
-                                                <Label className="text-xs">消息数量</Label>
-                                                <Input
-                                                    type="number"
-                                                    min={10}
-                                                    value={form.summaryPushMessageCount}
-                                                    onChange={e => setForm({ ...form, summaryPushMessageCount: parseInt(e.target.value) || 100 })}
-                                                />
-                                            </div>
+                                            )}
+                                            <FormNumberInput
+                                                label="消息数量"
+                                                min={10}
+                                                value={form.summaryPushMessageCount}
+                                                onChange={e => setForm({ ...form, summaryPushMessageCount: parseInt(e.target.value) || 100 })}
+                                            />
                                         </div>
                                     )}
                                 </div>
@@ -825,58 +756,68 @@ export function GroupEditor({ id }: GroupEditorProps) {
                                 onChange={v => setForm({ ...form, emojiThiefEnabled: v })}
                             />
                             {form.emojiThiefEnabled === 'on' && (
-                                <div className="ml-12 p-3 rounded-lg bg-muted/50 space-y-3">
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <div className="space-y-1">
-                                            <Label className="text-xs">最大收集数</Label>
-                                            <Input
-                                                type="number"
-                                                min={0}
-                                                value={form.emojiThiefMaxCount}
-                                                onChange={e => setForm({ ...form, emojiThiefMaxCount: parseInt(e.target.value) || 500 })}
-                                            />
+                                <div className="ml-12 p-4 rounded-lg bg-muted/30 border space-y-4">
+                                    <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                                        <div className="space-y-0.5">
+                                            <Label className="text-sm font-medium">独立存储</Label>
+                                            <p className="text-xs text-muted-foreground">本群表情包独立存储，不与其他群共享</p>
                                         </div>
-                                        <div className="space-y-1">
-                                            <Label className="text-xs">收集概率 (%)</Label>
-                                            <Input
-                                                type="number"
-                                                min={0}
-                                                max={100}
-                                                value={Math.round(form.emojiThiefStealRate * 100)}
-                                                onChange={e => setForm({ ...form, emojiThiefStealRate: (parseInt(e.target.value) || 100) / 100 })}
+                                        <Switch
+                                            checked={form.emojiThiefSeparateFolder}
+                                            onCheckedChange={v => setForm({ ...form, emojiThiefSeparateFolder: v })}
+                                        />
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <FormNumberInput
+                                            label="最大收集数"
+                                            min={10}
+                                            max={5000}
+                                            value={form.emojiThiefMaxCount}
+                                            onChange={e => setForm({ ...form, emojiThiefMaxCount: parseInt(e.target.value) || 500 })}
+                                        />
+                                        <div className="flex items-end h-full pb-1">
+                                            <ProbabilitySlider
+                                                label="收集概率"
+                                                value={form.emojiThiefStealRate}
+                                                onChange={v => setForm({ ...form, emojiThiefStealRate: v })}
+                                                className="w-full"
                                             />
                                         </div>
                                     </div>
-                                    <div className="space-y-1">
-                                        <Label className="text-xs">随机发图模式</Label>
-                                        <Select
-                                            value={form.emojiThiefTriggerMode}
-                                            onValueChange={v => setForm({ ...form, emojiThiefTriggerMode: v })}
-                                        >
-                                            <SelectTrigger>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="off">关闭</SelectItem>
-                                                <SelectItem value="chat_follow">对话跟随</SelectItem>
-                                                <SelectItem value="chat_random">对话随机</SelectItem>
-                                                <SelectItem value="bym_follow">伪人跟随</SelectItem>
-                                                <SelectItem value="bym_random">伪人随机</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    {form.emojiThiefTriggerMode !== 'off' && (
-                                        <div className="space-y-1">
-                                            <Label className="text-xs">发送概率 (%)</Label>
-                                            <Input
-                                                type="number"
-                                                min={0}
-                                                max={100}
-                                                value={Math.round(form.emojiThiefTriggerRate * 100)}
-                                                onChange={e => setForm({ ...form, emojiThiefTriggerRate: (parseInt(e.target.value) || 5) / 100 })}
+
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-2">
+                                            <Label className="text-xs">随机发图模式</Label>
+                                            <Select
+                                                value={form.emojiThiefTriggerMode}
+                                                onValueChange={v => setForm({ ...form, emojiThiefTriggerMode: v })}
+                                            >
+                                                <SelectTrigger className="h-9">
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="off">关闭自动发送</SelectItem>
+                                                    <SelectItem value="chat_follow">对话跟随</SelectItem>
+                                                    <SelectItem value="chat_random">对话随机</SelectItem>
+                                                    <SelectItem value="bym_follow">伪人跟随</SelectItem>
+                                                    <SelectItem value="bym_random">伪人随机</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                        <div className="flex items-end h-full pb-1">
+                                            <ProbabilitySlider
+                                                label="发送概率"
+                                                value={form.emojiThiefTriggerRate}
+                                                onChange={v => setForm({ ...form, emojiThiefTriggerRate: v })}
+                                                disabled={form.emojiThiefTriggerMode === 'off' || form.emojiThiefTriggerMode === 'chat_follow' || form.emojiThiefTriggerMode === 'bym_follow'}
+                                                className="w-full"
                                             />
                                         </div>
-                                    )}
+                                    </div>
+                                    <p className="text-[10px] text-muted-foreground bg-muted/50 p-2 rounded">
+                                        💡 触发模式100%发送，随机模式按概率发送。
+                                    </p>
                                 </div>
                             )}
                         </CardContent>
@@ -893,439 +834,178 @@ export function GroupEditor({ id }: GroupEditorProps) {
                             </CardHeader>
                             <CardContent className="space-y-4">
                                 {/* 入群欢迎 */}
-                                <div className="rounded-lg border overflow-hidden">
-                                    <div className="flex items-center justify-between p-3 bg-muted/30">
-                                        <div className="flex items-center gap-2">
-                                            <UserPlus className="h-4 w-4 text-green-500" />
-                                            <span className="text-sm font-medium">入群欢迎</span>
-                                        </div>
-                                        <Select
-                                            value={form.welcomeEnabled}
-                                            onValueChange={(v: 'inherit' | 'on' | 'off') => {
-                                                const updates: Partial<typeof form> = { welcomeEnabled: v }
-                                                if (v === 'on' && form.welcomeProbability === 'inherit') {
-                                                    updates.welcomeProbability = 1.0
-                                                }
-                                                setForm({ ...form, ...updates })
-                                            }}
-                                        >
-                                            <SelectTrigger className="w-24 h-8">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="inherit">继承</SelectItem>
-                                                <SelectItem value="on">开启</SelectItem>
-                                                <SelectItem value="off">关闭</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    {form.welcomeEnabled === 'on' && (
-                                        <div className="p-3 space-y-3 border-t">
-                                            <div className="space-y-2">
-                                                <div className="flex items-center justify-between">
-                                                    <Label className="text-xs">响应概率</Label>
-                                                    <span className="text-xs text-muted-foreground font-medium">
-                                                        {Math.round((form.welcomeProbability === 'inherit' ? 1.0 : form.welcomeProbability as number) * 100)}%
-                                                    </span>
-                                                </div>
-                                                <Slider
-                                                    value={[form.welcomeProbability === 'inherit' ? 1.0 : form.welcomeProbability as number]}
-                                                    onValueChange={([v]) => setForm({ ...form, welcomeProbability: v })}
-                                                    min={0}
-                                                    max={1}
-                                                    step={0.05}
-                                                />
-                                            </div>
-                                            <Input
-                                                value={form.welcomeMessage}
-                                                onChange={e => setForm({ ...form, welcomeMessage: e.target.value })}
-                                                placeholder="固定欢迎语（留空使用AI生成）"
-                                                className="h-8 text-sm"
-                                            />
-                                            <Textarea
-                                                value={form.welcomePrompt}
-                                                onChange={e => setForm({ ...form, welcomePrompt: e.target.value })}
-                                                placeholder="AI欢迎提示词"
-                                                rows={2}
-                                                className="text-sm"
-                                            />
-                                        </div>
-                                    )}
-                                </div>
+                                <EventConfig
+                                    icon={<UserPlus className="h-4 w-4 text-green-500" />}
+                                    title="入群欢迎"
+                                    enabled={form.welcomeEnabled}
+                                    onEnabledChange={(v) => {
+                                        const updates: Partial<typeof form> = { welcomeEnabled: v }
+                                        if (v === 'on' && form.welcomeProbability === 'inherit') {
+                                            updates.welcomeProbability = 1.0
+                                        }
+                                        setForm({ ...form, ...updates })
+                                    }}
+                                    probability={form.welcomeProbability}
+                                    onProbabilityChange={(v) => setForm({ ...form, welcomeProbability: v })}
+                                >
+                                    <Input
+                                        value={form.welcomeMessage}
+                                        onChange={e => setForm({ ...form, welcomeMessage: e.target.value })}
+                                        placeholder="固定欢迎语（留空使用AI生成）"
+                                        className="h-8 text-sm"
+                                    />
+                                    <Textarea
+                                        value={form.welcomePrompt}
+                                        onChange={e => setForm({ ...form, welcomePrompt: e.target.value })}
+                                        placeholder="AI欢迎提示词"
+                                        rows={2}
+                                        className="text-sm"
+                                    />
+                                </EventConfig>
 
                                 {/* 退群告别 */}
-                                <div className="rounded-lg border overflow-hidden">
-                                    <div className="flex items-center justify-between p-3 bg-muted/30">
-                                        <div className="flex items-center gap-2">
-                                            <UserMinus className="h-4 w-4 text-red-500" />
-                                            <span className="text-sm font-medium">退群告别</span>
-                                        </div>
-                                        <Select
-                                            value={form.goodbyeEnabled}
-                                            onValueChange={(v: 'inherit' | 'on' | 'off') => {
-                                                const updates: Partial<typeof form> = { goodbyeEnabled: v }
-                                                if (v === 'on' && form.goodbyeProbability === 'inherit') {
-                                                    updates.goodbyeProbability = 1.0
-                                                }
-                                                setForm({ ...form, ...updates })
-                                            }}
-                                        >
-                                            <SelectTrigger className="w-24 h-8">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="inherit">继承</SelectItem>
-                                                <SelectItem value="on">开启</SelectItem>
-                                                <SelectItem value="off">关闭</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    {form.goodbyeEnabled === 'on' && (
-                                        <div className="p-3 space-y-3 border-t">
-                                            <div className="space-y-2">
-                                                <div className="flex items-center justify-between">
-                                                    <Label className="text-xs">响应概率</Label>
-                                                    <span className="text-xs text-muted-foreground font-medium">
-                                                        {Math.round((form.goodbyeProbability === 'inherit' ? 1.0 : form.goodbyeProbability as number) * 100)}%
-                                                    </span>
-                                                </div>
-                                                <Slider
-                                                    value={[form.goodbyeProbability === 'inherit' ? 1.0 : form.goodbyeProbability as number]}
-                                                    onValueChange={([v]) => setForm({ ...form, goodbyeProbability: v })}
-                                                    min={0}
-                                                    max={1}
-                                                    step={0.05}
-                                                />
-                                            </div>
-                                            <Textarea
-                                                value={form.goodbyePrompt}
-                                                onChange={e => setForm({ ...form, goodbyePrompt: e.target.value })}
-                                                placeholder="AI告别提示词"
-                                                rows={2}
-                                                className="text-sm"
-                                            />
-                                        </div>
-                                    )}
-                                </div>
+                                <EventConfig
+                                    icon={<UserMinus className="h-4 w-4 text-red-500" />}
+                                    title="退群告别"
+                                    enabled={form.goodbyeEnabled}
+                                    onEnabledChange={(v) => {
+                                        const updates: Partial<typeof form> = { goodbyeEnabled: v }
+                                        if (v === 'on' && form.goodbyeProbability === 'inherit') {
+                                            updates.goodbyeProbability = 1.0
+                                        }
+                                        setForm({ ...form, ...updates })
+                                    }}
+                                    probability={form.goodbyeProbability}
+                                    onProbabilityChange={(v) => setForm({ ...form, goodbyeProbability: v })}
+                                >
+                                    <Textarea
+                                        value={form.goodbyePrompt}
+                                        onChange={e => setForm({ ...form, goodbyePrompt: e.target.value })}
+                                        placeholder="AI告别提示词"
+                                        rows={2}
+                                        className="text-sm"
+                                    />
+                                </EventConfig>
 
                                 {/* 戳一戳 */}
-                                <div className="rounded-lg border overflow-hidden">
-                                    <div className="flex items-center justify-between p-3 bg-muted/30">
-                                        <div className="flex items-center gap-2">
-                                            <MousePointer2 className="h-4 w-4 text-orange-500" />
-                                            <span className="text-sm font-medium">戳一戳</span>
-                                        </div>
-                                        <Select
-                                            value={form.pokeEnabled}
-                                            onValueChange={(v: 'inherit' | 'on' | 'off') => {
-                                                const updates: Partial<typeof form> = { pokeEnabled: v }
-                                                if (v === 'on' && form.pokeProbability === 'inherit') {
-                                                    updates.pokeProbability = 1.0
-                                                }
-                                                setForm({ ...form, ...updates })
-                                            }}
-                                        >
-                                            <SelectTrigger className="w-24 h-8">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="inherit">继承</SelectItem>
-                                                <SelectItem value="on">开启</SelectItem>
-                                                <SelectItem value="off">关闭</SelectItem>
-                                            </SelectContent>
-                                        </Select>
+                                <EventConfig
+                                    icon={<MousePointer2 className="h-4 w-4 text-orange-500" />}
+                                    title="戳一戳"
+                                    enabled={form.pokeEnabled}
+                                    onEnabledChange={(v) => {
+                                        const updates: Partial<typeof form> = { pokeEnabled: v }
+                                        if (v === 'on' && form.pokeProbability === 'inherit') {
+                                            updates.pokeProbability = 1.0
+                                        }
+                                        setForm({ ...form, ...updates })
+                                    }}
+                                    probability={form.pokeProbability}
+                                    onProbabilityChange={(v) => setForm({ ...form, pokeProbability: v })}
+                                >
+                                    <div className="flex items-center justify-between pt-2 border-t">
+                                        <Label className="text-xs">戳回去</Label>
+                                        <Switch
+                                            checked={form.pokeBack}
+                                            onCheckedChange={v => setForm({ ...form, pokeBack: v })}
+                                        />
                                     </div>
-                                    {form.pokeEnabled === 'on' && (
-                                        <div className="p-3 space-y-3 border-t">
-                                            <div className="space-y-2">
-                                                <div className="flex items-center justify-between">
-                                                    <Label className="text-xs">响应概率</Label>
-                                                    <span className="text-xs text-muted-foreground font-medium">
-                                                        {Math.round((form.pokeProbability === 'inherit' ? 1.0 : form.pokeProbability as number) * 100)}%
-                                                    </span>
-                                                </div>
-                                                <Slider
-                                                    value={[form.pokeProbability === 'inherit' ? 1.0 : form.pokeProbability as number]}
-                                                    onValueChange={([v]) => setForm({ ...form, pokeProbability: v })}
-                                                    min={0}
-                                                    max={1}
-                                                    step={0.05}
-                                                />
-                                            </div>
-                                            <div className="flex items-center justify-between pt-2 border-t">
-                                                <Label className="text-xs">戳回去</Label>
-                                                <Switch
-                                                    checked={form.pokeBack}
-                                                    onCheckedChange={v => setForm({ ...form, pokeBack: v })}
-                                                />
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
+                                </EventConfig>
 
                                 {/* 撤回响应 */}
-                                <div className="rounded-lg border overflow-hidden">
-                                    <div className="flex items-center justify-between p-3 bg-muted/30">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-sm">🔄</span>
-                                            <span className="text-sm font-medium">撤回响应</span>
-                                        </div>
-                                        <Select
-                                            value={form.recallEnabled}
-                                            onValueChange={(v: 'inherit' | 'on' | 'off') => {
-                                                const updates: Partial<typeof form> = { recallEnabled: v }
-                                                if (v === 'on' && form.recallProbability === 'inherit') {
-                                                    updates.recallProbability = 1.0
-                                                }
-                                                setForm({ ...form, ...updates })
-                                            }}
-                                        >
-                                            <SelectTrigger className="w-24 h-8">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="inherit">继承</SelectItem>
-                                                <SelectItem value="on">开启</SelectItem>
-                                                <SelectItem value="off">关闭</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    {form.recallEnabled === 'on' && (
-                                        <div className="p-3 space-y-2 border-t">
-                                            <div className="flex items-center gap-2">
-                                                <Label className="text-xs w-16">概率</Label>
-                                                <Slider
-                                                    value={[form.recallProbability === 'inherit' ? 1.0 : form.recallProbability as number]}
-                                                    onValueChange={([v]) => setForm({ ...form, recallProbability: v })}
-                                                    min={0} max={1} step={0.05} className="flex-1"
-                                                />
-                                                <span className="text-xs w-10 text-right">
-                                                    {Math.round((form.recallProbability === 'inherit' ? 1.0 : form.recallProbability as number) * 100)}%
-                                                </span>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
+                                <EventConfig
+                                    icon={<span className="text-sm">🔄</span>}
+                                    title="撤回响应"
+                                    enabled={form.recallEnabled}
+                                    onEnabledChange={(v) => {
+                                        const updates: Partial<typeof form> = { recallEnabled: v }
+                                        if (v === 'on' && form.recallProbability === 'inherit') {
+                                            updates.recallProbability = 1.0
+                                        }
+                                        setForm({ ...form, ...updates })
+                                    }}
+                                    probability={form.recallProbability}
+                                    onProbabilityChange={(v) => setForm({ ...form, recallProbability: v })}
+                                />
 
                                 {/* 禁言响应 */}
-                                <div className="rounded-lg border overflow-hidden">
-                                    <div className="flex items-center justify-between p-3 bg-muted/30">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-sm">🔇</span>
-                                            <span className="text-sm font-medium">禁言响应</span>
-                                        </div>
-                                        <Select
-                                            value={form.banEnabled}
-                                            onValueChange={(v: 'inherit' | 'on' | 'off') => {
-                                                const updates: Partial<typeof form> = { banEnabled: v }
-                                                if (v === 'on' && form.banProbability === 'inherit') {
-                                                    updates.banProbability = 1.0
-                                                }
-                                                setForm({ ...form, ...updates })
-                                            }}
-                                        >
-                                            <SelectTrigger className="w-24 h-8">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="inherit">继承</SelectItem>
-                                                <SelectItem value="on">开启</SelectItem>
-                                                <SelectItem value="off">关闭</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    {form.banEnabled === 'on' && (
-                                        <div className="p-3 space-y-2 border-t">
-                                            <div className="flex items-center gap-2">
-                                                <Label className="text-xs w-16">概率</Label>
-                                                <Slider
-                                                    value={[form.banProbability === 'inherit' ? 1.0 : form.banProbability as number]}
-                                                    onValueChange={([v]) => setForm({ ...form, banProbability: v })}
-                                                    min={0} max={1} step={0.05} className="flex-1"
-                                                />
-                                                <span className="text-xs w-10 text-right">
-                                                    {Math.round((form.banProbability === 'inherit' ? 1.0 : form.banProbability as number) * 100)}%
-                                                </span>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
+                                <EventConfig
+                                    icon={<span className="text-sm">🔇</span>}
+                                    title="禁言响应"
+                                    enabled={form.banEnabled}
+                                    onEnabledChange={(v) => {
+                                        const updates: Partial<typeof form> = { banEnabled: v }
+                                        if (v === 'on' && form.banProbability === 'inherit') {
+                                            updates.banProbability = 1.0
+                                        }
+                                        setForm({ ...form, ...updates })
+                                    }}
+                                    probability={form.banProbability}
+                                    onProbabilityChange={(v) => setForm({ ...form, banProbability: v })}
+                                />
 
                                 {/* 运气王响应 */}
-                                <div className="rounded-lg border overflow-hidden">
-                                    <div className="flex items-center justify-between p-3 bg-muted/30">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-sm">🧧</span>
-                                            <span className="text-sm font-medium">运气王响应</span>
-                                        </div>
-                                        <Select
-                                            value={form.luckyKingEnabled}
-                                            onValueChange={(v: 'inherit' | 'on' | 'off') => {
-                                                const updates: Partial<typeof form> = { luckyKingEnabled: v }
-                                                if (v === 'on' && form.luckyKingProbability === 'inherit') {
-                                                    updates.luckyKingProbability = 1.0
-                                                }
-                                                setForm({ ...form, ...updates })
-                                            }}
-                                        >
-                                            <SelectTrigger className="w-24 h-8">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="inherit">继承</SelectItem>
-                                                <SelectItem value="on">开启</SelectItem>
-                                                <SelectItem value="off">关闭</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    {form.luckyKingEnabled === 'on' && (
-                                        <div className="p-3 space-y-2 border-t">
-                                            <div className="flex items-center gap-2">
-                                                <Label className="text-xs w-16">概率</Label>
-                                                <Slider
-                                                    value={[form.luckyKingProbability === 'inherit' ? 1.0 : form.luckyKingProbability as number]}
-                                                    onValueChange={([v]) => setForm({ ...form, luckyKingProbability: v })}
-                                                    min={0} max={1} step={0.05} className="flex-1"
-                                                />
-                                                <span className="text-xs w-10 text-right">
-                                                    {Math.round((form.luckyKingProbability === 'inherit' ? 1.0 : form.luckyKingProbability as number) * 100)}%
-                                                </span>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
+                                <EventConfig
+                                    icon={<span className="text-sm">🧧</span>}
+                                    title="运气王响应"
+                                    enabled={form.luckyKingEnabled}
+                                    onEnabledChange={(v) => {
+                                        const updates: Partial<typeof form> = { luckyKingEnabled: v }
+                                        if (v === 'on' && form.luckyKingProbability === 'inherit') {
+                                            updates.luckyKingProbability = 1.0
+                                        }
+                                        setForm({ ...form, ...updates })
+                                    }}
+                                    probability={form.luckyKingProbability}
+                                    onProbabilityChange={(v) => setForm({ ...form, luckyKingProbability: v })}
+                                />
 
                                 {/* 荣誉变更响应 */}
-                                <div className="rounded-lg border overflow-hidden">
-                                    <div className="flex items-center justify-between p-3 bg-muted/30">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-sm">🏆</span>
-                                            <span className="text-sm font-medium">荣誉变更</span>
-                                        </div>
-                                        <Select
-                                            value={form.honorEnabled}
-                                            onValueChange={(v: 'inherit' | 'on' | 'off') => {
-                                                const updates: Partial<typeof form> = { honorEnabled: v }
-                                                if (v === 'on' && form.honorProbability === 'inherit') {
-                                                    updates.honorProbability = 1.0
-                                                }
-                                                setForm({ ...form, ...updates })
-                                            }}
-                                        >
-                                            <SelectTrigger className="w-24 h-8">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="inherit">继承</SelectItem>
-                                                <SelectItem value="on">开启</SelectItem>
-                                                <SelectItem value="off">关闭</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    {form.honorEnabled === 'on' && (
-                                        <div className="p-3 space-y-2 border-t">
-                                            <div className="flex items-center gap-2">
-                                                <Label className="text-xs w-16">概率</Label>
-                                                <Slider
-                                                    value={[form.honorProbability === 'inherit' ? 1.0 : form.honorProbability as number]}
-                                                    onValueChange={([v]) => setForm({ ...form, honorProbability: v })}
-                                                    min={0} max={1} step={0.05} className="flex-1"
-                                                />
-                                                <span className="text-xs w-10 text-right">
-                                                    {Math.round((form.honorProbability === 'inherit' ? 1.0 : form.honorProbability as number) * 100)}%
-                                                </span>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
+                                <EventConfig
+                                    icon={<span className="text-sm">🏆</span>}
+                                    title="荣誉变更"
+                                    enabled={form.honorEnabled}
+                                    onEnabledChange={(v) => {
+                                        const updates: Partial<typeof form> = { honorEnabled: v }
+                                        if (v === 'on' && form.honorProbability === 'inherit') {
+                                            updates.honorProbability = 1.0
+                                        }
+                                        setForm({ ...form, ...updates })
+                                    }}
+                                    probability={form.honorProbability}
+                                    onProbabilityChange={(v) => setForm({ ...form, honorProbability: v })}
+                                />
 
                                 {/* 精华消息响应 */}
-                                <div className="rounded-lg border overflow-hidden">
-                                    <div className="flex items-center justify-between p-3 bg-muted/30">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-sm">⭐</span>
-                                            <span className="text-sm font-medium">精华消息</span>
-                                        </div>
-                                        <Select
-                                            value={form.essenceEnabled}
-                                            onValueChange={(v: 'inherit' | 'on' | 'off') => {
-                                                const updates: Partial<typeof form> = { essenceEnabled: v }
-                                                if (v === 'on' && form.essenceProbability === 'inherit') {
-                                                    updates.essenceProbability = 1.0
-                                                }
-                                                setForm({ ...form, ...updates })
-                                            }}
-                                        >
-                                            <SelectTrigger className="w-24 h-8">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="inherit">继承</SelectItem>
-                                                <SelectItem value="on">开启</SelectItem>
-                                                <SelectItem value="off">关闭</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    {form.essenceEnabled === 'on' && (
-                                        <div className="p-3 space-y-2 border-t">
-                                            <div className="flex items-center gap-2">
-                                                <Label className="text-xs w-16">概率</Label>
-                                                <Slider
-                                                    value={[form.essenceProbability === 'inherit' ? 1.0 : form.essenceProbability as number]}
-                                                    onValueChange={([v]) => setForm({ ...form, essenceProbability: v })}
-                                                    min={0} max={1} step={0.05} className="flex-1"
-                                                />
-                                                <span className="text-xs w-10 text-right">
-                                                    {Math.round((form.essenceProbability === 'inherit' ? 1.0 : form.essenceProbability as number) * 100)}%
-                                                </span>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
+                                <EventConfig
+                                    icon={<span className="text-sm">⭐</span>}
+                                    title="精华消息"
+                                    enabled={form.essenceEnabled}
+                                    onEnabledChange={(v) => {
+                                        const updates: Partial<typeof form> = { essenceEnabled: v }
+                                        if (v === 'on' && form.essenceProbability === 'inherit') {
+                                            updates.essenceProbability = 1.0
+                                        }
+                                        setForm({ ...form, ...updates })
+                                    }}
+                                    probability={form.essenceProbability}
+                                    onProbabilityChange={(v) => setForm({ ...form, essenceProbability: v })}
+                                />
 
                                 {/* 管理员变更响应 */}
-                                <div className="rounded-lg border overflow-hidden">
-                                    <div className="flex items-center justify-between p-3 bg-muted/30">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-sm">👑</span>
-                                            <span className="text-sm font-medium">管理员变更</span>
-                                        </div>
-                                        <Select
-                                            value={form.adminEnabled}
-                                            onValueChange={(v: 'inherit' | 'on' | 'off') => {
-                                                const updates: Partial<typeof form> = { adminEnabled: v }
-                                                if (v === 'on' && form.adminProbability === 'inherit') {
-                                                    updates.adminProbability = 1.0
-                                                }
-                                                setForm({ ...form, ...updates })
-                                            }}
-                                        >
-                                            <SelectTrigger className="w-24 h-8">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="inherit">继承</SelectItem>
-                                                <SelectItem value="on">开启</SelectItem>
-                                                <SelectItem value="off">关闭</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    {form.adminEnabled === 'on' && (
-                                        <div className="p-3 space-y-2 border-t">
-                                            <div className="flex items-center gap-2">
-                                                <Label className="text-xs w-16">概率</Label>
-                                                <Slider
-                                                    value={[form.adminProbability === 'inherit' ? 1.0 : form.adminProbability as number]}
-                                                    onValueChange={([v]) => setForm({ ...form, adminProbability: v })}
-                                                    min={0} max={1} step={0.05} className="flex-1"
-                                                />
-                                                <span className="text-xs w-10 text-right">
-                                                    {Math.round((form.adminProbability === 'inherit' ? 1.0 : form.adminProbability as number) * 100)}%
-                                                </span>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
+                                <EventConfig
+                                    icon={<span className="text-sm">👑</span>}
+                                    title="管理员变更"
+                                    enabled={form.adminEnabled}
+                                    onEnabledChange={(v) => {
+                                        const updates: Partial<typeof form> = { adminEnabled: v }
+                                        if (v === 'on' && form.adminProbability === 'inherit') {
+                                            updates.adminProbability = 1.0
+                                        }
+                                        setForm({ ...form, ...updates })
+                                    }}
+                                    probability={form.adminProbability}
+                                    onProbabilityChange={(v) => setForm({ ...form, adminProbability: v })}
+                                />
                             </CardContent>
                         </Card>
                     )}
@@ -1343,27 +1023,13 @@ export function GroupEditor({ id }: GroupEditorProps) {
                         </CardHeader>
                         <CardContent className="space-y-4">
                             {/* 伪人开关 */}
-                            <div className="flex items-center justify-between p-3 rounded-lg border">
-                                <div className="flex items-center gap-3">
-                                    <div className="p-2 rounded-md bg-muted">
-                                        <Smile className="h-4 w-4 text-orange-500" />
-                                    </div>
-                                    <div>
-                                        <p className="text-sm font-medium">启用伪人</p>
-                                        <p className="text-xs text-muted-foreground">开启后机器人会随机回复群消息</p>
-                                    </div>
-                                </div>
-                                <Select value={form.bymEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, bymEnabled: v })}>
-                                    <SelectTrigger className="w-24">
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="inherit">继承</SelectItem>
-                                        <SelectItem value="on">开启</SelectItem>
-                                        <SelectItem value="off">关闭</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
+                            <FeatureSwitch
+                                icon={<Smile className="h-4 w-4 text-orange-500" />}
+                                title="启用伪人"
+                                desc="开启后机器人会随机回复群消息"
+                                value={form.bymEnabled}
+                                onChange={v => setForm({ ...form, bymEnabled: v })}
+                            />
 
                             {form.bymEnabled !== 'off' && (
                                 <div className="space-y-4 ml-4 pl-4 border-l-2 border-muted">
@@ -1387,21 +1053,13 @@ export function GroupEditor({ id }: GroupEditorProps) {
                                             </Select>
                                         </div>
                                         <div className="space-y-2">
-                                            <Label>伪人模型</Label>
-                                            <Select
-                                                value={form.bymModel || '__default__'}
-                                                onValueChange={v => setForm({ ...form, bymModel: v === '__default__' ? '' : v })}
-                                            >
-                                                <SelectTrigger>
-                                                    <SelectValue placeholder="使用全局" />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value="__default__">使用全局</SelectItem>
-                                                    {allModels.map(m => (
-                                                        <SelectItem key={m} value={m}>{m}</SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
+                                            <ModelSelect
+                                                label="伪人模型"
+                                                value={form.bymModel}
+                                                models={allModels}
+                                                onChange={v => setForm({ ...form, bymModel: v })}
+                                                placeholder="使用全局"
+                                            />
                                         </div>
                                     </div>
                                     <div className="space-y-2">
@@ -1416,47 +1074,51 @@ export function GroupEditor({ id }: GroupEditorProps) {
                                     {/* 参数配置 */}
                                     <div className="grid grid-cols-4 gap-3">
                                         <div className="space-y-1">
-                                            <Label className="text-xs">回复概率(%)</Label>
-                                            <Input
-                                                type="number"
-                                                min={0}
-                                                max={100}
-                                                value={form.bymProbability === 'inherit' ? '' : Math.round((form.bymProbability as number) * 100)}
-                                                onChange={e => setForm({
-                                                    ...form,
-                                                    bymProbability: e.target.value === '' ? 'inherit' : Number(e.target.value) / 100
-                                                })}
-                                                placeholder="继承"
-                                            />
+                                            <div className="flex items-center justify-between">
+                                                <Label className="text-xs">回复概率</Label>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-4 text-[10px] px-1"
+                                                    onClick={() => setForm({ ...form, bymProbability: form.bymProbability === 'inherit' ? 0.02 : 'inherit' })}
+                                                >
+                                                    {form.bymProbability === 'inherit' ? '继承' : '自定义'}
+                                                </Button>
+                                            </div>
+                                            {form.bymProbability !== 'inherit' && (
+                                                <ProbabilitySlider
+                                                    label=""
+                                                    value={form.bymProbability as number}
+                                                    onChange={(v) => setForm({ ...form, bymProbability: v })}
+                                                    className="pt-1"
+                                                />
+                                            )}
+                                            {form.bymProbability === 'inherit' && (
+                                                <div className="text-xs text-muted-foreground h-8 flex items-center">使用全局设置</div>
+                                            )}
                                         </div>
-                                        <div className="space-y-1">
-                                            <Label className="text-xs">温度</Label>
-                                            <Input
-                                                type="number"
-                                                min={0}
-                                                max={2}
-                                                step={0.1}
-                                                value={form.bymTemperature === 'inherit' ? '' : form.bymTemperature}
-                                                onChange={e => setForm({
-                                                    ...form,
-                                                    bymTemperature: e.target.value === '' ? 'inherit' : Number(e.target.value)
-                                                })}
-                                                placeholder="继承"
-                                            />
-                                        </div>
-                                        <div className="space-y-1">
-                                            <Label className="text-xs">最大Token</Label>
-                                            <Input
-                                                type="number"
-                                                min={0}
-                                                value={form.bymMaxTokens === 'inherit' ? '' : form.bymMaxTokens}
-                                                onChange={e => setForm({
-                                                    ...form,
-                                                    bymMaxTokens: e.target.value === '' ? 'inherit' : Number(e.target.value)
-                                                })}
-                                                placeholder="继承"
-                                            />
-                                        </div>
+                                        <FormNumberInput
+                                            label="温度"
+                                            min={0}
+                                            max={2}
+                                            step={0.1}
+                                            value={form.bymTemperature === 'inherit' ? '' : form.bymTemperature}
+                                            onChange={e => setForm({
+                                                ...form,
+                                                bymTemperature: e.target.value === '' ? 'inherit' : Number(e.target.value)
+                                            })}
+                                            placeholder="继承"
+                                        />
+                                        <FormNumberInput
+                                            label="最大Token"
+                                            min={0}
+                                            value={form.bymMaxTokens === 'inherit' ? '' : form.bymMaxTokens}
+                                            onChange={e => setForm({
+                                                ...form,
+                                                bymMaxTokens: e.target.value === '' ? 'inherit' : Number(e.target.value)
+                                            })}
+                                            placeholder="继承"
+                                        />
                                         <div className="space-y-1">
                                             <Label className="text-xs">回复长度</Label>
                                             <Select
@@ -1485,102 +1147,80 @@ export function GroupEditor({ id }: GroupEditorProps) {
                             )}
 
                             {/* 主动发言 - 伪人扩展 */}
-                            <div className="flex items-center justify-between p-3 rounded-lg border">
-                                <div className="flex items-center gap-3">
-                                    <div className="p-2 rounded-md bg-muted">
-                                        <Clock className="h-4 w-4 text-blue-500" />
-                                    </div>
-                                    <div>
-                                        <p className="text-sm font-medium">主动发言</p>
-                                        <p className="text-xs text-muted-foreground">根据群聊内容主动参与讨论</p>
-                                    </div>
-                                </div>
-                                <Select value={form.proactiveChatEnabled} onValueChange={(v: 'inherit' | 'on' | 'off') => setForm({ ...form, proactiveChatEnabled: v })}>
-                                    <SelectTrigger className="w-24">
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="inherit">继承</SelectItem>
-                                        <SelectItem value="on">开启</SelectItem>
-                                        <SelectItem value="off">关闭</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
+                            <FeatureSwitch
+                                icon={<Clock className="h-4 w-4 text-blue-500" />}
+                                title="主动发言"
+                                desc="根据群聊内容主动参与讨论"
+                                value={form.proactiveChatEnabled}
+                                onChange={v => setForm({ ...form, proactiveChatEnabled: v })}
+                            />
 
                             {form.proactiveChatEnabled !== 'off' && (
                                 <div className="space-y-3 ml-4 pl-4 border-l-2 border-muted">
                                     <div className="grid grid-cols-3 gap-3">
                                         <div className="space-y-1">
-                                            <Label className="text-xs">触发概率 (%)</Label>
-                                            <Input
-                                                type="number"
-                                                min={0}
-                                                max={100}
-                                                value={form.proactiveChatProbability === 'inherit' ? '' : Math.round((form.proactiveChatProbability as number) * 100)}
-                                                onChange={e => setForm({
-                                                    ...form,
-                                                    proactiveChatProbability: e.target.value === '' ? 'inherit' : Number(e.target.value) / 100
-                                                })}
-                                                placeholder="继承"
-                                            />
+                                            <div className="flex items-center justify-between">
+                                                <Label className="text-xs">触发概率</Label>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-6 text-xs px-2"
+                                                    onClick={() => setForm({ ...form, proactiveChatProbability: form.proactiveChatProbability === 'inherit' ? 0.05 : 'inherit' })}
+                                                >
+                                                    {form.proactiveChatProbability === 'inherit' ? '继承' : '自定义'}
+                                                </Button>
+                                            </div>
+                                            {form.proactiveChatProbability !== 'inherit' && (
+                                                <ProbabilitySlider
+                                                    label=""
+                                                    value={form.proactiveChatProbability as number}
+                                                    onChange={(v) => setForm({ ...form, proactiveChatProbability: v })}
+                                                    className="pt-1"
+                                                />
+                                            )}
                                         </div>
-                                        <div className="space-y-1">
-                                            <Label className="text-xs">冷却时间(秒)</Label>
-                                            <Input
-                                                type="number"
-                                                min={0}
-                                                value={form.proactiveChatCooldown === 'inherit' ? '' : form.proactiveChatCooldown}
-                                                onChange={e => setForm({
-                                                    ...form,
-                                                    proactiveChatCooldown: e.target.value === '' ? 'inherit' : Number(e.target.value)
-                                                })}
-                                                placeholder="继承"
-                                            />
-                                        </div>
-                                        <div className="space-y-1">
-                                            <Label className="text-xs">每日上限</Label>
-                                            <Input
-                                                type="number"
-                                                min={0}
-                                                value={form.proactiveChatMaxDaily === 'inherit' ? '' : form.proactiveChatMaxDaily}
-                                                onChange={e => setForm({
-                                                    ...form,
-                                                    proactiveChatMaxDaily: e.target.value === '' ? 'inherit' : Number(e.target.value)
-                                                })}
-                                                placeholder="继承"
-                                            />
-                                        </div>
+                                        <FormNumberInput
+                                            label="冷却时间(秒)"
+                                            min={0}
+                                            value={form.proactiveChatCooldown === 'inherit' ? '' : form.proactiveChatCooldown}
+                                            onChange={e => setForm({
+                                                ...form,
+                                                proactiveChatCooldown: e.target.value === '' ? 'inherit' : Number(e.target.value)
+                                            })}
+                                            placeholder="继承"
+                                        />
+                                        <FormNumberInput
+                                            label="每日上限"
+                                            min={0}
+                                            value={form.proactiveChatMaxDaily === 'inherit' ? '' : form.proactiveChatMaxDaily}
+                                            onChange={e => setForm({
+                                                ...form,
+                                                proactiveChatMaxDaily: e.target.value === '' ? 'inherit' : Number(e.target.value)
+                                            })}
+                                            placeholder="继承"
+                                        />
                                     </div>
                                     <div className="grid grid-cols-3 gap-3 pt-2 border-t">
-                                        <div className="space-y-1">
-                                            <Label className="text-xs">最少消息数</Label>
-                                            <Input
-                                                type="number"
-                                                min={1}
-                                                value={form.proactiveChatMinMessages}
-                                                onChange={e => setForm({ ...form, proactiveChatMinMessages: parseInt(e.target.value) || 5 })}
-                                            />
-                                        </div>
-                                        <div className="space-y-1">
-                                            <Label className="text-xs">开始时间</Label>
-                                            <Input
-                                                type="number"
-                                                min={0}
-                                                max={23}
-                                                value={form.proactiveChatTimeStart}
-                                                onChange={e => setForm({ ...form, proactiveChatTimeStart: parseInt(e.target.value) || 8 })}
-                                            />
-                                        </div>
-                                        <div className="space-y-1">
-                                            <Label className="text-xs">结束时间</Label>
-                                            <Input
-                                                type="number"
-                                                min={0}
-                                                max={23}
-                                                value={form.proactiveChatTimeEnd}
-                                                onChange={e => setForm({ ...form, proactiveChatTimeEnd: parseInt(e.target.value) || 23 })}
-                                            />
-                                        </div>
+                                        <FormNumberInput
+                                            label="最少消息数"
+                                            min={1}
+                                            value={form.proactiveChatMinMessages}
+                                            onChange={e => setForm({ ...form, proactiveChatMinMessages: parseInt(e.target.value) || 5 })}
+                                        />
+                                        <FormNumberInput
+                                            label="开始时间"
+                                            min={0}
+                                            max={23}
+                                            value={form.proactiveChatTimeStart}
+                                            onChange={e => setForm({ ...form, proactiveChatTimeStart: parseInt(e.target.value) || 8 })}
+                                        />
+                                        <FormNumberInput
+                                            label="结束时间"
+                                            min={0}
+                                            max={23}
+                                            value={form.proactiveChatTimeEnd}
+                                            onChange={e => setForm({ ...form, proactiveChatTimeEnd: parseInt(e.target.value) || 23 })}
+                                        />
                                     </div>
                                 </div>
                             )}
@@ -1631,12 +1271,14 @@ export function GroupEditor({ id }: GroupEditorProps) {
                             </p>
                             
                             {/* 禁用全局渠道开关 */}
-                            <div className="flex items-center justify-between p-3 rounded-lg border">
-                                <div className="flex items-center gap-2">
-                                    <Server className="h-4 w-4 text-orange-500" />
+                            <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/20">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 rounded-md bg-orange-500/10">
+                                        <Server className="h-4 w-4 text-orange-500" />
+                                    </div>
                                     <div>
-                                        <p className="text-sm font-medium">禁用全局渠道</p>
-                                        <p className="text-xs text-muted-foreground">开启后本群只使用独立渠道</p>
+                                        <p className="text-sm font-medium">强制使用本群渠道</p>
+                                        <p className="text-xs text-muted-foreground">开启后本群将完全隔离全局模型，仅使用下方独立配置</p>
                                     </div>
                                 </div>
                                 <Switch
@@ -2134,76 +1776,6 @@ export function GroupEditor({ id }: GroupEditorProps) {
                     </Card>
                 </TabsContent>
             </Tabs>
-        </div>
-    )
-}
-
-// 功能开关组件
-function FeatureSwitch({
-    icon,
-    title,
-    desc,
-    value,
-    onChange
-}: {
-    icon: React.ReactNode
-    title: string
-    desc: string
-    value: 'inherit' | 'on' | 'off'
-    onChange: (v: 'inherit' | 'on' | 'off') => void
-}) {
-    return (
-        <div className="flex items-center justify-between p-3 rounded-lg border">
-            <div className="flex items-center gap-3">
-                <div className="p-2 rounded-md bg-muted">{icon}</div>
-                <div>
-                    <p className="text-sm font-medium">{title}</p>
-                    <p className="text-xs text-muted-foreground">{desc}</p>
-                </div>
-            </div>
-            <Select value={value} onValueChange={onChange}>
-                <SelectTrigger className="w-24">
-                    <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                    <SelectItem value="inherit">继承</SelectItem>
-                    <SelectItem value="on">开启</SelectItem>
-                    <SelectItem value="off">关闭</SelectItem>
-                </SelectContent>
-            </Select>
-        </div>
-    )
-}
-
-// 模型选择组件
-function ModelSelect({
-    label,
-    value,
-    models,
-    onChange
-}: {
-    label: string
-    value: string
-    models: string[]
-    onChange: (v: string) => void
-}) {
-    return (
-        <div className="space-y-1">
-            <Label className="text-xs">{label}</Label>
-            <Select
-                value={value || '__default__'}
-                onValueChange={v => onChange(v === '__default__' ? '' : v)}
-            >
-                <SelectTrigger>
-                    <SelectValue placeholder="使用全局配置" />
-                </SelectTrigger>
-                <SelectContent className="max-h-[200px]">
-                    <SelectItem value="__default__">使用全局配置</SelectItem>
-                    {models.map(m => (
-                        <SelectItem key={m} value={m}>{m}</SelectItem>
-                    ))}
-                </SelectContent>
-            </Select>
         </div>
     )
 }

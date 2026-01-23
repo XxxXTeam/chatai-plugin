@@ -158,15 +158,42 @@ export class ScopeManager {
 
         try {
             const now = Date.now()
+
+            // 获取现有配置进行合并
+            const existing = await this.getUserSettings(userId)
+            const existingSettings = existing?.settings || {}
+
             const { systemPrompt, presetId, ...otherSettings } = settings
+
+            // 处理“回退到全局”逻辑
+            const isGlobalValue = val => val === 'global' || val === 'default' || val === 'use_global' || val === null
+
+            const mergedSettings = { ...existingSettings }
+            for (const [key, value] of Object.entries(otherSettings)) {
+                if (isGlobalValue(value)) {
+                    delete mergedSettings[key]
+                } else {
+                    mergedSettings[key] = value
+                }
+            }
 
             const stmt = this.db.db.prepare(`
         INSERT OR REPLACE INTO user_scopes 
         (userId, systemPrompt, presetId, settings, createdAt, updatedAt)
         VALUES (?, ?, ?, ?, COALESCE((SELECT createdAt FROM user_scopes WHERE userId = ?), ?), ?)
       `)
-            const finalPrompt = systemPrompt === undefined ? null : systemPrompt
-            stmt.run(userId, finalPrompt, presetId || null, JSON.stringify(otherSettings), userId, now, now)
+
+            // 支持空人设：区分 undefined 和 空字符串
+            const finalPrompt =
+                systemPrompt === undefined
+                    ? (existing?.systemPrompt ?? null)
+                    : isGlobalValue(systemPrompt)
+                      ? null
+                      : systemPrompt
+            const finalPresetId =
+                presetId === undefined ? (existing?.presetId ?? null) : isGlobalValue(presetId) ? null : presetId
+
+            stmt.run(userId, finalPrompt, finalPresetId, JSON.stringify(mergedSettings), userId, now, now)
 
             logger.debug(`[ScopeManager] 用户配置已更新: ${userId}${systemPrompt === '' ? ' (空人设)' : ''}`)
             return true
@@ -229,8 +256,17 @@ export class ScopeManager {
                 finalOtherSettings = { ...rest, ...nestedSettings }
             }
 
-            // 合并现有设置与新设置（新设置优先）
-            const mergedSettings = { ...existingSettings, ...finalOtherSettings }
+            // 处理“回退到全局”逻辑：如果值是 'global'、'default'、'use_global' 或 null，则从配置中删除该项
+            const isGlobalValue = val => val === 'global' || val === 'default' || val === 'use_global' || val === null
+
+            const mergedSettings = { ...existingSettings }
+            for (const [key, value] of Object.entries(finalOtherSettings)) {
+                if (isGlobalValue(value)) {
+                    delete mergedSettings[key]
+                } else {
+                    mergedSettings[key] = value
+                }
+            }
 
             const stmt = this.db.db.prepare(`
         INSERT OR REPLACE INTO group_scopes 
@@ -239,10 +275,26 @@ export class ScopeManager {
       `)
 
             // 支持空人设：区分 undefined 和 空字符串；保留现有值如果未提供新值
-            const finalPrompt = systemPrompt === undefined ? (existing?.systemPrompt ?? null) : systemPrompt
-            const finalPresetId = presetId === undefined ? (existing?.presetId ?? null) : presetId || null
-            const finalKnowledgeIds = knowledgeIds === undefined ? (existing?.knowledgeIds ?? null) : knowledgeIds
-            const finalInheritFrom = inheritFrom === undefined ? (existing?.inheritFrom ?? null) : inheritFrom
+            const finalPrompt =
+                systemPrompt === undefined
+                    ? (existing?.systemPrompt ?? null)
+                    : isGlobalValue(systemPrompt)
+                      ? null
+                      : systemPrompt
+            const finalPresetId =
+                presetId === undefined ? (existing?.presetId ?? null) : isGlobalValue(presetId) ? null : presetId
+            const finalKnowledgeIds =
+                knowledgeIds === undefined
+                    ? (existing?.knowledgeIds ?? null)
+                    : isGlobalValue(knowledgeIds)
+                      ? null
+                      : knowledgeIds
+            const finalInheritFrom =
+                inheritFrom === undefined
+                    ? (existing?.inheritFrom ?? null)
+                    : isGlobalValue(inheritFrom)
+                      ? null
+                      : inheritFrom
 
             stmt.run(
                 groupId,
@@ -488,7 +540,24 @@ export class ScopeManager {
 
         try {
             const now = Date.now()
+
+            // 获取现有配置进行合并
+            const existing = await this.getGroupUserSettings(groupId, userId)
+            const existingSettings = existing?.settings || {}
+
             const { systemPrompt, presetId, ...otherSettings } = settings
+
+            // 处理“回退到全局”逻辑
+            const isGlobalValue = val => val === 'global' || val === 'default' || val === 'use_global' || val === null
+
+            const mergedSettings = { ...existingSettings }
+            for (const [key, value] of Object.entries(otherSettings)) {
+                if (isGlobalValue(value)) {
+                    delete mergedSettings[key]
+                } else {
+                    mergedSettings[key] = value
+                }
+            }
 
             const stmt = this.db.db.prepare(`
         INSERT OR REPLACE INTO group_user_scopes 
@@ -499,13 +568,21 @@ export class ScopeManager {
       `)
 
             // 支持空人设：区分 undefined 和 空字符串
-            const finalPrompt = systemPrompt === undefined ? null : systemPrompt
+            const finalPrompt =
+                systemPrompt === undefined
+                    ? (existing?.systemPrompt ?? null)
+                    : isGlobalValue(systemPrompt)
+                      ? null
+                      : systemPrompt
+            const finalPresetId =
+                presetId === undefined ? (existing?.presetId ?? null) : isGlobalValue(presetId) ? null : presetId
+
             stmt.run(
                 groupId,
                 userId,
                 finalPrompt,
-                presetId || null,
-                JSON.stringify(otherSettings),
+                finalPresetId,
+                JSON.stringify(mergedSettings),
                 groupId,
                 userId,
                 now,
@@ -663,7 +740,24 @@ export class ScopeManager {
 
         try {
             const now = Date.now()
+
+            // 获取现有配置进行合并
+            const existing = await this.getPrivateSettings(userId)
+            const existingSettings = existing?.settings || {}
+
             const { systemPrompt, presetId, ...otherSettings } = settings
+
+            // 处理“回退到全局”逻辑
+            const isGlobalValue = val => val === 'global' || val === 'default' || val === 'use_global' || val === null
+
+            const mergedSettings = { ...existingSettings }
+            for (const [key, value] of Object.entries(otherSettings)) {
+                if (isGlobalValue(value)) {
+                    delete mergedSettings[key]
+                } else {
+                    mergedSettings[key] = value
+                }
+            }
 
             const stmt = this.db.db.prepare(`
         INSERT OR REPLACE INTO private_scopes 
@@ -672,8 +766,16 @@ export class ScopeManager {
       `)
 
             // 支持空人设：区分 undefined 和 空字符串
-            const finalPrompt = systemPrompt === undefined ? null : systemPrompt
-            stmt.run(userId, finalPrompt, presetId || null, JSON.stringify(otherSettings), userId, now, now)
+            const finalPrompt =
+                systemPrompt === undefined
+                    ? (existing?.systemPrompt ?? null)
+                    : isGlobalValue(systemPrompt)
+                      ? null
+                      : systemPrompt
+            const finalPresetId =
+                presetId === undefined ? (existing?.presetId ?? null) : isGlobalValue(presetId) ? null : presetId
+
+            stmt.run(userId, finalPrompt, finalPresetId, JSON.stringify(mergedSettings), userId, now, now)
 
             logger.debug(`[ScopeManager] 私聊配置已更新: ${userId}${systemPrompt === '' ? ' (空人设)' : ''}`)
             return true
@@ -1549,14 +1651,30 @@ export class ScopeManager {
         if (!groupSettings) return null
 
         const settings = groupSettings.settings || {}
+
+        // 优先获取多渠道配置
+        let independentChannels = []
+        if (settings.independentChannels) {
+            try {
+                independentChannels =
+                    typeof settings.independentChannels === 'string'
+                        ? JSON.parse(settings.independentChannels)
+                        : settings.independentChannels
+            } catch (e) {
+                logger.error(`[ScopeManager] 解析群组多渠道配置失败 (${groupId}):`, e)
+            }
+        }
+
         return {
-            // 群独立渠道配置
+            // 群独立渠道配置 (兼容旧版)
             channelId: settings.independentChannelId || null,
             baseUrl: settings.independentBaseUrl || null,
             apiKey: settings.independentApiKey || null,
             adapterType: settings.independentAdapterType || 'openai',
             forbidGlobal: settings.forbidGlobalModel === true,
-            modelId: settings.chatModel || settings.modelId || null
+            modelId: settings.chatModel || settings.modelId || null,
+            // 多渠道支持
+            independentChannels: independentChannels
         }
     }
 
@@ -1576,7 +1694,11 @@ export class ScopeManager {
             independentBaseUrl: channelConfig.baseUrl,
             independentApiKey: channelConfig.apiKey,
             independentAdapterType: channelConfig.adapterType || 'openai',
-            forbidGlobalModel: channelConfig.forbidGlobal === true
+            forbidGlobalModel: channelConfig.forbidGlobal === true,
+            // 保存多渠道
+            independentChannels: channelConfig.independentChannels
+                ? JSON.stringify(channelConfig.independentChannels)
+                : undefined
         }
 
         if (channelConfig.modelId) {
