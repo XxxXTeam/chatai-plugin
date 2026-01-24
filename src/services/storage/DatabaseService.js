@@ -74,6 +74,83 @@ class DatabaseService {
                 value TEXT NOT NULL,
                 updated_at INTEGER NOT NULL
             );
+
+            -- 知识图谱: 实体表
+            CREATE TABLE IF NOT EXISTS kg_entities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_id TEXT UNIQUE NOT NULL,
+                entity_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                scope_id TEXT NOT NULL,
+                properties TEXT,
+                embedding BLOB,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE INDEX IF NOT EXISTS idx_kg_entity_id ON kg_entities(entity_id);
+            CREATE INDEX IF NOT EXISTS idx_kg_entity_scope ON kg_entities(scope_id, entity_type);
+            CREATE INDEX IF NOT EXISTS idx_kg_entity_name ON kg_entities(name);
+
+            -- 知识图谱: 关系表
+            CREATE TABLE IF NOT EXISTS kg_relationships (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                relationship_id TEXT UNIQUE NOT NULL,
+                from_entity_id TEXT NOT NULL,
+                to_entity_id TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                properties TEXT,
+                scope_id TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_from ON kg_relationships(from_entity_id);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_to ON kg_relationships(to_entity_id);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_scope ON kg_relationships(scope_id, relation_type);
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_pair ON kg_relationships(from_entity_id, to_entity_id, relation_type);
+
+            -- 知识图谱: 实体版本历史
+            CREATE TABLE IF NOT EXISTS kg_entity_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                properties TEXT,
+                scope_id TEXT NOT NULL,
+                changed_at INTEGER NOT NULL,
+                change_type TEXT NOT NULL,
+                change_reason TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_kg_entity_history ON kg_entity_history(entity_id, version DESC);
+
+            -- 知识图谱: 关系版本历史
+            CREATE TABLE IF NOT EXISTS kg_relationship_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                relationship_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                from_entity_id TEXT NOT NULL,
+                to_entity_id TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                properties TEXT,
+                scope_id TEXT NOT NULL,
+                changed_at INTEGER NOT NULL,
+                change_type TEXT NOT NULL,
+                change_reason TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_kg_rel_history ON kg_relationship_history(relationship_id, version DESC);
+
+            -- 知识图谱: 作用域共享配置
+            CREATE TABLE IF NOT EXISTS kg_scope_sharing (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_scope_id TEXT NOT NULL,
+                target_scope_id TEXT NOT NULL,
+                share_type TEXT NOT NULL,
+                entity_types TEXT,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_kg_scope_share ON kg_scope_sharing(source_scope_id, target_scope_id);
         `)
     }
 

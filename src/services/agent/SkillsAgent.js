@@ -297,17 +297,34 @@ export class SkillsAgent {
                     const result = await this.execute(s.name, args)
                     const duration = Date.now() - startTime
 
-                    // 如果结果已经是格式化的对象且包含 status，则直接返回
-                    if (result && typeof result === 'object' && result.status) {
-                        return JSON.stringify(result)
+                    // 提取实际内容
+                    let content
+                    const isError = result?.isError === true
+
+                    if (result && typeof result === 'object') {
+                        // 如果已经是格式化的对象且包含 status，提取 content
+                        if (result.status) {
+                            content = result.content
+                        }
+                        // MCP 格式：{ content: [{type: 'text', text: '...'}] }
+                        else if (Array.isArray(result.content)) {
+                            content = result.content
+                                .map(item => (item.type === 'text' ? item.text : JSON.stringify(item)))
+                                .join('\n')
+                        }
+                        // 其他对象格式
+                        else {
+                            content = JSON.stringify(result)
+                        }
+                    } else {
+                        content = result
                     }
 
                     // 包装为标准格式
-                    const isError = result?.isError === true
                     const formattedResult = {
                         status: isError ? 'error' : 'success',
                         tool: s.name,
-                        content: isError ? result.content?.[0]?.text || '执行失败' : result,
+                        content: content,
                         metadata: { duration }
                     }
                     return JSON.stringify(formattedResult)
@@ -578,15 +595,54 @@ export function convertMcpTools(mcpTools, requestContext = null) {
             parameters: t.inputSchema || { type: 'object', properties: {} }
         },
         async run(args) {
-            const result = await mcpManager.callTool(t.name, args, {
-                useCache: true,
-                cacheTTL: 60000,
-                context: requestContext
-            })
-            if (result.content && Array.isArray(result.content)) {
-                return result.content.map(b => (b.type === 'text' ? b.text : JSON.stringify(b))).join('\n')
+            const startTime = Date.now()
+            try {
+                const result = await mcpManager.callTool(t.name, args, {
+                    useCache: true,
+                    cacheTTL: 60000,
+                    context: requestContext
+                })
+                const duration = Date.now() - startTime
+
+                // 提取实际内容
+                let content
+                const isError = result?.isError === true
+
+                if (result && typeof result === 'object') {
+                    // MCP 格式：{ content: [{type: 'text', text: '...'}] }
+                    if (Array.isArray(result.content)) {
+                        content = result.content
+                            .map(item => (item.type === 'text' ? item.text : JSON.stringify(item)))
+                            .join('\n')
+                    }
+                    // 已格式化的对象
+                    else if (result.status) {
+                        content = result.content
+                    }
+                    // 其他对象
+                    else {
+                        content = typeof result.content === 'string' ? result.content : JSON.stringify(result)
+                    }
+                } else {
+                    content = typeof result === 'string' ? result : JSON.stringify(result)
+                }
+
+                // 包装为标准格式
+                const formattedResult = {
+                    status: isError ? 'error' : 'success',
+                    tool: t.name,
+                    content: content,
+                    metadata: { duration }
+                }
+                return JSON.stringify(formattedResult)
+            } catch (error) {
+                return JSON.stringify({
+                    status: 'error',
+                    tool: t.name,
+                    content: error.message,
+                    metadata: { duration: Date.now() - startTime }
+                })
             }
-            return typeof result.content === 'string' ? result.content : JSON.stringify(result)
         }
     }))
 }

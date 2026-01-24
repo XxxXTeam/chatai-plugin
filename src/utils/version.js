@@ -83,9 +83,9 @@ export function getGitVersion() {
     } else {
         info.version = 'unknown'
     }
-    if (info.isDirty) {
-        info.version += '-dirty'
-    }
+    // if (info.isDirty) {
+    //     info.version += '-dirty'
+    // }
 
     return info
 }

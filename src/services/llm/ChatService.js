@@ -417,8 +417,6 @@ export class ChatService {
                 `[ChatService] 使用预设模型覆盖: ${llmModel} (预设: ${currentPreset.name || effectivePresetIdForModel})`
             )
         }
-
-        // 作用域模型覆盖（群组/用户独立模型配置）
         if (!model && scopeModelId) {
             llmModel = scopeModelId
             logger.info(`[ChatService] 使用作用域模型: ${llmModel} (来源: ${scopeModelSource})`)
@@ -433,10 +431,9 @@ export class ChatService {
             setToolContext({ event, bot: event.bot || Bot })
         }
         await channelManager.init()
-
-        // ==================== 渠道选择：群独立 > 全局 ====================
         let channel = null
         let channelSource = 'global'
+        const forbidGlobalModel = groupChannelConfig?.forbidGlobal === true
 
         // 优先使用群独立渠道配置
         if (groupChannelConfig?.baseUrl && groupChannelConfig?.apiKey) {
@@ -460,9 +457,15 @@ export class ChatService {
                 logger.info(`[ChatService] 使用群独立模型: ${llmModel}`)
             }
             logger.info(`[ChatService] 使用群独立渠道: ${channel.name} (${channel.baseUrl})`)
+        } else if (forbidGlobalModel) {
+            // 如果禁用全局且没有独立渠道，抛出错误
+            throw new Error(`本群已禁用全局模型但未配置独立渠道，请在管理面板中配置群独立渠道后使用`)
         } else {
             // 使用全局渠道
             channel = channelManager.getBestChannel(llmModel)
+            if (!channel) {
+                throw new Error(`未找到可用的渠道，请检查模型配置: ${llmModel}`)
+            }
         }
 
         logger.debug(
@@ -722,7 +725,7 @@ export class ChatService {
                             parts.push(`群友关系：${groupMemory.relations.join('；')}`)
                         }
                         if (parts.length > 0) {
-                            systemPrompt += `\n【群聊记忆】\n${parts.join('\n')}\n`
+                            systemPrompt += '\n【群聊记忆】\n' + parts.join('\n') + '\n'
                             logger.debug(`[ChatService] 已添加群聊记忆上下文`)
                         }
                         if (debugInfo) {
