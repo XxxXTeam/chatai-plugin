@@ -34,6 +34,10 @@ export {
     enableAllTools,
     disableAllTools
 } from './SkillsAgent.js'
+
+// Skills 配置和加载器
+export { skillsConfig, skillsLoader, initSkillsModule } from '../skills/index.js'
+
 export {
     icqqGroup,
     icqqFriend,

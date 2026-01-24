@@ -51,6 +51,7 @@ import { ProbabilitySlider } from '@/components/group-form/probability-slider'
 import { FormNumberInput } from '@/components/group-form/form-number-input'
 import { ModelSelect } from '@/components/group-form/model-select'
 import { IndependentChannel, Channel, Preset } from '@/lib/types'
+import { ChannelDialog, ChannelFormData } from '@/components/group-editor/ChannelDialog'
 
 interface GroupEditorProps {
     id: string
@@ -68,7 +69,7 @@ export function GroupEditor({ id }: GroupEditorProps) {
     // 渠道编辑相关状态
     const [channelDialogOpen, setChannelDialogOpen] = useState(false)
     const [editingChannelIndex, setEditingChannelIndex] = useState<number | null>(null)
-    const [channelForm, setChannelForm] = useState({
+    const [channelForm, setChannelForm] = useState<ChannelFormData>({
         name: '',
         baseUrl: '',
         apiKey: '',
@@ -76,20 +77,13 @@ export function GroupEditor({ id }: GroupEditorProps) {
         models: '',
         enabled: true,
         priority: 0,
-        // 高级配置
         modelsPath: '',
         chatPath: '',
-        // 图片处理
-        imageTransferMode: 'auto' as 'base64' | 'url' | 'auto',
+        imageTransferMode: 'auto',
         imageCompress: true,
         imageQuality: 85,
         imageMaxSize: 4096
     })
-    const [showApiKey, setShowApiKey] = useState(false)
-    const [fetchingModels, setFetchingModels] = useState(false)
-    const [modelSelectorOpen, setModelSelectorOpen] = useState(false)
-    const [availableModels, setAvailableModels] = useState<string[]>([])
-    const [selectedModels, setSelectedModels] = useState<string[]>([])
 
     const [form, setForm] = useState({
         groupId: '',
@@ -1256,7 +1250,6 @@ export function GroupEditor({ id }: GroupEditorProps) {
                                             imageQuality: 85,
                                             imageMaxSize: 4096
                                         })
-                                        setShowApiKey(false)
                                         setChannelDialogOpen(true)
                                     }}
                                 >
@@ -1345,7 +1338,6 @@ export function GroupEditor({ id }: GroupEditorProps) {
                                                                 imageQuality: channel.imageConfig?.quality ?? 85,
                                                                 imageMaxSize: channel.imageConfig?.maxSize ?? 4096
                                                             })
-                                                            setShowApiKey(false)
                                                             setChannelDialogOpen(true)
                                                         }}
                                                     >
@@ -1373,273 +1365,79 @@ export function GroupEditor({ id }: GroupEditorProps) {
                         </CardContent>
                     </Card>
 
-                    {/* 渠道编辑对话框 */}
-                    <Dialog open={channelDialogOpen} onOpenChange={setChannelDialogOpen}>
-                        <DialogContent className="max-w-lg">
-                            <DialogHeader>
-                                <DialogTitle>
-                                    {editingChannelIndex !== null ? '编辑渠道' : '添加渠道'}
-                                </DialogTitle>
-                            </DialogHeader>
-                            <div className="space-y-4 py-4">
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div className="space-y-2">
-                                        <Label>渠道名称</Label>
-                                        <Input
-                                            value={channelForm.name}
-                                            onChange={e => setChannelForm({ ...channelForm, name: e.target.value })}
-                                            placeholder="渠道名称"
-                                        />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label>适配器类型</Label>
-                                        <Select
-                                            value={channelForm.adapterType}
-                                            onValueChange={v => setChannelForm({ ...channelForm, adapterType: v })}
-                                        >
-                                            <SelectTrigger>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="openai">OpenAI</SelectItem>
-                                                <SelectItem value="azure">Azure</SelectItem>
-                                                <SelectItem value="claude">Claude</SelectItem>
-                                                <SelectItem value="gemini">Gemini</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                </div>
-                                <div className="space-y-2">
-                                    <Label>API 地址</Label>
-                                    <Input
-                                        value={channelForm.baseUrl}
-                                        onChange={e => setChannelForm({ ...channelForm, baseUrl: e.target.value })}
-                                        placeholder="https://api.openai.com/v1（留空使用默认）"
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <Label>API Key</Label>
-                                    <div className="flex gap-2">
-                                        <Input
-                                            type={showApiKey ? 'text' : 'password'}
-                                            value={channelForm.apiKey}
-                                            onChange={e => setChannelForm({ ...channelForm, apiKey: e.target.value })}
-                                            placeholder="sk-..."
-                                            className="flex-1"
-                                        />
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            size="icon"
-                                            onClick={() => setShowApiKey(!showApiKey)}
-                                        >
-                                            {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                                        </Button>
-                                    </div>
-                                </div>
-                                <div className="space-y-2">
-                                    <div className="flex items-center justify-between">
-                                        <Label>模型列表</Label>
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            size="sm"
-                                            disabled={!channelForm.apiKey || fetchingModels}
-                                            onClick={async () => {
-                                                if (!channelForm.apiKey) {
-                                                    toast.error('请先填写 API Key')
-                                                    return
-                                                }
-                                                setFetchingModels(true)
-                                                try {
-                                                    const res = await channelsApi.fetchModels({
-                                                        adapterType: channelForm.adapterType,
-                                                        baseUrl: channelForm.baseUrl || '',
-                                                        apiKey: channelForm.apiKey
-                                                    }) as { data?: { models?: unknown[] }; models?: unknown[] }
-                                                    const models = res?.data?.models || res?.models || []
-                                                    if (Array.isArray(models) && models.length > 0) {
-                                                        const modelIds = models
-                                                            .map((m: unknown) =>
-                                                                typeof m === 'string' ? m : (m as Record<string, string>)?.id || (m as Record<string, string>)?.name
-                                                            )
-                                                            .filter(Boolean)
-                                                        setAvailableModels(modelIds)
-                                                        const currentModels = channelForm.models.split(',').map(m => m.trim()).filter(Boolean)
-                                                        setSelectedModels(currentModels.filter(m => modelIds.includes(m)))
-                                                        setModelSelectorOpen(true)
-                                                        toast.success(`获取到 ${modelIds.length} 个模型`)
-                                                    } else {
-                                                        toast.error('未获取到模型列表')
-                                                    }
-                                                } catch (error: unknown) {
-                                                    const err = error as { response?: { data?: { message?: string } } }
-                                                    toast.error(err.response?.data?.message || '获取模型失败')
-                                                } finally {
-                                                    setFetchingModels(false)
-                                                }
-                                            }}
-                                        >
-                                            {fetchingModels ? (
-                                                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                                            ) : (
-                                                <RefreshCw className="h-4 w-4 mr-1" />
-                                            )}
-                                            获取模型
-                                        </Button>
-                                    </div>
-                                    <Textarea
-                                        value={channelForm.models}
-                                        onChange={e => setChannelForm({ ...channelForm, models: e.target.value })}
-                                        placeholder="模型名称，用逗号分隔，如：gpt-4, gpt-3.5-turbo"
-                                        rows={3}
-                                    />
-                                </div>
-                                <div className="flex items-center justify-between">
-                                    <Label>启用渠道</Label>
-                                    <Switch
-                                        checked={channelForm.enabled}
-                                        onCheckedChange={v => setChannelForm({ ...channelForm, enabled: v })}
-                                    />
-                                </div>
-
-                                {/* 高级配置 */}
-                                <div className="space-y-3 p-3 rounded-lg border bg-muted/30">
-                                    <p className="text-sm font-medium">高级配置</p>
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <div className="space-y-1">
-                                            <Label className="text-xs">模型列表路径</Label>
-                                            <Input
-                                                value={channelForm.modelsPath}
-                                                onChange={e => setChannelForm({ ...channelForm, modelsPath: e.target.value })}
-                                                placeholder="/models"
-                                                className="h-8 text-xs"
-                                            />
-                                        </div>
-                                        <div className="space-y-1">
-                                            <Label className="text-xs">对话接口路径</Label>
-                                            <Input
-                                                value={channelForm.chatPath}
-                                                onChange={e => setChannelForm({ ...channelForm, chatPath: e.target.value })}
-                                                placeholder="/chat/completions"
-                                                className="h-8 text-xs"
-                                            />
-                                        </div>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label className="text-xs">图片传递方式</Label>
-                                        <Select
-                                            value={channelForm.imageTransferMode}
-                                            onValueChange={(v: 'base64' | 'url' | 'auto') => setChannelForm({ ...channelForm, imageTransferMode: v })}
-                                        >
-                                            <SelectTrigger className="h-8">
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="auto">自动检测</SelectItem>
-                                                <SelectItem value="base64">Base64编码</SelectItem>
-                                                <SelectItem value="url">URL链接</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    <div className="flex items-center justify-between">
-                                        <Label className="text-xs">压缩图片</Label>
-                                        <Switch
-                                            checked={channelForm.imageCompress}
-                                            onCheckedChange={v => setChannelForm({ ...channelForm, imageCompress: v })}
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                            <DialogFooter>
-                                <Button variant="outline" onClick={() => setChannelDialogOpen(false)}>
-                                    取消
-                                </Button>
-                                <Button onClick={() => {
-                                    if (!channelForm.name) {
-                                        toast.error('请填写渠道名称')
-                                        return
-                                    }
-                                    const newChannel: IndependentChannel = {
-                                        id: editingChannelIndex !== null 
-                                            ? form.independentChannels[editingChannelIndex].id 
-                                            : `ch_${Date.now()}`,
-                                        name: channelForm.name,
-                                        baseUrl: channelForm.baseUrl,
-                                        apiKey: channelForm.apiKey,
-                                        adapterType: channelForm.adapterType,
-                                        models: channelForm.models.split(',').map(m => m.trim()).filter(Boolean),
-                                        enabled: channelForm.enabled,
-                                        priority: channelForm.priority,
-                                        modelsPath: channelForm.modelsPath || undefined,
-                                        chatPath: channelForm.chatPath || undefined,
-                                        imageConfig: {
-                                            transferMode: channelForm.imageTransferMode,
-                                            compress: channelForm.imageCompress,
-                                            quality: channelForm.imageQuality,
-                                            maxSize: channelForm.imageMaxSize
-                                        }
-                                    }
-                                    if (editingChannelIndex !== null) {
-                                        const channels = [...form.independentChannels]
-                                        channels[editingChannelIndex] = newChannel
-                                        setForm({ ...form, independentChannels: channels })
-                                    } else {
-                                        setForm({ ...form, independentChannels: [...form.independentChannels, newChannel] })
-                                    }
-                                    setChannelDialogOpen(false)
-                                    toast.success(editingChannelIndex !== null ? '渠道已更新' : '渠道已添加')
-                                }}>
-                                    {editingChannelIndex !== null ? '更新' : '添加'}
-                                </Button>
-                            </DialogFooter>
-                        </DialogContent>
-                    </Dialog>
-
-                    {/* 模型选择对话框 */}
-                    <Dialog open={modelSelectorOpen} onOpenChange={setModelSelectorOpen}>
-                        <DialogContent className="max-w-md">
-                            <DialogHeader>
-                                <DialogTitle>选择模型</DialogTitle>
-                            </DialogHeader>
-                            <ScrollArea className="h-[300px] pr-4">
-                                <div className="space-y-2">
-                                    {availableModels.map(model => (
-                                        <div key={model} className="flex items-center gap-2">
-                                            <Checkbox
-                                                id={model}
-                                                checked={selectedModels.includes(model)}
-                                                onCheckedChange={checked => {
-                                                    if (checked) {
-                                                        setSelectedModels([...selectedModels, model])
-                                                    } else {
-                                                        setSelectedModels(selectedModels.filter(m => m !== model))
-                                                    }
-                                                }}
-                                            />
-                                            <label htmlFor={model} className="text-sm cursor-pointer flex-1">
-                                                {model}
-                                            </label>
-                                        </div>
-                                    ))}
-                                </div>
-                            </ScrollArea>
-                            <DialogFooter>
-                                <Button variant="outline" onClick={() => setSelectedModels(availableModels)}>
-                                    全选
-                                </Button>
-                                <Button variant="outline" onClick={() => setSelectedModels([])}>
-                                    清空
-                                </Button>
-                                <Button onClick={() => {
-                                    setChannelForm({ ...channelForm, models: selectedModels.join(', ') })
-                                    setModelSelectorOpen(false)
-                                }}>
-                                    确认 ({selectedModels.length})
-                                </Button>
-                            </DialogFooter>
-                        </DialogContent>
-                    </Dialog>
+                    {/* 渠道编辑对话框 - 使用统一的 ChannelDialog 组件 */}
+                    <ChannelDialog
+                        open={channelDialogOpen}
+                        onOpenChange={setChannelDialogOpen}
+                        channelForm={channelForm}
+                        onChannelFormChange={setChannelForm}
+                        isEditing={editingChannelIndex !== null}
+                        onSave={() => {
+                            if (!channelForm.name) {
+                                toast.error('请填写渠道名称')
+                                return
+                            }
+                            const newChannel: IndependentChannel = {
+                                id: editingChannelIndex !== null 
+                                    ? form.independentChannels[editingChannelIndex].id 
+                                    : `ch_${Date.now()}`,
+                                name: channelForm.name,
+                                baseUrl: channelForm.baseUrl,
+                                apiKey: channelForm.apiKey,
+                                adapterType: channelForm.adapterType,
+                                models: channelForm.models.split(',').map(m => m.trim()).filter(Boolean),
+                                enabled: channelForm.enabled,
+                                priority: channelForm.priority,
+                                modelsPath: channelForm.modelsPath || undefined,
+                                chatPath: channelForm.chatPath || undefined,
+                                imageConfig: {
+                                    transferMode: channelForm.imageTransferMode,
+                                    compress: channelForm.imageCompress,
+                                    quality: channelForm.imageQuality,
+                                    maxSize: channelForm.imageMaxSize
+                                }
+                            }
+                            if (editingChannelIndex !== null) {
+                                const channels = [...form.independentChannels]
+                                channels[editingChannelIndex] = newChannel
+                                setForm({ ...form, independentChannels: channels })
+                            } else {
+                                setForm({ ...form, independentChannels: [...form.independentChannels, newChannel] })
+                            }
+                            setChannelDialogOpen(false)
+                            toast.success(editingChannelIndex !== null ? '渠道已更新' : '渠道已添加')
+                        }}
+                        onFetchModels={async () => {
+                            if (!channelForm.apiKey) {
+                                toast.error('请先填写 API Key')
+                                return
+                            }
+                            try {
+                                const res = await channelsApi.fetchModels({
+                                    adapterType: channelForm.adapterType,
+                                    baseUrl: channelForm.baseUrl || '',
+                                    apiKey: channelForm.apiKey
+                                }) as { data?: { models?: unknown[] }; models?: unknown[] }
+                                const models = res?.data?.models || res?.models || []
+                                if (Array.isArray(models) && models.length > 0) {
+                                    const modelIds = models
+                                        .map((m: unknown) =>
+                                            typeof m === 'string' ? m : (m as Record<string, string>)?.id || (m as Record<string, string>)?.name
+                                        )
+                                        .filter(Boolean)
+                                    toast.success(`获取到 ${modelIds.length} 个模型`)
+                                    return modelIds
+                                } else {
+                                    toast.error('未获取到模型列表')
+                                    return []
+                                }
+                            } catch (error: unknown) {
+                                const err = error as { response?: { data?: { message?: string } } }
+                                toast.error(err.response?.data?.message || '获取模型失败')
+                                return []
+                            }
+                        }}
+                    />
 
                     <Card>
                         <CardHeader>

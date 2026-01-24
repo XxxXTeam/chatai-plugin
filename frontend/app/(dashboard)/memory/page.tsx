@@ -16,11 +16,12 @@ import {
     DialogTitle
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Brain, Loader2, Plus, RefreshCw, Search, Sparkles, Trash2, Users } from 'lucide-react'
+import { Brain, Loader2, Plus, RefreshCw, Search, Sparkles, Trash2, Users, ChevronDown, ChevronUp } from 'lucide-react'
 import { memoryApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { DeleteDialog } from '@/components/ui/delete-dialog'
+import { useIsMobile } from '@/lib/hooks/useResponsive'
+import { cn } from '@/lib/utils'
 
 interface Memory {
     id: number
@@ -49,7 +50,120 @@ const sourceLabels: Record<string, { label: string; color: string }> = {
     ai_tool: { label: 'AI工具', color: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300' }
 }
 
+// 移动端记忆卡片组件
+function MemoryCard({ 
+    memory, 
+    onDelete 
+}: { 
+    memory: Memory
+    onDelete: (id: number) => void 
+}) {
+    const [expanded, setExpanded] = useState(false)
+    const source = (memory.source || (memory.metadata as Record<string, unknown>)?.source || 'manual') as string
+    const sourceInfo = sourceLabels[source] || { label: source, color: 'bg-gray-100 text-gray-800' }
+
+    return (
+        <Card className="overflow-hidden">
+            <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-2">
+                            <span className="text-xs font-mono text-muted-foreground">#{memory.id}</span>
+                            <span className={cn('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', sourceInfo.color)}>
+                                {sourceInfo.label}
+                            </span>
+                            {memory.score && (
+                                <Badge variant="secondary" className="text-xs">
+                                    {(memory.score * 100).toFixed(0)}%
+                                </Badge>
+                            )}
+                        </div>
+                        <p className={cn('text-sm', expanded ? '' : 'line-clamp-2')}>
+                            {typeof memory.content === 'string' ? memory.content : JSON.stringify(memory.content)}
+                        </p>
+                        {memory.timestamp && (
+                            <p className="text-xs text-muted-foreground mt-2">
+                                {new Date(memory.timestamp).toLocaleString('zh-CN')}
+                            </p>
+                        )}
+                    </div>
+                    <div className="flex flex-col gap-1">
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => setExpanded(!expanded)}
+                        >
+                            {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-destructive"
+                            onClick={() => onDelete(memory.id)}
+                        >
+                            <Trash2 className="h-4 w-4" />
+                        </Button>
+                    </div>
+                </div>
+            </CardContent>
+        </Card>
+    )
+}
+
+// 桌面端记忆表格行组件
+function MemoryTableRow({ 
+    memory, 
+    onDelete 
+}: { 
+    memory: Memory
+    onDelete: (id: number) => void 
+}) {
+    const source = (memory.source || (memory.metadata as Record<string, unknown>)?.source || 'manual') as string
+    const sourceInfo = sourceLabels[source] || { label: source, color: 'bg-gray-100 text-gray-800' }
+
+    return (
+        <tr className="border-b hover:bg-muted/30 transition-colors">
+            <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{memory.id}</td>
+            <td className="px-4 py-3 max-w-[400px]">
+                <div
+                    className="truncate text-sm"
+                    title={typeof memory.content === 'string' ? memory.content : JSON.stringify(memory.content)}
+                >
+                    {typeof memory.content === 'string' ? memory.content : JSON.stringify(memory.content)}
+                </div>
+            </td>
+            <td className="px-4 py-3">
+                <span className={cn('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', sourceInfo.color)}>
+                    {sourceInfo.label}
+                </span>
+            </td>
+            <td className="px-4 py-3">
+                {memory.score ? (
+                    <Badge variant="secondary">{(memory.score * 100).toFixed(1)}%</Badge>
+                ) : (
+                    '-'
+                )}
+            </td>
+            <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
+                {memory.timestamp ? new Date(memory.timestamp).toLocaleString('zh-CN') : '-'}
+            </td>
+            <td className="px-4 py-3">
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-destructive"
+                    onClick={() => onDelete(memory.id)}
+                >
+                    <Trash2 className="h-4 w-4" />
+                </Button>
+            </td>
+        </tr>
+    )
+}
+
 export default function MemoryPage() {
+    const isMobile = useIsMobile()
     const [userId, setUserId] = useState('')
     const [userList, setUserList] = useState<string[]>([])
     const [memories, setMemories] = useState<Memory[]>([])
@@ -232,66 +346,67 @@ export default function MemoryPage() {
     const displayMemories = searchResults.length > 0 ? searchResults : memories
 
     return (
-        <div className="space-y-6">
-            {/* 统计卡片 */}
-            <div className="grid gap-4 md:grid-cols-3">
-                <Card>
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">用户数</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="flex items-center gap-2">
-                            <Users className="h-5 w-5 text-primary" />
-                            <span className="text-2xl font-bold">{stats.totalUsers}</span>
+        <div className="space-y-4 sm:space-y-6">
+            {/* 统计卡片 - 移动端两列，桌面端三列 */}
+            <div className="grid gap-3 grid-cols-2 md:grid-cols-3">
+                <Card className="p-3 sm:p-4">
+                    <div className="flex items-center gap-2">
+                        <Users className="h-5 w-5 text-primary shrink-0" />
+                        <div className="min-w-0">
+                            <p className="text-xs text-muted-foreground">用户数</p>
+                            <p className="text-xl font-bold truncate">{stats.totalUsers}</p>
                         </div>
-                    </CardContent>
+                    </div>
                 </Card>
-                <Card>
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">当前用户记忆数</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="flex items-center gap-2">
-                            <Brain className="h-5 w-5 text-green-500" />
-                            <span className="text-2xl font-bold">{memories.length}</span>
+                <Card className="p-3 sm:p-4">
+                    <div className="flex items-center gap-2">
+                        <Brain className="h-5 w-5 text-green-500 shrink-0" />
+                        <div className="min-w-0">
+                            <p className="text-xs text-muted-foreground">当前用户记忆</p>
+                            <p className="text-xl font-bold truncate">{memories.length}</p>
                         </div>
-                    </CardContent>
+                    </div>
                 </Card>
-                <Card>
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">已选用户</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <span className="text-xl font-medium">{userId || '-'}</span>
-                    </CardContent>
+                <Card className="p-3 sm:p-4 col-span-2 md:col-span-1">
+                    <div className="flex items-center gap-2">
+                        <div className="min-w-0 flex-1">
+                            <p className="text-xs text-muted-foreground">已选用户</p>
+                            <p className="text-lg font-medium truncate">{userId || '-'}</p>
+                        </div>
+                    </div>
                 </Card>
             </div>
 
             {/* 记忆管理 */}
             <Card>
-                <CardHeader>
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <CardHeader className="pb-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                         <div>
-                            <CardTitle>记忆管理</CardTitle>
-                            <CardDescription>管理用户的长期记忆数据</CardDescription>
+                            <CardTitle className="text-lg">记忆管理</CardTitle>
+                            <CardDescription className="text-xs sm:text-sm">管理用户的长期记忆数据</CardDescription>
                         </div>
                         <div className="flex items-center gap-2">
-                            <Button variant="outline" size="sm" onClick={fetchUserList}>
-                                <RefreshCw className="mr-2 h-4 w-4" />
-                                刷新用户
+                            <Button variant="outline" size="sm" onClick={fetchUserList} className="h-8">
+                                <RefreshCw className="h-3.5 w-3.5 sm:mr-1.5" />
+                                <span className="hidden sm:inline">刷新</span>
                             </Button>
-                            <Button variant="destructive" size="sm" onClick={() => setClearAllDialogOpen(true)}>
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                清空所有记忆
+                            <Button 
+                                variant="destructive" 
+                                size="sm" 
+                                onClick={() => setClearAllDialogOpen(true)}
+                                className="h-8"
+                            >
+                                <Trash2 className="h-3.5 w-3.5 sm:mr-1.5" />
+                                <span className="hidden sm:inline">清空所有</span>
                             </Button>
                         </div>
                     </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                    {/* 搜索栏 */}
-                    <div className="flex flex-wrap gap-2">
+                    {/* 搜索栏 - 移动端堆叠布局 */}
+                    <div className="flex flex-col sm:flex-row gap-2">
                         <Select value={userId || '__none__'} onValueChange={v => setUserId(v === '__none__' ? '' : v)}>
-                            <SelectTrigger className="w-[200px]">
+                            <SelectTrigger className="w-full sm:w-[180px] h-9">
                                 <SelectValue placeholder="选择用户" />
                             </SelectTrigger>
                             <SelectContent>
@@ -307,39 +422,57 @@ export default function MemoryPage() {
                             value={userId}
                             onChange={e => setUserId(e.target.value)}
                             placeholder="或直接输入用户ID"
-                            className="w-[180px]"
+                            className="h-9"
                         />
-                        <Button onClick={fetchMemories} disabled={loading || !userId}>
-                            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            <Search className="mr-2 h-4 w-4" />
-                            查询记忆
+                        <Button onClick={fetchMemories} disabled={loading || !userId} className="h-9 shrink-0">
+                            {loading && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                            <Search className="h-3.5 w-3.5 sm:mr-1.5" />
+                            <span className="hidden sm:inline">查询</span>
                         </Button>
-                        <Button variant="outline" onClick={() => setAddDialogOpen(true)} disabled={!userId}>
-                            <Plus className="mr-2 h-4 w-4" />
-                            添加记忆
-                        </Button>
-                        {memories.length > 0 && (
-                            <>
-                                <Button
-                                    variant="secondary"
-                                    onClick={() => setSummarizeDialogOpen(true)}
-                                    disabled={summarizing}
-                                    title="合并重复记忆，覆盖旧数据"
-                                >
-                                    {summarizing ? (
-                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    ) : (
-                                        <Sparkles className="mr-2 h-4 w-4" />
-                                    )}
-                                    总结整理
-                                </Button>
-                                <Button variant="destructive" onClick={() => setClearUserDialogOpen(true)}>
-                                    <Trash2 className="mr-2 h-4 w-4" />
-                                    清空记忆
-                                </Button>
-                            </>
-                        )}
                     </div>
+
+                    {/* 操作按钮 - 移动端网格布局 */}
+                    {userId && (
+                        <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2">
+                            <Button 
+                                variant="outline" 
+                                size="sm"
+                                onClick={() => setAddDialogOpen(true)} 
+                                disabled={!userId}
+                                className="h-8"
+                            >
+                                <Plus className="h-3.5 w-3.5 mr-1.5" />
+                                添加记忆
+                            </Button>
+                            {memories.length > 0 && (
+                                <>
+                                    <Button
+                                        variant="secondary"
+                                        size="sm"
+                                        onClick={() => setSummarizeDialogOpen(true)}
+                                        disabled={summarizing}
+                                        className="h-8"
+                                    >
+                                        {summarizing ? (
+                                            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                                        ) : (
+                                            <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+                                        )}
+                                        总结整理
+                                    </Button>
+                                    <Button 
+                                        variant="destructive" 
+                                        size="sm"
+                                        onClick={() => setClearUserDialogOpen(true)}
+                                        className="h-8"
+                                    >
+                                        <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                                        清空记忆
+                                    </Button>
+                                </>
+                            )}
+                        </div>
+                    )}
 
                     {/* 搜索框 */}
                     {userId && memories.length > 0 && (
@@ -348,16 +481,16 @@ export default function MemoryPage() {
                                 value={searchQuery}
                                 onChange={e => setSearchQuery(e.target.value)}
                                 placeholder="搜索记忆内容..."
-                                className="max-w-[300px]"
+                                className="h-9"
                                 onKeyDown={e => e.key === 'Enter' && handleSearch()}
                             />
-                            <Button variant="outline" onClick={handleSearch} disabled={searching}>
-                                {searching && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            <Button variant="outline" onClick={handleSearch} disabled={searching} className="h-9 shrink-0">
+                                {searching && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
                                 搜索
                             </Button>
                             {searchResults.length > 0 && (
-                                <Button variant="ghost" onClick={() => setSearchResults([])}>
-                                    清除搜索
+                                <Button variant="ghost" onClick={() => setSearchResults([])} className="h-9 shrink-0">
+                                    清除
                                 </Button>
                             )}
                         </div>
@@ -374,87 +507,49 @@ export default function MemoryPage() {
                             <Brain className="h-12 w-12 mx-auto mb-4 opacity-50" />
                             <p>该用户暂无记忆</p>
                         </div>
+                    ) : isMobile ? (
+                        /* 移动端卡片列表 */
+                        <div className="space-y-3">
+                            {displayMemories.map(memory => (
+                                <MemoryCard
+                                    key={memory.id}
+                                    memory={memory}
+                                    onDelete={handleDeleteMemory}
+                                />
+                            ))}
+                        </div>
                     ) : (
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead className="w-[60px]">ID</TableHead>
-                                    <TableHead>内容</TableHead>
-                                    <TableHead className="w-[90px]">来源</TableHead>
-                                    <TableHead className="w-[70px]">相似度</TableHead>
-                                    <TableHead className="w-[140px]">时间</TableHead>
-                                    <TableHead className="w-[60px]">操作</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {displayMemories.map(memory => {
-                                    const source = (memory.source ||
-                                        (memory.metadata as Record<string, unknown>)?.source ||
-                                        'manual') as string
-                                    const sourceInfo = sourceLabels[source] || {
-                                        label: source,
-                                        color: 'bg-gray-100 text-gray-800'
-                                    }
-                                    return (
-                                        <TableRow key={memory.id}>
-                                            <TableCell className="font-mono text-xs">{memory.id}</TableCell>
-                                            <TableCell className="max-w-[400px]">
-                                                <div
-                                                    className="truncate"
-                                                    title={
-                                                        typeof memory.content === 'string'
-                                                            ? memory.content
-                                                            : JSON.stringify(memory.content)
-                                                    }
-                                                >
-                                                    {typeof memory.content === 'string'
-                                                        ? memory.content
-                                                        : JSON.stringify(memory.content)}
-                                                </div>
-                                            </TableCell>
-                                            <TableCell>
-                                                <span
-                                                    className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${sourceInfo.color}`}
-                                                >
-                                                    {sourceInfo.label}
-                                                </span>
-                                            </TableCell>
-                                            <TableCell>
-                                                {memory.score ? (
-                                                    <Badge variant="secondary">
-                                                        {(memory.score * 100).toFixed(1)}%
-                                                    </Badge>
-                                                ) : (
-                                                    '-'
-                                                )}
-                                            </TableCell>
-                                            <TableCell className="text-xs text-muted-foreground">
-                                                {memory.timestamp
-                                                    ? new Date(memory.timestamp).toLocaleString('zh-CN')
-                                                    : '-'}
-                                            </TableCell>
-                                            <TableCell>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-8 w-8 text-destructive"
-                                                    onClick={() => handleDeleteMemory(memory.id)}
-                                                >
-                                                    <Trash2 className="h-4 w-4" />
-                                                </Button>
-                                            </TableCell>
-                                        </TableRow>
-                                    )
-                                })}
-                            </TableBody>
-                        </Table>
+                        /* 桌面端表格 */
+                        <div className="rounded-md border overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead className="bg-muted/50">
+                                    <tr>
+                                        <th className="px-4 py-3 text-left font-medium text-muted-foreground w-[60px]">ID</th>
+                                        <th className="px-4 py-3 text-left font-medium text-muted-foreground">内容</th>
+                                        <th className="px-4 py-3 text-left font-medium text-muted-foreground w-[90px]">来源</th>
+                                        <th className="px-4 py-3 text-left font-medium text-muted-foreground w-[70px]">相似度</th>
+                                        <th className="px-4 py-3 text-left font-medium text-muted-foreground w-[140px]">时间</th>
+                                        <th className="px-4 py-3 text-left font-medium text-muted-foreground w-[60px]">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {displayMemories.map(memory => (
+                                        <MemoryTableRow
+                                            key={memory.id}
+                                            memory={memory}
+                                            onDelete={handleDeleteMemory}
+                                        />
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     )}
                 </CardContent>
             </Card>
 
             {/* 添加记忆弹窗 */}
             <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-                <DialogContent>
+                <DialogContent className="sm:max-w-md">
                     <DialogHeader>
                         <DialogTitle>添加记忆</DialogTitle>
                         <DialogDescription>为用户 {userId} 添加新的记忆</DialogDescription>
@@ -480,11 +575,11 @@ export default function MemoryPage() {
                             />
                         </div>
                     </div>
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setAddDialogOpen(false)}>
+                    <DialogFooter className="flex-col sm:flex-row gap-2">
+                        <Button variant="outline" onClick={() => setAddDialogOpen(false)} className="w-full sm:w-auto">
                             取消
                         </Button>
-                        <Button onClick={handleAddMemory} disabled={saving}>
+                        <Button onClick={handleAddMemory} disabled={saving} className="w-full sm:w-auto">
                             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                             添加
                         </Button>

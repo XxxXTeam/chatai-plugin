@@ -34,6 +34,8 @@ class TelemetryService {
         this.intervalHandle = null
         this.globalStartups = 0
         this.announcements = []
+        this.currentUser = null // 当前用户信息
+        this.currentGroup = null // 当前群组信息
     }
 
     /**
@@ -155,11 +157,22 @@ class TelemetryService {
     recordUsage(usage) {
         if (!this.enabled) return
 
-        const { model, inputTokens = 0, outputTokens = 0, success = true, duration = 0 } = usage
+        const {
+            model,
+            inputTokens = 0,
+            outputTokens = 0,
+            success = true,
+            duration = 0,
+            userId = null,
+            groupId = null
+        } = usage
+
+        // 标准化模型名称
+        const normalizedModel = this.normalizeModelName(model)
 
         // 更新模型使用统计
-        if (!this.usageBuffer.modelUsage[model]) {
-            this.usageBuffer.modelUsage[model] = {
+        if (!this.usageBuffer.modelUsage[normalizedModel]) {
+            this.usageBuffer.modelUsage[normalizedModel] = {
                 calls: 0,
                 inputTokens: 0,
                 outputTokens: 0,
@@ -169,7 +182,7 @@ class TelemetryService {
             }
         }
 
-        const modelStats = this.usageBuffer.modelUsage[model]
+        const modelStats = this.usageBuffer.modelUsage[normalizedModel]
         modelStats.calls++
         modelStats.inputTokens += inputTokens
         modelStats.outputTokens += outputTokens
@@ -189,6 +202,10 @@ class TelemetryService {
             this.usageBuffer.failCount++
         }
         this.usageBuffer.totalDuration += duration
+
+        // 保存用户和群组信息
+        if (userId) this.currentUser = userId
+        if (groupId) this.currentGroup = groupId
     }
 
     /**
@@ -216,6 +233,8 @@ class TelemetryService {
 
         const report = {
             instanceId: this.instanceId,
+            userId: this.currentUser || 'anonymous',
+            groupId: this.currentGroup || null,
             version: this.version,
             period: 'hourly',
             startTime: this.usageBuffer.lastReportTime,
@@ -271,6 +290,9 @@ class TelemetryService {
             await this.reportUsage()
         }, this.reportInterval)
 
+        // 启动时检查一次
+        this.checkVersion()
+
         // 确保进程退出时上报
         process.on('beforeExit', async () => {
             await this.reportUsage()
@@ -311,22 +333,30 @@ class TelemetryService {
     /**
      * 发送HTTP请求
      */
-    async sendRequest(endpoint, data) {
-        const url = `${this.serverUrl}${endpoint}`
+    async sendRequest(endpoint, data, method = 'POST') {
+        let url = `${this.serverUrl}${endpoint}`
+        const options = {
+            method,
+            headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': `ChatAI/${this.version}`
+            }
+        }
+
+        if (method === 'GET' && data) {
+            // GET请求将数据转为查询参数
+            const params = new URLSearchParams(data)
+            url += `?${params.toString()}`
+        } else if (method === 'POST') {
+            options.body = JSON.stringify(data)
+        }
 
         try {
             const controller = new AbortController()
             const timeout = setTimeout(() => controller.abort(), 10000)
+            options.signal = controller.signal
 
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'User-Agent': `ChatAI/${this.version}`
-                },
-                body: JSON.stringify(data),
-                signal: controller.signal
-            })
+            const response = await fetch(url, options)
 
             clearTimeout(timeout)
 
@@ -373,6 +403,90 @@ class TelemetryService {
             this.stopPeriodicReport()
         } else if (!this.intervalHandle) {
             this.startPeriodicReport()
+        }
+    }
+
+    /**
+     * 标准化模型名称（合并相似模型）
+     */
+    normalizeModelName(modelName) {
+        if (!modelName) return 'unknown'
+
+        // 标准化映射表
+        const normalizeMap = {
+            // GPT系列
+            'gpt-4o': 'gpt-4o',
+            'gpt-4o-mini': 'gpt-4o-mini',
+            'gpt-4-turbo': 'gpt-4-turbo',
+            'gpt-4': 'gpt-4',
+            'gpt-3.5-turbo': 'gpt-3.5-turbo',
+            // Claude系列
+            'claude-3-5-sonnet': 'claude-3.5-sonnet',
+            'claude-3-opus': 'claude-3-opus',
+            'claude-3-sonnet': 'claude-3-sonnet',
+            'claude-3-haiku': 'claude-3-haiku',
+            // Gemini系列
+            'gemini-2.0-flash': 'gemini-2.0-flash',
+            'gemini-1.5-pro': 'gemini-1.5-pro',
+            'gemini-1.5-flash': 'gemini-1.5-flash',
+            // DeepSeek系列
+            'deepseek-chat': 'deepseek-chat',
+            'deepseek-coder': 'deepseek-coder',
+            // Qwen系列
+            'qwen-max': 'qwen-max',
+            'qwen-plus': 'qwen-plus',
+            'qwen-turbo': 'qwen-turbo'
+        }
+
+        const lowerModelName = modelName.toLowerCase()
+        // 尝试匹配已知模型
+        for (const [pattern, normalized] of Object.entries(normalizeMap)) {
+            if (lowerModelName.includes(pattern.toLowerCase())) {
+                return normalized
+            }
+        }
+
+        return modelName
+    }
+
+    /**
+     * 检查版本更新
+     */
+    async checkVersion() {
+        if (!this.enabled) return { success: false, disabled: true }
+        if (!this.branch) return { success: false, error: 'No branch info' }
+
+        try {
+            const response = await this.sendRequest(
+                '/api/v1/version/check',
+                {
+                    branch: this.branch,
+                    currentVersion: this.version
+                },
+                'GET'
+            )
+
+            if (response.success) {
+                const hasUpdate = response.version !== this.version
+                logger.info(
+                    `[Telemetry] Version check: ${this.branch} branch, current ${this.version}, latest ${response.version}, update available: ${hasUpdate}`
+                )
+
+                return {
+                    success: true,
+                    hasUpdate: hasUpdate,
+                    latestVersion: response.version,
+                    currentVersion: this.version,
+                    repoUrl: response.repo_url,
+                    isPublic: response.is_public,
+                    releaseNotes: response.release_notes
+                }
+            }
+
+            return { success: false, error: 'Server returned error' }
+        } catch (err) {
+            logger.debug('[Telemetry] 版本检查失败:', err.message)
+            return { success: false, error: err.message }
         }
     }
 }

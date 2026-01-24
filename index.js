@@ -53,11 +53,29 @@ initTasks.push(
                 branch: versionInfo.branch,
                 commit: versionInfo.commit
             })
+
+            // 检查版本更新
+            try {
+                const versionCheck = await telemetryService.checkVersion()
+                if (versionCheck.success && versionCheck.hasUpdate) {
+                    result.versionUpdate = {
+                        hasUpdate: true,
+                        currentVersion: versionCheck.currentVersion,
+                        latestVersion: versionCheck.latestVersion,
+                        repoUrl: versionCheck.repoUrl,
+                        isPublic: versionCheck.isPublic
+                    }
+                }
+            } catch (err) {
+                chatLogger.debug('Telemetry', '版本检查失败:', err.message)
+            }
+
             return {
                 name: 'Telemetry',
                 status: result.success ? 'ok' : 'warn',
                 globalStartups: result.globalStartups || 0,
-                announcements: result.announcements || []
+                announcements: result.announcements || [],
+                versionUpdate: result.versionUpdate
             }
         } catch (err) {
             return { name: 'Telemetry', status: 'warn', error: err.message, globalStartups: 0 }
@@ -78,6 +96,13 @@ initTasks.push(
 initTasks.push(
     (async () => {
         try {
+            // 初始化 Skills 配置和加载器
+            const { initSkillsModule } = await import('./src/services/skills/index.js')
+            const skillsModule = await initSkillsModule(__dirname)
+            global.chatAiSkillsConfig = skillsModule.config
+            global.chatAiSkillsLoader = skillsModule.loader
+
+            // 创建默认 SkillsAgent 实例
             const { createSkillsAgent, SkillsAgent } = await import('./src/services/agent/index.js')
             const defaultAgent = await createSkillsAgent({})
             const skillCount = defaultAgent.skills?.size || 0
@@ -90,9 +115,10 @@ initTasks.push(
             global.chatAiSkillsAgent = defaultAgent
             global.ChatAiSkillsAgent = SkillsAgent
 
+            const mode = skillsModule.config.getMode()
             chatLogger.info(
                 'Skills',
-                `初始化完成: ${skillCount} 个技能 (内置: ${builtinCount}, 自定义: ${customCount}, MCP: ${mcpToolCount}), ${categoryCount} 个类别`
+                `初始化完成: ${skillCount} 个技能 (内置: ${builtinCount}, 自定义: ${customCount}, MCP: ${mcpToolCount}), ${categoryCount} 个类别, mode=${mode}`
             )
             return {
                 name: 'Skills',
@@ -102,7 +128,8 @@ initTasks.push(
                 mcpServerCount,
                 builtinCount,
                 customCount,
-                mcpToolCount
+                mcpToolCount,
+                mode
             }
         } catch (err) {
             chatLogger.error('Skills', '初始化失败:', err.message)
@@ -172,11 +199,22 @@ if (loadStats.failed > 0) {
     })
 }
 chatLogger.successBanner(`${pluginName} ${pluginVersion} 加载完成`, statsItems)
+
 if (announcements.length > 0) {
     for (const ann of announcements) {
         const icon = ann.type === 'warning' ? '⚠️' : ann.type === 'update' ? '🆕' : 'ℹ️'
         chatLogger.info('公告', `${icon} ${ann.title}: ${ann.content}`)
     }
+}
+
+// 显示版本更新信息
+if (telemetryResult?.versionUpdate?.hasUpdate) {
+    const update = telemetryResult.versionUpdate
+    const repoType = update.isPublic ? '公开仓库' : '内测仓库'
+    chatLogger.info(
+        '版本更新',
+        `🆕 发现新版本! 当前: ${update.currentVersion} -> 最新: ${update.latestVersion} (${repoType})`
+    )
 }
 let _skillsModule = null
 async function loadSkillsModule() {
@@ -193,6 +231,14 @@ const skills = {
     },
     get SkillsAgent() {
         return _skillsModule?.SkillsAgent || global.ChatAiSkillsAgent
+    },
+
+    // Skills 配置和加载器
+    get config() {
+        return global.chatAiSkillsConfig
+    },
+    get loader() {
+        return global.chatAiSkillsLoader
     },
 
     // 核心方法
@@ -217,6 +263,33 @@ const skills = {
     },
     async execute(toolName, args, context, options = {}) {
         return await this.executeTool(toolName, args, context, options)
+    },
+
+    // Skills 配置方法
+    getMode() {
+        return global.chatAiSkillsConfig?.getMode() || 'hybrid'
+    },
+    isEnabled() {
+        return global.chatAiSkillsConfig?.isEnabled() !== false
+    },
+    getGroups() {
+        return global.chatAiSkillsConfig?.getGroups() || []
+    },
+    getEnabledGroups() {
+        return global.chatAiSkillsConfig?.getEnabledGroups() || []
+    },
+    async updateConfig(updates) {
+        if (global.chatAiSkillsConfig) {
+            await global.chatAiSkillsConfig.update(updates)
+        }
+    },
+    async reloadConfig() {
+        if (global.chatAiSkillsConfig) {
+            await global.chatAiSkillsConfig.reload()
+        }
+        if (global.chatAiSkillsLoader) {
+            await global.chatAiSkillsLoader.reload()
+        }
     },
 
     // MCP服务器管理

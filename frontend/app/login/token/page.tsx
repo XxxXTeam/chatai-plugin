@@ -15,18 +15,14 @@ function TokenLoginContent() {
 
     useEffect(() => {
         const token = searchParams.get('token')
-
-        // 1. 先检查是否已有有效的JWT token
         const existingToken = localStorage.getItem('chatai_token')
         if (existingToken) {
-            // 尝试验证现有token是否有效（简单检查JWT格式和过期）
             try {
                 const parts = existingToken.split('.')
                 if (parts.length === 3) {
                     const payload = JSON.parse(atob(parts[1]))
-                    const exp = payload.exp * 1000 // JWT exp是秒，转毫秒
+                    const exp = payload.exp * 1000 
                     if (exp > Date.now()) {
-                        // Token有效，直接跳转
                         setStatus('success')
                         setMessage('已登录，正在跳转...')
                         router.push('/')
@@ -34,7 +30,6 @@ function TokenLoginContent() {
                     }
                 }
             } catch {
-                // Token解析失败，继续正常登录流程
                 localStorage.removeItem('chatai_token')
             }
         }
@@ -44,8 +39,6 @@ function TokenLoginContent() {
             setMessage('无效的登录链接')
             return
         }
-
-        // 2. 验证 URL token
         const verifyToken = async () => {
             try {
                 const res = (await authApi.verifyToken(token)) as {
@@ -54,7 +47,6 @@ function TokenLoginContent() {
                     message?: string
                 }
                 if (res?.success || res?.data?.token) {
-                    // 保存 JWT token
                     const authToken = res?.data?.token
                     localStorage.setItem('chatai_token', authToken)
                     setStatus('success')

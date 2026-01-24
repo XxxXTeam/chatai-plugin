@@ -402,7 +402,7 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                     baseUrl: settings.independentBaseUrl || '',
                     apiKey: settings.independentApiKey ? '****' + settings.independentApiKey.slice(-4) : '',
                     adapterType: settings.independentAdapterType || 'openai',
-                    forbidGlobal: settings.forbidGlobalModel || false,
+                    // forbidGlobal 字段不返回给群管理面板，该设置仅主管理面板可访问和修改
                     channels: (() => {
                         if (!settings.independentChannels) return []
                         try {
@@ -649,7 +649,7 @@ router.put('/config', groupAdminAuth, async (req, res) => {
                     ? body.independentChannel.apiKey
                     : undefined,
             independentAdapterType: body.independentChannel?.adapterType,
-            forbidGlobalModel: body.independentChannel?.forbidGlobal,
+            // forbidGlobalModel 不允许通过群管理面板修改，该设置仅主管理面板可修改
             independentChannels: newChannels,
             // 使用限制
             dailyGroupLimit: body.usageLimit?.dailyGroupLimit,
@@ -911,7 +911,7 @@ router.get('/channel', groupAdminAuth, async (req, res) => {
                 baseUrl: channelConfig?.baseUrl || '',
                 apiKey: channelConfig?.apiKey ? '****' + channelConfig.apiKey.slice(-4) : '',
                 adapterType: channelConfig?.adapterType || 'openai',
-                forbidGlobal: channelConfig?.forbidGlobal || false,
+                // forbidGlobal 字段不返回给群管理面板
                 modelId: channelConfig?.modelId || ''
             })
         )
@@ -927,7 +927,7 @@ router.get('/channel', groupAdminAuth, async (req, res) => {
 router.put('/channel', groupAdminAuth, async (req, res) => {
     try {
         const { groupId } = req.groupAdmin
-        const { baseUrl, apiKey, adapterType, forbidGlobal, modelId } = req.body
+        const { baseUrl, apiKey, adapterType, modelId } = req.body // 移除 forbidGlobal 参数
 
         const db = getDatabase()
         const scopeManager = getScopeManager(db)
@@ -936,13 +936,14 @@ router.put('/channel', groupAdminAuth, async (req, res) => {
         // 获取现有配置
         const existing = (await scopeManager.getGroupChannelConfig(groupId)) || {}
 
-        // 构建更新数据（只更新提供的字段）
+        // 构建更新数据（不允许修改 forbidGlobal）
         const updateData = {
             channelId: existing.channelId,
             baseUrl: baseUrl !== undefined ? baseUrl : existing.baseUrl,
             apiKey: apiKey !== undefined && apiKey !== '' && !apiKey.startsWith('****') ? apiKey : existing.apiKey,
             adapterType: adapterType !== undefined ? adapterType : existing.adapterType,
-            forbidGlobal: forbidGlobal !== undefined ? forbidGlobal : existing.forbidGlobal,
+            // forbidGlobal 保持现有值，不允许通过群管理面板修改
+            forbidGlobal: existing.forbidGlobal,
             modelId: modelId !== undefined ? modelId : existing.modelId
         }
 
@@ -972,7 +973,7 @@ router.delete('/channel', groupAdminAuth, async (req, res) => {
             baseUrl: null,
             apiKey: null,
             adapterType: 'openai',
-            forbidGlobal: false,
+            // forbidGlobal 不在清空时重置，保持现有值
             modelId: null
         })
 
