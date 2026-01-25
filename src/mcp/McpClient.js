@@ -151,7 +151,7 @@ export class McpClient {
         // --prefer-offline: 优先使用本地缓存
         const npxArgs = ['-y', '--prefer-offline', pkg, ...args]
         const displayCmd = `npx ${npxArgs.join(' ')}`
-        logger.info(`[MCP] Starting npm server: ${displayCmd}`)
+        logger.debug(`[MCP] Starting npm server: ${displayCmd}`)
 
         // 合并环境变量，支持 NODE_OPTIONS 等
         const mergedEnv = {
@@ -308,7 +308,7 @@ export class McpClient {
                 if (this.sseMessageEndpoint && !this.sseMessageEndpoint.startsWith('http')) {
                     this.sseMessageEndpoint = this.sseBaseUrl + this.sseMessageEndpoint
                 }
-                logger.info(`[MCP] SSE endpoint received: ${this.sseMessageEndpoint}`)
+                logger.debug(`[MCP] SSE endpoint received: ${this.sseMessageEndpoint}`)
                 if (!resolved) {
                     resolved = true
                     clearTimeout(timeout)
@@ -336,11 +336,11 @@ export class McpClient {
             }
 
             this.eventSource.onopen = () => {
-                logger.info(`[MCP] SSE connection opened, waiting for endpoint event...`)
+                logger.debug(`[MCP] SSE connection opened, waiting for endpoint event...`)
                 setTimeout(() => {
                     if (!resolved) {
                         this.sseMessageEndpoint = this.sseBaseUrl + '/message'
-                        logger.info(`[MCP] No endpoint event, using default: ${this.sseMessageEndpoint}`)
+                        logger.debug(`[MCP] No endpoint event, using default: ${this.sseMessageEndpoint}`)
                         resolved = true
                         clearTimeout(timeout)
                         resolve()
@@ -412,7 +412,7 @@ export class McpClient {
 
         // Handle specific notifications
         if (message.method === 'tools/list_changed') {
-            logger.info('[MCP] Tools list changed, refreshing...')
+            logger.debug('[MCP] Tools list changed, refreshing...')
             // Emit event for manager to handle
         }
     }
@@ -457,7 +457,7 @@ export class McpClient {
         this.reconnectAttempts++
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000)
 
-        logger.info(
+        logger.debug(
             `[MCP] Reconnecting in ${delay}ms... (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`
         )
 

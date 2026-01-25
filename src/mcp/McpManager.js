@@ -65,14 +65,14 @@ export class McpManager {
             const dir = path.dirname(MCP_SERVERS_FILE)
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true })
-                logger.info('[MCP] 创建配置目录:', dir)
+                logger.debug('[MCP] 创建配置目录:', dir)
             }
 
             // 如果文件不存在，创建默认配置
             if (!fs.existsSync(MCP_SERVERS_FILE)) {
                 this.serversConfig = { servers: {} }
                 this.saveServersConfig()
-                logger.info('[MCP] 创建默认配置文件:', MCP_SERVERS_FILE)
+                logger.debug('[MCP] 创建默认配置文件:', MCP_SERVERS_FILE)
                 return this.serversConfig
             }
 
@@ -98,7 +98,7 @@ export class McpManager {
                 fs.mkdirSync(dir, { recursive: true })
             }
             fs.writeFileSync(MCP_SERVERS_FILE, JSON.stringify(this.serversConfig, null, 2), 'utf-8')
-            logger.info('[MCP] 服务器配置已保存')
+            logger.debug('[MCP] 服务器配置已保存')
         } catch (error) {
             logger.error('[MCP] 保存服务器配置失败:', error.message)
         }
@@ -129,7 +129,7 @@ export class McpManager {
 
         const mcpConfig = config.get('mcp')
         if (!mcpConfig?.enabled) {
-            logger.info('[MCP] 外部MCP已禁用，仅使用内置工具')
+            logger.debug('[MCP] 外部MCP已禁用，仅使用内置工具')
             this.initialized = true
             return
         }
@@ -224,7 +224,7 @@ export class McpManager {
             const jsTools = allTools.filter(t => t.isJsTool)
 
             if (jsTools.length === 0) {
-                logger.info('[MCP] 在data/tools中未找到自定义JS工具')
+                logger.debug('[MCP] 在data/tools中未找到自定义JS工具')
                 return
             }
             for (const tool of jsTools) {
@@ -247,7 +247,7 @@ export class McpManager {
                 isCustomTools: true
             })
 
-            logger.info(`[MCP] Custom tools server initialized with ${jsTools.length} tools`)
+            logger.debug(`[MCP] Custom tools server initialized with ${jsTools.length} tools`)
         } catch (error) {
             logger.error('[MCP] 初始化自定义工具服务器失败:', error)
         }
@@ -266,11 +266,11 @@ export class McpManager {
 
         const serverNames = Object.keys(servers)
         if (serverNames.length === 0) {
-            logger.info('[MCP] 未配置外部MCP服务器')
+            logger.debug('[MCP] 未配置外部MCP服务器')
             return
         }
 
-        logger.info(`[MCP] Loading ${serverNames.length} external server(s): ${serverNames.join(', ')}`)
+        logger.debug(`[MCP] Loading ${serverNames.length} external server(s): ${serverNames.join(', ')}`)
         const results = await Promise.allSettled(
             serverNames.map(async name => {
                 try {

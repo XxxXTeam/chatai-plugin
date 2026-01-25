@@ -72,7 +72,7 @@ async function getGroupFeatureModel(groupId, modelKey) {
         const settings = groupSettings?.settings || {}
 
         if (settings[modelKey] && settings[modelKey].trim()) {
-            logger.info(`[Commands] 使用群组独立${modelKey}: ${settings[modelKey]} (群: ${groupId})`)
+            logger.debug(`[Commands] 使用群组独立${modelKey}: ${settings[modelKey]} (群: ${groupId})`)
             return settings[modelKey].trim()
         }
     } catch (err) {
@@ -304,7 +304,7 @@ export class AICommands extends plugin {
             true
         )
 
-        logger.info(`[AI-Commands] Debug模式${status}: ${key}`)
+        logger.debug(`[AI-Commands] Debug模式${status}: ${key}`)
         return true
     }
     async endConversation() {

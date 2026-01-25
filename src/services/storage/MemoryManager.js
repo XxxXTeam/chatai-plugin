@@ -902,7 +902,8 @@ ${existingMemoryList || '暂无'}
      * @param {Object} options
      */
     async saveMemory(userId, content, options = {}) {
-        if (!config.get('memory.enabled')) return null
+        const isManual = options.source === 'manual' || options.forceManual
+        if (!config.get('memory.enabled') && !isManual) return null
 
         try {
             await this.init()

@@ -1,0 +1,192 @@
+# Skills 模块配置
+# 此文件定义了技能系统的独立配置，与 MCP 服务器配置解耦
+
+skills:
+  # 是否启用 Skills 模块
+  enabled: true
+
+  # 工作模式:
+  # - 'hybrid': 混合模式，同时加载 Skills 配置和 MCP 服务器工具（默认）
+  # - 'skills-only': 仅加载 Skills 配置的工具，忽略 MCP 服务器
+  # - 'mcp-only': 仅加载 MCP 服务器工具（兼容旧行为）
+  mode: 'hybrid'
+
+  # 工具源配置
+  sources:
+    # 内置工具配置
+    builtin:
+      enabled: true
+      # 启用的类别列表（空数组 = 启用全部）
+      # 可选类别: basic, user, group, message, admin, media, file, web, memory, image, system, emoji, knowledge
+      categories: []
+      # 禁用的工具列表（优先级高于 categories）
+      disabledTools: []
+
+    # 自定义 JS 工具配置
+    custom:
+      enabled: true
+      # JS 工具目录（相对于插件根目录）
+      path: 'data/tools'
+      # 文件变更时自动重载
+      autoReload: true
+
+    # 外部 MCP 服务器工具配置
+    mcp:
+      enabled: true
+      servers: []
+      disabledServers: []
+
+  # 工具组配置
+  groups:
+    # ========== 基础工具组 ==========
+    - index: 0
+      name: 'basic'
+      description: '基础工具：获取时间、日期、农历、节日、系统环境信息等'
+      tools: ['get_current_time', 'get_lunar_date', 'get_festival', 'get_environment', 'list_available_tools', 'get_tool_info', 'format_number', 'sleep', 'echo']
+      enabled: true
+
+    # ========== QQ用户/Bot信息 ==========
+    - index: 1
+      name: 'user'
+      description: '用户信息：获取QQ用户资料、好友列表、发送者信息、点赞等'
+      tools: ['get_user_info', 'get_friend_list', 'get_avatar', 'get_sender_info', 'search_friend', 'check_is_friend', 'get_user_profile', 'send_like']
+      enabled: true
+
+    - index: 2
+      name: 'bot'
+      description: 'Bot信息：获取机器人自身信息、状态、好友/群列表等'
+      tools: ['get_bot_info', 'get_login_info', 'get_version_info', 'get_online_clients', 'get_model_show', 'get_self_info']
+      enabled: true
+
+    # ========== 群组信息 ==========
+    - index: 3
+      name: 'group'
+      description: '群组信息：获取群资料、成员列表、管理员、群公告等'
+      tools: ['get_group_info', 'get_group_list', 'get_group_member_list', 'get_group_member_info', 'get_current_group', 'get_group_admins', 'search_group_member', 'get_group_notice', 'check_in_group', 'search_group']
+      enabled: true
+
+    - index: 4
+      name: 'group-stats'
+      description: '群统计：群星级、龙王、发言榜、幸运字符、不活跃成员、群荣誉等'
+      tools: ['get_group_level', 'get_dragon_king', 'get_sign_in_today', 'get_speak_rank', 'get_group_data', 'get_lucky_list', 'draw_lucky', 'equip_lucky', 'switch_lucky', 'get_inactive_members', 'get_recent_join_members', 'get_group_honor', 'get_group_stat', 'get_random_group_member']
+      enabled: true
+
+    # ========== 消息操作 ==========
+    - index: 5
+      name: 'message'
+      description: '消息操作：发送消息、@用户、获取聊天记录、撤回、解析转发消息等'
+      tools: ['send_to_master', 'get_master_info', 'send_private_message', 'send_group_message', 'reply_current_message', 'at_user', 'at_role', 'random_at', 'get_chat_history', 'recall_message', 'get_forward_msg', 'deep_parse_message', 'send_forward_msg', 'send_poke', 'mark_msg_as_read']
+      enabled: true
+
+    # ========== 群管理 ==========
+    - index: 6
+      name: 'admin'
+      description: '群管理：禁言、踢人、设置群名片/头衔、发送公告等（需要管理员权限）'
+      tools: ['mute_member', 'kick_member', 'set_group_card', 'set_group_whole_ban', 'set_group_admin', 'set_group_name', 'set_group_special_title', 'send_group_notice', 'delete_group_notice', 'set_group_add_request', 'set_friend_add_request', 'get_group_muted_list', 'set_group_leave', 'delete_friend', 'set_group_portrait', 'get_group_at_all_remain', 'set_group_anonymous_ban']
+      enabled: true
+      requiredPermission: 'admin'
+
+    # ========== 媒体处理 ==========
+    - index: 7
+      name: 'media'
+      description: '媒体处理：发送图片/视频/表情、生成二维码、解析图片等'
+      tools: ['parse_image', 'generate_qrcode', 'get_image_info', 'send_image', 'send_video', 'parse_video', 'send_dice', 'send_rps', 'send_music', 'send_location', 'send_share', 'send_face', 'send_mface', 'send_flash_image', 'send_gift', 'get_face_list', 'parse_mface', 'download_image', 'send_markdown', 'send_button']
+      enabled: true
+
+    # ========== 语音 ==========
+    - index: 8
+      name: 'voice'
+      description: '语音工具：AI语音对话、TTS语音合成、语音识别、发送语音消息等'
+      tools: ['set_ai_voice_chat', 'get_ai_voice_characters', 'send_ai_voice', 'send_voice', 'parse_voice', 'get_record', 'get_tts_speakers', 'send_tts']
+      enabled: true
+
+    # ========== 搜索/网络 ==========
+    - index: 9
+      name: 'search'
+      description: '搜索工具：Bing/DuckDuckGo搜索、网页内容获取、维基百科、翻译、天气、热搜榜等'
+      tools: ['bing_search', 'fetch_webpage', 'web_search', 'search_wiki', 'search_group_history', 'translate', 'get_weather', 'get_ip_info', 'search_baike', 'get_hitokoto', 'get_hot_search', 'get_douyin_hot', 'get_history_today', 'get_joke', 'get_morning_paper', 'get_short_url', 'get_oil_price']
+      enabled: true
+
+    - index: 10
+      name: 'web'
+      description: '网页访问：访问URL获取内容'
+      tools: ['website', 'fetch_url']
+      enabled: true
+
+    # ========== 记忆/上下文 ==========
+    - index: 11
+      name: 'memory'
+      description: '记忆管理：保存、检索、删除用户记忆'
+      tools: ['save_user_memory', 'get_user_memories', 'search_user_memory', 'delete_user_memory']
+      enabled: true
+
+    - index: 12
+      name: 'context'
+      description: '上下文管理：获取当前会话上下文、群聊上下文、清空对话、获取引用消息等'
+      tools: ['get_current_context', 'get_conversation_context', 'clear_conversation', 'get_reply_message', 'get_at_members', 'get_group_context']
+      enabled: true
+
+    # ========== 文件操作 ==========
+    - index: 13
+      name: 'file'
+      description: '文件操作：群文件上传、下载、管理、创建文件夹等'
+      tools: ['get_group_files', 'get_file_url', 'upload_group_file', 'delete_group_file', 'create_group_folder', 'get_group_file_system_info', 'get_group_root_files', 'get_group_files_by_folder', 'move_group_file', 'rename_group_file', 'delete_group_folder', 'upload_private_file', 'get_private_file_url', 'download_file', 'send_file_message', 'get_file', 'ocr_image', 'can_send_record', 'can_send_image']
+      enabled: true
+
+    # ========== 实用工具 ==========
+    - index: 14
+      name: 'utils'
+      description: '实用工具：计算、随机数、编码转换、时间戳、正则匹配、文本处理、密码生成等'
+      tools: ['calculate', 'random_number', 'random_choice', 'uuid', 'hash', 'base64_encode', 'base64_decode', 'url_encode', 'json_format', 'timestamp', 'countdown', 'regex_match', 'regex_replace', 'text_stats', 'text_transform', 'extract_urls', 'extract_emails', 'extract_phones', 'split_text', 'join_text', 'truncate_text', 'escape_html', 'generate_password', 'dice_roll', 'draw_lots']
+      enabled: true
+
+    - index: 15
+      name: 'extra'
+      description: '扩展工具：天气查询、一言、骰子、随机抽取、倒计时、短链接、提醒、插画等'
+      tools: ['hitokoto', 'roll_dice', 'random_choose', 'create_short_url', 'query_ip_info', 'set_reminder', 'get_illustration']
+      enabled: true
+
+    # ========== 定时任务 ==========
+    - index: 16
+      name: 'schedule'
+      description: '定时任务：创建、管理定时任务，支持周期执行、@用户、触发AI对话等'
+      tools: ['create_scheduled_task', 'list_scheduled_tasks', 'delete_scheduled_task', 'modify_scheduled_task', 'get_scheduled_task_info', 'trigger_scheduled_task']
+      enabled: true
+
+    # ========== 系统命令（危险） ==========
+    - index: 17
+      name: 'shell'
+      description: '系统命令：执行Shell命令、获取系统信息、进程信息、环境变量等（危险工具）'
+      tools: ['execute_command', 'get_system_info', 'get_process_info', 'read_env', 'list_directory']
+      enabled: false
+      requiredPermission: 'master'
+
+  # 工具执行配置
+  execution:
+    # 单个工具超时时间（毫秒）
+    timeout: 30000
+    # 最大并行执行数
+    maxParallel: 5
+    # 错误时是否重试
+    retryOnError: false
+    # 重试次数
+    maxRetries: 2
+    # 是否缓存结果
+    cacheResults: true
+    # 缓存有效期（毫秒）
+    cacheTTL: 60000
+
+  # 调度配置
+  dispatch:
+    enabled: true
+    useSummary: true
+    maxGroups: 3
+  security:
+    dangerousTools:
+      - kick_member
+      - mute_member
+      - recall_message
+      - set_group_admin
+      - write_file
+    allowDangerous: false
+    dangerousRequiredPermission: 'master'

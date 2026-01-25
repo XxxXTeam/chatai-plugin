@@ -145,7 +145,7 @@ export class bym extends plugin {
                 if (rawMsg.includes(keyword)) {
                     forceTriggered = true
                     matchedKeyword = keyword
-                    logger.info(`[BYM] 关键词触发: 匹配到 "${keyword}" 在消息 "${rawMsg.substring(0, 30)}..."`)
+                    logger.debug(`[BYM] 关键词触发: 匹配到 "${keyword}" 在消息 "${rawMsg.substring(0, 30)}..."`)
                     break
                 }
             }
@@ -181,14 +181,14 @@ export class bym extends plugin {
             if (randomValue > probability) {
                 return false
             }
-            logger.info(`[BYM] 概率触发成功: random=${randomValue.toFixed(4)} <= probability=${probability}`)
+            logger.debug(`[BYM] 概率触发成功: random=${randomValue.toFixed(4)} <= probability=${probability}`)
         } else {
-            logger.info(`[BYM] 关键词触发: "${matchedKeyword}"`)
+            logger.debug(`[BYM] 关键词触发: "${matchedKeyword}"`)
         }
 
         try {
             markMessageProcessed(e)
-            logger.info('[BYM] 伪人模式触发')
+            logger.debug('[BYM] 伪人模式触发')
             const { LlmService } = await import('../src/services/llm/LlmService.js')
             const groupBymModel = groupBymConfig?.bymModel
             const configBymModel = config.get('bym.model')
@@ -245,7 +245,7 @@ export class bym extends plugin {
                             if (bymPresetId === '__custom__' && bymPrompt) {
                                 // 使用自定义伪人提示词
                                 systemPrompt = bymPrompt
-                                logger.info(`[BYM] 使用群组自定义伪人提示词`)
+                                logger.debug(`[BYM] 使用群组自定义伪人提示词`)
                             } else {
                                 // 使用指定的预设
                                 try {
@@ -255,7 +255,7 @@ export class bym extends plugin {
                                     if (preset?.systemPrompt) {
                                         systemPrompt = preset.systemPrompt
                                         scopePresetId = bymPresetId
-                                        logger.info(
+                                        logger.debug(
                                             `[BYM] 使用群组伪人预设: ${bymPresetId} (${preset.name || bymPresetId})`
                                         )
                                     }
@@ -277,7 +277,7 @@ export class bym extends plugin {
 
                             // 记录配置来源
                             if (bymConfig.sources.length > 0) {
-                                logger.info(`[BYM] 配置来源: ${bymConfig.sources.join(' -> ')}`)
+                                logger.debug(`[BYM] 配置来源: ${bymConfig.sources.join(' -> ')}`)
                             }
                         }
 
@@ -288,7 +288,7 @@ export class bym extends plugin {
                         })
                         if (bymConfig.knowledgePrompt) {
                             systemPrompt += '\n\n' + bymConfig.knowledgePrompt
-                            logger.info(
+                            logger.debug(
                                 `[BYM] 已添加群组知识库 (${bymConfig.knowledgeIds.length} 个, ${bymConfig.knowledgePrompt.length} 字符)`
                             )
                         }
@@ -305,7 +305,7 @@ export class bym extends plugin {
                             const preset = presetManager.get(scopePresetId)
                             if (preset?.systemPrompt) {
                                 systemPrompt = preset.systemPrompt
-                                logger.info(`[BYM] 使用作用域预设: ${scopePresetId} (${preset.name || scopePresetId})`)
+                                logger.debug(`[BYM] 使用作用域预设: ${scopePresetId} (${preset.name || scopePresetId})`)
                             }
                         }
 
@@ -317,7 +317,7 @@ export class bym extends plugin {
                             )
                             systemPrompt = independentResult.prompt
                             if (independentResult.isIndependent) {
-                                logger.info(`[BYM] 使用独立人格 (来源: ${independentResult.source})`)
+                                logger.debug(`[BYM] 使用独立人格 (来源: ${independentResult.source})`)
                             }
                         }
                     }
@@ -337,7 +337,7 @@ export class bym extends plugin {
                             })
                             if (knowledgePrompt) {
                                 systemPrompt += '\n\n' + knowledgePrompt
-                                logger.info(`[BYM] 已添加预设知识库 (${knowledgePrompt.length} 字符)`)
+                                logger.debug(`[BYM] 已添加预设知识库 (${knowledgePrompt.length} 字符)`)
                             }
                         } catch (err) {
                             logger.debug('[BYM] 加载预设知识库失败:', err.message)
@@ -359,7 +359,7 @@ export class bym extends plugin {
                         const preset = presetManager.get(globalBymPresetId)
                         if (preset?.systemPrompt) {
                             systemPrompt = preset.systemPrompt
-                            logger.info(
+                            logger.debug(
                                 `[BYM] 使用全局伪人预设: ${globalBymPresetId} (${preset.name || globalBymPresetId})`
                             )
                         }
@@ -380,7 +380,7 @@ export class bym extends plugin {
                     const presetPrompt = LlmService.getSystemPrompt(presetId)
                     if (presetPrompt) {
                         systemPrompt = presetPrompt
-                        logger.info(`[BYM] 匹配关键词 "${keyword}", 使用预设 "${presetId}"`)
+                        logger.debug(`[BYM] 匹配关键词 "${keyword}", 使用预设 "${presetId}"`)
                     }
                     break
                 }
@@ -403,7 +403,7 @@ export class bym extends plugin {
                 }
 
                 if (imageUrls.length > 0) {
-                    logger.info(`[BYM] 处理图片消息: ${imageUrls.length} 张图片`)
+                    logger.debug(`[BYM] 处理图片消息: ${imageUrls.length} 张图片`)
                 }
             }
 
@@ -464,8 +464,13 @@ export class bym extends plugin {
                             .join('\n')
 
                         if (contextText.trim()) {
-                            systemPrompt += `\n\n【最近群聊记录】\n${contextText}\n\n请基于以上聊天记录的话题和氛围，自然地参与对话。`
-                            logger.info(`[BYM] 已添加群聊上下文: ${contextMessages.length} 条消息`)
+                            systemPrompt += `
+
+【最近群聊记录】
+${contextText}
+
+请基于以上聊天记录的话题和氛围，自然地参与对话。`
+                            logger.debug(`[BYM] 已添加群聊上下文: ${contextMessages.length} 条消息`)
                         }
                     }
                 } catch (err) {

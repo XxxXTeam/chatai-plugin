@@ -104,7 +104,13 @@ router.get('/groups', async (req, res) => {
     try {
         const sm = await ensureScopeManager()
         const groups = await sm.listGroupSettings()
-        res.json(ChaiteResponse.ok(groups))
+        const formattedGroups = groups.map(g => ({
+            ...g,
+            enabled: g.settings?.enabled ?? true,
+            triggerMode: g.settings?.triggerMode || 'default',
+            groupName: g.settings?.groupName || g.groupName
+        }))
+        res.json(ChaiteResponse.ok(formattedGroups))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
@@ -114,6 +120,12 @@ router.get('/group/:groupId', async (req, res) => {
     try {
         const sm = await ensureScopeManager()
         const settings = await sm.getGroupSettings(req.params.groupId)
+        if (settings) {
+            // 提取 settings.enabled 到顶层
+            settings.enabled = settings.settings?.enabled ?? true
+            settings.triggerMode = settings.settings?.triggerMode || 'default'
+            settings.groupName = settings.settings?.groupName || settings.groupName
+        }
         res.json(ChaiteResponse.ok(settings))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -123,7 +135,15 @@ router.get('/group/:groupId', async (req, res) => {
 router.put('/group/:groupId', async (req, res) => {
     try {
         const sm = await ensureScopeManager()
-        await sm.setGroupSettings(req.params.groupId, req.body)
+        const { enabled, groupName, triggerMode, ...otherData } = req.body
+        // 将 enabled, groupName, triggerMode 合并到 settings 中
+        const dataToSave = {
+            ...otherData,
+            enabled,
+            groupName,
+            triggerMode
+        }
+        await sm.setGroupSettings(req.params.groupId, dataToSave)
         res.json(ChaiteResponse.ok({ success: true }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))

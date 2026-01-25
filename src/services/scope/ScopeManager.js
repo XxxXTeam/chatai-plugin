@@ -255,9 +255,14 @@ export class ScopeManager {
                 const { settings: nestedSettings, ...rest } = otherSettings
                 finalOtherSettings = { ...rest, ...nestedSettings }
             }
-
-            // 处理“回退到全局”逻辑：如果值是 'global'、'default'、'use_global' 或 null，则从配置中删除该项
-            const isGlobalValue = val => val === 'global' || val === 'default' || val === 'use_global' || val === null
+            const isGlobalValue = val =>
+                val === 'global' ||
+                val === 'default' ||
+                val === 'use_global' ||
+                val === '__default__' ||
+                val === '__global__' ||
+                val === null ||
+                val === ''
 
             const mergedSettings = { ...existingSettings }
             for (const [key, value] of Object.entries(finalOtherSettings)) {
@@ -273,8 +278,6 @@ export class ScopeManager {
         (groupId, systemPrompt, presetId, knowledgeIds, inheritFrom, settings, createdAt, updatedAt)
         VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT createdAt FROM group_scopes WHERE groupId = ?), ?), ?)
       `)
-
-            // 支持空人设：区分 undefined 和 空字符串；保留现有值如果未提供新值
             const finalPrompt =
                 systemPrompt === undefined
                     ? (existing?.systemPrompt ?? null)

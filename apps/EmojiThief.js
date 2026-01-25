@@ -404,7 +404,7 @@ class EmojiThiefService {
         const emojiPath = await this.getRandomEmoji(groupId, config.separateFolder)
         if (!emojiPath) return null
 
-        logger.info(`[EmojiThief] 群${groupId}触发表情包发送 (mode=${mode}, source=${triggerSource})`)
+        logger.debug(`[EmojiThief] 群${groupId}触发表情包发送 (mode=${mode}, source=${triggerSource})`)
         return this.buildEmojiMessage(emojiPath)
     }
 
@@ -448,7 +448,7 @@ class EmojiThiefService {
 
         try {
             await fsp.rm(emojiDir, { recursive: true, force: true })
-            logger.info(`[EmojiThief] 已清理群${groupId}的表情包`)
+            logger.debug(`[EmojiThief] 已清理群${groupId}的表情包`)
             return true
         } catch (error) {
             logger.error(`[EmojiThief] 清理群${groupId}表情包失败:`, error.message)
