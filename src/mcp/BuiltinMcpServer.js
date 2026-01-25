@@ -557,7 +557,7 @@ export class BuiltinMcpServer {
                 })
 
                 this.fileWatchers.push({ watcher, path: dir.path, name: dir.name })
-                logger.info(`[BuiltinMCP] 文件监听器已启动: ${dir.name} (${dir.path})`)
+                logger.debug(`[BuiltinMCP] 文件监听器已启动: ${dir.name} (${dir.path})`)
             }
 
             this.watcherEnabled = this.fileWatchers.length > 0
@@ -581,7 +581,7 @@ export class BuiltinMcpServer {
             }
             this.fileWatchers = []
             this.watcherEnabled = false
-            logger.info('[BuiltinMCP] 所有文件监听器已停止')
+            logger.debug('[BuiltinMCP] 所有文件监听器已停止')
         }
         if (this.reloadDebounceTimer) {
             clearTimeout(this.reloadDebounceTimer)
@@ -1166,7 +1166,7 @@ export class BuiltinMcpServer {
                 const validation = validateParams(args, modularTool.inputSchema, ctx)
                 logger.debug(`[BuiltinMCP] 参数验证结果: ${name}`, validation)
                 if (!validation.valid) {
-                    logger.info(`[BuiltinMCP] 参数验证失败: ${name} - ${validation.error}`)
+                    logger.debug(`[BuiltinMCP] 参数验证失败: ${name} - ${validation.error}`)
                     const errorResult = paramError(validation)
                     await recordStats(errorResult, new Error(validation.error))
                     return this.formatResult(errorResult)

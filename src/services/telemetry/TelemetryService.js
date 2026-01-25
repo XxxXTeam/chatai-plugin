@@ -468,9 +468,6 @@ class TelemetryService {
 
             if (response.success) {
                 const hasUpdate = response.version !== this.version
-                logger.info(
-                    `[Telemetry] Version check: ${this.branch} branch, current ${this.version}, latest ${response.version}, update available: ${hasUpdate}`
-                )
 
                 return {
                     success: true,

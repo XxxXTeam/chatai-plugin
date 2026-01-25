@@ -190,18 +190,100 @@ export const contextApi = {
     clear: (data: Record<string, unknown>) => api.post('/api/context/clear', data)
 }
 
-// Memory API
+// Memory API - 结构化记忆
 export const memoryApi = {
+    // 用户和统计
     getUsers: () => api.get('/api/memory/users'),
-    get: (userId: string) => api.get(`/api/memory/${userId}`),
-    create: (data: Record<string, unknown>) => api.post('/api/memory', data),
-    delete: (userId: string, memoryId: string) => api.delete(`/api/memory/${userId}/${memoryId}`),
+    getStats: () => api.get('/api/memory/stats'),
+    getCategories: () => api.get('/api/memory/categories'),
+    
+    // 用户记忆
+    get: (userId: string, format?: 'tree' | 'list') => 
+        api.get(`/api/memory/user/${userId}`, { params: { format: format || 'list' } }),
+    getTree: (userId: string) => api.get(`/api/memory/user/${userId}`, { params: { format: 'tree' } }),
+    getUserStats: (userId: string) => api.get(`/api/memory/user/${userId}/stats`),
+    getByCategory: (userId: string, category: string) => 
+        api.get(`/api/memory/user/${userId}/category/${category}`),
+    
+    // 添加记忆
+    create: (data: { userId: string; content: string; category?: string; subType?: string; groupId?: string; metadata?: Record<string, unknown> }) => 
+        api.post(`/api/memory/user/${data.userId}`, data),
+    createLegacy: (data: Record<string, unknown>) => api.post('/api/memory', data),
+    
+    // 批量操作
+    batch: (memories: Array<{ userId: string; content: string; category?: string }>) => 
+        api.post('/api/memory/batch', { memories }),
+    
+    // 更新和删除
+    update: (memoryId: number, data: Record<string, unknown>) => 
+        api.put(`/api/memory/${memoryId}`, data),
+    delete: (memoryId: number | string) => 
+        api.delete(`/api/memory/${memoryId}`),
+    deleteLegacy: (userId: string, memoryId: string) => 
+        api.delete(`/api/memory/${userId}/${memoryId}`),
+    
+    // 清空
     clearAll: () => api.delete('/api/memory/clear-all'),
-    clearUser: (userId: string) => api.delete(`/api/memory/${userId}`),
-    search: (data: Record<string, unknown>) => api.post('/api/memory/search', data),
-    // 手动触发记忆总结（覆盖式）
-    summarize: (userId: string) => api.post(`/api/memory/${userId}/summarize`),
-    summarizeGroup: (groupId: string) => api.post(`/api/memory/group/${groupId}/summarize`)
+    clearUser: (userId: string, hard?: boolean) => 
+        api.delete(`/api/memory/user/${userId}`, { params: { hard: hard ? 'true' : undefined } }),
+    
+    // 搜索
+    search: (data: { query: string; userId?: string; groupId?: string; category?: string; limit?: number }) => 
+        api.post('/api/memory/search', data),
+    
+    // 总结和合并
+    summarize: (userId: string, useLLM?: boolean) => 
+        api.post(`/api/memory/user/${userId}/summarize`, { useLLM }),
+    merge: (userId: string) => api.post(`/api/memory/merge/${userId}`),
+    
+    // 群组记忆
+    getGroup: (groupId: string, options?: { userId?: string; category?: string }) => 
+        api.get(`/api/memory/group/${groupId}`, { params: options }),
+    getUserInGroup: (userId: string, groupId: string, format?: 'tree' | 'list') => 
+        api.get(`/api/memory/user/${userId}/group/${groupId}`, { params: { format } })
+}
+
+// Knowledge Graph API (知识图谱)
+export const graphApi = {
+    // 作用域
+    getScopes: () => api.get('/api/graph/scopes'),
+    getStats: (scopeId?: string) => api.get('/api/graph/stats', { params: { scopeId } }),
+    // 实体
+    getEntities: (scopeId: string, options?: { type?: string; limit?: number; offset?: number }) =>
+        api.get('/api/graph/entities', { params: { scopeId, ...options } }),
+    searchEntities: (query: string, scopeIds?: string[], type?: string, limit?: number) =>
+        api.get('/api/graph/entities/search', { params: { query, scopeIds: scopeIds?.join(','), type, limit } }),
+    getEntity: (entityId: string) => api.get(`/api/graph/entities/${entityId}`),
+    createEntity: (data: { name: string; type: string; scopeId: string; properties?: Record<string, unknown> }) =>
+        api.post('/api/graph/entities', data),
+    updateEntity: (entityId: string, data: Record<string, unknown>) => api.put(`/api/graph/entities/${entityId}`, data),
+    deleteEntity: (entityId: string) => api.delete(`/api/graph/entities/${entityId}`),
+    getEntityHistory: (entityId: string, limit?: number) =>
+        api.get(`/api/graph/entities/${entityId}/history`, { params: { limit } }),
+    getEntityRelationships: (entityId: string, direction?: 'both' | 'incoming' | 'outgoing') =>
+        api.get(`/api/graph/entities/${entityId}/relationships`, { params: { direction } }),
+    // 关系
+    createRelationship: (data: {
+        fromEntityId: string
+        toEntityId: string
+        relationType: string
+        scopeId: string
+        properties?: Record<string, unknown>
+    }) => api.post('/api/graph/relationships', data),
+    deleteRelationship: (relationshipId: string) => api.delete(`/api/graph/relationships/${relationshipId}`),
+    // 图查询
+    getSubgraph: (entityId: string, depth?: number, scopeIds?: string[]) =>
+        api.get('/api/graph/subgraph', { params: { entityId, depth, scopeIds: scopeIds?.join(',') } }),
+    getPath: (fromEntityId: string, toEntityId: string, maxDepth?: number, relationTypes?: string[]) =>
+        api.get('/api/graph/path', {
+            params: { fromEntityId, toEntityId, maxDepth, relationTypes: relationTypes?.join(',') }
+        }),
+    getContext: (userId: string, groupId?: string, maxEntities?: number) =>
+        api.get('/api/graph/context', { params: { userId, groupId, maxEntities } }),
+    // 导入导出
+    exportGraph: (scopeId: string) => api.post('/api/graph/export', { scopeId }),
+    importGraph: (graphData: unknown, targetScopeId?: string) =>
+        api.post('/api/graph/import', { graphData, targetScopeId })
 }
 
 // Scope API

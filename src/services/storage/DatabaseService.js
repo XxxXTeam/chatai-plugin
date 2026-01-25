@@ -38,6 +38,20 @@ class DatabaseService {
 
         // Enable WAL mode for better concurrency
         this.db.pragma('journal_mode = WAL')
+        try {
+            const walPath = dbPath + '-wal'
+            if (fs.existsSync(walPath)) {
+                const walStats = fs.statSync(walPath)
+                if (walStats.size > 0) {
+                    this.db.pragma('wal_checkpoint(TRUNCATE)')
+                    safeLogger.debug(
+                        `[Database] WAL checkpoint completed, synced ${(walStats.size / 1024).toFixed(1)}KB`
+                    )
+                }
+            }
+        } catch (err) {
+            safeLogger.warn(`[Database] WAL checkpoint failed: ${err.message}`)
+        }
 
         this.createTables()
         this.initialized = true
@@ -151,6 +165,28 @@ class DatabaseService {
                 created_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_kg_scope_share ON kg_scope_sharing(source_scope_id, target_scope_id);
+
+            -- 结构化记忆表
+            CREATE TABLE IF NOT EXISTS structured_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                group_id TEXT,
+                category TEXT NOT NULL,
+                sub_type TEXT,
+                content TEXT NOT NULL,
+                confidence REAL DEFAULT 0.8,
+                source TEXT DEFAULT 'auto',
+                metadata TEXT,
+                created_at INTEGER DEFAULT (strftime('%s','now') * 1000),
+                updated_at INTEGER DEFAULT (strftime('%s','now') * 1000),
+                expires_at INTEGER,
+                is_active INTEGER DEFAULT 1
+            );
+            CREATE INDEX IF NOT EXISTS idx_struct_mem_user ON structured_memories(user_id);
+            CREATE INDEX IF NOT EXISTS idx_struct_mem_group ON structured_memories(group_id);
+            CREATE INDEX IF NOT EXISTS idx_struct_mem_category ON structured_memories(category);
+            CREATE INDEX IF NOT EXISTS idx_struct_mem_user_group ON structured_memories(user_id, group_id);
+            CREATE INDEX IF NOT EXISTS idx_struct_mem_active ON structured_memories(is_active);
         `)
     }
 

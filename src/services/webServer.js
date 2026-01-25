@@ -132,6 +132,7 @@ import {
     imageRoutes,
     logsRoutes,
     memoryRoutes,
+    graphRoutes,
     channelRoutes,
     testPanelRoutes,
     groupAdminRoutes,
@@ -519,6 +520,7 @@ window.location.href = '/';
         this.app.use('/api/logs', auth, logsRoutes)
         this.app.use('/api/placeholders', auth, logsRoutes)
         this.app.use('/api/memory', auth, memoryRoutes)
+        this.app.use('/api/graph', auth, graphRoutes)
         this.app.use('/api/group-admin', groupAdminRoutes)
         this.app.use('/api/skills', auth, skillsRoutes)
         this.app.use('/api', auth, systemRoutes)

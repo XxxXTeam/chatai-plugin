@@ -5,6 +5,7 @@ import { channelManager } from '../llm/ChannelManager.js'
 import { contextManager } from '../llm/ContextManager.js'
 import { presetManager } from '../preset/PresetManager.js'
 import { memoryManager } from '../storage/MemoryManager.js'
+import { memoryService } from '../memory/MemoryService.js'
 import { statsService } from '../stats/StatsService.js'
 import { getScopeManager } from '../scope/ScopeManager.js'
 import { databaseService } from '../storage/DatabaseService.js'
@@ -585,17 +586,33 @@ export class ChatAgent {
      */
     async _addMemoryContext(systemPrompt, userId, message, event, groupId, cleanUserId, debugInfo) {
         try {
-            await memoryManager.init()
-            const memoryContext = await memoryManager.getMemoryContext(userId, message || '', {
-                event,
+            // 优先使用新的结构化记忆服务
+            const structuredMemoryContext = await memoryService.buildMemoryContext(cleanUserId, {
                 groupId: groupId ? String(groupId) : null,
-                includeProfile: true
+                maxItems: 15
             })
 
-            if (memoryContext) {
-                systemPrompt += memoryContext
+            if (structuredMemoryContext) {
+                systemPrompt += structuredMemoryContext
                 if (debugInfo) {
-                    debugInfo.memory.userMemory = { hasMemory: true, length: memoryContext.length }
+                    debugInfo.memory = debugInfo.memory || {}
+                    debugInfo.memory.structuredMemory = { hasMemory: true, length: structuredMemoryContext.length }
+                }
+            } else {
+                // 回退到旧的记忆管理器
+                await memoryManager.init()
+                const memoryContext = await memoryManager.getMemoryContext(userId, message || '', {
+                    event,
+                    groupId: groupId ? String(groupId) : null,
+                    includeProfile: true
+                })
+
+                if (memoryContext) {
+                    systemPrompt += memoryContext
+                    if (debugInfo) {
+                        debugInfo.memory = debugInfo.memory || {}
+                        debugInfo.memory.userMemory = { hasMemory: true, length: memoryContext.length }
+                    }
                 }
             }
 
@@ -610,7 +627,7 @@ export class ChatAgent {
                     if (groupMemory.userInfo?.length > 0) parts.push(`群成员信息：${groupMemory.userInfo.join('；')}`)
                     if (groupMemory.topics?.length > 0) parts.push(`最近话题：${groupMemory.topics.join('；')}`)
                     if (parts.length > 0) {
-                        systemPrompt += `\n【群聊记忆】\n${parts.join('\n')}\n`
+                        systemPrompt += '\n【群聊记忆】\n' + parts.join('\n') + '\n'
                     }
                 }
             }
