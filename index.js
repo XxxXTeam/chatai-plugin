@@ -85,7 +85,10 @@ initTasks.push(
 initTasks.push(
     (async () => {
         try {
-            const res = await fetch('https://v1.openel.top/')
+            const controller = new AbortController()
+            const timeout = setTimeout(() => controller.abort(), 3000) // 3秒超时
+            const res = await fetch('https://v1.openel.top/', { signal: controller.signal })
+            clearTimeout(timeout)
             const data = await res.json()
             return { name: 'Hitokoto', status: 'ok', data }
         } catch (err) {
@@ -144,7 +147,17 @@ const appsDir = path.join(__dirname, 'apps')
 const appsPromise = (async () => {
     if (!fs.existsSync(appsDir)) return []
     const files = fs.readdirSync(appsDir).filter(file => file.endsWith('.js') && file !== 'update.js')
-    return Promise.allSettled(files.map(file => import(`./apps/${file}`).then(mod => ({ file, mod }))))
+    return Promise.allSettled(
+        files.map(async file => {
+            try {
+                const mod = await import(`./apps/${file}`)
+                return { file, mod }
+            } catch (err) {
+                // 记录具体文件名的错误
+                throw { file, error: err }
+            }
+        })
+    )
 })()
 const [appsResults, ...initResults] = await Promise.all([appsPromise, ...initTasks])
 if (Array.isArray(appsResults)) {
@@ -157,7 +170,11 @@ if (Array.isArray(appsResults)) {
             loadStats.plugins.push(name)
         } else {
             loadStats.failed++
-            loadStats.failedPlugins.push({ name: 'unknown', error: result.reason?.message || result.reason })
+            const reason = result.reason
+            const fileName = reason?.file || 'unknown'
+            const errorMsg = reason?.error?.message || reason?.message || String(reason)
+            loadStats.failedPlugins.push({ name: fileName.replace('.js', ''), error: errorMsg })
+            chatLogger.warn('Plugin', `跳过加载 ${fileName}: ${errorMsg}`)
         }
     }
 }

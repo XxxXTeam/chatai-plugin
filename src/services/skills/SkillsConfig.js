@@ -78,7 +78,7 @@ class SkillsConfig {
         await this.load()
         this.initialized = true
 
-        logger.info('[SkillsConfig] 配置初始化完成')
+        logger.debug('[SkillsConfig] 配置初始化完成')
         return this
     }
 
@@ -98,7 +98,7 @@ class SkillsConfig {
                 // 配置文件不存在，使用默认配置并创建文件
                 this.config = { ...DEFAULT_CONFIG }
                 await this._createDefaultConfig()
-                logger.info('[SkillsConfig] 使用默认配置并创建 skills.yaml')
+                logger.debug('[SkillsConfig] 使用默认配置并创建 skills.yaml')
             }
 
             this._validateConfig()
@@ -231,7 +231,7 @@ ${yamlContent}`
     async reload() {
         await this.load()
         this._notifyWatchers()
-        logger.info('[SkillsConfig] 配置已重新加载')
+        logger.debug('[SkillsConfig] 配置已重新加载')
     }
 
     /**
@@ -446,7 +446,7 @@ ${yamlContent}`
         await this._saveConfig()
         this._notifyWatchers()
 
-        logger.info('[SkillsConfig] 配置已更新')
+        logger.debug('[SkillsConfig] 配置已更新')
     }
 
     /**

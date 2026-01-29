@@ -1,3 +1,9 @@
+/**
+ * @fileoverview MCP (Model Context Protocol) 管理模块
+ * @module mcp/McpManager
+ * @description 统一管理内置工具、自定义JS工具和外部MCP服务器
+ */
+
 import { chatLogger } from '../core/utils/logger.js'
 const logger = chatLogger
 import fs from 'node:fs'
@@ -10,19 +16,31 @@ import { builtinMcpServer, setBuiltinToolContext } from './BuiltinMcpServer.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-// MCP 服务器配置文件路径
+/** @constant {string} MCP服务器配置文件路径 */
 const MCP_SERVERS_FILE = path.join(__dirname, '../../data/mcp-servers.json')
 
 /**
- * @description 管理内置工具、自定义JS工具、外部MCP服务器
- * 支持工具调用、资源读取、提示词管理等功能
+ * @class McpManager
+ * @classdesc MCP管理器 - 统一管理工具调用、资源读取和提示词
+ *
+ * @description
+ * 核心功能：
+ * - **内置工具**: 50+内置实用工具（时间、天气、搜索、文件操作等）
+ * - **自定义JS工具**: 支持用户自定义JavaScript工具
+ * - **外部MCP服务器**: 支持连接外部MCP协议服务器
+ * - **工具缓存**: 支持工具结果缓存，减少重复调用
+ * - **工具日志**: 记录工具调用历史，便于调试
  *
  * @example
- * ```js
+ * // 初始化并获取工具列表
  * await mcpManager.init()
  * const tools = mcpManager.getTools()
- * const result = await mcpManager.callTool('get_time', {})
- * ```
+ *
+ * // 调用工具
+ * const result = await mcpManager.callTool('get_time', { timezone: 'Asia/Shanghai' })
+ *
+ * // 连接外部MCP服务器
+ * await mcpManager.addServer('my-server', { command: 'npx', args: ['-y', '@my/mcp-server'] })
  */
 export class McpManager {
     constructor() {
@@ -124,18 +142,37 @@ export class McpManager {
     async _doInit() {
         if (this.initialized) return
 
-        await this.initBuiltinServer()
-        await this.initCustomToolsServer()
-
         const mcpConfig = config.get('mcp')
-        if (!mcpConfig?.enabled) {
-            logger.debug('[MCP] 外部MCP已禁用，仅使用内置工具')
-            this.initialized = true
-            return
+        const externalEnabled = mcpConfig?.enabled
+        const tasks = [this.initBuiltinServer(), this.initCustomToolsServer()]
+        if (externalEnabled) {
+            tasks.push(this.loadServersWithLog())
         }
 
-        await this.loadServers()
+        await Promise.all(tasks)
+
+        if (!externalEnabled) {
+            logger.debug('[MCP] 外部MCP已禁用，仅使用内置工具')
+        }
+
         this.initialized = true
+    }
+
+    /**
+     * 加载外部服务器并记录日志
+     */
+    async loadServersWithLog() {
+        try {
+            const beforeCount = this.tools.size
+            await this.loadServers()
+            const afterCount = this.tools.size
+            const newTools = afterCount - beforeCount
+            if (newTools > 0) {
+                logger.info(`[MCP] 外部服务器加载完成: +${newTools} 个工具`)
+            }
+        } catch (error) {
+            logger.error('[MCP] 加载外部服务器失败:', error.message)
+        }
     }
 
     /**
@@ -284,7 +321,7 @@ export class McpManager {
         )
 
         const success = results.filter(r => r.status === 'fulfilled' && r.value.success).length
-        logger.info(`[MCP] Loaded ${success}/${serverNames.length} external servers`)
+        logger.debug(`[MCP] Loaded ${success}/${serverNames.length} external servers`)
     }
 
     /**
@@ -388,9 +425,7 @@ export class McpManager {
                 })
             }
 
-            logger.info(
-                `[MCP] Connected to server: ${name}, loaded ${tools.length} tools, ${resources.length} resources, ${prompts.length} prompts`
-            )
+            logger.debug(`[MCP] Connected to server: ${name}, loaded ${tools.length} tools`)
             return { success: true, tools: tools.length, resources: resources.length, prompts: prompts.length }
         } catch (err) {
             logger.error(`[MCP] Failed to connect to server ${name}: ${err.message}`, err.stack)
@@ -432,7 +467,7 @@ export class McpManager {
             }
 
             this.servers.delete(name)
-            logger.info(`[MCP] Disconnected from server: ${name}`)
+            logger.debug(`[MCP] Disconnected from server: ${name}`)
             return true
         } catch (error) {
             logger.error(`[MCP] Error disconnecting from server ${name}:`, error)
@@ -1043,7 +1078,7 @@ export class McpManager {
             server.tools = tools
         }
 
-        logger.info(`[MCP] Refreshed builtin tools: ${tools.length}`)
+        logger.debug(`[MCP] Refreshed builtin tools: ${tools.length}`)
         return tools
     }
 
@@ -1111,7 +1146,7 @@ export class McpManager {
                 }
             }
 
-            logger.info(`[MCP] 热重载完成: ${modularCount} 模块化工具, ${jsCount} JS工具`)
+            logger.debug(`[MCP] 热重载完成: ${modularCount} 模块化工具, ${jsCount} JS工具`)
             return {
                 success: true,
                 modularCount,

@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Info, AlertTriangle } from 'lucide-react'
-import type { McpTransportType, AddServerFormData } from '@/types/mcp'
+import type { McpTransportType, AddServerFormData } from '@/lib/types'
 
 interface ServerConfigFormProps {
     /** 初始表单数据 */

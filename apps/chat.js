@@ -32,20 +32,6 @@ export {
     getBotIds
 }
 
-// QQBotSender 单独处理
-let _qqBotSender = null
-async function getQQBotSender() {
-    if (_qqBotSender === null) {
-        try {
-            const { qqBotSender } = await import('../src/services/qqbot/QQBotSender.js')
-            _qqBotSender = qqBotSender
-        } catch {
-            _qqBotSender = false
-        }
-    }
-    return _qqBotSender || null
-}
-
 // ScopeManager 初始化
 let _scopeManager = null
 async function ensureScopeManager() {
@@ -575,36 +561,21 @@ export class Chat extends plugin {
                         recordSentMessage(replyTextContent)
                     }
 
-                    // 尝试官方Bot代发
-                    let usedOfficialBot = false
-                    if (e.isGroup && e.group_id) {
-                        const sender = await getQQBotSender()
-                        if (sender?.shouldUseOfficialBot?.(e.group_id)) {
-                            const relayResult = await sender.relayFromICEnhanced(e.group_id, replyContent, e)
-                            if (relayResult.success) usedOfficialBot = true
-                        }
-                    }
+                    const quoteReply = config.get('basic.quoteReply') === true
+                    const mathRenderEnabled = config.get('render.mathFormula') !== false
 
-                    if (!usedOfficialBot) {
-                        const quoteReply = config.get('basic.quoteReply') === true
-                        const mathRenderEnabled = config.get('render.mathFormula') !== false
-
-                        if (mathRenderEnabled && replyTextContent) {
-                            const mathDetection = renderService.detectMathFormulas(replyTextContent)
-                            if (mathDetection.hasMath && mathDetection.confidence !== 'low') {
-                                try {
-                                    const imageBuffer = await renderService.renderMathContent(replyTextContent, {
-                                        theme: config.get('render.theme') || 'light',
-                                        width: config.get('render.width') || 800
-                                    })
-                                    const imgMsg = segment.image(imageBuffer)
-                                    const replyResult = await this.reply(imgMsg, quoteReply)
-                                    this.handleAutoRecall(replyResult, false)
-                                } catch {
-                                    const replyResult = await this.reply(replyContent, quoteReply)
-                                    this.handleAutoRecall(replyResult, false)
-                                }
-                            } else {
+                    if (mathRenderEnabled && replyTextContent) {
+                        const mathDetection = renderService.detectMathFormulas(replyTextContent)
+                        if (mathDetection.hasMath && mathDetection.confidence !== 'low') {
+                            try {
+                                const imageBuffer = await renderService.renderMathContent(replyTextContent, {
+                                    theme: config.get('render.theme') || 'light',
+                                    width: config.get('render.width') || 800
+                                })
+                                const imgMsg = segment.image(imageBuffer)
+                                const replyResult = await this.reply(imgMsg, quoteReply)
+                                this.handleAutoRecall(replyResult, false)
+                            } catch {
                                 const replyResult = await this.reply(replyContent, quoteReply)
                                 this.handleAutoRecall(replyResult, false)
                             }
@@ -612,6 +583,9 @@ export class Chat extends plugin {
                             const replyResult = await this.reply(replyContent, quoteReply)
                             this.handleAutoRecall(replyResult, false)
                         }
+                    } else {
+                        const replyResult = await this.reply(replyContent, quoteReply)
+                        this.handleAutoRecall(replyResult, false)
                     }
 
                     // 表情包小偷

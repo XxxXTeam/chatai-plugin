@@ -1,8 +1,8 @@
 /**
  * @module utils/eventAdapter
  */
-import { detectAdapter, getBot, getBotSelfId, getUserInfo, getMessage, isQQBotPlatform } from './platformAdapter.js'
-export { getBot, getBotSelfId, detectAdapter, isQQBotPlatform }
+import { detectAdapter, getBot, getBotSelfId, getUserInfo, getMessage } from './platformAdapter.js'
+export { getBot, getBotSelfId, detectAdapter }
 
 /**
  * @param {Object} bot - Bot 实例
@@ -139,11 +139,6 @@ export async function sendReaction(e, messageId, emojiId, isSet = true) {
     const platform = detectAdapter(e)
 
     try {
-        // QQBot平台特殊处理
-        if (isQQBotPlatform(e)) {
-            return await sendQQBotReaction(e, messageId, emojiId, isSet)
-        }
-
         if (platform === 'icqq') {
             if (e.group_id && bot.pickGroup) {
                 const group = bot.pickGroup(parseInt(e.group_id))
@@ -181,42 +176,6 @@ export async function sendReaction(e, messageId, emojiId, isSet = true) {
     }
 
     return false
-}
-
-/**
- * QQBot平台发送表情表态
- * @param {Object} e - 事件对象
- * @param {string} messageId - 消息ID
- * @param {string} emojiId - 表情ID
- * @param {boolean} isSet - 添加或移除
- * @returns {Promise<boolean>}
- */
-export async function sendQQBotReaction(e, messageId, emojiId, isSet = true) {
-    const bot = getBot(e)
-
-    try {
-        // 获取QQBot SDK实例
-        const sdk = bot?.sdk
-        if (!sdk) return false
-
-        // 频道消息表态
-        if (e.group_id?.startsWith?.('qg_') || e.channel_id) {
-            const channelId = e.channel_id || e.group_id?.replace?.(/^qg_\d+-/, '')
-            if (isSet) {
-                await sdk.postReaction?.(channelId, messageId, emojiId)
-            } else {
-                await sdk.deleteReaction?.(channelId, messageId, emojiId)
-            }
-            return true
-        }
-
-        // 群消息暂不支持表态
-        logger.debug('[EventAdapter] QQBot群消息暂不支持表情表态')
-        return false
-    } catch (err) {
-        logger.debug(`[EventAdapter] QQBot表情表态失败: ${err.message}`)
-        return false
-    }
 }
 
 /**
@@ -703,253 +662,6 @@ export async function sendGroupMessage(bot, groupId, message) {
 }
 
 /**
- * 解析QQBot频道事件
- * @param {Object} e - 事件对象
- * @returns {Object}
- */
-export function parseQQBotGuildEvent(e) {
-    const raw = e.raw || e
-    return {
-        eventType: raw.t || e.sub_type,
-        guildId: raw.guild_id || e.guild_id,
-        channelId: raw.channel_id || e.channel_id,
-        userId: raw.user_id || e.user_id,
-        operatorId: raw.op_user_id || e.operator_id,
-        timestamp: raw.timestamp || e.time,
-        // 频道信息
-        guildName: raw.name,
-        guildIcon: raw.icon,
-        // 成员信息
-        memberNick: raw.nick,
-        memberRoles: raw.roles || [],
-        joinedAt: raw.joined_at
-    }
-}
-
-/**
- * 解析QQBot按钮回调事件
- * @param {Object} e - 事件对象
- * @returns {Object}
- */
-export function parseQQBotCallbackEvent(e) {
-    const raw = e.raw || e
-    const resolved = raw.data?.resolved || {}
-    return {
-        eventId: raw.event_id || e.message_id,
-        buttonId: resolved.button_id,
-        buttonData: resolved.button_data,
-        userId: raw.operator_id || e.user_id,
-        groupId: raw.group_id || e.group_id,
-        guildId: raw.guild_id,
-        channelId: raw.channel_id,
-        isGroup: !!raw.group_id,
-        isGuild: !!raw.guild_id
-    }
-}
-
-/**
- * 解析QQBot消息审核事件
- * @param {Object} e - 事件对象
- * @returns {Object}
- */
-export function parseQQBotAuditEvent(e) {
-    const raw = e.raw || e
-    return {
-        auditId: raw.audit_id,
-        messageId: raw.message_id,
-        guildId: raw.guild_id,
-        channelId: raw.channel_id,
-        auditTime: raw.audit_time,
-        createTime: raw.create_time,
-        isPassed: e.sub_type === 'pass' || raw.t === 'MESSAGE_AUDIT_PASS'
-    }
-}
-
-/**
- * 构建QQBot消息按钮
- * @param {Array} buttons - 按钮配置数组
- * @param {Object} options - 选项
- * @returns {Object}
- */
-export function buildQQBotButtons(buttons, options = {}) {
-    const rows = []
-    let currentRow = []
-
-    for (const btn of buttons) {
-        const button = {
-            id: btn.id || String(Date.now() + Math.random()),
-            render_data: {
-                label: btn.text || btn.label,
-                visited_label: btn.clicked_text || btn.text || btn.label,
-                style: btn.style || 0
-            },
-            action: {}
-        }
-
-        // 按钮类型
-        if (btn.link || btn.url) {
-            // 链接按钮
-            button.action.type = 0
-            button.action.data = btn.link || btn.url
-            button.action.permission = { type: 2 }
-        } else if (btn.callback) {
-            // 回调按钮
-            button.action.type = 1
-            button.action.permission = { type: 2 }
-        } else if (btn.input) {
-            // 输入按钮
-            button.action.type = 2
-            button.action.data = btn.input
-            button.action.enter = btn.send !== false
-            button.action.permission = { type: 2 }
-        }
-
-        // 权限设置
-        if (btn.permission === 'admin') {
-            button.action.permission = { type: 1 }
-        } else if (Array.isArray(btn.permission)) {
-            button.action.permission = {
-                type: 0,
-                specify_user_ids: btn.permission
-            }
-        }
-
-        currentRow.push(button)
-
-        // 每行最多5个按钮
-        if (currentRow.length >= 5) {
-            rows.push({ type: 'button', buttons: currentRow })
-            currentRow = []
-        }
-    }
-
-    if (currentRow.length > 0) {
-        rows.push({ type: 'button', buttons: currentRow })
-    }
-
-    return rows
-}
-
-/**
- * 构建QQBot Markdown消息
- * @param {string} content - Markdown内容
- * @param {Object} options - 选项
- * @returns {Object}
- */
-export function buildQQBotMarkdown(content, options = {}) {
-    const msg = {
-        type: 'markdown',
-        content: content
-    }
-
-    // 使用模板
-    if (options.templateId) {
-        msg.custom_template_id = options.templateId
-        if (options.params) {
-            msg.params = Object.entries(options.params).map(([key, values]) => ({
-                key,
-                values: Array.isArray(values) ? values : [values]
-            }))
-        }
-        delete msg.content
-    }
-
-    return msg
-}
-
-/**
- * 构建QQBot Embed消息
- * @param {Object} config - Embed配置
- * @returns {Object}
- */
-export function buildQQBotEmbed(config) {
-    return {
-        type: 'embed',
-        title: config.title,
-        prompt: config.prompt || config.title,
-        thumbnail: config.thumbnail ? { url: config.thumbnail } : undefined,
-        fields: (config.fields || []).map(f => ({
-            name: f.name || f.title
-        }))
-    }
-}
-
-/**
- * 构建QQBot Ark消息（卡片消息）
- * @param {Object} config - Ark配置
- * @returns {Object}
- */
-export function buildQQBotArk(config) {
-    // Ark 23 - 链接+文本列表
-    if (config.type === 'link' || config.template === 23) {
-        return {
-            type: 'ark',
-            template_id: 23,
-            kv: [
-                { key: '#DESC#', value: config.desc || '' },
-                { key: '#PROMPT#', value: config.prompt || config.title || '' },
-                {
-                    key: '#LIST#',
-                    obj: (config.list || []).map(item => ({
-                        obj_kv: [{ key: 'desc', value: item.desc || item.text || '' }]
-                    }))
-                }
-            ]
-        }
-    }
-
-    // Ark 24 - 文本+缩略图
-    if (config.type === 'text' || config.template === 24) {
-        return {
-            type: 'ark',
-            template_id: 24,
-            kv: [
-                { key: '#DESC#', value: config.desc || '' },
-                { key: '#PROMPT#', value: config.prompt || '' },
-                { key: '#TITLE#', value: config.title || '' },
-                { key: '#SUBTITLE#', value: config.subtitle || '' },
-                { key: '#COVER#', value: config.cover || config.image || '' }
-            ]
-        }
-    }
-
-    // 自定义Ark
-    return {
-        type: 'ark',
-        template_id: config.template || config.template_id,
-        kv: config.kv || []
-    }
-}
-
-/**
- * 获取QQBot用户头像URL
- * @param {Object} e - 事件对象
- * @param {string} userId - 用户ID (可选，默认当前用户)
- * @returns {string}
- */
-export function getQQBotAvatarUrl(e, userId = null) {
-    const bot = getBot(e)
-    userId = userId || e.user_id || e.sender?.user_id
-
-    // 频道用户
-    if (String(userId).startsWith('qg_')) {
-        const realUserId = String(userId).replace(/^qg_/, '')
-        // 尝试从缓存获取
-        const userInfo = bot?.fl?.get?.(userId)
-        if (userInfo?.avatar) return userInfo.avatar
-    }
-
-    // QQ用户 (通过appid)
-    const appid = bot?.info?.appid || bot?.uin
-    if (appid && userId) {
-        const realUserId = String(userId).replace(/^\d+:/, '')
-        return `https://q.qlogo.cn/qqapp/${appid}/${realUserId}/0`
-    }
-
-    return ''
-}
-
-/**
  * 检查事件处理概率
  * 根据配置的概率决定是否触发事件处理
  * 支持群组独立概率配置，开启后默认100%
@@ -1068,43 +780,11 @@ export async function checkEventProbability(eventType, groupId = null) {
     }
 }
 
-/**
- * 检测QQBot消息类型
- * @param {Object} e - 事件对象
- * @returns {string} 'group' | 'private' | 'guild' | 'direct'
- */
-export function getQQBotMessageType(e) {
-    if (!isQQBotPlatform(e)) return e.message_type || 'unknown'
-
-    // 频道私信
-    if (e.message_type === 'private' && e.sub_type !== 'friend') {
-        return 'direct'
-    }
-
-    // 频道消息
-    if (e.group_id?.startsWith?.('qg_') || e.message_type === 'guild') {
-        return 'guild'
-    }
-
-    // QQ群消息
-    if (e.group_id && !String(e.group_id).startsWith('qg_')) {
-        return 'group'
-    }
-
-    // QQ私聊
-    if (e.message_type === 'private') {
-        return 'private'
-    }
-
-    return e.message_type || 'unknown'
-}
-
 export default {
     // API 调用
     callOneBotApi,
     sendPoke,
     sendReaction,
-    sendQQBotReaction,
     sendGroupMessage,
 
     // 信息获取
@@ -1112,8 +792,6 @@ export default {
     getGroupName,
     getOriginalMessage,
     parseMessageContent,
-    getQQBotAvatarUrl,
-    getQQBotMessageType,
 
     // 事件解析
     parsePokeEvent,
@@ -1124,17 +802,6 @@ export default {
     parseEssenceEvent,
     parseAdminChangeEvent,
     parseHonorEvent,
-
-    // QQBot事件解析
-    parseQQBotGuildEvent,
-    parseQQBotCallbackEvent,
-    parseQQBotAuditEvent,
-
-    // QQBot消息构建
-    buildQQBotButtons,
-    buildQQBotMarkdown,
-    buildQQBotEmbed,
-    buildQQBotArk,
 
     // 工具函数
     formatDuration,

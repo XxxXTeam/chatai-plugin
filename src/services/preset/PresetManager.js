@@ -1,3 +1,9 @@
+/**
+ * @fileoverview 预设管理模块
+ * @module services/preset/PresetManager
+ * @description 管理AI人格预设，支持系统提示词、模型参数、工具配置等
+ */
+
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,8 +14,11 @@ import config from '../../../config/config.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+/** @constant {string} 数据目录路径 */
 const DATA_DIR = path.join(__dirname, '../../../data')
+/** @constant {string} 预设配置文件路径 */
 const PRESETS_FILE = path.join(DATA_DIR, 'presets.json')
+/** @constant {string} 人格文档目录路径 */
 const PERSONA_DIR = path.join(DATA_DIR, 'persona')
 
 /**

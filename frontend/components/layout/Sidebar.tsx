@@ -39,6 +39,7 @@ interface NavItem {
     href: string
     label: string
     icon?: LucideIcon
+    tourId?: string
 }
 
 interface NavGroup {
@@ -46,6 +47,7 @@ interface NavGroup {
     label: string
     icon: LucideIcon
     items: NavItem[]
+    tourId?: string
 }
 
 // 合并后的分组导航结构
@@ -60,12 +62,13 @@ const navGroups: NavGroup[] = [
         id: 'config',
         label: '配置中心',
         icon: Settings,
+        tourId: 'config',
         items: [
-            { href: '/settings', label: '基础设置', icon: Settings },
+            { href: '/settings', label: '基础设置', icon: Settings, tourId: 'settings' },
             { href: '/settings/system', label: '系统配置', icon: Server },
             { href: '/settings/context', label: '上下文配置', icon: FileText },
-            { href: '/channels', label: '渠道管理', icon: Plug },
-            { href: '/presets', label: '预设管理', icon: Palette },
+            { href: '/channels', label: '渠道管理', icon: Plug, tourId: 'channels' },
+            { href: '/presets', label: '预设管理', icon: Palette, tourId: 'presets' },
             { href: '/scope', label: '人设管理', icon: UserCog },
             { href: '/settings/proxy', label: '代理设置', icon: Globe },
             { href: '/settings/links', label: '登录链接', icon: LinkIcon }
@@ -75,6 +78,7 @@ const navGroups: NavGroup[] = [
         id: 'ai',
         label: 'AI扩展',
         icon: Cpu,
+        tourId: 'ai',
         items: [
             { href: '/tools', label: '工具配置', icon: Wrench },
             { href: '/mcp', label: 'MCP服务', icon: Bot },
@@ -87,6 +91,7 @@ const navGroups: NavGroup[] = [
         id: 'data',
         label: '数据记录',
         icon: Database,
+        tourId: 'data',
         items: [
             { href: '/stats', label: '使用统计', icon: BarChart3 },
             { href: '/history/usage', label: '调用统计', icon: Activity },
@@ -98,9 +103,10 @@ const navGroups: NavGroup[] = [
         id: 'users',
         label: '用户管理',
         icon: Users,
+        tourId: 'users',
         items: [
             { href: '/users', label: '用户管理', icon: Users },
-            { href: '/groups', label: '群组管理', icon: UsersRound }
+            { href: '/groups', label: '群组管理', icon: UsersRound, tourId: 'groups' }
         ]
     }
 ]
@@ -187,6 +193,7 @@ function NavGroupItem({
                             ? 'text-primary'
                             : 'text-muted-foreground hover:text-foreground hover:bg-accent/40'
                     )}
+                    {...(group.tourId ? { 'data-tour': group.tourId } : {})}
                 >
                     {hasActiveItem && <div className="absolute inset-0 bg-primary/5 opacity-100 transition-opacity" />}
                     <div
@@ -224,6 +231,7 @@ function NavGroupItem({
                                     : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                             )}
                             onClick={onNavClick}
+                            {...(item.tourId ? { 'data-tour': item.tourId } : {})}
                         >
                             {ItemIcon && <ItemIcon className="h-4 w-4" />}
                             <span>{item.label}</span>
@@ -282,7 +290,7 @@ export function Sidebar() {
     return (
         <>
             {/* Desktop Sidebar */}
-            <aside className="hidden lg:block w-64 glass-sidebar h-screen sticky top-0 transition-all duration-300">
+            <aside className="hidden lg:block w-64 glass-sidebar h-screen sticky top-0 transition-all duration-300" data-tour="sidebar">
                 <div className="flex h-16 items-center px-6 border-b border-border/40 backdrop-blur-md bg-background/20">
                     <Link href="/" className="flex items-center gap-3 group">
                         <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80 shadow-lg shadow-primary/20 group-hover:shadow-primary/40 group-hover:scale-110 transition-all duration-300">

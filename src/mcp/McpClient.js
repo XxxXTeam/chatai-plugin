@@ -105,7 +105,7 @@ export class McpClient {
             }
             this.reconnectAttempts = 0
 
-            logger.info(`[MCP] Connected successfully via ${this.type}`)
+            logger.debug(`[MCP] Connected successfully via ${this.type}`)
         } catch (error) {
             logger.error(`[MCP] Connection failed: ${error.message}`, error.stack)
             throw error

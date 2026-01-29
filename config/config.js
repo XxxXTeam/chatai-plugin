@@ -503,55 +503,6 @@ class Config {
                 defaultCharacter: '', // 默认AI声聊角色
                 maxTextLength: 500 // 最大文本长度
             },
-            // QQ官方Bot代理配置
-            qqBotProxy: {
-                enabled: false, // 是否启用QQ官方Bot代理
-                proxyUrl: 'http://localhost:2173', // 代理服务器地址
-                bots: [], // Bot配置列表 [{appid, secret, sandbox, intents}]
-                autoReconnect: true, // 自动重连
-                reconnectInterval: 5000, // 重连间隔(ms)
-                maxReconnectAttempts: 10, // 最大重连次数
-                // 消息处理配置
-                messageHandler: {
-                    enabled: true, // 是否处理消息
-                    useAI: true, // 使用AI处理消息
-                    presetId: '' // 使用的预设ID（留空使用默认）
-                },
-                // IC代发配置：IC触发时使用官方Bot回复
-                icRelay: {
-                    enabled: false, // 启用IC代发模式
-                    globalRelay: false, // 全局代发（所有群都代发，否则只代发白名单群）
-                    officialBotQQ: '', // 官方Bot的QQ号
-                    groups: {}, // 群号映射: {"IC群号": "group_openid"}
-                    whitelistGroups: [], // 代发白名单群（globalRelay=false时生效）
-                    blacklistGroups: [], // 代发黑名单群（globalRelay=true时生效）
-                    fallbackToIC: true, // 获取被动ID失败时回退到IC发送
-                    // Markdown模板配置
-                    markdown: {
-                        enabled: false, // 是否使用MD模板发送
-                        templateId: '', // MD模板ID
-                        templateKeys: 'abcdefghij' // 模板参数键名
-                    },
-                    // 按钮配置
-                    button: {
-                        enabled: false, // 是否发送按钮
-                        appid: '', // 按钮appid
-                        templateId: '' // 按钮模板ID（keyboard_id）
-                    }
-                },
-                // 事件处理配置
-                events: {
-                    READY: true, // Bot就绪事件
-                    AT_MESSAGE_CREATE: true, // @消息
-                    DIRECT_MESSAGE_CREATE: true, // 私信消息
-                    C2C_MESSAGE_CREATE: true, // C2C消息
-                    GROUP_AT_MESSAGE_CREATE: true, // 群@消息
-                    MESSAGE_CREATE: true, // 频道消息
-                    GUILD_CREATE: true, // 加入频道
-                    GUILD_DELETE: true, // 退出频道
-                    INTERACTION_CREATE: true // 互动事件
-                }
-            },
             streaming: {
                 enabled: true
             },

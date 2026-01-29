@@ -1,3 +1,9 @@
+/**
+ * @fileoverview 上下文管理模块
+ * @module services/llm/ContextManager
+ * @description 管理AI对话的上下文历史、会话隔离和消息队列
+ */
+
 import { chatLogger } from '../../core/utils/logger.js'
 const logger = chatLogger
 import { redisClient } from '../../core/cache/RedisClient.js'
@@ -5,6 +11,20 @@ import config from '../../../config/config.js'
 import historyManager from '../../core/utils/history.js'
 import { databaseService } from '../storage/DatabaseService.js'
 
+/**
+ * @class ContextManager
+ * @classdesc 上下文管理器
+ * @description
+ * @example
+ * // 获取会话ID
+ * const convId = contextManager.getConversationId(userId, groupId)
+ *
+ * // 获取上下文历史
+ * const history = await contextManager.getContextHistory(convId)
+ *
+ * // 构建带用户标签的上下文
+ * const labeled = contextManager.buildLabeledContext(history, sender)
+ */
 export class ContextManager {
     constructor() {
         this.locks = new Map() // 异步锁: key -> { promise, resolve, acquiredAt }

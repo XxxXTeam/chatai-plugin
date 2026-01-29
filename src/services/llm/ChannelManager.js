@@ -1,3 +1,9 @@
+/**
+ * @fileoverview 渠道管理模块
+ * @module services/llm/ChannelManager
+ * @description 管理多个API渠道，支持负载均衡、故障转移和APIKey轮询
+ */
+
 import { chatLogger } from '../../core/utils/logger.js'
 const logger = chatLogger
 import config from '../../../config/config.js'
@@ -6,7 +12,8 @@ import { redisClient } from '../../core/cache/RedisClient.js'
 import { statsService } from '../stats/StatsService.js'
 
 /**
- * 默认 API 地址
+ * @constant {Object} DEFAULT_BASE_URLS
+ * @description 各适配器的默认API地址
  */
 const DEFAULT_BASE_URLS = {
     openai: 'https://api.openai.com/v1',
@@ -74,13 +81,31 @@ export const ChannelStatus = {
     QUOTA_EXCEEDED: 'quota_exceeded'
 }
 
+/**
+ * @class ChannelManager
+ * @classdesc 渠道管理器 - 负责管理API渠道的选择、负载均衡和故障转移
+ *
+ * @description
+ * @example
+ * // 获取适合请求的渠道
+ * const channel = await channelManager.selectChannel({ model: 'gpt-4o' })
+ *
+ * // 获取所有可用模型
+ * const models = channelManager.getAllModels()
+ */
 export class ChannelManager {
     constructor() {
+        /** @type {Map<string, Object>} 渠道ID -> 渠道配置 */
         this.channels = new Map()
+        /** @type {Map<string, Object>} 活跃请求追踪 */
         this.activeRequests = new Map()
-        this.channelStats = new Map() // 渠道使用统计
-        this.keyStats = new Map() // APIKey使用统计
+        /** @type {Map<string, Object>} 渠道使用统计 */
+        this.channelStats = new Map()
+        /** @type {Map<string, Object>} APIKey使用统计 */
+        this.keyStats = new Map()
+        /** @type {boolean} 是否已初始化 */
         this.initialized = false
+        /** @type {NodeJS.Timeout|null} 健康检查定时器 */
         this.healthCheckInterval = null
     }
 

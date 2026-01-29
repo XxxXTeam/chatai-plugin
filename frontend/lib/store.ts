@@ -60,7 +60,7 @@ interface UiState {
 export const useUiStore = create<UiState>()(
     persist(
         set => ({
-            sidebarOpen: true,
+            sidebarOpen: false, // 默认关闭，防止移动端刷新时弹出
             sidebarCollapsed: false,
             theme: 'system',
             setSidebarOpen: open => set({ sidebarOpen: open }),

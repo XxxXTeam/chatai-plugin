@@ -53,7 +53,7 @@ class ProactiveChatService {
         if (this.initialized) return
 
         this.initialized = true
-        logger.info('[ProactiveChatService] 主动聊天服务已初始化')
+        logger.debug('[ProactiveChatService] 主动聊天服务已初始化')
     }
 
     /**

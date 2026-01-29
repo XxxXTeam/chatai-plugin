@@ -3,6 +3,8 @@
 import { Sidebar } from '@/components/layout/Sidebar'
 import { Header } from '@/components/layout/Header'
 import { MobileNav } from '@/components/layout/MobileNav'
+import { SetupWizard } from '@/components/SetupWizard'
+import { DashboardTour } from '@/components/DashboardTour'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { systemApi } from '@/lib/api'
@@ -105,6 +107,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
             {/* 全局命令面板 */}
             <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+
+            {/* 首次使用引导 */}
+            <SetupWizard />
+            { <DashboardTour /> }
         </div>
     )
 }

@@ -14,6 +14,7 @@ import { useRouter } from 'next/navigation'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { useResponsive } from '@/lib/hooks'
 import { cn } from '@/lib/utils'
+import { RestartTourButton } from '@/components/DashboardTour'
 
 interface HeaderProps {
     title?: string
@@ -92,6 +93,8 @@ export function Header({ title = 'ChatAi 管理面板', onSearchClick }: HeaderP
                 </Button>
             )}
 
+            <RestartTourButton />
+
             <ThemeToggle />
 
             <DropdownMenu>
@@ -104,6 +107,7 @@ export function Header({ title = 'ChatAi 管理面板', onSearchClick }: HeaderP
                             isMobile ? 'w-8 h-8' : 'w-9 h-9'
                         )}
                         aria-label="用户菜单"
+                        data-tour="header-user"
                     >
                         <div className="w-full h-full bg-gradient-to-tr from-primary/20 to-secondary/20 flex items-center justify-center">
                             <User className={cn('text-primary', isMobile ? 'h-3.5 w-3.5' : 'h-4 w-4')} />

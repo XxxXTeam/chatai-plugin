@@ -4,7 +4,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { getBotIds } from '../src/utils/messageDedup.js'
-import { isQQBotPlatform, getAvatarUrl, getQQBotAvatarUrl, getUserInfo } from '../src/utils/platformAdapter.js'
+import { getAvatarUrl, getUserInfo } from '../src/utils/platformAdapter.js'
 
 // 懒加载服务
 let _statsService = null
@@ -1573,7 +1573,7 @@ export class ImageGen extends plugin {
                 if (m.type === 'at') {
                     const qq = m.qq || m.data?.qq
                     if (qq && qq !== 'all' && String(qq) !== String(e.self_id)) {
-                        // 使用统一的头像获取接口（支持QQBot）
+                        // 使用统一的头像获取接口
                         const avatarUrl = getAvatarUrl(e, qq, 640)
                         if (avatarUrl && !urls.includes(avatarUrl)) {
                             logger.debug('[ImageGen] 添加@用户头像:', qq)
@@ -1587,14 +1587,13 @@ export class ImageGen extends plugin {
         // 回退到发送者头像
         const hasQuote = !!(e.getReply || e.source || e.reply_id)
         if (urls.length === 0 && !hasQuote && e.user_id) {
-            // 使用统一的头像获取接口（支持QQBot）
+            // 使用统一的头像获取接口
             const senderAvatar = getAvatarUrl(e, e.user_id, 640)
             if (senderAvatar) {
                 logger.debug('[ImageGen] 回退到发送者头像:', e.user_id)
                 urls.push(senderAvatar)
             } else {
-                // QQBot平台无法获取头像时，提示用户发送图片
-                logger.debug('[ImageGen] QQBot平台无法获取用户头像')
+                logger.debug('[ImageGen] 无法获取用户头像')
             }
         }
 

@@ -50,7 +50,7 @@ class TaskSchedulerService {
         }, 5000)
 
         this.initialized = true
-        logger.info('[TaskSchedulerService] 定时任务调度器已启动')
+        logger.debug('[TaskSchedulerService] 定时任务调度器已启动')
     }
 
     /**
@@ -66,7 +66,7 @@ class TaskSchedulerService {
         }
         this.taskTimers.clear()
         this.initialized = false
-        logger.info('[TaskSchedulerService] 定时任务调度器已停止')
+        logger.debug('[TaskSchedulerService] 定时任务调度器已停止')
     }
 
     /**
@@ -123,7 +123,7 @@ class TaskSchedulerService {
                 loadedCount++
             }
 
-            logger.info(`[TaskSchedulerService] 已加载 ${loadedCount} 个任务，跳过 ${expiredCount} 个过期任务`)
+            logger.debug(`[TaskSchedulerService] 已加载 ${loadedCount} 个任务，跳过 ${expiredCount} 个过期任务`)
         } catch (err) {
             logger.warn('[TaskSchedulerService] 加载任务失败:', err.message)
         }

@@ -47,7 +47,21 @@ export const configApi = {
         api.put('/api/config/proactive-chat', data as Record<string, unknown>),
     // 管理员配置
     getAdmin: () => api.get('/api/config/admin'),
-    updateAdmin: <T extends object>(data: T) => api.put('/api/config/admin', data as Record<string, unknown>)
+    updateAdmin: <T extends object>(data: T) => api.put('/api/config/admin', data as Record<string, unknown>),
+    // 初始化引导
+    getInitStatus: () => api.get('/api/config/init-status'),
+    completeInit: () => api.post('/api/config/init-complete'),
+    resetInit: () => api.post('/api/config/init-reset'),
+    // 引导完成状态
+    getTourStatus: (tourId: string) => api.get(`/api/config/tour-status/${tourId}`),
+    completeTour: (tourId: string) => api.post(`/api/config/tour-complete/${tourId}`),
+    skipTour: (tourId: string) => api.post(`/api/config/tour-skip/${tourId}`),
+    resetTour: (tourId: string) => api.post(`/api/config/tour-reset/${tourId}`),
+    quickSetup: (data: {
+        channel?: { name?: string; adapterType?: string; baseUrl?: string; apiKey?: string; models?: string[] }
+        model?: string
+        triggerPrefixes?: string[]
+    }) => api.post('/api/config/quick-setup', data)
 }
 export const channelsApi = {
     list: (withStats = false) => api.get(`/api/channels/list?withStats=${withStats}`),

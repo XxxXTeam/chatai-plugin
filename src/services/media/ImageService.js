@@ -19,16 +19,125 @@ export class ImageService {
         this.storagePath = path.join(__dirname, '../../../data/images')
         this.maxSize = 10 * 1024 * 1024 // 10MB
         this.allowedFormats = ['jpg', 'jpeg', 'png', 'gif', 'webp']
+        this.maxAgeMs = 24 * 60 * 60 * 1000 // 24小时后清理
+        this.maxStorageMB = 500 // 最大存储500MB
+        this.cleanupInterval = null
 
         this.init()
     }
 
     /**
-     * 初始化存储目录
+     * 初始化存储目录并启动自动清理
      */
     init() {
         if (!fs.existsSync(this.storagePath)) {
             fs.mkdirSync(this.storagePath, { recursive: true })
+        }
+
+        // 启动时执行一次清理
+        this.scheduleCleanup()
+    }
+
+    /**
+     * 调度自动清理任务
+     */
+    scheduleCleanup() {
+        // 延迟30秒后首次清理，避免影响启动
+        setTimeout(() => {
+            this.autoCleanup().catch(() => {})
+        }, 30 * 1000)
+
+        // 每小时检查一次
+        if (!this.cleanupInterval) {
+            this.cleanupInterval = setInterval(
+                () => {
+                    this.autoCleanup().catch(() => {})
+                },
+                60 * 60 * 1000
+            )
+        }
+    }
+
+    /**
+     * 自动清理 - 基于时间和存储大小
+     */
+    async autoCleanup() {
+        try {
+            const files = fs.readdirSync(this.storagePath)
+            if (files.length === 0) return 0
+
+            const now = Date.now()
+            const fileInfos = []
+            let totalSize = 0
+
+            // 收集文件信息
+            for (const file of files) {
+                try {
+                    const filepath = path.join(this.storagePath, file)
+                    const stats = fs.statSync(filepath)
+                    totalSize += stats.size
+                    fileInfos.push({
+                        file,
+                        filepath,
+                        mtime: stats.mtimeMs,
+                        size: stats.size,
+                        age: now - stats.mtimeMs
+                    })
+                } catch {
+                    // 忽略无法读取的文件
+                }
+            }
+
+            // 按修改时间排序（最旧的在前）
+            fileInfos.sort((a, b) => a.mtime - b.mtime)
+
+            let cleaned = 0
+            const maxStorageBytes = this.maxStorageMB * 1024 * 1024
+
+            for (const info of fileInfos) {
+                // 条件1: 超过最大年龄
+                // 条件2: 总大小超过限制时，删除最旧的文件
+                const shouldDelete = info.age > this.maxAgeMs || totalSize > maxStorageBytes
+
+                if (shouldDelete) {
+                    try {
+                        fs.unlinkSync(info.filepath)
+                        totalSize -= info.size
+                        cleaned++
+
+                        // 同时删除关联的缩略图
+                        if (!info.file.includes('_thumb')) {
+                            const id = info.file.split('.')[0]
+                            const thumbPath = path.join(this.storagePath, `${id}_thumb.webp`)
+                            if (fs.existsSync(thumbPath)) {
+                                const thumbStats = fs.statSync(thumbPath)
+                                fs.unlinkSync(thumbPath)
+                                totalSize -= thumbStats.size
+                                cleaned++
+                            }
+                            // 清理 Redis 缓存
+                            await redisClient.del(`image:${id}`).catch(() => {})
+                        }
+                    } catch {
+                        // 忽略删除失败
+                    }
+                }
+
+                // 如果已经低于存储限制且没有超龄文件，停止清理
+                if (totalSize <= maxStorageBytes * 0.8 && info.age <= this.maxAgeMs) {
+                    break
+                }
+            }
+
+            if (cleaned > 0) {
+                const remainingMB = (totalSize / 1024 / 1024).toFixed(1)
+                logger.debug(`[ImageService] 清理 ${cleaned} 个过期图片，剩余 ${remainingMB}MB`)
+            }
+
+            return cleaned
+        } catch (err) {
+            logger.debug('[ImageService] 自动清理失败:', err.message)
+            return 0
         }
     }
 

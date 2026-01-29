@@ -1,3 +1,9 @@
+/**
+ * @fileoverview 技能代理模块
+ * @module services/agent/SkillsAgent
+ * @description 统一的工具/技能管理接口，整合内置工具、自定义工具和MCP服务器
+ */
+
 import { chatLogger } from '../../core/utils/logger.js'
 const logger = chatLogger
 import { mcpManager } from '../../mcp/McpManager.js'
@@ -5,18 +11,26 @@ import { toolFilterService } from '../tools/ToolFilterService.js'
 import { setBuiltinToolContext, getBuiltinToolContext, builtinMcpServer } from '../../mcp/BuiltinMcpServer.js'
 
 /**
- * SkillsAgent - 统一技能代理
+ * @class SkillsAgent
+ * @classdesc 技能代理 - 统一管理和执行各类工具调用
  *
- * 提供统一的工具/技能管理接口，整合:
- * - 内置工具 (builtin)
- * - 自定义JS工具 (custom-tools)
- * - 外部MCP服务器工具 (npm包、stdio、sse、http)
+ * @description
+ * 核心功能：
+ * - **统一接口**: 整合内置工具、自定义JS工具、外部MCP服务器
+ * - **权限控制**: 基于用户权限和预设配置过滤可用工具
+ * - **上下文注入**: 自动注入事件上下文到工具执行环境
+ * - **执行日志**: 记录工具调用历史，便于调试和审计
+ * - **分类管理**: 按类别组织和管理工具
  *
  * @example
- * ```js
+ * // 创建代理实例
  * const agent = await createSkillsAgent({ event, presetId: 'default' })
- * const result = await agent.execute('get_time', {})
- * ```
+ *
+ * // 获取可用工具列表
+ * const tools = agent.getTools()
+ *
+ * // 执行工具调用
+ * const result = await agent.execute('get_time', { timezone: 'Asia/Shanghai' })
  */
 export class SkillsAgent {
     constructor(options = {}) {

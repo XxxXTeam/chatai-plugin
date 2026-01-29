@@ -1,3 +1,9 @@
+/**
+ * @fileoverview 日志服务模块
+ * @module services/stats/LogService
+ * @description 提供统一的日志记录服务，支持多种日志类型和文件轮转
+ */
+
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -6,8 +12,18 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 /**
- * 日志服务 - 保存错误日志到文件
- * 支持多种日志类型：error, warn, api, tool, channel, debug
+ * @class LogService
+ * @classdesc 日志服务类 - 统一管理插件日志的记录、存储和清理
+ * @description
+ * @example
+ * // 记录错误日志
+ * logService.error('请求失败', new Error('Network error'), { userId: '123' })
+ *
+ * // 记录API错误
+ * logService.apiError('openai', 'gpt-4o', error, requestInfo)
+ *
+ * // 记录工具调用
+ * logService.toolCall('get_weather', { city: '北京' }, result, { duration: 100 })
  */
 class LogService {
     constructor() {

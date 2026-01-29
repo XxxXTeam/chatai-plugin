@@ -1,3 +1,26 @@
+// ============ MCP 类型 ============
+
+/**
+ * MCP 传输类型
+ */
+export type McpTransportType = 'stdio' | 'npm' | 'npx' | 'sse' | 'http'
+
+/**
+ * 添加服务器表单数据
+ */
+export interface AddServerFormData {
+    name: string
+    type: McpTransportType
+    command?: string
+    args?: string
+    package?: string
+    url?: string
+    headers?: string
+    env?: string
+}
+
+// ============ 渠道类型 ============
+
 export interface IndependentChannel {
     id: string
     name: string

@@ -603,36 +603,71 @@ export default function GroupAdminPage() {
 
     if (needLogin) {
         return (
-            <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-background to-muted">
-                <Card className="w-full max-w-sm">
-                    <CardContent className="p-6">
-                        <div className="text-center mb-6">
-                            <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
-                                <Server className="h-8 w-8 text-primary" />
+            <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-background via-orange-50/30 dark:via-orange-950/10 to-muted">
+                <div className="w-full max-w-md space-y-4">
+                    <Card className="border-orange-200/50 dark:border-orange-900/30">
+                        <CardContent className="p-6">
+                            <div className="text-center mb-6">
+                                <div className="w-16 h-16 bg-orange-100 dark:bg-orange-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                                    <Users className="h-8 w-8 text-orange-600 dark:text-orange-400" />
+                                </div>
+                                <h2 className="text-xl font-semibold">群管理面板</h2>
+                                <p className="text-sm text-muted-foreground mt-1">专属于群管理员的配置入口</p>
                             </div>
-                            <h2 className="text-xl font-semibold">群管理面板</h2>
-                            <p className="text-sm text-muted-foreground mt-1">请输入登录码访问</p>
+                            <div className="space-y-4">
+                                <Input
+                                    value={loginCode}
+                                    onChange={e => setLoginCode(e.target.value.toUpperCase())}
+                                    onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                                    placeholder="输入6位登录码"
+                                    maxLength={6}
+                                    className="text-center text-xl tracking-wider font-mono h-12 border-orange-200 dark:border-orange-900/50 focus-visible:ring-orange-500"
+                                    autoFocus
+                                />
+                                <Button className="w-full h-11 bg-orange-600 hover:bg-orange-700" onClick={handleLogin} disabled={loginLoading}>
+                                    {loginLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                                    登录管理面板
+                                </Button>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* 使用说明 */}
+                    <Card className="bg-muted/50">
+                        <CardContent className="p-4 space-y-3">
+                            <h3 className="font-medium text-sm flex items-center gap-2">
+                                <MessageSquare className="h-4 w-4 text-orange-600" />
+                                如何获取登录码？
+                            </h3>
+                            <ol className="text-xs text-muted-foreground space-y-2 list-decimal list-inside">
+                                <li>确保您是目标群的 <strong>管理员</strong> 或 <strong>群主</strong></li>
+                                <li>在群内发送命令 <code className="bg-background px-1.5 py-0.5 rounded border">#群管理面板</code></li>
+                                <li>Bot 将私聊发送登录码或直接链接</li>
+                                <li>登录码有效期为 <strong>5分钟</strong>，请尽快使用</li>
+                            </ol>
+                        </CardContent>
+                    </Card>
+
+                    {/* 功能说明 */}
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="flex items-center gap-2 bg-card p-2.5 rounded-lg border">
+                            <Settings className="h-4 w-4 text-muted-foreground shrink-0" />
+                            <span className="text-muted-foreground">设置群专属人设</span>
                         </div>
-                        <div className="space-y-4">
-                            <Input
-                                value={loginCode}
-                                onChange={e => setLoginCode(e.target.value.toUpperCase())}
-                                onKeyDown={e => e.key === 'Enter' && handleLogin()}
-                                placeholder="输入登录码"
-                                maxLength={6}
-                                className="text-center text-xl tracking-wider font-mono h-12"
-                                autoFocus
-                            />
-                            <Button className="w-full h-11" onClick={handleLogin} disabled={loginLoading}>
-                                {loginLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                                登录
-                            </Button>
+                        <div className="flex items-center gap-2 bg-card p-2.5 rounded-lg border">
+                            <Zap className="h-4 w-4 text-muted-foreground shrink-0" />
+                            <span className="text-muted-foreground">管理功能开关</span>
                         </div>
-                        <p className="text-xs text-muted-foreground text-center mt-4">
-                            在群内发送 <code className="bg-muted px-1 rounded">#群管理面板</code> 获取登录码
-                        </p>
-                    </CardContent>
-                </Card>
+                        <div className="flex items-center gap-2 bg-card p-2.5 rounded-lg border">
+                            <Bot className="h-4 w-4 text-muted-foreground shrink-0" />
+                            <span className="text-muted-foreground">配置伪人模式</span>
+                        </div>
+                        <div className="flex items-center gap-2 bg-card p-2.5 rounded-lg border">
+                            <Server className="h-4 w-4 text-muted-foreground shrink-0" />
+                            <span className="text-muted-foreground">独立渠道配置</span>
+                        </div>
+                    </div>
+                </div>
             </div>
         )
     }

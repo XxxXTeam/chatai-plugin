@@ -31,6 +31,7 @@ const MAX_RECORDS = 10000 // 最多保留记录数
  * @property {string} [error] - 错误信息
  * @property {number} retryCount - 重试次数
  * @property {boolean} channelSwitched - 是否切换了渠道
+ * @property {boolean} fallbackUsed - 是否使用了备选模型
  * @property {string} [previousChannelId] - 切换前的渠道ID
  * @property {string[]} [switchChain] - 渠道切换链 (1 > 2 > 3)
  * @property {string} source - 请求来源 (chat/test/api)
@@ -217,6 +218,7 @@ class UsageStats {
             error: record.error || null,
             retryCount: record.retryCount || 0,
             channelSwitched: record.channelSwitched || false,
+            fallbackUsed: record.fallbackUsed || false,
             previousChannelId: record.previousChannelId || null,
             switchChain: record.switchChain || null,
             source: record.source || 'chat',

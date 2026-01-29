@@ -68,7 +68,7 @@ async function initScheduler() {
     }, 10000)
 
     initialized = true
-    logger.info('[ScheduleTools] 定时任务调度器已启动')
+    logger.debug('[ScheduleTools] 定时任务调度器已启动')
 }
 
 /**

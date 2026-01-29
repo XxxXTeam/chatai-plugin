@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -35,6 +35,7 @@ import {
 import { DeleteDialog } from '@/components/ui/delete-dialog'
 import { cn } from '@/lib/utils'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { GroupAccessGuide } from '@/components/GroupAccessGuide'
 
 interface GroupScope {
     groupId: string
@@ -228,6 +229,9 @@ export default function GroupsPage() {
                     </Button>
                 </div>
             </div>
+
+            {/* Access Guide */}
+            <GroupAccessGuide variant="compact" />
 
             {/* Filters */}
             <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between bg-card p-4 rounded-lg border shadow-sm">

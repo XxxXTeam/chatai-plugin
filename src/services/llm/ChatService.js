@@ -1,3 +1,9 @@
+/**
+ * @fileoverview 聊天服务模块
+ * @module services/llm/ChatService
+ * @description
+ */
+
 import { chatLogger } from '../../core/utils/logger.js'
 const logger = chatLogger
 import crypto from 'node:crypto'
@@ -854,6 +860,14 @@ export class ChatService {
         let allToolLogs = []
         let lastError = null
         const requestStartTime = Date.now()
+
+        // 追踪实际使用的模型和渠道（用于统计记录，即使 debugMode=false 也需要）
+        let actualUsedModel = llmModel
+        let actualUsedChannel = channel
+        let actualFallbackUsed = false
+        let actualChannelSwitched = false
+        let actualTotalRetryCount = 0
+        let actualSwitchChain = []
         const presetParams = currentPreset?.modelParams || {}
         const baseMaxToken = presetParams.max_tokens || presetParams.maxTokens || channelLlm.maxTokens || 4000
         const baseTemperature = presetParams.temperature ?? channelLlm.temperature ?? 0.7
@@ -999,8 +1013,27 @@ export class ChatService {
                 let totalRetryCount = 0
                 let currentKeyIndex = clientOptions.keyIndex ?? -1
                 const switchChain = [] // 记录渠道/Key切换链
+
+                // 同步更新外部追踪变量的辅助函数
+                const syncTrackingVars = () => {
+                    actualUsedModel = usedModel
+                    actualUsedChannel = usedChannel
+                    actualFallbackUsed = fallbackUsed
+                    actualChannelSwitched = channelSwitched
+                    actualTotalRetryCount = totalRetryCount
+                    actualSwitchChain = [...switchChain]
+                }
                 const initialChannelInfo = channel?.name || channel?.id || 'unknown'
                 switchChain.push({ type: 'init', channel: initialChannelInfo })
+
+                // 记录重试统计信息
+                const retryStats = {
+                    totalAttempts: 0,
+                    channelsTriedForMainModel: new Set(),
+                    keysTriedPerChannel: new Map(),
+                    errors: [],
+                    mainModelExhausted: false
+                }
 
                 for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
                     const currentModel = modelsToTry[modelIndex]
@@ -1010,24 +1043,48 @@ export class ChatService {
                     let currentClient = client
                     let currentChannel = isMainModel ? channel : null
 
-                    // 备选模型时获取新渠道
+                    // 备选模型：只有在主模型的所有渠道都已耗尽后才使用
                     if (!isMainModel) {
-                        currentChannel = channelManager.getBestChannel(currentModel)
-                        if (currentChannel) {
-                            const keyInfo = channelManager.getChannelKey(currentChannel)
-                            currentKeyIndex = keyInfo.keyIndex
-                            const fallbackClientOptions = {
-                                ...clientOptions,
-                                adapterType: currentChannel.adapterType,
-                                baseUrl: currentChannel.baseUrl,
-                                apiKey: keyInfo.key,
-                                keyIndex: keyInfo.keyIndex
-                            }
-                            currentClient = await LlmService.createClient(fallbackClientOptions)
+                        // 检查是否应该使用备选模型
+                        if (!retryStats.mainModelExhausted) {
+                            logger.debug(`[ChatService] 主模型渠道未耗尽，跳过备选模型 ${currentModel}`)
+                            continue
                         }
+
+                        currentChannel = channelManager.getBestChannel(currentModel)
+                        if (!currentChannel) {
+                            logger.warn(`[ChatService] 备选模型 ${currentModel} 无可用渠道，跳过`)
+                            continue
+                        }
+
+                        const keyInfo = channelManager.getChannelKey(currentChannel)
+                        currentKeyIndex = keyInfo.keyIndex
+                        const fallbackClientOptions = {
+                            ...clientOptions,
+                            adapterType: currentChannel.adapterType,
+                            baseUrl: currentChannel.baseUrl,
+                            apiKey: keyInfo.key,
+                            keyIndex: keyInfo.keyIndex
+                        }
+                        currentClient = await LlmService.createClient(fallbackClientOptions)
+
+                        // 记录开始使用备选模型
+                        switchChain.push({
+                            type: 'fallback',
+                            model: currentModel,
+                            channel: currentChannel.name,
+                            reason: 'main_model_exhausted'
+                        })
+                        logger.info(`[ChatService] 主模型所有渠道已耗尽，切换到备选模型: ${currentModel}`)
+                    }
+
+                    // 记录当前渠道
+                    if (currentChannel && isMainModel) {
+                        retryStats.channelsTriedForMainModel.add(currentChannel.id)
                     }
 
                     while (retryCount <= (isMainModel ? maxRetries : 1)) {
+                        retryStats.totalAttempts++
                         try {
                             // 应用模型映射 - 获取实际请求的模型名称
                             const currentModelMapping = currentChannel
@@ -1069,6 +1126,8 @@ export class ChatService {
                                 if (currentChannel) {
                                     channelManager.resetChannelError(currentChannel.id)
                                 }
+                                // 同步追踪变量用于统计记录
+                                syncTrackingVars()
                                 break
                             }
 
@@ -1112,9 +1171,13 @@ export class ChatService {
 
                             // 尝试切换渠道
                             if (!switched && enableChannelSwitch && isMainModel) {
-                                const altChannels = channelManager.getAvailableChannels(currentModel, {
-                                    excludeChannelId: currentChannel?.id
-                                })
+                                // 排除已尝试的渠道
+                                const altChannels = channelManager
+                                    .getAvailableChannels(currentModel, {
+                                        excludeChannelId: currentChannel?.id
+                                    })
+                                    .filter(ch => !retryStats.channelsTriedForMainModel.has(ch.id))
+
                                 if (altChannels.length > 0) {
                                     const altChannel = altChannels[0]
                                     const altKeyInfo = channelManager.getChannelKey(altChannel)
@@ -1130,6 +1193,8 @@ export class ChatService {
                                     currentChannel = altChannel
                                     currentKeyIndex = altKeyInfo.keyIndex
                                     channelSwitched = true
+                                    // 记录已尝试的渠道
+                                    retryStats.channelsTriedForMainModel.add(altChannel.id)
                                     const altClientOptions = {
                                         ...clientOptions,
                                         adapterType: altChannel.adapterType,
@@ -1233,9 +1298,13 @@ export class ChatService {
 
                             // Key切换失败，尝试切换渠道
                             if (!errorSwitched && shouldTrySwitch && enableChannelSwitch && isMainModel) {
-                                const altChannels = channelManager.getAvailableChannels(currentModel, {
-                                    excludeChannelId: currentChannel?.id
-                                })
+                                // 排除已尝试的渠道
+                                const altChannels = channelManager
+                                    .getAvailableChannels(currentModel, {
+                                        excludeChannelId: currentChannel?.id
+                                    })
+                                    .filter(ch => !retryStats.channelsTriedForMainModel.has(ch.id))
+
                                 if (altChannels.length > 0) {
                                     const altChannel = altChannels[0]
                                     const altKeyInfo = channelManager.getChannelKey(altChannel)
@@ -1251,6 +1320,8 @@ export class ChatService {
                                     currentChannel = altChannel
                                     currentKeyIndex = altKeyInfo.keyIndex
                                     channelSwitched = true
+                                    // 记录已尝试的渠道
+                                    retryStats.channelsTriedForMainModel.add(altChannel.id)
                                     const altClientOptions = {
                                         ...clientOptions,
                                         adapterType: altChannel.adapterType,
@@ -1267,6 +1338,15 @@ export class ChatService {
                             // 无法切换Key或渠道，使用普通重试（单渠道单Key场景）
                             retryCount++
                             totalRetryCount++
+
+                            // 记录错误信息到重试统计
+                            retryStats.errors.push({
+                                model: currentModel,
+                                channel: currentChannel?.name,
+                                errorType,
+                                errorMessage: errorMsg,
+                                attempt: retryCount
+                            })
 
                             if (retryCount <= (isMainModel ? maxRetries : 1)) {
                                 // 指数退避延迟
@@ -1285,6 +1365,28 @@ export class ChatService {
                         }
                     }
 
+                    // 主模型循环结束后，检查是否所有渠道都已尝试
+                    if (isMainModel && !response) {
+                        // 获取主模型所有可用渠道
+                        const allChannelsForMainModel = channelManager.getAvailableChannels(currentModel) || []
+                        const triedAllChannels = allChannelsForMainModel.every(ch =>
+                            retryStats.channelsTriedForMainModel.has(ch.id)
+                        )
+
+                        if (triedAllChannels || allChannelsForMainModel.length === 0) {
+                            retryStats.mainModelExhausted = true
+                            logger.info(
+                                `[ChatService] 主模型 ${currentModel} 所有渠道已耗尽 (尝试了 ${retryStats.channelsTriedForMainModel.size} 个渠道)`
+                            )
+                            switchChain.push({
+                                type: 'exhausted',
+                                model: currentModel,
+                                channelsTried: retryStats.channelsTriedForMainModel.size,
+                                totalChannels: allChannelsForMainModel.length
+                            })
+                        }
+                    }
+
                     // 如果成功获取响应，退出模型循环
                     if (response && (response.contents?.length > 0 || response.toolCallLogs?.length > 0)) {
                         break
@@ -1296,6 +1398,8 @@ export class ChatService {
                     logger.info(`[ChatService] 尝试备选模型: ${modelsToTry[modelIndex + 1]}`)
                 }
                 if (!response && lastError) {
+                    // 同步追踪变量用于统计记录（即使失败也要记录）
+                    syncTrackingVars()
                     if (debugInfo) {
                         debugInfo.totalRetryCount = totalRetryCount
                         debugInfo.switchChain = switchChain.length > 1 ? switchChain : null
@@ -1306,6 +1410,8 @@ export class ChatService {
 
                 if (!response) {
                     logger.warn('[ChatService] 所有模型和渠道尝试后仍无有效响应')
+                    // 同步追踪变量（无响应但也无错误的情况）
+                    syncTrackingVars()
                 }
 
                 finalResponse = response?.contents || []
@@ -1338,10 +1444,21 @@ export class ChatService {
                         if (s.type === 'key') return `Key切换: ${s.channel} #${s.fromKey}->#${s.toKey} (${s.reason})`
                         if (s.type === 'channel') return `渠道切换: ${s.from}->${s.to} (${s.reason})`
                         if (s.type === 'retry') return `重试: ${s.channel} #${s.attempt} (${s.reason})`
+                        if (s.type === 'fallback') return `备选模型: ${s.model} @ ${s.channel} (${s.reason})`
+                        if (s.type === 'exhausted')
+                            return `渠道耗尽: ${s.model} (${s.channelsTried}/${s.totalChannels})`
                         return JSON.stringify(s)
                     })
                     debugInfo.switchChain = formattedChain.length > 1 ? formattedChain : null
                     debugInfo.switchChainRaw = switchChain.length > 1 ? switchChain : null
+
+                    // 添加详细的重试统计信息
+                    debugInfo.retryStats = {
+                        totalAttempts: retryStats.totalAttempts,
+                        channelsTriedCount: retryStats.channelsTriedForMainModel.size,
+                        mainModelExhausted: retryStats.mainModelExhausted,
+                        errors: retryStats.errors.slice(-5) // 只保留最近5个错误
+                    }
                 }
             }
 
@@ -1383,7 +1500,9 @@ export class ChatService {
 
             // 记录统计（使用统一入口）
             try {
-                const keyInfo = channel?.lastUsedKey || {}
+                // 使用实际追踪的渠道信息（优先于 debugInfo，因为 debugInfo 仅在 debugMode=true 时有值）
+                const usedChannelForStats = actualUsedChannel || channel
+                const keyInfo = usedChannelForStats?.lastUsedKey || channel?.lastUsedKey || {}
                 const requestDuration = Date.now() - requestStartTime
                 const responseText =
                     finalResponse
@@ -1392,10 +1511,26 @@ export class ChatService {
                         .join('') || ''
                 const requestSuccess = !!finalResponse?.length
 
+                // 格式化 switchChain 为可读格式
+                const formattedSwitchChain =
+                    actualSwitchChain.length > 1
+                        ? actualSwitchChain.map(s => {
+                              if (s.type === 'init') return `初始: ${s.channel}`
+                              if (s.type === 'key')
+                                  return `Key切换: ${s.channel} #${s.fromKey}->#${s.toKey} (${s.reason})`
+                              if (s.type === 'channel') return `渠道切换: ${s.from}->${s.to} (${s.reason})`
+                              if (s.type === 'retry') return `重试: ${s.channel} #${s.attempt} (${s.reason})`
+                              if (s.type === 'fallback') return `备选模型: ${s.model} @ ${s.channel} (${s.reason})`
+                              if (s.type === 'exhausted')
+                                  return `渠道耗尽: ${s.model} (${s.channelsTried}/${s.totalChannels})`
+                              return JSON.stringify(s)
+                          })
+                        : null
+
                 await statsService.recordApiCall({
-                    channelId: debugInfo?.usedChannel?.id || channel?.id || `no-channel-${llmModel}`,
-                    channelName: debugInfo?.usedChannel?.name || channel?.name || `无渠道(${llmModel})`,
-                    model: debugInfo?.usedModel || llmModel,
+                    channelId: usedChannelForStats?.id || `no-channel-${llmModel}`,
+                    channelName: usedChannelForStats?.name || `无渠道(${llmModel})`,
+                    model: actualUsedModel || llmModel,
                     keyIndex: keyInfo.keyIndex ?? -1,
                     keyName: keyInfo.keyName || '',
                     strategy: keyInfo.strategy || '',
@@ -1406,17 +1541,18 @@ export class ChatService {
                     userId,
                     groupId: groupId || null,
                     stream: useStreaming,
-                    retryCount: debugInfo?.totalRetryCount || 0,
-                    channelSwitched: debugInfo?.channelSwitched || false,
-                    previousChannelId: debugInfo?.channelSwitched ? channel?.id : null,
-                    switchChain: debugInfo?.switchChain || null,
+                    retryCount: actualTotalRetryCount,
+                    channelSwitched: actualChannelSwitched,
+                    fallbackUsed: actualFallbackUsed,
+                    previousChannelId: actualChannelSwitched ? channel?.id : null,
+                    switchChain: formattedSwitchChain,
                     apiUsage: finalUsage,
                     messages,
                     responseText,
                     // 请求详情
                     request: {
                         messages,
-                        model: debugInfo?.usedModel || llmModel,
+                        model: actualUsedModel || llmModel,
                         tools: hasTools
                             ? client.tools.map(t => ({ name: t.name, description: t.description?.substring(0, 100) }))
                             : null,

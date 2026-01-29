@@ -50,20 +50,7 @@ class KnowledgeService {
         const docsWithContent = Array.from(this.documents.values()).filter(d => d.content && d.content.length > 0)
         const linkedDocs = Array.from(this.documents.values()).filter(d => d.presetIds && d.presetIds.length > 0)
 
-        logger.info(`[KnowledgeService] 初始化完成:`)
-        logger.info(`  - 总文档数: ${this.documents.size}`)
-        logger.info(`  - 有内容文档: ${docsWithContent.length}`)
-        logger.info(`  - 已关联预设: ${linkedDocs.length}`)
-        logger.info(`  - 知识库目录: ${KNOWLEDGE_DIR}`)
-
-        // 列出已关联的文档
-        if (linkedDocs.length > 0) {
-            for (const doc of linkedDocs) {
-                logger.info(
-                    `  - [${doc.name}] 关联预设: ${doc.presetIds.join(', ')}，内容长度: ${doc.content?.length || 0}`
-                )
-            }
-        }
+        logger.debug(`[KnowledgeService] 初始化完成: ${this.documents.size} 文档, ${linkedDocs.length} 关联预设`)
     }
 
     /**

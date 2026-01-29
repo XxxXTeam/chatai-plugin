@@ -57,6 +57,7 @@ chatai-plugin/
 │   │   ├── agent/         # 技能代理系统
 │   │   ├── llm/           # LLM 服务和适配器
 │   │   ├── media/         # 媒体处理服务
+│   │   ├── memory/        # 记忆服务
 │   │   ├── middleware/    # 中间件服务
 │   │   ├── permission/    # 权限管理服务
 │   │   ├── preset/        # 预设管理服务
@@ -65,12 +66,12 @@ chatai-plugin/
 │   │   ├── routes/        # Web路由服务
 │   │   ├── scheduler/     # 任务调度服务
 │   │   ├── scope/         # 作用域管理服务
+│   │   ├── skills/        # 技能配置和加载器
 │   │   ├── stats/         # 统计服务
 │   │   ├── storage/       # 存储服务
 │   │   ├── telemetry/     # 遥测服务
 │   │   ├── tools/         # 工具服务
 │   │   └── webServer.js   # Web服务器主入口
-│   └── utils/             # 工具函数
 ├── index.js               # 插件主入口（导出 apps 和 skills）
 └── package.json           # 项目依赖和配置
 ```
@@ -94,6 +95,8 @@ chatai-plugin/
    - `scheduler/`: 任务调度服务
    - `scope/`: 作用域管理服务
    - `stats/`: 统计服务
+   - `skills/`: 技能配置和加载器系统
+   - `memory/`: 记忆服务，提供结构化记忆功能
 
 3. **MCP 系统** (`src/mcp/`)
    - `McpManager.js`: 统一管理所有 MCP 服务器
@@ -181,7 +184,6 @@ pnpm build:analyze
 - **Husky**: Git 钩子
   - `pre-commit` 钩子自动格式化代码
 - **lint-staged**: 暂存文件检查
-- **ESLint**: 代码检查（前端）
 
 **格式化命令**: `pnpm format` (插件根目录)
 
@@ -223,6 +225,7 @@ llm:
     enabled: true           # 启用备选模型轮询
     models: []              # 备选模型列表
     maxRetries: 3           # 最大重试次数
+    retryDelay: 500         # 重试间隔(ms)
     notifyOnFallback: false # 切换模型时是否通知用户
 ```
 
@@ -247,6 +250,7 @@ bym:
   inheritPersonality: true # 继承人格配置
   presetId: ''             # 伪人模式专用预设ID
   processImage: true       # 是否处理图片消息
+  exclusiveFeatures: ['groupSummary', 'userPortrait'] # 仅伪人模式可用的功能
 ```
 
 ### 伪人模式群组配置
@@ -278,12 +282,59 @@ bym:
 proactiveChat:
   enabled: false            # 全局开关
   pollInterval: 5           # 轮询间隔（分钟）
-  baseProbability: 0.05     # 基础触发概率
+  minMessagesBeforeTrigger: 10 # 触发前最少需要的群消息数
+  maxConcurrentTriggers: 3  # 单次轮询最大触发群数
+  baseProbability: 0.05     # 基础触发概率 (5%)
+  maxProbability: 0.5       # 最大触发概率上限 (50%)
+  quietHoursStart: 0        # 静默开始时间（0-23）
+  quietHoursEnd: 6          # 静默结束时间（0-23）
+  allowQuietHoursOverride: false # 是否允许在静默时段触发
+  # 时段概率乘数
+  timePeriodMultipliers: {
+    late_night: 0.1,        # 深夜 (0:00-5:00) 大幅降低
+    early_morning: 0.3,     # 清晨 (5:00-7:00) 降低
+    morning: 1.0,           # 上午 (7:00-12:00) 正常
+    afternoon: 1.2,         # 下午 (12:00-18:00) 略高
+    evening: 1.5,           # 傍晚 (18:00-21:00) 最活跃
+    night: 0.8              # 晚上 (21:00-24:00) 略低
+  },
+  # 星期乘数
+  weekdayMultipliers: {
+    0: 1.3,                 # 周日
+    1: 0.8,                 # 周一（工作日开始，较低）
+    2: 0.9,                 # 周二
+    3: 1.0,                 # 周三
+    4: 1.0,                 # 周四
+    5: 1.2,                 # 周五
+    6: 1.4                  # 周六（周末，较高）
+  },
+  # 活跃度检测配置
+  highFreqMessagesPerMinute: 2    # 判定为高频对话的消息速率（条/分钟）
+  activeMessagesIn30Min: 15       # 30分钟内达到此消息数判定为活跃
+  lowMessagesIn30Min: 3           # 30分钟内低于此消息数判定为低活跃
+  deadMinutesWithoutMessage: 120  # 超过此分钟数无消息判定为死群
+  inactiveMinutesLimit: 180       # 最近活跃距离现在超过该分钟则不主动触发
+  # 活跃度级别乘数
+  activityMultipliers: {
+    dead: 0,                # 死群不触发
+    low: 0.3,               # 低活跃降低概率
+    normal: 1.0,            # 正常
+    active: 1.5,            # 活跃提高概率
+    high_freq: 0.1          # 高频对话中大幅降低（避免打扰）
+  },
   model: ''                 # 使用的模型
   systemPrompt: '你是群里的一员，正在查看群聊记录...' # 系统提示
-  useGroupContext: true     # 使用群聊上下文
+  maxTokens: 150           # 最大生成token数
+  temperature: 0.9          # 生成温度
   enabledGroups: []         # 启用的群列表
   blacklistGroups: []       # 黑名单群
+  # 防刷屏
+  cooldownMinutes: 30       # 同一群触发后的冷却时间（分钟）
+  maxDailyMessages: 20      # 每日每群最大主动消息数
+  maxHourlyMessages: 5      # 每小时每群最大主动消息数
+  # 记忆和上下文
+  useGroupContext: true     # 使用群聊上下文
+  contextMessageCount: 20   # 携带的上下文消息数
 ```
 
 ### 工具调用配置
@@ -314,6 +365,18 @@ toolGroups:                 # 工具组定义
     name: 'web'
     description: '网络工具：搜索、获取网页内容、访问URL等'
     tools: ['web_search', 'fetch_url', 'read_webpage']
+  - index: 3
+    name: 'file'
+    description: '文件操作：读写文件、列目录等'
+    tools: ['read_file', 'write_file', 'list_directory']
+  - index: 4
+    name: 'memory'
+    description: '记忆管理：保存和检索用户记忆'
+    tools: ['save_memory', 'get_memory', 'search_memory']
+  - index: 5
+    name: 'image'
+    description: '图像处理：生成、编辑、分析图片'
+    tools: ['generate_image', 'edit_image', 'analyze_image']
 ```
 
 ### MCP 工具配置
@@ -330,6 +393,45 @@ builtinTools:
   allowDangerous: false     # 是否允许危险操作
 ```
 
+### 技能系统配置 (Skills)
+
+新增独立的 `skills.yaml` 配置文件，用于管理技能系统的独立配置，与 MCP 服务器配置解耦：
+
+```yaml
+skills:
+  enabled: true
+  mode: 'hybrid'            # 'hybrid', 'skills-only', 'mcp-only'
+  sources:
+    builtin:
+      enabled: true
+      categories: []        # 空数组表示启用所有类别
+      disabledTools: []     # 禁用的工具列表
+    custom:
+      enabled: true
+      path: 'data/tools'    # 自定义工具路径
+      autoReload: true      # 自动重载
+    mcp:
+      enabled: true
+      servers: []           # 启用的MCP服务器（空表示全部）
+      disabledServers: []   # 禁用的MCP服务器
+  groups: []                # 工具组配置
+  execution:
+    timeout: 30000          # 工具执行超时时间
+    maxParallel: 5          # 最大并行执行数
+    retryOnError: false     # 错误重试
+    maxRetries: 2           # 最大重试次数
+    cacheResults: true      # 缓存结果
+    cacheTTL: 60000         # 缓存TTL
+  dispatch:
+    enabled: true           # 调度功能启用
+    useSummary: true        # 使用摘要模式
+    maxGroups: 3            # 最大工具组数
+  security:
+    dangerousTools: ['kick_member', 'mute_member', 'recall_message', 'set_group_admin', 'write_file']
+    allowDangerous: false   # 是否允许危险操作
+    dangerousRequiredPermission: 'admin'  # 危险工具需要的权限
+```
+
 ### 上下文管理配置
 
 ```yaml
@@ -341,15 +443,26 @@ context:
     enabled: true
     intervalMinutes: 10
     maxMessagesBefore: 60
+    minInactiveMinutes: 30  # 在该时间段无人发言才会总结
+    retainMessagesAfterSummary: 0  # 总结后保留的最近消息数量
+    model: ''               # 总结使用的模型（留空使用默认）
+    maxTokens: 400          # 总结输出长度
+    windowMessages: 80      # 参与总结的最多消息数
   isolation:                # 隔离模式配置
     groupUserIsolation: false # 群聊用户隔离
     privateIsolation: true  # 私聊隔离
   autoContext:              # 自动上下文配置
     enabled: true
     maxHistoryMessages: 20
+    includeToolCalls: false # 是否包含工具调用记录
   autoEnd:                  # 自动结束对话
     enabled: false
     maxRounds: 50
+    notifyUser: true        # 结束时是否通知用户
+    notifyMessage: '对话已达到最大轮数限制，已自动开始新会话。'
+  groupContextSharing: true # 群聊上下文传递
+  globalSystemPrompt: ''    # 全局系统提示词
+  globalPromptMode: 'append' # 全局提示词模式: append(追加) | prepend(前置) | override(覆盖)
 ```
 
 ### 记忆管理配置
@@ -361,10 +474,15 @@ memory:
   autoExtract: true         # 自动从对话提取记忆
   pollInterval: 5           # 轮询间隔（分钟）
   maxMemories: 50          # 每用户最大记忆数
+  model: ''                 # 记忆提取使用的模型（留空使用默认模型）
   groupContext:             # 群聊上下文采集
     enabled: true
     collectInterval: 10
     maxMessagesPerCollect: 50
+    analyzeThreshold: 20    # 触发分析的最小消息数
+    extractUserInfo: true   # 提取用户信息作为记忆
+    extractTopics: true     # 提取讨论话题
+    extractRelations: true  # 提取用户关系
 ```
 
 ### 预设和人格配置
@@ -408,10 +526,14 @@ features:
     enabled: true          # 群聊总结功能
     maxMessages: 100       # 总结最近N条消息
     autoTrigger: false     # 自动触发
+    maxChars: 6000         # 总结最大字符数
     push:                  # 定时推送配置
       enabled: false
       intervalType: 'day'
       intervalValue: 1
+      pushHour: 20         # 每日推送时间（小时，0-23）
+      messageCount: 100    # 总结消息数量
+      model: ''            # 总结使用的模型（留空使用默认）
   userPortrait:
     enabled: true          # 个人画像分析
     minMessages: 10        # 最少需要N条消息才能分析
@@ -422,23 +544,145 @@ features:
   reaction:
     enabled: false         # 表情回应处理
     prompt: ''             # 添加回应的提示词模板
+    removePrompt: ''       # 取消回应的提示词模板
   recall:
     enabled: false         # 消息撤回响应
     aiResponse: true       # 使用AI响应撤回
+    prompt: ''             # 自定义提示词（留空使用默认）
   welcome:
     enabled: false         # 入群欢迎
     message: ''            # 默认欢迎语
+    prompt: ''             # 自定义提示词（留空使用默认）
   goodbye:
     enabled: false         # 退群通知
     aiResponse: false      # 使用AI响应退群
+    prompt: ''             # 自定义提示词（留空使用默认）
+  ban:
+    enabled: false         # 禁言事件响应
+    aiResponse: true       # 使用AI响应禁言
+    prompt: ''             # 自定义提示词（留空使用默认）
+  admin:
+    enabled: false         # 管理员变更响应
+    prompt: ''             # 自定义提示词（留空使用默认）
+  luckyKing:
+    enabled: false         # 运气王响应
+    congratulate: false    # 祝贺他人成为运气王
+    prompt: ''             # 自定义提示词（留空使用默认）
+  honor:
+    enabled: false         # 荣誉变更响应（龙王、群聊之火等）
+    prompt: ''             # 自定义提示词（留空使用默认）
+  essence:
+    enabled: false         # 精华消息响应
+    prompt: ''             # 自定义提示词（留空使用默认）
   imageGen:               # AI绘图
     enabled: true          # 启用绘图功能
     model: 'gemini-3-pro-image' # 默认模型
+    videoModel: 'veo-2.0-generate-001' # 视频生成模型
     timeout: 600000        # 超时时间（毫秒）
     maxImages: 3          # 最大图片数
     apis:                 # API列表
       - baseUrl: 'https://business.928100.xyz/v1/chat/completions'
         apiKey: 'X-Free'
+    presetSources:        # 预设来源配置
+      - name: '云端预设'
+        url: 'https://ht.pippi.top/data.json'
+        enabled: true
+    customPresets: []      # 自定义预设（面板可编辑）
+  voiceReply:            # 语音回复（旧配置，兼容）
+    enabled: false
+    ttsProvider: 'system'
+    triggerOnTool: false
+    triggerAlways: false
+    maxTextLength: 500
+```
+
+### AI声聊配置
+
+```yaml
+voice:
+  enabled: false           # 全局开关
+  defaultCharacter: ''     # 默认AI声聊角色
+  maxTextLength: 500       # 最大文本长度
+```
+
+### QQ官方Bot代理配置
+
+```yaml
+qqBotProxy:
+  enabled: false           # 是否启用QQ官方Bot代理
+  proxyUrl: 'http://localhost:2173' # 代理服务器地址
+  bots: []                 # Bot配置列表 [{appid, secret, sandbox, intents}]
+  autoReconnect: true      # 自动重连
+  reconnectInterval: 5000  # 重连间隔(ms)
+  maxReconnectAttempts: 10 # 最大重连次数
+  messageHandler:          # 消息处理配置
+    enabled: true          # 是否处理消息
+    useAI: true            # 使用AI处理消息
+    presetId: ''           # 使用的预设ID（留空使用默认）
+  icRelay:                 # IC代发配置：IC触发时使用官方Bot回复
+    enabled: false         # 启用IC代发模式
+    globalRelay: false     # 全局代发（所有群都代发，否则只代发白名单群）
+    officialBotQQ: ''      # 官方Bot的QQ号
+    groups: {}             # 群号映射: {"IC群号": "group_openid"}
+    whitelistGroups: []    # 代发白名单群（globalRelay=false时生效）
+    blacklistGroups: []    # 代发黑名单群（globalRelay=true时生效）
+    fallbackToIC: true     # 获取被动ID失败时回退到IC发送
+    markdown:              # Markdown模板配置
+      enabled: false       # 是否使用MD模板发送
+      templateId: ''       # MD模板ID
+      templateKeys: 'abcdefghij' # 模板参数键名
+    button:                # 按钮配置
+      enabled: false       # 是否发送按钮
+      appid: ''           # 按钮appid
+      templateId: ''       # 按钮模板ID（keyboard_id）
+  events:                  # 事件处理配置
+    READY: true
+    AT_MESSAGE_CREATE: true
+    DIRECT_MESSAGE_CREATE: true
+    C2C_MESSAGE_CREATE: true
+    GROUP_AT_MESSAGE_CREATE: true
+    MESSAGE_CREATE: true
+    GUILD_CREATE: true
+    GUILD_DELETE: true
+    INTERACTION_CREATE: true
+```
+
+### 流式响应配置
+
+```yaml
+streaming:
+  enabled: true           # 启用流式响应
+```
+
+### IP探针配置
+
+```yaml
+probe:
+  serverUrl: 'http://127.0.0.1:9527' # 探针服务器地址
+  secretKey: 'your-secret-key-change-me' # API密钥，需与服务端一致
+```
+
+### AI触发配置
+
+```yaml
+trigger:
+  private:
+    enabled: true          # 是否响应私聊
+    mode: 'prefix'         # 私聊触发模式: 'always'(总是), 'prefix'(需前缀), 'off'(关闭)
+  group:
+    enabled: true          # 是否响应群聊
+    at: true               # @机器人触发
+    prefix: true           # 前缀触发
+    keyword: false         # 关键词触发
+    random: false          # 随机触发
+    randomRate: 0.05       # 随机触发概率
+  prefixes: ['#chat']      # 前缀列表
+  keywords: []             # 关键词列表
+  collectGroupMsg: true    # 采集群消息用于记忆
+  blacklistUsers: []       # 用户黑名单
+  whitelistUsers: []       # 用户白名单（空=不限）
+  blacklistGroups: []      # 群黑名单
+  whitelistGroups: []      # 群白名单（空=不限）
 ```
 
 ## 工具开发
@@ -549,11 +793,19 @@ npm version patch|minor|major
 - 支持并行工具执行
 - 工具组分类管理（系统、QQ、网络、文件、记忆、图像等）
 
-### 技能代理
+### 技能代理 (SkillsAgent)
 
 - `SkillsAgent`: 统一管理所有内置、自定义和MCP工具
 - 支持工具启用/禁用动态管理
 - 支持工具分类和搜索功能
+- 支持MCP服务器管理
+- 支持技能配置和加载器系统
+
+### Skills 配置和加载器 (SkillsConfig & SkillsLoader)
+
+- `SkillsConfig`: 负责加载、管理和验证 `skills.yaml` 配置文件
+- `SkillsLoader`: 根据配置独立加载工具，统一处理内置工具、自定义JS工具和外部MCP服务器工具
+- 支持热重载和动态管理配置
 
 ### Skills 导出模块
 
@@ -580,6 +832,12 @@ await skills.disconnectMcpServer(name)
 const categories = await skills.getToolCategories()
 await skills.toggleTool(toolName, enabled)
 await skills.reloadAllTools()
+
+// 技能配置管理
+await skills.reloadConfig()
+await skills.updateConfig(updates)
+const mode = skills.getMode()
+const groups = skills.getGroups()
 ```
 
 **SkillsAgent 初始化**: 在插件加载时自动初始化，统计内置工具、自定义工具和MCP工具数量，并输出到日志。
@@ -620,6 +878,7 @@ await skills.reloadAllTools()
 - 统计插件使用情况
 - 推送公告和更新信息
 - 收集插件全局启动次数
+- 记录模型使用统计（不含敏感信息）
 
 ## 前端技术栈
 
@@ -710,8 +969,14 @@ Web API 路由管理，统一的 RESTful API 入口。
 ### Scope 服务 (`src/services/scope/`)
 作用域管理，处理不同维度的上下文隔离。
 
+### Skills 服务 (`src/services/skills/`)
+技能配置和加载器系统，提供独立的技能管理功能。
+
 ### Stats 服务 (`src/services/stats/`)
 统计服务，收集和分析使用数据。
+
+### Memory 服务 (`src/services/memory/`)
+提供结构化记忆服务，支持用户记忆管理。
 
 ## 开发工具链
 

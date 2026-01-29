@@ -1,3 +1,9 @@
+/**
+ * @fileoverview 记忆管理模块
+ * @module services/storage/MemoryManager
+ * @description 管理AI的长期记忆，支持自动提取、存储和检索用户信息
+ */
+
 import { chatLogger } from '../../core/utils/logger.js'
 const logger = chatLogger
 import config from '../../../config/config.js'
@@ -6,8 +12,19 @@ import { LlmService } from '../llm/LlmService.js'
 import { statsService } from '../stats/StatsService.js'
 
 /**
- * Memory Manager - 使用数据库存储记忆
- * 支持周期性轮询分析对话历史并提取记忆
+ * @class MemoryManager
+ * @classdesc 记忆管理器 - 使用数据库存储和管理AI的长期记忆
+ *
+ * @description
+ * @example
+ * // 获取用户记忆
+ * const memories = await memoryManager.getMemories(userId)
+ *
+ * // 添加记忆
+ * await memoryManager.addMemory(userId, '喜欢编程', 'preference')
+ *
+ * // 搜索记忆
+ * const results = await memoryManager.searchMemories('编程', { userId })
  */
 export class MemoryManager {
     constructor() {

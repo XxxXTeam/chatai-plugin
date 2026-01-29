@@ -112,6 +112,46 @@ class TelemetryService {
     }
 
     /**
+     * 检测运行环境
+     * @returns {string} 环境标识
+     */
+    detectEnvironment() {
+        if (global.Bot) {
+            if (global.Bot.uin) {
+                if (global.Bot.version?.name) {
+                    return `yunzai-${global.Bot.version.name}`
+                }
+                return 'yunzai'
+            }
+            if (global.Bot.bots) {
+                return 'trss-yunzai'
+            }
+            return 'yunzai-like'
+        }
+        if (process.env.DOCKER || process.env.KUBERNETES_SERVICE_HOST) {
+            return 'container'
+        }
+        if (process.env.PM2_HOME || process.env.pm_id !== undefined) {
+            return 'pm2'
+        }
+        if (process.env.INVOCATION_ID || process.env.JOURNAL_STREAM) {
+            return 'systemd'
+        }
+        if (process.env.STY) {
+            return 'screen'
+        }
+        if (process.env.TMUX) {
+            return 'tmux'
+        }
+        const nodeEnv = process.env.NODE_ENV
+        if (nodeEnv && nodeEnv !== 'undefined') {
+            return nodeEnv
+        }
+
+        return 'standalone'
+    }
+
+    /**
      * 上报版本信息
      */
     async reportVersion() {
@@ -125,6 +165,9 @@ class TelemetryService {
             nodeVersion: process.version,
             platform: os.platform(),
             arch: os.arch(),
+            environment: this.detectEnvironment(),
+            osRelease: os.release(),
+            osType: os.type(),
             instanceId: this.instanceId,
             timestamp: Date.now()
         }
@@ -133,7 +176,7 @@ class TelemetryService {
             const response = await this.sendRequest('/api/v1/report', report)
 
             if (response.success) {
-                this.globalStartups = response.globalStartups || 0
+                this.globalStartups = response.globalStartups || response.totalStartups || response.startups || 0
                 this.announcements = response.announcements || []
                 return {
                     success: true,
@@ -143,6 +186,7 @@ class TelemetryService {
                 }
             }
 
+            logger.debug('[Telemetry] 服务器返回错误:', JSON.stringify(response))
             return { success: false, error: 'Server returned error' }
         } catch (err) {
             logger.debug('[Telemetry] 版本上报失败:', err.message)
@@ -236,6 +280,8 @@ class TelemetryService {
             userId: this.currentUser || 'anonymous',
             groupId: this.currentGroup || null,
             version: this.version,
+            environment: this.detectEnvironment(),
+            platform: os.platform(),
             period: 'hourly',
             startTime: this.usageBuffer.lastReportTime,
             endTime: now,
@@ -353,7 +399,8 @@ class TelemetryService {
 
         try {
             const controller = new AbortController()
-            const timeout = setTimeout(() => controller.abort(), 10000)
+            // 减少超时时间到5秒，避免网络问题导致启动过慢
+            const timeout = setTimeout(() => controller.abort(), 5000)
             options.signal = controller.signal
 
             const response = await fetch(url, options)

@@ -277,7 +277,8 @@ export const messageTools = [
                     return { success: false, error: `检测到重复发送(${dedupResult.count}次)，已跳过`, skipped: true }
                 }
                 const e = ctx.getEvent()
-                const isValidQQBot = b => {
+                // 检查是否为有效的 ICQQ/OICQ Bot 实例
+                const isValidBot = b => {
                     if (!b?.uin || !b?.pickFriend || !b?.pickGroup) return false
                     const uin = b.uin
                     if (uin === 'stdin' || (typeof uin === 'string' && !/^\d+$/.test(uin))) return false
@@ -287,25 +288,24 @@ export const messageTools = [
 
                 let bot = null
                 // 优先从 e.bot 获取
-                if (isValidQQBot(e?.bot)) {
+                if (isValidBot(e?.bot)) {
                     bot = e.bot
                 }
-                // 尝试从 Bot 对象中查找 QQ bot
+                // 尝试从 Bot 对象中查找有效的 bot
                 if (!bot && global.Bot) {
                     // TRSS-Yunzai: Bot 是一个对象，key 是 uin
                     for (const key of Object.keys(global.Bot)) {
                         // 排除 stdin 和非数字 key
                         if (key === 'stdin' || !/^\d+$/.test(key)) continue
-                        if (global.Bot[key].adapter?.name == 'QQbot') continue
                         const b = global.Bot[key]
-                        if (isValidQQBot(b)) {
+                        if (isValidBot(b)) {
                             bot = b
                             break
                         }
                     }
                 }
                 if (!bot) {
-                    return { success: false, error: '无法获取有效的QQ Bot实例，请确保有QQ账号在线' }
+                    return { success: false, error: '无法获取有效的Bot实例，请确保有账号在线' }
                 }
 
                 const userId = parseInt(args.user_id)

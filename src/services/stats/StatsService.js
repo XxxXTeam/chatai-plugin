@@ -221,6 +221,7 @@ class StatsService {
      * @param {Object} [options.response] - 响应信息（仅失败时）
      * @param {number} [options.retryCount] - 重试次数
      * @param {boolean} [options.channelSwitched] - 是否切换了渠道
+     * @param {boolean} [options.fallbackUsed] - 是否使用了备选模型
      * @param {string} [options.previousChannelId] - 切换前的渠道ID
      * @param {Array} [options.messages] - 消息数组（用于估算tokens）
      * @param {string} [options.responseText] - 响应文本（用于估算tokens）
@@ -251,6 +252,7 @@ class StatsService {
             response = null,
             retryCount = 0,
             channelSwitched = false,
+            fallbackUsed = false,
             previousChannelId = null,
             switchChain = null,
             messages = null,
@@ -342,6 +344,7 @@ class StatsService {
                 error,
                 retryCount,
                 channelSwitched,
+                fallbackUsed,
                 previousChannelId,
                 switchChain,
                 source,

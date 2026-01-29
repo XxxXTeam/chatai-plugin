@@ -31,7 +31,7 @@ class SchedulerService {
             await this.scopeManager.init()
 
             this.initialized = true
-            chatLogger.info('[SchedulerService] 调度服务已启动')
+            chatLogger.debug('[SchedulerService] 调度服务已启动')
             this.startPeriodicScan()
         } catch (error) {
             chatLogger.error('[SchedulerService] 初始化失败:', error)
@@ -112,7 +112,7 @@ class SchedulerService {
             }
 
             if (added > 0 || removed > 0) {
-                chatLogger.info(`[SchedulerService] 任务同步: +${added} -${removed}, 当前 ${this.tasks.size} 个`)
+                chatLogger.debug(`[SchedulerService] 任务同步: +${added} -${removed}, 当前 ${this.tasks.size} 个`)
             }
         } catch (error) {
             chatLogger.warn('[SchedulerService] 同步任务失败:', error.message)
@@ -152,7 +152,7 @@ class SchedulerService {
                 })
             }
 
-            chatLogger.info(`[SchedulerService] 已加载 ${this.tasks.size} 个定时任务`)
+            chatLogger.debug(`[SchedulerService] 已加载 ${this.tasks.size} 个定时任务`)
         } catch (error) {
             chatLogger.error('[SchedulerService] 加载任务失败:', error)
         }

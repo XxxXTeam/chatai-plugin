@@ -42,7 +42,7 @@ class SkillsLoader {
         await this.loadAll()
 
         this.initialized = true
-        logger.info(`[SkillsLoader] 初始化完成: ${this.tools.size} 个工具, mode=${skillsConfig.getMode()}`)
+        logger.debug(`[SkillsLoader] 初始化完成: ${this.tools.size} 个工具, mode=${skillsConfig.getMode()}`)
 
         return this
     }
@@ -261,7 +261,7 @@ class SkillsLoader {
         await skillsConfig.reload()
         await mcpManager.refreshBuiltinTools()
         await this.loadAll()
-        logger.info(`[SkillsLoader] 重新加载完成: ${this.tools.size} 个工具`)
+        logger.debug(`[SkillsLoader] 重新加载完成: ${this.tools.size} 个工具`)
     }
 
     // ========== 工具获取方法 ==========
