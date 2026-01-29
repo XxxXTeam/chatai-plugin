@@ -1820,9 +1820,29 @@ const response = await fetch('/api/tools/test', {
 
 ## 相关文档
 
-- [架构文档](ARCHITECTURE.md) - MCP 与 Skills 的关系说明
+### 核心文档
+
+- [架构文档](ARCHITECTURE.md) - MCP 与 Skills Agent 架构详解
 - [开发者文档](DEVELOPMENT.md) - 项目开发与贡献指南
+
+### Wiki 详细文档
+
+项目 Wiki 位于 `docs/content/` 目录，包含更详细的工具开发文档：
+
+| 文档 | 说明 |
+|------|------|
+| [工具调用系统](content/工具调用系统/工具调用系统.md) | 工具系统概述与架构 |
+| [MCP 协议实现](content/工具调用系统/MCP%20协议实现.md) | MCP 协议详解与传输层实现 |
+| [自定义工具开发](content/工具调用系统/自定义工具开发.md) | 工具开发完整教程 |
+| [工具安全控制](content/工具调用系统/工具安全控制.md) | 权限过滤与安全策略 |
+| [工具监控与调试](content/工具调用系统/工具监控与调试.md) | 调试方法与日志分析 |
+| [内置工具管理](content/工具调用系统/内置工具管理/) | 各类内置工具详解（14个子文档） |
+
+### 外部资源
+
 - [MCP 官方文档](https://modelcontextprotocol.io/) - Model Context Protocol 规范
+- [MCP Servers 列表](https://github.com/modelcontextprotocol/servers) - 官方与社区 MCP 服务器
+- [JSON Schema 规范](https://json-schema.org/) - 参数定义格式
 
 ---
 

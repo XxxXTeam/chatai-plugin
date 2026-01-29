@@ -1,18 +1,7 @@
 # OpenAI 适配器
 
-<cite>
-**本文档引用的文件**
-- [OpenAIClient.js](file://src/core/adapters/openai/OpenAIClient.js)
-- [converter.js](file://src/core/adapters/openai/converter.js)
-- [index.js](file://src/core/adapters/openai/index.js)
-- [AbstractClient.js](file://src/core/adapters/AbstractClient.js)
-- [converter.js](file://src/core/utils/converter.js)
-- [config.js](file://config/config.js)
-- [helpers.js](file://src/core/utils/helpers.js)
-- [ProxyService.js](file://src/services/proxy/ProxyService.js)
-- [models.js](file://src/core/types/models.js)
-- [tools.js](file://src/core/types/tools.js)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

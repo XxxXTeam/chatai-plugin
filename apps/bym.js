@@ -6,6 +6,8 @@ import {
     isSelfMessage,
     isReplyToBotMessage
 } from '../src/utils/messageDedup.js'
+import { renderService } from '../src/services/media/RenderService.js'
+import { segment } from '../src/utils/messageParser.js'
 import { getScopeManager } from '../src/services/scope/ScopeManager.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
 import { statsService } from '../src/services/stats/StatsService.js'
@@ -542,7 +544,72 @@ ${contextText}
                 await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 500))
                 const autoRecall = config.get('basic.autoRecall')
                 const recallDelay = autoRecall?.enabled === true ? autoRecall.delay || 60 : 0
-                await this.reply(replyText, false, { recallMsg: recallDelay })
+
+                const sentenceOutputCfg = config.get('output.sentenceOutput') || {}
+                const longTextCfg = config.get('output.longText') || {}
+                const mathRenderEnabled = config.get('render.mathFormula') !== false
+
+                let handled = false
+
+                // 按句输出模式
+                if (sentenceOutputCfg.enabled) {
+                    const sentences = this.splitIntoSentences(replyText)
+                    if (sentences.length > 1) {
+                        for (let i = 0; i < sentences.length; i++) {
+                            await this.reply(sentences[i], false, { recallMsg: recallDelay })
+                            if (i < sentences.length - 1) {
+                                const delay =
+                                    sentenceOutputCfg.randomDelay !== false
+                                        ? (sentenceOutputCfg.minDelay || 300) +
+                                          Math.random() *
+                                              ((sentenceOutputCfg.maxDelay || 1500) -
+                                                  (sentenceOutputCfg.minDelay || 300))
+                                        : sentenceOutputCfg.minDelay || 300
+                                await new Promise(r => setTimeout(r, delay))
+                            }
+                        }
+                        handled = true
+                    }
+                }
+
+                // 数学公式渲染
+                if (!handled && mathRenderEnabled) {
+                    const mathDetection = renderService.detectMathFormulas(replyText)
+                    if (mathDetection.hasMath && mathDetection.confidence !== 'low') {
+                        try {
+                            const imageBuffer = await renderService.renderMathContent(replyText, {
+                                theme: config.get('render.theme') || 'light',
+                                width: config.get('render.width') || 800
+                            })
+                            await this.reply(segment.image(imageBuffer), false, { recallMsg: recallDelay })
+                            handled = true
+                        } catch {}
+                    }
+                }
+
+                // 长文本合并转发
+                if (!handled && longTextCfg.enabled !== false && replyText.length > (longTextCfg.threshold || 500)) {
+                    const mode = longTextCfg.mode || 'forward'
+                    if (mode === 'forward' || mode === 'auto') {
+                        try {
+                            const paragraphs = replyText.split(/\n{2,}/).filter(p => p.trim())
+                            if (paragraphs.length > 0 && e.group?.makeForwardMsg) {
+                                const forwardMsgs = paragraphs.map(p => ({
+                                    message: p,
+                                    nickname: 'AI',
+                                    user_id: e.self_id
+                                }))
+                                await e.reply(await e.group.makeForwardMsg(forwardMsgs))
+                                handled = true
+                            }
+                        } catch {}
+                    }
+                }
+
+                // 默认直接发送
+                if (!handled) {
+                    await this.reply(replyText, false, { recallMsg: recallDelay })
+                }
 
                 // 表情包小偷 - 伪人触发模式
                 try {
@@ -561,5 +628,35 @@ ${contextText}
             logger.error('[BYM] Error:', error)
             return false
         }
+    }
+
+    /**
+     * 将文本分割为句子
+     */
+    splitIntoSentences(text) {
+        if (!text) return []
+        const lines = text.split(/\n+/)
+        const sentences = []
+        for (const line of lines) {
+            if (!line.trim()) continue
+            const parts = line.split(/(?<=[。！？!?.…])\s*/)
+            for (const part of parts) {
+                const trimmed = part.trim()
+                if (trimmed) sentences.push(trimmed)
+            }
+        }
+        // 合并过短的句子
+        const merged = []
+        let buffer = ''
+        for (const s of sentences) {
+            if (buffer.length + s.length < 20 && buffer) {
+                buffer += s
+            } else {
+                if (buffer) merged.push(buffer)
+                buffer = s
+            }
+        }
+        if (buffer) merged.push(buffer)
+        return merged.length > 0 ? merged : [text]
     }
 }

@@ -1,18 +1,7 @@
 # MCP 协议实现
 
-<cite>
-**本文引用的文件**
-- [McpManager.js](file://src/mcp/McpManager.js)
-- [McpClient.js](file://src/mcp/McpClient.js)
-- [BuiltinMcpServer.js](file://src/mcp/BuiltinMcpServer.js)
-- [tools/index.js](file://src/mcp/tools/index.js)
-- [mcpRoutes.js](file://src/services/routes/mcpRoutes.js)
-- [mcp.ts](file://frontend/types/mcp.ts)
-- [ServerConfigForm.tsx](file://frontend/components/mcp/ServerConfigForm.tsx)
-- [mcp-servers.json](file://data/mcp-servers.json)
-- [example_tool.js](file://data/tools/example_tool.js)
-- [basic.js](file://src/mcp/tools/basic.js)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

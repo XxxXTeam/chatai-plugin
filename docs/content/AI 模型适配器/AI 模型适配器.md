@@ -1,23 +1,7 @@
 # AI 模型适配器
 
-<cite>
-**本文档引用的文件**
-- [src/core/adapters/index.js](file://src/core/adapters/index.js)
-- [src/core/adapters/AbstractClient.js](file://src/core/adapters/AbstractClient.js)
-- [src/core/adapters/openai/OpenAIClient.js](file://src/core/adapters/openai/OpenAIClient.js)
-- [src/core/adapters/openai/converter.js](file://src/core/adapters/openai/converter.js)
-- [src/core/adapters/gemini/GeminiClient.js](file://src/core/adapters/gemini/GeminiClient.js)
-- [src/core/adapters/gemini/converter.js](file://src/core/adapters/gemini/converter.js)
-- [src/core/adapters/claude/ClaudeClient.js](file://src/core/adapters/claude/ClaudeClient.js)
-- [src/core/adapters/claude/converter.js](file://src/core/adapters/claude/converter.js)
-- [src/core/utils/converter.js](file://src/core/utils/converter.js)
-- [src/services/llm/LlmService.js](file://src/services/llm/LlmService.js)
-- [src/services/llm/ChannelManager.js](file://src/services/llm/ChannelManager.js)
-- [src/core/types/adapter.js](file://src/core/types/adapter.js)
-- [src/core/types/models.js](file://src/core/types/models.js)
-- [src/core/types/common.js](file://src/core/types/common.js)
-- [config/config.js](file://config/config.js)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

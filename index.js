@@ -153,7 +153,6 @@ const appsPromise = (async () => {
                 const mod = await import(`./apps/${file}`)
                 return { file, mod }
             } catch (err) {
-                // 记录具体文件名的错误
                 throw { file, error: err }
             }
         })

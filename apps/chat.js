@@ -562,8 +562,12 @@ export class Chat extends plugin {
                     }
 
                     const quoteReply = config.get('basic.quoteReply') === true
+                    const longTextCfg = config.get('output.longText') || {}
                     const mathRenderEnabled = config.get('render.mathFormula') !== false
 
+                    let handled = false
+
+                    // 检测数学公式并渲染
                     if (mathRenderEnabled && replyTextContent) {
                         const mathDetection = renderService.detectMathFormulas(replyTextContent)
                         if (mathDetection.hasMath && mathDetection.confidence !== 'low') {
@@ -572,18 +576,35 @@ export class Chat extends plugin {
                                     theme: config.get('render.theme') || 'light',
                                     width: config.get('render.width') || 800
                                 })
-                                const imgMsg = segment.image(imageBuffer)
-                                const replyResult = await this.reply(imgMsg, quoteReply)
+                                const replyResult = await this.reply(segment.image(imageBuffer), quoteReply)
                                 this.handleAutoRecall(replyResult, false)
-                            } catch {
-                                const replyResult = await this.reply(replyContent, quoteReply)
-                                this.handleAutoRecall(replyResult, false)
-                            }
-                        } else {
-                            const replyResult = await this.reply(replyContent, quoteReply)
-                            this.handleAutoRecall(replyResult, false)
+                                handled = true
+                            } catch {}
                         }
-                    } else {
+                    }
+
+                    // 长文本合并转发处理
+                    if (
+                        !handled &&
+                        longTextCfg.enabled !== false &&
+                        replyTextContent.length > (longTextCfg.threshold || 500)
+                    ) {
+                        const mode = longTextCfg.mode || 'forward'
+                        if (mode === 'forward' || mode === 'auto') {
+                            try {
+                                const paragraphs = replyTextContent.split(/\n{2,}/).filter(p => p.trim())
+                                if (paragraphs.length > 0) {
+                                    await this.sendForwardMsg(longTextCfg.forwardTitle || 'AI 回复', paragraphs)
+                                    handled = true
+                                }
+                            } catch {
+                                // 合并转发失败，回退到普通发送
+                            }
+                        }
+                    }
+
+                    // 默认直接输出
+                    if (!handled) {
                         const replyResult = await this.reply(replyContent, quoteReply)
                         this.handleAutoRecall(replyResult, false)
                     }

@@ -73,12 +73,9 @@ interface Config {
         defaultModel: string
         models: {
             chat: string
-            tool: string
-            dispatch: string
             image: string
             draw: string
             roleplay: string
-            search: string
         }
         fallback: {
             enabled: boolean
@@ -114,7 +111,6 @@ interface Config {
         parallelExecution: boolean
         sendIntermediateReply: boolean
         useToolGroups: boolean
-        dispatchFirst: boolean
     }
     personality: {
         isolateContext: {
@@ -126,6 +122,21 @@ interface Config {
         enabled: boolean
         showThinkingContent: boolean
         useForwardMsg: boolean
+    }
+    output: {
+        longText: {
+            enabled: boolean
+            threshold: number
+            mode: string
+            forwardTitle: string
+        }
+        sentenceOutput: {
+            enabled: boolean
+            allSentences: boolean
+            minDelay: number
+            maxDelay: number
+            randomDelay: boolean
+        }
     }
     features: {
         groupSummary: { enabled: boolean; maxMessages: number; model?: string }
@@ -183,7 +194,7 @@ const defaultConfig: Config = {
     admin: { loginNotifyPrivate: true, sensitiveCommandMasterOnly: true },
     llm: {
         defaultModel: '',
-        models: { chat: '', tool: '', dispatch: '', image: '', draw: '', roleplay: '', search: '' },
+        models: { chat: '', image: '', draw: '', roleplay: '' },
         fallback: { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false }
     },
     context: {
@@ -196,7 +207,7 @@ const defaultConfig: Config = {
         enable: false,
         probability: 0.02,
         temperature: 0.9,
-        maxTokens: 100,
+        maxTokens: 150,
         recall: false,
         model: '',
         presetId: '',
@@ -208,11 +219,14 @@ const defaultConfig: Config = {
         useForwardMsg: true,
         parallelExecution: true,
         sendIntermediateReply: true,
-        useToolGroups: false,
-        dispatchFirst: false
+        useToolGroups: false
     },
     personality: { isolateContext: { enabled: false, clearOnSwitch: false } },
     thinking: { enabled: true, showThinkingContent: true, useForwardMsg: true },
+    output: {
+        longText: { enabled: true, threshold: 500, mode: 'forward', forwardTitle: 'AI 回复' },
+        sentenceOutput: { enabled: false, allSentences: false, minDelay: 300, maxDelay: 1500, randomDelay: true }
+    },
     features: {
         groupSummary: { enabled: true, maxMessages: 100, model: '' },
         userPortrait: { enabled: true, minMessages: 10, model: '' },
@@ -249,29 +263,23 @@ const defaultConfig: Config = {
     }
 }
 
-type ModelCategory = 'chat' | 'tool' | 'dispatch' | 'image' | 'draw' | 'roleplay' | 'search' | 'fallback' | 'default'
+type ModelCategory = 'chat' | 'image' | 'draw' | 'roleplay' | 'fallback' | 'default'
 
 const MODEL_CATEGORY_LABELS: Record<ModelCategory, string> = {
     default: '默认模型',
     chat: '对话模型',
-    tool: '工具模型',
-    dispatch: '调度模型',
     image: '图像理解模型',
     draw: '绘图模型',
     roleplay: '伪人模型',
-    search: '搜索模型',
     fallback: '备选模型'
 }
 
 const MODEL_CATEGORY_DESCRIPTIONS: Record<ModelCategory, string> = {
     default: '其他模型未配置时使用',
-    chat: '普通对话，不传递工具',
-    tool: '执行工具调用',
-    dispatch: '选择工具组（轻量快速）',
+    chat: '普通对话',
     image: '分析理解图片内容',
     draw: '生成图片（如DALL-E）',
     roleplay: '伪人模式回复',
-    search: '联网搜索',
     fallback: '主模型失败时使用'
 }
 
@@ -365,12 +373,9 @@ export default function SettingsPage() {
                 if (!merged.llm.models)
                     merged.llm.models = {
                         chat: '',
-                        tool: '',
-                        dispatch: '',
                         image: '',
                         draw: '',
-                        roleplay: '',
-                        search: ''
+                        roleplay: ''
                     }
                 if (!merged.llm.fallback)
                     merged.llm.fallback = {
@@ -457,7 +462,7 @@ export default function SettingsPage() {
         } else if (category === 'fallback') {
             currentModels = config.llm?.fallback?.models || []
         } else {
-            // chat/roleplay/search 是单个字符串
+            // chat/image/draw/roleplay 是单个字符串
             const model = config.llm?.models?.[category]
             currentModels = model ? [model] : []
         }
@@ -471,7 +476,7 @@ export default function SettingsPage() {
         } else if (editingModelCategory === 'fallback') {
             updateConfig('llm.fallback.models', tempSelectedModels)
         } else {
-            // chat/roleplay/search 只保存第一个选中的模型
+            // chat/image/draw/roleplay 只保存第一个选中的模型
             updateConfig(`llm.models.${editingModelCategory}`, tempSelectedModels[0] || '')
         }
         setModelDialogOpen(false)
@@ -482,11 +487,9 @@ export default function SettingsPage() {
         return (
             editingModelCategory === 'default' ||
             editingModelCategory === 'chat' ||
-            editingModelCategory === 'tool' ||
-            editingModelCategory === 'dispatch' ||
             editingModelCategory === 'image' ||
-            editingModelCategory === 'roleplay' ||
-            editingModelCategory === 'search'
+            editingModelCategory === 'draw' ||
+            editingModelCategory === 'roleplay'
         )
     }
 
@@ -987,6 +990,123 @@ export default function SettingsPage() {
                             )}
                         </CardContent>
                     </Card>
+
+                    {/* 输出优化配置 */}
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>输出优化</CardTitle>
+                            <CardDescription>长文本处理和按句输出设置</CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <Label>长文本优化</Label>
+                                    <p className="text-sm text-muted-foreground">长文本自动转为图片或合并转发</p>
+                                </div>
+                                <Switch
+                                    checked={config.output?.longText?.enabled ?? true}
+                                    onCheckedChange={v => updateConfig('output.longText.enabled', v)}
+                                />
+                            </div>
+                            {config.output?.longText?.enabled && (
+                                <>
+                                    <div className="grid gap-2">
+                                        <Label>长文本阈值（字符数）</Label>
+                                        <Input
+                                            type="number"
+                                            value={config.output?.longText?.threshold || 500}
+                                            onChange={e =>
+                                                updateConfig('output.longText.threshold', parseInt(e.target.value) || 500)
+                                            }
+                                        />
+                                        <p className="text-xs text-muted-foreground">超过此字符数的回复将被优化处理</p>
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label>处理模式</Label>
+                                        <Select
+                                            value={config.output?.longText?.mode || 'auto'}
+                                            onValueChange={v => updateConfig('output.longText.mode', v)}
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="auto">自动（含公式用图片，否则合并转发）</SelectItem>
+                                                <SelectItem value="image">始终渲染为图片</SelectItem>
+                                                <SelectItem value="forward">始终合并转发</SelectItem>
+                                                <SelectItem value="none">不处理</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label>合并转发标题</Label>
+                                        <Input
+                                            value={config.output?.longText?.forwardTitle || 'AI 回复'}
+                                            onChange={e => updateConfig('output.longText.forwardTitle', e.target.value)}
+                                            placeholder="AI 回复"
+                                        />
+                                    </div>
+                                </>
+                            )}
+                            <Separator />
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <Label>按句输出</Label>
+                                    <p className="text-sm text-muted-foreground">将长回复拆分成多条消息逐句发送</p>
+                                </div>
+                                <Switch
+                                    checked={config.output?.sentenceOutput?.enabled ?? false}
+                                    onCheckedChange={v => updateConfig('output.sentenceOutput.enabled', v)}
+                                />
+                            </div>
+                            {config.output?.sentenceOutput?.enabled && (
+                                <>
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <Label>全部按句输出</Label>
+                                            <p className="text-sm text-muted-foreground">所有回复都按句输出（否则仅伪人模式）</p>
+                                        </div>
+                                        <Switch
+                                            checked={config.output?.sentenceOutput?.allSentences ?? false}
+                                            onCheckedChange={v => updateConfig('output.sentenceOutput.allSentences', v)}
+                                        />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="grid gap-2">
+                                            <Label>最小延迟（毫秒）</Label>
+                                            <Input
+                                                type="number"
+                                                value={config.output?.sentenceOutput?.minDelay || 300}
+                                                onChange={e =>
+                                                    updateConfig('output.sentenceOutput.minDelay', parseInt(e.target.value) || 300)
+                                                }
+                                            />
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <Label>最大延迟（毫秒）</Label>
+                                            <Input
+                                                type="number"
+                                                value={config.output?.sentenceOutput?.maxDelay || 1500}
+                                                onChange={e =>
+                                                    updateConfig('output.sentenceOutput.maxDelay', parseInt(e.target.value) || 1500)
+                                                }
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <Label>随机延迟</Label>
+                                            <p className="text-sm text-muted-foreground">在最小和最大延迟之间随机，更自然</p>
+                                        </div>
+                                        <Switch
+                                            checked={config.output?.sentenceOutput?.randomDelay ?? true}
+                                            onCheckedChange={v => updateConfig('output.sentenceOutput.randomDelay', v)}
+                                        />
+                                    </div>
+                                </>
+                            )}
+                        </CardContent>
+                    </Card>
                 </TabsContent>
 
                 {/* 管理配置 */}
@@ -1095,7 +1215,7 @@ export default function SettingsPage() {
                         </CardHeader>
                         <CardContent className="space-y-3">
                             {(
-                                ['chat', 'tool', 'dispatch', 'image', 'draw', 'roleplay', 'search'] as ModelCategory[]
+                                ['chat', 'image', 'draw', 'roleplay'] as ModelCategory[]
                             ).map(category => (
                                 <div key={category} className="flex items-center justify-between p-3 border rounded-lg">
                                     <div>
@@ -1501,24 +1621,10 @@ export default function SettingsPage() {
                                 />
                             </div>
                             {config.tools?.useToolGroups && (
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <Label>调度优先</Label>
-                                        <p className="text-sm text-muted-foreground">
-                                            先用调度模型选择工具组，再用工具模型执行
-                                        </p>
-                                    </div>
-                                    <Switch
-                                        checked={config.tools?.dispatchFirst ?? false}
-                                        onCheckedChange={v => updateConfig('tools.dispatchFirst', v)}
-                                    />
-                                </div>
-                            )}
-                            {config.tools?.useToolGroups && (
                                 <Alert>
                                     <Info className="h-4 w-4" />
                                     <AlertDescription>
-                                        工具组配置请在「MCP工具」页面管理。调度模型和工具模型请在上方「模型」标签页配置。
+                                        工具组配置请在「MCP工具」页面管理。工具模型请在上方「模型」标签页配置。
                                     </AlertDescription>
                                 </Alert>
                             )}

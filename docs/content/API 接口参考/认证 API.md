@@ -1,19 +1,7 @@
 # 认证 API
 
-<cite>
-**本文档引用的文件**
-- [src/services/middleware/auth.js](file://src/services/middleware/auth.js)
-- [src/services/routes/authRoutes.js](file://src/services/routes/authRoutes.js)
-- [src/services/webServer.js](file://src/services/webServer.js)
-- [frontend/app/login/page.tsx](file://frontend/app/login/page.tsx)
-- [frontend/app/login/token/page.tsx](file://frontend/app/login/token/page.tsx)
-- [frontend/lib/api.ts](file://frontend/lib/api.ts)
-- [src/services/permission/PermissionService.js](file://src/services/permission/PermissionService.js)
-- [src/services/middleware/index.js](file://src/services/middleware/index.js)
-- [src/services/routes/shared.js](file://src/services/routes/shared.js)
-- [src/services/routes/index.js](file://src/services/routes/index.js)
-- [config/config.js](file://config/config.js)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

@@ -1,21 +1,7 @@
 # MCP 配置
 
-<cite>
-**本文引用的文件**
-- [McpManager.js](file://src/mcp/McpManager.js)
-- [BuiltinMcpServer.js](file://src/mcp/BuiltinMcpServer.js)
-- [McpClient.js](file://src/mcp/McpClient.js)
-- [ToolGroupManager.js](file://src/services/tools/ToolGroupManager.js)
-- [ToolFilterService.js](file://src/services/tools/ToolFilterService.js)
-- [tools/index.js](file://src/mcp/tools/index.js)
-- [config.js](file://config/config.js)
-- [mcp-servers.json](file://data/mcp-servers.json)
-- [README.md（工具目录）](file://data/tools/README.md)
-- [example_tool.js](file://data/tools/example_tool.js)
-- [TOOLS.md](file://docs/TOOLS.md)
-- [mcpRoutes.js](file://src/services/routes/mcpRoutes.js)
-- [helpers.js](file://src/mcp/tools/helpers.js)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

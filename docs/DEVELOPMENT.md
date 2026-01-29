@@ -774,10 +774,68 @@ BREAKING CHANGE: 配置文件格式已更改"
 
 ## 相关链接
 
-- [工具开发指南](./TOOLS.md)
-- [贡献指南](../CONTRIBUTING.md)
-- [MCP 协议文档](https://modelcontextprotocol.io/)
-- [Yunzai-Bot 文档](https://github.com/yoimiya-kokomi/Miao-Yunzai)
+### 核心文档
+
+- [架构文档](./ARCHITECTURE.md) - MCP 与 Skills Agent 架构详解
+- [工具开发指南](./TOOLS.md) - 工具编写完整教程
+- [贡献指南](../CONTRIBUTING.md) - 代码贡献规范
+
+### Wiki 详细文档
+
+项目 Wiki 位于 `docs/content/` 目录，包含更详细的技术文档：
+
+#### 开发必读
+| 文档 | 说明 |
+|------|------|
+| [开发者指南](content/开发者指南.md) | 开发环境搭建与代码规范 |
+| [快速开始](content/快速开始.md) | 完整的安装部署流程 |
+| [故障排除](content/故障排除.md) | 常见问题与解决方案 |
+
+#### 核心架构
+| 文档 | 说明 |
+|------|------|
+| [系统概览](content/核心架构/系统概览.md) | 整体架构设计与分层 |
+| [核心架构](content/核心架构/核心架构.md) | Apps/Services/Core 层详解 |
+| [组件交互机制](content/核心架构/组件交互机制.md) | 模块间通信与事件流 |
+| [设计模式应用](content/核心架构/设计模式应用.md) | 适配器、工厂、单例等模式 |
+| [服务层架构](content/核心架构/服务层架构/) | LLM/存储/媒体等服务详解 |
+| [模块系统](content/核心架构/模块系统/) | 模块加载与生命周期 |
+
+#### 模型适配器
+| 文档 | 说明 |
+|------|------|
+| [AI 模型适配器](content/AI%20模型适配器/) | OpenAI/Gemini/Claude 等适配器实现 |
+
+#### 工具开发
+| 文档 | 说明 |
+|------|------|
+| [工具调用系统](content/工具调用系统/工具调用系统.md) | 工具系统概述 |
+| [MCP 协议实现](content/工具调用系统/MCP%20协议实现.md) | MCP 协议详解 |
+| [自定义工具开发](content/工具调用系统/自定义工具开发.md) | 工具开发完整指南 |
+| [工具安全控制](content/工具调用系统/工具安全控制.md) | 权限与安全策略 |
+| [内置工具管理](content/工具调用系统/内置工具管理/) | 各类内置工具文档 |
+
+#### API 开发
+| 文档 | 说明 |
+|------|------|
+| [API 接口参考](content/API%20接口参考/) | REST API 完整文档 |
+| [Web 管理面板](content/Web%20管理面板/) | 面板组件与路由 |
+
+#### 配置参考
+| 文档 | 说明 |
+|------|------|
+| [配置管理](content/配置管理/配置管理.md) | 配置系统概述 |
+| [渠道配置](content/配置管理/渠道配置.md) | API 渠道配置 |
+| [模型配置](content/配置管理/模型配置.md) | 模型参数调优 |
+| [MCP 配置](content/配置管理/MCP%20配置.md) | MCP 服务器配置 |
+
+### 外部资源
+
+- [MCP 协议文档](https://modelcontextprotocol.io/) - Model Context Protocol 官方文档
+- [Yunzai-Bot 文档](https://github.com/yoimiya-kokomi/Miao-Yunzai) - Yunzai-Bot V3 文档
+- [OpenAI API 文档](https://platform.openai.com/docs/) - OpenAI 官方 API 文档
+- [Google Gemini 文档](https://ai.google.dev/docs) - Gemini API 文档
+- [Anthropic Claude 文档](https://docs.anthropic.com/) - Claude API 文档
 
 ---
 

@@ -1,19 +1,7 @@
 # Claude 适配器
 
-<cite>
-**本文档引用的文件**
-- [ClaudeClient.js](file://src/core/adapters/claude/ClaudeClient.js)
-- [converter.js](file://src/core/adapters/claude/converter.js)
-- [AbstractClient.js](file://src/core/adapters/AbstractClient.js)
-- [converter.js](file://src/core/utils/converter.js)
-- [index.js](file://src/core/adapters/claude/index.js)
-- [index.js](file://src/core/adapters/index.js)
-- [models.js](file://src/core/times/models.js)
-- [adapter.js](file://src/core/times/adapter.js)
-- [LlmService.js](file://src/services/llm/LlmService.js)
-- [ChannelManager.js](file://src/services/llm/ChannelManager.js)
-- [config.js](file://config/config.js)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

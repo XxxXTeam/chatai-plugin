@@ -1,23 +1,7 @@
 # API 接口参考
 
-<cite>
-**本文档引用的文件**
-- [index.js](file://index.js)
-- [package.json](file://package.json)
-- [README.md](file://README.md)
-- [src/services/webServer.js](file://src/services/webServer.js)
-- [src/services/routes/index.js](file://src/services/routes/index.js)
-- [src/services/routes/shared.js](file://src/services/routes/shared.js)
-- [src/services/middleware/auth.js](file://src/services/middleware/auth.js)
-- [src/services/routes/authRoutes.js](file://src/services/routes/authRoutes.js)
-- [src/services/routes/channelRoutes.js](file://src/services/routes/channelRoutes.js)
-- [src/services/routes/conversationRoutes.js](file://src/services/routes/conversationRoutes.js)
-- [src/services/routes/presetRoutes.js](file://src/services/routes/presetRoutes.js)
-- [src/services/routes/toolsRoutes.js](file://src/services/routes/toolsRoutes.js)
-- [src/services/routes/systemRoutes.js](file://src/services/routes/systemRoutes.js)
-- [src/services/routes/memoryRoutes.js](file://src/services/routes/memoryRoutes.js)
-- [src/services/routes/groupAdminRoutes.js](file://src/services/routes/groupAdminRoutes.js)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

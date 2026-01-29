@@ -1,18 +1,7 @@
 # 对话管理 API
 
-<cite>
-**本文档引用的文件**
-- [conversationRoutes.js](file://src/services/routes/conversationRoutes.js)
-- [DatabaseService.js](file://src/services/storage/DatabaseService.js)
-- [history.js](file://src/core/utils/history.js)
-- [ContextManager.js](file://src/services/llm/ContextManager.js)
-- [ApiResponse.js](file://src/services/middleware/ApiResponse.js)
-- [shared.js](file://src/services/routes/shared.js)
-- [webServer.js](file://src/services/webServer.js)
-- [config.js](file://config/config.js)
-- [api.ts](file://frontend/lib/api.ts)
-- [messageDedup.js](file://src/utils/messageDedup.js)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

@@ -86,18 +86,12 @@ class Config {
                 dimensions: 1536,
                 // 模型分类配置（每个分类配置一个模型名，空则使用默认模型）
                 models: {
-                    // 对话模型 - 用于普通聊天（无工具调用）
+                    // 对话模型 - 用于普通聊天
                     chat: '',
-                    // 工具模型 - 用于执行工具调用
-                    tool: '',
-                    // 调度模型 - 用于分析需要调用哪些工具组（轻量快速）
-                    dispatch: '',
                     // 图像模型 - 用于图像理解和生成
                     image: '',
                     // 伪人模型 - 用于模拟真人回复
-                    roleplay: '',
-                    // 搜索模型 - 用于联网搜索
-                    search: ''
+                    roleplay: ''
                 },
                 // 备选模型配置 - 主模型失败时自动轮询
                 fallback: {
@@ -117,7 +111,7 @@ class Config {
                 enableTools: false, // 是否允许伪人模式使用工具
                 probability: 0.02,
                 temperature: 0.9,
-                maxTokens: 100,
+                maxTokens: 150,
                 recall: false,
                 model: '',
                 systemPrompt:
@@ -210,9 +204,8 @@ class Config {
                 useForwardMsg: true, // 工具日志使用合并转发
                 parallelExecution: true, // 启用并行工具执行
                 sendIntermediateReply: true, // 工具调用前发送模型的中间回复
-                // 工具组配置 - 调度模型只接收工具组摘要，选中后返回完整工具列表
-                useToolGroups: true, // 启用工具组模式
-                dispatchFirst: true // 先用调度模型选择工具组，再用工具模型执行
+                // 工具组配置
+                useToolGroups: false // 启用工具组模式
             },
             // 工具组定义（可在面板配置）
             toolGroups: [
@@ -310,7 +303,7 @@ class Config {
                     intervalMinutes: 10,
                     maxMessagesBefore: 60, // 超过此消息数且长时间未活跃则总结
                     minInactiveMinutes: 30, // 在该时间段无人发言才会总结
-                    retainMessagesAfterSummary: 0, // 总结后保留的最近消息数量
+                    retainMessagesAfterSummary: 5, // 总结后保留的最近消息数量
                     model: '', // 为空使用默认模型
                     maxTokens: 400, // 总结输出长度
                     windowMessages: 80 // 参与总结的最多消息数
@@ -395,6 +388,23 @@ class Config {
                 mathFormula: true, // 启用数学公式自动渲染为图片
                 theme: 'light', // 渲染主题: 'light' | 'dark'
                 width: 800 // 渲染宽度
+            },
+            // 输出优化配置
+            output: {
+                // 长文本处理
+                longText: {
+                    enabled: true, // 启用长文本优化
+                    threshold: 500, // 长文本阈值（字符数）
+                    mode: 'forward', // 处理模式: 'auto' | 'forward' | 'image' | 'none'（默认合并转发）
+                    forwardTitle: 'AI 回复' // 合并转发标题
+                },
+                sentenceOutput: {
+                    enabled: false, // 启用按句输出
+                    allSentences: false, // 全部按句输出（否则仅伪人模式）
+                    minDelay: 300, // 句子间最小延迟（毫秒）
+                    maxDelay: 1500, // 句子间最大延迟（毫秒）
+                    randomDelay: true // 随机延迟（更自然）
+                }
             },
             // 高级功能
             features: {

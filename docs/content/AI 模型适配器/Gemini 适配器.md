@@ -1,17 +1,7 @@
 # Gemini 适配器
 
-<cite>
-**本文引用的文件**
-- [GeminiClient.js](file://src/core/adapters/gemini/GeminiClient.js)
-- [converter.js](file://src/core/adapters/gemini/converter.js)
-- [index.js](file://src/core/adapters/gemini/index.js)
-- [AbstractClient.js](file://src/core/adapters/AbstractClient.js)
-- [converter.js](file://src/core/utils/converter.js)
-- [helpers.js](file://src/core/utils/helpers.js)
-- [models.js](file://src/core/types/models.js)
-- [common.js](file://src/core/types/common.js)
-- [channelRoutes.js](file://src/services/routes/channelRoutes.js)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)
@@ -298,7 +288,7 @@ UT --> TY
 - 模型选择
   - 根据场景选择合适模型（如快速/轻量 vs 高质量/长上下文），平衡速度与效果
 
-[本节为通用指导，无需特定文件引用]
+
 
 ## 故障排查指南
 - 认证失败
@@ -322,7 +312,7 @@ UT --> TY
 ## 结论
 Gemini 适配器通过清晰的分层设计与强大的转换器机制，实现了与 Google AI Studio 的高效对接。其在多模态输入、工具调用解析、安全设置与模型查询等方面提供了完备的能力，同时通过媒体预处理与多键策略提升了稳定性与可用性。建议在生产环境中结合本文的性能优化与最佳实践，确保系统的可靠性与效率。
 
-[本节为总结性内容，无需特定文件引用]
+
 
 ## 附录
 

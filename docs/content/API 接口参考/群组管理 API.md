@@ -1,17 +1,7 @@
 # 群组管理 API
 
-<cite>
-**本文档引用的文件**
-- [index.js](file://index.js)
-- [README.md](file://README.md)
-- [groupAdminRoutes.js](file://src/services/routes/groupAdminRoutes.js)
-- [ScopeManager.js](file://src/services/scope/ScopeManager.js)
-- [shared.js](file://src/services/routes/shared.js)
-- [group.js](file://src/mcp/tools/group.js)
-- [group.js](file://src/utils/group.js)
-- [scopeRoutes.js](file://src/services/routes/scopeRoutes.js)
-- [routeFactory.js](file://src/services/middleware/routeFactory.js)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

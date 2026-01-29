@@ -1,24 +1,7 @@
 # API 接口文档
 
-<cite>
-**本文档引用的文件**
-- [index.js](file://index.js)
-- [webServer.js](file://src/services/webServer.js)
-- [routes/index.js](file://src/services/routes/index.js)
-- [auth.js](file://src/services/middleware/auth.js)
-- [ApiResponse.js](file://src/services/middleware/ApiResponse.js)
-- [shared.js](file://src/services/route/shared.js)
-- [systemRoutes.js](file://src/services/routes/systemRoutes.js)
-- [channelRoutes.js](file://src/services/routes/channelRoutes.js)
-- [configRoutes.js](file://src/services/routes/configRoutes.js)
-- [conversationRoutes.js](file://src/services/routes/conversationRoutes.js)
-- [presetRoutes.js](file://src/services/routes/presetRoutes.js)
-- [toolsRoutes.js](file://src/services/routes/toolsRoutes.js)
-- [skillsRoutes.js](file://src/services/routes/skillsRoutes.js)
-- [api.ts](file://frontend/lib/api.ts)
-- [useApi.ts](file://frontend/lib/hooks/useApi.ts)
-- [config.js](file://config/config.js)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

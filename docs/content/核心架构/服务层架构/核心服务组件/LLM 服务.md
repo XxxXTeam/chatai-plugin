@@ -1,20 +1,7 @@
 # LLM 服务
 
-<cite>
-**本文档引用的文件**
-- [LlmService.js](file://src/services/llm/LlmService.js)
-- [ChannelManager.js](file://src/services/llm/ChannelManager.js)
-- [ChatService.js](file://src/services/llm/ChatService.js)
-- [ContextManager.js](file://src/services/llm/ContextManager.js)
-- [AbstractClient.js](file://src/core/adapters/AbstractClient.js)
-- [OpenAIClient.js](file://src/core/adapters/openai/OpenAIClient.js)
-- [GeminiClient.js](file://src/core/adapters/gemini/GeminiClient.js)
-- [ClaudeClient.js](file://src/core/adapters/claude/ClaudeClient.js)
-- [index.js（适配器导出）](file://src/core/adapters/index.js)
-- [converter.js（类型转换器）](file://src/core/utils/converter.js)
-- [config.js（配置管理）](file://config/config.js)
-- [config.yaml（运行时配置）](file://config/config.yaml)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)
@@ -446,7 +433,7 @@ LS --> CFG
 - 上下文管理
   - ContextManager 的自动总结与会话状态，控制上下文长度，提升响应速度
 
-[本节为通用指导，无需特定文件引用]
+
 
 ## 故障排查指南
 - 渠道不可用
@@ -469,7 +456,7 @@ LS --> CFG
 ## 结论
 本 LLM 服务通过清晰的服务层、适配器层与配置层划分，实现了多厂商模型的统一接入与灵活管理。ChannelManager 提供完善的渠道治理与负载均衡，LlmService 负责客户端创建与工具/推理配置，ChatService 则承担消息编排与上下文管理。配合类型转换器与配置体系，系统具备良好的扩展性与可维护性。
 
-[本节为总结，无需特定文件引用]
+
 
 ## 附录
 

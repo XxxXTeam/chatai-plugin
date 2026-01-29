@@ -1,25 +1,7 @@
 # Web 管理面板
 
-<cite>
-**本文档引用的文件**
-- [package.json](file://frontend/package.json)
-- [next.config.ts](file://frontend/next.config.ts)
-- [layout.tsx](file://frontend/app/layout.tsx)
-- [api.ts](file://frontend/lib/api.ts)
-- [store.ts](file://frontend/lib/store.ts)
-- [types.ts](file://frontend/lib/types.ts)
-- [useApi.ts](file://frontend/lib/hooks/useApi.ts)
-- [useSSE.ts](file://frontend/lib/hooks/useSSE.ts)
-- [useResponsive.ts](file://frontend/lib/hooks/useResponsive.ts)
-- [Header.tsx](file://frontend/components/layout/Header.tsx)
-- [Sidebar.tsx](file://frontend/components/layout/Sidebar.tsx)
-- [ApiKeyManager.tsx](file://frontend/components/channels/ApiKeyManager.tsx)
-- [form.tsx](file://frontend/components/ui/form.tsx)
-- [dialog.tsx](file://frontend/components/ui/dialog.tsx)
-- [channels/page.tsx](file://frontend/app/(dashboard)/channels/page.tsx)
-- [settings/page.tsx](file://frontend/app/(dashboard)/settings/page.tsx)
-- [groups/[id]/page.tsx](file://frontend/app/(dashboard)/groups/[id]/page.tsx)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

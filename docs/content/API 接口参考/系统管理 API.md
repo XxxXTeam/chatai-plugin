@@ -1,21 +1,7 @@
 # 系统管理 API
 
-<cite>
-**本文档引用的文件**
-- [index.js](file://index.js)
-- [webServer.js](file://src/services/webServer.js)
-- [systemRoutes.js](file://src/services/routes/systemRoutes.js)
-- [configRoutes.js](file://src/services/routes/configRoutes.js)
-- [logsRoutes.js](file://src/services/routes/logsRoutes.js)
-- [StatsService.js](file://src/services/stats/StatsService.js)
-- [UsageStats.js](file://src/services/stats/UsageStats.js)
-- [ToolCallStats.js](file://src/services/stats/ToolCallStats.js)
-- [LogService.js](file://src/services/stats/LogService.js)
-- [config.js](file://config/config.js)
-- [auth.js](file://src/services/middleware/auth.js)
-- [PermissionService.js](file://src/services/permission/PermissionService.js)
-- [TelemetryService.js](file://src/services/telemetry/TelemetryService.js)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

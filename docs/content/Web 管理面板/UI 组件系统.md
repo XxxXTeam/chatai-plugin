@@ -1,22 +1,7 @@
 # UI 组件系统
 
-<cite>
-**本文引用的文件**
-- [frontend/components/ui/button.tsx](file://frontend/components/ui/button.tsx)
-- [frontend/components/ui/dialog.tsx](file://frontend/components/ui/dialog.tsx)
-- [frontend/components/ui/form.tsx](file://frontend/components/ui/form.tsx)
-- [frontend/components/ui/table.tsx](file://frontend/components/ui/table.tsx)
-- [frontend/components/ui/input.tsx](file://frontend/components/ui/input.tsx)
-- [frontend/components/ui/select.tsx](file://frontend/components/ui/select.tsx)
-- [frontend/components/ui/textarea.tsx](file://frontend/components/ui/textarea.tsx)
-- [frontend/components/ui/checkbox.tsx](file://frontend/components/ui/checkbox.tsx)
-- [frontend/components/ui/switch.tsx](file://frontend/components/ui/switch.tsx)
-- [frontend/components/ui/card.tsx](file://frontend/components/ui/card.tsx)
-- [frontend/components/ui/badge.tsx](file://frontend/components/ui/badge.tsx)
-- [frontend/components/ui/tabs.tsx](file://frontend/components/ui/tabs.tsx)
-- [frontend/lib/utils.ts](file://frontend/lib/utils.ts)
-- [frontend/app/layout.tsx](file://frontend/app/layout.tsx)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

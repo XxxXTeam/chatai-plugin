@@ -1,19 +1,7 @@
 # Web 服务器
 
-<cite>
-**本文引用的文件**
-- [index.js](file://index.js)
-- [webServer.js](file://src/services/webServer.js)
-- [config.js](file://config/config.js)
-- [index.js（路由索引）](file://src/services/routes/index.js)
-- [auth.js（中间件）](file://src/services/middleware/auth.js)
-- [ApiResponse.js（统一响应）](file://src/services/middleware/ApiResponse.js)
-- [skillsRoutes.js](file://src/services/routes/skillsRoutes.js)
-- [systemRoutes.js](file://src/services/routes/systemRoutes.js)
-- [api.ts（前端 API 客户端）](file://frontend/lib/api.ts)
-- [useSSE.ts（前端 SSE 钩子）](file://frontend/lib/hooks/useSSE.ts)
-- [SkillsAgent.js](file://src/services/agent/SkillsAgent.js)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

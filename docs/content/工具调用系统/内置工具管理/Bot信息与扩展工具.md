@@ -1,23 +1,7 @@
 # Bot信息与扩展工具
 
-<cite>
-**本文档引用的文件**
-- [README.md](file://README.md)
-- [index.js](file://index.js)
-- [config.js](file://config/config.js)
-- [tools/index.js](file://src/mcp/tools/index.js)
-- [tools/bot.js](file://src/mcp/tools/bot.js)
-- [tools/extra.js](file://src/mcp/tools/extra.js)
-- [tools/basic.js](file://src/mcp/tools/basic.js)
-- [tools/user.js](file://src/mcp/tools/user.js)
-- [tools/group.js](file://src/mcp/tools/group.js)
-- [tools/message.js](file://src/mcp/tools/message.js)
-- [tools/helpers.js](file://src/mcp/tools/helpers.js)
-- [tools/schedule.js](file://src/mcp/tools/schedule.js)
-- [data/tools/README.md](file://data/tools/README.md)
-- [data/tools/example_tool.js](file://data/tools/example_tool.js)
-- [docs/TOOLS.md](file://docs/TOOLS.md)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

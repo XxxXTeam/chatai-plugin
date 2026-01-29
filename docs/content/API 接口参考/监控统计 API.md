@@ -1,18 +1,7 @@
 # 监控统计 API
 
-<cite>
-**本文档引用的文件**
-- [StatsService.js](file://src/services/stats/StatsService.js)
-- [UsageStats.js](file://src/services/stats/UsageStats.js)
-- [ToolCallStats.js](file://src/services/stats/ToolCallStats.js)
-- [LogService.js](file://src/services/stats/LogService.js)
-- [statsRoutes.js](file://src/services/routes/statsRoutes.js)
-- [systemRoutes.js](file://src/services/routes/systemRoutes.js)
-- [api.ts](file://frontend/lib/api.ts)
-- [SystemMonitor.tsx](file://frontend/components/dashboard/SystemMonitor.tsx)
-- [index.js](file://index.js)
-- [package.json](file://package.json)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

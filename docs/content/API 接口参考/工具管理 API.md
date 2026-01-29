@@ -1,19 +1,7 @@
 # 工具管理 API
 
-<cite>
-**本文档引用的文件**
-- [toolsRoutes.js](file://src/services/routes/toolsRoutes.js)
-- [McpManager.js](file://src/mcp/McpManager.js)
-- [BuiltinMcpServer.js](file://src/mcp/BuiltinMcpServer.js)
-- [ToolGroupManager.js](file://src/services/tools/ToolGroupManager.js)
-- [ToolFilterService.js](file://src/services/tools/ToolFilterService.js)
-- [ToolCallStats.js](file://src/services/stats/ToolCallStats.js)
-- [config.js](file://config/config.js)
-- [CustomTool.js](file://data/tools/CustomTool.js)
-- [example_tool.js](file://data/tools/example_tool.js)
-- [api.ts](file://frontend/lib/api.ts)
-- [webServer.js](file://src/services/webServer.js)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)

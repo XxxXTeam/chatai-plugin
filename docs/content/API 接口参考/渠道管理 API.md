@@ -1,19 +1,7 @@
 # 渠道管理 API
 
-<cite>
-**本文档引用的文件**
-- [index.js](file://index.js)
-- [README.md](file://README.md)
-- [ChannelManager.js](file://src/services/llm/ChannelManager.js)
-- [channelRoutes.js](file://src/services/routes/channelRoutes.js)
-- [config.js](file://config/config.js)
-- [OpenAIClient.js](file://src/core/adapters/openai/OpenAIClient.js)
-- [StatsService.js](file://src/services/stats/StatsService.js)
-- [page.tsx](file://frontend/app/(dashboard)/channels/page.tsx)
-- [api.ts](file://frontend/lib/api.ts)
-- [ApiKeyManager.tsx](file://frontend/components/channels/ApiKeyManager.tsx)
-- [BatchTestPanel.tsx](file://frontend/components/channels/BatchTestPanel.tsx)
-</cite>
+
+
 
 ## 目录
 1. [简介](#简介)
