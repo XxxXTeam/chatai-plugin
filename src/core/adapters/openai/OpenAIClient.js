@@ -49,8 +49,9 @@ function validateAndCleanMessages(messages) {
                     delete assistantMsg.tool_calls
                 }
                 if (originalCount !== (assistantMsg.tool_calls?.length || 0)) {
+                    const removedIds = assistantMsg.tool_calls ? [] : Array.from(validToolCallIds)
                     logger.debug(
-                        `[消息验证] 修复不完整的 tool_calls: ${originalCount} -> ${assistantMsg.tool_calls?.length || 0}`
+                        `[消息验证] 修复不完整的 tool_calls: ${originalCount} -> ${assistantMsg.tool_calls?.length || 0}, 未匹配ID: [${Array.from(validToolCallIds).join(', ')}], 已匹配ID: [${Array.from(matchedToolCallIds).join(', ')}]`
                     )
                 }
             }
@@ -73,11 +74,16 @@ function validateAndCleanMessages(messages) {
 
             cleaned.push(msg)
 
-            if (msg.tool_calls && msg.tool_calls.length > 0) {
+            // 检查 tool_calls (OpenAI格式) 和 toolCalls (内部格式)
+            const toolCallsArr = msg.tool_calls || msg.toolCalls
+            if (toolCallsArr && toolCallsArr.length > 0) {
                 lastAssistantIndex = cleaned.length - 1
-                for (const tc of msg.tool_calls) {
+                for (const tc of toolCallsArr) {
                     if (tc.id) validToolCallIds.add(tc.id)
                 }
+                logger.debug(
+                    `[消息验证] assistant消息有tool_calls: ${toolCallsArr.length}个, IDs: [${toolCallsArr.map(tc => tc.id).join(', ')}]`
+                )
             }
         } else if (msg.role === 'tool') {
             if (lastAssistantIndex >= 0 && validToolCallIds.has(msg.tool_call_id)) {
@@ -89,6 +95,9 @@ function validateAndCleanMessages(messages) {
                     matchedToolCallIds.clear()
                 }
             } else {
+                logger.debug(
+                    `[消息验证] tool消息未匹配: tool_call_id=${msg.tool_call_id}, lastAssistantIndex=${lastAssistantIndex}, validIds=[${Array.from(validToolCallIds).join(', ')}]`
+                )
                 pendingToolMessages.push(msg)
             }
         } else {
@@ -108,7 +117,10 @@ function validateAndCleanMessages(messages) {
 
     // 处理末尾残留的孤立 tool 消息
     if (pendingToolMessages.length > 0) {
-        logger.debug(`[消息验证] 丢弃末尾 ${pendingToolMessages.length} 个孤立的 tool 消息`)
+        const orphanedIds = pendingToolMessages.map(m => m.tool_call_id || 'no_id').join(', ')
+        logger.debug(
+            `[消息验证] 丢弃末尾 ${pendingToolMessages.length} 个孤立的 tool 消息, IDs: [${orphanedIds}], lastAssistantIndex: ${lastAssistantIndex}`
+        )
     }
 
     return cleaned

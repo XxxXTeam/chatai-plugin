@@ -1,5 +1,6 @@
 import fetch from 'node-fetch'
 import crypto from 'crypto'
+import config from '../../../config/config.js'
 
 export const bltoolsTools = [
     {
@@ -707,7 +708,7 @@ export const bltoolsTools = [
 
     {
         name: 'bilibili_video_summary',
-        description: '获取B站视频的AI总结',
+        description: '获取B站视频的AI总结，包含视频摘要、大纲和精选弹幕',
         inputSchema: {
             type: 'object',
             properties: {
@@ -722,20 +723,35 @@ export const bltoolsTools = [
             const { bvid } = args
 
             try {
-                const headers = {
+                const baseHeaders = {
                     accept: '*/*',
-                    'accept-language': 'zh-CN,zh;q=0.9',
-                    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                    'user-agent':
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36'
                 }
 
-                const biliRes = await fetch('https://www.bilibili.com')
-                const setCookies = []
-                for (const [k, v] of biliRes.headers) {
-                    if (k.toLowerCase() === 'set-cookie') setCookies.push(v)
-                }
-                headers.cookie = setCookies.map(c => c.split(';')[0]).join('; ')
+                // 从配置获取SESSDATA
+                const sessdata = config.get('bilibili.sessdata') || ''
 
-                const videoRes = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, { headers })
+                // 获取Cookie
+                const getCookie = async () => {
+                    if (sessdata) {
+                        return `SESSDATA=${sessdata}`
+                    }
+                    const response = await fetch('https://www.bilibili.com')
+                    const setCookies = []
+                    for (const [k, v] of response.headers) {
+                        if (k.toLowerCase() === 'set-cookie') setCookies.push(v)
+                    }
+                    return setCookies.map(c => c.split(';')[0]).join('; ')
+                }
+
+                const cookie = await getCookie()
+
+                // 获取视频信息
+                const videoRes = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {
+                    headers: { ...baseHeaders, cookie }
+                })
                 const videoData = await videoRes.json()
 
                 if (videoData.code !== 0) {
@@ -743,24 +759,25 @@ export const bltoolsTools = [
                 }
 
                 const { cid, owner } = videoData.data
-                const navRes = await fetch('https://api.bilibili.com/x/web-interface/nav', { headers })
+
+                // 初始化WBI密钥
+                const navRes = await fetch('https://api.bilibili.com/x/web-interface/nav', {
+                    headers: { ...baseHeaders, cookie: sessdata ? `SESSDATA=${sessdata};` : cookie }
+                })
                 const navData = await navRes.json()
 
-                if (!navData.data?.wbi_img) {
+                // wbi_img 即使未登录也能获取
+                const { img_url, sub_url } = navData.data?.wbi_img || {}
+                if (!img_url || !sub_url) {
                     return {
-                        video_info: {
-                            title: videoData.data.title,
-                            author: owner.name,
-                            desc: videoData.data.desc
-                        },
-                        summary: '无法获取AI总结（需要登录）'
+                        video_info: { title: videoData.data.title, author: owner.name },
+                        error: '无法获取WBI密钥'
                     }
                 }
-
-                const { img_url, sub_url } = navData.data.wbi_img
                 const imgKey = img_url.split('/').pop().split('.')[0]
                 const subKey = sub_url.split('/').pop().split('.')[0]
 
+                // WBI签名
                 const mixinKeyEncTab = [
                     46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29, 28,
                     14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21,
@@ -779,9 +796,14 @@ export const bltoolsTools = [
                     web_location: '333.788',
                     wts: Math.round(Date.now() / 1000)
                 }
+
+                const chrFilter = /[!'()*]/g
                 const query = Object.keys(params)
                     .sort()
-                    .map(k => `${k}=${params[k]}`)
+                    .map(k => {
+                        const value = params[k].toString().replace(chrFilter, '')
+                        return `${encodeURIComponent(k)}=${encodeURIComponent(value)}`
+                    })
                     .join('&')
                 const wrid = crypto
                     .createHash('md5')
@@ -790,27 +812,58 @@ export const bltoolsTools = [
 
                 const summaryRes = await fetch(
                     `https://api.bilibili.com/x/web-interface/view/conclusion/get?${query}&w_rid=${wrid}`,
-                    { headers: { ...headers, referer: `https://www.bilibili.com/video/${bvid}` } }
+                    { headers: { ...baseHeaders, cookie, referer: `https://www.bilibili.com/video/${bvid}` } }
                 )
                 const summaryData = await summaryRes.json()
 
-                if (summaryData.code !== 0 || !summaryData.data?.model_result) {
+                if (summaryData.code !== 0) {
+                    return {
+                        video_info: { title: videoData.data.title, author: owner.name },
+                        summary: `获取AI总结失败: ${summaryData.message}`
+                    }
+                }
+
+                if (!summaryData.data?.model_result) {
                     return {
                         video_info: { title: videoData.data.title, author: owner.name },
                         summary: '暂无AI总结'
                     }
                 }
 
-                const { summary, outline } = summaryData.data.model_result
+                // 格式化返回结果
+                const { summary, outline, subtitle } = summaryData.data.model_result
+                const parts = []
+
+                if (summary) {
+                    parts.push('【视频摘要】', summary, '')
+                }
+
+                if (outline?.[0]?.part_outline?.length > 0) {
+                    parts.push('【视频大纲】')
+                    outline[0].part_outline.forEach(({ timestamp, content }) => {
+                        const minutes = Math.floor(timestamp / 60)
+                        const seconds = timestamp % 60
+                        const time = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+                        parts.push(`${time} - ${content}`)
+                    })
+                    parts.push('')
+                }
+
+                if (subtitle?.[0]?.part_subtitle?.length > 0) {
+                    parts.push('【精选弹幕】')
+                    subtitle[0].part_subtitle.forEach(({ start_timestamp, content }) => {
+                        const time = `${Math.floor(start_timestamp / 60)
+                            .toString()
+                            .padStart(2, '0')}:${(start_timestamp % 60).toString().padStart(2, '0')}`
+                        parts.push(`${time} - ${content}`)
+                    })
+                }
+
                 return {
                     success: true,
                     video_info: { title: videoData.data.title, author: owner.name, bvid },
-                    summary: summary || '暂无摘要',
-                    outline:
-                        outline?.[0]?.part_outline?.map(o => ({
-                            time: `${Math.floor(o.timestamp / 60)}:${String(o.timestamp % 60).padStart(2, '0')}`,
-                            content: o.content
-                        })) || []
+                    formatted_summary: parts.join('\n'),
+                    raw: { summary, outline, subtitle }
                 }
             } catch (error) {
                 return { error: `获取视频总结失败: ${error.message}` }

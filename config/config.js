@@ -269,6 +269,9 @@ class Config {
             mcp: {
                 enabled: true
             },
+            bilibili: {
+                sessdata: '' // B站登录Cookie的SESSDATA，用于获取AI视频总结
+            },
             redis: {
                 enabled: true,
                 host: '127.0.0.1',

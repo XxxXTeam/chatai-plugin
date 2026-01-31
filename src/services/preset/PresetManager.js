@@ -458,31 +458,6 @@ export class PresetManager {
      * @returns {boolean}
      */
     isContextCleared(conversationId) {
-        const state = this.clearedContexts.get(conversationId)
-        if (!state) return false
-
-        const now = Date.now()
-        const clearWindow = 60 * 1000 // 60秒保护窗口
-
-        // 检查是否在保护窗口内
-        if (now - state.clearedAt < clearWindow) {
-            // 增加使用计数
-            state.useCount = (state.useCount || 0) + 1
-
-            // 如果超过最大使用次数，移除标记（防止无限保护）
-            if (state.useCount > (state.maxUses || 3)) {
-                this.clearedContexts.delete(conversationId)
-                logger.debug(`[PresetManager] 上下文清除标记已过期(使用次数): ${conversationId}`)
-                return false
-            }
-
-            logger.debug(`[PresetManager] 上下文清除保护生效: ${conversationId}, 使用次数: ${state.useCount}`)
-            return true
-        }
-
-        // 超过时间窗口，移除标记
-        this.clearedContexts.delete(conversationId)
-        logger.debug(`[PresetManager] 上下文清除标记已过期(超时): ${conversationId}`)
         return false
     }
 
