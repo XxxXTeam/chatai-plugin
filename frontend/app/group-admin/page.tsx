@@ -235,7 +235,7 @@ export default function GroupAdminPage() {
     const handleLoginWithCode = useCallback(async (code: string) => {
         setLoading(true)
         try {
-            const res = await fetch('/api/group-admin/login', {
+            const res = await fetch('/chatai/api/group-admin/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ code: code.toUpperCase() })
@@ -259,7 +259,7 @@ export default function GroupAdminPage() {
 
     const loadConfig = useCallback(async (token?: string) => {
         try {
-            const res = await fetch('/api/group-admin/config', {
+            const res = await fetch('/chatai/api/group-admin/config', {
                 headers: { Authorization: `Bearer ${token || getToken()}` }
             })
             if (!res.ok) {
@@ -405,7 +405,7 @@ export default function GroupAdminPage() {
         }
         setLoginLoading(true)
         try {
-            const res = await fetch('/api/group-admin/login', {
+            const res = await fetch('/chatai/api/group-admin/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ code: loginCode.trim().toUpperCase() })
@@ -437,7 +437,7 @@ export default function GroupAdminPage() {
     const saveConfig = async () => {
         setSaving(true)
         try {
-            const res = await fetch('/api/group-admin/config', {
+            const res = await fetch('/chatai/api/group-admin/config', {
                 method: 'PUT',
                 headers: { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -563,7 +563,7 @@ export default function GroupAdminPage() {
     const deleteEmoji = async (fileName: string) => {
         if (!confirm('确定要删除这个表情吗？')) return
         try {
-            const res = await fetch(`/api/group-admin/emoji/delete?file=${encodeURIComponent(fileName)}`, {
+            const res = await fetch(`/chatai/api/group-admin/emoji/delete?file=${encodeURIComponent(fileName)}`, {
                 method: 'DELETE', headers: { Authorization: `Bearer ${getToken()}` }
             })
             if (res.ok) {
@@ -576,7 +576,7 @@ export default function GroupAdminPage() {
     const clearEmojis = async () => {
         if (!confirm('确定要清空所有表情吗？')) return
         try {
-            const res = await fetch('/api/group-admin/emoji/clear', {
+            const res = await fetch('/chatai/api/group-admin/emoji/clear', {
                 method: 'DELETE', headers: { Authorization: `Bearer ${getToken()}` }
             })
             if (res.ok) { toast.success('已清空'); setEmojiStats({ total: 0, images: [] }) }
@@ -1392,7 +1392,7 @@ export default function GroupAdminPage() {
                         return []
                     }
                     try {
-                        const res = await fetch('/api/admin/models/fetch', {
+                        const res = await fetch('/chatai/api/admin/models/fetch', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
                             body: JSON.stringify({ baseUrl: channelForm.baseUrl, apiKey: channelForm.apiKey, adapterType: channelForm.adapterType })

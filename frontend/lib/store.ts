@@ -16,6 +16,7 @@ export const useAuthStore = create<AuthState>()(
             setToken: token => set({ token, isAuthenticated: !!token }),
             logout: () => {
                 localStorage.removeItem('chatai_token')
+                document.cookie = 'auth_token=; path=/chatai; expires=Thu, 01 Jan 1970 00:00:00 GMT'
                 set({ token: null, isAuthenticated: false })
             }
         }),

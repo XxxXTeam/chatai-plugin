@@ -57,7 +57,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             .catch(() => {
                 localStorage.removeItem('chatai_token')
                 // 清除cookie
-                document.cookie = 'auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+                document.cookie = 'auth_token=; path=/chatai; expires=Thu, 01 Jan 1970 00:00:00 GMT'
                 router.push('/login/')
             })
     }, [router])

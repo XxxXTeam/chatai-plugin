@@ -280,13 +280,16 @@ const authHandler = new AuthHandler()
 class WebServer {
     constructor() {
         this.app = express()
+        this.router = express.Router()
         this.port = config.get('web.port') || 3000
         this.server = null
+        this.mountPath = '/chatai'
         this.setupMiddleware()
         this.setupRoutes()
     }
 
     setupMiddleware() {
+        // 全局中间件
         this.app.use(express.json({ limit: '50mb' }))
         this.app.use(express.urlencoded({ extended: true }))
         this.app.use(cookieParser())
@@ -303,22 +306,19 @@ class WebServer {
             if (req.method === 'OPTIONS') return res.sendStatus(204)
             next()
         })
-
-        // Static files
         const webDir = path.join(__dirname, '../../resources/web')
         if (fs.existsSync(webDir)) {
-            this.app.use(express.static(webDir))
+            this.router.use(express.static(webDir))
         }
     }
 
     authMiddleware(req, res, next) {
         const authHeader = req.headers.authorization
         const cookieToken = req.cookies?.auth_token
-        const queryToken = req.query?.token // SSE 连接通过 query 参数传递 token
+        const queryToken = req.query?.token
         const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : cookieToken || queryToken
 
         if (!token) {
-            chatLogger.warn(`[Auth] 无token: ${req.method} ${req.originalUrl}`)
             return res.status(401).json(ChaiteResponse.fail(null, 'No token provided'))
         }
 
@@ -339,9 +339,11 @@ class WebServer {
 
     setupRoutes() {
         const auth = this.authMiddleware.bind(this)
-        this.app.get('/login/token', async (req, res) => {
+        const mountPath = this.mountPath
+
+        this.router.get('/login/token', async (req, res) => {
             const { token } = req.query
-            if (!token) return res.redirect('/login/')
+            if (!token) return res.redirect(`${mountPath}/login/`)
             const success = authHandler.validateToken(token, false)
             if (success) {
                 const jwtToken = jwt.sign(
@@ -361,7 +363,7 @@ class WebServer {
                     secure: req.secure,
                     sameSite: 'lax',
                     maxAge: 30 * 24 * 60 * 60 * 1000,
-                    path: '/'
+                    path: mountPath
                 })
 
                 // 返回一个中间页面，确保cookie被正确设置后再跳转
@@ -369,13 +371,13 @@ class WebServer {
 <html><head><meta charset="utf-8"><title>登录中...</title>
 <script>
 localStorage.setItem('chatai_token', '${jwtToken}');
-window.location.href = '/';
+window.location.href = '${mountPath}/';
 </script></head><body>正在登录...</body></html>`)
             }
-            res.redirect('/login/?error=invalid_token')
+            res.redirect(`${mountPath}/login/?error=invalid_token`)
         })
 
-        this.app.post('/api/auth/login', async (req, res) => {
+        this.router.post('/api/auth/login', async (req, res) => {
             try {
                 const { token, password, fingerprint } = req.body
                 const clientFingerprint = fingerprint || req.headers['x-client-fingerprint']
@@ -404,7 +406,8 @@ window.location.href = '/';
                     httpOnly: true,
                     secure: req.secure,
                     sameSite: 'lax',
-                    maxAge: 30 * 24 * 60 * 60 * 1000
+                    maxAge: 30 * 24 * 60 * 60 * 1000,
+                    path: mountPath
                 })
 
                 chatLogger.debug('[Auth] 登录成功')
@@ -414,7 +417,7 @@ window.location.href = '/';
             }
         })
 
-        this.app.get('/api/auth/verify-token', async (req, res) => {
+        this.router.get('/api/auth/verify-token', async (req, res) => {
             const { token } = req.query
             const clientFingerprint = req.headers['x-client-fingerprint']
 
@@ -445,12 +448,12 @@ window.location.href = '/';
             }
         })
 
-        this.app.get('/api/auth/status', auth, (req, res) => {
+        this.router.get('/api/auth/status', auth, (req, res) => {
             res.json(ChaiteResponse.ok({ authenticated: true }))
         })
 
         // 生成临时登录Token - 公开接口，Token输出到控制台
-        this.app.get('/api/auth/token/generate', async (req, res) => {
+        this.router.get('/api/auth/token/generate', async (req, res) => {
             try {
                 const token = authHandler.generateToken() // 5分钟有效
                 chatLogger.info('========================================')
@@ -470,7 +473,7 @@ window.location.href = '/';
         })
 
         // POST /api/auth/token/permanent - 生成永久Token
-        this.app.post('/api/auth/token/permanent', auth, (req, res) => {
+        this.router.post('/api/auth/token/permanent', auth, (req, res) => {
             try {
                 const forceNew = req.body?.forceNew === true
                 const hadToken = !!config.get('web.permanentAuthToken')
@@ -482,7 +485,7 @@ window.location.href = '/';
         })
 
         // DELETE /api/auth/token/permanent - 撤销永久Token
-        this.app.delete('/api/auth/token/permanent', auth, (req, res) => {
+        this.router.delete('/api/auth/token/permanent', auth, (req, res) => {
             try {
                 config.set('web.permanentAuthToken', null)
                 chatLogger.info('[Auth] 永久Token已撤销')
@@ -493,7 +496,7 @@ window.location.href = '/';
         })
 
         // GET /api/auth/token/status - 获取Token状态
-        this.app.get('/api/auth/token/status', auth, (req, res) => {
+        this.router.get('/api/auth/token/status', auth, (req, res) => {
             try {
                 const permanentToken = config.get('web.permanentAuthToken')
                 res.json(
@@ -507,28 +510,30 @@ window.location.href = '/';
             }
         })
 
-        this.app.get('/api/health', systemRoutes)
-        this.app.use('/api/channels', auth, channelRoutes)
-        this.app.use('/api/config', auth, configRoutes)
-        this.app.use('/api/test-panel', auth, testPanelRoutes)
-        this.app.use('/api/scope', auth, scopeRoutes)
-        this.app.use('/api/tools', auth, toolsRoutes)
-        this.app.use('/api/proxy', auth, proxyRoutes)
-        this.app.use('/api/mcp', auth, mcpRoutes)
-        this.app.use('/api/knowledge', auth, knowledgeRoutes)
-        this.app.use('/api/imagegen', auth, imageRoutes)
-        this.app.use('/api/logs', auth, logsRoutes)
-        this.app.use('/api/placeholders', auth, logsRoutes)
-        this.app.use('/api/memory', auth, memoryRoutes)
-        this.app.use('/api/graph', auth, graphRoutes)
-        this.app.use('/api/group-admin', groupAdminRoutes)
-        this.app.use('/api/skills', auth, skillsRoutes)
-        this.app.use('/api', auth, systemRoutes)
-        this.app.use('/api/conversations', createConversationRoutes(auth))
-        this.app.use('/api/context', createContextRoutes(auth))
-        this.app.use('/api/preset', createPresetRoutes(auth))
-        this.app.use('/api/presets', createPresetsConfigRoutes(auth))
-        this.app.get('*', (req, res) => {
+        this.router.get('/api/health', systemRoutes)
+        this.router.use('/api/channels', auth, channelRoutes)
+        this.router.use('/api/config', auth, configRoutes)
+        this.router.use('/api/test-panel', auth, testPanelRoutes)
+        this.router.use('/api/scope', auth, scopeRoutes)
+        this.router.use('/api/tools', auth, toolsRoutes)
+        this.router.use('/api/proxy', auth, proxyRoutes)
+        this.router.use('/api/mcp', auth, mcpRoutes)
+        this.router.use('/api/knowledge', auth, knowledgeRoutes)
+        this.router.use('/api/imagegen', auth, imageRoutes)
+        this.router.use('/api/logs', auth, logsRoutes)
+        this.router.use('/api/placeholders', auth, logsRoutes)
+        this.router.use('/api/memory', auth, memoryRoutes)
+        this.router.use('/api/graph', auth, graphRoutes)
+        this.router.use('/api/group-admin', groupAdminRoutes)
+        this.router.use('/api/skills', auth, skillsRoutes)
+        this.router.use('/api', auth, systemRoutes)
+        this.router.use('/api/conversations', createConversationRoutes(auth))
+        this.router.use('/api/context', createContextRoutes(auth))
+        this.router.use('/api/preset', createPresetRoutes(auth))
+        this.router.use('/api/presets', createPresetsConfigRoutes(auth))
+
+        // SPA fallback - 所有未匹配路由返回index.html
+        this.router.get('*', (req, res) => {
             const indexFile = path.join(__dirname, '../../resources/web/index.html')
             if (fs.existsSync(indexFile)) {
                 res.sendFile(indexFile)
@@ -536,11 +541,14 @@ window.location.href = '/';
                 res.status(404).send('Not Found')
             }
         })
+
+        // 将子路由器挂载到/chatai路径
+        this.app.use(mountPath, this.router)
     }
 
     getLoginInfo(permanent = false) {
         const token = authHandler.generateToken(5 * 60, permanent)
-        const mountPath = ''
+        const mountPath = this.mountPath
         const baseLocalAddrs = this.addresses?.local || [`http://127.0.0.1:${this.port}`]
         const localUrls = baseLocalAddrs.map(addr => `${addr}${mountPath}/login/token?token=${token}`)
         const localIPv6Urls = (this.addresses?.localIPv6 || []).map(
@@ -616,13 +624,14 @@ window.location.href = '/';
         this.server = botServer
         this.sharedPort = true
 
-        // 挂载路径配置
-        const mountPath = config.get('web.mountPath') || '/chatai'
-        this.mountPath = mountPath
+        // 使用固定的挂载路径 /chatai
+        const mountPath = this.mountPath
 
-        const rootPaths = ['/_next', '/assets', '/api', '/login']
+        // 将整个应用挂载到TRSS的express
         botExpress.use(this.app)
-        const quietPaths = [...rootPaths, mountPath]
+
+        // 添加quiet和skip_auth路径（/chatai下的所有路径）
+        const quietPaths = [mountPath]
         if (Array.isArray(botExpress.quiet)) {
             botExpress.quiet.push(...quietPaths)
         }
@@ -630,7 +639,7 @@ window.location.href = '/';
             botExpress.skip_auth.push(...quietPaths)
         }
 
-        chatLogger.info(`[WebServer] TRSS环境已共享端口 ${this.port}`)
+        chatLogger.info(`[WebServer] TRSS环境已共享端口 ${this.port}，挂载路径: ${mountPath}`)
     }
 
     /**
@@ -677,30 +686,32 @@ window.location.href = '/';
     printStartupBanner() {
         const startTime = Date.now() - (this.startTime || Date.now())
         const items = []
+        const mountPath = this.mountPath
 
         if (this.sharedPort) {
             items.push({ label: '模式', value: 'TRSS共享端口', color: colors.magenta })
         }
+        items.push({ label: '访问路径', value: mountPath, color: colors.cyan })
 
         if (this.addresses.local?.length > 0) {
             items.push({ label: '本地地址', value: '', color: colors.yellow })
             for (const addr of this.addresses.local) {
-                items.push({ label: '  ➜', value: addr, color: colors.cyan })
+                items.push({ label: '  ➜', value: `${addr}${mountPath}/`, color: colors.cyan })
             }
         }
         if (this.addresses.localIPv6?.length > 0) {
             items.push({ label: '本地地址（IPv6）', value: '', color: colors.yellow })
             for (const addr of this.addresses.localIPv6) {
-                items.push({ label: '  ➜', value: addr, color: colors.cyan })
+                items.push({ label: '  ➜', value: `${addr}${mountPath}/`, color: colors.cyan })
             }
         }
         if (this.addresses.public) {
             items.push({ label: '公网地址', value: '', color: colors.green })
-            items.push({ label: '  ➜', value: this.addresses.public, color: colors.green })
+            items.push({ label: '  ➜', value: `${this.addresses.public}${mountPath}/`, color: colors.green })
         }
         if (this.addresses.publicIPv6) {
             items.push({ label: '公网地址（IPv6）', value: '', color: colors.green })
-            items.push({ label: '  ➜', value: this.addresses.publicIPv6, color: colors.green })
+            items.push({ label: '  ➜', value: `${this.addresses.publicIPv6}${mountPath}/`, color: colors.green })
         }
 
         chatLogger.successBanner(`ChatAI Panel v1.0.0 启动成功 ${startTime}ms`, items)

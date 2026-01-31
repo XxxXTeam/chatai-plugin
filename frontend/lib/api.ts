@@ -1,5 +1,5 @@
 import axios from 'axios'
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || ''
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/chatai'
 export const api = axios.create({
     baseURL: API_BASE_URL,
     timeout: 30000,
@@ -19,9 +19,9 @@ api.interceptors.response.use(
     response => response.data,
     error => {
         if (error.response?.status === 401) {
-            if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+            if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
                 localStorage.removeItem('chatai_token')
-                window.location.href = '/login/'
+                window.location.href = '/chatai/login/'
             }
         }
         throw error
