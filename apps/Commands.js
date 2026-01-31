@@ -587,27 +587,31 @@ export class AICommands extends plugin {
             const publicUrl = config.get('web.publicUrl')
 
             // 构建所有登录URL
+            const mountPath = webServer.mountPath || '/chatai'
             const urls = []
 
             // 本地地址
             if (addresses.local?.length > 0) {
                 for (const addr of addresses.local) {
-                    urls.push({ label: '本地', url: `${addr}/group-admin?code=${code}` })
+                    urls.push({ label: '本地', url: `${addr}${mountPath}/group-admin?code=${code}` })
                 }
             }
 
             // IPv6本地地址
             if (addresses.localIPv6?.length > 0) {
                 for (const addr of addresses.localIPv6) {
-                    urls.push({ label: 'IPv6', url: `${addr}/group-admin?code=${code}` })
+                    urls.push({ label: 'IPv6', url: `${addr}${mountPath}/group-admin?code=${code}` })
                 }
             }
 
             // 公网地址
             if (publicUrl) {
-                urls.push({ label: '公网', url: `${publicUrl.replace(/\/$/, '')}/group-admin?code=${code}` })
+                urls.push({
+                    label: '公网',
+                    url: `${publicUrl.replace(/\/$/, '')}${mountPath}/group-admin?code=${code}`
+                })
             } else if (addresses.public) {
-                urls.push({ label: '公网', url: `${addresses.public}/group-admin?code=${code}` })
+                urls.push({ label: '公网', url: `${addresses.public}${mountPath}/group-admin?code=${code}` })
             }
 
             // 自定义链接
@@ -615,7 +619,7 @@ export class AICommands extends plugin {
                 if (link.url) {
                     urls.push({
                         label: link.label || '自定义',
-                        url: `${link.url.replace(/\/$/, '')}/group-admin?code=${code}`
+                        url: `${link.url.replace(/\/$/, '')}${mountPath}/group-admin?code=${code}`
                     })
                 }
             }

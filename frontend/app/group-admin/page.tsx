@@ -385,7 +385,7 @@ export default function GroupAdminPage() {
         const urlParams = new URLSearchParams(window.location.search)
         const urlCode = urlParams.get('code')
         if (urlCode) {
-            window.history.replaceState({}, '', '/group-admin')
+            window.history.replaceState({}, '', '/chatai/group-admin')
             handleLoginWithCode(urlCode)
             return
         }
