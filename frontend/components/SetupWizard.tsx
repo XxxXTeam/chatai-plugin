@@ -103,6 +103,22 @@ const QUICK_PRESETS: Record<string, ChannelPreset> = {
         apiKey: '',
         models: 'deepseek-ai/DeepSeek-V3, Qwen/Qwen2.5-72B-Instruct',
         description: '国内中转，支持多模型'
+    },
+    zhipu: {
+        name: '智谱AI',
+        adapterType: 'openai',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        apiKey: '',
+        models: 'glm-4.5, glm-4.5-air, glm-4.6, glm-4.7',
+        description: '智谱AI官方API'
+    },
+    'free-zhipu': {
+        name: '免费智谱视频',
+        adapterType: 'openai',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        apiKey: 'a1eef00f6bce4a10a7de83936fce6492.0wDYtwPnWukoPxWj',
+        models: 'glm-4.5, glm-4.5-air, glm-4.6, glm-4.7, glm-4.1v-thinking-flash',
+        description: '免费智谱API，支持视频分析'
     }
 }
 
@@ -571,7 +587,7 @@ export function SetupWizard({ onComplete, forceShow = false }: SetupWizardProps)
                                     <TabsTrigger value="paid">付费渠道</TabsTrigger>
                                 </TabsList>
                                 <TabsContent value="free" className="space-y-2 mt-2">
-                                    {['free-glm', 'free-xiaomi', 'free-api'].map(id => (
+                                    {['free-glm', 'free-xiaomi', 'free-api', 'free-zhipu'].map(id => (
                                         <Card
                                             key={id}
                                             className={`cursor-pointer transition-all ${selectedChannelPreset === id ? 'border-primary ring-1 ring-primary' : 'hover:border-primary/50'}`}

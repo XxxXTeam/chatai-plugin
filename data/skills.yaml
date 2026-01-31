@@ -160,6 +160,47 @@ skills:
       tools: ['execute_command', 'get_system_info', 'get_process_info', 'read_env', 'list_directory']
       enabled: false
       requiredPermission: 'master'
+    - index: 18
+      name: 'bltools-music'
+      description: '音乐搜索：QQ音乐搜索并发送音乐卡片'
+      tools: ['search_music_qq']
+      enabled: true
+
+    - index: 19
+      name: 'bltools-emoji'
+      description: '表情包工具：表情包搜索、消息表情回应'
+      tools: ['search_emoji', 'set_msg_reaction']
+      enabled: true
+
+    - index: 20
+      name: 'bltools-image'
+      description: '图片工具：Bing图片搜索、壁纸搜索、AI图片编辑'
+      tools: ['search_image_bing', 'search_wallpaper', 'ai_image_edit']
+      enabled: true
+
+    - index: 21
+      name: 'bltools-bilibili'
+      description: 'B站工具：B站视频搜索、视频AI总结'
+      tools: ['bilibili_search', 'bilibili_video_summary']
+      enabled: true
+
+    - index: 22
+      name: 'bltools-video'
+      description: '视频分析：使用智谱AI分析视频内容'
+      tools: ['video_analysis']
+      enabled: true
+
+    - index: 23
+      name: 'bltools-github'
+      description: 'GitHub工具：获取GitHub仓库详细信息'
+      tools: ['github_repo_info']
+      enabled: true
+
+    - index: 24
+      name: 'bltools-mindmap'
+      description: 'AI思维导图：根据描述生成思维导图图片'
+      tools: ['ai_mindmap']
+      enabled: true
 
   # 工具执行配置
   execution:

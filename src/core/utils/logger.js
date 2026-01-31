@@ -1,3 +1,6 @@
+import fs from 'node:fs'
+import yaml from 'yaml'
+
 const icons = {
     success: '✓',
     error: '✗',
@@ -60,15 +63,74 @@ const colors = {
 
 const c = colors
 const LOG_LEVELS = {
-    debug: { color: c.gray, label: `${c.gray}${icons.debug} DBG${c.reset}`, icon: icons.debug },
-    info: { color: c.cyan, label: `${c.cyan}${icons.info} INF${c.reset}`, icon: icons.info },
-    warn: { color: c.yellow, label: `${c.yellow}${icons.warn} WRN${c.reset}`, icon: icons.warn },
-    error: { color: c.red, label: `${c.red}${icons.error} ERR${c.reset}`, icon: icons.error },
-    success: { color: c.green, label: `${c.green}${icons.success} OK ${c.reset}`, icon: icons.success },
-    mark: { color: c.magenta, label: `${c.magenta}${icons.star} MRK${c.reset}`, icon: icons.star }
+    debug: { color: c.gray, label: `${c.gray}${icons.debug} DBG${c.reset}`, icon: icons.debug, priority: 0 },
+    info: { color: c.cyan, label: `${c.cyan}${icons.info} INF${c.reset}`, icon: icons.info, priority: 1 },
+    warn: { color: c.yellow, label: `${c.yellow}${icons.warn} WRN${c.reset}`, icon: icons.warn, priority: 2 },
+    error: { color: c.red, label: `${c.red}${icons.error} ERR${c.reset}`, icon: icons.error, priority: 3 },
+    success: { color: c.green, label: `${c.green}${icons.success} OK ${c.reset}`, icon: icons.success, priority: 1 },
+    mark: { color: c.magenta, label: `${c.magenta}${icons.star} MRK${c.reset}`, icon: icons.star, priority: 4 }
 }
 
-// 插件名称
+// 日志级别优先级映射（与 log4js 兼容）
+const LEVEL_PRIORITY = {
+    trace: 0,
+    debug: 0,
+    info: 1,
+    warn: 2,
+    error: 3,
+    fatal: 4,
+    mark: 4
+}
+
+// 缓存日志级别（避免重复读取配置）
+let cachedLogLevel = null
+
+// 初始化时同步读取框架配置
+function initLogLevel() {
+    if (cachedLogLevel !== null) return
+    try {
+        const configPath = process.cwd() + '/config/config/bot.yaml'
+        if (fs.existsSync(configPath)) {
+            const content = fs.readFileSync(configPath, 'utf-8')
+            const config = yaml.parse(content)
+            if (config?.log_level) {
+                const level = config.log_level.toLowerCase()
+                if (LEVEL_PRIORITY[level] !== undefined) {
+                    cachedLogLevel = LEVEL_PRIORITY[level]
+                }
+            }
+        }
+    } catch {
+        // 忽略初始化错误
+    }
+}
+initLogLevel()
+function getFrameworkLogLevel() {
+    if (cachedLogLevel !== null) {
+        return cachedLogLevel
+    }
+    try {
+        if (typeof logger !== 'undefined' && logger.logger?.defaultLogger?.level) {
+            const level = logger.logger.defaultLogger.level.levelStr?.toLowerCase()
+            if (level && LEVEL_PRIORITY[level] !== undefined) {
+                cachedLogLevel = LEVEL_PRIORITY[level]
+                return cachedLogLevel
+            }
+        }
+    } catch {}
+    return 1
+}
+
+/**
+ * 检查是否应该输出该级别的日志
+ */
+function shouldLog(level) {
+    const levelConfig = LOG_LEVELS[level]
+    if (!levelConfig) return true
+    const frameworkLevel = getFrameworkLogLevel()
+    return levelConfig.priority >= frameworkLevel
+}
+
 const PLUGIN_NAME = 'ChatAI'
 
 /**
@@ -107,10 +169,6 @@ function formatMessage(level, tag, ...args) {
 
     return `${c.gray}${time}${c.reset} ${config.label} ${c.gray}[${c.reset}${c.brightMagenta}${PLUGIN_NAME}${c.reset}${c.gray}]${c.reset}${tagStr} ${config.color}${message}${c.reset}`
 }
-
-/**
- * 美化日志类
- */
 class ChatAILogger {
     constructor(defaultTag = '') {
         this.defaultTag = defaultTag
@@ -124,6 +182,7 @@ class ChatAILogger {
     }
 
     debug(tag, ...args) {
+        if (!shouldLog('debug')) return
         if (typeof tag === 'string' && args.length > 0) {
             console.log(formatMessage('debug', tag, ...args))
         } else {
@@ -132,6 +191,7 @@ class ChatAILogger {
     }
 
     info(tag, ...args) {
+        if (!shouldLog('info')) return
         if (typeof tag === 'string' && args.length > 0) {
             console.log(formatMessage('info', tag, ...args))
         } else {
@@ -140,6 +200,7 @@ class ChatAILogger {
     }
 
     warn(tag, ...args) {
+        if (!shouldLog('warn')) return
         if (typeof tag === 'string' && args.length > 0) {
             console.log(formatMessage('warn', tag, ...args))
         } else {
@@ -148,6 +209,7 @@ class ChatAILogger {
     }
 
     error(tag, ...args) {
+        if (!shouldLog('error')) return
         if (typeof tag === 'string' && args.length > 0) {
             console.log(formatMessage('error', tag, ...args))
         } else {
@@ -156,6 +218,7 @@ class ChatAILogger {
     }
 
     success(tag, ...args) {
+        if (!shouldLog('success')) return
         if (typeof tag === 'string' && args.length > 0) {
             console.log(formatMessage('success', tag, ...args))
         } else {
@@ -164,6 +227,7 @@ class ChatAILogger {
     }
 
     mark(tag, ...args) {
+        if (!shouldLog('mark')) return
         if (typeof tag === 'string' && args.length > 0) {
             console.log(formatMessage('mark', tag, ...args))
         } else {
@@ -219,10 +283,6 @@ class ChatAILogger {
         console.log(line)
         console.log('')
     }
-
-    /**
-     * 打印模块加载信息（紧凑格式）
-     */
     moduleLoad(moduleName, status = 'ok', detail = '') {
         const icon =
             status === 'ok'

@@ -198,6 +198,14 @@ class Config {
                 useGroupContext: true, // 使用群聊上下文
                 contextMessageCount: 20 // 携带的上下文消息数
             },
+            // 会话追踪配置 - 智能识别用户是否在继续与机器人对话
+            conversationTracking: {
+                enabled: false, // 是否启用会话追踪
+                timeout: 2, // 追踪超时时间（分钟）
+                throttle: 3, // AI判断节流间隔（秒）
+                batchDelay: 3, // 批量判断延迟（秒）
+                model: '' // 判断用模型（留空使用调度模型或默认模型）
+            },
             // 工具调用配置
             tools: {
                 showCallLogs: true, // 显示工具调用日志

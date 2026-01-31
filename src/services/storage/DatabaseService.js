@@ -55,7 +55,6 @@ class DatabaseService {
 
         this.createTables()
         this.initialized = true
-        safeLogger.debug(`[Database] Initialized: ${dbPath}`)
     }
 
     createTables() {

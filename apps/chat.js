@@ -21,6 +21,7 @@ import { getScopeManager } from '../src/services/scope/ScopeManager.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
 import { mcpManager } from '../src/mcp/McpManager.js'
 import { setToolContext } from '../src/core/utils/toolAdapter.js'
+import { conversationTracker } from '../src/services/llm/ConversationTracker.js'
 
 export {
     recordSentMessage,
@@ -174,7 +175,7 @@ export class Chat extends plugin {
         }
 
         // 检查触发条件
-        const triggerResult = this.checkTrigger(triggerCfg)
+        const triggerResult = await this.checkTriggerWithTracking(triggerCfg)
         if (!triggerResult.triggered) return false
 
         // 标记消息正在处理
@@ -361,6 +362,80 @@ export class Chat extends plugin {
             if (Math.random() < rate) {
                 return { triggered: true, msg: rawMsg }
             }
+        }
+
+        return { triggered: false }
+    }
+
+    /**
+     * 带会话追踪的触发检查
+     * 在显式触发后开始追踪，追踪期内通过AI判断是否继续对话
+     */
+    async checkTriggerWithTracking(cfg) {
+        const e = this.e
+
+        // 初始化会话追踪
+        conversationTracker.init()
+
+        // 先检查常规触发条件
+        const baseResult = this.checkTrigger(cfg)
+
+        // 如果常规触发成功
+        if (baseResult.triggered) {
+            // 群聊时开始会话追踪
+            if (e.isGroup && e.group_id && e.user_id) {
+                const groupId = String(e.group_id)
+                const userId = String(e.user_id)
+
+                if (conversationTracker.isEnabled()) {
+                    conversationTracker.startTracking(groupId, userId)
+                    logger.debug(`[Chat] 开始会话追踪: ${groupId}_${userId}`)
+                }
+            }
+            return baseResult
+        }
+
+        // 常规触发失败，检查会话追踪
+        if (!e.isGroup || !e.group_id || !e.user_id) {
+            return { triggered: false }
+        }
+
+        if (!conversationTracker.isEnabled()) {
+            return { triggered: false }
+        }
+
+        const groupId = String(e.group_id)
+        const userId = String(e.user_id)
+
+        // 检查是否在追踪期内
+        if (!conversationTracker.isTracking(groupId, userId)) {
+            return { triggered: false }
+        }
+
+        // 节流检查
+        if (conversationTracker.isThrottled(groupId, userId)) {
+            return { triggered: false }
+        }
+
+        // 更新节流时间
+        conversationTracker.updateThrottle(groupId, userId)
+
+        // 获取对话历史
+        const activeConv = conversationTracker.getActiveConversation(groupId, userId)
+        const chatHistory = activeConv?.chatHistory || []
+
+        // 构建用户消息
+        const senderName = e.sender?.card || e.sender?.nickname || '未知用户'
+        const userMessage = `${senderName}: ${e.msg || ''}`
+
+        // 使用批量判断队列（减少API调用）
+        const isTalking = await conversationTracker.addToBatchJudgment(groupId, userId, userMessage, chatHistory, e)
+
+        if (isTalking) {
+            // 重置追踪定时器
+            conversationTracker.startTracking(groupId, userId)
+            logger.debug(`[Chat] 会话追踪判断为继续对话: ${groupId}_${userId}`)
+            return { triggered: true, msg: e.msg || '' }
         }
 
         return { triggered: false }
@@ -559,6 +634,17 @@ export class Chat extends plugin {
                         .join('\n')
                     if (replyTextContent) {
                         recordSentMessage(replyTextContent)
+
+                        // 更新会话追踪历史
+                        if (e.isGroup && e.group_id && e.user_id && conversationTracker.isEnabled()) {
+                            const gid = String(e.group_id)
+                            const uid = String(e.user_id)
+                            if (conversationTracker.isTracking(gid, uid)) {
+                                // 记录用户消息和机器人回复
+                                conversationTracker.addToHistory(gid, uid, 'user', finalMessage)
+                                conversationTracker.addToHistory(gid, uid, 'bot', replyTextContent)
+                            }
+                        }
                     }
 
                     const quoteReply = config.get('basic.quoteReply') === true

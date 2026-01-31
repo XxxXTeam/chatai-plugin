@@ -3,7 +3,6 @@
  * 包含天气、一言、骰子、倒计时、提醒、短链接、IP查询等实用功能
  */
 
-// 存储活跃的提醒
 const activeReminders = new Map()
 
 export const extraTools = [
@@ -445,76 +444,56 @@ export const extraTools = [
     },
     {
         name: 'set_reminder',
-        description: '设置定时提醒，在指定时间或一段时间后提醒某人',
+        description: '设置简单的定时提醒（内存版，重启会丢失）。复杂定时任务请使用 create_scheduled_task 工具',
         inputSchema: {
             type: 'object',
             properties: {
                 time: {
                     type: 'string',
-                    description: "具体时间点，格式 'HH:mm' 或 'HH:mm:ss'（24小时制）"
-                },
-                relative_time: {
-                    type: 'string',
-                    description: "相对时长，如 '30m'(30分钟)、'1h30m'(1小时30分钟)、'2h'(2小时)"
+                    description: "时间格式：'HH:mm' 或相对时间如 '30m'、'1h30m'、'10s'"
                 },
                 qq: {
                     type: 'string',
-                    description: '需要提醒的用户QQ号，不指定则提醒发起者'
+                    description: '提醒的用户QQ，不填则提醒发起者'
                 },
                 content: {
                     type: 'string',
-                    description: '提醒的具体内容'
+                    description: '提醒内容'
                 }
             },
             required: ['content']
         },
         handler: async (args, ctx) => {
-            let { time, relative_time, qq, content } = args
+            let { time, qq, content } = args
             const e = ctx?.getEvent?.()
             if (!e) return { error: '无法获取事件上下文' }
 
             if (!qq) qq = String(e.user_id || e.sender?.user_id)
-
-            if ((time && relative_time) || (!time && !relative_time)) {
-                return { error: "'time' 和 'relative_time' 必须提供一个且只能提供一个" }
-            }
-
+            if (!time) return { error: '请提供时间' }
             if (!content?.trim()) return { error: '提醒内容不能为空' }
 
             try {
                 let delayMs
                 const now = new Date()
 
-                if (time) {
-                    if (!/^\d{1,2}:\d{1,2}(:\d{1,2})?$/.test(time)) {
-                        return { error: `时间格式不正确: "${time}"，请使用 'HH:mm' 格式` }
-                    }
-
+                // HH:mm 格式
+                if (/^\d{1,2}:\d{1,2}(:\d{1,2})?$/.test(time)) {
                     const [hour, minute, second = 0] = time.split(':').map(Number)
-                    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
-                        return { error: `时间数值无效: ${time}` }
-                    }
-
-                    let targetDate = new Date()
-                    targetDate.setHours(hour, minute, second, 0)
-                    if (targetDate <= now) targetDate.setDate(targetDate.getDate() + 1)
-                    delayMs = targetDate.getTime() - now.getTime()
+                    let target = new Date()
+                    target.setHours(hour, minute, second, 0)
+                    if (target <= now) target.setDate(target.getDate() + 1)
+                    delayMs = target.getTime() - now.getTime()
                 } else {
-                    const hoursMatch = relative_time.match(/(\d+)\s*h/i)
-                    const minutesMatch = relative_time.match(/(\d+)\s*m/i)
-                    const secondsMatch = relative_time.match(/(\d+)\s*s/i)
-
-                    const hours = hoursMatch ? parseInt(hoursMatch[1]) : 0
-                    const minutes = minutesMatch ? parseInt(minutesMatch[1]) : 0
-                    const seconds = secondsMatch ? parseInt(secondsMatch[1]) : 0
-
-                    delayMs = hours * 3600000 + minutes * 60000 + seconds * 1000
-                    if (delayMs <= 0) return { error: `相对时间解析后必须大于0` }
+                    // 相对时间
+                    const h = time.match(/(\d+)\s*h/i)?.[1] || 0
+                    const m = time.match(/(\d+)\s*m/i)?.[1] || 0
+                    const s = time.match(/(\d+)\s*s/i)?.[1] || 0
+                    delayMs = Number(h) * 3600000 + Number(m) * 60000 + Number(s) * 1000
+                    if (delayMs <= 0) return { error: '时间格式无效' }
                 }
 
-                // 限制最大7天
                 if (delayMs > 7 * 24 * 60 * 60 * 1000) {
-                    return { error: '提醒时间不能超过7天' }
+                    return { error: '提醒时间不能超过7天，超过请使用 create_scheduled_task' }
                 }
 
                 const targetDate = new Date(now.getTime() + delayMs)
@@ -531,7 +510,7 @@ export const extraTools = [
 
                 activeReminders.set(reminderId, { timerId, qq, content, targetTime: targetDate })
 
-                const remindTimeStr = targetDate.toLocaleString('zh-CN', {
+                const timeStr = targetDate.toLocaleString('zh-CN', {
                     hour12: false,
                     month: '2-digit',
                     day: '2-digit',
@@ -541,9 +520,8 @@ export const extraTools = [
 
                 return {
                     success: true,
-                    message: `提醒已设置，将在 ${remindTimeStr} 提醒用户 ${qq}`,
-                    reminderId,
-                    targetTime: targetDate.toISOString()
+                    message: `提醒已设置，将在 ${timeStr} 提醒`,
+                    reminder_id: reminderId
                 }
             } catch (error) {
                 return { error: `设置提醒失败: ${error.message}` }

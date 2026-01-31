@@ -27,6 +27,16 @@ class EmojiThiefService {
         this.rootDir = path.join(__dirname, '../data/EmojiThief')
         this.globalDbPath = path.join(this.rootDir, 'global_md5.json')
         this.initialized = false
+
+        // 动态概率状态（按群组存储）
+        this.sessionStates = new Map() // key: groupId, value: { lastEmojiTime, consecutiveCount }
+
+        // 动态概率配置
+        this.dynamicConfig = {
+            cooldownTime: 30000, // 冷却时间（毫秒），30秒内再次触发概率衰减
+            maxConsecutive: 3, // 连续发送惩罚最大计数
+            decayFactor: 0.7 // 连续发送惩罚衰减因子
+        }
     }
 
     async init() {
@@ -338,6 +348,61 @@ class EmojiThiefService {
     }
 
     /**
+     * 获取群组的动态概率状态
+     * @param {string} groupId 群号
+     */
+    getSessionState(groupId) {
+        if (!this.sessionStates.has(groupId)) {
+            this.sessionStates.set(groupId, { lastEmojiTime: 0, consecutiveCount: 0 })
+        }
+        return this.sessionStates.get(groupId)
+    }
+
+    /**
+     * 计算动态概率
+     * @param {string} groupId 群号
+     * @param {number} baseRate 基础概率
+     * @returns {number} 调整后的概率
+     */
+    calculateDynamicProbability(groupId, baseRate) {
+        const state = this.getSessionState(groupId)
+        const now = Date.now()
+
+        // 时间衰减因子：冷却期内概率降低
+        const timeSinceLastEmoji = now - state.lastEmojiTime
+        const timeFactor = Math.min(1, timeSinceLastEmoji / this.dynamicConfig.cooldownTime)
+
+        // 连续发送惩罚因子：连续发送越多，概率越低
+        const consecutiveCount = Math.min(state.consecutiveCount, this.dynamicConfig.maxConsecutive)
+        const penaltyFactor = Math.pow(this.dynamicConfig.decayFactor, consecutiveCount)
+
+        // 计算最终概率
+        const adjustedRate = baseRate * timeFactor * penaltyFactor
+
+        return Math.max(0, Math.min(1, adjustedRate))
+    }
+
+    /**
+     * 记录表情包发送成功
+     * @param {string} groupId 群号
+     */
+    recordEmojiSent(groupId) {
+        const state = this.getSessionState(groupId)
+        state.lastEmojiTime = Date.now()
+        state.consecutiveCount = 0 // 成功发送后重置连续计数
+    }
+
+    /**
+     * 记录表情包未发送
+     * @param {string} groupId 群号
+     */
+    recordEmojiSkipped(groupId) {
+        const state = this.getSessionState(groupId)
+        // 增加连续未发送计数，但有上限
+        state.consecutiveCount = Math.min(state.consecutiveCount + 1, 10)
+    }
+
+    /**
      * 尝试触发表情包发送
      * @param {object} e 消息事件
      * @param {string} triggerSource 触发来源: 'message' | 'bym' | 'chat'
@@ -352,16 +417,20 @@ class EmojiThiefService {
         if (!config.enabled) return null
 
         const mode = config.triggerMode
-        const rate = config.triggerRate
+        const baseRate = config.triggerRate
 
         // 根据触发来源和模式判断是否触发
         let shouldTrigger = false
 
         switch (mode) {
             case 'random':
-                // 随机触发 - 任何消息都可能触发
+                // 随机触发 - 任何消息都可能触发（使用动态概率）
                 if (triggerSource === 'message') {
-                    shouldTrigger = Math.random() < rate
+                    const dynamicRate = this.calculateDynamicProbability(groupId, baseRate)
+                    shouldTrigger = Math.random() < dynamicRate
+                    logger.debug(
+                        `[EmojiThief] 动态概率: base=${baseRate.toFixed(3)}, dynamic=${dynamicRate.toFixed(3)}`
+                    )
                 }
                 break
 
@@ -373,9 +442,10 @@ class EmojiThiefService {
                 break
 
             case 'bym_random':
-                // 伪人触发随机 - 伪人触发时按概率发送
+                // 伪人触发随机 - 伪人触发时按动态概率发送
                 if (triggerSource === 'bym') {
-                    shouldTrigger = Math.random() < rate
+                    const dynamicRate = this.calculateDynamicProbability(groupId, baseRate)
+                    shouldTrigger = Math.random() < dynamicRate
                 }
                 break
 
@@ -387,9 +457,10 @@ class EmojiThiefService {
                 break
 
             case 'chat_random':
-                // 对话随机 - AI回复时按概率发送
+                // 对话随机 - AI回复时按动态概率发送
                 if (triggerSource === 'chat') {
-                    shouldTrigger = Math.random() < rate
+                    const dynamicRate = this.calculateDynamicProbability(groupId, baseRate)
+                    shouldTrigger = Math.random() < dynamicRate
                 }
                 break
 
@@ -399,11 +470,16 @@ class EmojiThiefService {
                 break
         }
 
-        if (!shouldTrigger) return null
+        if (!shouldTrigger) {
+            this.recordEmojiSkipped(groupId)
+            return null
+        }
 
         const emojiPath = await this.getRandomEmoji(groupId, config.separateFolder)
         if (!emojiPath) return null
 
+        // 记录发送成功
+        this.recordEmojiSent(groupId)
         logger.debug(`[EmojiThief] 群${groupId}触发表情包发送 (mode=${mode}, source=${triggerSource})`)
         return this.buildEmojiMessage(emojiPath)
     }

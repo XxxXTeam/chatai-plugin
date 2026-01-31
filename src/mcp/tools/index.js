@@ -23,7 +23,9 @@ const toolModules = {
     voice: { file: './voice.js', export: 'voiceTools' },
     extra: { file: './extra.js', export: 'extraTools' },
     shell: { file: './shell.js', export: 'shellTools' },
-    schedule: { file: './schedule.js', export: 'scheduleTools' }
+    schedule: { file: './schedule.js', export: 'scheduleTools' },
+    bltools: { file: './bltools.js', export: 'bltoolsTools' },
+    reminder: { file: './reminder.js', export: 'reminderTools' }
 }
 
 // 类别元信息
@@ -54,6 +56,17 @@ const categoryMeta = {
         name: '定时任务',
         description: '创建、管理定时任务，支持周期执行、@用户、触发AI对话等',
         icon: 'Clock'
+    },
+    bltools: {
+        name: '扩展工具',
+        description:
+            'QQ音乐、表情包、Bing图片、壁纸、B站视频搜索/总结、GitHub仓库、AI图片编辑、视频分析、AI思维导图、表情回应等',
+        icon: 'Sparkles'
+    },
+    reminder: {
+        name: '定时提醒',
+        description: '设置定时提醒，支持相对时间、绝对时间、每天/每周重复',
+        icon: 'Bell'
     }
 }
 

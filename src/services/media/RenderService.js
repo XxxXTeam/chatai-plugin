@@ -21,14 +21,9 @@ try {
 let canvasModule = null
 try {
     canvasModule = await import('@napi-rs/canvas')
-    logService.info('[RenderService] Canvas 模块加载成功，启用快速渲染')
 } catch (e) {
     if (e.code === 'ERR_MODULE_NOT_FOUND') {
-        logService.info('[RenderService] Canvas 未安装，使用 Puppeteer 渲染')
-        logService.info('[RenderService] 提示: pnpm add @napi-rs/canvas 可加速10倍渲染')
     } else {
-        logService.warn('[RenderService] Canvas 加载失败: ' + e.message)
-        logService.warn('[RenderService] 解决方案: pnpm rebuild @napi-rs/canvas')
     }
 }
 

@@ -98,7 +98,7 @@ const PRESET_CATEGORIES: ChannelPresetCategory[] = [
     {
         name: '内置免费API',
         icon: '🆓',
-        presets: ['free-glm', 'free-xiaomi', 'free-gemini', 'free-grok', 'free-api', 'free-gemini2', 'free-opencode', 'free-gemini3']
+        presets: ['free-glm', 'free-xiaomi', 'free-gemini', 'free-grok', 'free-api', 'free-gemini2', 'free-opencode', 'free-gemini3', 'free-zhipu']
     },
     { name: '国际厂商', icon: '🌍', presets: ['openai', 'gemini', 'claude', 'grok', 'mistral', 'cohere', 'groq'] },
     {
@@ -187,6 +187,15 @@ const CHANNEL_PRESETS: Record<string, ChannelPreset> = {
         models: 'x-ai/grok-4.1-fast,google/gemini-2.5-flash-lite',
         description: '免费grok和Gemini2.5'
     },
+    'free-zhipu': {
+        name: '免费智谱',
+        adapterType: 'openai',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        apiKey: 'a1eef00f6bce4a10a7de83936fce6492.0wDYtwPnWukoPxWj',
+        models: 'glm-4.5, glm-4.5-air, glm-4.6, glm-4.7, glm-4.1v-thinking-flash',
+        description: '免费智谱API'
+    },
+
     // ========== 国际厂商 ==========
     openai: {
         name: 'OpenAI',
@@ -889,6 +898,11 @@ export default function ChannelsPage() {
                                                             'free-gemini3': {
                                                                 type: 'info',
                                                                 message: '免费Gemini',
+                                                                url: preset.authUrl
+                                                            },
+                                                            'free-zhipu': {
+                                                                type: 'info',
+                                                                message: '免费智谱',
                                                                 url: preset.authUrl
                                                             },
                                                             'free-grok': {
