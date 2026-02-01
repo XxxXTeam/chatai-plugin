@@ -54,8 +54,20 @@ skills:
 
     - index: 2
       name: 'bot'
-      description: 'Bot信息：获取机器人自身信息、状态、好友/群列表等'
-      tools: ['get_bot_info', 'get_login_info', 'get_version_info', 'get_online_clients', 'get_model_show', 'get_self_info']
+      description: 'Bot信息：获取机器人自身信息、状态、好友列表等'
+      tools:
+        - get_login_info
+        - get_bot_status
+        - get_friend_list
+        - get_stranger_info
+        - get_version_info
+        - get_online_clients
+        - can_send_image
+        - can_send_record
+        - set_qq_avatar
+        - get_model_show
+        - send_like
+        - get_self_info
       enabled: true
 
     # ========== 群组信息 ==========
@@ -129,8 +141,41 @@ skills:
     # ========== 文件操作 ==========
     - index: 13
       name: 'file'
-      description: '文件操作：群文件上传、下载、管理、创建文件夹等'
-      tools: ['get_group_files', 'get_file_url', 'upload_group_file', 'delete_group_file', 'create_group_folder', 'get_group_file_system_info', 'get_group_root_files', 'get_group_files_by_folder', 'move_group_file', 'rename_group_file', 'delete_group_folder', 'upload_private_file', 'get_private_file_url', 'download_file', 'send_file_message', 'get_file', 'ocr_image', 'can_send_record', 'can_send_image']
+      description: '文件操作：群文件上传下载、本地文件读写、目录管理、URL下载等'
+      tools:
+        # 群文件操作
+        - get_group_files
+        - get_file_url
+        - upload_group_file
+        - delete_group_file
+        - create_group_folder
+        - get_group_file_system_info
+        - get_group_root_files
+        - get_group_files_by_folder
+        - move_group_file
+        - rename_group_file
+        - delete_group_folder
+        - upload_private_file
+        - get_private_file_url
+        - download_file
+        - send_file_message
+        - get_file
+        # 本地文件操作
+        - read_file
+        - write_file
+        - list_directory
+        - download_to_file
+        - download_group_file_to_file
+        - delete_file
+        - copy_file
+        - move_file
+        - get_file_info
+        - create_directory
+        # 媒体相关
+        - get_record
+        - ocr_image
+        - can_send_record
+        - can_send_image
       enabled: true
 
     # ========== 实用工具 ==========
@@ -142,8 +187,20 @@ skills:
 
     - index: 15
       name: 'extra'
-      description: '扩展工具：天气查询、一言、骰子、随机抽取、倒计时、短链接、提醒、插画等'
-      tools: ['hitokoto', 'roll_dice', 'random_choose', 'create_short_url', 'query_ip_info', 'set_reminder', 'get_illustration']
+      description: '扩展工具：天气查询、一言、骰子、随机抽取、倒计时、短链接、IP查询、插画等'
+      tools:
+        - get_weather
+        - hitokoto
+        - roll_dice
+        - random_choose
+        - countdown
+        - create_short_url
+        - query_ip_info
+        - get_illustration
+        - get_joke
+        - get_morning_paper
+        - get_short_url
+        - get_oil_price
       enabled: true
 
     # ========== 定时任务 ==========
@@ -201,6 +258,14 @@ skills:
       description: 'AI思维导图：根据描述生成思维导图图片'
       tools: ['ai_mindmap']
       enabled: true
+    - index: 25
+      name: 'reminder'
+      description: '定时提醒：设置定时提醒，支持相对时间、绝对时间、每天/每周重复'
+      tools:
+        - set_reminder
+        - list_reminders
+        - cancel_reminder
+      enabled: true
 
   # 工具执行配置
   execution:
@@ -224,10 +289,21 @@ skills:
     maxGroups: 3
   security:
     dangerousTools:
+      # 群管理危险操作
       - kick_member
       - mute_member
       - recall_message
       - set_group_admin
+      - set_group_whole_ban
+      - delete_friend
+      - set_group_leave
+      # 文件系统危险操作
       - write_file
+      - delete_file
+      - move_file
+      - delete_group_file
+      - delete_group_folder
+      # 系统命令
+      - execute_command
     allowDangerous: false
     dangerousRequiredPermission: 'master'

@@ -36,7 +36,7 @@ const categoryMeta = {
     message: { name: '消息操作', description: '发送消息、@用户、获取聊天记录、转发消息解析等', icon: 'MessageSquare' },
     admin: { name: '群管理', description: '禁言、踢人、设置群名片等管理功能', icon: 'Shield' },
     groupStats: { name: '群统计', description: '群星级、龙王、发言榜、幸运字符、不活跃成员等', icon: 'BarChart' },
-    file: { name: '文件操作', description: '群文件上传、下载、管理等', icon: 'FolderOpen' },
+    file: { name: '文件操作', description: '群文件上传下载、本地文件读写、目录管理、URL下载等', icon: 'FolderOpen' },
     media: { name: '媒体处理', description: '图片解析、语音处理、二维码生成等', icon: 'Image' },
     web: { name: '网页访问', description: '访问网页、获取内容等', icon: 'Globe' },
     search: { name: '搜索工具', description: '网页搜索、Wiki查询、翻译等', icon: 'Search' },

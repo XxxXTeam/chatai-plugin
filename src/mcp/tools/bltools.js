@@ -1078,7 +1078,6 @@ export const bltoolsTools = [
         handler: async (args, ctx) => {
             const { prompt, width = 2400, height = 1600 } = args
             const e = ctx?.getEvent?.()
-            if (!e) return { error: '无法获取事件上下文' }
 
             if (!prompt?.trim()) {
                 return { error: '思维导图描述不能为空' }
@@ -1087,12 +1086,25 @@ export const bltoolsTools = [
             try {
                 // 动态导入依赖
                 const { LlmService } = await import('../../services/llm/LlmService.js')
+                const { channelManager } = await import('../../services/llm/ChannelManager.js')
                 const { Transformer } = await import('markmap-lib')
                 const { createRequire } = await import('module')
                 const require = createRequire(import.meta.url)
                 const puppeteer = require('puppeteer')
                 const fs = await import('fs')
                 const path = await import('path')
+
+                // 获取默认模型和渠道配置
+                await channelManager.init()
+                const model = LlmService.getModel()
+                if (!model) {
+                    return { error: '未配置默认模型' }
+                }
+
+                const channel = channelManager.getBestChannel(model)
+                if (!channel) {
+                    return { error: `未找到支持模型 ${model} 的渠道` }
+                }
 
                 // 生成Markdown内容
                 const systemPrompt = `你是一个专业的思维导图生成助手。请根据用户的描述生成符合Markdown语法的思维导图代码。
@@ -1102,21 +1114,39 @@ export const bltoolsTools = [
 3. 合理组织层级结构，最多5级
 4. 使用简洁清晰的描述`
 
+                const keyInfo = channelManager.getChannelKey(channel)
+                if (!keyInfo?.key) {
+                    return { error: '未找到可用的 API 密钥' }
+                }
+
                 const client = await LlmService.createClient({
-                    enableTools: false,
-                    event: e
+                    model,
+                    apiKey: keyInfo.key,
+                    baseUrl: channel.baseUrl,
+                    enableTools: false
                 })
 
-                const messages = [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: `请根据以下描述生成思维导图：${prompt}` }
-                ]
+                const userMessage = {
+                    role: 'user',
+                    content: [{ type: 'text', text: `请根据以下描述生成思维导图：${prompt}` }]
+                }
 
-                const response = await client.chat(messages, { stream: false })
-                const markdownContent = response?.content || response?.choices?.[0]?.message?.content || ''
+                const response = await client.sendMessage(userMessage, {
+                    model,
+                    systemPrompt,
+                    stream: false,
+                    maxToken: 4096
+                })
+
+                // 从 contents 数组中提取文本内容
+                const textContent = response?.contents?.find(c => c.type === 'text')
+                const markdownContent = textContent?.text || response?.text || response?.content || ''
 
                 if (!markdownContent) {
-                    return { error: '生成失败，未获取到Markdown内容' }
+                    return {
+                        error: '生成失败，未获取到Markdown内容',
+                        debug: { response: JSON.stringify(response).slice(0, 500) }
+                    }
                 }
 
                 // 验证Markdown

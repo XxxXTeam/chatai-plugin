@@ -2,7 +2,67 @@
  * 文件操作工具
  */
 
+import fs from 'fs'
+import path from 'path'
+import { pipeline } from 'stream/promises'
 import { icqqGroup, callOneBotApi } from './helpers.js'
+
+const DANGEROUS_PATHS_WINDOWS = [
+    'C:\\Windows',
+    'C:\\Program Files',
+    'C:\\Program Files (x86)',
+    'C:\\ProgramData',
+    'C:\\Users\\Default',
+    'C:\\Users\\Public',
+    'C:\\System Volume Information',
+    'C:\\$Recycle.Bin',
+    'C:\\Recovery',
+    'C:\\Boot'
+]
+
+const DANGEROUS_PATHS_LINUX = [
+    '/bin',
+    '/sbin',
+    '/usr/bin',
+    '/usr/sbin',
+    '/usr/lib',
+    '/usr/lib64',
+    '/lib',
+    '/lib64',
+    '/boot',
+    '/etc',
+    '/root',
+    '/sys',
+    '/proc',
+    '/dev',
+    '/run',
+    '/var/run',
+    '/var/lib',
+    '/snap'
+]
+
+const isWindows = process.platform === 'win32'
+const DANGEROUS_PATHS = isWindows ? DANGEROUS_PATHS_WINDOWS : DANGEROUS_PATHS_LINUX
+
+function isPathDangerous(targetPath) {
+    const resolved = path.resolve(targetPath).toLowerCase()
+    const normalizedDangerous = DANGEROUS_PATHS.map(p => path.resolve(p).toLowerCase())
+
+    for (const dangerous of normalizedDangerous) {
+        if (resolved === dangerous || resolved.startsWith(dangerous + path.sep)) {
+            return true
+        }
+    }
+    return false
+}
+
+function getSafePath(targetPath) {
+    const resolved = path.resolve(targetPath)
+    if (isPathDangerous(resolved)) {
+        throw new Error(`禁止操作系统关键目录: ${targetPath}`)
+    }
+    return resolved
+}
 
 export const fileTools = [
     {
@@ -877,6 +937,480 @@ export const fileTools = [
                 return { success: true, can_send: true }
             } catch (err) {
                 return { success: true, can_send: true }
+            }
+        }
+    },
+
+    {
+        name: 'read_file',
+        description: '读取本地文件内容。支持文本文件读取，返回文件内容。路径限制在工作目录内。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                file_path: { type: 'string', description: '文件路径（相对于工作目录或绝对路径）' },
+                encoding: { type: 'string', description: '编码格式，默认utf8', default: 'utf8' },
+                max_size: { type: 'number', description: '最大读取字节数，默认1MB', default: 1048576 }
+            },
+            required: ['file_path']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const filePath = getSafePath(args.file_path)
+                const encoding = args.encoding || 'utf8'
+                const maxSize = args.max_size || 1048576
+
+                if (!fs.existsSync(filePath)) {
+                    return { success: false, error: `文件不存在: ${args.file_path}` }
+                }
+
+                const stats = fs.statSync(filePath)
+                if (stats.isDirectory()) {
+                    return { success: false, error: '目标是目录，请使用 list_directory' }
+                }
+
+                if (stats.size > maxSize) {
+                    return { success: false, error: `文件过大 (${stats.size} bytes)，超过限制 ${maxSize} bytes` }
+                }
+
+                const content = fs.readFileSync(filePath, encoding)
+                return {
+                    success: true,
+                    file_path: filePath,
+                    size: stats.size,
+                    content,
+                    encoding
+                }
+            } catch (err) {
+                return { success: false, error: `读取文件失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'write_file',
+        description: '写入内容到本地文件。可以创建新文件或覆盖/追加到现有文件。路径限制在工作目录内。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                file_path: { type: 'string', description: '文件路径' },
+                content: { type: 'string', description: '要写入的内容' },
+                encoding: { type: 'string', description: '编码格式，默认utf8', default: 'utf8' },
+                append: { type: 'boolean', description: '是否追加模式，默认false覆盖写入', default: false },
+                create_dirs: { type: 'boolean', description: '是否自动创建目录，默认true', default: true }
+            },
+            required: ['file_path', 'content']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const filePath = getSafePath(args.file_path)
+                const encoding = args.encoding || 'utf8'
+                const append = args.append || false
+                const createDirs = args.create_dirs !== false
+
+                if (createDirs) {
+                    const dir = path.dirname(filePath)
+                    if (!fs.existsSync(dir)) {
+                        fs.mkdirSync(dir, { recursive: true })
+                    }
+                }
+
+                if (append) {
+                    fs.appendFileSync(filePath, args.content, encoding)
+                } else {
+                    fs.writeFileSync(filePath, args.content, encoding)
+                }
+
+                const stats = fs.statSync(filePath)
+                return {
+                    success: true,
+                    file_path: filePath,
+                    size: stats.size,
+                    mode: append ? 'append' : 'write'
+                }
+            } catch (err) {
+                return { success: false, error: `写入文件失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'list_directory',
+        description: '列出目录中的文件和子目录。返回文件名、大小、类型等信息。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                dir_path: { type: 'string', description: '目录路径，默认当前工作目录', default: '.' },
+                recursive: { type: 'boolean', description: '是否递归列出子目录', default: false },
+                pattern: { type: 'string', description: '文件名过滤模式（如 *.txt）' }
+            }
+        },
+        handler: async (args, ctx) => {
+            try {
+                const dirPath = getSafePath(args.dir_path || '.')
+                const recursive = args.recursive || false
+                const pattern = args.pattern
+
+                if (!fs.existsSync(dirPath)) {
+                    return { success: false, error: `目录不存在: ${args.dir_path}` }
+                }
+
+                const stats = fs.statSync(dirPath)
+                if (!stats.isDirectory()) {
+                    return { success: false, error: '目标不是目录' }
+                }
+
+                const listDir = (dir, depth = 0) => {
+                    const items = []
+                    const entries = fs.readdirSync(dir, { withFileTypes: true })
+
+                    for (const entry of entries) {
+                        const fullPath = path.join(dir, entry.name)
+                        const itemStats = fs.statSync(fullPath)
+
+                        if (pattern) {
+                            const regex = new RegExp('^' + pattern.replace(/\*/g, '.*').replace(/\?/g, '.') + '$')
+                            if (!regex.test(entry.name)) continue
+                        }
+
+                        const item = {
+                            name: entry.name,
+                            path: path.relative(dirPath, fullPath),
+                            type: entry.isDirectory() ? 'directory' : 'file',
+                            size: itemStats.size,
+                            modified: itemStats.mtime.toISOString()
+                        }
+                        items.push(item)
+
+                        if (recursive && entry.isDirectory() && depth < 5) {
+                            item.children = listDir(fullPath, depth + 1)
+                        }
+                    }
+                    return items
+                }
+
+                const items = listDir(dirPath)
+                return {
+                    success: true,
+                    dir_path: dirPath,
+                    count: items.length,
+                    items
+                }
+            } catch (err) {
+                return { success: false, error: `列出目录失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'download_to_file',
+        description: '从URL下载文件到本地指定路径。支持HTTP/HTTPS链接。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                url: { type: 'string', description: '文件下载URL' },
+                save_path: { type: 'string', description: '保存路径' },
+                filename: { type: 'string', description: '文件名（可选，默认从URL提取）' },
+                overwrite: { type: 'boolean', description: '是否覆盖已存在文件', default: false }
+            },
+            required: ['url', 'save_path']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const savePath = getSafePath(args.save_path)
+                let filename = args.filename || path.basename(new URL(args.url).pathname) || 'downloaded_file'
+                const fullPath = path.join(savePath, filename)
+
+                if (!args.overwrite && fs.existsSync(fullPath)) {
+                    return { success: false, error: `文件已存在: ${fullPath}` }
+                }
+
+                if (!fs.existsSync(savePath)) {
+                    fs.mkdirSync(savePath, { recursive: true })
+                }
+
+                const response = await fetch(args.url)
+                if (!response.ok) {
+                    return { success: false, error: `下载失败: HTTP ${response.status}` }
+                }
+
+                const arrayBuffer = await response.arrayBuffer()
+                fs.writeFileSync(fullPath, Buffer.from(arrayBuffer))
+
+                const stats = fs.statSync(fullPath)
+                return {
+                    success: true,
+                    url: args.url,
+                    saved_path: fullPath,
+                    filename,
+                    size: stats.size
+                }
+            } catch (err) {
+                return { success: false, error: `下载文件失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'download_group_file_to_file',
+        description: '下载群文件到本地指定目录。先获取群文件URL，然后下载到本地。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                group_id: { type: 'string', description: '群号' },
+                file_id: { type: 'string', description: '文件ID' },
+                save_path: { type: 'string', description: '保存目录路径' },
+                filename: { type: 'string', description: '保存的文件名（可选）' }
+            },
+            required: ['group_id', 'file_id', 'save_path']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const bot = ctx.getBot()
+                const { adapter } = ctx.getAdapter()
+                const groupId = parseInt(args.group_id)
+                const savePath = getSafePath(args.save_path)
+
+                let url = ''
+                let originalName = args.filename || 'group_file'
+
+                if (adapter === 'icqq') {
+                    const gfs = icqqGroup.getFs(bot, groupId)
+                    if (gfs?.download) {
+                        const result = await gfs.download(args.file_id)
+                        url = result?.url || result
+                        originalName = result?.name || originalName
+                    }
+                } else {
+                    const result = await callOneBotApi(bot, 'get_group_file_url', {
+                        group_id: groupId,
+                        file_id: args.file_id
+                    })
+                    url = result?.data?.url || result?.url
+                }
+
+                if (!url) {
+                    return { success: false, error: '无法获取文件下载链接' }
+                }
+
+                if (!fs.existsSync(savePath)) {
+                    fs.mkdirSync(savePath, { recursive: true })
+                }
+
+                const fullPath = path.join(savePath, args.filename || originalName)
+                const response = await fetch(url)
+                if (!response.ok) {
+                    return { success: false, error: `下载失败: HTTP ${response.status}` }
+                }
+
+                const arrayBuffer = await response.arrayBuffer()
+                fs.writeFileSync(fullPath, Buffer.from(arrayBuffer))
+
+                const stats = fs.statSync(fullPath)
+                return {
+                    success: true,
+                    group_id: groupId,
+                    file_id: args.file_id,
+                    saved_path: fullPath,
+                    size: stats.size
+                }
+            } catch (err) {
+                return { success: false, error: `下载群文件失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'delete_file',
+        description: '删除本地文件或空目录。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                file_path: { type: 'string', description: '文件或目录路径' },
+                recursive: { type: 'boolean', description: '是否递归删除目录内容', default: false }
+            },
+            required: ['file_path']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const filePath = getSafePath(args.file_path)
+
+                if (!fs.existsSync(filePath)) {
+                    return { success: false, error: `路径不存在: ${args.file_path}` }
+                }
+
+                const stats = fs.statSync(filePath)
+                if (stats.isDirectory()) {
+                    if (args.recursive) {
+                        fs.rmSync(filePath, { recursive: true })
+                    } else {
+                        fs.rmdirSync(filePath)
+                    }
+                } else {
+                    fs.unlinkSync(filePath)
+                }
+
+                return {
+                    success: true,
+                    deleted_path: filePath,
+                    type: stats.isDirectory() ? 'directory' : 'file'
+                }
+            } catch (err) {
+                return { success: false, error: `删除失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'copy_file',
+        description: '复制本地文件到另一个位置。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                source: { type: 'string', description: '源文件路径' },
+                destination: { type: 'string', description: '目标路径' },
+                overwrite: { type: 'boolean', description: '是否覆盖已存在文件', default: false }
+            },
+            required: ['source', 'destination']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const sourcePath = getSafePath(args.source)
+                const destPath = getSafePath(args.destination)
+
+                if (!fs.existsSync(sourcePath)) {
+                    return { success: false, error: `源文件不存在: ${args.source}` }
+                }
+
+                if (!args.overwrite && fs.existsSync(destPath)) {
+                    return { success: false, error: `目标文件已存在: ${args.destination}` }
+                }
+
+                const destDir = path.dirname(destPath)
+                if (!fs.existsSync(destDir)) {
+                    fs.mkdirSync(destDir, { recursive: true })
+                }
+
+                fs.copyFileSync(sourcePath, destPath)
+                const stats = fs.statSync(destPath)
+
+                return {
+                    success: true,
+                    source: sourcePath,
+                    destination: destPath,
+                    size: stats.size
+                }
+            } catch (err) {
+                return { success: false, error: `复制失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'move_file',
+        description: '移动或重命名本地文件。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                source: { type: 'string', description: '源文件路径' },
+                destination: { type: 'string', description: '目标路径' },
+                overwrite: { type: 'boolean', description: '是否覆盖已存在文件', default: false }
+            },
+            required: ['source', 'destination']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const sourcePath = getSafePath(args.source)
+                const destPath = getSafePath(args.destination)
+
+                if (!fs.existsSync(sourcePath)) {
+                    return { success: false, error: `源文件不存在: ${args.source}` }
+                }
+
+                if (!args.overwrite && fs.existsSync(destPath)) {
+                    return { success: false, error: `目标文件已存在: ${args.destination}` }
+                }
+
+                const destDir = path.dirname(destPath)
+                if (!fs.existsSync(destDir)) {
+                    fs.mkdirSync(destDir, { recursive: true })
+                }
+
+                fs.renameSync(sourcePath, destPath)
+
+                return {
+                    success: true,
+                    source: sourcePath,
+                    destination: destPath
+                }
+            } catch (err) {
+                return { success: false, error: `移动失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'get_file_info',
+        description: '获取本地文件的详细信息，包括大小、创建时间、修改时间等。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                file_path: { type: 'string', description: '文件路径' }
+            },
+            required: ['file_path']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const filePath = getSafePath(args.file_path)
+
+                if (!fs.existsSync(filePath)) {
+                    return { success: false, error: `路径不存在: ${args.file_path}` }
+                }
+
+                const stats = fs.statSync(filePath)
+                return {
+                    success: true,
+                    file_path: filePath,
+                    type: stats.isDirectory() ? 'directory' : 'file',
+                    size: stats.size,
+                    created: stats.birthtime.toISOString(),
+                    modified: stats.mtime.toISOString(),
+                    accessed: stats.atime.toISOString(),
+                    permissions: stats.mode.toString(8)
+                }
+            } catch (err) {
+                return { success: false, error: `获取文件信息失败: ${err.message}` }
+            }
+        }
+    },
+
+    {
+        name: 'create_directory',
+        description: '创建本地目录，支持递归创建多级目录。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                dir_path: { type: 'string', description: '目录路径' },
+                recursive: { type: 'boolean', description: '是否递归创建父目录', default: true }
+            },
+            required: ['dir_path']
+        },
+        handler: async (args, ctx) => {
+            try {
+                const dirPath = getSafePath(args.dir_path)
+
+                if (fs.existsSync(dirPath)) {
+                    return { success: true, dir_path: dirPath, message: '目录已存在' }
+                }
+
+                fs.mkdirSync(dirPath, { recursive: args.recursive !== false })
+
+                return {
+                    success: true,
+                    dir_path: dirPath,
+                    message: '目录创建成功'
+                }
+            } catch (err) {
+                return { success: false, error: `创建目录失败: ${err.message}` }
             }
         }
     }
