@@ -3,6 +3,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { logService } from '../stats/LogService.js'
+import { generateModernSummaryHtml } from './templates/groupSummaryModern.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -1722,6 +1723,70 @@ class RenderService {
             return imageBuffer
         } catch (error) {
             logService.error('[RenderService] 渲染群聊总结失败', error)
+            throw error
+        }
+    }
+
+    /**
+     * 渲染群聊总结 - 深色现代风格
+     * @param {string} markdown - 总结内容
+     * @param {Object} options - 选项
+     * @returns {Promise<Buffer>}
+     */
+    async renderGroupSummaryModern(markdown, options = {}) {
+        const {
+            title = '今日群聊',
+            subtitle = '',
+            messageCount = 0,
+            participantCount = 0,
+            topUsers = [],
+            hourlyActivity = [],
+            width = 520,
+            topics = [],
+            keywords = [],
+            interactions = [],
+            atmosphere = {},
+            quotes = []
+        } = options
+
+        const cleanedMd = this.cleanMarkdown(markdown)
+        const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
+        let html = marked(protectedMd)
+        html = this.restoreMathExpressions(html, expressions)
+
+        const beautifulHtml = generateModernSummaryHtml({
+            title,
+            subtitle,
+            html,
+            messageCount,
+            participantCount,
+            topUsers,
+            hourlyActivity,
+            width,
+            topics,
+            keywords,
+            interactions,
+            atmosphere,
+            quotes
+        })
+
+        let browser = null
+        try {
+            browser = await this.getBrowser()
+            const page = await browser.newPage()
+            await page.setViewport({ width: width + 30, height: 800, deviceScaleFactor: 2 })
+            await page.setContent(beautifulHtml, { waitUntil: 'networkidle0', timeout: 30000 })
+            if (topUsers.some(u => u.avatar)) {
+                try {
+                    await page.waitForSelector('.avatar-img', { timeout: 5000 })
+                    await new Promise(r => setTimeout(r, 500))
+                } catch (e) {}
+            }
+            const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
+            await page.close()
+            return imageBuffer
+        } catch (error) {
+            logService.error('[RenderService] 渲染深色风格群聊总结失败', error)
             throw error
         }
     }

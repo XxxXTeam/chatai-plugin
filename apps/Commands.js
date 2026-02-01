@@ -145,8 +145,12 @@ export class AICommands extends plugin {
                     fnc: 'toggleChatDebug'
                 },
                 {
-                    reg: '^#(群聊总结|总结群聊|群消息总结|画像总结)$',
+                    reg: '^#(群聊总结|总结群聊|群消息总结|画像总结)(2)?$',
                     fnc: 'groupSummary'
+                },
+                {
+                    reg: '^#(今日群聊|群聊总结2|现代总结)$',
+                    fnc: 'groupSummaryModern'
                 },
                 {
                     reg: '^#(个人画像|用户画像|分析我)$',
@@ -702,6 +706,8 @@ export class AICommands extends plugin {
             await this.reply('此功能仅支持群聊', true)
             return true
         }
+        const useModernStyle = /2$/.test(e.msg)
+
         const globalEnabled = config.get('features.groupSummary.enabled')
         const isEnabled = await isGroupFeatureEnabled(e.group_id, 'summaryEnabled', globalEnabled)
         if (!isEnabled) {
@@ -710,7 +716,7 @@ export class AICommands extends plugin {
         }
 
         try {
-            await this.reply('正在分析群聊消息...', true)
+            await this.reply(useModernStyle ? '正在分析群聊消息...' : '正在分析群聊消息...', true)
             const maxMessages = config.get('features.groupSummary.maxMessages') || 300
             const maxChars = config.get('features.groupSummary.maxChars') || 6000
             const groupId = String(e.group_id)
@@ -847,16 +853,149 @@ export class AICommands extends plugin {
                 }
             }
 
-            // 获取活跃用户TOP5，包含QQ号用于获取头像
+            // 获取活跃用户TOP（现代风格8个，普通风格5个）
             const topUsers = Object.values(userStats)
                 .sort((a, b) => b.count - a.count)
-                .slice(0, 5)
+                .slice(0, useModernStyle ? 8 : 5)
                 .map(u => ({
                     name: u.name,
                     count: u.count,
                     odId: u.odId,
                     avatar: u.odId ? `https://q1.qlogo.cn/g?b=qq&nk=${u.odId}&s=0` : null
                 }))
+
+            // 现代风格额外数据
+            let keywords = []
+            let interactions = []
+            let atmosphere = {}
+            let quotes = []
+
+            if (useModernStyle) {
+                // 提取关键词
+                const wordCounts = {}
+                const stopWords = new Set([
+                    '的',
+                    '了',
+                    '是',
+                    '我',
+                    '你',
+                    '他',
+                    '她',
+                    '它',
+                    '们',
+                    '这',
+                    '那',
+                    '有',
+                    '在',
+                    '吗',
+                    '啊',
+                    '呢',
+                    '吧',
+                    '嗯',
+                    '哦',
+                    '哈',
+                    '呀',
+                    '好',
+                    '不',
+                    '也',
+                    '都',
+                    '就',
+                    '和',
+                    '与',
+                    '但',
+                    '而',
+                    '或',
+                    '一',
+                    '个',
+                    '什么',
+                    '怎么',
+                    '为什么',
+                    '可以',
+                    '没有',
+                    '还是',
+                    '已经',
+                    '可能',
+                    '应该',
+                    '因为',
+                    '所以',
+                    '如果',
+                    '虽然',
+                    '然后',
+                    '现在',
+                    '知道',
+                    '觉得',
+                    '看看',
+                    '说说'
+                ])
+                for (const msg of recentMessages) {
+                    const content = typeof msg.content === 'string' ? msg.content : ''
+                    const words = content.match(/[\u4e00-\u9fa5]{2,4}|[a-zA-Z]{3,}/g) || []
+                    for (const word of words) {
+                        if (!stopWords.has(word) && word.length >= 2) {
+                            wordCounts[word] = (wordCounts[word] || 0) + 1
+                        }
+                    }
+                }
+                keywords = Object.entries(wordCounts)
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 12)
+                    .map(([word, count]) => ({ word, count }))
+
+                // 互动关系
+                const interactionMap = {}
+                for (const msg of recentMessages) {
+                    const content = typeof msg.content === 'string' ? msg.content : ''
+                    const from = msg.nickname || '用户'
+                    const atMatches = content.match(/@([^\s@]+)/g) || []
+                    for (const at of atMatches) {
+                        const to = at.replace('@', '')
+                        if (to && to !== from && to !== '全体成员') {
+                            const key = `${from}->${to}`
+                            if (!interactionMap[key]) {
+                                interactionMap[key] = { from, to, count: 0 }
+                            }
+                            interactionMap[key].count++
+                        }
+                    }
+                }
+                interactions = Object.values(interactionMap)
+                    .sort((a, b) => b.count - a.count)
+                    .slice(0, 3)
+
+                // 群聊氛围
+                const totalMsgs = recentMessages.length
+                const emojiCount = recentMessages.filter(m =>
+                    /[\u{1F300}-\u{1F9FF}]|[😀-🙏]/u.test(m.content || '')
+                ).length
+                atmosphere = {
+                    positivity: Math.min(95, Math.round(50 + (emojiCount / totalMsgs) * 100 + Math.random() * 20)),
+                    activity: Math.min(95, Math.round(30 + Math.min(totalMsgs / 3, 50) + Math.random() * 15)),
+                    interaction: Math.min(
+                        95,
+                        Math.round(
+                            20 + interactions.length * 15 + Object.keys(interactionMap).length * 5 + Math.random() * 10
+                        )
+                    )
+                }
+
+                // 精彩语录
+                quotes = recentMessages
+                    .filter(m => {
+                        const content = typeof m.content === 'string' ? m.content : ''
+                        return (
+                            content.length >= 15 &&
+                            content.length <= 100 &&
+                            !content.startsWith('[') &&
+                            !/^@/.test(content)
+                        )
+                    })
+                    .sort(() => Math.random() - 0.5)
+                    .slice(0, 3)
+                    .map(m => ({
+                        content: m.content.substring(0, 80),
+                        author: m.nickname || '群友'
+                    }))
+            }
 
             const summaryPrompt = `请根据以下群聊记录，对群聊内容进行全面的总结分析。请从以下几个维度进行分析，并以清晰、有条理的Markdown格式呈现你的结论：
 
@@ -920,23 +1059,28 @@ ${dialogText}${truncatedNote}`
                         result?.model || groupSummaryModel || config.get('llm.defaultModel') || '默认模型'
                     const shortModel = actualModel.split('/').pop()
 
-                    // 渲染为图片
-                    const imageBuffer = await renderService.renderGroupSummary(summaryText, {
-                        title: '群聊内容总结',
+                    // 渲染为图片（根据样式选择渲染方法）
+                    const renderOptions = {
+                        title: useModernStyle ? '今日群聊' : '群聊内容总结',
                         subtitle: `${shortModel} · ${dataSource}`,
                         messageCount: messages.length,
                         participantCount: participants.size,
                         topUsers,
-                        hourlyActivity
-                    })
+                        hourlyActivity,
+                        ...(useModernStyle ? { keywords, interactions, atmosphere, quotes } : {})
+                    }
+                    const imageBuffer = useModernStyle
+                        ? await renderService.renderGroupSummaryModern(summaryText, renderOptions)
+                        : await renderService.renderGroupSummary(summaryText, renderOptions)
                     await this.reply(segment.image(imageBuffer))
                 } catch (renderErr) {
                     const fallbackModel =
                         result?.model || groupSummaryModel || config.get('llm.defaultModel') || '默认模型'
                     const fallbackShortModel = fallbackModel.split('/').pop()
                     logger.warn('[AI-Commands] 渲染图片失败:', renderErr.message)
+                    const titleEmoji = useModernStyle ? '✨' : '📊'
                     await this.reply(
-                        `📊 群聊总结 (${messages.length}条消息 · ${fallbackShortModel})\n\n${summaryText}`,
+                        `${titleEmoji} ${useModernStyle ? '今日群聊' : '群聊总结'} (${messages.length}条消息 · ${fallbackShortModel})\n\n${summaryText}`,
                         true
                     )
                 }
@@ -945,6 +1089,377 @@ ${dialogText}${truncatedNote}`
             }
         } catch (error) {
             logger.error('[AI-Commands] Group summary error:', error)
+            await this.reply('群聊总结失败: ' + error.message, true)
+        }
+        return true
+    }
+
+    /**
+     * 群聊总结 - 深色现代风格
+     */
+    async groupSummaryModern() {
+        const e = this.e
+        if (!e.group_id) {
+            await this.reply('此功能仅支持群聊', true)
+            return true
+        }
+        const globalEnabled = config.get('features.groupSummary.enabled')
+        const isEnabled = await isGroupFeatureEnabled(e.group_id, 'summaryEnabled', globalEnabled)
+        if (!isEnabled) {
+            await this.reply('群聊总结功能未启用', true)
+            return true
+        }
+
+        try {
+            await this.reply('正在分析群聊消息（现代风格）...', true)
+            const maxMessages = config.get('features.groupSummary.maxMessages') || 300
+            const maxChars = config.get('features.groupSummary.maxChars') || 6000
+            const groupId = String(e.group_id)
+            await memoryManager.init()
+            let messages = []
+            let dataSource = ''
+            try {
+                const history = await getGroupChatHistory(e, maxMessages)
+                if (history && history.length > 0) {
+                    const apiMessages = await Promise.all(
+                        history.map(async msg => {
+                            let nickname = msg.sender?.card || msg.sender?.nickname || '用户'
+                            const contentParts = await Promise.all(
+                                (msg.message || []).map(async part => {
+                                    if (part.type === 'text') return part.text
+                                    if (part.type === 'at') {
+                                        if (part.qq === 'all' || part.qq === 0) return '@全体成员'
+                                        try {
+                                            const info = await getMemberInfo(e, part.qq)
+                                            return `@${info?.card || info?.nickname || part.qq}`
+                                        } catch {
+                                            return `@${part.qq}`
+                                        }
+                                    }
+                                    return ''
+                                })
+                            )
+                            return {
+                                userId: msg.sender?.user_id,
+                                nickname,
+                                content: contentParts.join(''),
+                                timestamp: msg.time ? msg.time * 1000 : Date.now()
+                            }
+                        })
+                    )
+                    messages = apiMessages.filter(m => m.content && m.content.trim())
+                    if (messages.length > 0) dataSource = 'Bot API'
+                }
+            } catch (historyErr) {
+                logger.debug('[AI-Commands] Bot API 获取群聊历史失败:', historyErr.message)
+            }
+            if (messages.length < maxMessages) {
+                const memoryMessages = memoryManager.getGroupMessageBuffer(groupId) || []
+                if (memoryMessages.length > messages.length) {
+                    messages = memoryMessages
+                    dataSource = '内存缓冲'
+                }
+            }
+            if (messages.length < maxMessages) {
+                try {
+                    databaseService.init()
+                    const conversationId = `group_summary_${groupId}`
+                    const rawDbMessages = databaseService.getMessages(conversationId, maxMessages)
+                    if (rawDbMessages && rawDbMessages.length > messages.length) {
+                        const dbMessages = rawDbMessages
+                            .map(m => ({
+                                nickname: m.metadata?.nickname || '用户',
+                                content:
+                                    typeof m.content === 'string'
+                                        ? m.content
+                                        : Array.isArray(m.content)
+                                          ? m.content
+                                                .filter(c => c.type === 'text')
+                                                .map(c => c.text)
+                                                .join('')
+                                          : String(m.content),
+                                timestamp: m.timestamp
+                            }))
+                            .filter(m => m.content && m.content.trim())
+                        if (dbMessages.length > messages.length) {
+                            messages = dbMessages
+                            dataSource = '数据库'
+                        }
+                    }
+                } catch (dbErr) {
+                    logger.debug('[AI-Commands] 从数据库读取群消息失败:', dbErr.message)
+                }
+            }
+
+            if (messages.length < 5) {
+                await this.reply('群聊消息太少，无法生成总结\n\n💡 提示：需要在群里有足够的聊天记录', true)
+                return true
+            }
+
+            const recentMessages = messages.slice(-maxMessages)
+            let dialogText = recentMessages
+                .map(m => {
+                    if (typeof m.content === 'string' && m.content.startsWith('[')) {
+                        return m.content
+                    }
+                    const content =
+                        typeof m.content === 'string'
+                            ? m.content
+                            : Array.isArray(m.content)
+                              ? m.content
+                                    .filter(c => c.type === 'text')
+                                    .map(c => c.text)
+                                    .join('')
+                              : m.content
+                    return `[${m.nickname || '用户'}]: ${content}`
+                })
+                .join('\n')
+            let truncatedNote = ''
+            if (dialogText.length > maxChars) {
+                dialogText = dialogText.slice(-maxChars)
+                truncatedNote = '\n\n⚠️ 消息过长，已截断到最近部分。'
+            }
+
+            const participants = new Set(recentMessages.map(m => m.nickname || m.userId || '用户'))
+            const userStats = {}
+            const hourlyActivity = Array(24).fill(0)
+
+            for (const msg of recentMessages) {
+                const name = msg.nickname || msg.userId || '用户'
+                const odId = msg.userId || null
+                if (!userStats[name]) {
+                    userStats[name] = { name, odId, count: 0, lastMsg: '' }
+                }
+                userStats[name].count++
+                if (msg.content) {
+                    userStats[name].lastMsg = msg.content.substring(0, 30)
+                }
+                if (msg.timestamp) {
+                    const hour = new Date(msg.timestamp).getHours()
+                    hourlyActivity[hour]++
+                }
+            }
+
+            const topUsers = Object.values(userStats)
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 8)
+                .map(u => ({
+                    name: u.name,
+                    count: u.count,
+                    odId: u.odId,
+                    avatar: u.odId ? `https://q1.qlogo.cn/g?b=qq&nk=${u.odId}&s=0` : null
+                }))
+
+            // 提取关键词（简单词频统计）
+            const wordCounts = {}
+            const stopWords = new Set([
+                '的',
+                '了',
+                '是',
+                '我',
+                '你',
+                '他',
+                '她',
+                '它',
+                '们',
+                '这',
+                '那',
+                '有',
+                '在',
+                '吗',
+                '啊',
+                '呢',
+                '吧',
+                '嗯',
+                '哦',
+                '哈',
+                '呀',
+                '好',
+                '不',
+                '也',
+                '都',
+                '就',
+                '和',
+                '与',
+                '但',
+                '而',
+                '或',
+                '一',
+                '个',
+                '什么',
+                '怎么',
+                '为什么',
+                '可以',
+                '没有',
+                '还是',
+                '已经',
+                '可能',
+                '应该',
+                '因为',
+                '所以',
+                '如果',
+                '虽然',
+                '然后',
+                '现在',
+                '知道',
+                '觉得',
+                '看看',
+                '说说'
+            ])
+            for (const msg of recentMessages) {
+                const content = typeof msg.content === 'string' ? msg.content : ''
+                const words = content.match(/[\u4e00-\u9fa5]{2,4}|[a-zA-Z]{3,}/g) || []
+                for (const word of words) {
+                    if (!stopWords.has(word) && word.length >= 2) {
+                        wordCounts[word] = (wordCounts[word] || 0) + 1
+                    }
+                }
+            }
+            const keywords = Object.entries(wordCounts)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 12)
+                .map(([word, count]) => ({ word, count }))
+
+            // 互动关系（@关系统计）
+            const interactionMap = {}
+            for (const msg of recentMessages) {
+                const content = typeof msg.content === 'string' ? msg.content : ''
+                const from = msg.nickname || '用户'
+                const atMatches = content.match(/@([^\s@]+)/g) || []
+                for (const at of atMatches) {
+                    const to = at.replace('@', '')
+                    if (to && to !== from && to !== '全体成员') {
+                        const key = `${from}->${to}`
+                        if (!interactionMap[key]) {
+                            interactionMap[key] = { from, to, count: 0 }
+                        }
+                        interactionMap[key].count++
+                    }
+                }
+            }
+            const interactions = Object.values(interactionMap)
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 3)
+
+            // 群聊氛围（基于简单规则估算）
+            const totalMsgs = recentMessages.length
+            const avgMsgLen = recentMessages.reduce((sum, m) => sum + (m.content?.length || 0), 0) / (totalMsgs || 1)
+            const emojiCount = recentMessages.filter(m => /[\u{1F300}-\u{1F9FF}]|[😀-🙏]/u.test(m.content || '')).length
+            const atmosphere = {
+                positivity: Math.min(95, Math.round(50 + (emojiCount / totalMsgs) * 100 + Math.random() * 20)),
+                activity: Math.min(95, Math.round(30 + Math.min(totalMsgs / 3, 50) + Math.random() * 15)),
+                interaction: Math.min(
+                    95,
+                    Math.round(
+                        20 + interactions.length * 15 + Object.keys(interactionMap).length * 5 + Math.random() * 10
+                    )
+                )
+            }
+
+            // 精彩语录（选取较长且有趣的消息）
+            const quotes = recentMessages
+                .filter(m => {
+                    const content = typeof m.content === 'string' ? m.content : ''
+                    return (
+                        content.length >= 15 && content.length <= 100 && !content.startsWith('[') && !/^@/.test(content)
+                    )
+                })
+                .sort(() => Math.random() - 0.5)
+                .slice(0, 3)
+                .map(m => ({
+                    content: m.content.substring(0, 80),
+                    author: m.nickname || '群友'
+                }))
+
+            const summaryPrompt = `请根据以下群聊记录，对群聊内容进行全面的总结分析。请从以下几个维度进行分析，并以清晰、有条理的Markdown格式呈现你的结论：
+
+## 分析维度
+
+1. **🔥 热门话题**：群友们最近在讨论什么话题？有哪些热点事件或共同关注的内容？按热度排序列出主要话题。
+
+2. **👥 活跃成员**：哪些成员发言最多？简要描述他们的发言特点和主要讨论内容。
+
+3. **💬 群聊氛围**：群聊的整体氛围如何？（例如：轻松愉快、严肃认真、热烈讨论等）
+
+4. **📌 关键信息**：有没有重要的通知、决定或值得关注的信息？
+
+5. **🎯 话题趋势**：群聊话题有什么变化趋势？
+
+6. **💡 精彩瞬间**：有哪些有趣的对话、金句或值得记录的互动？
+
+## 注意事项
+- 请保持客观中立，如实反映群聊内容
+- 对于敏感话题请谨慎处理
+- 总结要简洁明了，突出重点
+
+---
+
+以下是最近的群聊记录（共 ${recentMessages.length} 条消息，${participants.size} 位参与者）：
+
+${dialogText}${truncatedNote}`
+
+            const groupSummaryModel = await getGroupFeatureModel(e.group_id, 'summaryModel')
+            let summaryText = ''
+            let result = null
+            try {
+                result = await chatService.sendMessage({
+                    userId: `summary_${e.group_id}`,
+                    groupId: null,
+                    message: summaryPrompt,
+                    model: groupSummaryModel || undefined,
+                    mode: 'chat',
+                    skipHistory: true,
+                    disableTools: true,
+                    skipPersona: true
+                })
+
+                if (result.response && Array.isArray(result.response)) {
+                    summaryText = result.response
+                        .filter(c => c.type === 'text')
+                        .map(c => c.text)
+                        .join('\n')
+                }
+            } catch (invokeErr) {
+                logger.error('[AI-Commands] 调用模型生成群聊总结失败:', invokeErr)
+                await this.reply(`群聊总结生成失败：${invokeErr.message || '模型调用异常'}`, true)
+                return true
+            }
+
+            if (summaryText) {
+                try {
+                    const actualModel =
+                        result?.model || groupSummaryModel || config.get('llm.defaultModel') || '默认模型'
+                    const shortModel = actualModel.split('/').pop()
+
+                    // 使用深色现代风格渲染
+                    const imageBuffer = await renderService.renderGroupSummaryModern(summaryText, {
+                        title: '今日群聊',
+                        subtitle: `${shortModel} · ${dataSource}`,
+                        messageCount: messages.length,
+                        participantCount: participants.size,
+                        topUsers,
+                        hourlyActivity,
+                        keywords,
+                        interactions,
+                        atmosphere,
+                        quotes
+                    })
+                    await this.reply(segment.image(imageBuffer))
+                } catch (renderErr) {
+                    const fallbackModel =
+                        result?.model || groupSummaryModel || config.get('llm.defaultModel') || '默认模型'
+                    const fallbackShortModel = fallbackModel.split('/').pop()
+                    logger.warn('[AI-Commands] 渲染图片失败:', renderErr.message)
+                    await this.reply(
+                        `📊 今日群聊 (${messages.length}条消息 · ${fallbackShortModel})\n\n${summaryText}`,
+                        true
+                    )
+                }
+            } else {
+                await this.reply('总结生成失败', true)
+            }
+        } catch (error) {
+            logger.error('[AI-Commands] Group summary modern error:', error)
             await this.reply('群聊总结失败: ' + error.message, true)
         }
         return true
