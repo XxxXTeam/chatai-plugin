@@ -189,11 +189,21 @@ export async function getUserNickname(e, userId, bot = null) {
     bot = bot || getBot(e)
 
     try {
-        // 优先从事件中获取
+        if (e?.nickname && e?.user_id == userId) {
+            return e.nickname
+        }
+        if (e?.member && e?.user_id == userId) {
+            const memberInfo = e.member
+            if (memberInfo?.card || memberInfo?.nickname) {
+                return memberInfo.card || memberInfo.nickname
+            }
+        }
         if (e?.sender?.user_id == userId) {
             if (e.sender.card) return e.sender.card
             if (e.sender.nickname) return e.sender.nickname
         }
+
+        // 尝试从API获取
         const userInfo = await getUserInfo(e, userId, e?.group_id)
         if (userInfo?.card || userInfo?.nickname) {
             return userInfo.card || userInfo.nickname
@@ -389,13 +399,21 @@ export function parseMemberChangeEvent(e) {
     } else if (changeType === 'decrease') {
         subType = e.sub_type === 'kick' ? 'kick' : e.sub_type === 'kick_me' ? 'kick_me' : 'leave'
     }
+    let nickname = null
+    if (changeType === 'increase' && e.nickname) {
+        nickname = e.nickname
+    } else if (changeType === 'decrease' && e.member) {
+        nickname = e.member.card || e.member.nickname
+    }
 
     return {
         userId,
         operatorId,
         changeType,
         subType,
-        groupId: e.group_id
+        groupId: e.group_id,
+        nickname, // icqq 提供的用户昵称
+        member: e.member // icqq 退群事件的完整成员信息
     }
 }
 
@@ -681,7 +699,17 @@ export async function checkEventProbability(eventType, groupId = null) {
         }
 
         // 检查该事件类型是否启用
-        const enabledEvents = eventConfig.enabledEvents || ['poke', 'reaction', 'groupIncrease']
+        const enabledEvents = eventConfig.enabledEvents || [
+            'poke',
+            'reaction',
+            'welcome',
+            'goodbye',
+            'ban',
+            'admin',
+            'luckyKing',
+            'honor',
+            'recall'
+        ]
         if (!enabledEvents.includes(eventType)) {
             return { shouldTrigger: false, probability: 0, randomValue: 0, reason: 'event type disabled' }
         }
