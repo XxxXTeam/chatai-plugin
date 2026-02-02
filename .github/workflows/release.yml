@@ -33,13 +33,33 @@ jobs:
       - name: Build native modules
         run: pnpm rebuild better-sqlite3
       
-      - name: Build frontend
+      - name: Build frontend and copy to resources/web
         run: |
           if [ -d "frontend" ]; then
             cd frontend
             pnpm install --frozen-lockfile
             pnpm build
+            
+            # Copy built static files to resources/web
+            cd ..
+            rm -rf resources/web
+            mkdir -p resources/web
+            cp -r frontend/out/* resources/web/
           fi
+      
+      - name: Create release package
+        run: |
+          # Create release.zip with only plugin files
+          zip -r release.zip . \
+            -x "frontend/*" \
+            -x "docs/*" \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x "node_modules/*" \
+            -x "*.md" \
+            -x "*.zip"
+          
+          echo "Package created: release.zip"
       
       - name: Generate changelog
         id: changelog
@@ -55,14 +75,9 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           body: ${{ steps.changelog.outputs.content }}
+          files: release.zip
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Sync release to XxxXTeam/chatai-plugin
-        if: success()
-        run: |
-          git remote add upstream https://x-access-token:${{ secrets.SYNC_TOKEN }}@github.com/XxxXTeam/chatai-plugin.git || true
-          git push upstream --tags
-        continue-on-error: true
