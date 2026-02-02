@@ -23,7 +23,7 @@ const toolModules = {
     voice: { file: './voice.js', export: 'voiceTools' },
     extra: { file: './extra.js', export: 'extraTools' },
     shell: { file: './shell.js', export: 'shellTools' },
-    schedule: { file: './schedule.js', export: 'scheduleTools' },
+    schedule: { file: './nlSchedule.js', export: 'nlScheduleTools' },
     bltools: { file: './bltools.js', export: 'bltoolsTools' },
     reminder: { file: './reminder.js', export: 'reminderTools' }
 }
@@ -54,7 +54,7 @@ const categoryMeta = {
     },
     schedule: {
         name: '定时任务',
-        description: '创建、管理定时任务，支持周期执行、@用户、触发AI对话等',
+        description: '自然语言定时任务，如"5分钟后发一首歌"、"明天早上8点提醒我"',
         icon: 'Clock'
     },
     bltools: {

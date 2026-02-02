@@ -143,7 +143,7 @@ import {
     createPresetsConfigRoutes,
     ChaiteResponse
 } from './routes/index.js'
-import { schedulerService } from './scheduler/SchedulerService.js'
+import { nlSchedulerService } from './scheduler/NLSchedulerService.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -603,9 +603,9 @@ window.location.href = '${mountPath}/';
         this.addresses = await getServerAddressesFast(this.port)
         this.printStartupBanner()
 
-        // 异步启动周期任务调度服务
-        schedulerService.init().catch(err => {
-            chatLogger.warn('[WebServer] 调度服务启动失败:', err.message)
+        // 异步启动自然语言定时任务服务
+        nlSchedulerService.init().catch(err => {
+            chatLogger.warn('[WebServer] 定时任务服务启动失败:', err.message)
         })
 
         return { port: this.port }

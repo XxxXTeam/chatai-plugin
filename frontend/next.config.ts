@@ -16,10 +16,8 @@ const nextConfig: NextConfig = {
     experimental: {
         optimizeCss: true
     },
-    // 优化打包
     poweredByHeader: false,
     reactStrictMode: true,
-    // 压缩优化
     compress: true
 }
 export default nextConfig

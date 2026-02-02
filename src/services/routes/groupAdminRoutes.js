@@ -9,7 +9,6 @@ import jwt from 'jsonwebtoken'
 import { ChaiteResponse, getDatabase } from './shared.js'
 import { getScopeManager } from '../scope/ScopeManager.js'
 import { chatLogger } from '../../core/utils/logger.js'
-import { schedulerService } from '../scheduler/SchedulerService.js'
 import config from '../../../config/config.js'
 
 const router = express.Router()
@@ -674,16 +673,6 @@ router.put('/config', groupAdminAuth, async (req, res) => {
 
         await scopeManager.setGroupSettings(groupId, updateData)
 
-        // 更新调度任务
-        schedulerService.updateGroupTask(groupId, {
-            summaryPushEnabled: body.summary?.push?.enabled,
-            summaryPushIntervalType: body.summary?.push?.intervalType,
-            summaryPushIntervalValue: body.summary?.push?.intervalValue,
-            summaryPushHour: body.summary?.push?.pushHour,
-            summaryPushMessageCount: body.summary?.push?.messageCount,
-            summaryModel: body.summary?.modelId ?? body.models?.summary
-        })
-
         chatLogger.info(`[GroupAdmin] 群 ${groupId} 配置已更新 (操作者: ${req.groupAdmin.userId})`)
 
         res.json(ChaiteResponse.ok({ success: true }))
@@ -871,8 +860,8 @@ router.put('/whitelist', groupAdminAuth, async (req, res) => {
 router.get('/scheduler/status', groupAdminAuth, async (req, res) => {
     try {
         const { groupId } = req.groupAdmin
-        const status = schedulerService.getTaskStatus(groupId)
-        res.json(ChaiteResponse.ok(status || { enabled: false }))
+        // 定时任务已重构，返回空状态
+        res.json(ChaiteResponse.ok({ enabled: false, message: '定时任务模块已重构' }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
@@ -884,8 +873,8 @@ router.get('/scheduler/status', groupAdminAuth, async (req, res) => {
 router.post('/scheduler/trigger', groupAdminAuth, async (req, res) => {
     try {
         const { groupId } = req.groupAdmin
-        await schedulerService.triggerSummaryNow(groupId)
-        res.json(ChaiteResponse.ok({ success: true, message: '总结推送已触发' }))
+        // 定时任务已重构，此功能待重新实现
+        res.json(ChaiteResponse.ok({ success: false, message: '定时总结功能已重构，请使用新的自然语言定时任务' }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
