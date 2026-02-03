@@ -19,6 +19,7 @@ router.get('/', (req, res) => {
             trigger: config.get('trigger'),
             context: config.get('context'),
             bym: config.get('bym'),
+            game: config.get('game'),
             tools: config.get('tools'),
             personality: config.get('personality'),
             thinking: config.get('thinking'),

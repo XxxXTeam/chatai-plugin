@@ -44,7 +44,8 @@ import {
     Brain,
     Sparkles,
     MessageSquare,
-    Shield
+    Shield,
+    Gamepad2
 } from 'lucide-react'
 
 interface PrefixPersona {
@@ -76,6 +77,7 @@ interface Config {
             image: string
             draw: string
             roleplay: string
+            game: string
         }
         fallback: {
             enabled: boolean
@@ -104,6 +106,12 @@ interface Config {
         presetId: string
         systemPrompt: string
         inheritPersonality: boolean
+    }
+    game: {
+        probability: number
+        enableTools: boolean
+        temperature: number
+        maxTokens: number
     }
     tools: {
         showCallLogs: boolean
@@ -194,7 +202,7 @@ const defaultConfig: Config = {
     admin: { loginNotifyPrivate: true, sensitiveCommandMasterOnly: true },
     llm: {
         defaultModel: '',
-        models: { chat: '', image: '', draw: '', roleplay: '' },
+        models: { chat: '', image: '', draw: '', roleplay: '', game: '' },
         fallback: { enabled: false, models: [], maxRetries: 3, retryDelay: 500, notifyOnFallback: false }
     },
     context: {
@@ -213,6 +221,12 @@ const defaultConfig: Config = {
         presetId: '',
         systemPrompt: '',
         inheritPersonality: true
+    },
+    game: {
+        probability: 0.3,
+        enableTools: true,
+        temperature: 0.8,
+        maxTokens: 1000
     },
     tools: {
         showCallLogs: true,
@@ -263,7 +277,7 @@ const defaultConfig: Config = {
     }
 }
 
-type ModelCategory = 'chat' | 'image' | 'draw' | 'roleplay' | 'fallback' | 'default'
+type ModelCategory = 'chat' | 'image' | 'draw' | 'roleplay' | 'game' | 'fallback' | 'default'
 
 const MODEL_CATEGORY_LABELS: Record<ModelCategory, string> = {
     default: '默认模型',
@@ -271,6 +285,7 @@ const MODEL_CATEGORY_LABELS: Record<ModelCategory, string> = {
     image: '图像理解模型',
     draw: '绘图模型',
     roleplay: '伪人模型',
+    game: '游戏模型',
     fallback: '备选模型'
 }
 
@@ -278,6 +293,7 @@ const MODEL_CATEGORY_DESCRIPTIONS: Record<ModelCategory, string> = {
     default: '其他模型未配置时使用',
     chat: '普通对话',
     image: '分析理解图片内容',
+    game: 'Galgame等互动游戏',
     draw: '生成图片（如DALL-E）',
     roleplay: '伪人模式回复',
     fallback: '主模型失败时使用'
@@ -375,7 +391,8 @@ export default function SettingsPage() {
                         chat: '',
                         image: '',
                         draw: '',
-                        roleplay: ''
+                        roleplay: '',
+                        game: ''
                     }
                 if (!merged.llm.fallback)
                     merged.llm.fallback = {
@@ -489,7 +506,8 @@ export default function SettingsPage() {
             editingModelCategory === 'chat' ||
             editingModelCategory === 'image' ||
             editingModelCategory === 'draw' ||
-            editingModelCategory === 'roleplay'
+            editingModelCategory === 'roleplay' ||
+            editingModelCategory === 'game'
         )
     }
 
@@ -630,6 +648,13 @@ export default function SettingsPage() {
                     >
                         <MessageSquare className="h-4 w-4 mr-1.5" />
                         伪人
+                    </TabsTrigger>
+                    <TabsTrigger
+                        value="game"
+                        className="data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg px-3 py-1.5 text-sm transition-all"
+                    >
+                        <Gamepad2 className="h-4 w-4 mr-1.5" />
+                        游戏
                     </TabsTrigger>
                     <TabsTrigger
                         value="tools"
@@ -1215,7 +1240,7 @@ export default function SettingsPage() {
                         </CardHeader>
                         <CardContent className="space-y-3">
                             {(
-                                ['chat', 'image', 'draw', 'roleplay'] as ModelCategory[]
+                                ['chat', 'image', 'draw', 'roleplay', 'game'] as ModelCategory[]
                             ).map(category => (
                                 <div key={category} className="flex items-center justify-between p-3 border rounded-lg">
                                     <div>
@@ -1548,6 +1573,70 @@ export default function SettingsPage() {
                                     </div>
                                 </>
                             )}
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+
+                {/* 游戏模式 */}
+                <TabsContent value="game" className="space-y-4">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>游戏模式</CardTitle>
+                            <CardDescription>Galgame等互动游戏的配置，用户进入游戏后的消息响应行为</CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="grid gap-2">
+                                <Label>响应概率</Label>
+                                <p className="text-xs text-muted-foreground">非@触发时的响应概率（@触发时100%响应）</p>
+                                <div className="flex items-center gap-4">
+                                    <Slider
+                                        value={[(config.game?.probability ?? 0.3) * 100]}
+                                        onValueChange={v => updateConfig('game.probability', v[0] / 100)}
+                                        min={0}
+                                        max={100}
+                                        step={1}
+                                        className="flex-1"
+                                    />
+                                    <span className="w-12 text-right text-sm">{Math.round((config.game?.probability ?? 0.3) * 100)}%</span>
+                                </div>
+                            </div>
+                            <Separator />
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <Label>启用工具</Label>
+                                    <p className="text-sm text-muted-foreground">允许游戏模式使用MCP工具</p>
+                                </div>
+                                <Switch
+                                    checked={config.game?.enableTools ?? true}
+                                    onCheckedChange={v => updateConfig('game.enableTools', v)}
+                                />
+                            </div>
+                            <div className="grid gap-2">
+                                <Label>温度</Label>
+                                <p className="text-xs text-muted-foreground">控制回复的随机性（0-2，越高越随机）</p>
+                                <div className="flex items-center gap-4">
+                                    <Slider
+                                        value={[config.game?.temperature ?? 0.8]}
+                                        onValueChange={v => updateConfig('game.temperature', v[0])}
+                                        min={0}
+                                        max={2}
+                                        step={0.1}
+                                        className="flex-1"
+                                    />
+                                    <span className="w-12 text-right text-sm">{(config.game?.temperature ?? 0.8).toFixed(1)}</span>
+                                </div>
+                            </div>
+                            <div className="grid gap-2">
+                                <Label>最大Token数</Label>
+                                <Input
+                                    type="number"
+                                    min={100}
+                                    max={8000}
+                                    value={config.game?.maxTokens ?? 1000}
+                                    onChange={e => updateConfig('game.maxTokens', parseInt(e.target.value) || 1000)}
+                                />
+                                <p className="text-xs text-muted-foreground">游戏回复的最大长度</p>
+                            </div>
                         </CardContent>
                     </Card>
                 </TabsContent>

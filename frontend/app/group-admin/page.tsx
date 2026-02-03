@@ -17,7 +17,7 @@ import { toast } from 'sonner'
 import {
     AlertCircle, Loader2, Settings, Zap, Sparkles, BookOpen, RefreshCw, Power, X, Image,
     MessageSquare, PartyPopper, Palette, Bot, Users, Clock, Hand, UserPlus, UserMinus,
-    Brain, Smile, Server, Trash2, Plus, Eye, EyeOff
+    Brain, Smile, Server, Trash2, Plus, Eye, EyeOff, Gamepad2
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useIsMobile } from '@/lib/hooks/useResponsive'
@@ -51,7 +51,7 @@ interface Preset {
 }
 
 type TriState = 'inherit' | 'on' | 'off'
-type TabId = 'basic' | 'features' | 'bym' | 'channel' | 'advanced'
+type TabId = 'basic' | 'features' | 'bym' | 'game' | 'channel' | 'advanced'
 
 // ============== 子组件 ==============
 
@@ -183,6 +183,12 @@ export default function GroupAdminPage() {
         bymProbability: 'inherit' as 'inherit' | number, bymModel: '',
         bymTemperature: 'inherit' as 'inherit' | number, bymMaxTokens: 'inherit' as 'inherit' | number,
         bymReplyLength: 'medium', bymUseEmoji: true,
+        // 游戏模式
+        gameProbability: 'inherit' as 'inherit' | number,
+        gameEnableTools: 'inherit' as TriState,
+        gameTemperature: 'inherit' as 'inherit' | number,
+        gameMaxTokens: 'inherit' as 'inherit' | number,
+        gameModel: '',
         // 主动发言
         proactiveChatEnabled: 'inherit' as TriState,
         proactiveChatProbability: 'inherit' as 'inherit' | number,
@@ -316,6 +322,11 @@ export default function GroupAdminPage() {
                     bymMaxTokens: c.bym?.maxTokens ?? 'inherit',
                     bymReplyLength: c.bym?.style?.replyLength || 'medium',
                     bymUseEmoji: c.bym?.style?.useEmoji ?? true,
+                    gameProbability: c.game?.probability ?? 'inherit',
+                    gameEnableTools: c.game?.enableTools === undefined ? 'inherit' : c.game.enableTools ? 'on' : 'off',
+                    gameTemperature: c.game?.temperature ?? 'inherit',
+                    gameMaxTokens: c.game?.maxTokens ?? 'inherit',
+                    gameModel: c.models?.game || '',
                     proactiveChatEnabled: c.bym?.proactive?.enabled === undefined ? 'inherit' : c.bym.proactive.enabled ? 'on' : 'off',
                     proactiveChatProbability: c.bym?.proactive?.probability ?? 'inherit',
                     proactiveChatCooldown: c.bym?.proactive?.cooldown ?? 'inherit',
@@ -491,7 +502,13 @@ export default function GroupAdminPage() {
                         quality: form.imageGenQuality,
                         maxDailyLimit: form.imageGenDailyLimit
                     },
-                    models: { chat: form.chatModel || undefined, summary: form.summaryModel || undefined },
+                    game: {
+                        probability: form.gameProbability === 'inherit' ? undefined : form.gameProbability,
+                        enableTools: form.gameEnableTools === 'inherit' ? undefined : form.gameEnableTools === 'on',
+                        temperature: form.gameTemperature === 'inherit' ? undefined : form.gameTemperature,
+                        maxTokens: form.gameMaxTokens === 'inherit' ? undefined : form.gameMaxTokens
+                    },
+                    models: { chat: form.chatModel || undefined, summary: form.summaryModel || undefined, game: form.gameModel || undefined },
                     listMode: form.listMode,
                     blacklist: form.blacklist,
                     whitelist: form.whitelist,
@@ -588,6 +605,7 @@ export default function GroupAdminPage() {
         { id: 'basic', label: '基础设置', mobileLabel: '基础', icon: <Settings className="h-4 w-4" /> },
         { id: 'features', label: '功能开关', mobileLabel: '功能', icon: <Zap className="h-4 w-4" /> },
         { id: 'bym', label: '伪人模式', mobileLabel: '伪人', icon: <Sparkles className="h-4 w-4" /> },
+        { id: 'game', label: '游戏模式', mobileLabel: '游戏', icon: <Gamepad2 className="h-4 w-4" /> },
         { id: 'channel', label: '对话设置', mobileLabel: '对话', icon: <MessageSquare className="h-4 w-4" /> },
         { id: 'advanced', label: '高级配置', mobileLabel: '高级', icon: <BookOpen className="h-4 w-4" /> }
     ]
@@ -1122,6 +1140,68 @@ export default function GroupAdminPage() {
                                             </div>
                                         </div>
                                     </FeatureItem>
+                                </div>
+                            )}
+
+                            {/* 游戏模式 Tab */}
+                            {activeTab === 'game' && (
+                                <div className="space-y-4">
+                                    <div className="p-4 rounded-lg border bg-card space-y-4">
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <Gamepad2 className="h-4 w-4 text-green-500" />
+                                            <Label className="text-base font-medium">游戏模式配置</Label>
+                                        </div>
+                                        <p className="text-sm text-muted-foreground">Galgame等互动游戏的群组独立配置</p>
+                                        
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="space-y-2">
+                                                <Label className="text-sm">触发概率</Label>
+                                                {form.gameProbability === 'inherit' ? (
+                                                    <Button variant="outline" size="sm" className="w-full" onClick={() => setForm({ ...form, gameProbability: 0.3 })}>继承全局</Button>
+                                                ) : (
+                                                    <div className="flex items-center gap-2">
+                                                        <Input type="number" min={0} max={100} className="w-20" value={Math.round((form.gameProbability as number) * 100)} onChange={e => setForm({ ...form, gameProbability: parseInt(e.target.value) / 100 })} />
+                                                        <span className="text-sm">%</span>
+                                                        <Button variant="ghost" size="sm" onClick={() => setForm({ ...form, gameProbability: 'inherit' })}><X className="h-3 w-3" /></Button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <ModelSelect label="游戏模型" value={form.gameModel} models={allModels} onChange={v => setForm({ ...form, gameModel: v })} />
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="space-y-2">
+                                                <Label className="text-sm">温度</Label>
+                                                {form.gameTemperature === 'inherit' ? (
+                                                    <Button variant="outline" size="sm" className="w-full" onClick={() => setForm({ ...form, gameTemperature: 0.8 })}>继承全局</Button>
+                                                ) : (
+                                                    <div className="flex items-center gap-2">
+                                                        <Input type="number" min={0} max={2} step={0.1} value={form.gameTemperature} onChange={e => setForm({ ...form, gameTemperature: parseFloat(e.target.value) })} />
+                                                        <Button variant="ghost" size="sm" onClick={() => setForm({ ...form, gameTemperature: 'inherit' })}><X className="h-3 w-3" /></Button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label className="text-sm">最大Token</Label>
+                                                {form.gameMaxTokens === 'inherit' ? (
+                                                    <Button variant="outline" size="sm" className="w-full" onClick={() => setForm({ ...form, gameMaxTokens: 1000 })}>继承全局</Button>
+                                                ) : (
+                                                    <div className="flex items-center gap-2">
+                                                        <Input type="number" min={100} max={8000} value={form.gameMaxTokens} onChange={e => setForm({ ...form, gameMaxTokens: parseInt(e.target.value) })} />
+                                                        <Button variant="ghost" size="sm" onClick={() => setForm({ ...form, gameMaxTokens: 'inherit' })}><X className="h-3 w-3" /></Button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div className="flex items-center justify-between pt-2">
+                                            <div>
+                                                <Label className="text-sm">启用工具</Label>
+                                                <p className="text-xs text-muted-foreground">允许游戏模式使用MCP工具</p>
+                                            </div>
+                                            <TriStateSelect value={form.gameEnableTools} onChange={v => setForm({ ...form, gameEnableTools: v })} />
+                                        </div>
+                                    </div>
                                 </div>
                             )}
 

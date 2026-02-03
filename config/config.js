@@ -91,7 +91,9 @@ class Config {
                     // 图像模型 - 用于图像理解和生成
                     image: '',
                     // 伪人模型 - 用于模拟真人回复
-                    roleplay: ''
+                    roleplay: '',
+                    // 游戏模型 - 用于Galgame等互动游戏
+                    game: ''
                 },
                 // 备选模型配置 - 主模型失败时自动轮询
                 fallback: {
@@ -122,6 +124,13 @@ class Config {
                 presetMap: {},
                 // 仅伪人模式可用的功能
                 exclusiveFeatures: ['groupSummary', 'userPortrait']
+            },
+            // 游戏模式配置（Galgame等）
+            game: {
+                probability: 0.3, // 非@触发时的响应概率（30%）
+                enableTools: true, // 是否允许游戏模式使用工具
+                temperature: 0.8,
+                maxTokens: 1000
             },
             // 主动聊天配置
             proactiveChat: {

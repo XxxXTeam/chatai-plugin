@@ -136,7 +136,8 @@ export class ChatService {
             skipHistory = false, // 跳过历史记录（用于事件响应等场景）
             skipPersona = false, // 跳过人设获取（用于总结等场景）
             temperature: overrideTemperature, // 覆盖温度参数
-            maxTokens: overrideMaxTokens // 覆盖最大token参数
+            maxTokens: overrideMaxTokens, // 覆盖最大token参数
+            source = 'chat' // 统计来源标签（chat/game/bym等）
         } = options
 
         // 调试信息收集
@@ -1537,7 +1538,7 @@ export class ChatService {
                     duration: requestDuration,
                     success: requestSuccess,
                     error: !requestSuccess ? lastError?.message || lastError?.toString() || '未知错误' : null,
-                    source: 'chat',
+                    source,
                     userId,
                     groupId: groupId || null,
                     stream: useStreaming,

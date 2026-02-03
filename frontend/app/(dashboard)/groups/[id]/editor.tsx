@@ -38,7 +38,8 @@ import {
     Eye,
     EyeOff,
     Palette,
-    MousePointer2
+    MousePointer2,
+    Gamepad2
 } from 'lucide-react'
 import { scopeApi, presetsApi, channelsApi, knowledgeApi } from '@/lib/api'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -97,7 +98,13 @@ export function GroupEditor({ id }: GroupEditorProps) {
         chatModel: '',
         summaryModel: '',
         bymModel: '',
+        gameModel: '',
         imageGenModel: '',
+        // 游戏模式配置
+        gameProbability: 'inherit' as 'inherit' | number,
+        gameEnableTools: 'inherit' as 'inherit' | 'on' | 'off',
+        gameTemperature: 'inherit' as 'inherit' | number,
+        gameMaxTokens: 'inherit' as 'inherit' | number,
         // 功能开关
         toolsEnabled: 'inherit' as 'inherit' | 'on' | 'off',
         imageGenEnabled: 'inherit' as 'inherit' | 'on' | 'off',
@@ -219,7 +226,12 @@ export function GroupEditor({ id }: GroupEditorProps) {
                         chatModel: settings.chatModel || '',
                         summaryModel: settings.summaryModel || '',
                         bymModel: settings.bymModel || '',
+                        gameModel: settings.gameModel || '',
                         imageGenModel: settings.imageGenModel || '',
+                        gameProbability: settings.gameProbability === undefined || settings.gameProbability === 'inherit' ? 'inherit' : Number(settings.gameProbability),
+                        gameEnableTools: settings.gameEnableTools === undefined ? 'inherit' : settings.gameEnableTools ? 'on' : 'off',
+                        gameTemperature: settings.gameTemperature === undefined || settings.gameTemperature === 'inherit' ? 'inherit' : Number(settings.gameTemperature),
+                        gameMaxTokens: settings.gameMaxTokens === undefined || settings.gameMaxTokens === 'inherit' ? 'inherit' : Number(settings.gameMaxTokens),
                         toolsEnabled: settings.toolsEnabled === undefined ? 'inherit' : settings.toolsEnabled ? 'on' : 'off',
                         imageGenEnabled: settings.imageGenEnabled === undefined ? 'inherit' : settings.imageGenEnabled ? 'on' : 'off',
                         summaryEnabled: settings.summaryEnabled === undefined ? 'inherit' : settings.summaryEnabled ? 'on' : 'off',
@@ -316,7 +328,12 @@ export function GroupEditor({ id }: GroupEditorProps) {
                 chatModel: form.chatModel || undefined,
                 summaryModel: form.summaryModel || undefined,
                 bymModel: form.bymModel || undefined,
+                gameModel: form.gameModel || undefined,
                 imageGenModel: form.imageGenModel || undefined,
+                gameProbability: form.gameProbability === 'inherit' ? undefined : form.gameProbability,
+                gameEnableTools: form.gameEnableTools === 'inherit' ? undefined : form.gameEnableTools === 'on',
+                gameTemperature: form.gameTemperature === 'inherit' ? undefined : form.gameTemperature,
+                gameMaxTokens: form.gameMaxTokens === 'inherit' ? undefined : form.gameMaxTokens,
                 toolsEnabled: form.toolsEnabled === 'inherit' ? undefined : form.toolsEnabled === 'on',
                 imageGenEnabled: form.imageGenEnabled === 'inherit' ? undefined : form.imageGenEnabled === 'on',
                 summaryEnabled: form.summaryEnabled === 'inherit' ? undefined : form.summaryEnabled === 'on',
@@ -439,6 +456,10 @@ export function GroupEditor({ id }: GroupEditorProps) {
                     <TabsTrigger value="bym" className="text-xs sm:text-sm px-1 sm:px-3 py-2">
                         <Smile className="h-4 w-4 sm:mr-1" />
                         <span className="hidden sm:inline">伪人</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="game" className="text-xs sm:text-sm px-1 sm:px-3 py-2">
+                        <Gamepad2 className="h-4 w-4 sm:mr-1" />
+                        <span className="hidden sm:inline">游戏</span>
                     </TabsTrigger>
                     <TabsTrigger value="channel" className="text-xs sm:text-sm px-1 sm:px-3 py-2">
                         <Server className="h-4 w-4 sm:mr-1" />
@@ -1218,6 +1239,64 @@ export function GroupEditor({ id }: GroupEditorProps) {
                                     </div>
                                 </div>
                             )}
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+
+                {/* 游戏模式 */}
+                <TabsContent value="game" className="space-y-4">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="text-base flex items-center gap-2">
+                                <Gamepad2 className="h-4 w-4 text-green-500" />
+                                游戏模式
+                            </CardTitle>
+                            <p className="text-sm text-muted-foreground">Galgame等互动游戏的群组独立配置</p>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="grid grid-cols-2 gap-4">
+                                <ProbabilitySlider
+                                    label="触发概率"
+                                    value={form.gameProbability}
+                                    onChange={v => setForm({ ...form, gameProbability: v })}
+                                />
+                                <div className="space-y-1">
+                                    <Label className="text-xs">游戏模型</Label>
+                                    <Select value={form.gameModel} onValueChange={v => setForm({ ...form, gameModel: v })}>
+                                        <SelectTrigger><SelectValue placeholder="继承全局" /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="">继承全局</SelectItem>
+                                            {allModels.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <FormNumberInput
+                                    label="温度"
+                                    min={0}
+                                    max={2}
+                                    step={0.1}
+                                    value={form.gameTemperature === 'inherit' ? '' : form.gameTemperature}
+                                    onChange={e => setForm({ ...form, gameTemperature: e.target.value ? parseFloat(e.target.value) : 'inherit' })}
+                                    placeholder="继承"
+                                />
+                                <FormNumberInput
+                                    label="最大Token"
+                                    min={100}
+                                    max={8000}
+                                    value={form.gameMaxTokens === 'inherit' ? '' : form.gameMaxTokens}
+                                    onChange={e => setForm({ ...form, gameMaxTokens: e.target.value ? parseInt(e.target.value) : 'inherit' })}
+                                    placeholder="继承"
+                                />
+                            </div>
+                            <FeatureSwitch
+                                icon={<Zap className="h-4 w-4 text-yellow-500" />}
+                                title="启用工具"
+                                desc="允许游戏模式使用MCP工具"
+                                value={form.gameEnableTools}
+                                onChange={v => setForm({ ...form, gameEnableTools: v })}
+                            />
                         </CardContent>
                     </Card>
                 </TabsContent>
