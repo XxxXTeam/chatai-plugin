@@ -8,6 +8,8 @@ import { getScopeManager } from '../src/services/scope/ScopeManager.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
 import { chatService } from '../src/services/llm/ChatService.js'
 import { urlToQRCode } from '../src/utils/platformAdapter.js'
+import { renderService } from '../src/services/media/RenderService.js'
+import { segment } from '../src/utils/messageParser.js'
 
 // 缓存 Yunzai 主人配置
 let yunzaiCfg = null
@@ -665,68 +667,140 @@ export class AIManagement extends plugin {
     }
 
     /**
-     * 帮助信息
+     * 帮助信息 - 渲染为图片发送
      */
     async help() {
         const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
 
-        const msg = `📚 AI插件命令帮助
+        // 定义所有命令分类
+        const commandCategories = [
+            {
+                category: '对话命令',
+                icon: '💬',
+                commands: [
+                    { cmd: '#结束对话', desc: '结束对话清除上下文', icon: '🔚' },
+                    { cmd: '#清除记忆', desc: '清除个人记忆数据', icon: '🧹' },
+                    { cmd: '#对话状态', desc: '查看对话详细状态', icon: '📊' },
+                    { cmd: '#我的记忆', desc: '查看已保存的记忆', icon: '🧠' },
+                    { cmd: '#总结记忆', desc: '整理合并记忆条目', icon: '📝' },
+                    { cmd: '#chatdebug', desc: '切换聊天调试模式', icon: '🐛' }
+                ]
+            },
+            {
+                category: '群聊功能',
+                icon: '👥',
+                commands: [
+                    { cmd: '#群聊总结', desc: 'AI总结群聊内容', icon: '📋' },
+                    { cmd: '#今日群聊', desc: '现代风格群聊总结', icon: '📰' },
+                    { cmd: '#个人画像', desc: '分析用户画像', icon: '👤' },
+                    { cmd: '#画像@xxx', desc: '分析指定用户画像', icon: '🎯' },
+                    { cmd: '#今日词云', desc: '生成群聊词云图', icon: '☁️' },
+                    { cmd: '#群记忆', desc: '查看群聊共享记忆', icon: '💭' }
+                ]
+            },
+            {
+                category: '绘图功能',
+                icon: '🎨',
+                commands: [
+                    { cmd: '画 <描述>', desc: 'AI绘图支持中英文', icon: '🖼️' },
+                    { cmd: '手办化', desc: '图片转手办风格', icon: '🎎' },
+                    { cmd: 'Q版/动漫化', desc: '图片风格转换', icon: '✨' },
+                    { cmd: '赛博朋克', desc: '赛博朋克风格', icon: '🌃' },
+                    { cmd: '油画/水彩', desc: '绘画风格转换', icon: '🎭' }
+                ]
+            },
+            {
+                category: 'Galgame 游戏',
+                icon: '🎮',
+                commands: [
+                    { cmd: '#开始游戏', desc: '开始Galgame冒险', icon: '🎬' },
+                    { cmd: '#继续游戏', desc: '继续上次的游戏', icon: '▶️' },
+                    { cmd: '#结束游戏', desc: '结束当前游戏', icon: '⏹️' },
+                    { cmd: '#游戏存档', desc: '查看游戏存档', icon: '💾' },
+                    { cmd: '#游戏状态', desc: '查看游戏状态', icon: '📈' }
+                ]
+            },
+            {
+                category: '人格设定',
+                icon: '🎭',
+                commands: [
+                    { cmd: `${cmdPrefix}设置人格`, desc: '设置个人专属人格', icon: '✏️' },
+                    { cmd: `${cmdPrefix}查看人格`, desc: '查看当前人格', icon: '👁️' },
+                    { cmd: `${cmdPrefix}清除人格`, desc: '清除个人人格', icon: '🗑️' },
+                    { cmd: `${cmdPrefix}设置群人格`, desc: '设置群人格[主人]', icon: '👥' },
+                    { cmd: `${cmdPrefix}清除群人格`, desc: '清除群人格[主人]', icon: '❌' }
+                ]
+            },
+            {
+                category: '群管理命令',
+                icon: '⚙️',
+                commands: [
+                    { cmd: '#群管理面板', desc: '获取群设置面板', icon: '🖥️' },
+                    { cmd: `${cmdPrefix}群设置`, desc: '查看本群功能状态', icon: '📋' },
+                    { cmd: `${cmdPrefix}群伪人开/关`, desc: '本群伪人模式', icon: '🤖' },
+                    { cmd: `${cmdPrefix}群绘图开/关`, desc: '本群绘图功能', icon: '🖌️' }
+                ]
+            },
+            {
+                category: '群渠道与限制',
+                icon: '📡',
+                commands: [
+                    { cmd: `${cmdPrefix}群渠道设置`, desc: '查看群渠道配置', icon: '📺' },
+                    { cmd: `${cmdPrefix}群禁/启用全局`, desc: '切换全局渠道', icon: '🔄' },
+                    { cmd: `${cmdPrefix}群限制设置`, desc: '查看使用限制', icon: '🚧' },
+                    { cmd: `${cmdPrefix}群限制 N M`, desc: '设置群/用户限制', icon: '⚖️' },
+                    { cmd: `${cmdPrefix}群使用统计`, desc: '查看今日使用', icon: '📊' },
+                    { cmd: `${cmdPrefix}群重置统计`, desc: '重置今日统计', icon: '🔃' }
+                ]
+            },
+            {
+                category: '主人命令',
+                icon: '👑',
+                commands: [
+                    { cmd: `${cmdPrefix}管理面板`, desc: 'Web管理面板', icon: '🌐' },
+                    { cmd: `${cmdPrefix}状态`, desc: '查看插件状态', icon: '📈' },
+                    { cmd: `${cmdPrefix}调试开/关`, desc: '切换调试模式', icon: '🔧' },
+                    { cmd: `${cmdPrefix}伪人开/关`, desc: '全局伪人模式', icon: '🎭' },
+                    { cmd: `${cmdPrefix}设置模型`, desc: '设置默认模型', icon: '🤖' },
+                    { cmd: `${cmdPrefix}结束全部对话`, desc: '清除所有对话', icon: '🧹' }
+                ]
+            },
+            {
+                category: '版本更新',
+                icon: '🔄',
+                commands: [
+                    { cmd: '#ai版本', desc: '查看版本信息', icon: 'ℹ️' },
+                    { cmd: '#ai检查更新', desc: '检查新版本', icon: '🔍' },
+                    { cmd: '#ai更新', desc: '更新插件', icon: '⬆️' },
+                    { cmd: '#ai更新日志', desc: '查看提交历史', icon: '📜' }
+                ]
+            }
+        ]
 
-━━━━ 对话命令 ━━━━
-#结束对话 - 结束当前对话，清除上下文
-#清除记忆 - 清除个人记忆数据
-#对话状态 - 查看当前对话详细状态
-#我的记忆 - 查看已保存的记忆
-#总结记忆 - 整理合并记忆条目
-
-━━━━ 群聊功能 ━━━━
-#群聊总结 - AI总结近期群聊内容
-#个人画像 - 分析用户个人画像
-#画像@xxx - 分析指定用户画像
-#今日词云 - 生成群聊词云图
-#群记忆 - 查看群聊共享记忆
-
-━━━━ 人格设定 ━━━━
-${cmdPrefix}设置人格 <内容> - 设置个人专属人格
-${cmdPrefix}查看人格 - 查看当前生效的人格
-${cmdPrefix}清除人格 - 清除个人人格设定
-
-━━━━ 群管理命令 ━━━━
-#群管理面板 - 获取群设置面板
-${cmdPrefix}群设置 - 查看本群功能状态
-${cmdPrefix}群伪人开启/关闭 - 本群伪人模式
-${cmdPrefix}群绘图开启/关闭 - 本群绘图功能
-${cmdPrefix}设置群人格 <内容> - 设置群人格
-${cmdPrefix}清除群人格 - 清除群人格设定
-
-━━━━ 群渠道与限制 ━━━━
-${cmdPrefix}群渠道设置 - 查看群独立渠道配置
-${cmdPrefix}群禁用全局 - 禁用全局渠道
-${cmdPrefix}群启用全局 - 启用全局渠道
-${cmdPrefix}群限制设置 - 查看使用限制
-${cmdPrefix}群限制 100 20 - 设置群/用户限制
-${cmdPrefix}群使用统计 - 查看今日使用情况
-${cmdPrefix}群重置统计 - 重置今日统计
-
-━━━━ 主人命令 ━━━━
-${cmdPrefix}管理面板 - Web管理面板(临时)
-${cmdPrefix}管理面板 永久 - Web管理面板(永久)
-${cmdPrefix}状态 - 查看插件运行状态
-${cmdPrefix}调试开启/关闭 - 调试模式
-${cmdPrefix}伪人开启/关闭 - 全局伪人模式
-${cmdPrefix}设置模型 <名称> - 设置默认模型
-${cmdPrefix}结束全部对话 - 清除所有对话
-#ai版本 - 查看版本信息
-#ai检查更新 - 检查新版本
-#ai更新 - 更新插件
-#ai更新日志 - 查看提交历史
-
-━━━━ 调试命令 ━━━━
-#chatdebug - 切换聊天调试模式
-
-💡 人格优先级: 群内用户 > 群组 > 用户全局 > 默认预设`
-
-        await this.reply(msg, true)
+        try {
+            // 尝试渲染为图片
+            const imageBuffer = await renderService.renderHelpImage({
+                commands: commandCategories,
+                title: 'ChatAI 插件帮助',
+                subtitle: `命令前缀: ${cmdPrefix} | 人格优先级: 群内用户 > 群组 > 用户全局 > 默认预设`,
+                footer: '💡 [主人] 需主人权限 | [管理] 需群管理员权限'
+            })
+            await this.reply(segment.image(imageBuffer))
+        } catch (err) {
+            logger.warn('[Management] 渲染帮助图片失败，回退到文本:', err.message)
+            // 回退到文本模式
+            const textHelp = commandCategories
+                .map(cat => {
+                    const cmds = cat.commands.map(c => `  ${c.cmd} - ${c.desc}`).join('\n')
+                    return `━━ ${cat.icon} ${cat.category} ━━\n${cmds}`
+                })
+                .join('\n\n')
+            await this.reply(
+                `📚 AI插件命令帮助\n\n${textHelp}\n\n💡 人格优先级: 群内用户 > 群组 > 用户全局 > 默认预设`,
+                true
+            )
+        }
+        return true
     }
 
     /**

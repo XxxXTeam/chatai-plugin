@@ -2493,6 +2493,227 @@ class RenderService {
             throw error
         }
     }
+    /**
+     * 渲染插件帮助图片 - 三列网格布局
+     * @param {Object} options - 渲染选项
+     * @param {Array<{category: string, icon: string, commands: Array<{cmd: string, desc: string, icon?: string}>}>} options.commands - 命令分类列表
+     * @param {string} options.title - 标题
+     * @param {string} options.subtitle - 副标题
+     * @param {string} options.footer - 底部文字
+     * @param {number} options.width - 宽度
+     * @returns {Promise<Buffer>}
+     */
+    async renderHelpImage(options = {}) {
+        const {
+            commands = [],
+            title = 'ChatAI Plugin',
+            subtitle = 'Yunzai-Bot AI助手',
+            footer = 'Created by ChatAI-Plugin',
+            width = 540
+        } = options
+
+        // 分类颜色配置
+        const categoryColors = [
+            { bg: 'linear-gradient(135deg, #FFE4E1 0%, #FFB6C1 100%)', border: '#FFB6C1', title: '#C44569' },
+            { bg: 'linear-gradient(135deg, #E8F5E9 0%, #A5D6A7 100%)', border: '#A5D6A7', title: '#2E7D32' },
+            { bg: 'linear-gradient(135deg, #E3F2FD 0%, #90CAF9 100%)', border: '#90CAF9', title: '#1565C0' },
+            { bg: 'linear-gradient(135deg, #FFF3E0 0%, #FFCC80 100%)', border: '#FFCC80', title: '#E65100' },
+            { bg: 'linear-gradient(135deg, #F3E5F5 0%, #CE93D8 100%)', border: '#CE93D8', title: '#7B1FA2' },
+            { bg: 'linear-gradient(135deg, #E0F7FA 0%, #80DEEA 100%)', border: '#80DEEA', title: '#00838F' },
+            { bg: 'linear-gradient(135deg, #FFFDE7 0%, #FFF59D 100%)', border: '#FFF59D', title: '#F57F17' },
+            { bg: 'linear-gradient(135deg, #FCE4EC 0%, #F48FB1 100%)', border: '#F48FB1', title: '#C2185B' },
+            { bg: 'linear-gradient(135deg, #E8EAF6 0%, #9FA8DA 100%)', border: '#9FA8DA', title: '#303F9F' }
+        ]
+
+        // 生成命令列表HTML - 三列网格布局
+        const commandsHtml = commands
+            .map((cat, catIdx) => {
+                const color = categoryColors[catIdx % categoryColors.length]
+                const cmdList = cat.commands
+                    .map(cmd => {
+                        const icon = cmd.icon || '📌'
+                        return `<div class="cmd-card">
+                    <div class="cmd-icon">${icon}</div>
+                    <div class="cmd-info">
+                        <div class="cmd-name">${cmd.cmd}</div>
+                        <div class="cmd-desc">${cmd.desc}</div>
+                    </div>
+                </div>`
+                    })
+                    .join('')
+                return `
+                <div class="category" style="--cat-bg: ${color.bg}; --cat-border: ${color.border}; --cat-title: ${color.title};">
+                    <div class="category-header">
+                        <span class="category-icon">${cat.icon}</span>
+                        <span class="category-title">${cat.category}</span>
+                    </div>
+                    <div class="cmd-grid">${cmdList}</div>
+                </div>`
+            })
+            .join('')
+
+        const helpHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: linear-gradient(180deg, #fce4ec 0%, #f8bbd9 50%, #f48fb1 100%);
+            min-height: 100vh;
+            padding: 12px;
+            -webkit-font-smoothing: antialiased;
+        }
+        .container {
+            max-width: ${width}px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.92);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            position: relative;
+        }
+        .bg-decor {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 45%;
+            height: 100%;
+            background: linear-gradient(180deg, rgba(255,182,193,0.15) 0%, rgba(255,182,193,0.05) 100%);
+            pointer-events: none;
+            z-index: 0;
+        }
+        .header {
+            background: linear-gradient(135deg, rgba(255,182,193,0.3) 0%, rgba(255,218,225,0.5) 100%);
+            padding: 16px 20px;
+            position: relative;
+            z-index: 1;
+            border-bottom: 1px solid rgba(255,182,193,0.3);
+        }
+        .header-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: #C44569;
+            margin-bottom: 2px;
+        }
+        .header-subtitle {
+            font-size: 11px;
+            color: #888;
+        }
+        .content {
+            padding: 10px 12px;
+            position: relative;
+            z-index: 1;
+        }
+        .category {
+            margin-bottom: 10px;
+            background: var(--cat-bg);
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid var(--cat-border);
+        }
+        .category-header {
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            border-bottom: 1px solid rgba(0,0,0,0.05);
+        }
+        .category-icon {
+            font-size: 14px;
+        }
+        .category-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--cat-title);
+        }
+        .cmd-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+            padding: 8px;
+        }
+        .cmd-card {
+            background: rgba(255,255,255,0.85);
+            border-radius: 6px;
+            padding: 8px;
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .cmd-icon {
+            font-size: 12px;
+            flex-shrink: 0;
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .cmd-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .cmd-name {
+            font-size: 10px;
+            font-weight: 600;
+            color: #333;
+            line-height: 1.3;
+            word-break: break-all;
+        }
+        .cmd-desc {
+            font-size: 9px;
+            color: #666;
+            line-height: 1.3;
+            margin-top: 2px;
+        }
+        .footer {
+            padding: 10px 16px;
+            text-align: center;
+            position: relative;
+            z-index: 1;
+            border-top: 1px solid rgba(255,182,193,0.3);
+        }
+        .footer-text {
+            font-size: 10px;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="bg-decor"></div>
+        <div class="header">
+            <div class="header-title">${title}</div>
+            <div class="header-subtitle">${subtitle}</div>
+        </div>
+        <div class="content">
+            ${commandsHtml}
+        </div>
+        <div class="footer">
+            <div class="footer-text">${footer}</div>
+        </div>
+    </div>
+</body>
+</html>`
+
+        let browser = null
+        try {
+            browser = await this.getBrowser()
+            const page = await browser.newPage()
+            await page.setViewport({ width: width + 24, height: 800, deviceScaleFactor: 2 })
+            await page.setContent(helpHtml, { waitUntil: 'networkidle0', timeout: 30000 })
+            const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
+            await page.close()
+            return imageBuffer
+        } catch (error) {
+            logService.error('[RenderService] 渲染帮助图片失败', error)
+            throw error
+        }
+    }
 }
 
 export const renderService = new RenderService()
