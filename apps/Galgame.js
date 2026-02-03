@@ -527,7 +527,7 @@ export class Galgame extends plugin {
 
         // 检查用户是否在游戏模式
         const inGame = galgameService.isUserInGame(groupId, userId)
-        gameLogger.info(`用户游戏状态检查: groupId=${groupId}, userId=${userId}, inGame=${inGame}`)
+        gameLogger.debug(`用户游戏状态检查: groupId=${groupId}, userId=${userId}, inGame=${inGame}`)
         if (!inGame) {
             return false
         }
