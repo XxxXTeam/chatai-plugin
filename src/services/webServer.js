@@ -585,7 +585,8 @@ window.location.href = '${mountPath}/';
             validity: permanent ? '永久有效' : '5分钟内有效',
             isPermanent: permanent,
             token,
-            mountPath // 返回挂载路径供前端使用
+            mountPath, // 返回挂载路径供前端使用
+            isPublicUrlConfigured: !!configPublicUrl // 标记公网地址是否来自配置
         }
     }
 

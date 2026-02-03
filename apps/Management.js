@@ -303,7 +303,7 @@ export class AIManagement extends plugin {
 
         // 使用新的getLoginInfo方法获取完整登录信息
         const loginInfo = webServer.getLoginInfo(permanent, forceNew)
-        const { localUrl, localUrls, localIPv6Urls, publicUrl, customUrls, validity } = loginInfo
+        const { localUrl, localUrls, localIPv6Urls, publicUrl, customUrls, validity, isPublicUrlConfigured } = loginInfo
 
         const validityText = validity
         const warningText = permanent ? '\n\n⚠️ 请妥善保管此链接，不要泄露给他人！' : ''
@@ -319,32 +319,42 @@ export class AIManagement extends plugin {
             user_id: this.e.self_id
         })
 
-        // 显示URL列表
-        // 所有本地IPv4地址
-        if (localUrls && localUrls.length > 0) {
-            messages.push({
-                message: `📍 本地地址（IPv4）：\n${localUrls.join('\n')}`,
-                nickname: 'AI管理面板',
-                user_id: this.e.self_id
-            })
-        }
-
-        // 所有本地IPv6地址
-        if (localIPv6Urls && localIPv6Urls.length > 0) {
-            messages.push({
-                message: `📍 本地地址（IPv6）：\n${localIPv6Urls.join('\n')}`,
-                nickname: 'AI管理面板',
-                user_id: this.e.self_id
-            })
-        }
-
-        // 公网地址
-        if (publicUrl) {
+        // 如果配置了公网地址，只显示公网地址；否则显示所有地址
+        if (isPublicUrlConfigured && publicUrl) {
+            // 只显示配置的公网地址
             messages.push({
                 message: `🌐 公网地址：\n${publicUrl}`,
                 nickname: 'AI管理面板',
                 user_id: this.e.self_id
             })
+        } else {
+            // 显示URL列表
+            // 所有本地IPv4地址
+            if (localUrls && localUrls.length > 0) {
+                messages.push({
+                    message: `📍 本地地址（IPv4）：\n${localUrls.join('\n')}`,
+                    nickname: 'AI管理面板',
+                    user_id: this.e.self_id
+                })
+            }
+
+            // 所有本地IPv6地址
+            if (localIPv6Urls && localIPv6Urls.length > 0) {
+                messages.push({
+                    message: `📍 本地地址（IPv6）：\n${localIPv6Urls.join('\n')}`,
+                    nickname: 'AI管理面板',
+                    user_id: this.e.self_id
+                })
+            }
+
+            // 公网地址
+            if (publicUrl) {
+                messages.push({
+                    message: `🌐 公网地址：\n${publicUrl}`,
+                    nickname: 'AI管理面板',
+                    user_id: this.e.self_id
+                })
+            }
         }
 
         // 自定义地址
@@ -409,22 +419,27 @@ export class AIManagement extends plugin {
             // 发送文本消息
             const textParts = [`🔐 AI插件管理面板（${validityText}）`, '']
 
-            // 添加所有IPv4地址
-            if (localUrls && localUrls.length > 0) {
-                textParts.push(`📍 本地地址（IPv4）：`)
-                textParts.push(...localUrls)
-                textParts.push('')
-            }
-
-            // 添加所有IPv6地址
-            if (localIPv6Urls && localIPv6Urls.length > 0) {
-                textParts.push(`📍 本地地址（IPv6）：`)
-                textParts.push(...localIPv6Urls)
-                textParts.push('')
-            }
-
-            if (publicUrl) {
+            // 如果配置了公网地址，只显示公网地址；否则显示所有地址
+            if (isPublicUrlConfigured && publicUrl) {
                 textParts.push(`🌐 公网地址：`, publicUrl, '')
+            } else {
+                // 添加所有IPv4地址
+                if (localUrls && localUrls.length > 0) {
+                    textParts.push(`📍 本地地址（IPv4）：`)
+                    textParts.push(...localUrls)
+                    textParts.push('')
+                }
+
+                // 添加所有IPv6地址
+                if (localIPv6Urls && localIPv6Urls.length > 0) {
+                    textParts.push(`📍 本地地址（IPv6）：`)
+                    textParts.push(...localIPv6Urls)
+                    textParts.push('')
+                }
+
+                if (publicUrl) {
+                    textParts.push(`🌐 公网地址：`, publicUrl, '')
+                }
             }
 
             // 添加自定义地址
@@ -713,11 +728,11 @@ export class AIManagement extends plugin {
                 category: 'Galgame 游戏',
                 icon: '🎮',
                 commands: [
-                    { cmd: '#开始游戏', desc: '开始Galgame冒险', icon: '🎬' },
-                    { cmd: '#继续游戏', desc: '继续上次的游戏', icon: '▶️' },
-                    { cmd: '#结束游戏', desc: '结束当前游戏', icon: '⏹️' },
-                    { cmd: '#游戏存档', desc: '查看游戏存档', icon: '💾' },
-                    { cmd: '#游戏状态', desc: '查看游戏状态', icon: '📈' }
+                    { cmd: '#游戏开始', desc: '开始Galgame冒险', icon: '🎬' },
+                    { cmd: '#游戏状态', desc: '查看游戏状态', icon: '📈' },
+                    { cmd: '#游戏退出', desc: '暂时退出游戏', icon: '⏸️' },
+                    { cmd: '#游戏结束', desc: '结束并清空数据', icon: '⏹️' },
+                    { cmd: '#游戏导出', desc: '导出对话数据', icon: '💾' }
                 ]
             },
             {
