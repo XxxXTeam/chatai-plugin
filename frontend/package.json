@@ -4,10 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "npm run lint && next build",
     "start": "next start",
-    "lint": "eslint",
-    "export": "set \"ANALYZE=true\" && next build && powershell -NoProfile -Command \"Remove-Item ..\\resources\\web -Recurse -Force -ErrorAction SilentlyContinue; Copy-Item -Recurse -Force out ..\\resources\\web\"",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit",
+    "export": "npm run lint && next build && powershell -NoProfile -Command \"Remove-Item ..\\resources\\web -Recurse -Force -ErrorAction SilentlyContinue; Copy-Item -Recurse -Force out ..\\resources\\web\"",
     "build:analyze": "ANALYZE=true next build"
   },
   "dependencies": {

@@ -134,6 +134,7 @@ export class MessageInspector extends plugin {
     /**
      * 检查消息详情 - 增强版
      * 支持提取完整的 pb/elem/msg 数据
+     * 深度递归解析合并转发，使用嵌套合并转发包裹
      */
     async inspectMessage() {
         const e = this.e
@@ -175,9 +176,7 @@ export class MessageInspector extends plugin {
 
         // NapCat/OneBot: 从消息数组中提取 reply 段的 id
         if (!targetSeq && !targetMsgId) {
-            // 尝试多个可能的消息数组位置
             const msgArrays = [e.message, e.original_msg?.message, e.raw_message_json].filter(Boolean)
-
             for (const msgArray of msgArrays) {
                 if (!Array.isArray(msgArray)) continue
                 for (const seg of msgArray) {
@@ -202,17 +201,13 @@ export class MessageInspector extends plugin {
 
         try {
             let rawMsg = null
-            let isForwardMsg = false
-            let forwardData = null
 
             // 获取消息
             if (getPrevious) {
-                // 获取上一条消息（通过聊天历史）
                 if (e.group_id) {
                     const group = bot.pickGroup(e.group_id)
                     if (group?.getChatHistory) {
                         const history = await group.getChatHistory(0, 2)
-                        // 第一条是当前命令消息，第二条是上一条
                         rawMsg = history?.length >= 2 ? history[history.length - 2] : history?.[0]
                     }
                 } else {
@@ -223,7 +218,6 @@ export class MessageInspector extends plugin {
                     }
                 }
             } else {
-                // 通过seq或message_id获取
                 rawMsg = await this.fetchMessage(bot, e, targetSeq, targetMsgId)
             }
 
@@ -232,48 +226,659 @@ export class MessageInspector extends plugin {
                 return true
             }
 
-            // 检查是否是转发消息
-            const message = rawMsg.message || rawMsg.content || []
-            for (const seg of message) {
-                const segType = seg.type || seg.data?._type
-                if (segType === 'forward') {
-                    isForwardMsg = true
-                    // 解析转发消息
-                    forwardData = await ForwardMessageParser.parse(e, seg, {
-                        extractProto: true,
-                        extractSerialized: true,
-                        maxDepth: 10
-                    })
-                    break
-                }
-                if (segType === 'json') {
-                    try {
-                        const jsonStr = seg.data?.data || seg.data
-                        const jsonData = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr
-                        if (jsonData?.app === 'com.tencent.multimsg' && jsonData?.meta?.detail?.resid) {
-                            isForwardMsg = true
-                            forwardData = await ForwardMessageParser.parse(e, jsonData.meta.detail.resid, {
-                                extractProto: true,
-                                extractSerialized: true,
-                                maxDepth: 10
-                            })
-                            break
-                        }
-                    } catch {}
-                }
-            }
+            // 完整解析消息（包括深度递归转发）
+            const fullData = await this.parseMessageComplete(e, rawMsg, { maxDepth: 10 })
 
-            // 构建完整数据
-            const fullData = await this.buildFullMessageData(rawMsg, forwardData)
-
-            // 发送合并转发
-            await this.sendDataAsForward(e, fullData, isForwardMsg)
+            // 使用嵌套合并转发发送数据
+            await this.sendNestedForward(e, fullData)
         } catch (error) {
             logger.error('[MessageInspector] Error:', error)
             await this.reply(`❌ 获取消息失败: ${error.message}`, true)
         }
 
         return true
+    }
+
+    /**
+     * 完整解析消息（包括 proto 反序列化和深度递归转发）
+     */
+    async parseMessageComplete(e, rawMsg, options = {}) {
+        const { maxDepth = 10, currentDepth = 0 } = options
+        const bot = e.bot || Bot
+
+        const result = {
+            // 基础信息
+            message_id: rawMsg.message_id || rawMsg.id || null,
+            seq: rawMsg.seq || null,
+            rand: rawMsg.rand || null,
+            time: rawMsg.time || null,
+            user_id: rawMsg.user_id || rawMsg.sender?.user_id || null,
+            sender: rawMsg.sender || null,
+            group_id: rawMsg.group_id || null,
+            // 消息内容
+            message: rawMsg.message || rawMsg.content || [],
+            raw_message: rawMsg.raw_message || null,
+            // icqq 特有
+            font: rawMsg.font || null,
+            pktnum: rawMsg.pktnum || null,
+            atme: rawMsg.atme || null,
+            atall: rawMsg.atall || null,
+            // proto 相关
+            proto: null,
+            protoDecoded: null,
+            serialized: null,
+            pb: null,
+            elems: null,
+            parsed: null,
+            msgrecord: null,
+            // 转发消息
+            isForward: false,
+            forwardMessages: null
+        }
+
+        // 1. 提取 proto 数据
+        result.proto = IcqqMessageUtils.extractProto(rawMsg)
+
+        // 2. 尝试序列化消息
+        const serialized = IcqqMessageUtils.serializeMessage(rawMsg)
+        if (serialized) {
+            result.serialized = serialized.toString('base64')
+            // 尝试解码 proto
+            const decoded = ProtobufUtils.safeDecode(serialized)
+            if (decoded) {
+                result.protoDecoded = decoded
+            }
+        }
+
+        // 3. 提取 raw buffer (pb 原始数据)
+        if (rawMsg.raw) {
+            if (Buffer.isBuffer(rawMsg.raw)) {
+                result.pb = {
+                    hex: rawMsg.raw.toString('hex'),
+                    base64: rawMsg.raw.toString('base64'),
+                    length: rawMsg.raw.length
+                }
+                // 尝试解码 pb
+                const pbDecoded = ProtobufUtils.safeDecode(rawMsg.raw)
+                if (pbDecoded) {
+                    result.pb.decoded = pbDecoded
+                }
+            } else {
+                result.pb = rawMsg.raw
+            }
+        }
+
+        // 4. 提取 elems 数据
+        if (rawMsg.elems) {
+            result.elems = rawMsg.elems
+        }
+
+        // 5. 提取 parsed 数据
+        if (rawMsg.parsed) {
+            result.parsed = {
+                brief: rawMsg.parsed.brief,
+                content: rawMsg.parsed.content,
+                atme: rawMsg.parsed.atme,
+                atall: rawMsg.parsed.atall,
+                quotation: rawMsg.parsed.quotation
+            }
+        }
+
+        // 6. 添加 msgrecord
+        result.msgrecord = MsgRecordExtractor.fromApiResponse(rawMsg)
+
+        // 7. 检查并深度解析转发消息
+        const message = result.message || []
+        for (const seg of message) {
+            const segType = seg.type || seg.data?._type
+            if (segType === 'forward') {
+                result.isForward = true
+                if (currentDepth < maxDepth) {
+                    result.forwardMessages = await this.parseForwardDeep(e, seg, {
+                        maxDepth,
+                        currentDepth: currentDepth + 1
+                    })
+                }
+                break
+            }
+            if (segType === 'json') {
+                try {
+                    const jsonStr = seg.data?.data || seg.data
+                    const jsonData = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr
+                    if (jsonData?.app === 'com.tencent.multimsg' && jsonData?.meta?.detail?.resid) {
+                        result.isForward = true
+                        if (currentDepth < maxDepth) {
+                            result.forwardMessages = await this.parseForwardDeep(e, jsonData.meta.detail.resid, {
+                                maxDepth,
+                                currentDepth: currentDepth + 1
+                            })
+                        }
+                        break
+                    }
+                } catch {}
+            }
+        }
+
+        return result
+    }
+
+    /**
+     * 深度递归解析转发消息
+     */
+    async parseForwardDeep(e, forwardElement, options = {}) {
+        const { maxDepth = 10, currentDepth = 0 } = options
+        const bot = e.bot || Bot
+
+        const result = {
+            success: false,
+            messages: [],
+            totalCount: 0,
+            method: 'unknown',
+            proto: null,
+            raw: null,
+            errors: []
+        }
+
+        if (currentDepth >= maxDepth) {
+            result.errors.push(`达到最大递归深度 ${maxDepth}`)
+            return result
+        }
+
+        try {
+            // 获取 resid
+            const resid =
+                typeof forwardElement === 'string'
+                    ? forwardElement
+                    : forwardElement?.id ||
+                      forwardElement?.data?.id ||
+                      forwardElement?.resid ||
+                      forwardElement?.data?.resid
+
+            let forwardMessages = null
+            let rawData = null
+
+            // 方式1: 直接从元素中获取内容
+            if (forwardElement?.data?.content && Array.isArray(forwardElement.data.content)) {
+                forwardMessages = forwardElement.data.content
+                result.method = 'element.data.content'
+                rawData = forwardElement
+            } else if (forwardElement?.content && Array.isArray(forwardElement.content)) {
+                forwardMessages = forwardElement.content
+                result.method = 'element.content'
+                rawData = forwardElement
+            }
+
+            // 方式2: 通过 API 获取
+            if (!forwardMessages && resid) {
+                // icqq: group.getForwardMsg
+                if (e.group?.getForwardMsg) {
+                    try {
+                        const fwdResult = await e.group.getForwardMsg(resid)
+                        if (fwdResult) {
+                            forwardMessages = Array.isArray(fwdResult) ? fwdResult : [fwdResult]
+                            result.method = 'group.getForwardMsg'
+                            rawData = fwdResult
+                        }
+                    } catch (err) {
+                        result.errors.push(`group.getForwardMsg: ${err.message}`)
+                    }
+                }
+
+                // bot.getForwardMsg
+                if (!forwardMessages && bot?.getForwardMsg) {
+                    try {
+                        const fwdResult = await bot.getForwardMsg(resid)
+                        if (fwdResult) {
+                            forwardMessages = Array.isArray(fwdResult) ? fwdResult : [fwdResult]
+                            result.method = 'bot.getForwardMsg'
+                            rawData = fwdResult
+                        }
+                    } catch (err) {
+                        result.errors.push(`bot.getForwardMsg: ${err.message}`)
+                    }
+                }
+
+                // NapCat/OneBot: sendApi get_forward_msg
+                if (!forwardMessages && bot?.sendApi) {
+                    try {
+                        const apiResult = await bot.sendApi('get_forward_msg', { id: resid })
+                        const messages =
+                            apiResult?.message ||
+                            apiResult?.data?.messages ||
+                            apiResult?.messages ||
+                            apiResult?.data?.message
+                        if (messages && Array.isArray(messages)) {
+                            forwardMessages = messages
+                            result.method = 'sendApi.get_forward_msg'
+                            rawData = apiResult
+                        }
+                    } catch (err) {
+                        result.errors.push(`sendApi.get_forward_msg: ${err.message}`)
+                    }
+                }
+            }
+
+            if (!forwardMessages || !Array.isArray(forwardMessages)) {
+                result.errors.push('无法获取转发消息内容')
+                return result
+            }
+
+            result.success = true
+            result.totalCount = forwardMessages.length
+            result.raw = rawData
+
+            // 解析每条消息（深度递归）
+            for (const msg of forwardMessages) {
+                const msgData = msg.data || msg
+                const parsedMsg = {
+                    user_id: msgData.user_id || msgData.uin || msgData.sender?.user_id || 0,
+                    nickname: msgData.nickname || msgData.nick || msgData.sender?.nickname || '',
+                    time: msgData.time || 0,
+                    group_id: msgData.group_id || null,
+                    seq: msgData.seq || 0,
+                    message: msgData.content || msgData.message || [],
+                    raw_message: msgData.raw_message || '',
+                    proto: null,
+                    serialized: null,
+                    protoDecoded: null,
+                    nestedForward: null
+                }
+
+                // 提取 proto 数据
+                parsedMsg.proto = IcqqMessageUtils.extractProto(msg)
+                if (!parsedMsg.proto && msg.proto) {
+                    parsedMsg.proto = msg.proto
+                }
+
+                // 提取序列化数据
+                const serialized = IcqqMessageUtils.serializeForwardMessage(msg)
+                if (serialized) {
+                    parsedMsg.serialized = serialized.toString('base64')
+                    const decoded = ProtobufUtils.safeDecode(serialized)
+                    if (decoded) {
+                        parsedMsg.protoDecoded = decoded
+                    }
+                }
+
+                // 检查嵌套转发（递归解析）
+                const messageContent = parsedMsg.message
+                if (Array.isArray(messageContent)) {
+                    for (const elem of messageContent) {
+                        const elemType = elem.type || elem.data?._type
+                        if (elemType === 'forward') {
+                            parsedMsg.nestedForward = await this.parseForwardDeep(e, elem, {
+                                maxDepth,
+                                currentDepth: currentDepth + 1
+                            })
+                            break
+                        }
+                        if (elemType === 'json') {
+                            try {
+                                const jsonStr = elem.data?.data || elem.data
+                                const jsonData = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr
+                                if (jsonData?.app === 'com.tencent.multimsg' && jsonData?.meta?.detail?.resid) {
+                                    parsedMsg.nestedForward = await this.parseForwardDeep(
+                                        e,
+                                        jsonData.meta.detail.resid,
+                                        { maxDepth, currentDepth: currentDepth + 1 }
+                                    )
+                                    break
+                                }
+                            } catch {}
+                        }
+                    }
+                }
+
+                result.messages.push(parsedMsg)
+            }
+        } catch (err) {
+            result.errors.push(`解析异常: ${err.message}`)
+            logger.warn('[MessageInspector] parseForwardDeep failed:', err)
+        }
+
+        return result
+    }
+
+    /**
+     * 使用嵌套合并转发发送数据
+     * 太长的数据会被包裹到子合并转发中
+     */
+    async sendNestedForward(e, data) {
+        const bot = e.bot || Bot
+        const botId = bot?.uin || e.self_id || 10000
+
+        // 构建主节点列表
+        const mainNodes = []
+
+        // 1. 基础信息节点
+        const basicInfo = {
+            message_id: data.message_id,
+            seq: data.seq,
+            rand: data.rand,
+            time: data.time,
+            user_id: data.user_id,
+            group_id: data.group_id,
+            sender: data.sender,
+            raw_message: data.raw_message
+        }
+        mainNodes.push(this.createTextNode(botId, '📋 基础信息', this.safeStringify(basicInfo)))
+
+        // 2. 消息段节点
+        if (data.message?.length > 0) {
+            const msgStr = this.safeStringify(data.message)
+            if (msgStr.length > 3000) {
+                // 太长，包裹到子合并转发
+                mainNodes.push(await this.wrapInForward(e, '💬 消息段', this.chunkString(msgStr, 2500)))
+            } else {
+                mainNodes.push(this.createTextNode(botId, '💬 消息段', msgStr))
+            }
+        }
+
+        // 3. icqq 特有字段
+        const icqqFields = { font: data.font, pktnum: data.pktnum, atme: data.atme, atall: data.atall }
+        if (Object.values(icqqFields).some(v => v !== null)) {
+            mainNodes.push(this.createTextNode(botId, '🎲 icqq字段', this.safeStringify(icqqFields)))
+        }
+
+        // 4. elems 数据
+        if (data.elems) {
+            const elemsStr = this.safeStringify(data.elems)
+            if (elemsStr.length > 3000) {
+                mainNodes.push(await this.wrapInForward(e, '📦 elems', this.chunkString(elemsStr, 2500)))
+            } else {
+                mainNodes.push(this.createTextNode(botId, '📦 elems', elemsStr))
+            }
+        }
+
+        // 5. parsed 数据
+        if (data.parsed) {
+            mainNodes.push(this.createTextNode(botId, '📝 parsed', this.safeStringify(data.parsed)))
+        }
+
+        // 6. pb 数据
+        if (data.pb) {
+            const pbNodes = []
+            if (typeof data.pb === 'object') {
+                pbNodes.push(`长度: ${data.pb.length || 'N/A'} bytes`)
+                if (data.pb.base64) {
+                    pbNodes.push(`\nBase64:\n${data.pb.base64}`)
+                }
+                if (data.pb.decoded) {
+                    const decodedStr = this.safeStringify(data.pb.decoded)
+                    pbNodes.push(`\n解码结果:\n${decodedStr.substring(0, 2000)}`)
+                }
+            } else {
+                pbNodes.push(this.safeStringify(data.pb))
+            }
+            const pbContent = pbNodes.join('')
+            if (pbContent.length > 3000) {
+                mainNodes.push(await this.wrapInForward(e, '📦 pb数据', this.chunkString(pbContent, 2500)))
+            } else {
+                mainNodes.push(this.createTextNode(botId, '📦 pb数据', pbContent))
+            }
+        }
+
+        // 7. proto 数据
+        if (data.proto) {
+            const protoStr = this.safeStringify(data.proto)
+            if (protoStr.length > 3000) {
+                mainNodes.push(await this.wrapInForward(e, '📦 proto', this.chunkString(protoStr, 2500)))
+            } else {
+                mainNodes.push(this.createTextNode(botId, '📦 proto', protoStr))
+            }
+        }
+
+        // 8. protoDecoded 数据
+        if (data.protoDecoded) {
+            const decodedStr = this.safeStringify(data.protoDecoded)
+            if (decodedStr.length > 3000) {
+                mainNodes.push(await this.wrapInForward(e, '🔓 proto解码', this.chunkString(decodedStr, 2500)))
+            } else {
+                mainNodes.push(this.createTextNode(botId, '🔓 proto解码', decodedStr))
+            }
+        }
+
+        // 9. serialized 数据
+        if (data.serialized) {
+            mainNodes.push(this.createTextNode(botId, '📦 serialized', data.serialized))
+        }
+
+        // 10. msgrecord
+        if (data.msgrecord) {
+            mainNodes.push(this.createTextNode(botId, '📋 msgrecord', this.safeStringify(data.msgrecord)))
+        }
+
+        // 11. 转发消息（深度递归）
+        if (data.isForward && data.forwardMessages) {
+            const forwardNode = await this.buildForwardDataNode(e, data.forwardMessages, 0)
+            if (forwardNode) {
+                mainNodes.push(forwardNode)
+            }
+        }
+
+        // 发送合并转发
+        const sendResult = await this.sendForwardNodes(e, mainNodes)
+        if (!sendResult) {
+            // 回退到普通消息
+            await this.reply(
+                `📋 消息数据 (seq: ${data.seq})\n${this.safeStringify(basicInfo).substring(0, 1000)}`,
+                true
+            )
+        }
+    }
+
+    /**
+     * 构建转发数据节点（递归）
+     */
+    async buildForwardDataNode(e, forwardData, depth) {
+        const bot = e.bot || Bot
+        const botId = bot?.uin || e.self_id || 10000
+
+        if (!forwardData?.success) {
+            return this.createTextNode(
+                botId,
+                '📨 转发消息',
+                `解析失败: ${forwardData?.errors?.join(', ') || '未知错误'}`
+            )
+        }
+
+        const subNodes = []
+        subNodes.push(
+            this.createTextNode(
+                botId,
+                '📨 转发概览',
+                `共 ${forwardData.totalCount} 条消息\n获取方式: ${forwardData.method}\n深度: ${depth}`
+            )
+        )
+
+        // 添加每条消息
+        for (let i = 0; i < forwardData.messages.length; i++) {
+            const msg = forwardData.messages[i]
+            const msgNodes = []
+
+            // 消息基本信息
+            const msgInfo = {
+                user_id: msg.user_id,
+                nickname: msg.nickname,
+                time: msg.time,
+                seq: msg.seq,
+                message: msg.message,
+                raw_message: msg.raw_message
+            }
+            msgNodes.push(this.safeStringify(msgInfo))
+
+            // proto 数据
+            if (msg.proto) {
+                msgNodes.push(`\n\n📦 proto:\n${this.safeStringify(msg.proto).substring(0, 1500)}`)
+            }
+
+            // protoDecoded 数据
+            if (msg.protoDecoded) {
+                msgNodes.push(`\n\n🔓 proto解码:\n${this.safeStringify(msg.protoDecoded).substring(0, 1500)}`)
+            }
+
+            // serialized 数据
+            if (msg.serialized) {
+                msgNodes.push(`\n\n📦 serialized:\n${msg.serialized.substring(0, 500)}`)
+            }
+
+            const msgContent = msgNodes.join('')
+            if (msgContent.length > 3000) {
+                subNodes.push(
+                    await this.wrapInForward(e, `消息[${i + 1}] ${msg.nickname}`, this.chunkString(msgContent, 2500))
+                )
+            } else {
+                subNodes.push(this.createTextNode(botId, `消息[${i + 1}] ${msg.nickname}`, msgContent))
+            }
+
+            // 嵌套转发（递归）
+            if (msg.nestedForward?.success) {
+                const nestedNode = await this.buildForwardDataNode(e, msg.nestedForward, depth + 1)
+                if (nestedNode) {
+                    subNodes.push(nestedNode)
+                }
+            }
+        }
+
+        // 包裹为子合并转发
+        return this.createForwardNode(e, `📨 转发消息 (${forwardData.totalCount}条)`, subNodes)
+    }
+
+    /**
+     * 创建文本消息节点
+     */
+    createTextNode(botId, title, content) {
+        return {
+            user_id: botId,
+            nickname: title,
+            message: [{ type: 'text', text: content }]
+        }
+    }
+
+    /**
+     * 将长文本包裹到子合并转发中
+     */
+    async wrapInForward(e, title, chunks) {
+        const bot = e.bot || Bot
+        const botId = bot?.uin || e.self_id || 10000
+
+        const chunkArray = Array.isArray(chunks) ? chunks : [chunks]
+        const subNodes = chunkArray.map((chunk, i) => ({
+            user_id: botId,
+            nickname: `${title} [${i + 1}/${chunkArray.length}]`,
+            message: [{ type: 'text', text: chunk }]
+        }))
+
+        return this.createForwardNode(e, title, subNodes)
+    }
+
+    /**
+     * 创建合并转发节点
+     */
+    async createForwardNode(e, title, nodes) {
+        const bot = e.bot || Bot
+        const botId = bot?.uin || e.self_id || 10000
+
+        try {
+            // 尝试使用 makeForwardMsg 创建嵌套转发
+            if (e.group?.makeForwardMsg) {
+                const forwardMsg = await e.group.makeForwardMsg(nodes)
+                if (forwardMsg) {
+                    return {
+                        user_id: botId,
+                        nickname: title,
+                        message: forwardMsg
+                    }
+                }
+            }
+
+            const group = bot.pickGroup?.(e.group_id)
+            if (group?.makeForwardMsg) {
+                const forwardMsg = await group.makeForwardMsg(nodes)
+                if (forwardMsg) {
+                    return {
+                        user_id: botId,
+                        nickname: title,
+                        message: forwardMsg
+                    }
+                }
+            }
+        } catch (err) {
+            logger.debug('[MessageInspector] createForwardNode failed:', err.message)
+        }
+
+        // 回退：将节点内容合并为单条消息
+        const combined = nodes
+            .map(n => {
+                const text = n.message?.[0]?.text || n.message || ''
+                return `【${n.nickname}】\n${typeof text === 'string' ? text.substring(0, 500) : JSON.stringify(text).substring(0, 500)}`
+            })
+            .join('\n\n')
+
+        return {
+            user_id: botId,
+            nickname: title,
+            message: [{ type: 'text', text: combined.substring(0, 4000) }]
+        }
+    }
+
+    /**
+     * 发送合并转发节点
+     */
+    async sendForwardNodes(e, nodes) {
+        const bot = e.bot || Bot
+
+        try {
+            // TRSS 框架
+            if (getFramework() === 'trss') {
+                if (e.isGroup && e.group?.makeForwardMsg) {
+                    const forwardMsg = await e.group.makeForwardMsg(nodes)
+                    if (forwardMsg) {
+                        await e.group.sendMsg(forwardMsg)
+                        return true
+                    }
+                } else if (!e.isGroup && e.friend?.makeForwardMsg) {
+                    const forwardMsg = await e.friend.makeForwardMsg(nodes)
+                    if (forwardMsg) {
+                        await e.friend.sendMsg(forwardMsg)
+                        return true
+                    }
+                }
+            }
+
+            // Miao-Yunzai / icqq
+            if (e.isGroup || e.group_id) {
+                const group = bot.pickGroup(e.group_id)
+                if (group?.makeForwardMsg) {
+                    const forwardMsg = await group.makeForwardMsg(nodes)
+                    if (forwardMsg) {
+                        await group.sendMsg(forwardMsg)
+                        return true
+                    }
+                }
+            } else {
+                const friend = bot.pickFriend(e.user_id)
+                if (friend?.makeForwardMsg) {
+                    const forwardMsg = await friend.makeForwardMsg(nodes)
+                    if (forwardMsg) {
+                        await friend.sendMsg(forwardMsg)
+                        return true
+                    }
+                }
+            }
+
+            // Bot.makeForwardMsg
+            if (typeof Bot?.makeForwardMsg === 'function') {
+                const forwardMsg = await Bot.makeForwardMsg(nodes)
+                await this.reply(forwardMsg)
+                return true
+            }
+
+            return false
+        } catch (err) {
+            logger.warn('[MessageInspector] sendForwardNodes failed:', err.message)
+            return false
+        }
     }
 
     /**
@@ -338,197 +943,6 @@ export class MessageInspector extends plugin {
         }
 
         return rawMsg
-    }
-
-    /**
-     * 构建完整消息数据
-     */
-    async buildFullMessageData(rawMsg, forwardData) {
-        const data = {
-            // 基础信息
-            message_id: rawMsg.message_id || rawMsg.id || null,
-            seq: rawMsg.seq || null,
-            rand: rawMsg.rand || null,
-            time: rawMsg.time || null,
-            // 发送者
-            user_id: rawMsg.user_id || rawMsg.sender?.user_id || null,
-            sender: rawMsg.sender || null,
-            // 群信息
-            group_id: rawMsg.group_id || null,
-            // 消息内容
-            message: rawMsg.message || rawMsg.content || [],
-            raw_message: rawMsg.raw_message || null,
-            // icqq 特有
-            font: rawMsg.font || null,
-            pktnum: rawMsg.pktnum || null,
-            atme: rawMsg.atme || null,
-            atall: rawMsg.atall || null
-        }
-
-        // 提取 proto 数据
-        const proto = IcqqMessageUtils.extractProto(rawMsg)
-        if (proto) {
-            data.proto = proto
-        }
-
-        // 提取序列化数据
-        const serialized = IcqqMessageUtils.serializeMessage(rawMsg)
-        if (serialized) {
-            data.serialized = serialized.toString('base64')
-        }
-
-        // 提取 raw buffer (pb 原始数据)
-        if (rawMsg.raw) {
-            if (Buffer.isBuffer(rawMsg.raw)) {
-                data.pb = {
-                    hex: rawMsg.raw.toString('hex'),
-                    base64: rawMsg.raw.toString('base64'),
-                    length: rawMsg.raw.length
-                }
-            } else {
-                data.pb = rawMsg.raw
-            }
-        }
-
-        // 提取 elem 数据
-        if (rawMsg.elems) {
-            data.elems = rawMsg.elems
-        }
-
-        // 提取 parsed 数据 (Parser)
-        if (rawMsg.parsed) {
-            data.parsed = {
-                brief: rawMsg.parsed.brief,
-                content: rawMsg.parsed.content,
-                atme: rawMsg.parsed.atme,
-                atall: rawMsg.parsed.atall,
-                quotation: rawMsg.parsed.quotation
-            }
-        }
-
-        // 添加 msgrecord
-        data.msgrecord = MsgRecordExtractor.fromApiResponse(rawMsg)
-
-        // 转发消息数据
-        if (forwardData?.success) {
-            data.forward = {
-                total: forwardData.totalCount,
-                messages: forwardData.messages.map(msg => ({
-                    user_id: msg.user_id,
-                    nickname: msg.nickname,
-                    time: msg.time,
-                    message: msg.message,
-                    raw_message: msg.raw_message,
-                    proto: msg.proto || null,
-                    serialized: msg.serialized || null,
-                    nested_forward: msg.nested_forward?.success
-                        ? {
-                              total: msg.nested_forward.totalCount
-                          }
-                        : null
-                }))
-            }
-        }
-
-        return data
-    }
-
-    /**
-     * 以合并转发形式发送数据
-     */
-    async sendDataAsForward(e, data, isForwardMsg) {
-        const bot = e.bot || Bot
-        const botId = bot?.uin || e.self_id || 10000
-        const msgs = []
-
-        // 1. 基础消息信息
-        const basicInfo = {
-            message_id: data.message_id,
-            seq: data.seq,
-            rand: data.rand,
-            time: data.time,
-            user_id: data.user_id,
-            group_id: data.group_id,
-            sender: data.sender,
-            raw_message: data.raw_message
-        }
-        msgs.push(`${this.safeStringify(basicInfo)}`)
-        if (data.message?.length > 0) {
-            msgs.push(`${this.safeStringify(data.message)}`)
-        }
-
-        // 3. icqq 特有字段
-        const icqqFields = {
-            font: data.font,
-            pktnum: data.pktnum,
-            atme: data.atme,
-            atall: data.atall
-        }
-        if (Object.values(icqqFields).some(v => v !== null)) {
-            msgs.push(`${this.safeStringify(icqqFields)}`)
-        }
-
-        // 4. elems 数据
-        if (data.elems) {
-            const elemsStr = this.safeStringify(data.elems)
-            msgs.push(`${elemsStr.substring(0, 3000)}`)
-        }
-
-        // 5. parsed 数据
-        if (data.parsed) {
-            msgs.push(`${this.safeStringify(data.parsed)}`)
-        }
-
-        // 6. pb 数据
-        if (data.pb) {
-            if (typeof data.pb === 'object' && data.pb.base64) {
-                msgs.push(`📦 pb (protobuf) 数据\n长度: ${data.pb.length} bytes\n\nBase64:\n${data.pb.base64}`)
-                if (data.pb.hex) {
-                    // HEX 可能很长，分段发送
-                    const hexChunks = this.chunkString(data.pb.hex, 3000)
-                    hexChunks.forEach((chunk, i) => {
-                        msgs.push(`📦 pb HEX (${i + 1}/${hexChunks.length})\n${chunk}`)
-                    })
-                }
-            } else {
-                msgs.push(`📦 pb 数据\n${this.safeStringify(data.pb)}`)
-            }
-        }
-
-        // 7. proto 数据
-        if (data.proto) {
-            const protoStr = this.safeStringify(data.proto)
-            const protoChunks = this.chunkString(protoStr, 3000)
-            protoChunks.forEach((chunk, i) => {
-                msgs.push(`📦 proto 数据 (${i + 1}/${protoChunks.length})\n${chunk}`)
-            })
-        }
-
-        // 8. serialized 数据
-        if (data.serialized) {
-            msgs.push(`📦 serialized数据\n${data.serialized}`)
-        }
-
-        // 9. msgrecord
-        if (data.msgrecord) {
-            const recordStr = this.safeStringify(data.msgrecord)
-            msgs.push(`📋 msgrecord\n${recordStr}`)
-        }
-        if (data.forward) {
-            msgs.push(`📨 转发消息 (共${data.forward.total}条)`)
-            for (let i = 0; i < Math.min(data.forward.messages.length, 20); i++) {
-                const fwdMsg = data.forward.messages[i]
-                const fwdStr = this.safeStringify(fwdMsg)
-                msgs.push(`📨 转发消息 [${i + 1}]\n${fwdStr.substring(0, 3000)}`)
-            }
-        }
-        const sendResult = await this.sendForwardMsg(e, '消息数据', msgs)
-        if (!sendResult) {
-            await this.reply(
-                `📋 消息数据 (seq: ${data.seq})\n${this.safeStringify(basicInfo).substring(0, 1000)}`,
-                true
-            )
-        }
     }
 
     /**

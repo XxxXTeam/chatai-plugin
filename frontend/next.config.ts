@@ -9,7 +9,7 @@ const nextConfig: NextConfig = {
     images: {
         unoptimized: true
     },
-    productionBrowserSourceMaps: !isProd,
+    productionBrowserSourceMaps: false,
     compiler: {
         removeConsole: isProd ? { exclude: ['error', 'warn'] } : false
     },

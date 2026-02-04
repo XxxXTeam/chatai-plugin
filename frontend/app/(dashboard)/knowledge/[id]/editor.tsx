@@ -52,6 +52,7 @@ export function KnowledgeEditor({ id: propsId }: Props) {
         if (!isNew) {
             fetchDocument()
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id, isNew])
 
     const fetchDocument = async () => {

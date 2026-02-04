@@ -536,18 +536,25 @@ window.location.href = '${mountPath}/';
         this.router.use('/api/preset', createPresetRoutes(auth))
         this.router.use('/api/presets', createPresetsConfigRoutes(auth))
         this.router.use('/api', auth, systemRoutes)
-
-        // SPA fallback - 所有未匹配路由返回index.html
         this.router.get('*', (req, res) => {
-            const indexFile = path.join(__dirname, '../../resources/web/index.html')
+            const webDir = path.join(__dirname, '../../resources/web')
+            const reqPath = req.path.replace(/\/$/, '') || ''
+            const standalonePages = ['game-edit', 'login', 'group-admin']
+            for (const page of standalonePages) {
+                if (reqPath === `/${page}` || reqPath.startsWith(`/${page}/`)) {
+                    const pageIndex = path.join(webDir, page, 'index.html')
+                    if (fs.existsSync(pageIndex)) {
+                        return res.sendFile(pageIndex)
+                    }
+                }
+            }
+            const indexFile = path.join(webDir, 'index.html')
             if (fs.existsSync(indexFile)) {
                 res.sendFile(indexFile)
             } else {
                 res.status(404).send('Not Found')
             }
         })
-
-        // 将子路由器挂载到/chatai路径
         this.app.use(mountPath, this.router)
     }
 
@@ -663,7 +670,6 @@ window.location.href = '${mountPath}/';
                     if (error.code === 'EADDRINUSE') {
                         if (retries > 0) {
                             chatLogger.warn(`[WebServer] 端口 ${port} 已被占用，尝试释放端口...`)
-                            // 尝试请求旧服务释放端口
                             try {
                                 const fetch = (await import('node-fetch')).default
                                 await Promise.race([
@@ -757,16 +763,10 @@ window.location.href = '${mountPath}/';
                 resolve()
             }
         })
-
-        // 等待端口释放
         await new Promise(r => setTimeout(r, 500))
-
-        // 重新初始化
         this.app = express()
         this.setupMiddleware()
         this.setupRoutes()
-
-        // 重新启动
         await this.startWithOwnPort()
         this.addresses = await getServerAddresses(this.port)
 
@@ -812,10 +812,6 @@ export function getWebServer() {
     }
     return webServerInstance
 }
-
-/**
- * 重载WebServer（用于热更新）
- */
 export async function reloadWebServer() {
     if (webServerInstance) {
         await webServerInstance.reload()

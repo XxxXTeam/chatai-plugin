@@ -261,6 +261,7 @@ export default function GroupAdminPage() {
             setNeedLogin(true)
             setLoading(false)
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
     const loadConfig = useCallback(async (token?: string) => {

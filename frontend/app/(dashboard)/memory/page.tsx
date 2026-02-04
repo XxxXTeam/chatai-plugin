@@ -573,6 +573,7 @@ export default function MemoryPage() {
             fetchGraphEntities()
             fetchGraphStats(selectedScope)
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedScope])
 
     const displayMemories = searchResults.length > 0 ? searchResults : memories

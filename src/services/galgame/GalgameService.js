@@ -845,16 +845,23 @@ class GalgameService {
      */
     async updateEnvironment(userId, characterId, updates, groupId = null) {
         await this.init()
-        const settings = await this.getSessionSettings(userId, characterId, groupId)
-        if (!settings?.environment) {
-            gameLogger.warn(`[GalgameService] 无法更新环境设定: 用户 ${userId} 没有环境数据`)
-            return
+        let settings = await this.getSessionSettings(userId, characterId, groupId)
+
+        // 如果没有设置，创建新的
+        if (!settings) {
+            settings = { environment: {}, initialized: false, createdAt: Date.now() }
+        }
+
+        // 如果没有环境数据，初始化空对象
+        if (!settings.environment) {
+            settings.environment = {}
         }
 
         // 合并更新
         const updatedEnv = { ...settings.environment, ...updates }
         settings.environment = updatedEnv
         settings.updatedAt = Date.now()
+        settings.initialized = true
 
         await this.saveSessionSettings(userId, characterId, settings, groupId)
         gameLogger.info(`[GalgameService] 用户 ${userId} 环境设定已更新`)
@@ -866,7 +873,7 @@ class GalgameService {
     async updateSession(userId, characterId, updates, groupId = null) {
         await this.init()
         const db = databaseService.db
-        const session = await this.getSession(userId, characterId, groupId)
+        const session = await this.getOrCreateSession(userId, characterId, groupId)
         if (!session) {
             gameLogger.warn(`[GalgameService] 无法更新会话: 用户 ${userId} 没有会话数据`)
             return

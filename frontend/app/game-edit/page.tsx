@@ -10,7 +10,6 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { toast } from 'sonner'
 import { Gamepad2, Clock, Lock, Save, AlertCircle, CheckCircle2, User, MapPin, Heart, Sparkles, Loader2 } from 'lucide-react'
 
@@ -332,20 +331,18 @@ function GameEditContent() {
                 <Card>
                     <CardHeader><CardTitle className="text-base">角色设定</CardTitle></CardHeader>
                     <CardContent>
-                        <ScrollArea className="max-h-[50vh]">
-                            <div className="space-y-4 pr-4">
-                                {session?.editableFields.environment.map(field => (
-                                    <div key={field} className="space-y-2">
-                                        <Label className="flex items-center gap-2">{FIELD_ICONS[field]}{FIELD_LABELS[field] || field}</Label>
-                                        {['background', 'summary', 'greeting', 'scene'].includes(field) ? (
-                                            <Textarea value={(form.environment as Record<string, string>)?.[field] || ''} onChange={e => handleEnvChange(field, e.target.value)} placeholder={`输入${FIELD_LABELS[field] || field}...`} rows={3} />
-                                        ) : (
-                                            <Input value={(form.environment as Record<string, string>)?.[field] || ''} onChange={e => handleEnvChange(field, e.target.value)} placeholder={`输入${FIELD_LABELS[field] || field}...`} />
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
-                        </ScrollArea>
+                        <div className="space-y-4">
+                            {session?.editableFields.environment.map(field => (
+                                <div key={field} className="space-y-2">
+                                    <Label className="flex items-center gap-2">{FIELD_ICONS[field]}{FIELD_LABELS[field] || field}</Label>
+                                    {['background', 'summary', 'greeting', 'scene'].includes(field) ? (
+                                        <Textarea value={(form.environment as Record<string, string>)?.[field] || ''} onChange={e => handleEnvChange(field, e.target.value)} placeholder={`输入${FIELD_LABELS[field] || field}...`} rows={3} />
+                                    ) : (
+                                        <Input value={(form.environment as Record<string, string>)?.[field] || ''} onChange={e => handleEnvChange(field, e.target.value)} placeholder={`输入${FIELD_LABELS[field] || field}...`} />
+                                    )}
+                                </div>
+                            ))}
+                        </div>
                     </CardContent>
                 </Card>
 

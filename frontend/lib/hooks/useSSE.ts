@@ -133,11 +133,12 @@ export function useSSE(endpoint: string, options: SSEOptions = {}) {
                     setLastEvent(sseEvent)
                     setEvents(prev => [...prev.slice(-99), sseEvent])
                     onEvent?.(sseEvent)
-                } catch (e) {
+                } catch (_e) {
                     // 忽略解析错误
                 }
             })
         })
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
         endpoint,
         autoReconnect,

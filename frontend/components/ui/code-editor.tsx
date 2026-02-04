@@ -68,7 +68,7 @@ export function CodeEditor({
         >
             <Editor
                 value={value}
-                onValueChange={readOnly ? () => {} : onChange}
+                onValueChange={readOnly ? (_v: string) => { /* readonly */ } : onChange}
                 highlight={highlight}
                 padding={12}
                 placeholder={placeholder}

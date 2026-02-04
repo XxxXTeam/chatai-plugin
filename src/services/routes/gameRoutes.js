@@ -645,10 +645,24 @@ export function createGameEditRoutes() {
                 return res.status(410).json(ChaiteResponse.fail(null, '编辑会话已过期'))
             }
 
+            // 过滤掉受保护的字段（如 secret）
+            const safeEnvironment = { ...session.gameData.environment }
+            delete safeEnvironment.secret
+
+            const safeGameData = {
+                environment: safeEnvironment,
+                session: {
+                    affection: session.gameData.session?.affection,
+                    trust: session.gameData.session?.trust,
+                    gold: session.gameData.session?.gold,
+                    relationship: session.gameData.session?.relationship
+                }
+            }
+
             res.json(
                 ChaiteResponse.ok({
                     editId,
-                    gameData: session.gameData,
+                    gameData: safeGameData,
                     editableFields: {
                         environment: EDITABLE_ENV_FIELDS,
                         session: EDITABLE_SESSION_FIELDS
@@ -698,20 +712,41 @@ export function createGameEditRoutes() {
                 }
             }
 
-            // 保存更新结果
-            session.updates = safeUpdates
-            session.submittedAt = Date.now()
-            editSessions.set(editId, session)
+            // 直接应用更新到数据库，无需轮询
+            try {
+                const { userId, characterId, groupId } = session
 
-            logger.info(`[GameRoutes] 编辑会话已提交: ${editId}`)
+                if (Object.keys(safeUpdates.environment).length > 0) {
+                    await galgameService.updateEnvironment(userId, characterId, safeUpdates.environment, groupId)
+                    logger.info(`[GameRoutes] 用户 ${userId} 通过在线编辑更新了环境设定`)
+                }
 
-            res.json(
-                ChaiteResponse.ok({
-                    editId,
-                    updates: safeUpdates,
-                    message: '编辑已提交，请返回游戏查看更新'
-                })
-            )
+                if (Object.keys(safeUpdates.session).length > 0) {
+                    await galgameService.updateSession(userId, characterId, safeUpdates.session, groupId)
+                    logger.info(`[GameRoutes] 用户 ${userId} 通过在线编辑更新了会话数据`)
+                }
+
+                // 标记会话已提交并清理
+                session.submittedAt = Date.now()
+                session.updates = safeUpdates
+                editSessions.set(editId, session)
+
+                // 30秒后清理会话
+                setTimeout(() => editSessions.delete(editId), 30000)
+
+                logger.info(`[GameRoutes] 编辑会话已提交并应用: ${editId}`)
+
+                res.json(
+                    ChaiteResponse.ok({
+                        editId,
+                        updates: safeUpdates,
+                        message: '编辑已提交并生效！'
+                    })
+                )
+            } catch (err) {
+                logger.error(`[GameRoutes] 应用编辑失败: ${err.message}`)
+                res.status(500).json(ChaiteResponse.fail(null, `应用编辑失败: ${err.message}`))
+            }
         })
     )
 

@@ -54,9 +54,8 @@ export function useResponsive() {
 
     const [mounted, setMounted] = useState(false)
 
-    useEffect(() => {
-        setMounted(true)
-    }, [])
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    useEffect(() => { setMounted(true) }, [])
 
     const isMobile = width < breakpoints.md
     const isTablet = width >= breakpoints.md && width < breakpoints.lg
@@ -150,9 +149,9 @@ export function useIsDesktop(): boolean {
  * 触摸设备检测 - 使用 useSyncExternalStore
  */
 export function useIsTouchDevice(): boolean {
-    const subscribe = useCallback((callback: () => void) => {
-        // 触摸能力不会改变，但我们仍然需要订阅函数
-        return () => {}
+    const subscribe = useCallback((_callback: () => void) => {
+        // 触摸能力不会改变，返回空的取消订阅函数
+        return () => { /* noop */ }
     }, [])
 
     const getSnapshot = useCallback(() => {

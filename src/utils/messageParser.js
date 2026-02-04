@@ -1316,8 +1316,6 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
         // 尝试获取转发消息内容 - 支持多种方式
         let forwardMessages = null
         let parseMethod = ''
-
-        parseLog.push(`[Forward][深度${depth}] 开始解析, element keys: ${Object.keys(forwardElement || {}).join(', ')}`)
         if (forwardElement.data) {
             parseLog.push(`[Forward] data keys: ${Object.keys(forwardElement.data || {}).join(', ')}`)
             // NapCat 文档: content 应该在 [收] 时直接包含
@@ -1325,95 +1323,60 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
                 parseLog.push(`[Forward] data.content 存在, 长度: ${forwardElement.data.content?.length || 0}`)
             }
         }
-        // 输出完整结构用于调试 (限制长度)
-        parseLog.push(`[Forward] 完整结构: ${JSON.stringify(forwardElement).substring(0, 500)}`)
         if (forwardElement.data?.content && Array.isArray(forwardElement.data.content)) {
             forwardMessages = forwardElement.data.content
             parseMethod = 'data_content'
-            parseLog.push(`[Forward] 使用 data.content 方式 (NapCat标准), 消息数: ${forwardMessages.length}`)
         } else if (forwardElement.content && Array.isArray(forwardElement.content)) {
             forwardMessages = forwardElement.content
             parseMethod = 'direct_content'
-            parseLog.push(`[Forward] 使用 direct_content 方式, 消息数: ${forwardMessages.length}`)
         } else if (forwardElement.message && Array.isArray(forwardElement.message)) {
             forwardMessages = forwardElement.message
             parseMethod = 'message_array'
-            parseLog.push(`[Forward] 使用 message_array 方式, 消息数: ${forwardMessages.length}`)
         } else if (forwardElement.data?.message && Array.isArray(forwardElement.data.message)) {
             forwardMessages = forwardElement.data.message
             parseMethod = 'data_message'
-            parseLog.push(`[Forward] 使用 data.message 方式, 消息数: ${forwardMessages.length}`)
         } else if (forwardElement.id && e.group?.getForwardMsg) {
-            parseLog.push(`[Forward] 尝试通过 id=${forwardElement.id} 获取`)
             try {
                 forwardMessages = await e.group.getForwardMsg(forwardElement.id)
                 parseMethod = 'group_getForwardMsg_id'
-                parseLog.push(`[Forward] 通过 id 获取成功, 消息数: ${forwardMessages?.length || 0}`)
-            } catch (err) {
-                parseLog.push(`[Forward] 通过 id 获取失败: ${err.message}`)
-            }
+            } catch (err) {}
         } else if (forwardElement.data?.id && e.group?.getForwardMsg) {
-            parseLog.push(`[Forward] 尝试通过 data.id=${forwardElement.data.id} 获取`)
             try {
                 forwardMessages = await e.group.getForwardMsg(forwardElement.data.id)
                 parseMethod = 'group_getForwardMsg_data_id'
-                parseLog.push(`[Forward] 通过 data.id 获取成功, 消息数: ${forwardMessages?.length || 0}`)
-            } catch (err) {
-                parseLog.push(`[Forward] 通过 data.id 获取失败: ${err.message}`)
-            }
-        }
-        // 方式5: 通过 resid 获取 (TRSS)
-        else if (forwardElement.resid && e.group?.getForwardMsg) {
+            } catch (err) {}
+        } else if (forwardElement.resid && e.group?.getForwardMsg) {
             parseLog.push(`[Forward] 尝试通过 resid=${forwardElement.resid} 获取`)
             try {
                 forwardMessages = await e.group.getForwardMsg(forwardElement.resid)
                 parseMethod = 'group_getForwardMsg_resid'
-                parseLog.push(`[Forward] 通过 resid 获取成功, 消息数: ${forwardMessages?.length || 0}`)
-            } catch (err) {
-                parseLog.push(`[Forward] 通过 resid 获取失败: ${err.message}`)
-            }
+            } catch (err) {}
         }
-        // 方式6: 通过 bot.getForwardMsg 获取 (全局方法)
         if (!forwardMessages && e.bot?.getForwardMsg) {
             const fwdId = forwardElement.id || forwardElement.data?.id || forwardElement.resid
             if (fwdId) {
-                parseLog.push(`[Forward] 尝试通过 bot.getForwardMsg id=${fwdId} 获取`)
                 try {
                     forwardMessages = await e.bot.getForwardMsg(fwdId)
                     parseMethod = 'bot_getForwardMsg'
-                    parseLog.push(`[Forward] 通过 bot.getForwardMsg 获取成功, 消息数: ${forwardMessages?.length || 0}`)
-                } catch (err) {
-                    parseLog.push(`[Forward] 通过 bot.getForwardMsg 获取失败: ${err.message}`)
-                }
+                } catch (err) {}
             }
         }
-
-        // 方式7: OneBot v11 标准 - sendApi get_forward_msg (参数: id)
         if (!forwardMessages && e.bot?.sendApi) {
             const fwdId =
                 forwardElement.id || forwardElement.data?.id || forwardElement.resid || forwardElement.data?.resid
             if (fwdId) {
-                parseLog.push(`[Forward] 尝试 sendApi get_forward_msg id=${fwdId}`)
                 try {
                     const result = await e.bot.sendApi('get_forward_msg', { id: fwdId })
-                    // OneBot v11 返回格式: { message: [...] }
-                    // NapCat 可能返回: { data: { messages: [...] } } 或 { messages: [...] }
                     const messages =
                         result?.message || result?.data?.messages || result?.messages || result?.data?.message
                     if (messages && Array.isArray(messages)) {
                         forwardMessages = messages
                         parseMethod = 'sendApi_get_forward_msg'
-                        parseLog.push(`[Forward] 通过 sendApi 获取成功, 消息数: ${forwardMessages.length}`)
                     } else if (result) {
-                        parseLog.push(`[Forward] sendApi 返回格式异常: ${JSON.stringify(result).substring(0, 200)}`)
                     }
-                } catch (err) {
-                    parseLog.push(`[Forward] sendApi 获取失败: ${err.message}`)
-                }
+                } catch (err) {}
             }
         }
-
-        // 方式8: 尝试从引用消息中获取转发内容
         if (!forwardMessages && e.source?.message) {
             const sourceMsg = e.source.message
             if (Array.isArray(sourceMsg)) {
@@ -1422,7 +1385,6 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
                     forwardMessages = fwdSeg.data?.content || fwdSeg.data?.message || fwdSeg.message
                     if (Array.isArray(forwardMessages)) {
                         parseMethod = 'source_message'
-                        parseLog.push(`[Forward] 从 source.message 获取成功, 消息数: ${forwardMessages.length}`)
                     }
                 }
             }
@@ -1431,9 +1393,6 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
         if (forwardMessages && Array.isArray(forwardMessages)) {
             const forwardTexts = []
             const parsedMessages = []
-
-            parseLog.push(`[Forward] 开始解析 ${forwardMessages.length} 条消息, 方法: ${parseMethod}`)
-
             // 最多处理15条转发消息
             for (let i = 0; i < Math.min(forwardMessages.length, 15); i++) {
                 const msg = forwardMessages[i]
@@ -1647,8 +1606,6 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
                 method: parseMethod,
                 messages: parsedMessages
             }
-
-            parseLog.push(`[Forward] 解析完成, 共 ${parsedMessages.length} 条, 文本行数: ${forwardTexts.length}`)
         } else {
             text = '[转发消息]'
             parseLog.push(`[Forward] 未能获取转发消息内容`)

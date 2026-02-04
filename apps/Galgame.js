@@ -29,6 +29,7 @@ import {
     EDITABLE_SESSION_FIELDS,
     PROTECTED_FIELDS
 } from '../src/services/routes/gameRoutes.js'
+import { getWebServer } from '../src/services/webServer.js'
 
 // 创建Game标签的logger
 const gameLogger = chatLogger.tag('Game')
@@ -1279,8 +1280,8 @@ export class Galgame extends plugin {
      */
     async onlineEdit() {
         const e = this.e
-        const userId = e.user_id
-        const groupId = e.group_id
+        const userId = String(e.user_id)
+        const groupId = e.group_id ? String(e.group_id) : null
 
         try {
             // 检查是否在游戏中
@@ -1296,15 +1297,20 @@ export class Galgame extends plugin {
             const settings = await galgameService.getSessionSettings(userId, characterId, groupId)
             const session = await galgameService.getOrCreateSession(userId, characterId, groupId)
 
+            gameLogger.debug(`[Galgame] 在线编辑 - settings: ${JSON.stringify(settings)}`)
+            gameLogger.debug(`[Galgame] 在线编辑 - environment: ${JSON.stringify(settings?.environment)}`)
+
             const gameData = {
                 environment: settings?.environment || {},
                 session: {
-                    affection: session?.affection,
-                    trust: session?.trust,
-                    gold: session?.gold,
-                    relationship: session?.relationship
+                    affection: session?.affection ?? 10,
+                    trust: session?.trust ?? 10,
+                    gold: session?.gold ?? 100,
+                    relationship: session?.relationship ?? 'stranger'
                 }
             }
+
+            gameLogger.info(`[Galgame] 创建编辑会话 gameData: ${JSON.stringify(gameData)}`)
 
             // 直接创建编辑会话
             const editId = generateUUID()
@@ -1320,21 +1326,41 @@ export class Galgame extends plugin {
             editSessions.set(editId, editSession)
             gameLogger.info(`创建编辑会话: ${editId} for user ${userId}`)
 
-            // 获取web服务器地址
-            let webPort = config.get('web.port') || 3000
-            if (global.Bot?.server) {
-                const address = global.Bot.server.address()
-                if (address?.port) webPort = address.port
+            // 使用 webServer 获取正确的 URL
+            const webServer = getWebServer()
+            const mountPath = webServer.mountPath || '/chatai'
+
+            // 构建编辑链接列表（类似登录链接）
+            const editUrls = []
+
+            // 本地地址
+            if (webServer.addresses?.local) {
+                for (const addr of webServer.addresses.local) {
+                    editUrls.push(`${addr}${mountPath}/game-edit?code=${editId}`)
+                }
+            } else {
+                editUrls.push(`http://127.0.0.1:${webServer.port}${mountPath}/game-edit?code=${editId}`)
             }
-            const publicUrl = config.get('web.publicUrl')
-            let baseUrl = publicUrl || `http://127.0.0.1:${webPort}`
-            baseUrl = baseUrl.replace(/\/$/, '')
-            const editUrl = `${baseUrl}/chatai/game-edit?code=${editId}`
+
+            // 公网地址
+            const configPublicUrl = config.get('web.publicUrl')
+            let publicEditUrl = null
+            if (configPublicUrl) {
+                publicEditUrl = `${configPublicUrl.replace(/\/$/, '')}${mountPath}/game-edit?code=${editId}`
+            } else if (webServer.addresses?.public) {
+                publicEditUrl = `${webServer.addresses.public}${mountPath}/game-edit?code=${editId}`
+            }
+
+            // 构建消息
+            let urlText = editUrls[0]
+            if (publicEditUrl) {
+                urlText = `公网: ${publicEditUrl}\n本地: ${editUrls[0]}`
+            }
 
             const editMsg = `📝 游戏在线编辑
 
 请在30分钟内访问以下链接编辑游戏信息：
-${editUrl}
+${urlText}
 
 ⚠️ 注意事项：
 • 链接有效期30分钟
@@ -1389,71 +1415,13 @@ ${editUrl}
                 gameLogger.warn(`[Galgame] 用户 ${userId} 编辑链接发送失败，无法私聊`)
             }
 
-            // 启动后台轮询检查编辑结果
-            this.pollEditResult(editId, userId, groupId, characterId, baseUrl)
+            // 编辑提交时会直接应用更新到数据库，无需轮询
         } catch (err) {
             gameLogger.error('创建在线编辑失败:', err)
             await this.reply(`❌ 创建编辑会话失败: ${err.message}`)
         }
 
         return true
-    }
-
-    /**
-     * 轮询检查编辑结果
-     */
-    async pollEditResult(editId, userId, groupId, characterId, baseUrl) {
-        const maxPolls = 60 // 最多轮询60次，每次30秒，共30分钟
-        let pollCount = 0
-
-        const poll = async () => {
-            pollCount++
-            if (pollCount > maxPolls) return
-
-            try {
-                const response = await fetch(`${baseUrl}/chatai/api/game/edit/${editId}/result`)
-                const result = await response.json()
-
-                if (result.code === 0 && result.data.submitted) {
-                    // 编辑已提交，应用更新
-                    const updates = result.data.updates
-
-                    if (updates.environment) {
-                        await galgameService.updateEnvironment(userId, characterId, updates.environment, groupId)
-                        gameLogger.info(`[Galgame] 用户 ${userId} 通过在线编辑更新了环境设定`)
-                    }
-
-                    if (updates.session) {
-                        await galgameService.updateSession(userId, characterId, updates.session, groupId)
-                        gameLogger.info(`[Galgame] 用户 ${userId} 通过在线编辑更新了会话数据`)
-                    }
-
-                    // 通知用户（如果在群里）
-                    if (groupId && Bot.pickGroup) {
-                        try {
-                            const group = Bot.pickGroup(groupId)
-                            if (group) {
-                                await group.sendMsg(`✅ 游戏信息已更新！\n用户: ${userId}\n已应用在线编辑的修改`)
-                            }
-                        } catch (e) {
-                            gameLogger.debug('发送编辑完成通知失败:', e.message)
-                        }
-                    }
-
-                    return
-                }
-
-                // 继续轮询
-                setTimeout(poll, 30000) // 30秒后再次检查
-            } catch (err) {
-                gameLogger.debug(`轮询编辑结果失败: ${err.message}`)
-                // 继续轮询
-                setTimeout(poll, 30000)
-            }
-        }
-
-        // 10秒后开始第一次轮询
-        setTimeout(poll, 10000)
     }
 
     /**
