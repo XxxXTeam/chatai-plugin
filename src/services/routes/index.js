@@ -5,6 +5,7 @@
 
 import { createConversationRoutes, createContextRoutes } from './conversationRoutes.js'
 import { createPresetRoutes, createPresetsConfigRoutes } from './presetRoutes.js'
+import { createGameRoutes, createGameEditRoutes } from './gameRoutes.js'
 import channelRoutes from './channelRoutes.js'
 import statsRoutes from './statsRoutes.js'
 import testPanelRoutes from './testPanelRoutes.js'
@@ -46,6 +47,8 @@ export {
     broadcastSSE,
     createPresetRoutes,
     createPresetsConfigRoutes,
+    createGameRoutes,
+    createGameEditRoutes,
     ChaiteResponse,
     ApiResponse,
     getDatabase,

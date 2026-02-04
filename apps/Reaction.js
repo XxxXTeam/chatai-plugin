@@ -12,6 +12,7 @@ import {
     sendGroupMessage,
     getBot
 } from '../src/utils/eventAdapter.js'
+import { galgameService } from '../src/services/galgame/GalgameService.js'
 
 const EMOJI_MAP = {
     // 经典QQ表情 (0-200)
@@ -350,6 +351,10 @@ async function handleReactionEvent(e, bot) {
 
         // 机器人自己的回应不处理
         if (userId === selfId || botIds.has(String(userId))) {
+            return
+        }
+        if (galgameService.isUserInGame(groupId ? String(groupId) : null, String(userId))) {
+            logger.debug(`[AI-Reaction] 用户 ${userId} 在游戏模式中，跳过表情回应处理`)
             return
         }
 

@@ -5,16 +5,30 @@ import config from '../config/config.js'
 // 从 galgame 内部模块导入
 import {
     galgameService,
+    gameRenderer,
     CHOICE_EMOJIS,
+    OPTION_EMOJIS,
     MESSAGE_CACHE_TTL,
     getAffectionLevel,
     processEventChoice,
-    processEventWithCustomInput
+    processEventWithCustomInput,
+    generateRandomRewards,
+    EVENT_TYPES,
+    DAILY_EVENTS,
+    EXPLORE_EVENTS
 } from '../src/services/galgame/index.js'
 import { getBotIds, isMessageProcessed, markMessageProcessed, isSelfMessage } from '../src/utils/messageDedup.js'
 import { parseReactionEvent, sendGroupMessage, getBot, sendReaction } from '../src/utils/eventAdapter.js'
 import { parseUserMessage } from '../src/utils/messageParser.js'
 import chatLogger from '../src/core/utils/logger.js'
+import {
+    editSessions,
+    generateUUID,
+    SESSION_EXPIRE_MS,
+    EDITABLE_ENV_FIELDS,
+    EDITABLE_SESSION_FIELDS,
+    PROTECTED_FIELDS
+} from '../src/services/routes/gameRoutes.js'
 
 // 创建Game标签的logger
 const gameLogger = chatLogger.tag('Game')
@@ -98,6 +112,11 @@ async function handleGalgameReaction(e, bot) {
         const reactionInfo = parseReactionEvent(e)
         let { emojiId, messageId, userId, isAdd, groupId } = reactionInfo
 
+        gameLogger.debug(
+            `[Reaction] 收到表情事件: emojiId=${emojiId}, messageId=${messageId}, userId=${userId}, isAdd=${isAdd}, groupId=${groupId}`
+        )
+        gameLogger.debug(`[Reaction] 原始事件: face_id=${e.face_id}, seq=${e.seq}, isReaction=${e.isReaction}`)
+
         if (!isAdd) return
 
         // 处理NapCat格式
@@ -167,7 +186,7 @@ async function handleGalgameReaction(e, bot) {
             // 发送回复
             await sendGalgameResponse(bot, groupId, userId, gameSession.characterId, result)
         } else if (pendingChoice.type === 'event') {
-            // 事件选项
+            // 事件选项 - 随机生成概率和奖惩
             const eventResult = processEventChoice(pendingChoice.eventInfo, optionIndex, pendingChoice.options)
 
             // 更新好感度
@@ -176,6 +195,24 @@ async function handleGalgameReaction(e, bot) {
                     String(userId),
                     gameSession.characterId,
                     eventResult.affectionChange,
+                    groupId
+                )
+            }
+            // 更新信任度
+            if (eventResult.trustChange !== 0) {
+                await galgameService.updateTrust(
+                    String(userId),
+                    gameSession.characterId,
+                    eventResult.trustChange,
+                    groupId
+                )
+            }
+            // 更新金币
+            if (eventResult.goldChange !== 0) {
+                await galgameService.updateGold(
+                    String(userId),
+                    gameSession.characterId,
+                    eventResult.goldChange,
                     groupId
                 )
             }
@@ -188,39 +225,26 @@ async function handleGalgameReaction(e, bot) {
                 groupId
             )
 
-            // 获取更新后的状态
-            const status = await galgameService.getStatus(String(userId), gameSession.characterId, groupId)
+            // 发送结果给模型让其继续剧情
+            const systemMsg = `[系统:玩家选择了选项${optionIndex}|${eventResult.success ? '成功' : '失败'}|好感${eventResult.affectionChange > 0 ? '+' : ''}${eventResult.affectionChange},信任${eventResult.trustChange > 0 ? '+' : ''}${eventResult.trustChange},金币${eventResult.goldChange > 0 ? '+' : ''}${eventResult.goldChange}]`
+            const result = await galgameService.sendMessage({
+                userId: String(userId),
+                groupId,
+                message: `${systemMsg}\n玩家选择: ${eventResult.optionText}`,
+                characterId: gameSession.characterId
+            })
 
-            // 发送事件结果
-            const resultEmoji = eventResult.success ? '✨' : '💫'
-            const affectionEmoji = eventResult.affectionChange > 0 ? '💕' : eventResult.affectionChange < 0 ? '💔' : ''
-
-            let resultMsg = `━━━ 事件结果 ━━━\n`
-            resultMsg += `${resultEmoji} ${eventResult.eventName}: ${eventResult.message}\n`
-            resultMsg += `📝 你的选择: ${eventResult.optionText}\n`
-            resultMsg += `🎲 判定: ${eventResult.roll}% / ${eventResult.rate}%\n`
-            if (eventResult.affectionChange !== 0) {
-                resultMsg += `${affectionEmoji} 好感度 ${eventResult.affectionChange > 0 ? '+' : ''}${eventResult.affectionChange}\n`
-            }
-            resultMsg += `\n${status.level.emoji} 当前好感度: ${status.affection} (${status.level.name})`
-
-            await sendGroupMessage(bot, groupId, resultMsg)
+            await sendGalgameResponse(bot, groupId, userId, gameSession.characterId, result)
         }
     } catch (err) {
         gameLogger.error(' 处理表情回应失败:', err)
     }
 }
 
-/**
- * 发送Galgame回复（包含选项处理）
- * - 文本正常发送
- * - 选项1234分开发送后合并转发
- */
 async function sendGalgameResponse(bot, groupId, userId, characterId, result) {
     const hasOptions = result.options && result.options.length > 0
     const hasEvent = result.event && result.eventOptions && result.eventOptions.length > 0
-
-    // 构建场景/任务/线索头部信息
+    const botId = bot?.uin || Bot?.uin || 10000
     let headerInfo = ''
     if (result.scene) {
         headerInfo += `📍 ${result.scene.name}`
@@ -242,125 +266,146 @@ async function sendGalgameResponse(bot, groupId, userId, characterId, result) {
             headerInfo += `✨ 发现[${d.type}]: ${d.content}\n`
         }
     }
-    if (headerInfo) {
-        headerInfo += '━━━━━━━━━━━━━━━━\n'
-    }
 
     // 构建基础回复
-    let replyText = headerInfo + result.response
+    let replyText = result.response
 
-    // 添加好感度变化提示
+    // 构建属性变化提示
+    let changeTexts = []
     if (result.affectionChange !== 0) {
-        const changeEmoji = result.affectionChange > 0 ? '💕' : '💔'
-        replyText += `\n\n${changeEmoji} 好感度 ${result.affectionChange > 0 ? '+' : ''}${result.affectionChange}`
+        const emoji = result.affectionChange > 0 ? '💕' : '💔'
+        changeTexts.push(`${emoji}好感${result.affectionChange > 0 ? '+' : ''}${result.affectionChange}`)
+    }
+    if (result.trustChange !== 0) {
+        const emoji = result.trustChange > 0 ? '🤝' : '⚔️'
+        changeTexts.push(`${emoji}信任${result.trustChange > 0 ? '+' : ''}${result.trustChange}`)
+    }
+    if (result.goldChange !== 0) {
+        const emoji = result.goldChange > 0 ? '💰' : '💸'
+        changeTexts.push(`${emoji}金币${result.goldChange > 0 ? '+' : ''}${result.goldChange}`)
+    }
+    if (result.obtainedItems?.length > 0) {
+        changeTexts.push(`📦获得: ${result.obtainedItems.map(i => i.name).join('、')}`)
+    }
+    if (changeTexts.length > 0) {
+        replyText += `\n\n${changeTexts.join(' | ')}`
     }
 
-    // 添加当前状态
-    replyText += `\n${result.session.level.emoji} ${result.session.level.name} (${result.session.affection})`
+    // 状态行
+    const trustLevel = result.session.trustLevel || { emoji: '🤔', name: '观望' }
+    const statusLine = `${result.session.level.emoji}${result.session.level.name}(${result.session.affection}) ${trustLevel.emoji}${trustLevel.name}(${result.session.trust || 10}) 💰${result.session.gold || 100}`
+    const forwardMsgs = []
 
-    // 如果回复包含空行，分段发送
-    const paragraphs = replyText.split(/\n\n+/).filter(p => p.trim())
-    if (paragraphs.length > 1) {
-        for (const paragraph of paragraphs) {
-            await sendGroupMessage(bot, groupId, paragraph.trim())
-            await new Promise(r => setTimeout(r, 500))
-        }
-    } else {
-        await sendGroupMessage(bot, groupId, replyText)
+    // 场景信息（如果有）
+    if (headerInfo.trim()) {
+        forwardMsgs.push({
+            message: headerInfo.trim(),
+            nickname: '📍 场景',
+            user_id: botId
+        })
     }
 
-    // 如果有对话选项，选项单独合并转发
+    // 主要对话内容
+    forwardMsgs.push({
+        message: replyText,
+        nickname: result.session?.characterName || '角色',
+        user_id: botId
+    })
+
+    // 状态信息
+    forwardMsgs.push({
+        message: statusLine,
+        nickname: '💫 状态',
+        user_id: botId
+    })
+
+    // 如果有对话选项
     if (hasOptions) {
-        const forwardMsgs = []
-
-        // 添加选项说明
+        let optionsText = '━━━ 请选择 ━━━\n发数字1-4或贴对应表情选择\n\n'
+        for (let i = 0; i < Math.min(result.options.length, 4); i++) {
+            const emoji = OPTION_EMOJIS[i]?.name || `${i + 1}`
+            optionsText += `${emoji} ${result.options[i].text}\n`
+        }
         forwardMsgs.push({
-            message: '━━━ 请选择 ━━━\n在你的消息上添加对应表情，或直接发送文字选择',
-            nickname: '系统',
-            user_id: bot.uin || Bot.uin
+            message: optionsText.trim(),
+            nickname: '🎯 选项',
+            user_id: botId
         })
-
-        // 每个选项单独一条消息
-        for (let i = 0; i < result.options.length; i++) {
-            const opt = result.options[i]
-            forwardMsgs.push({
-                message: `${CHOICE_EMOJIS[i].name} ${opt.text}`,
-                nickname: `选项${i + 1}`,
-                user_id: bot.uin || Bot.uin
-            })
-        }
-
-        // 发送选项合并转发
-        try {
-            if (groupId && bot?.pickGroup) {
-                const group = bot.pickGroup(parseInt(groupId))
-                await group.sendMsg(await bot.makeForwardMsg(forwardMsgs))
-            } else {
-                // 合并转发失败，普通发送选项
-                let optionsText = '━━━ 请选择 ━━━\n'
-                for (let i = 0; i < result.options.length; i++) {
-                    optionsText += `${CHOICE_EMOJIS[i].name} ${result.options[i].text}\n`
-                }
-                await sendGroupMessage(bot, groupId, optionsText)
-            }
-        } catch (err) {
-            let optionsText = '━━━ 请选择 ━━━\n'
-            for (let i = 0; i < result.options.length; i++) {
-                optionsText += `${CHOICE_EMOJIS[i].name} ${result.options[i].text}\n`
-            }
-            await sendGroupMessage(bot, groupId, optionsText)
-        }
-
-        return { hasOptions: true, options: result.options }
     }
 
-    // 如果触发了事件，事件选项单独合并转发
+    // 如果触发了事件
     if (hasEvent) {
-        const forwardMsgs = []
-
-        // 添加事件说明
+        let eventText = `━━━ 触发事件 ━━━\n`
+        eventText += `📌 ${result.event.name}\n`
+        eventText += `${result.event.description}\n\n`
+        eventText += `发数字1-4或贴对应表情选择:\n`
+        for (let i = 0; i < Math.min(result.eventOptions.length, 4); i++) {
+            const emoji = OPTION_EMOJIS[i]?.name || `${i + 1}`
+            eventText += `${emoji} ${result.eventOptions[i].text}\n`
+        }
         forwardMsgs.push({
-            message: `━━━ 触发事件: ${result.event.name} ━━━\n${result.event.description}\n成功率: ${result.event.successRate}%\n\n在你的消息上添加表情选择，或直接发送文字行动`,
-            nickname: '系统',
-            user_id: bot.uin || Bot.uin
+            message: eventText.trim(),
+            nickname: '⚡ 事件',
+            user_id: botId
         })
-
-        // 每个事件选项单独一条消息
-        for (let i = 0; i < result.eventOptions.length; i++) {
-            const opt = result.eventOptions[i]
-            const successText = opt.successAffection > 0 ? `+${opt.successAffection}` : opt.successAffection
-            const failText = opt.failAffection > 0 ? `+${opt.failAffection}` : opt.failAffection
-            forwardMsgs.push({
-                message: `${CHOICE_EMOJIS[i].name} ${opt.text}\n   成功: ${successText} / 失败: ${failText}`,
-                nickname: `选项${i + 1}`,
-                user_id: bot.uin || Bot.uin
-            })
-        }
-
-        try {
-            if (groupId && bot?.pickGroup) {
-                const group = bot.pickGroup(parseInt(groupId))
-                await group.sendMsg(await bot.makeForwardMsg(forwardMsgs))
-            } else {
-                let eventText = `━━━ 触发事件: ${result.event.name} ━━━\n`
-                for (let i = 0; i < result.eventOptions.length; i++) {
-                    const opt = result.eventOptions[i]
-                    eventText += `${CHOICE_EMOJIS[i].name} ${opt.text}\n`
-                }
-                await sendGroupMessage(bot, groupId, eventText)
-            }
-        } catch (err) {
-            let eventText = `━━━ 触发事件: ${result.event.name} ━━━\n`
-            for (let i = 0; i < result.eventOptions.length; i++) {
-                eventText += `${CHOICE_EMOJIS[i].name} ${result.eventOptions[i].text}\n`
-            }
-            await sendGroupMessage(bot, groupId, eventText)
-        }
-
-        return { hasEvent: true, event: result.event, eventOptions: result.eventOptions }
     }
 
-    return { hasOptions: false, hasEvent: false }
+    // 尝试发送合并转发
+    let sent = false
+    let sentMsgInfo = null
+    try {
+        if (groupId && bot?.pickGroup && bot?.makeForwardMsg) {
+            const group = bot.pickGroup(parseInt(groupId))
+            const forwardMsg = await bot.makeForwardMsg(forwardMsgs)
+            if (forwardMsg) {
+                sentMsgInfo = await group.sendMsg(forwardMsg)
+                sent = true
+            }
+        }
+    } catch (err) {
+        gameLogger.debug(`合并转发失败，使用普通发送: ${err.message}`)
+    }
+
+    // 合并转发失败，使用普通发送（但合并为一条）
+    if (!sent) {
+        let fullText = ''
+        if (headerInfo.trim()) {
+            fullText += headerInfo.trim() + '\n━━━━━━━━━━━━━━━━\n'
+        }
+        fullText += replyText + '\n\n' + statusLine
+
+        if (hasOptions) {
+            fullText += '\n\n━━━ 请选择 ━━━\n发数字1-4或贴对应表情选择\n'
+            for (let i = 0; i < Math.min(result.options.length, 4); i++) {
+                const emoji = OPTION_EMOJIS[i]?.name || `${i + 1}`
+                fullText += `${emoji} ${result.options[i].text}\n`
+            }
+        }
+
+        if (hasEvent) {
+            fullText += `\n\n━━━ 触发事件: ${result.event.name} ━━━\n`
+            fullText += `${result.event.description}\n发数字1-4或贴对应表情选择:\n`
+            for (let i = 0; i < Math.min(result.eventOptions.length, 4); i++) {
+                const emoji = OPTION_EMOJIS[i]?.name || `${i + 1}`
+                fullText += `${emoji} ${result.eventOptions[i].text}\n`
+            }
+        }
+
+        sentMsgInfo = await sendGroupMessage(bot, groupId, fullText.trim())
+    }
+
+    // 提取发送消息的seq
+    const msgSeq = sentMsgInfo?.seq || sentMsgInfo?.message_id || sentMsgInfo?.rand
+    gameLogger.debug(`[sendGalgameResponse] 发送消息seq: ${msgSeq}, info: ${JSON.stringify(sentMsgInfo)}`)
+
+    return {
+        hasOptions,
+        hasEvent,
+        options: result.options,
+        event: result.event,
+        eventOptions: result.eventOptions,
+        msgSeq
+    }
 }
 
 /**
@@ -382,9 +427,12 @@ function formatStatus(status) {
 🤝 相遇: ${status.meetingReason || '???'}
 🔐 秘密: ${status.secret || '???'}
 ━━━━━━━━━━━━━━━━
-${level.emoji} 关系: ${level.name}
-💖 好感度: ${status.affection} 点
-${progressBar}`
+${level.emoji} 好感: ${level.name} (${status.affection})
+${progressBar}
+${status.trustLevel?.emoji || '🤔'} 信任: ${status.trustLevel?.name || '观望'} (${status.trust || 10})
+${createProgressBar(status.trust || 10, -100, 150)}
+💰 金币: ${status.gold || 100}
+📦 物品: ${status.items?.length || 0}个`
 
     // 当前场景
     if (status.currentScene) {
@@ -507,6 +555,34 @@ export class Galgame extends plugin {
                     fnc: 'showHelp'
                 },
                 {
+                    reg: /^#(日常|日常事件)$/i,
+                    fnc: 'triggerDailyEvent'
+                },
+                {
+                    reg: /^#(探索|探索事件)$/i,
+                    fnc: 'triggerExploreEvent'
+                },
+                {
+                    reg: /^#任务$/i,
+                    fnc: 'showCurrentTask'
+                },
+                {
+                    reg: /^#(商店|购买)$/i,
+                    fnc: 'triggerShopEvent'
+                },
+                {
+                    reg: /^#(打工|赚钱|工作)$/i,
+                    fnc: 'triggerWorkEvent'
+                },
+                {
+                    reg: /^#(物品|背包)$/i,
+                    fnc: 'showItems'
+                },
+                {
+                    reg: /^#游戏(在线)?编辑$/i,
+                    fnc: 'onlineEdit'
+                },
+                {
                     reg: '',
                     fnc: 'interceptGameMode',
                     log: false
@@ -588,6 +664,19 @@ export class Galgame extends plugin {
             return false
         }
 
+        // 检查是否是数字选择（1-4）
+        const numberMatch = textContent.match(/^([1-4])$/)
+        if (numberMatch) {
+            const optionIndex = parseInt(numberMatch[1])
+            const pendingChoice = galgameService.findUserPendingChoice(groupId, userId)
+            if (pendingChoice) {
+                markMessageProcessed(e)
+                gameLogger.debug(`游戏模式选项选择: 用户选择了选项 ${optionIndex}`)
+                await this.handleNumberSelection(optionIndex, pendingChoice)
+                return true
+            }
+        }
+
         // 如果是@机器人，直接触发
         if (e.atBot) {
             markMessageProcessed(e)
@@ -664,13 +753,14 @@ export class Galgame extends plugin {
             // 处理回复
             const responseInfo = await sendGalgameResponse(bot, groupId, userId, gameSession.characterId, result)
 
-            // 如果有选项或事件，保存待选择项
-            if (responseInfo.hasOptions && e.message_id) {
-                galgameService.savePendingChoice(groupId, e.message_id, userId, 'option', result.options)
+            // 如果有选项或事件，保存待选择项（用回复消息的seq匹配回调）
+            const msgSeq = responseInfo.msgSeq
+            if (responseInfo.hasOptions && msgSeq) {
+                galgameService.savePendingChoice(groupId, msgSeq, userId, 'option', result.options)
 
                 for (let i = 0; i < Math.min(result.options.length, 4); i++) {
                     try {
-                        await sendReaction(e, e.message_id, CHOICE_EMOJIS[i].id, true)
+                        await sendReaction(e, msgSeq, OPTION_EMOJIS[i].id, true, 1)
                         await new Promise(r => setTimeout(r, 300))
                     } catch (err) {
                         gameLogger.debug(` 添加选项表情失败: ${err.message}`)
@@ -678,19 +768,12 @@ export class Galgame extends plugin {
                 }
             }
 
-            if (responseInfo.hasEvent && e.message_id) {
-                galgameService.savePendingChoice(
-                    groupId,
-                    e.message_id,
-                    userId,
-                    'event',
-                    result.eventOptions,
-                    result.event
-                )
+            if (responseInfo.hasEvent && msgSeq) {
+                galgameService.savePendingChoice(groupId, msgSeq, userId, 'event', result.eventOptions, result.event)
 
                 for (let i = 0; i < Math.min(result.eventOptions.length, 4); i++) {
                     try {
-                        await sendReaction(e, e.message_id, CHOICE_EMOJIS[i].id, true)
+                        await sendReaction(e, msgSeq, OPTION_EMOJIS[i].id, true, 1)
                         await new Promise(r => setTimeout(r, 300))
                     } catch (err) {
                         gameLogger.debug(` 添加事件表情失败: ${err.message}`)
@@ -755,6 +838,12 @@ export class Galgame extends plugin {
 
                 // 构建完整开场消息
                 let openingMsg = ''
+
+                // 添加前情提要（如果有）
+                if (envSettings?.summary) {
+                    openingMsg += `${envSettings.summary}\n━━━━━━━━━━━━━━━━\n`
+                }
+
                 if (openingResult.scene) {
                     openingMsg += `📍 ${openingResult.scene.name}`
                     if (openingResult.scene.description) {
@@ -764,8 +853,6 @@ export class Galgame extends plugin {
                 }
                 openingMsg += openingResult.response
                 openingMsg += `\n${level.emoji} ${level.name} (${session.affection})`
-
-                // 分段发送长消息
                 const paragraphs = openingMsg.split(/\n\n+/).filter(p => p.trim())
                 if (paragraphs.length > 1) {
                     for (const paragraph of paragraphs) {
@@ -839,33 +926,24 @@ export class Galgame extends plugin {
         try {
             const gameSession = galgameService.getUserGameSession(groupId, userId)
             const characterId = gameSession?.characterId || 'default'
-
-            // 获取导出数据（不含环境提示词）
             const exportData = await galgameService.exportSession(userId, characterId, false, groupId)
 
             if (!exportData) {
                 await this.reply('❌ 没有找到游戏数据')
                 return true
             }
-
-            // 生成文件名和内容
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
             const filename = `galgame_${characterId}_${timestamp}.json`
             const jsonContent = JSON.stringify(exportData, null, 2)
-
-            // 写入临时文件
             const tempDir = os.tmpdir()
             const tempFilePath = path.join(tempDir, filename)
             fs.writeFileSync(tempFilePath, jsonContent, 'utf8')
-
-            // 尝试使用icqq发送文件
             const bot = e.bot || Bot
             let fileSent = false
 
             if (groupId && bot?.pickGroup) {
                 try {
                     const group = bot.pickGroup(parseInt(groupId))
-                    // 尝试多种方式发送文件
                     if (group?.fs?.upload) {
                         await group.fs.upload(tempFilePath)
                         fileSent = true
@@ -1011,7 +1089,7 @@ export class Galgame extends plugin {
      */
     async handleEventWithCustomInput(bot, groupId, userId, gameSession, pendingEvent, customInput) {
         try {
-            // 处理事件的自定义输入
+            // 处理事件的自定义输入 - 随机生成概率和奖惩
             const eventResult = processEventWithCustomInput(pendingEvent.eventInfo, customInput, pendingEvent.options)
 
             // 更新好感度
@@ -1019,36 +1097,139 @@ export class Galgame extends plugin {
                 await galgameService.updateAffection(
                     String(userId),
                     gameSession.characterId,
-                    eventResult.affectionChange
+                    eventResult.affectionChange,
+                    groupId
+                )
+            }
+            // 更新信任度
+            if (eventResult.trustChange !== 0) {
+                await galgameService.updateTrust(
+                    String(userId),
+                    gameSession.characterId,
+                    eventResult.trustChange,
+                    groupId
+                )
+            }
+            // 更新金币
+            if (eventResult.goldChange !== 0) {
+                await galgameService.updateGold(
+                    String(userId),
+                    gameSession.characterId,
+                    eventResult.goldChange,
+                    groupId
                 )
             }
 
             // 记录事件已触发
-            await galgameService.addTriggeredEvent(String(userId), gameSession.characterId, pendingEvent.eventInfo.name)
+            await galgameService.addTriggeredEvent(
+                String(userId),
+                gameSession.characterId,
+                pendingEvent.eventInfo.name,
+                groupId
+            )
 
             // 移除待处理的事件
             galgameService.removePendingChoiceByKey(pendingEvent.key)
 
-            // 获取更新后的状态
-            const status = await galgameService.getStatus(String(userId), gameSession.characterId)
+            // 发送结果给模型让其继续剧情
+            const systemMsg = `[系统:玩家选择了自定义行动|${eventResult.success ? '成功' : '失败'}|好感${eventResult.affectionChange > 0 ? '+' : ''}${eventResult.affectionChange},信任${eventResult.trustChange > 0 ? '+' : ''}${eventResult.trustChange},金币${eventResult.goldChange > 0 ? '+' : ''}${eventResult.goldChange}]`
+            const result = await galgameService.sendMessage({
+                userId: String(userId),
+                groupId,
+                message: `${systemMsg}\n玩家的行动: ${customInput}`,
+                characterId: gameSession.characterId,
+                event: pendingEvent.e
+            })
 
-            // 发送事件结果
-            const resultEmoji = eventResult.success ? '✨' : '💫'
-            const affectionEmoji = eventResult.affectionChange > 0 ? '💕' : eventResult.affectionChange < 0 ? '💔' : ''
-
-            let resultMsg = `━━━ 事件结果 ━━━\n`
-            resultMsg += `${resultEmoji} ${eventResult.eventName}: ${eventResult.message}\n`
-            resultMsg += `📝 你的行动: ${eventResult.optionText}\n`
-            resultMsg += `🎲 判定: ${eventResult.roll}% / ${eventResult.rate}%\n`
-            if (eventResult.affectionChange !== 0) {
-                resultMsg += `${affectionEmoji} 好感度 ${eventResult.affectionChange > 0 ? '+' : ''}${eventResult.affectionChange}\n`
-            }
-            resultMsg += `\n${status.level.emoji} 当前好感度: ${status.affection} (${status.level.name})`
-
-            await this.reply(resultMsg)
+            await sendGalgameResponse(bot, groupId, String(userId), gameSession.characterId, result)
         } catch (err) {
             gameLogger.error(' 处理事件自定义输入失败:', err)
             await this.reply(`❌ 处理失败: ${err.message}`)
+        }
+    }
+
+    /**
+     * 处理数字选择（1-4）
+     */
+    async handleNumberSelection(optionIndex, pendingChoice) {
+        const e = this.e
+        const userId = String(e.user_id)
+        const groupId = e.group_id ? String(e.group_id) : null
+        const bot = e.bot || Bot
+
+        try {
+            const gameSession = galgameService.getUserGameSession(groupId, userId)
+            if (!gameSession) {
+                await this.reply('❌ 游戏会话已过期')
+                return
+            }
+
+            if (pendingChoice.type === 'option') {
+                // 对话选项
+                const selectedOption = pendingChoice.options.find(o => o.index === optionIndex)
+                if (!selectedOption) {
+                    await this.reply('❌ 无效的选项')
+                    return
+                }
+
+                galgameService.removePendingChoiceByKey(pendingChoice.key)
+
+                const result = await galgameService.sendMessage({
+                    userId,
+                    groupId,
+                    message: `[系统:玩家选择了选项${optionIndex}]\n${selectedOption.text}`,
+                    characterId: gameSession.characterId,
+                    event: e
+                })
+
+                await sendGalgameResponse(bot, groupId, userId, gameSession.characterId, result)
+
+                // 处理新选项的表情
+                const msgSeq = e.seq || e.message_id
+                if (result.options?.length > 0 && msgSeq) {
+                    galgameService.savePendingChoice(groupId, msgSeq, userId, 'option', result.options)
+                }
+            } else if (pendingChoice.type === 'event') {
+                // 事件选项
+                const eventResult = processEventChoice(pendingChoice.eventInfo, optionIndex, pendingChoice.options)
+
+                if (eventResult.affectionChange !== 0) {
+                    await galgameService.updateAffection(
+                        userId,
+                        gameSession.characterId,
+                        eventResult.affectionChange,
+                        groupId
+                    )
+                }
+                if (eventResult.trustChange !== 0) {
+                    await galgameService.updateTrust(userId, gameSession.characterId, eventResult.trustChange, groupId)
+                }
+                if (eventResult.goldChange !== 0) {
+                    await galgameService.updateGold(userId, gameSession.characterId, eventResult.goldChange, groupId)
+                }
+
+                await galgameService.addTriggeredEvent(
+                    userId,
+                    gameSession.characterId,
+                    pendingChoice.eventInfo.name,
+                    groupId
+                )
+                galgameService.removePendingChoiceByKey(pendingChoice.key)
+
+                const systemMsg = `[系统:玩家选择了选项${optionIndex}|${eventResult.success ? '成功' : '失败'}|好感${eventResult.affectionChange > 0 ? '+' : ''}${eventResult.affectionChange},信任${eventResult.trustChange > 0 ? '+' : ''}${eventResult.trustChange},金币${eventResult.goldChange > 0 ? '+' : ''}${eventResult.goldChange}]`
+                const result = await galgameService.sendMessage({
+                    userId,
+                    groupId,
+                    message: systemMsg,
+                    characterId: gameSession.characterId,
+                    event: e
+                })
+
+                await sendGalgameResponse(bot, groupId, userId, gameSession.characterId, result)
+            }
+        } catch (err) {
+            gameLogger.error('处理数字选择失败:', err)
+            await this.reply(`❌ 选择失败: ${err.message}`)
         }
     }
 
@@ -1065,8 +1246,22 @@ export class Galgame extends plugin {
             const characterId = gameSession?.characterId || 'default'
             const inGame = galgameService.isUserInGame(groupId, userId)
 
-            const status = await galgameService.getStatus(userId, characterId)
+            const status = await galgameService.getStatus(userId, characterId, groupId)
 
+            // 尝试使用图片渲染
+            if (gameRenderer.isAvailable()) {
+                try {
+                    const imageBuffer = await gameRenderer.renderStatus(status)
+                    if (imageBuffer) {
+                        await this.reply(segment.image(imageBuffer))
+                        return true
+                    }
+                } catch (renderErr) {
+                    gameLogger.debug(`图片渲染失败，回退文本: ${renderErr.message}`)
+                }
+            }
+
+            // 回退到文本显示
             let statusText = formatStatus(status)
             statusText += `\n🎮 游戏模式: ${inGame ? '开启' : '关闭'}`
 
@@ -1077,6 +1272,188 @@ export class Galgame extends plugin {
         }
 
         return true
+    }
+
+    /**
+     * 在线编辑游戏信息
+     */
+    async onlineEdit() {
+        const e = this.e
+        const userId = e.user_id
+        const groupId = e.group_id
+
+        try {
+            // 检查是否在游戏中
+            const gameSession = galgameService.getUserGameSession(groupId, userId)
+            if (!gameSession || !gameSession.inGame) {
+                await this.reply('❌ 你当前没有进行中的游戏，请先使用 #游戏开始')
+                return true
+            }
+
+            const characterId = gameSession.characterId || 'default'
+
+            // 获取当前游戏数据
+            const settings = await galgameService.getSessionSettings(userId, characterId, groupId)
+            const session = await galgameService.getOrCreateSession(userId, characterId, groupId)
+
+            const gameData = {
+                environment: settings?.environment || {},
+                session: {
+                    affection: session?.affection,
+                    trust: session?.trust,
+                    gold: session?.gold,
+                    relationship: session?.relationship
+                }
+            }
+
+            // 直接创建编辑会话
+            const editId = generateUUID()
+            const editSession = {
+                editId,
+                userId: String(userId),
+                groupId: String(groupId),
+                characterId,
+                gameData,
+                createdAt: Date.now(),
+                expiresAt: Date.now() + SESSION_EXPIRE_MS
+            }
+            editSessions.set(editId, editSession)
+            gameLogger.info(`创建编辑会话: ${editId} for user ${userId}`)
+
+            // 获取web服务器地址
+            let webPort = config.get('web.port') || 3000
+            if (global.Bot?.server) {
+                const address = global.Bot.server.address()
+                if (address?.port) webPort = address.port
+            }
+            const publicUrl = config.get('web.publicUrl')
+            let baseUrl = publicUrl || `http://127.0.0.1:${webPort}`
+            baseUrl = baseUrl.replace(/\/$/, '')
+            const editUrl = `${baseUrl}/chatai/game-edit?code=${editId}`
+
+            const editMsg = `📝 游戏在线编辑
+
+请在30分钟内访问以下链接编辑游戏信息：
+${editUrl}
+
+⚠️ 注意事项：
+• 链接有效期30分钟
+• 好感度/信任度/金币等核心数据不可修改
+• 秘密信息不会显示
+• 提交后返回游戏即可生效`
+
+            // 尝试通过私聊/临时私聊发送编辑链接
+            let sendSuccess = false
+            try {
+                // 优先尝试临时私聊（群临时会话）
+                if (groupId && e.member?.sendMsg) {
+                    await e.member.sendMsg(editMsg)
+                    sendSuccess = true
+                    await this.reply('📝 编辑链接已私聊发送，请查看私聊消息')
+                }
+            } catch (tempErr) {
+                gameLogger.debug(`临时私聊发送失败: ${tempErr.message}`)
+            }
+
+            // 临时私聊失败，尝试普通私聊
+            if (!sendSuccess) {
+                try {
+                    if (Bot.pickFriend) {
+                        const friend = Bot.pickFriend(userId)
+                        if (friend?.sendMsg) {
+                            await friend.sendMsg(editMsg)
+                            sendSuccess = true
+                            await this.reply('📝 编辑链接已私聊发送，请查看私聊消息')
+                        }
+                    } else if (Bot.pickUser) {
+                        const user = Bot.pickUser(userId)
+                        if (user?.sendMsg) {
+                            await user.sendMsg(editMsg)
+                            sendSuccess = true
+                            await this.reply('📝 编辑链接已私聊发送，请查看私聊消息')
+                        }
+                    }
+                } catch (friendErr) {
+                    gameLogger.debug(`私聊发送失败: ${friendErr.message}`)
+                }
+            }
+
+            // 私聊都失败，回退到群内发送（不显示完整链接）
+            if (!sendSuccess) {
+                await this.reply(`📝 游戏在线编辑
+
+⚠️ 无法发送私聊，请添加机器人好友后重试
+或联系管理员获取编辑链接
+
+编辑ID: ${editId.slice(0, 8)}...`)
+                gameLogger.warn(`[Galgame] 用户 ${userId} 编辑链接发送失败，无法私聊`)
+            }
+
+            // 启动后台轮询检查编辑结果
+            this.pollEditResult(editId, userId, groupId, characterId, baseUrl)
+        } catch (err) {
+            gameLogger.error('创建在线编辑失败:', err)
+            await this.reply(`❌ 创建编辑会话失败: ${err.message}`)
+        }
+
+        return true
+    }
+
+    /**
+     * 轮询检查编辑结果
+     */
+    async pollEditResult(editId, userId, groupId, characterId, baseUrl) {
+        const maxPolls = 60 // 最多轮询60次，每次30秒，共30分钟
+        let pollCount = 0
+
+        const poll = async () => {
+            pollCount++
+            if (pollCount > maxPolls) return
+
+            try {
+                const response = await fetch(`${baseUrl}/chatai/api/game/edit/${editId}/result`)
+                const result = await response.json()
+
+                if (result.code === 0 && result.data.submitted) {
+                    // 编辑已提交，应用更新
+                    const updates = result.data.updates
+
+                    if (updates.environment) {
+                        await galgameService.updateEnvironment(userId, characterId, updates.environment, groupId)
+                        gameLogger.info(`[Galgame] 用户 ${userId} 通过在线编辑更新了环境设定`)
+                    }
+
+                    if (updates.session) {
+                        await galgameService.updateSession(userId, characterId, updates.session, groupId)
+                        gameLogger.info(`[Galgame] 用户 ${userId} 通过在线编辑更新了会话数据`)
+                    }
+
+                    // 通知用户（如果在群里）
+                    if (groupId && Bot.pickGroup) {
+                        try {
+                            const group = Bot.pickGroup(groupId)
+                            if (group) {
+                                await group.sendMsg(`✅ 游戏信息已更新！\n用户: ${userId}\n已应用在线编辑的修改`)
+                            }
+                        } catch (e) {
+                            gameLogger.debug('发送编辑完成通知失败:', e.message)
+                        }
+                    }
+
+                    return
+                }
+
+                // 继续轮询
+                setTimeout(poll, 30000) // 30秒后再次检查
+            } catch (err) {
+                gameLogger.debug(`轮询编辑结果失败: ${err.message}`)
+                // 继续轮询
+                setTimeout(poll, 30000)
+            }
+        }
+
+        // 10秒后开始第一次轮询
+        setTimeout(poll, 10000)
     }
 
     /**
@@ -1248,32 +1625,416 @@ export class Galgame extends plugin {
 
 📌 基础命令：
 • #游戏开始 [角色ID] - 进入游戏
-• #游戏状态 - 查看好感度
-• #游戏退出 - 暂时退出（保留数据）
-• #游戏结束 - 结束游戏（清空数据）
-• #游戏导出 - 导出对话JSON
-• #游戏导入 - 导入对话数据
+• #游戏状态 - 查看全部状态
+• #游戏退出 - 暂时退出
+• #游戏结束 - 结束游戏
+
+📌 事件命令：
+• #日常 - 日常互动事件
+• #探索 - 探索冒险事件
+• #商店 - 购买物品
+• #打工 - 赚取金币
+
+📌 查看命令：
+• #任务 - 查看任务进度
+• #物品 - 查看背包物品
 
 📌 角色管理：
-• #游戏角色列表 - 查看角色
-• #游戏创建角色 - 创建角色
-• #游戏删除角色 <ID> - 删除
+• #游戏角色列表
+• #游戏创建角色
+• #游戏删除角色 <ID>
 
-📌 游戏模式：
-• 直接发消息即可对话
-• #开头的命令正常使用
-• 选项用表情回应或文字
+📌 数据管理：
+• #游戏导出 / #游戏导入
 
-📌 特性：
-• 事件由AI动态生成
-• 每个事件只触发一次
-• 群聊用户独立
+📌 游玩方式：
+• 直接发消息对话
+• 选项用表情1-4贴
 
-📌 好感度等级：
-😠厌恶 → 😒反感 → 😐冷淡 → 🙂陌生
-😊熟悉 → 😄好感 → 🥰喜欢 → 💕爱慕 → 💖挚爱`
+📌 好感度: 😠厌恶→�好感→�挚爱
+� 信任度: ⚔️敌视→�信赖→⭐生死之交`
 
         await this.reply(help)
+        return true
+    }
+
+    /**
+     * 触发日常事件
+     */
+    async triggerDailyEvent() {
+        const e = this.e
+        const userId = String(e.user_id)
+        const groupId = e.group_id ? String(e.group_id) : null
+
+        // 检查是否在游戏中
+        if (!galgameService.isUserInGame(groupId, userId)) {
+            await this.reply('❌ 请先使用 #游戏开始 进入游戏')
+            return true
+        }
+
+        try {
+            const gameSession = galgameService.getUserGameSession(groupId, userId)
+            if (!gameSession) {
+                await this.reply('❌ 游戏会话不存在')
+                return true
+            }
+
+            const bot = e.bot || Bot
+
+            // 根据好感度选择日常事件类型
+            const status = await galgameService.getStatus(userId, gameSession.characterId, groupId)
+            const affection = status.affection
+
+            let eventCategory = 'stranger'
+            if (affection > 60) eventCategory = 'intimate'
+            else if (affection > 40) eventCategory = 'friendly'
+            else if (affection > 20) eventCategory = 'familiar'
+
+            const events = DAILY_EVENTS[eventCategory] || DAILY_EVENTS.stranger
+            const randomEvent = events[Math.floor(Math.random() * events.length)]
+
+            // 发送日常事件请求给AI
+            const result = await galgameService.sendMessage({
+                userId,
+                groupId,
+                message: `[玩家想要进行日常互动：${randomEvent}]`,
+                characterId: gameSession.characterId,
+                event: e
+            })
+
+            // 发送回复
+            const responseInfo = await sendGalgameResponse(bot, groupId, userId, gameSession.characterId, result)
+
+            // 处理选项表情
+            const msgSeq = responseInfo.msgSeq
+            if (result.options?.length > 0 && msgSeq) {
+                galgameService.savePendingChoice(groupId, msgSeq, userId, 'option', result.options)
+                for (let i = 0; i < Math.min(result.options.length, 4); i++) {
+                    try {
+                        await sendReaction(e, msgSeq, OPTION_EMOJIS[i].id, true, 1)
+                        await new Promise(r => setTimeout(r, 200))
+                    } catch (err) {
+                        gameLogger.debug(`添加选项表情失败: ${err.message}`)
+                    }
+                }
+            }
+
+            if (result.event && result.eventOptions?.length > 0 && msgSeq) {
+                galgameService.savePendingChoice(groupId, msgSeq, userId, 'event', result.eventOptions, result.event)
+                for (let i = 0; i < Math.min(result.eventOptions.length, 4); i++) {
+                    try {
+                        await sendReaction(e, msgSeq, OPTION_EMOJIS[i].id, true, 1)
+                        await new Promise(r => setTimeout(r, 200))
+                    } catch (err) {
+                        gameLogger.debug(`添加事件表情失败: ${err.message}`)
+                    }
+                }
+            }
+        } catch (err) {
+            gameLogger.error('触发日常事件失败:', err)
+            await this.reply(`❌ 触发失败: ${err.message}`)
+        }
+
+        return true
+    }
+
+    /**
+     * 触发探索事件
+     */
+    async triggerExploreEvent() {
+        const e = this.e
+        const userId = String(e.user_id)
+        const groupId = e.group_id ? String(e.group_id) : null
+
+        // 检查是否在游戏中
+        if (!galgameService.isUserInGame(groupId, userId)) {
+            await this.reply('❌ 请先使用 #游戏开始 进入游戏')
+            return true
+        }
+
+        try {
+            const gameSession = galgameService.getUserGameSession(groupId, userId)
+            if (!gameSession) {
+                await this.reply('❌ 游戏会话不存在')
+                return true
+            }
+
+            const bot = e.bot || Bot
+
+            // 随机选择探索地点和活动
+            const location = EXPLORE_EVENTS.locations[Math.floor(Math.random() * EXPLORE_EVENTS.locations.length)]
+            const activity = EXPLORE_EVENTS.activities[Math.floor(Math.random() * EXPLORE_EVENTS.activities.length)]
+
+            // 发送探索事件请求给AI
+            const result = await galgameService.sendMessage({
+                userId,
+                groupId,
+                message: `[玩家想要去${location}进行探索，尝试${activity}]`,
+                characterId: gameSession.characterId,
+                event: e
+            })
+
+            // 发送回复
+            const responseInfo = await sendGalgameResponse(bot, groupId, userId, gameSession.characterId, result)
+
+            // 处理选项表情
+            const msgSeq = responseInfo.msgSeq
+            if (result.options?.length > 0 && msgSeq) {
+                galgameService.savePendingChoice(groupId, msgSeq, userId, 'option', result.options)
+                for (let i = 0; i < Math.min(result.options.length, 4); i++) {
+                    try {
+                        await sendReaction(e, msgSeq, OPTION_EMOJIS[i].id, true, 1)
+                        await new Promise(r => setTimeout(r, 200))
+                    } catch (err) {
+                        gameLogger.debug(`添加选项表情失败: ${err.message}`)
+                    }
+                }
+            }
+
+            if (result.event && result.eventOptions?.length > 0 && msgSeq) {
+                galgameService.savePendingChoice(groupId, msgSeq, userId, 'event', result.eventOptions, result.event)
+                for (let i = 0; i < Math.min(result.eventOptions.length, 4); i++) {
+                    try {
+                        await sendReaction(e, msgSeq, OPTION_EMOJIS[i].id, true, 1)
+                        await new Promise(r => setTimeout(r, 200))
+                    } catch (err) {
+                        gameLogger.debug(`添加事件表情失败: ${err.message}`)
+                    }
+                }
+            }
+        } catch (err) {
+            gameLogger.error('触发探索事件失败:', err)
+            await this.reply(`❌ 触发失败: ${err.message}`)
+        }
+
+        return true
+    }
+
+    /**
+     * 显示当前任务
+     */
+    async showCurrentTask() {
+        const e = this.e
+        const userId = String(e.user_id)
+        const groupId = e.group_id ? String(e.group_id) : null
+
+        // 检查是否在游戏中
+        if (!galgameService.isUserInGame(groupId, userId)) {
+            await this.reply('❌ 请先使用 #游戏开始 进入游戏')
+            return true
+        }
+
+        try {
+            const gameSession = galgameService.getUserGameSession(groupId, userId)
+            const characterId = gameSession?.characterId || 'default'
+            const status = await galgameService.getStatus(userId, characterId, groupId)
+
+            let taskText = `📋 任务进度\n━━━━━━━━━━━━━━━━\n`
+
+            // 当前任务
+            if (status.currentTask) {
+                taskText += `\n📌 当前任务:\n${status.currentTask}\n`
+            } else {
+                taskText += `\n📌 当前无进行中的任务\n`
+            }
+
+            // 当前场景
+            if (status.currentScene) {
+                taskText += `\n📍 当前位置: ${status.currentScene.name}`
+                if (status.currentScene.description) {
+                    taskText += `\n   ${status.currentScene.description}`
+                }
+            }
+
+            // 已发现线索
+            if (status.clues && status.clues.length > 0) {
+                taskText += `\n\n🔍 已发现线索 (${status.clues.length}):`
+                for (const clue of status.clues.slice(-5)) {
+                    taskText += `\n   • ${clue}`
+                }
+                if (status.clues.length > 5) {
+                    taskText += `\n   ...还有${status.clues.length - 5}条`
+                }
+            }
+
+            // 剧情进展
+            if (status.plotHistory && status.plotHistory.length > 0) {
+                taskText += `\n\n📖 近期剧情:`
+                for (const plot of status.plotHistory.slice(-3)) {
+                    taskText += `\n   • ${plot}`
+                }
+            }
+
+            // 已触发事件
+            if (status.triggeredEvents && status.triggeredEvents.length > 0) {
+                taskText += `\n\n⭐ 经历事件 (${status.triggeredEvents.length}):`
+                taskText += `\n   ${status.triggeredEvents.slice(-5).join('、')}`
+            }
+
+            taskText += `\n\n💡 使用 #日常 #探索 #商店 #打工 触发事件`
+
+            await this.reply(taskText)
+        } catch (err) {
+            gameLogger.error('获取任务失败:', err)
+            await this.reply(`❌ 获取失败: ${err.message}`)
+        }
+
+        return true
+    }
+
+    /**
+     * 触发商店事件
+     */
+    async triggerShopEvent() {
+        const e = this.e
+        const userId = String(e.user_id)
+        const groupId = e.group_id ? String(e.group_id) : null
+
+        if (!galgameService.isUserInGame(groupId, userId)) {
+            await this.reply('❌ 请先使用 #游戏开始 进入游戏')
+            return true
+        }
+
+        try {
+            const gameSession = galgameService.getUserGameSession(groupId, userId)
+            if (!gameSession) {
+                await this.reply('❌ 游戏会话不存在')
+                return true
+            }
+
+            const bot = e.bot || Bot
+            const status = await galgameService.getStatus(userId, gameSession.characterId, groupId)
+
+            const result = await galgameService.sendMessage({
+                userId,
+                groupId,
+                message: `[玩家想要去商店购物，当前金币: ${status.gold}]`,
+                characterId: gameSession.characterId,
+                event: e
+            })
+
+            const responseInfo = await sendGalgameResponse(bot, groupId, userId, gameSession.characterId, result)
+
+            const msgSeq = responseInfo.msgSeq
+            if (result.options?.length > 0 && msgSeq) {
+                galgameService.savePendingChoice(groupId, msgSeq, userId, 'option', result.options)
+                for (let i = 0; i < Math.min(result.options.length, 4); i++) {
+                    try {
+                        await sendReaction(e, msgSeq, OPTION_EMOJIS[i].id, true, 1)
+                        await new Promise(r => setTimeout(r, 200))
+                    } catch (err) {}
+                }
+            }
+        } catch (err) {
+            gameLogger.error('触发商店事件失败:', err)
+            await this.reply(`❌ 触发失败: ${err.message}`)
+        }
+
+        return true
+    }
+
+    /**
+     * 触发打工事件
+     */
+    async triggerWorkEvent() {
+        const e = this.e
+        const userId = String(e.user_id)
+        const groupId = e.group_id ? String(e.group_id) : null
+
+        if (!galgameService.isUserInGame(groupId, userId)) {
+            await this.reply('❌ 请先使用 #游戏开始 进入游戏')
+            return true
+        }
+
+        try {
+            const gameSession = galgameService.getUserGameSession(groupId, userId)
+            if (!gameSession) {
+                await this.reply('❌ 游戏会话不存在')
+                return true
+            }
+
+            const bot = e.bot || Bot
+            const jobs = ['咖啡店帮工', '图书馆整理', '便利店收银', '家教', '发传单', '跑腿送货']
+            const randomJob = jobs[Math.floor(Math.random() * jobs.length)]
+
+            const result = await galgameService.sendMessage({
+                userId,
+                groupId,
+                message: `[玩家想要去打工赚钱，尝试: ${randomJob}]`,
+                characterId: gameSession.characterId,
+                event: e
+            })
+
+            const responseInfo = await sendGalgameResponse(bot, groupId, userId, gameSession.characterId, result)
+
+            const msgSeq = responseInfo.msgSeq
+            if (result.options?.length > 0 && msgSeq) {
+                galgameService.savePendingChoice(groupId, msgSeq, userId, 'option', result.options)
+                for (let i = 0; i < Math.min(result.options.length, 4); i++) {
+                    try {
+                        await sendReaction(e, msgSeq, OPTION_EMOJIS[i].id, true, 1)
+                        await new Promise(r => setTimeout(r, 200))
+                    } catch (err) {}
+                }
+            }
+
+            if (result.event && result.eventOptions?.length > 0 && msgSeq) {
+                galgameService.savePendingChoice(groupId, msgSeq, userId, 'event', result.eventOptions, result.event)
+                for (let i = 0; i < Math.min(result.eventOptions.length, 4); i++) {
+                    try {
+                        await sendReaction(e, msgSeq, OPTION_EMOJIS[i].id, true, 1)
+                        await new Promise(r => setTimeout(r, 200))
+                    } catch (err) {}
+                }
+            }
+        } catch (err) {
+            gameLogger.error('触发打工事件失败:', err)
+            await this.reply(`❌ 触发失败: ${err.message}`)
+        }
+
+        return true
+    }
+
+    /**
+     * 显示物品列表
+     */
+    async showItems() {
+        const e = this.e
+        const userId = String(e.user_id)
+        const groupId = e.group_id ? String(e.group_id) : null
+
+        if (!galgameService.isUserInGame(groupId, userId)) {
+            await this.reply('❌ 请先使用 #游戏开始 进入游戏')
+            return true
+        }
+
+        try {
+            const gameSession = galgameService.getUserGameSession(groupId, userId)
+            const characterId = gameSession?.characterId || 'default'
+            const status = await galgameService.getStatus(userId, characterId, groupId)
+
+            let itemText = `📦 背包物品\n━━━━━━━━━━━━━━━━\n`
+            itemText += `💰 金币: ${status.gold || 100}\n`
+
+            if (status.items && status.items.length > 0) {
+                itemText += `\n📦 物品 (${status.items.length}):\n`
+                for (const item of status.items) {
+                    itemText += `  • ${item.name}`
+                    if (item.description) itemText += ` - ${item.description}`
+                    itemText += '\n'
+                }
+            } else {
+                itemText += `\n📦 背包空空如也\n`
+            }
+
+            itemText += `\n💡 使用 #商店 购买物品\n💡 使用 #打工 赚取金币`
+
+            await this.reply(itemText)
+        } catch (err) {
+            gameLogger.error('获取物品失败:', err)
+            await this.reply(`❌ 获取失败: ${err.message}`)
+        }
+
         return true
     }
 }

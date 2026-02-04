@@ -141,6 +141,8 @@ import {
     createContextRoutes,
     createPresetRoutes,
     createPresetsConfigRoutes,
+    createGameRoutes,
+    createGameEditRoutes,
     ChaiteResponse
 } from './routes/index.js'
 import { nlSchedulerService } from './scheduler/NLSchedulerService.js'
@@ -531,6 +533,8 @@ window.location.href = '${mountPath}/';
         this.router.use('/api/context', createContextRoutes(auth))
         this.router.use('/api/preset', createPresetRoutes(auth))
         this.router.use('/api/presets', createPresetsConfigRoutes(auth))
+        this.router.use('/api/game', createGameRoutes(auth))
+        this.router.use('/api/game-edit', createGameEditRoutes()) // 无需认证，使用UUID访问
 
         // SPA fallback - 所有未匹配路由返回index.html
         this.router.get('*', (req, res) => {

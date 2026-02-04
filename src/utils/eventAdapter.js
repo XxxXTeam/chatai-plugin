@@ -132,45 +132,50 @@ export async function sendPoke(e, userId, groupId = null) {
  * @param {string|number} messageId - 消息ID
  * @param {string|number} emojiId - 表情ID
  * @param {boolean} [isSet=true] - true为添加，false为取消
+ * @param {number} [emojiType=1] - 表情类型: 1=QQ表情, 2=Unicode表情
  * @returns {Promise<boolean>}
  */
-export async function sendReaction(e, messageId, emojiId, isSet = true) {
+export async function sendReaction(e, messageId, emojiId, isSet = true, emojiType = 1) {
     const bot = getBot(e)
-    const platform = detectAdapter(e)
+    // 优先使用传入的messageId（可能是回复消息的seq），否则使用e.seq
+    const seq = messageId || e.seq
+    logger.debug(`[EventAdapter] sendReaction: seq=${seq}, emojiId=${emojiId}, isSet=${isSet}`)
 
     try {
-        if (platform === 'icqq') {
-            if (e.group_id && bot.pickGroup) {
+        // icqq API: setReaction(seq, id, type) - 只有3个参数
+        // delReaction(seq, id, type) - 删除表情
+        // type: 1=系统表情, 2=emoji表情
+        if (e.group_id && bot?.pickGroup) {
+            try {
                 const group = bot.pickGroup(parseInt(e.group_id))
-                if (typeof group?.setReaction === 'function') {
-                    await group.setReaction(messageId, String(emojiId), isSet)
-                    return true
+                if (isSet) {
+                    if (typeof group?.setReaction === 'function') {
+                        await group.setReaction(seq, String(emojiId), emojiType)
+                        return true
+                    }
+                } else {
+                    if (typeof group?.delReaction === 'function') {
+                        await group.delReaction(seq, String(emojiId), emojiType)
+                        return true
+                    }
                 }
-                if (typeof group?.setEssence === 'function' && typeof group?.setMsgReaction === 'function') {
-                    await group.setMsgReaction(messageId, String(emojiId), isSet)
-                    return true
-                }
+            } catch (err) {
+                logger.debug(`[EventAdapter] setReaction失败: ${err.message}`)
             }
         }
-        const apis = ['set_msg_emoji_like', 'set_group_reaction', 'send_group_reaction', 'set_message_reaction']
-
+        const apis = ['set_msg_emoji_like', 'set_group_reaction']
         for (const api of apis) {
             try {
                 const result = await callOneBotApi(bot, api, {
+                    group_id: e.group_id,
                     message_id: messageId,
                     emoji_id: String(emojiId),
-                    set: isSet
+                    emoji_type: emojiType,
+                    is_set: isSet
                 })
                 if (result !== null) return true
             } catch {}
         }
-        try {
-            const result = await callOneBotApi(bot, 'set_msg_emoji_like', {
-                message_id: messageId,
-                emoji_id: String(emojiId)
-            })
-            if (result !== null) return true
-        } catch {}
     } catch (err) {
         logger.debug(`[EventAdapter] 发送表情回应失败: ${err.message}`)
     }
@@ -271,29 +276,42 @@ export function parsePokeEvent(e) {
  * @returns {Object}
  */
 export function parseReactionEvent(e) {
-    let emojiId = e.id || e.emoji_id || e.face_id || e.code
+    // TRSS-Yunzai reaction event fields
+    let emojiId = e.id || e.emoji_id || e.face_id || e.code || e.emoji?.id || e.detail?.id
     if (!emojiId && Array.isArray(e.likes) && e.likes.length > 0) {
         emojiId = e.likes[0].emoji_id || e.likes[0].face_id || e.likes[0].id
     }
+    if (!emojiId && e.detail) {
+        emojiId = e.detail.emoji_id || e.detail.face_id || e.detail.id
+    }
+    if (!emojiId && e.data) {
+        emojiId = e.data.emoji_id || e.data.face_id || e.data.id
+    }
+
     const messageId = e.message_id || e.seq || e.msg_id || e.message_seq
     const userId = e.user_id || e.operator_id || e.sender_id
     const targetId = e.target_id || e.sender_id || e.target_user_id
-    const isAdd = !(
-        e.set === false ||
-        e.set === 'remove' ||
-        e.set === 0 ||
-        e.sub_type === 'remove' ||
-        e.sub_type === 'cancel' ||
-        e.sub_type === 'delete' ||
-        e.is_set === false ||
-        e.is_set === 0 ||
-        e.action === 'remove' ||
-        e.action === 'cancel' ||
-        e.operate === 'remove' ||
-        e.operate === 'cancel' ||
-        e.type === 'remove' ||
-        e.type === 'cancel'
-    )
+
+    // isReaction字段: true=添加, false=移除
+    const isAdd =
+        e.isReaction !== false &&
+        !(
+            e.set === false ||
+            e.set === 'remove' ||
+            e.set === 0 ||
+            e.sub_type === 'remove' ||
+            e.sub_type === 'cancel' ||
+            e.sub_type === 'delete' ||
+            e.is_set === false ||
+            e.is_set === 0 ||
+            e.action === 'remove' ||
+            e.action === 'cancel' ||
+            e.operate === 'remove' ||
+            e.operate === 'cancel' ||
+            e.type === 'remove' ||
+            e.type === 'cancel' ||
+            e.count === 0
+        )
 
     return {
         emojiId,
@@ -302,7 +320,8 @@ export function parseReactionEvent(e) {
         targetId,
         isAdd,
         groupId: e.group_id,
-        likes: e.likes || []
+        likes: e.likes || [],
+        raw: e // 保留原始事件用于调试
     }
 }
 

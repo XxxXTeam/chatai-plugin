@@ -3,7 +3,7 @@
  * @module services/galgame/PromptBuilder
  */
 
-import { AFFECTION_LEVELS, DEFAULT_SYSTEM_PROMPT, ENVIRONMENT_PROMPT } from './constants.js'
+import { AFFECTION_LEVELS, TRUST_LEVELS, DEFAULT_SYSTEM_PROMPT, ENVIRONMENT_PROMPT } from './constants.js'
 
 /**
  * 获取好感度等级信息
@@ -26,6 +26,30 @@ export function getAffectionLevel(affection) {
  */
 export function getRelationshipStatus(affection) {
     const level = getAffectionLevel(affection)
+    return `${level.emoji} ${level.name}`
+}
+
+/**
+ * 获取信任等级信息
+ * @param {number} trust - 信任度值
+ * @returns {Object} 等级信息 { min, max, name, emoji, color }
+ */
+export function getTrustLevel(trust) {
+    for (const level of TRUST_LEVELS) {
+        if (trust >= level.min && trust <= level.max) {
+            return level
+        }
+    }
+    return TRUST_LEVELS[3] // 默认观望
+}
+
+/**
+ * 获取信任状态文本
+ * @param {number} trust - 信任度值
+ * @returns {string} 信任状态文本
+ */
+export function getTrustStatus(trust) {
+    const level = getTrustLevel(trust)
     return `${level.emoji} ${level.name}`
 }
 
@@ -106,7 +130,8 @@ export function buildSystemPrompt(options) {
 背景故事: ${env.background || '???'}
 角色秘密: ${secretRevealed ? env.secret : '???(玩家尚未发现)'}
 相遇原因: ${env.meetingReason || '偶然相遇'}
-初始场景: ${env.scene || '日常'}`
+初始场景: ${env.scene || '日常'}
+前情提要: ${env.summary || '故事刚刚开始'}`
     } else {
         environmentSetting = '（等待初始化）'
     }
@@ -127,14 +152,28 @@ export function buildSystemPrompt(options) {
 
     // 用户自定义或默认模板
     let userPrompt = character?.system_prompt || DEFAULT_SYSTEM_PROMPT
-    const level = getAffectionLevel(session.affection)
+    const affectionLevel = getAffectionLevel(session.affection)
+    const trustLevel = getTrustLevel(session.trust || 10)
+    const gold = session.gold || 100
+    let items = []
+    try {
+        items = JSON.parse(session.items || '[]')
+    } catch {
+        items = []
+    }
+    const itemNames = items.map(i => i.name).join('、') || '无'
 
     const replacements = {
         '{environment_setting}': environmentSetting,
         '{character_setting}': character?.description || '根据环境设定扮演角色',
-        '{affection_level}': level.name,
+        '{affection_level}': affectionLevel.name,
         '{affection_value}': session.affection.toString(),
+        '{trust_level}': trustLevel.name,
+        '{trust_value}': (session.trust || 10).toString(),
+        '{gold_value}': gold.toString(),
+        '{items}': itemNames,
         '{relationship_status}': getRelationshipStatus(session.affection),
+        '{trust_status}': getTrustStatus(session.trust || 10),
         '{triggered_events}': triggeredEventsText,
         '{current_scene}': currentScene,
         '{current_task}': currentTask,

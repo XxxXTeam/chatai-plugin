@@ -12,7 +12,15 @@ import config from '../../../config/config.js'
 import chatLogger from '../../core/utils/logger.js'
 
 // 从拆分的模块导入
-import { OPTION_EMOJIS, AFFECTION_LEVELS, ENVIRONMENT_PROMPT, INIT_PROMPT, DEFAULT_SYSTEM_PROMPT } from './constants.js'
+import {
+    OPTION_EMOJIS,
+    AFFECTION_LEVELS,
+    TRUST_LEVELS,
+    ENVIRONMENT_PROMPT,
+    INIT_PROMPT,
+    DEFAULT_SYSTEM_PROMPT,
+    GOLD_CONFIG
+} from './constants.js'
 import {
     parseResponse,
     parseInitResponse,
@@ -106,6 +114,9 @@ class GalgameService {
                 character_id TEXT NOT NULL,
                 group_id TEXT,
                 affection INTEGER DEFAULT 10,
+                trust INTEGER DEFAULT 10,
+                gold INTEGER DEFAULT 100,
+                items TEXT DEFAULT '[]',
                 relationship TEXT DEFAULT 'stranger',
                 triggered_events TEXT DEFAULT '[]',
                 in_game INTEGER DEFAULT 0,
@@ -124,6 +135,8 @@ class GalgameService {
                 event_type TEXT,
                 event_result TEXT,
                 affection_change INTEGER DEFAULT 0,
+                trust_change INTEGER DEFAULT 0,
+                gold_change INTEGER DEFAULT 0,
                 timestamp INTEGER NOT NULL,
                 FOREIGN KEY(session_id) REFERENCES galgame_sessions(id)
             );
@@ -144,6 +157,46 @@ class GalgameService {
             );
             CREATE INDEX IF NOT EXISTS idx_galgame_char_id ON galgame_characters(character_id);
         `)
+
+        // 迁移新字段
+        this.migrateNewFields(db)
+    }
+
+    /**
+     * 迁移新字段（trust, gold, items）
+     */
+    migrateNewFields(db) {
+        try {
+            // 检查sessions表是否需要添加新字段
+            const columns = db.prepare(`PRAGMA table_info(galgame_sessions)`).all()
+            const columnNames = columns.map(c => c.name)
+
+            if (!columnNames.includes('trust')) {
+                db.exec(`ALTER TABLE galgame_sessions ADD COLUMN trust INTEGER DEFAULT 10`)
+                gameLogger.info('已添加 trust 字段')
+            }
+            if (!columnNames.includes('gold')) {
+                db.exec(`ALTER TABLE galgame_sessions ADD COLUMN gold INTEGER DEFAULT 100`)
+                gameLogger.info('已添加 gold 字段')
+            }
+            if (!columnNames.includes('items')) {
+                db.exec(`ALTER TABLE galgame_sessions ADD COLUMN items TEXT DEFAULT '[]'`)
+                gameLogger.info('已添加 items 字段')
+            }
+
+            // 检查history表是否需要添加新字段
+            const historyColumns = db.prepare(`PRAGMA table_info(galgame_history)`).all()
+            const historyColumnNames = historyColumns.map(c => c.name)
+
+            if (!historyColumnNames.includes('trust_change')) {
+                db.exec(`ALTER TABLE galgame_history ADD COLUMN trust_change INTEGER DEFAULT 0`)
+            }
+            if (!historyColumnNames.includes('gold_change')) {
+                db.exec(`ALTER TABLE galgame_history ADD COLUMN gold_change INTEGER DEFAULT 0`)
+            }
+        } catch (err) {
+            gameLogger.debug(`字段迁移检查: ${err.message}`)
+        }
     }
 
     /**
@@ -327,12 +380,13 @@ class GalgameService {
         if (!session) {
             // 创建新会话
             const now = Date.now()
+            const initialGold = GOLD_CONFIG.initial || 100
             db.prepare(
                 `
-                INSERT INTO galgame_sessions (user_id, character_id, group_id, affection, relationship, created_at, updated_at)
-                VALUES (?, ?, ?, 10, 'stranger', ?, ?)
+                INSERT INTO galgame_sessions (user_id, character_id, group_id, affection, trust, gold, items, relationship, created_at, updated_at)
+                VALUES (?, ?, ?, 10, 10, ?, '[]', 'stranger', ?, ?)
             `
-            ).run(userId, characterId, groupId, now, now)
+            ).run(userId, characterId, groupId, initialGold, now, now)
 
             if (groupId) {
                 session = db
@@ -389,6 +443,106 @@ class GalgameService {
             change,
             oldLevel: getAffectionLevel(session.affection),
             newLevel: getAffectionLevel(newAffection)
+        }
+    }
+
+    /**
+     * 更新信任度
+     */
+    async updateTrust(userId, characterId, change, groupId = null) {
+        await this.init()
+        const db = databaseService.db
+
+        const session = await this.getOrCreateSession(userId, characterId, groupId)
+        const oldTrust = session.trust || 0
+        const newTrust = Math.max(-100, Math.min(150, oldTrust + change))
+
+        db.prepare(
+            `
+            UPDATE galgame_sessions SET trust = ?, updated_at = ? WHERE id = ?
+        `
+        ).run(newTrust, Date.now(), session.id)
+
+        return {
+            oldTrust,
+            newTrust,
+            change,
+            oldLevel: this.getTrustLevel(oldTrust),
+            newLevel: this.getTrustLevel(newTrust)
+        }
+    }
+
+    /**
+     * 获取信任等级
+     */
+    getTrustLevel(trust) {
+        for (const level of TRUST_LEVELS) {
+            if (trust >= level.min && trust <= level.max) {
+                return level
+            }
+        }
+        return TRUST_LEVELS[3] // 默认观望
+    }
+
+    /**
+     * 更新金币
+     */
+    async updateGold(userId, characterId, change, groupId = null) {
+        await this.init()
+        const db = databaseService.db
+
+        const session = await this.getOrCreateSession(userId, characterId, groupId)
+        const oldGold = session.gold || 0
+        const maxGold = GOLD_CONFIG.maxGold || 99999
+        const newGold = Math.max(0, Math.min(maxGold, oldGold + change))
+
+        db.prepare(
+            `
+            UPDATE galgame_sessions SET gold = ?, updated_at = ? WHERE id = ?
+        `
+        ).run(newGold, Date.now(), session.id)
+
+        return { oldGold, newGold, change, success: true }
+    }
+
+    /**
+     * 添加物品
+     */
+    async addItem(userId, characterId, item, groupId = null) {
+        await this.init()
+        const db = databaseService.db
+
+        const session = await this.getOrCreateSession(userId, characterId, groupId)
+        let items = []
+        try {
+            items = JSON.parse(session.items || '[]')
+        } catch {
+            items = []
+        }
+
+        items.push({
+            ...item,
+            obtainedAt: Date.now()
+        })
+
+        db.prepare(
+            `
+            UPDATE galgame_sessions SET items = ?, updated_at = ? WHERE id = ?
+        `
+        ).run(JSON.stringify(items), Date.now(), session.id)
+
+        return { success: true, item, totalItems: items.length }
+    }
+
+    /**
+     * 获取物品列表
+     */
+    async getItems(userId, characterId, groupId = null) {
+        const session = await this.getOrCreateSession(userId, characterId, groupId)
+        try {
+            return JSON.parse(session.items || '[]')
+        } catch {
+            return []
         }
     }
 
@@ -625,10 +779,35 @@ class GalgameService {
     }
 
     /**
+     * 查找用户的任意待处理选项（用于数字选择）
+     */
+    findUserPendingChoice(groupId, userId) {
+        const prefix = `${groupId || 'private'}_`
+        for (const [key, value] of this.pendingChoices) {
+            if (key.startsWith(prefix) && value.userId === String(userId)) {
+                return { ...value, key }
+            }
+        }
+        return null
+    }
+
+    /**
      * 通过key删除待选择项
      */
     removePendingChoiceByKey(key) {
         this.pendingChoices.delete(key)
+    }
+
+    /**
+     * 清理用户的所有待选择项
+     */
+    clearUserPendingChoices(groupId, userId) {
+        const prefix = `${groupId || 'private'}_`
+        for (const [key, value] of this.pendingChoices) {
+            if (key.startsWith(prefix) && value.userId === String(userId)) {
+                this.pendingChoices.delete(key)
+            }
+        }
     }
 
     /**
@@ -659,6 +838,57 @@ class GalgameService {
             WHERE id = ?
         `
         ).run(JSON.stringify(settings), Date.now(), session.id)
+    }
+
+    /**
+     * 更新环境设定（在线编辑用）
+     */
+    async updateEnvironment(userId, characterId, updates, groupId = null) {
+        await this.init()
+        const settings = await this.getSessionSettings(userId, characterId, groupId)
+        if (!settings?.environment) {
+            gameLogger.warn(`[GalgameService] 无法更新环境设定: 用户 ${userId} 没有环境数据`)
+            return
+        }
+
+        // 合并更新
+        const updatedEnv = { ...settings.environment, ...updates }
+        settings.environment = updatedEnv
+        settings.updatedAt = Date.now()
+
+        await this.saveSessionSettings(userId, characterId, settings, groupId)
+        gameLogger.info(`[GalgameService] 用户 ${userId} 环境设定已更新`)
+    }
+
+    /**
+     * 更新会话数据（在线编辑用）
+     */
+    async updateSession(userId, characterId, updates, groupId = null) {
+        await this.init()
+        const db = databaseService.db
+        const session = await this.getSession(userId, characterId, groupId)
+        if (!session) {
+            gameLogger.warn(`[GalgameService] 无法更新会话: 用户 ${userId} 没有会话数据`)
+            return
+        }
+
+        // 只允许更新特定字段
+        const allowedFields = ['relationship']
+        const updateParts = []
+        const values = []
+
+        for (const field of allowedFields) {
+            if (updates[field] !== undefined) {
+                updateParts.push(`${field} = ?`)
+                values.push(updates[field])
+            }
+        }
+
+        if (updateParts.length === 0) return
+
+        values.push(Date.now(), session.id)
+        db.prepare(`UPDATE galgame_sessions SET ${updateParts.join(', ')}, updated_at = ? WHERE id = ?`).run(...values)
+        gameLogger.info(`[GalgameService] 用户 ${userId} 会话数据已更新: ${updateParts.join(', ')}`)
     }
 
     /**
@@ -1084,13 +1314,14 @@ class GalgameService {
 
         // 处理好感度变化
         let totalAffectionChange = parsed.affectionChange
+        let totalTrustChange = parsed.trustChange || 0
+        let totalGoldChange = parsed.goldChange || 0
 
         // 检查事件是否已触发过
         let eventInfo = null
         if (parsed.event) {
             const alreadyTriggered = await this.isEventTriggered(userId, characterId, parsed.event.name)
             if (alreadyTriggered) {
-                // 事件已触发过，忽略
                 gameLogger.debug(`事件 "${parsed.event.name}" 已触发过，忽略`)
             } else {
                 eventInfo = parsed.event
@@ -1099,7 +1330,22 @@ class GalgameService {
 
         // 更新好感度
         if (totalAffectionChange !== 0) {
-            await this.updateAffection(userId, characterId, totalAffectionChange)
+            await this.updateAffection(userId, characterId, totalAffectionChange, groupId)
+        }
+
+        // 更新信任度
+        if (totalTrustChange !== 0) {
+            await this.updateTrust(userId, characterId, totalTrustChange, groupId)
+        }
+
+        // 更新金币
+        if (totalGoldChange !== 0) {
+            await this.updateGold(userId, characterId, totalGoldChange, groupId)
+        }
+
+        // 添加获得的物品
+        for (const item of parsed.obtainedItems || []) {
+            await this.addItem(userId, characterId, item, groupId)
         }
 
         // 记录AI回复
@@ -1114,14 +1360,18 @@ class GalgameService {
 
         // 获取更新后的会话
         const updatedSession = await this.getOrCreateSession(userId, characterId, groupId)
+        const trustLevel = this.getTrustLevel(updatedSession.trust || 10)
 
         return {
             response: parsed.cleanResponse,
             affectionChange: totalAffectionChange,
+            trustChange: totalTrustChange,
+            goldChange: totalGoldChange,
+            purchases: parsed.purchases || [],
+            obtainedItems: parsed.obtainedItems || [],
             options: parsed.options,
             event: eventInfo,
             eventOptions: parsed.eventOptions,
-            // 场景、任务、线索、剧情、发现信息
             scene: parsed.scene,
             task: parsed.task,
             clue: parsed.clue,
@@ -1129,8 +1379,12 @@ class GalgameService {
             discoveries: parsed.discoveries || [],
             session: {
                 affection: updatedSession.affection,
+                trust: updatedSession.trust || 10,
+                gold: updatedSession.gold || 100,
                 level: getAffectionLevel(updatedSession.affection),
-                relationship: updatedSession.relationship
+                trustLevel: trustLevel,
+                relationship: updatedSession.relationship,
+                characterName: session.character_id
             }
         }
     }
@@ -1151,6 +1405,14 @@ class GalgameService {
         // 检查秘密是否已揭示
         const secretRevealed = gameState.revealedSecrets?.includes('main_secret')
 
+        // 获取物品
+        let items = []
+        try {
+            items = JSON.parse(session.items || '[]')
+        } catch {
+            items = []
+        }
+
         return {
             userId,
             characterId,
@@ -1164,8 +1426,13 @@ class GalgameService {
             background: env?.background || '???',
             secret: secretRevealed ? env?.secret : '???',
             meetingReason: env?.meetingReason || '???',
+            // 双属性系统
             affection: session.affection,
+            trust: session.trust || 10,
+            gold: session.gold || 100,
+            items: items,
             level: getAffectionLevel(session.affection),
+            trustLevel: this.getTrustLevel(session.trust || 10),
             relationship: session.relationship,
             // 游戏进度信息
             currentScene: gameState.currentScene,
@@ -1381,17 +1648,32 @@ class GalgameService {
         // 删除历史记录
         db.prepare(`DELETE FROM galgame_history WHERE session_id = ?`).run(session.id)
 
-        // 重置会话数据（包括已触发事件）
+        // 重置会话数据（包括所有字段）
         db.prepare(
             `
             UPDATE galgame_sessions 
-            SET affection = 10, relationship = 'stranger', triggered_events = '[]', settings = NULL, updated_at = ?
+            SET affection = 10, 
+                trust = 10, 
+                gold = 100, 
+                items = '[]',
+                relationship = 'stranger', 
+                triggered_events = '[]', 
+                settings = NULL,
+                in_game = 0,
+                updated_at = ?
             WHERE id = ?
         `
         ).run(Date.now(), session.id)
 
-        // 退出游戏模式
+        // 退出游戏模式并清理内存缓存
         await this.exitGame(groupId, userId)
+
+        // 清理activeSessions缓存
+        const key = `${groupId || 'private'}_${userId}`
+        this.activeSessions.delete(key)
+
+        // 清理待选择项
+        this.clearUserPendingChoices(groupId, userId)
 
         return { success: true, message: '会话已重置' }
     }
@@ -1457,18 +1739,22 @@ class GalgameService {
     }
 }
 
-// 导出单例
 export const galgameService = new GalgameService()
-
-// 从拆分的模块重新导出，保持向后兼容
 export {
     OPTION_EMOJIS,
     AFFECTION_LEVELS,
+    TRUST_LEVELS,
     DEFAULT_SYSTEM_PROMPT,
     ENVIRONMENT_PROMPT,
     INIT_PROMPT,
     CHOICE_EMOJIS,
-    MESSAGE_CACHE_TTL
+    MESSAGE_CACHE_TTL,
+    EVENT_TYPES,
+    DAILY_EVENTS,
+    EXPLORE_EVENTS,
+    GOLD_CONFIG,
+    ITEM_TYPES,
+    DEFAULT_ITEMS
 } from './constants.js'
 export {
     parseResponse,

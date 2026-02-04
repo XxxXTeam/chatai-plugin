@@ -28,6 +28,7 @@ import {
     FileText,
     Server,
     Link as LinkIcon,
+    Gamepad2,
     type LucideIcon
 } from 'lucide-react'
 import { useUiStore } from '@/lib/store'
@@ -84,7 +85,8 @@ const navGroups: NavGroup[] = [
             { href: '/mcp', label: 'MCP服务', icon: Bot },
             { href: '/imagegen', label: '绘图预设', icon: Wand2 },
             { href: '/knowledge', label: '知识库', icon: BookOpen },
-            { href: '/memory', label: '记忆管理', icon: Brain }
+            { href: '/memory', label: '记忆管理', icon: Brain },
+            { href: '/game', label: 'Galgame', icon: Gamepad2 }
         ]
     },
     {
