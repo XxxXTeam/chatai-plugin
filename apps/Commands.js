@@ -594,37 +594,36 @@ export class AICommands extends plugin {
             const mountPath = webServer.mountPath || '/chatai'
             const urls = []
 
-            // 本地地址
-            if (addresses.local?.length > 0) {
-                for (const addr of addresses.local) {
-                    urls.push({ label: '本地', url: `${addr}${mountPath}/group-admin?code=${code}` })
-                }
-            }
-
-            // IPv6本地地址
-            if (addresses.localIPv6?.length > 0) {
-                for (const addr of addresses.localIPv6) {
-                    urls.push({ label: 'IPv6', url: `${addr}${mountPath}/group-admin?code=${code}` })
-                }
-            }
-
-            // 公网地址
-            if (publicUrl) {
-                urls.push({
-                    label: '公网',
-                    url: `${publicUrl.replace(/\/$/, '')}${mountPath}/group-admin?code=${code}`
-                })
-            } else if (addresses.public) {
-                urls.push({ label: '公网', url: `${addresses.public}${mountPath}/group-admin?code=${code}` })
-            }
-
-            // 自定义链接
-            for (const link of loginLinks) {
-                if (link.url) {
+            // 配置了公网URL或自定义链接时，只发送这些配置的地址
+            if (publicUrl || loginLinks.length > 0) {
+                if (publicUrl) {
                     urls.push({
-                        label: link.label || '自定义',
-                        url: `${link.url.replace(/\/$/, '')}${mountPath}/group-admin?code=${code}`
+                        label: '公网',
+                        url: `${publicUrl.replace(/\/$/, '')}${mountPath}/group-admin?code=${code}`
                     })
+                }
+                for (const link of loginLinks) {
+                    if (link.url) {
+                        urls.push({
+                            label: link.label || '公网',
+                            url: `${link.url.replace(/\/$/, '')}${mountPath}/group-admin?code=${code}`
+                        })
+                    }
+                }
+            } else {
+                // 未配置公网地址时，发送所有地址
+                if (addresses.local?.length > 0) {
+                    for (const addr of addresses.local) {
+                        urls.push({ label: '本地', url: `${addr}${mountPath}/group-admin?code=${code}` })
+                    }
+                }
+                if (addresses.localIPv6?.length > 0) {
+                    for (const addr of addresses.localIPv6) {
+                        urls.push({ label: 'IPv6', url: `${addr}${mountPath}/group-admin?code=${code}` })
+                    }
+                }
+                if (addresses.public) {
+                    urls.push({ label: '公网', url: `${addresses.public}${mountPath}/group-admin?code=${code}` })
                 }
             }
 

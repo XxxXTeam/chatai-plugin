@@ -319,42 +319,32 @@ export class AIManagement extends plugin {
             user_id: this.e.self_id
         })
 
-        // 如果配置了公网地址，只显示公网地址；否则显示所有地址
-        if (isPublicUrlConfigured && publicUrl) {
-            // 只显示配置的公网地址
+        // 显示所有地址
+        // 本地IPv4地址
+        if (localUrls && localUrls.length > 0) {
+            messages.push({
+                message: `📍 本地地址（IPv4）：\n${localUrls.join('\n')}`,
+                nickname: 'AI管理面板',
+                user_id: this.e.self_id
+            })
+        }
+
+        // 本地IPv6地址
+        if (localIPv6Urls && localIPv6Urls.length > 0) {
+            messages.push({
+                message: `📍 本地地址（IPv6）：\n${localIPv6Urls.join('\n')}`,
+                nickname: 'AI管理面板',
+                user_id: this.e.self_id
+            })
+        }
+
+        // 公网地址
+        if (publicUrl) {
             messages.push({
                 message: `🌐 公网地址：\n${publicUrl}`,
                 nickname: 'AI管理面板',
                 user_id: this.e.self_id
             })
-        } else {
-            // 显示URL列表
-            // 所有本地IPv4地址
-            if (localUrls && localUrls.length > 0) {
-                messages.push({
-                    message: `📍 本地地址（IPv4）：\n${localUrls.join('\n')}`,
-                    nickname: 'AI管理面板',
-                    user_id: this.e.self_id
-                })
-            }
-
-            // 所有本地IPv6地址
-            if (localIPv6Urls && localIPv6Urls.length > 0) {
-                messages.push({
-                    message: `📍 本地地址（IPv6）：\n${localIPv6Urls.join('\n')}`,
-                    nickname: 'AI管理面板',
-                    user_id: this.e.self_id
-                })
-            }
-
-            // 公网地址
-            if (publicUrl) {
-                messages.push({
-                    message: `🌐 公网地址：\n${publicUrl}`,
-                    nickname: 'AI管理面板',
-                    user_id: this.e.self_id
-                })
-            }
         }
 
         // 自定义地址
