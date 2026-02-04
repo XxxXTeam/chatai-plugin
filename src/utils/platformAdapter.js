@@ -42,9 +42,6 @@ export function detectAdapter(e) {
     }
     return 'unknown'
 }
-export function detectPlatform(e) {
-    return detectAdapter(e)
-}
 /**
  * 获取Bot信息
  * @param {Object} e - 事件对象
@@ -52,7 +49,7 @@ export function detectPlatform(e) {
  */
 export function getBotInfo(e) {
     const bot = e?.bot || Bot
-    const platform = detectPlatform(e)
+    const platform = detectAdapter(e)
 
     return {
         platform,
@@ -72,7 +69,7 @@ export function getBotInfo(e) {
  */
 export async function getUserInfo(e, userId, groupId = null) {
     const bot = e?.bot || Bot
-    const platform = detectPlatform(e)
+    const platform = detectAdapter(e)
     const userIdStr = String(userId)
 
     // 生成头像URL
@@ -253,7 +250,7 @@ export async function getUserInfo(e, userId, groupId = null) {
  */
 export async function getGroupInfo(e, groupId) {
     const bot = e?.bot || Bot
-    const platform = detectPlatform(e)
+    const platform = detectAdapter(e)
     groupId = parseInt(groupId)
 
     const defaultInfo = {
@@ -322,7 +319,7 @@ export async function getGroupInfo(e, groupId) {
  */
 export async function getGroupMemberList(e, groupId) {
     const bot = e?.bot || Bot
-    const platform = detectPlatform(e)
+    const platform = detectAdapter(e)
     groupId = parseInt(groupId)
 
     try {
@@ -365,7 +362,7 @@ export async function getGroupMemberList(e, groupId) {
  */
 export async function getMessage(e, messageId, groupId = null) {
     const bot = e?.bot || Bot
-    const platform = detectPlatform(e)
+    const platform = detectAdapter(e)
 
     try {
         switch (platform) {
@@ -419,7 +416,7 @@ export async function getMessage(e, messageId, groupId = null) {
  */
 export async function sendPoke(e, userId, groupId = null) {
     const bot = e?.bot || Bot
-    const platform = detectPlatform(e)
+    const platform = detectAdapter(e)
     userId = parseInt(userId)
 
     try {
@@ -1084,97 +1081,38 @@ export async function urlToQRCode(url) {
     }
 }
 
-/**
- * @deprecated 使用 detectFramework 代替
- */
-export function getBotFramework() {
-    return detectFramework()
-}
-
-/**
- * @deprecated 使用 detectAdapter 代替
- */
-export function getAdapter(e) {
-    return detectAdapter(e)
-}
-
-/**
- * @deprecated 使用 getBotInfo 代替
- */
-export function getFrameworkInfo(e) {
-    return {
-        framework: detectFramework(),
-        adapter: detectAdapter(e)
-    }
-}
-
-/**
- * 智能发送消息
- * @param {Object} e - 事件对象
- * @param {string|Array} message - 消息内容
- * @param {boolean} quote - 是否引用回复
- * @returns {Promise<Object|null>}
- */
-export async function smartReply(e, message, quote = false) {
-    if (!e?.reply) return null
-
-    try {
-        return await e.reply(message, quote)
-    } catch (err) {
-        logger?.warn?.('[PlatformAdapter] smartReply失败:', err.message)
-        return null
-    }
-}
-
 export default {
-    // 平台检测
     detectFramework,
     detectAdapter,
-    detectPlatform,
     getBotInfo,
-    // Bot 实例管理
     getBot,
     getBotSelfId,
     getAllBots,
     isBotOnline,
     getBotNickname,
-    // 权限检查
     isMaster,
     isPluginAuthor,
     isAdmin,
-    // 消息辅助
     getSenderName,
     isGroupMessage,
     isPrivateMessage,
     safeReply,
-    smartReply,
-    // URL处理
     urlToQRCode,
-    // 用户/群信息
     getUserInfo,
     getGroupInfo,
     getGroupMemberList,
-    // 消息操作
     getMessage,
     deleteMessage,
     sendPoke,
     sendGroupMessage,
     sendPrivateMessage,
-    // 群管理
     setGroupBan,
     setGroupCard,
-    // 列表获取
     getFriendList,
     getGroupList,
     getGroupChatHistory,
-    // 头像
     getAvatarUrl,
     getGroupAvatarUrl,
-    // 消息段处理
     normalizeSegment,
-    buildSegment,
-    // 兼容旧版
-    getBotFramework,
-    getAdapter,
-    getFrameworkInfo
+    buildSegment
 }

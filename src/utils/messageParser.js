@@ -1,36 +1,4 @@
 /**
- * 消息解析工具
- * 兼容多种协议:
- * - icqq: Yunzai默认协议
- * - NapCat(NC): https://napneko.github.io/develop/msg
- * - OneBot v11: https://github.com/botuniverse/onebot-11
- * - go-cqhttp: https://docs.go-cqhttp.org/cqcode
- *
- * 支持的消息类型:
- * - text: 文本消息
- * - image: 图片消息
- * - face: QQ表情
- * - at: @消息
- * - reply: 引用消息
- * - forward: 转发消息
- * - json: JSON卡片
- * - xml: XML消息
- * - record: 语音消息
- * - video: 视频消息
- * - file: 文件消息
- * - share: 链接分享
- * - location: 位置分享
- * - music: 音乐分享
- * - poke: 戳一戳
- * - mface: 商城表情
- * - bface: 原创表情/大表情
- * - markdown: Markdown消息
- */
-
-/**
- * 统一获取消息段数据 - 兼容 NC/icqq/OneBot 格式
- * NC/OneBot格式: { type: 'image', data: { url: '...', file: '...' } }
- * icqq格式: { type: 'image', url: '...', file: '...' }
  * @param {Object} segment - 消息段
  * @returns {Object} 统一的数据对象
  */
@@ -44,12 +12,6 @@ function getSegmentData(segment) {
 }
 
 /**
- * 获取图片/视频/文件的URL
- * 兼容 NC/NapCat/icqq/OneBot 多种格式
- *
- * NapCat image 格式:
- * { type: 'image', data: { file, file_id, url, path, file_size, file_unique, sub_type } }
- *
  * @param {Object} data - 消息段数据
  * @param {boolean} debug - 是否输出调试日志
  * @returns {string|null} URL
@@ -124,7 +86,6 @@ export function getBfaceUrl(file) {
     if (!file || typeof file !== 'string' || file.length < 32) {
         return null
     }
-    // 格式: https://gxh.vip.qq.com/club/item/parcel/item/{前2字符}/{前32字符}/raw300.gif
     return `https://gxh.vip.qq.com/club/item/parcel/item/${file.substring(0, 2)}/${file.substring(0, 32)}/raw300.gif`
 }
 
@@ -248,7 +209,6 @@ export async function parseUserMessage(e, options = {}) {
                                         }
                                         if (!memberInfo && group.getMemberMap) {
                                             try {
-                                                logger.debug(`[MessageParser][AT] 尝试 getMemberMap`)
                                                 const memberMap = await group.getMemberMap()
                                                 const memberData = memberMap?.get?.(parseInt(qq))
                                                 if (memberData) {
@@ -271,12 +231,7 @@ export async function parseUserMessage(e, options = {}) {
                                 logger.warn(`[MessageParser][AT] 获取群成员信息失败: ${err.message}`)
                             }
                         }
-
-                        // 构建清晰的显示名称（优先使用群名片）
                         const displayName = groupCard || nickname || atCard || `用户${qq}`
-
-                        // 增强的文本格式：提供完整的用户身份信息，避免模型虚构
-                        // 格式：[提及用户 QQ:xxx 群名片:xxx 昵称:xxx]
                         let atText = `[提及用户 QQ:${qq}`
                         if (groupCard) atText += ` 群名片:"${groupCard}"`
                         if (nickname && nickname !== groupCard) atText += ` 昵称:"${nickname}"`
@@ -287,8 +242,6 @@ export async function parseUserMessage(e, options = {}) {
 
                         logger.debug(`[MessageParser][AT] 最终文本: ${atText}`)
                         text += ` ${atText} `
-
-                        // 结构化信息：添加到 contents 中供工具使用
                         contents.push({
                             type: 'at_info',
                             at: {
@@ -296,7 +249,6 @@ export async function parseUserMessage(e, options = {}) {
                                 uid: uid ? String(uid) : '',
                                 name: atCard || '',
                                 display: displayName,
-                                // 增强字段：群成员详细信息
                                 card: groupCard,
                                 nickname: nickname,
                                 role: role,
@@ -314,21 +266,6 @@ export async function parseUserMessage(e, options = {}) {
                 }
 
                 case 'image': {
-                    // 调试日志：记录原始消息段
-                    logger.debug(
-                        '[MessageParser][Image] 原始消息段:',
-                        JSON.stringify({
-                            type: val.type,
-                            hasData: !!val.data,
-                            segDataKeys: Object.keys(segData),
-                            url: segData.url,
-                            file: segData.file,
-                            path: segData.path,
-                            file_id: segData.file_id,
-                            file_unique: segData.file_unique
-                        })
-                    )
-
                     let imgUrl = getMediaUrl(segData, true) || val.url
                     if (!imgUrl && segData.file_id && e.bot?.sendApi) {
                         try {
@@ -336,16 +273,11 @@ export async function parseUserMessage(e, options = {}) {
                             const fileInfo = await e.bot.sendApi('get_image', { file_id: segData.file_id })
                             imgUrl = fileInfo?.data?.url || fileInfo?.url
                             if (imgUrl) {
-                                logger.debug(
-                                    `[MessageParser][Image] 通过 get_image 获取成功: ${imgUrl.substring(0, 80)}...`
-                                )
                             }
                         } catch (err) {
                             logger.warn(`[MessageParser][Image] get_image API 失败:`, err.message)
                         }
                     }
-
-                    // 如果还是没有，尝试通过 file 字段获取 (可能是文件名或ID)
                     if (!imgUrl && segData.file && e.bot?.sendApi) {
                         try {
                             logger.debug(`[MessageParser][Image] 尝试通过 file 获取: ${segData.file}`)
@@ -1776,41 +1708,6 @@ function cleanCQCode(text) {
 }
 
 /**
- * 从用户消息中提取纯文本
- */
-export function extractTextFromMessage(message) {
-    if (!message?.content) return ''
-
-    return message.content
-        .filter(c => c.type === 'text')
-        .map(c => c.text)
-        .join('\n')
-        .trim()
-}
-
-/**
- * 检查消息是否包含图片
- */
-export function hasImages(message) {
-    if (!message?.content) return false
-    return message.content.some(c => c.type === 'image')
-}
-
-/**
- * 获取消息中的所有图片
- */
-export function getImages(message) {
-    if (!message?.content) return []
-    return message.content
-        .filter(c => c.type === 'image')
-        .map(c => ({
-            base64: c.image,
-            mimeType: c.mimeType || 'image/jpeg',
-            source: c.source
-        }))
-}
-
-/**
  * 导出CQ码清理函数供外部使用
  */
 export { cleanCQCode }
@@ -2135,505 +2032,6 @@ export const segment = {
 }
 
 /**
- * JSON卡片类型
- */
-export const CardType = {
-    LINK: 'com.tencent.structmsg', // 链接卡片
-    FORWARD: 'com.tencent.multimsg', // 合并转发
-    MINIAPP: 'com.tencent.miniapp', // 小程序
-    MUSIC: 'com.tencent.music' // 音乐分享
-}
-/**
- * 卡片消息解析器
- */
-export const CardParser = {
-    /**
-     * 解析JSON卡片消息
-     * @param {string|Object} json
-     * @returns {{type: string, data: Object, raw: Object}|null}
-     */
-    parse(json) {
-        try {
-            const data = typeof json === 'string' ? JSON.parse(json) : json
-            if (!data?.app) return null
-
-            const result = { type: 'unknown', data: {}, raw: data }
-
-            switch (data.app) {
-                case CardType.LINK:
-                    result.type = 'link'
-                    result.data = {
-                        title: data.meta?.news?.title || data.prompt || '',
-                        desc: data.meta?.news?.desc || data.desc || '',
-                        url: data.meta?.news?.jumpUrl || '',
-                        image: data.meta?.news?.preview || '',
-                        source: data.meta?.news?.tag || ''
-                    }
-                    break
-
-                case CardType.FORWARD:
-                    result.type = 'forward'
-                    result.data = {
-                        resid: data.meta?.detail?.resid || '',
-                        summary: data.meta?.detail?.summary || '',
-                        source: data.meta?.detail?.source || '',
-                        preview: (data.meta?.detail?.news || []).map(n => n.text)
-                    }
-                    break
-
-                case CardType.MUSIC:
-                    result.type = 'music'
-                    result.data = {
-                        title: data.meta?.music?.title || '',
-                        singer: data.meta?.music?.desc || '',
-                        url: data.meta?.music?.jumpUrl || '',
-                        audio: data.meta?.music?.musicUrl || '',
-                        image: data.meta?.music?.preview || ''
-                    }
-                    break
-
-                case CardType.MINIAPP:
-                    result.type = 'miniapp'
-                    result.data = {
-                        appid: data.meta?.detail_1?.appid || '',
-                        title: data.meta?.detail_1?.title || data.prompt || '',
-                        desc: data.meta?.detail_1?.desc || '',
-                        url: data.meta?.detail_1?.qqdocurl || '',
-                        image: data.meta?.detail_1?.preview || ''
-                    }
-                    break
-
-                default:
-                    result.type = 'custom'
-                    result.data = { app: data.app, prompt: data.prompt || '', meta: data.meta || {} }
-            }
-            return result
-        } catch {
-            return null
-        }
-    },
-    /** 判断是否是转发消息卡片 */
-    isForward: json => CardParser.parse(json)?.type === 'forward',
-
-    /** 判断是否是链接卡片 */
-    isLink: json => CardParser.parse(json)?.type === 'link',
-
-    /** 提取卡片中的URL */
-    extractUrl: json => CardParser.parse(json)?.data?.url || null,
-
-    /** 提取卡片中的图片 */
-    extractImage: json => CardParser.parse(json)?.data?.image || null
-}
-
-/**
- * 卡片消息构建器
- */
-export const CardBuilder = {
-    /**
-     * 创建链接卡片
-     */
-    link(title, desc, url, image) {
-        return segment.json({
-            app: CardType.LINK,
-            desc: '',
-            view: 'news',
-            ver: '0.0.0.1',
-            prompt: title,
-            meta: {
-                news: { title, desc, jumpUrl: url, preview: image || '', tag: '', tagIcon: '' }
-            }
-        })
-    },
-
-    /**
-     * 创建音乐分享卡片
-     */
-    music(type, idOrData) {
-        return segment.music(type, idOrData)
-    },
-
-    /**
-     * 创建自定义JSON卡片
-     */
-    json(data) {
-        return segment.json(data)
-    },
-
-    /**
-     * 创建大图卡片
-     * @param {string} image - 图片URL
-     * @param {string} title - 标题
-     * @param {string} content - 内容描述
-     */
-    bigImage(image, title = '', content = '') {
-        return segment.json({
-            app: 'com.tencent.structmsg',
-            desc: '',
-            view: 'news',
-            ver: '0.0.0.1',
-            prompt: title || '[图片]',
-            meta: {
-                news: {
-                    title: title || '',
-                    desc: content || '',
-                    preview: image,
-                    tag: '',
-                    jumpUrl: image
-                }
-            }
-        })
-    },
-
-    /**
-     * 创建文本卡片 (带图标)
-     * @param {string} title - 标题
-     * @param {string} content - 内容
-     * @param {string} icon - 图标URL
-     */
-    textCard(title, content, icon = '') {
-        return segment.json({
-            app: 'com.tencent.structmsg',
-            desc: '',
-            view: 'news',
-            ver: '0.0.0.1',
-            prompt: title,
-            meta: {
-                news: {
-                    title,
-                    desc: content,
-                    preview: icon,
-                    tag: '',
-                    jumpUrl: ''
-                }
-            }
-        })
-    },
-
-    /**
-     * 创建小程序卡片
-     * @param {Object} data - 小程序数据
-     */
-    miniApp(data) {
-        return segment.json({
-            app: CardType.MINIAPP,
-            desc: '',
-            view: 'all',
-            ver: '1.0.0.89',
-            prompt: data.title || '[小程序]',
-            meta: {
-                detail_1: {
-                    appid: data.appid || '',
-                    title: data.title || '',
-                    desc: data.desc || '',
-                    preview: data.image || '',
-                    qqdocurl: data.url || '',
-                    host: { uin: 0, nick: '' },
-                    shareTemplateId: '',
-                    shareTemplateData: {}
-                }
-            }
-        })
-    },
-
-    /**
-     * 创建Ark消息（通用模板）
-     * @param {string} templateId - 模板ID
-     * @param {Object} kv - 键值对参数
-     */
-    ark(templateId, kv = {}) {
-        const kvList = Object.entries(kv).map(([key, value]) => ({ key, value: String(value) }))
-        return {
-            type: 'ark',
-            data: {
-                template_id: templateId,
-                kv: kvList
-            }
-        }
-    }
-}
-
-/**
- * 消息构建器 - 链式构建消息
- */
-export class MessageBuilder {
-    constructor() {
-        this.segments = []
-    }
-
-    /**
-     * 添加文本
-     */
-    text(content) {
-        if (content) {
-            this.segments.push(segment.text(content))
-        }
-        return this
-    }
-
-    /**
-     * 添加图片
-     */
-    image(file, opts = {}) {
-        this.segments.push(segment.image(file, opts))
-        return this
-    }
-
-    /**
-     * 添加@
-     */
-    at(qq, name) {
-        this.segments.push(segment.at(qq, name))
-        return this
-    }
-
-    /**
-     * 添加表情
-     */
-    face(id) {
-        this.segments.push(segment.face(id))
-        return this
-    }
-
-    /**
-     * 添加引用
-     */
-    reply(id) {
-        this.segments.push(segment.reply(id))
-        return this
-    }
-
-    /**
-     * 添加语音
-     */
-    record(file) {
-        this.segments.push(segment.record(file))
-        return this
-    }
-
-    /**
-     * 添加视频
-     */
-    video(file, thumb) {
-        this.segments.push(segment.video(file, thumb))
-        return this
-    }
-
-    /**
-     * 添加JSON卡片
-     */
-    json(data) {
-        this.segments.push(segment.json(data))
-        return this
-    }
-
-    /**
-     * 添加Markdown
-     */
-    markdown(content) {
-        this.segments.push(segment.markdown(content))
-        return this
-    }
-
-    /**
-     * 添加商城表情
-     */
-    mface(packageId, emojiId, key, summary) {
-        this.segments.push(segment.mface(packageId, emojiId, key, summary))
-        return this
-    }
-
-    /**
-     * 添加任意消息段
-     */
-    add(seg) {
-        if (Array.isArray(seg)) {
-            this.segments.push(...seg)
-        } else {
-            this.segments.push(seg)
-        }
-        return this
-    }
-
-    /**
-     * 构建消息数组
-     */
-    build() {
-        return this.segments
-    }
-
-    /**
-     * 静态创建方法
-     */
-    static create() {
-        return new MessageBuilder()
-    }
-}
-
-/**
- * Raw消息工具 - 用于发送原始协议消息
- */
-export const RawMessage = {
-    /**
-     * 创建raw消息段 (TRSS/Chronocat)
-     * @param {Object} data - raw数据
-     */
-    raw(data) {
-        return { type: 'raw', data }
-    },
-
-    /**
-     * 构建OneBot消息段数组
-     * @param {Array} segments - 简化格式的消息段 [{type, ...data}]
-     * @returns {Array} OneBot格式消息段
-     */
-    toOneBot(segments) {
-        return segments.map(seg => {
-            if (seg.type && seg.data) return seg
-            const { type, ...data } = seg
-            return { type, data }
-        })
-    },
-
-    /**
-     * 构建icqq消息段数组
-     * @param {Array} segments - OneBot格式消息段
-     * @returns {Array} icqq格式消息段
-     */
-    toIcqq(segments) {
-        return segments.map(seg => {
-            const data = seg.data || {}
-            return { type: seg.type, ...data }
-        })
-    },
-
-    /**
-     * 解析CQ码字符串为消息段数组
-     * @param {string} cqString - CQ码字符串
-     * @returns {Array} 消息段数组
-     */
-    parseCQCode(cqString) {
-        if (!cqString) return []
-
-        const segments = []
-        const regex = /\[CQ:([^,\]]+)(?:,([^\]]*))?\]|([^\[\]]+)/g
-        let match
-
-        while ((match = regex.exec(cqString)) !== null) {
-            if (match[3]) {
-                // 普通文本
-                segments.push({ type: 'text', data: { text: match[3] } })
-            } else {
-                // CQ码
-                const type = match[1]
-                const paramsStr = match[2] || ''
-                const data = {}
-
-                if (paramsStr) {
-                    paramsStr.split(',').forEach(param => {
-                        const [key, ...valueParts] = param.split('=')
-                        const value = valueParts
-                            .join('=')
-                            .replace(/&#91;/g, '[')
-                            .replace(/&#93;/g, ']')
-                            .replace(/&#44;/g, ',')
-                            .replace(/&amp;/g, '&')
-                        if (key) data[key] = value
-                    })
-                }
-
-                segments.push({ type, data })
-            }
-        }
-
-        return segments
-    },
-
-    /**
-     * 将消息段数组转换为CQ码字符串
-     * @param {Array} segments - 消息段数组
-     * @returns {string} CQ码字符串
-     */
-    toCQCode(segments) {
-        return MessageUtils.toCQCode(segments)
-    }
-}
-
-/**
- * 转发消息构建器
- */
-export class ForwardBuilder {
-    constructor() {
-        this.nodes = []
-        this.options = {}
-    }
-
-    /**
-     * 添加自定义节点
-     * @param {string|number} userId - 发送者QQ
-     * @param {string} nickname - 发送者昵称
-     * @param {Array|string} content - 消息内容
-     * @param {number} time - 时间戳（可选）
-     */
-    addNode(userId, nickname, content, time) {
-        this.nodes.push(segment.nodeCustom(userId, nickname, content, time))
-        return this
-    }
-
-    /**
-     * 添加消息ID节点（引用现有消息）
-     * @param {string} messageId - 消息ID
-     */
-    addMessageId(messageId) {
-        this.nodes.push(segment.nodeId(messageId))
-        return this
-    }
-
-    /**
-     * 批量添加文本消息节点
-     * @param {Array<{user_id, nickname, text}>} messages - 消息列表
-     */
-    addTexts(messages) {
-        messages.forEach(msg => {
-            this.addNode(msg.user_id || '10000', msg.nickname || '用户', msg.text || msg.content || '')
-        })
-        return this
-    }
-
-    /**
-     * 设置外显选项
-     * @param {Object} opts - { prompt, summary, source }
-     */
-    setOptions(opts) {
-        this.options = { ...this.options, ...opts }
-        return this
-    }
-
-    /**
-     * 构建节点数组
-     */
-    build() {
-        return this.nodes
-    }
-
-    /**
-     * 获取完整配置
-     */
-    getConfig() {
-        return {
-            nodes: this.nodes,
-            ...this.options
-        }
-    }
-
-    /**
-     * 静态创建方法
-     */
-    static create() {
-        return new ForwardBuilder()
-    }
-}
-
-/**
  * 标准化消息API - 兼容多平台
  * 提供统一的消息发送和获取接口
  */
@@ -2887,82 +2285,6 @@ export const MessageApi = {
     }
 }
 
-/**
- * 消息数组工具
- */
-export const MessageUtils = {
-    /**
-     * 提取所有文本内容
-     * @param {Array} segments - 消息段数组
-     * @returns {string}
-     */
-    extractText(segments) {
-        if (!Array.isArray(segments)) return ''
-        return segments
-            .filter(s => s.type === 'text')
-            .map(s => s.data?.text || s.text || '')
-            .join('')
-    },
-
-    /**
-     * 提取所有图片
-     * @param {Array} segments - 消息段数组
-     * @returns {Array<{file: string, url?: string}>}
-     */
-    extractImages(segments) {
-        if (!Array.isArray(segments)) return []
-        return segments
-            .filter(s => s.type === 'image')
-            .map(s => ({
-                file: s.data?.file || s.file,
-                url: s.data?.url || s.url
-            }))
-    },
-
-    /**
-     * 判断消息是否包含指定类型
-     * @param {Array} segments
-     * @param {string} type
-     * @returns {boolean}
-     */
-    hasType(segments, type) {
-        if (!Array.isArray(segments)) return false
-        return segments.some(s => s.type === type)
-    },
-
-    /**
-     * 获取指定类型的消息段
-     * @param {Array} segments
-     * @param {string} type
-     * @returns {Array}
-     */
-    getByType(segments, type) {
-        if (!Array.isArray(segments)) return []
-        return segments.filter(s => s.type === type)
-    },
-
-    /**
-     * 将消息段数组转换为CQ码字符串
-     * @param {Array} segments
-     * @returns {string}
-     */
-    toCQCode(segments) {
-        if (!Array.isArray(segments)) return ''
-        return segments
-            .map(seg => {
-                if (seg.type === 'text') {
-                    return seg.data?.text || seg.text || ''
-                }
-                const data = seg.data || seg
-                const params = Object.entries(data)
-                    .filter(([k, v]) => k !== 'type' && v !== undefined && v !== null)
-                    .map(([k, v]) => `${k}=${String(v).replace(/[&\[\],]/g, c => `&#${c.charCodeAt(0)};`)}`)
-                    .join(',')
-                return `[CQ:${seg.type}${params ? ',' + params : ''}]`
-            })
-            .join('')
-    }
-}
 /**
  * icqq 消息工具 - 处理消息序列化/反序列化
  * 基于 icqq 的 Message 和 ForwardMessage 类
