@@ -9,6 +9,7 @@ import config from '../../../config/config.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { galgameService } from '../galgame/GalgameService.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -250,6 +251,135 @@ export function createGameRoutes(authMiddleware) {
 
             logger.info('[GameRoutes] 游戏设置已更新')
             res.json(ChaiteResponse.ok({ success: true }))
+        })
+    )
+
+    // GET /api/game/sessions - 获取所有游戏会话
+    router.get(
+        '/sessions',
+        ...auth,
+        asyncHandler(async (req, res) => {
+            try {
+                await galgameService.init()
+                const db = (await import('../database/DatabaseService.js')).databaseService.db
+                const sessions = db
+                    .prepare(
+                        `
+                    SELECT s.*, 
+                           c.name as character_name,
+                           (SELECT COUNT(*) FROM galgame_history WHERE session_id = s.id) as message_count
+                    FROM galgame_sessions s
+                    LEFT JOIN galgame_characters c ON s.character_id = c.character_id
+                    ORDER BY s.updated_at DESC
+                    LIMIT 100
+                `
+                    )
+                    .all()
+                res.json(ChaiteResponse.ok(sessions))
+            } catch (err) {
+                logger.error('[GameRoutes] 获取会话失败:', err)
+                res.status(500).json(ChaiteResponse.fail(null, '获取会话失败'))
+            }
+        })
+    )
+
+    // DELETE /api/game/sessions/:id - 删除游戏会话
+    router.delete(
+        '/sessions/:id',
+        ...auth,
+        asyncHandler(async (req, res) => {
+            try {
+                await galgameService.init()
+                const db = (await import('../database/DatabaseService.js')).databaseService.db
+                const sessionId = parseInt(req.params.id)
+
+                // 删除历史记录
+                db.prepare('DELETE FROM galgame_history WHERE session_id = ?').run(sessionId)
+                // 删除会话
+                db.prepare('DELETE FROM galgame_sessions WHERE id = ?').run(sessionId)
+
+                logger.info(`[GameRoutes] 删除会话: ${sessionId}`)
+                res.json(ChaiteResponse.ok({ id: sessionId }))
+            } catch (err) {
+                logger.error('[GameRoutes] 删除会话失败:', err)
+                res.status(500).json(ChaiteResponse.fail(null, '删除会话失败'))
+            }
+        })
+    )
+
+    // GET /api/game/characters - 获取所有角色
+    router.get(
+        '/characters',
+        ...auth,
+        asyncHandler(async (req, res) => {
+            try {
+                await galgameService.init()
+                const db = (await import('../database/DatabaseService.js')).databaseService.db
+                const characters = db
+                    .prepare(
+                        `
+                    SELECT * FROM galgame_characters
+                    ORDER BY created_at DESC
+                `
+                    )
+                    .all()
+                res.json(ChaiteResponse.ok(characters))
+            } catch (err) {
+                logger.error('[GameRoutes] 获取角色失败:', err)
+                res.status(500).json(ChaiteResponse.fail(null, '获取角色失败'))
+            }
+        })
+    )
+
+    // DELETE /api/game/characters/:id - 删除角色
+    router.delete(
+        '/characters/:id',
+        ...auth,
+        asyncHandler(async (req, res) => {
+            try {
+                await galgameService.init()
+                const db = (await import('../database/DatabaseService.js')).databaseService.db
+                const characterId = req.params.id
+
+                db.prepare('DELETE FROM galgame_characters WHERE character_id = ?').run(characterId)
+
+                logger.info(`[GameRoutes] 删除角色: ${characterId}`)
+                res.json(ChaiteResponse.ok({ id: characterId }))
+            } catch (err) {
+                logger.error('[GameRoutes] 删除角色失败:', err)
+                res.status(500).json(ChaiteResponse.fail(null, '删除角色失败'))
+            }
+        })
+    )
+
+    // GET /api/game/stats - 获取游戏统计
+    router.get(
+        '/stats',
+        ...auth,
+        asyncHandler(async (req, res) => {
+            try {
+                await galgameService.init()
+                const db = (await import('../database/DatabaseService.js')).databaseService.db
+
+                const totalSessions = db.prepare('SELECT COUNT(*) as count FROM galgame_sessions').get()
+                const activeSessions = db
+                    .prepare('SELECT COUNT(*) as count FROM galgame_sessions WHERE in_game = 1')
+                    .get()
+                const totalMessages = db.prepare('SELECT COUNT(*) as count FROM galgame_history').get()
+                const totalCharacters = db.prepare('SELECT COUNT(*) as count FROM galgame_characters').get()
+
+                res.json(
+                    ChaiteResponse.ok({
+                        totalSessions: totalSessions?.count || 0,
+                        activeSessions: activeSessions?.count || 0,
+                        totalMessages: totalMessages?.count || 0,
+                        totalCharacters: totalCharacters?.count || 0
+                    })
+                )
+            } catch (err) {
+                logger.error('[GameRoutes] 获取统计失败:', err)
+                res.status(500).json(ChaiteResponse.fail(null, '获取统计失败'))
+            }
         })
     )
 

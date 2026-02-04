@@ -1,9 +1,9 @@
 1:"$Sreact.fragment"
-2:I[67861,["/chatai/_next/static/chunks/35af49ae3f53bb6f.js","/chatai/_next/static/chunks/1f7f8c44af63c05b.js"],"ClientPageRoot"]
-3:I[82333,["/chatai/_next/static/chunks/468d7cba8c44db52.js","/chatai/_next/static/chunks/cebc3fcf50bce281.js","/chatai/_next/static/chunks/24ec81298d22c137.js","/chatai/_next/static/chunks/fd66258947e91b3c.js","/chatai/_next/static/chunks/384834ad6b166f82.js"],"default"]
-6:I[64662,["/chatai/_next/static/chunks/35af49ae3f53bb6f.js","/chatai/_next/static/chunks/1f7f8c44af63c05b.js"],"OutletBoundary"]
+2:I[295,["/chatai/_next/static/chunks/83e79c7d8953ed88.js","/chatai/_next/static/chunks/c2b13a73ef7e56d6.js"],"ClientPageRoot"]
+3:I[82333,["/chatai/_next/static/chunks/3dc1e533ece910ce.js","/chatai/_next/static/chunks/bf10cde5cfaa2a94.js","/chatai/_next/static/chunks/6bed491ef0ca641c.js","/chatai/_next/static/chunks/e0a83443aab61a22.js","/chatai/_next/static/chunks/a2d969d727675b0b.js"],"default"]
+6:I[2912,["/chatai/_next/static/chunks/83e79c7d8953ed88.js","/chatai/_next/static/chunks/c2b13a73ef7e56d6.js"],"OutletBoundary"]
 7:"$Sreact.suspense"
-0:{"buildId":"sRgRyoQwKraNOBIWbC22l","rsc":["$","$1","c",{"children":[["$","$L2",null,{"Component":"$3","serverProvidedParams":{"searchParams":{},"params":{},"promises":["$@4","$@5"]}}],[["$","script","script-0",{"src":"/chatai/_next/static/chunks/24ec81298d22c137.js","async":true}],["$","script","script-1",{"src":"/chatai/_next/static/chunks/fd66258947e91b3c.js","async":true}],["$","script","script-2",{"src":"/chatai/_next/static/chunks/384834ad6b166f82.js","async":true}]],["$","$L6",null,{"children":["$","$7",null,{"name":"Next.MetadataOutlet","children":"$@8"}]}]]}],"loading":null,"isPartial":false}
+0:{"buildId":"DAQkWRPFcyj99sxuHOVoR","rsc":["$","$1","c",{"children":[["$","$L2",null,{"Component":"$3","serverProvidedParams":{"searchParams":{},"params":{},"promises":["$@4","$@5"]}}],[["$","script","script-0",{"src":"/chatai/_next/static/chunks/6bed491ef0ca641c.js","async":true}],["$","script","script-1",{"src":"/chatai/_next/static/chunks/e0a83443aab61a22.js","async":true}],["$","script","script-2",{"src":"/chatai/_next/static/chunks/a2d969d727675b0b.js","async":true}]],["$","$L6",null,{"children":["$","$7",null,{"name":"Next.MetadataOutlet","children":"$@8"}]}]]}],"loading":null,"isPartial":false}
 4:{}
 5:"$0:rsc:props:children:0:props:serverProvidedParams:params"
 8:null

@@ -14,7 +14,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Slider } from '@/components/ui/slider'
 import { toast } from 'sonner'
-import { Plus, Trash2, Loader2, Gamepad2, User, Settings, Save } from 'lucide-react'
+import { Plus, Trash2, Loader2, Gamepad2, User, Settings, Save, Users, MessageSquare, BarChart3 } from 'lucide-react'
 import { PageHeader, PageContainer } from '@/components/layout/PageHeader'
 import { DeleteDialog } from '@/components/ui/delete-dialog'
 
@@ -44,8 +44,43 @@ interface GameSettings {
     enableTools: boolean
 }
 
+interface GameSession {
+    id: number
+    user_id: string
+    character_id: string
+    group_id: string | null
+    affection: number
+    trust: number
+    gold: number
+    relationship: string
+    in_game: number
+    message_count: number
+    character_name: string | null
+    updated_at: number
+}
+
+interface GameCharacter {
+    id: number
+    character_id: string
+    name: string
+    description: string
+    created_by: string
+    is_public: number
+    created_at: number
+}
+
+interface GameStats {
+    totalSessions: number
+    activeSessions: number
+    totalMessages: number
+    totalCharacters: number
+}
+
 export default function GamePage() {
     const [presets, setPresets] = useState<GamePreset[]>([])
+    const [sessions, setSessions] = useState<GameSession[]>([])
+    const [characters, setCharacters] = useState<GameCharacter[]>([])
+    const [stats, setStats] = useState<GameStats | null>(null)
     const [loading, setLoading] = useState(true)
     const [dialogOpen, setDialogOpen] = useState(false)
     const [editingPreset, setEditingPreset] = useState<GamePreset | null>(null)
@@ -53,6 +88,8 @@ export default function GamePage() {
     const [activeTab, setActiveTab] = useState('presets')
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
     const [deletingPreset, setDeletingPreset] = useState<GamePreset | null>(null)
+    const [deletingSession, setDeletingSession] = useState<GameSession | null>(null)
+    const [deletingCharacter, setDeletingCharacter] = useState<GameCharacter | null>(null)
 
     const [settings, setSettings] = useState<GameSettings>({
         probability: 30,
@@ -100,9 +137,38 @@ export default function GamePage() {
         }
     }
 
+    const fetchSessions = async () => {
+        try {
+            const res = await fetch('/api/game/sessions')
+            const data = await res.json()
+            setSessions(data.data || [])
+        } catch (error) {
+            console.error('加载会话失败:', error)
+        }
+    }
+
+    const fetchCharacters = async () => {
+        try {
+            const res = await fetch('/api/game/characters')
+            const data = await res.json()
+            setCharacters(data.data || [])
+        } catch (error) {
+            console.error('加载角色失败:', error)
+        }
+    }
+
+    const fetchStats = async () => {
+        try {
+            const res = await fetch('/api/game/stats')
+            const data = await res.json()
+            if (data.data) setStats(data.data)
+        } catch (error) {
+            console.error('加载统计失败:', error)
+        }
+    }
+
     useEffect(() => {
-        fetchPresets()
-        fetchSettings()
+        Promise.all([fetchPresets(), fetchSettings(), fetchSessions(), fetchCharacters(), fetchStats()])
     }, [])
 
     const resetForm = () => {
@@ -156,6 +222,30 @@ export default function GamePage() {
         }
     }
 
+    const handleDeleteSession = async () => {
+        if (!deletingSession) return
+        try {
+            await fetch(`/api/game/sessions/${deletingSession.id}`, { method: 'DELETE' })
+            toast.success('会话已删除')
+            fetchSessions()
+            fetchStats()
+        } catch {
+            toast.error('删除失败')
+        }
+    }
+
+    const handleDeleteCharacter = async () => {
+        if (!deletingCharacter) return
+        try {
+            await fetch(`/api/game/characters/${deletingCharacter.character_id}`, { method: 'DELETE' })
+            toast.success('角色已删除')
+            fetchCharacters()
+            fetchStats()
+        } catch {
+            toast.error('删除失败')
+        }
+    }
+
     const handleSaveSettings = async () => {
         try {
             await fetch('/api/game/settings', {
@@ -188,8 +278,23 @@ export default function GamePage() {
                 <Button size="sm" onClick={() => handleOpenDialog()}><Plus className="mr-2 h-4 w-4" />新建预设</Button>
             } />
 
+            {/* 统计卡片 */}
+            {stats && (
+                <div className="grid gap-4 md:grid-cols-4 mb-4">
+                    <Card><CardContent className="pt-4"><div className="flex items-center gap-2"><BarChart3 className="h-4 w-4 text-muted-foreground" /><span className="text-sm text-muted-foreground">总会话</span></div><p className="text-2xl font-bold">{stats.totalSessions}</p></CardContent></Card>
+                    <Card><CardContent className="pt-4"><div className="flex items-center gap-2"><Gamepad2 className="h-4 w-4 text-green-500" /><span className="text-sm text-muted-foreground">进行中</span></div><p className="text-2xl font-bold">{stats.activeSessions}</p></CardContent></Card>
+                    <Card><CardContent className="pt-4"><div className="flex items-center gap-2"><MessageSquare className="h-4 w-4 text-blue-500" /><span className="text-sm text-muted-foreground">总消息</span></div><p className="text-2xl font-bold">{stats.totalMessages}</p></CardContent></Card>
+                    <Card><CardContent className="pt-4"><div className="flex items-center gap-2"><Users className="h-4 w-4 text-purple-500" /><span className="text-sm text-muted-foreground">角色数</span></div><p className="text-2xl font-bold">{stats.totalCharacters}</p></CardContent></Card>
+                </div>
+            )}
+
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-                <TabsList><TabsTrigger value="presets">角色预设</TabsTrigger><TabsTrigger value="settings">游戏设置</TabsTrigger></TabsList>
+                <TabsList>
+                    <TabsTrigger value="presets">角色预设</TabsTrigger>
+                    <TabsTrigger value="sessions">游戏会话</TabsTrigger>
+                    <TabsTrigger value="characters">用户角色</TabsTrigger>
+                    <TabsTrigger value="settings">游戏设置</TabsTrigger>
+                </TabsList>
 
                 <TabsContent value="presets" className="space-y-4">
                     {presets.length === 0 ? (
@@ -213,6 +318,70 @@ export default function GamePage() {
                                         <div className="flex gap-2 pt-2">
                                             <Button size="sm" variant="outline" onClick={() => handleOpenDialog(preset)}>编辑</Button>
                                             <Button size="sm" variant="ghost" onClick={() => { setDeletingPreset(preset); setDeleteDialogOpen(true) }}><Trash2 className="h-4 w-4" /></Button>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            ))}
+                        </div>
+                    )}
+                </TabsContent>
+
+                <TabsContent value="sessions" className="space-y-4">
+                    {sessions.length === 0 ? (
+                        <Card><CardContent className="py-10 text-center text-muted-foreground">暂无游戏会话</CardContent></Card>
+                    ) : (
+                        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                            {sessions.map(session => (
+                                <Card key={session.id}>
+                                    <CardHeader className="pb-2">
+                                        <div className="flex items-center justify-between">
+                                            <CardTitle className="text-lg flex items-center gap-2">
+                                                <User className="h-4 w-4" />
+                                                {session.character_name || session.character_id}
+                                                {session.in_game === 1 && <Badge variant="default" className="bg-green-500">进行中</Badge>}
+                                            </CardTitle>
+                                        </div>
+                                        <CardDescription>用户: {session.user_id} {session.group_id && `· 群: ${session.group_id}`}</CardDescription>
+                                    </CardHeader>
+                                    <CardContent className="space-y-2 text-sm">
+                                        <div className="flex gap-4">
+                                            <span>❤️ {session.affection}</span>
+                                            <span>🤝 {session.trust}</span>
+                                            <span>💰 {session.gold}</span>
+                                        </div>
+                                        <p><span className="text-muted-foreground">消息数:</span> {session.message_count}</p>
+                                        <p><span className="text-muted-foreground">关系:</span> {session.relationship}</p>
+                                        <div className="flex gap-2 pt-2">
+                                            <Button size="sm" variant="ghost" onClick={() => { setDeletingSession(session); setDeleteDialogOpen(true) }}><Trash2 className="h-4 w-4" /></Button>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            ))}
+                        </div>
+                    )}
+                </TabsContent>
+
+                <TabsContent value="characters" className="space-y-4">
+                    {characters.length === 0 ? (
+                        <Card><CardContent className="py-10 text-center text-muted-foreground">暂无用户创建的角色</CardContent></Card>
+                    ) : (
+                        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                            {characters.map(char => (
+                                <Card key={char.id}>
+                                    <CardHeader className="pb-2">
+                                        <div className="flex items-center justify-between">
+                                            <CardTitle className="text-lg flex items-center gap-2">
+                                                <User className="h-4 w-4" />{char.name}
+                                                {char.is_public === 1 && <Badge variant="secondary">公开</Badge>}
+                                            </CardTitle>
+                                        </div>
+                                        <CardDescription>ID: {char.character_id}</CardDescription>
+                                    </CardHeader>
+                                    <CardContent className="space-y-2 text-sm">
+                                        <p className="line-clamp-2">{char.description || '无描述'}</p>
+                                        <p><span className="text-muted-foreground">创建者:</span> {char.created_by}</p>
+                                        <div className="flex gap-2 pt-2">
+                                            <Button size="sm" variant="ghost" onClick={() => { setDeletingCharacter(char); setDeleteDialogOpen(true) }}><Trash2 className="h-4 w-4" /></Button>
                                         </div>
                                     </CardContent>
                                 </Card>
@@ -289,7 +458,29 @@ export default function GamePage() {
                 </DialogContent>
             </Dialog>
 
-            <DeleteDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen} onConfirm={handleDelete} title="删除预设" description={`确定删除预设"${deletingPreset?.name}"吗？`} />
+            <DeleteDialog 
+                open={deleteDialogOpen} 
+                onOpenChange={(open) => {
+                    setDeleteDialogOpen(open)
+                    if (!open) {
+                        setDeletingPreset(null)
+                        setDeletingSession(null)
+                        setDeletingCharacter(null)
+                    }
+                }} 
+                onConfirm={() => {
+                    if (deletingPreset) handleDelete()
+                    else if (deletingSession) handleDeleteSession()
+                    else if (deletingCharacter) handleDeleteCharacter()
+                    setDeleteDialogOpen(false)
+                }} 
+                title={deletingPreset ? '删除预设' : deletingSession ? '删除会话' : '删除角色'} 
+                description={
+                    deletingPreset ? `确定删除预设"${deletingPreset.name}"吗？` :
+                    deletingSession ? `确定删除用户 ${deletingSession.user_id} 的会话吗？所有对话历史将被删除。` :
+                    deletingCharacter ? `确定删除角色"${deletingCharacter?.name}"吗？` : ''
+                } 
+            />
         </PageContainer>
     )
 }

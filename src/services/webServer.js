@@ -528,13 +528,14 @@ window.location.href = '${mountPath}/';
         this.router.use('/api/graph', auth, graphRoutes)
         this.router.use('/api/group-admin', groupAdminRoutes)
         this.router.use('/api/skills', auth, skillsRoutes)
-        this.router.use('/api', auth, systemRoutes)
+        // 游戏编辑路由必须在通用/api路由之前注册，避免被auth中间件拦截
+        this.router.use('/api/game-edit', createGameEditRoutes()) // 无需认证，使用UUID访问
+        this.router.use('/api/game', createGameRoutes(auth))
         this.router.use('/api/conversations', createConversationRoutes(auth))
         this.router.use('/api/context', createContextRoutes(auth))
         this.router.use('/api/preset', createPresetRoutes(auth))
         this.router.use('/api/presets', createPresetsConfigRoutes(auth))
-        this.router.use('/api/game', createGameRoutes(auth))
-        this.router.use('/api/game-edit', createGameEditRoutes()) // 无需认证，使用UUID访问
+        this.router.use('/api', auth, systemRoutes)
 
         // SPA fallback - 所有未匹配路由返回index.html
         this.router.get('*', (req, res) => {
