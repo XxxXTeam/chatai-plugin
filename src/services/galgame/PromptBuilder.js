@@ -3,7 +3,13 @@
  * @module services/galgame/PromptBuilder
  */
 
-import { AFFECTION_LEVELS, TRUST_LEVELS, DEFAULT_SYSTEM_PROMPT, ENVIRONMENT_PROMPT } from './constants.js'
+import {
+    AFFECTION_LEVELS,
+    TRUST_LEVELS,
+    DEFAULT_SYSTEM_PROMPT,
+    ENVIRONMENT_PROMPT,
+    ITEM_TYPE_LABELS
+} from './constants.js'
 
 /**
  * 获取好感度等级信息
@@ -98,6 +104,118 @@ export function buildStoryProgress(gameState) {
 }
 
 /**
+ * 根据好感度/信任度阶段生成当前阶段目标提示
+ * @param {number} affection - 好感度值
+ * @param {number} trust - 信任度值
+ * @param {Object} env - 环境设定
+ * @returns {string} 阶段目标提示
+ */
+export function buildStageHint(affection, trust, env) {
+    const hasUnknowns = env && Object.values(env).some(v => v === '???')
+
+    if (affection <= 20 && trust <= 20) {
+        return '与角色建立初步认识，了解基本信息' + (hasUnknowns ? '，尝试发现角色的未知面' : '')
+    }
+    if (affection <= 40) {
+        return '加深与角色的熟悉度，参与日常活动'
+    }
+    if (affection <= 60) {
+        const secretHint = trust < 40 ? '，提升信任度以发现更多秘密' : ''
+        return '发展更深层的关系' + secretHint
+    }
+    if (affection <= 80) {
+        return '感情进入关键阶段，重要选择将影响结局走向'
+    }
+    return '故事进入高潮，迎接最终结局'
+}
+
+/**
+ * 根据 gameState 和环境设定生成可探索方向
+ * @param {Object} gameState - 游戏状态
+ * @param {Object} env - 环境设定
+ * @param {Array} triggeredEvents - 已触发事件
+ * @returns {string} 可探索方向文本
+ */
+export function buildExploreHints(gameState, env, triggeredEvents) {
+    const hints = []
+
+    // 检查 ??? 字段 - 暗示未知信息
+    if (env) {
+        if (env.identity === '???') hints.push('角色的真实身份还是谜')
+        if (env.likes === '???') hints.push('还不了解角色的喜好')
+        if (env.dislikes === '???') hints.push('不清楚角色讨厌什么')
+        if (env.background === '???') hints.push('角色的过去还未知')
+        if (env.secret === '???') hints.push('角色似乎隐藏着什么秘密')
+        if (env.meetingReason === '???') hints.push('相遇的真正原因还不明确')
+    }
+
+    // 根据游戏进度添加提示
+    if (!gameState.visitedPlaces || gameState.visitedPlaces.length <= 1) {
+        hints.push('可以探索其他地点')
+    }
+    if (!gameState.knownNPCs || gameState.knownNPCs.length === 0) {
+        hints.push('还没有认识其他角色')
+    }
+    if (gameState.currentTask) {
+        hints.push(`当前任务: ${gameState.currentTask}`)
+    }
+
+    if (hints.length === 0) {
+        hints.push('继续与角色互动，推进剧情')
+    }
+
+    return hints.slice(0, 3).join('；')
+}
+
+/**
+ * 构建背包展示文本（供 system prompt 使用）
+ * 按类型分类展示，AI 需要知道类型来判断剧情分支
+ * @param {Array} items - 物品数组 [{ name, type, description }]
+ * @returns {string} 背包文本
+ */
+export function buildInventoryText(items) {
+    if (!items || items.length === 0) {
+        return '（空）'
+    }
+
+    // 按类型分组
+    const grouped = {}
+    for (const item of items) {
+        const type = item.type || 'consumable'
+        if (!grouped[type]) grouped[type] = []
+        grouped[type].push(item)
+    }
+
+    // 按类型优先级排列: key > clue > gift > consumable
+    const typeOrder = ['key', 'clue', 'gift', 'consumable']
+    const lines = []
+
+    for (const type of typeOrder) {
+        const typeItems = grouped[type]
+        if (!typeItems || typeItems.length === 0) continue
+
+        const label = ITEM_TYPE_LABELS[type] || type
+        const names = typeItems.map(i => {
+            let desc = i.name
+            if (i.description) desc += `(${i.description})`
+            return desc
+        })
+        lines.push(`${label}: ${names.join('、')}`)
+    }
+
+    // 处理未知类型
+    for (const type of Object.keys(grouped)) {
+        if (!typeOrder.includes(type)) {
+            const typeItems = grouped[type]
+            const names = typeItems.map(i => i.name)
+            lines.push(`其他: ${names.join('、')}`)
+        }
+    }
+
+    return lines.length > 0 ? lines.join('\n') : '（空）'
+}
+
+/**
  * 构建系统提示词
  * @param {Object} options - 构建选项
  * @param {Object} options.character - 角色配置
@@ -161,7 +279,11 @@ export function buildSystemPrompt(options) {
     } catch {
         items = []
     }
-    const itemNames = items.map(i => i.name).join('、') || '无'
+    const inventoryText = buildInventoryText(items)
+
+    // 构建阶段目标和探索方向
+    const stageHint = buildStageHint(session.affection, session.trust || 10, env)
+    const exploreHints = buildExploreHints(gameState, env, triggeredEvents)
 
     const replacements = {
         '{environment_setting}': environmentSetting,
@@ -171,12 +293,15 @@ export function buildSystemPrompt(options) {
         '{trust_level}': trustLevel.name,
         '{trust_value}': (session.trust || 10).toString(),
         '{gold_value}': gold.toString(),
-        '{items}': itemNames,
+        '{inventory}': inventoryText,
+        '{items}': items.map(i => i.name).join('、') || '无', // backward compat
         '{relationship_status}': getRelationshipStatus(session.affection),
         '{trust_status}': getTrustStatus(session.trust || 10),
         '{triggered_events}': triggeredEventsText,
         '{current_scene}': currentScene,
         '{current_task}': currentTask,
+        '{stage_hint}': stageHint,
+        '{explore_hints}': exploreHints,
         '{known_info}': knownInfo,
         '{story_progress}': storyProgress,
         '{history_summary}': historySummary || '（暂无历史对话）'

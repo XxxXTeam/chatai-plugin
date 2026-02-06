@@ -23,6 +23,8 @@ export {
     EXPLORE_EVENTS,
     GOLD_CONFIG,
     ITEM_TYPES,
+    ITEM_TYPE_LABELS,
+    ITEM_TYPE_ICONS,
     DEFAULT_ITEMS
 } from './constants.js'
 

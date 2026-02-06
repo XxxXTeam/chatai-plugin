@@ -506,7 +506,11 @@ class GalgameService {
     }
 
     /**
-     * 添加物品
+     * 添加物品到背包
+     * @param {string} userId
+     * @param {string} characterId
+     * @param {Object} item - { name, type?, description? }
+     * @param {string|null} groupId
      */
     async addItem(userId, characterId, item, groupId = null) {
         await this.init()
@@ -521,21 +525,23 @@ class GalgameService {
         }
 
         items.push({
-            ...item,
+            name: item.name,
+            type: item.type || 'consumable',
+            description: item.description || '',
             obtainedAt: Date.now()
         })
 
-        db.prepare(
-            `
-            UPDATE galgame_sessions SET items = ?, updated_at = ? WHERE id = ?
-        `
-        ).run(JSON.stringify(items), Date.now(), session.id)
+        db.prepare(`UPDATE galgame_sessions SET items = ?, updated_at = ? WHERE id = ?`).run(
+            JSON.stringify(items),
+            Date.now(),
+            session.id
+        )
 
         return { success: true, item, totalItems: items.length }
     }
 
     /**
-     * 获取物品列表
+     * 获取全部物品列表
      */
     async getItems(userId, characterId, groupId = null) {
         const session = await this.getOrCreateSession(userId, characterId, groupId)
@@ -544,6 +550,100 @@ class GalgameService {
         } catch {
             return []
         }
+    }
+
+    /**
+     * 检查是否拥有指定物品
+     * @param {string} userId
+     * @param {string} characterId
+     * @param {string} itemName - 物品名称
+     * @param {string|null} groupId
+     * @returns {boolean}
+     */
+    async hasItem(userId, characterId, itemName, groupId = null) {
+        const items = await this.getItems(userId, characterId, groupId)
+        return items.some(i => i.name === itemName)
+    }
+
+    /**
+     * 使用物品（消耗品从背包移除，关键道具保留）
+     * @returns {{ success: boolean, item?: Object, error?: string }}
+     */
+    async useItem(userId, characterId, itemName, groupId = null) {
+        await this.init()
+        const db = databaseService.db
+        const session = await this.getOrCreateSession(userId, characterId, groupId)
+
+        let items = []
+        try {
+            items = JSON.parse(session.items || '[]')
+        } catch {
+            items = []
+        }
+
+        const itemIndex = items.findIndex(i => i.name === itemName)
+        if (itemIndex === -1) {
+            return { success: false, error: `没有物品「${itemName}」` }
+        }
+
+        const item = items[itemIndex]
+
+        // 关键道具不会消失，只标记已使用
+        if (item.type === 'key') {
+            item.used = true
+            db.prepare(`UPDATE galgame_sessions SET items = ?, updated_at = ? WHERE id = ?`).run(
+                JSON.stringify(items),
+                Date.now(),
+                session.id
+            )
+            return { success: true, item, kept: true }
+        }
+
+        // 消耗品/礼物/线索 使用后移除
+        items.splice(itemIndex, 1)
+        db.prepare(`UPDATE galgame_sessions SET items = ?, updated_at = ? WHERE id = ?`).run(
+            JSON.stringify(items),
+            Date.now(),
+            session.id
+        )
+        return { success: true, item, kept: false }
+    }
+
+    /**
+     * 移除物品
+     */
+    async removeItem(userId, characterId, itemName, groupId = null) {
+        await this.init()
+        const db = databaseService.db
+        const session = await this.getOrCreateSession(userId, characterId, groupId)
+
+        let items = []
+        try {
+            items = JSON.parse(session.items || '[]')
+        } catch {
+            items = []
+        }
+
+        const newItems = items.filter(i => i.name !== itemName)
+        if (newItems.length === items.length) {
+            return { success: false, error: '物品不存在' }
+        }
+
+        db.prepare(`UPDATE galgame_sessions SET items = ?, updated_at = ? WHERE id = ?`).run(
+            JSON.stringify(newItems),
+            Date.now(),
+            session.id
+        )
+        return { success: true }
+    }
+
+    /**
+     * 按类型获取物品
+     * @param {string} type - 'key' | 'gift' | 'consumable' | 'clue'
+     */
+    async getItemsByType(userId, characterId, type, groupId = null) {
+        const items = await this.getItems(userId, characterId, groupId)
+        return items.filter(i => i.type === type)
     }
 
     /**
@@ -1304,6 +1404,11 @@ class GalgameService {
             await this.addItem(userId, characterId, item, groupId)
         }
 
+        // 处理使用的物品
+        for (const itemName of parsed.usedItems || []) {
+            await this.useItem(userId, characterId, itemName, groupId)
+        }
+
         // 记录AI回复（包含好感度、信任度、金币变化）
         await this.addHistory(
             session.id,
@@ -1327,6 +1432,10 @@ class GalgameService {
             goldChange: totalGoldChange,
             purchases: parsed.purchases || [],
             obtainedItems: parsed.obtainedItems || [],
+            usedItems: parsed.usedItems || [],
+            requiredItems: parsed.requiredItems || [],
+            shop: parsed.shop || null,
+            shopItems: parsed.shopItems || [],
             options: parsed.options,
             event: eventInfo,
             eventOptions: parsed.eventOptions,
@@ -1712,6 +1821,8 @@ export {
     EXPLORE_EVENTS,
     GOLD_CONFIG,
     ITEM_TYPES,
+    ITEM_TYPE_LABELS,
+    ITEM_TYPE_ICONS,
     DEFAULT_ITEMS
 } from './constants.js'
 export {

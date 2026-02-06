@@ -15,7 +15,9 @@ import {
     generateRandomRewards,
     EVENT_TYPES,
     DAILY_EVENTS,
-    EXPLORE_EVENTS
+    EXPLORE_EVENTS,
+    ITEM_TYPE_LABELS,
+    ITEM_TYPE_ICONS
 } from '../src/services/galgame/index.js'
 import { getBotIds, isMessageProcessed, markMessageProcessed, isSelfMessage } from '../src/utils/messageDedup.js'
 import { parseReactionEvent, sendGroupMessage, getBot, sendReaction } from '../src/utils/eventAdapter.js'
@@ -165,6 +167,106 @@ async function handleGalgameReaction(e, bot) {
         // 移除待选择项
         galgameService.removePendingChoice(groupId, messageId)
 
+        // 环境确认/重随（表情回应）
+        if (pendingChoice.type === 'env_confirm') {
+            const isConfirm = emojiNum === 123 // 👍 = 确认 (QQ emoji ID 123)
+            const charId = pendingChoice.eventInfo?.characterId
+            const envSettings = pendingChoice.eventInfo?.envSettings
+
+            // 同时清除用户级别的pending
+            galgameService.removePendingChoice(groupId, `env_${userId}`)
+
+            if (isConfirm && charId) {
+                gameLogger.info(`[Reaction] 环境确认: 用户 ${userId} 通过表情确认开始`)
+                try {
+                    await sendGroupMessage(bot, groupId, '✅ 正在生成开场剧情...')
+                    const openingResult = await galgameService.generateOpeningContext(
+                        String(userId),
+                        charId,
+                        e,
+                        groupId
+                    )
+                    const session = await galgameService.getOrCreateSession(String(userId), charId, groupId)
+                    const level = getAffectionLevel(session.affection)
+                    await galgameService.addHistory(session.id, 'assistant', openingResult.response)
+
+                    let openingMsg = ''
+                    if (envSettings?.summary) {
+                        openingMsg += `${envSettings.summary}\n━━━━━━━━━━━━━━━━\n`
+                    }
+                    if (openingResult.scene) {
+                        openingMsg += `📍 ${openingResult.scene.name}`
+                        if (openingResult.scene.description) openingMsg += ` - ${openingResult.scene.description}`
+                        openingMsg += '\n━━━━━━━━━━━━━━━━\n'
+                    }
+                    openingMsg += openingResult.response
+                    openingMsg += `\n${level.emoji} ${level.name} (${session.affection})`
+                    await sendGroupMessage(bot, groupId, openingMsg)
+                } catch (err) {
+                    gameLogger.error('确认开始游戏失败:', err)
+                    await sendGroupMessage(bot, groupId, `❌ 生成开场失败: ${err.message}`)
+                }
+            } else if (charId) {
+                // 重随
+                gameLogger.info(`[Reaction] 环境重随: 用户 ${userId} 通过表情重随`)
+                try {
+                    await sendGroupMessage(bot, groupId, '🔄 正在重新随机...')
+                    await galgameService.saveSessionSettings(String(userId), charId, null, groupId)
+                    const newEnv = await galgameService.initializeEnvironment(String(userId), charId, e, groupId)
+
+                    const fieldMap = [
+                        { key: 'name', emoji: '👤', label: '角色名' },
+                        { key: 'world', emoji: '🌍', label: '世界观' },
+                        { key: 'identity', emoji: '💼', label: '身份' },
+                        { key: 'personality', emoji: '💭', label: '性格' },
+                        { key: 'likes', emoji: '❤️', label: '喜好' },
+                        { key: 'dislikes', emoji: '❌', label: '厌恶' },
+                        { key: 'background', emoji: '📖', label: '背景' },
+                        { key: 'secret', emoji: '🔒', label: '秘密' },
+                        { key: 'scene', emoji: '📍', label: '场景' },
+                        { key: 'meetingReason', emoji: '🤝', label: '相遇' }
+                    ]
+                    let previewMsg = '🎲 重新随机的角色设定：\n━━━━━━━━━━━━━━━━\n'
+                    for (const f of fieldMap) {
+                        const v = newEnv?.[f.key]
+                        previewMsg += `${f.emoji} ${f.label}: ${!v || v === '???' ? '???（对话中揭示）' : v}\n`
+                    }
+                    previewMsg += '━━━━━━━━━━━━━━━━\n回复「确认」开始游戏 | 回复「重随」重新生成'
+
+                    const res = await sendGroupMessage(bot, groupId, previewMsg)
+                    const newMsgId = res?.message_id || res?.data?.message_id
+                    if (newMsgId) {
+                        galgameService.savePendingChoice(
+                            groupId,
+                            newMsgId,
+                            String(userId),
+                            'env_confirm',
+                            [
+                                { text: '确认', emoji: '👍' },
+                                { text: '重随', emoji: '🔄' }
+                            ],
+                            { characterId: charId, envSettings: newEnv }
+                        )
+                    }
+                    galgameService.savePendingChoice(
+                        groupId,
+                        `env_${userId}`,
+                        String(userId),
+                        'env_confirm',
+                        [
+                            { text: '确认', emoji: '👍' },
+                            { text: '重随', emoji: '🔄' }
+                        ],
+                        { characterId: charId, envSettings: newEnv, previewMessageId: newMsgId }
+                    )
+                } catch (err) {
+                    gameLogger.error('重新随机失败:', err)
+                    await sendGroupMessage(bot, groupId, `❌ 重新随机失败: ${err.message}`)
+                }
+            }
+            return
+        }
+
         // 根据选择类型处理
         if (pendingChoice.type === 'option') {
             // 对话选项
@@ -287,6 +389,12 @@ async function sendGalgameResponse(bot, groupId, userId, characterId, result) {
     }
     if (result.obtainedItems?.length > 0) {
         changeTexts.push(`📦获得: ${result.obtainedItems.map(i => i.name).join('、')}`)
+    }
+    if (result.usedItems?.length > 0) {
+        changeTexts.push(`🔧使用: ${result.usedItems.join('、')}`)
+    }
+    if (result.requiredItems?.length > 0) {
+        changeTexts.push(`🔒需要: ${result.requiredItems.join('、')}`)
     }
     if (changeTexts.length > 0) {
         replyText += `\n\n${changeTexts.join(' | ')}`
@@ -556,6 +664,10 @@ export class Galgame extends plugin {
                     fnc: 'showHelp'
                 },
                 {
+                    reg: /^#(背包|物品|道具)$/i,
+                    fnc: 'showInventory'
+                },
+                {
                     reg: /^#(日常|日常事件)$/i,
                     fnc: 'triggerDailyEvent'
                 },
@@ -663,6 +775,36 @@ export class Galgame extends plugin {
         }
         if (!textContent) {
             return false
+        }
+
+        // 检查是否是环境确认/重随回复
+        const envPending = galgameService.getPendingChoice(groupId, `env_${userId}`)
+        if (envPending && envPending.type === 'env_confirm') {
+            const lowerText = textContent.toLowerCase()
+            if (/^(确认|开始|ok|yes|好|可以)$/i.test(lowerText)) {
+                markMessageProcessed(e)
+                gameLogger.info(`环境确认: 用户 ${userId} 确认开始游戏`)
+                galgameService.removePendingChoice(groupId, `env_${userId}`)
+                if (envPending.eventInfo?.previewMessageId) {
+                    galgameService.removePendingChoice(groupId, envPending.eventInfo.previewMessageId)
+                }
+                await this.confirmGameStart(envPending.eventInfo.characterId, envPending.eventInfo.envSettings)
+                return true
+            }
+            if (/^(重随|重新随机|换一个|重来|reroll)$/i.test(lowerText)) {
+                markMessageProcessed(e)
+                gameLogger.info(`环境重随: 用户 ${userId} 要求重新随机`)
+                galgameService.removePendingChoice(groupId, `env_${userId}`)
+                if (envPending.eventInfo?.previewMessageId) {
+                    galgameService.removePendingChoice(groupId, envPending.eventInfo.previewMessageId)
+                }
+                // 清除已保存的环境设定，重新生成
+                const charId = envPending.eventInfo.characterId
+                await galgameService.saveSessionSettings(userId, charId, null, groupId)
+                // 重新触发游戏开始
+                await this.rerollEnvironment(charId)
+                return true
+            }
         }
 
         // 检查是否是数字选择（1-4）
@@ -828,41 +970,66 @@ export class Galgame extends plugin {
                 })
                 await sendGalgameResponse(bot, groupId, userId, characterId, result)
             } else {
+                // 随机生成环境设定
                 const envSettings = await galgameService.initializeEnvironment(userId, characterId, e, groupId)
-                const openingResult = await galgameService.generateOpeningContext(userId, characterId, e, groupId)
 
-                const session = await galgameService.getOrCreateSession(userId, characterId, groupId)
-                const level = getAffectionLevel(session.affection)
+                // 构建预览卡片 - 展示角色信息，??? 字段标注为悬念
+                const fieldMap = [
+                    { key: 'name', emoji: '👤', label: '角色名' },
+                    { key: 'world', emoji: '🌍', label: '世界观' },
+                    { key: 'identity', emoji: '💼', label: '身份' },
+                    { key: 'personality', emoji: '💭', label: '性格' },
+                    { key: 'likes', emoji: '❤️', label: '喜好' },
+                    { key: 'dislikes', emoji: '❌', label: '厌恶' },
+                    { key: 'background', emoji: '📖', label: '背景' },
+                    { key: 'secret', emoji: '🔒', label: '秘密' },
+                    { key: 'scene', emoji: '📍', label: '场景' },
+                    { key: 'meetingReason', emoji: '🤝', label: '相遇' }
+                ]
 
-                // 记录到历史
-                await galgameService.addHistory(session.id, 'assistant', openingResult.response)
-
-                // 构建完整开场消息
-                let openingMsg = ''
-
-                // 添加前情提要（如果有）
-                if (envSettings?.summary) {
-                    openingMsg += `${envSettings.summary}\n━━━━━━━━━━━━━━━━\n`
-                }
-
-                if (openingResult.scene) {
-                    openingMsg += `📍 ${openingResult.scene.name}`
-                    if (openingResult.scene.description) {
-                        openingMsg += ` - ${openingResult.scene.description}`
+                let previewMsg = '🎲 随机到的角色设定：\n━━━━━━━━━━━━━━━━\n'
+                for (const field of fieldMap) {
+                    const value = envSettings?.[field.key]
+                    if (value === '???' || !value) {
+                        previewMsg += `${field.emoji} ${field.label}: ???（对话中揭示）\n`
+                    } else {
+                        previewMsg += `${field.emoji} ${field.label}: ${value}\n`
                     }
-                    openingMsg += '\n━━━━━━━━━━━━━━━━\n'
                 }
-                openingMsg += openingResult.response
-                openingMsg += `\n${level.emoji} ${level.name} (${session.affection})`
-                const paragraphs = openingMsg.split(/\n\n+/).filter(p => p.trim())
-                if (paragraphs.length > 1) {
-                    for (const paragraph of paragraphs) {
-                        await sendGroupMessage(bot, groupId, paragraph.trim())
-                        await new Promise(r => setTimeout(r, 800))
-                    }
-                } else {
-                    await sendGroupMessage(bot, groupId, openingMsg)
+                previewMsg += '━━━━━━━━━━━━━━━━\n'
+                previewMsg += '回复「确认」开始游戏 | 回复「重随」重新生成'
+
+                // 发送预览消息
+                const previewResult = await sendGroupMessage(bot, groupId, previewMsg)
+                const messageId = previewResult?.message_id || previewResult?.data?.message_id
+
+                // 存储待确认状态（等待用户确认或重随）
+                if (messageId) {
+                    galgameService.savePendingChoice(
+                        groupId,
+                        messageId,
+                        userId,
+                        'env_confirm',
+                        [
+                            { text: '确认开始', emoji: '👍' },
+                            { text: '重新随机', emoji: '🔄' }
+                        ],
+                        { characterId, envSettings }
+                    )
                 }
+
+                // 同时也保存到用户级别的待确认（支持文字回复触发）
+                galgameService.savePendingChoice(
+                    groupId,
+                    `env_${userId}`,
+                    userId,
+                    'env_confirm',
+                    [
+                        { text: '确认开始', emoji: '👍' },
+                        { text: '重新随机', emoji: '🔄' }
+                    ],
+                    { characterId, envSettings, previewMessageId: messageId }
+                )
             }
         } catch (err) {
             gameLogger.error(' 开始游戏失败:', err)
@@ -870,6 +1037,125 @@ export class Galgame extends plugin {
         }
 
         return true
+    }
+
+    /**
+     * 确认游戏开始 - 用户确认后生成开场白
+     */
+    async confirmGameStart(characterId, envSettings) {
+        const e = this.e
+        const userId = String(e.user_id)
+        const groupId = e.group_id ? String(e.group_id) : null
+        const bot = e.bot || Bot
+
+        try {
+            await this.reply('✅ 正在生成开场剧情...')
+            const openingResult = await galgameService.generateOpeningContext(userId, characterId, e, groupId)
+            const session = await galgameService.getOrCreateSession(userId, characterId, groupId)
+            const level = getAffectionLevel(session.affection)
+
+            await galgameService.addHistory(session.id, 'assistant', openingResult.response)
+
+            let openingMsg = ''
+            if (envSettings?.summary) {
+                openingMsg += `${envSettings.summary}\n━━━━━━━━━━━━━━━━\n`
+            }
+            if (openingResult.scene) {
+                openingMsg += `📍 ${openingResult.scene.name}`
+                if (openingResult.scene.description) {
+                    openingMsg += ` - ${openingResult.scene.description}`
+                }
+                openingMsg += '\n━━━━━━━━━━━━━━━━\n'
+            }
+            openingMsg += openingResult.response
+            openingMsg += `\n${level.emoji} ${level.name} (${session.affection})`
+
+            const paragraphs = openingMsg.split(/\n\n+/).filter(p => p.trim())
+            if (paragraphs.length > 1) {
+                for (const paragraph of paragraphs) {
+                    await sendGroupMessage(bot, groupId, paragraph.trim())
+                    await new Promise(r => setTimeout(r, 800))
+                }
+            } else {
+                await sendGroupMessage(bot, groupId, openingMsg)
+            }
+        } catch (err) {
+            gameLogger.error('确认开始游戏失败:', err)
+            await this.reply(`❌ 生成开场失败: ${err.message}`)
+        }
+    }
+
+    /**
+     * 重新随机环境设定
+     */
+    async rerollEnvironment(characterId) {
+        const e = this.e
+        const userId = String(e.user_id)
+        const groupId = e.group_id ? String(e.group_id) : null
+        const bot = e.bot || Bot
+
+        try {
+            await this.reply('🔄 正在重新随机...')
+            const envSettings = await galgameService.initializeEnvironment(userId, characterId, e, groupId)
+
+            // 重新展示预览卡片
+            const fieldMap = [
+                { key: 'name', emoji: '👤', label: '角色名' },
+                { key: 'world', emoji: '🌍', label: '世界观' },
+                { key: 'identity', emoji: '💼', label: '身份' },
+                { key: 'personality', emoji: '💭', label: '性格' },
+                { key: 'likes', emoji: '❤️', label: '喜好' },
+                { key: 'dislikes', emoji: '❌', label: '厌恶' },
+                { key: 'background', emoji: '📖', label: '背景' },
+                { key: 'secret', emoji: '🔒', label: '秘密' },
+                { key: 'scene', emoji: '📍', label: '场景' },
+                { key: 'meetingReason', emoji: '🤝', label: '相遇' }
+            ]
+
+            let previewMsg = '🎲 重新随机的角色设定：\n━━━━━━━━━━━━━━━━\n'
+            for (const field of fieldMap) {
+                const value = envSettings?.[field.key]
+                if (value === '???' || !value) {
+                    previewMsg += `${field.emoji} ${field.label}: ???（对话中揭示）\n`
+                } else {
+                    previewMsg += `${field.emoji} ${field.label}: ${value}\n`
+                }
+            }
+            previewMsg += '━━━━━━━━━━━━━━━━\n'
+            previewMsg += '回复「确认」开始游戏 | 回复「重随」重新生成'
+
+            const previewResult = await sendGroupMessage(bot, groupId, previewMsg)
+            const messageId = previewResult?.message_id || previewResult?.data?.message_id
+
+            // 重新保存待确认状态
+            if (messageId) {
+                galgameService.savePendingChoice(
+                    groupId,
+                    messageId,
+                    userId,
+                    'env_confirm',
+                    [
+                        { text: '确认开始', emoji: '👍' },
+                        { text: '重新随机', emoji: '🔄' }
+                    ],
+                    { characterId, envSettings }
+                )
+            }
+            galgameService.savePendingChoice(
+                groupId,
+                `env_${userId}`,
+                userId,
+                'env_confirm',
+                [
+                    { text: '确认开始', emoji: '👍' },
+                    { text: '重新随机', emoji: '🔄' }
+                ],
+                { characterId, envSettings, previewMessageId: messageId }
+            )
+        } catch (err) {
+            gameLogger.error('重新随机失败:', err)
+            await this.reply(`❌ 重新随机失败: ${err.message}`)
+        }
     }
 
     /**
@@ -1587,6 +1873,81 @@ ${urlText}
     /**
      * 显示帮助
      */
+    /**
+     * 查看背包
+     */
+    async showInventory() {
+        const e = this.e
+        const userId = String(e.user_id)
+        const groupId = e.group_id ? String(e.group_id) : null
+
+        try {
+            const gameSession = galgameService.getUserGameSession(groupId, userId)
+            if (!gameSession || !gameSession.inGame) {
+                await this.reply('❌ 你当前没有进行中的游戏')
+                return true
+            }
+
+            const characterId = gameSession.characterId || 'default'
+            const session = await galgameService.getOrCreateSession(userId, characterId, groupId)
+            const items = await galgameService.getItems(userId, characterId, groupId)
+            const gold = session.gold || 100
+
+            let msg = '🎒 你的背包：\n━━━━━━━━━━━━━━━━\n'
+
+            if (items.length === 0) {
+                msg += '里面空空如也。\n'
+            } else {
+                // 按类型分组
+                const grouped = {}
+                for (const item of items) {
+                    const type = item.type || 'consumable'
+                    if (!grouped[type]) grouped[type] = []
+                    grouped[type].push(item)
+                }
+
+                // 按类型优先级展示: key > clue > gift > consumable
+                const typeOrder = ['key', 'clue', 'gift', 'consumable']
+                for (const type of typeOrder) {
+                    const typeItems = grouped[type]
+                    if (!typeItems || typeItems.length === 0) continue
+
+                    const icon = ITEM_TYPE_ICONS[type] || '📦'
+                    const label = ITEM_TYPE_LABELS[type] || type
+                    msg += `${icon} ${label}:\n`
+                    for (const item of typeItems) {
+                        msg += `  • ${item.name}`
+                        if (item.description) msg += ` - ${item.description}`
+                        msg += '\n'
+                    }
+                    msg += '\n'
+                }
+
+                // 处理未知类型
+                for (const type of Object.keys(grouped)) {
+                    if (!typeOrder.includes(type)) {
+                        const typeItems = grouped[type]
+                        msg += `📦 其他:\n`
+                        for (const item of typeItems) {
+                            msg += `  • ${item.name}`
+                            if (item.description) msg += ` - ${item.description}`
+                            msg += '\n'
+                        }
+                        msg += '\n'
+                    }
+                }
+            }
+
+            msg += `💰 金币: ${gold}\n━━━━━━━━━━━━━━━━`
+            await this.reply(msg)
+        } catch (err) {
+            gameLogger.error('查看背包失败:', err)
+            await this.reply(`❌ 查看背包失败: ${err.message}`)
+        }
+
+        return true
+    }
+
     async showHelp() {
         const help = `🎮 游戏模式帮助
 ━━━━━━━━━━━━━━━━
@@ -1967,42 +2328,7 @@ ${urlText}
      * 显示物品列表
      */
     async showItems() {
-        const e = this.e
-        const userId = String(e.user_id)
-        const groupId = e.group_id ? String(e.group_id) : null
-
-        if (!galgameService.isUserInGame(groupId, userId)) {
-            await this.reply('❌ 请先使用 #游戏开始 进入游戏')
-            return true
-        }
-
-        try {
-            const gameSession = galgameService.getUserGameSession(groupId, userId)
-            const characterId = gameSession?.characterId || 'default'
-            const status = await galgameService.getStatus(userId, characterId, groupId)
-
-            let itemText = `📦 背包物品\n━━━━━━━━━━━━━━━━\n`
-            itemText += `💰 金币: ${status.gold || 100}\n`
-
-            if (status.items && status.items.length > 0) {
-                itemText += `\n📦 物品 (${status.items.length}):\n`
-                for (const item of status.items) {
-                    itemText += `  • ${item.name}`
-                    if (item.description) itemText += ` - ${item.description}`
-                    itemText += '\n'
-                }
-            } else {
-                itemText += `\n📦 背包空空如也\n`
-            }
-
-            itemText += `\n💡 使用 #商店 购买物品\n💡 使用 #打工 赚取金币`
-
-            await this.reply(itemText)
-        } catch (err) {
-            gameLogger.error('获取物品失败:', err)
-            await this.reply(`❌ 获取失败: ${err.message}`)
-        }
-
-        return true
+        // 委托给 showInventory 统一处理
+        return await this.showInventory()
     }
 }

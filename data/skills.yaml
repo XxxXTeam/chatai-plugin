@@ -206,8 +206,8 @@ skills:
     # ========== 定时任务 ==========
     - index: 16
       name: 'schedule'
-      description: '定时任务：创建、管理定时任务，支持周期执行、@用户、触发AI对话等'
-      tools: ['create_scheduled_task', 'list_scheduled_tasks', 'delete_scheduled_task', 'modify_scheduled_task', 'get_scheduled_task_info', 'trigger_scheduled_task']
+      description: '定时任务：创建自然语言定时任务、查看和取消定时任务'
+      tools: ['schedule_task', 'list_my_scheduled_tasks', 'cancel_scheduled_task']
       enabled: true
 
     # ========== 系统命令（危险） ==========
@@ -282,9 +282,9 @@ skills:
     # 缓存有效期（毫秒）
     cacheTTL: 60000
 
-  # 调度配置
+  # 调度配置 - 启用后会用轻量模型先判断需要哪些工具组，减少 token 消耗
   dispatch:
-    enabled: true
+    enabled: false  # 默认关闭，在管理面板中启用
     useSummary: true
     maxGroups: 3
   security:

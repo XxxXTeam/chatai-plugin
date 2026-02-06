@@ -29,6 +29,10 @@ export function parseResponse(response) {
         goldChange: 0,
         purchases: [],
         obtainedItems: [],
+        usedItems: [], // [使用物品:物品名]
+        requiredItems: [], // [需要物品:物品名]
+        shop: null, // [商店:名称]
+        shopItems: [], // [商品N:物品名|类型|价格|描述]
         options: [],
         event: null,
         eventOptions: [],
@@ -126,16 +130,72 @@ export function parseResponse(response) {
     }
     cleanResponse = cleanResponse.replace(purchasePattern, '').trim()
 
-    // 解析获得物品 [获得物品:物品名|描述] 或 [获得物品:物品名]
-    const itemPattern = /\[获得物品:([^|\]]+)\|?([^\]]*)\]/g
+    // 解析获得物品 [获得物品:物品名|类型|描述] 或 [获得物品:物品名|描述] 或 [获得物品:物品名]
+    const itemPattern = /\[获得物品:([^|\]]+)\|?([^|\]]*)\|?([^\]]*)\]/g
     const itemMatches = [...response.matchAll(itemPattern)]
     for (const match of itemMatches) {
-        result.obtainedItems.push({
-            name: match[1].trim(),
-            description: match[2]?.trim() || ''
-        })
+        const name = match[1].trim()
+        const seg2 = match[2]?.trim() || ''
+        const seg3 = match[3]?.trim() || ''
+
+        // 判断是3段格式还是2段格式
+        const validTypes = ['key', 'gift', 'consumable', 'clue']
+        let type = 'consumable'
+        let description = ''
+
+        if (seg3) {
+            // 3段: name|type|description
+            type = validTypes.includes(seg2) ? seg2 : 'consumable'
+            description = seg3
+        } else if (seg2) {
+            // 2段: name|description or name|type
+            if (validTypes.includes(seg2)) {
+                type = seg2
+            } else {
+                description = seg2
+            }
+        }
+
+        result.obtainedItems.push({ name, type, description })
     }
     cleanResponse = cleanResponse.replace(itemPattern, '').trim()
+
+    // 解析使用物品 [使用物品:物品名]
+    const useItemPattern = /\[使用物品:([^\]]+)\]/g
+    const useItemMatches = [...response.matchAll(useItemPattern)]
+    for (const match of useItemMatches) {
+        result.usedItems.push(match[1].trim())
+    }
+    cleanResponse = cleanResponse.replace(useItemPattern, '').trim()
+
+    // 解析需要物品 [需要物品:物品名]
+    const needItemPattern = /\[需要物品:([^\]]+)\]/g
+    const needItemMatches = [...response.matchAll(needItemPattern)]
+    for (const match of needItemMatches) {
+        result.requiredItems.push(match[1].trim())
+    }
+    cleanResponse = cleanResponse.replace(needItemPattern, '').trim()
+
+    // 解析商店 [商店:名称]
+    const shopPattern = /\[商店:([^\]]+)\]/
+    const shopMatch = response.match(shopPattern)
+    if (shopMatch) {
+        result.shop = shopMatch[1].trim()
+    }
+    cleanResponse = cleanResponse.replace(shopPattern, '').trim()
+
+    // 解析商品 [商品N:物品名|类型|价格|描述]
+    const goodsPattern = /\[商品\d+:([^|\]]+)\|([^|\]]+)\|(\d+)\|([^\]]+)\]/g
+    const goodsMatches = [...response.matchAll(goodsPattern)]
+    for (const match of goodsMatches) {
+        result.shopItems.push({
+            name: match[1].trim(),
+            type: match[2].trim(),
+            price: parseInt(match[3]),
+            description: match[4].trim()
+        })
+    }
+    cleanResponse = cleanResponse.replace(goodsPattern, '').trim()
 
     // 解析对话选项 [选项1:文本]
     const optionPattern = /\[选项(\d):([^\]]+)\]/g
