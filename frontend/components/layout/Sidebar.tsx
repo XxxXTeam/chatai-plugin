@@ -51,67 +51,32 @@ interface NavGroup {
     tourId?: string
 }
 
-// 合并后的分组导航结构
-const navGroups: NavGroup[] = [
-    {
-        id: 'overview',
-        label: '仪表盘',
-        icon: LayoutDashboard,
-        items: [{ href: '/', label: '仪表盘', icon: LayoutDashboard }]
-    },
-    {
-        id: 'config',
-        label: '配置中心',
-        icon: Settings,
-        tourId: 'config',
-        items: [
-            { href: '/settings', label: '基础设置', icon: Settings, tourId: 'settings' },
-            { href: '/settings/system', label: '系统配置', icon: Server },
-            { href: '/settings/context', label: '上下文配置', icon: FileText },
-            { href: '/channels', label: '渠道管理', icon: Plug, tourId: 'channels' },
-            { href: '/presets', label: '预设管理', icon: Palette, tourId: 'presets' },
-            { href: '/scope', label: '人设管理', icon: UserCog },
-            { href: '/settings/proxy', label: '代理设置', icon: Globe },
-            { href: '/settings/links', label: '登录链接', icon: LinkIcon }
-        ]
-    },
-    {
-        id: 'ai',
-        label: 'AI扩展',
-        icon: Cpu,
-        tourId: 'ai',
-        items: [
-            { href: '/tools', label: '工具配置', icon: Wrench },
-            { href: '/mcp', label: 'MCP服务', icon: Bot },
-            { href: '/imagegen', label: '绘图预设', icon: Wand2 },
-            { href: '/knowledge', label: '知识库', icon: BookOpen },
-            { href: '/memory', label: '记忆管理', icon: Brain },
-            { href: '/game', label: 'Galgame', icon: Gamepad2 }
-        ]
-    },
-    {
-        id: 'data',
-        label: '数据记录',
-        icon: Database,
-        tourId: 'data',
-        items: [
-            { href: '/stats', label: '使用统计', icon: BarChart3 },
-            { href: '/history/usage', label: '调用统计', icon: Activity },
-            { href: '/conversations', label: '对话历史', icon: MessageSquare },
-            { href: '/history', label: '工具调用', icon: History }
-        ]
-    },
-    {
-        id: 'users',
-        label: '用户管理',
-        icon: Users,
-        tourId: 'users',
-        items: [
-            { href: '/users', label: '用户管理', icon: Users },
-            { href: '/groups', label: '群组管理', icon: UsersRound, tourId: 'groups' }
-        ]
-    }
-]
+// Icon name -> component lookup table
+const iconMap: Record<string, LucideIcon> = {
+    LayoutDashboard, Settings, MessageSquare, Users, Plug, Bot, Wrench,
+    History, Palette, UsersRound, UserCog, Brain, BookOpen, Cpu, Database,
+    BarChart3, Wand2, Globe, Activity, FileText, Server, Link: LinkIcon, Gamepad2
+}
+
+function resolveIcon(name: string): LucideIcon {
+    return iconMap[name] || FileText
+}
+
+// Navigation groups - uses shared nav-config for labels/paths, resolves icons locally
+import { navGroups as navGroupsConfig } from '@/lib/nav-config'
+
+const navGroups: NavGroup[] = navGroupsConfig.map(group => ({
+    id: group.id,
+    label: group.label,
+    icon: resolveIcon(group.icon),
+    tourId: group.tourId,
+    items: group.items.map(item => ({
+        href: item.href,
+        label: item.label,
+        icon: resolveIcon(item.icon),
+        tourId: item.tourId
+    }))
+}))
 
 // 判断单个导航项是否激活（精确匹配优先）
 function isItemActive(itemHref: string, pathname: string, allItems: NavItem[]): boolean {

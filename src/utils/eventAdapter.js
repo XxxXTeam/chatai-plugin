@@ -664,6 +664,7 @@ export function formatDuration(seconds) {
 
 /**
  * 发送群消息 - 全适配器兼容
+ * 委托给 platformAdapter.sendGroupMessage 统一实现
  * @param {Object} bot - Bot 实例
  * @param {string|number} groupId - 群ID
  * @param {string|Array} message - 消息内容
@@ -673,24 +674,11 @@ export async function sendGroupMessage(bot, groupId, message) {
     if (!message || !groupId) return false
 
     try {
-        // icqq
-        const group = bot?.pickGroup?.(parseInt(groupId))
-        if (group?.sendMsg) {
-            await group.sendMsg(message)
-            return true
-        }
-
-        // OneBot
-        if (bot?.sendGroupMsg) {
-            await bot.sendGroupMsg(parseInt(groupId), message)
-            return true
-        }
-
-        // OneBot 下划线命名
-        if (bot?.send_group_msg) {
-            await bot.send_group_msg({ group_id: parseInt(groupId), message })
-            return true
-        }
+        // 构造一个最小事件对象以适配 platformAdapter 接口
+        const e = { bot }
+        const { sendGroupMessage: platformSendGroupMessage } = await import('./platformAdapter.js')
+        const result = await platformSendGroupMessage(e, groupId, message)
+        return !!result
     } catch (err) {
         logger.warn(`[EventAdapter] 发送群消息失败: ${err.message}`)
     }

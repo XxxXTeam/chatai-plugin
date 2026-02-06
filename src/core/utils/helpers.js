@@ -567,24 +567,22 @@ export function normalizeApiError(error, provider) {
 
 /**
  * 重试工具函数
+ * 委托给 utils/common.js 的 retry 统一实现
  * @param {Function} fn - 要重试的函数
  * @param {Object} options - 重试选项
  * @returns {Promise<any>}
  */
 export async function withRetry(fn, options = {}) {
-    const { maxRetries = 3, delay = 1000, backoff = 2, shouldRetry = () => true } = options
-
-    let lastError
-    for (let i = 0; i < maxRetries; i++) {
-        try {
-            return await fn()
-        } catch (error) {
-            lastError = error
-            if (i < maxRetries - 1 && shouldRetry(error, i)) {
-                const waitTime = delay * Math.pow(backoff, i)
-                await new Promise(resolve => setTimeout(resolve, waitTime))
-            }
-        }
-    }
-    throw lastError
+    const { maxRetries = 3, delay = 1000, backoff = 2, shouldRetry } = options
+    const { retry } = await import('../../utils/common.js')
+    return retry(fn, {
+        retries: maxRetries,
+        delay,
+        backoff,
+        onRetry: shouldRetry
+            ? (error, attempt) => {
+                  if (!shouldRetry(error, attempt - 1)) throw error
+              }
+            : undefined
+    })
 }

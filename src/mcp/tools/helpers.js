@@ -4,6 +4,7 @@
 
 import _logger from '../../core/utils/logger.js'
 import * as cheerio from 'cheerio'
+import { PLUGIN_DEVELOPERS } from '../../utils/common.js'
 
 const logger = _logger.tag('mcp-helper')
 
@@ -173,15 +174,8 @@ export const icqqFriend = {
     }
 }
 
-export async function callOneBotApi(bot, action, params = {}) {
-    if (bot.sendApi) {
-        return await bot.sendApi(action, params)
-    }
-    if (bot[action]) {
-        return await bot[action](params)
-    }
-    throw new Error(`不支持的API: ${action}`)
-}
+// callOneBotApi 统一使用 eventAdapter 中更完善的实现（支持 camelCase 转换和 HTTP fallback）
+export { callOneBotApi } from '../../utils/eventAdapter.js'
 
 /**
  * 群公告 API 封装
@@ -811,7 +805,6 @@ export async function loadYunzaiConfig() {
     } catch (e) {}
     return yunzaiCfg
 }
-const PLUGIN_DEVELOPERS = [1018037233, 2173302144]
 
 /**
  * 获取主人QQ列表
@@ -1269,12 +1262,15 @@ export const compatSegment = {
 
     json: data => {
         const jsonStr = typeof data === 'string' ? data : JSON.stringify(data)
-        return { type: 'json', data: jsonStr, data: { data: jsonStr } }
+        // icqq 格式: { type: 'json', data: jsonStr }
+        // onebot 格式: { type: 'json', data: { data: jsonStr } }
+        // 使用 onebot 格式，normalizeSegment 会处理转换
+        return { type: 'json', data: { data: jsonStr } }
     },
 
     xml: data => ({
         type: 'xml',
-        data: data,
+        // 使用 onebot 格式，normalizeSegment 会处理转换
         data: { data }
     }),
 

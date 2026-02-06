@@ -60,7 +60,7 @@ export function BatchTestPanel({ open, onOpenChange, channelId, channelName, mod
     const [filterType, setFilterType] = useState<FilterType>('all')
     const [concurrency, setConcurrency] = useState(5)
     const [testedCount, setTestedCount] = useState(0)
-    const pageSize = 10
+    const pageSize = 20
 
     // 初始化选中所有模型
     useEffect(() => {
@@ -361,7 +361,7 @@ export function BatchTestPanel({ open, onOpenChange, channelId, channelName, mod
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="sm:max-w-3xl max-h-[90vh] flex flex-col gap-0 p-0 overflow-hidden">
+            <DialogContent className="sm:max-w-5xl max-h-[90vh] flex flex-col gap-0 p-0 overflow-hidden">
                 {/* 标题栏 */}
                 <DialogHeader className="px-6 py-4 border-b bg-gradient-to-r from-primary/5 to-transparent">
                     <DialogTitle className="flex items-center justify-between">
@@ -398,8 +398,8 @@ export function BatchTestPanel({ open, onOpenChange, channelId, channelName, mod
 
                 {/* 统计卡片 */}
                 {results.size > 0 && !testing && (
-                    <div className="px-6 py-3 border-b bg-muted/20">
-                        <div className="grid grid-cols-4 gap-3">
+                    <div className="px-4 sm:px-6 py-3 border-b bg-muted/20">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
                             <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
                                 <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                                 <div>
@@ -442,7 +442,7 @@ export function BatchTestPanel({ open, onOpenChange, channelId, channelName, mod
                 )}
 
                 {/* 搜索和操作栏 */}
-                <div className="px-6 py-3 border-b bg-background flex flex-wrap items-center gap-2">
+                <div className="px-4 sm:px-6 py-3 border-b bg-background flex flex-wrap items-center gap-2">
                     <div className="relative flex-1 min-w-[200px]">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                         <Input
@@ -522,8 +522,8 @@ export function BatchTestPanel({ open, onOpenChange, channelId, channelName, mod
                 {/* 模型列表 */}
                 <div className="flex-1 overflow-hidden flex flex-col">
                     {/* 表头 */}
-                    <div className="flex items-center px-6 py-2.5 border-b bg-muted/30 text-xs font-medium text-muted-foreground">
-                        <div className="w-10 flex-shrink-0">
+                    <div className="flex items-center px-4 sm:px-6 py-2 border-b bg-muted/30 text-xs font-medium text-muted-foreground">
+                        <div className="w-8 flex-shrink-0">
                             <Checkbox
                                 checked={selectedModels.length === filteredModels.length && filteredModels.length > 0}
                                 onCheckedChange={() => {
@@ -536,20 +536,21 @@ export function BatchTestPanel({ open, onOpenChange, channelId, channelName, mod
                             />
                         </div>
                         <div className="flex-1 min-w-0">模型名称</div>
-                        <div className="w-28 text-center flex-shrink-0">状态</div>
-                        <div className="w-24 text-center flex-shrink-0">操作</div>
+                        <div className="w-20 text-center flex-shrink-0 hidden sm:block">耗时</div>
+                        <div className="w-20 text-center flex-shrink-0">状态</div>
+                        <div className="w-20 text-center flex-shrink-0">操作</div>
                     </div>
 
                     {/* 列表 */}
-                    <ScrollArea className="flex-1 min-h-0" style={{ height: '340px' }}>
+                    <ScrollArea className="flex-1 min-h-0" style={{ height: 'min(500px, 50vh)' }}>
                         {paginatedModels.length === 0 ? (
                             <div className="flex flex-col items-center justify-center h-40 text-muted-foreground">
                                 <Search className="h-10 w-10 mb-2 opacity-20" />
                                 <span>暂无匹配的模型</span>
                             </div>
                         ) : (
-                            <div className="divide-y">
-                                {paginatedModels.map((model, index) => {
+                            <div className="divide-y divide-border/50">
+                                {paginatedModels.map((model) => {
                                     const status = getModelStatus(model)
                                     const isSelected = selectedModels.includes(model)
                                     const result = results.get(model)
@@ -558,106 +559,99 @@ export function BatchTestPanel({ open, onOpenChange, channelId, channelName, mod
                                         <div
                                             key={model}
                                             className={cn(
-                                                'flex items-center px-6 py-3 transition-all duration-200 group',
-                                                'hover:bg-muted/50',
+                                                'flex items-center px-4 sm:px-6 py-2 transition-colors group',
+                                                'hover:bg-muted/40',
                                                 isSelected && 'bg-primary/5',
                                                 status === '成功' && 'bg-emerald-50/30 dark:bg-emerald-950/10',
                                                 status === '失败' && 'bg-rose-50/30 dark:bg-rose-950/10',
                                                 status === '测试中' && 'bg-blue-50/30 dark:bg-blue-950/10'
                                             )}
-                                            style={{ animationDelay: `${index * 30}ms` }}
                                         >
-                                            <div className="w-10 flex-shrink-0">
+                                            <div className="w-8 flex-shrink-0">
                                                 <Checkbox
                                                     checked={isSelected}
                                                     onCheckedChange={() => toggleModel(model)}
                                                     disabled={testing}
-                                                    className="transition-transform hover:scale-110"
                                                 />
                                             </div>
-                                            <div className="flex-1 min-w-0 pr-4">
-                                                <div className="flex items-center gap-2">
-                                                    <span
-                                                        className={cn(
-                                                            'font-mono text-sm truncate',
-                                                            status === '成功' &&
-                                                                'text-emerald-700 dark:text-emerald-400',
-                                                            status === '失败' && 'text-rose-700 dark:text-rose-400'
-                                                        )}
-                                                    >
-                                                        {model}
-                                                    </span>
-                                                </div>
-                                                {result && (
-                                                    <div className="flex items-center gap-3 mt-1">
-                                                        {result.elapsed > 0 && (
-                                                            <span className="text-xs text-muted-foreground flex items-center gap-1">
-                                                                <Clock className="h-3 w-3" />
-                                                                {result.elapsed < 1000
-                                                                    ? `${result.elapsed}ms`
-                                                                    : `${(result.elapsed / 1000).toFixed(2)}s`}
+                                            <div className="flex-1 min-w-0 pr-3">
+                                                <span
+                                                    className={cn(
+                                                        'font-mono text-sm truncate block',
+                                                        status === '成功' && 'text-emerald-700 dark:text-emerald-400',
+                                                        status === '失败' && 'text-rose-700 dark:text-rose-400'
+                                                    )}
+                                                    title={model}
+                                                >
+                                                    {/* Highlight search match */}
+                                                    {searchTerm ? (
+                                                        (() => {
+                                                            const idx = model.toLowerCase().indexOf(searchTerm.toLowerCase())
+                                                            if (idx === -1) return model
+                                                            return (<>
+                                                                {model.slice(0, idx)}
+                                                                <mark className="bg-yellow-200 dark:bg-yellow-800 rounded-sm px-0.5">{model.slice(idx, idx + searchTerm.length)}</mark>
+                                                                {model.slice(idx + searchTerm.length)}
+                                                            </>)
+                                                        })()
+                                                    ) : model}
+                                                </span>
+                                                {result?.error && (
+                                                    <Tooltip>
+                                                        <TooltipTrigger asChild>
+                                                            <span className="text-[10px] text-rose-500 dark:text-rose-400 truncate block max-w-[300px] cursor-help mt-0.5">
+                                                                {result.error}
                                                             </span>
-                                                        )}
-                                                        {result.error && (
-                                                            <Tooltip>
-                                                                <TooltipTrigger asChild>
-                                                                    <span className="text-xs text-rose-600 dark:text-rose-400 truncate max-w-[200px] cursor-help">
-                                                                        {result.error}
-                                                                    </span>
-                                                                </TooltipTrigger>
-                                                                <TooltipContent side="bottom" className="max-w-[300px]">
-                                                                    <p className="text-xs">{result.error}</p>
-                                                                </TooltipContent>
-                                                            </Tooltip>
-                                                        )}
-                                                    </div>
+                                                        </TooltipTrigger>
+                                                        <TooltipContent side="bottom" className="max-w-[400px]">
+                                                            <p className="text-xs font-mono break-all">{result.error}</p>
+                                                        </TooltipContent>
+                                                    </Tooltip>
                                                 )}
                                             </div>
-                                            <div className="w-28 text-center flex-shrink-0">
+                                            {/* 耗时列 - 桌面端 */}
+                                            <div className="w-20 text-center flex-shrink-0 hidden sm:block">
+                                                {result && result.elapsed > 0 && (
+                                                    <span className="text-xs text-muted-foreground font-mono">
+                                                        {result.elapsed < 1000
+                                                            ? `${result.elapsed}ms`
+                                                            : `${(result.elapsed / 1000).toFixed(1)}s`}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {/* 状态列 */}
+                                            <div className="w-20 text-center flex-shrink-0">
                                                 {status === '成功' && (
-                                                    <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-400 dark:border-emerald-700 gap-1 font-medium shadow-sm">
-                                                        <CheckCircle2 className="h-3 w-3" />
-                                                        成功
-                                                    </Badge>
+                                                    <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 mx-auto" />
                                                 )}
                                                 {status === '失败' && (
-                                                    <Badge className="bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-950 dark:text-rose-400 dark:border-rose-700 gap-1 font-medium shadow-sm">
-                                                        <XCircle className="h-3 w-3" />
-                                                        失败
-                                                    </Badge>
+                                                    <XCircle className="h-4 w-4 text-rose-600 dark:text-rose-400 mx-auto" />
                                                 )}
                                                 {status === '测试中' && (
-                                                    <Badge className="bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-950 dark:text-blue-400 dark:border-blue-700 gap-1 font-medium animate-pulse shadow-sm">
-                                                        <Loader2 className="h-3 w-3 animate-spin" />
-                                                        测试中
-                                                    </Badge>
+                                                    <Loader2 className="h-4 w-4 text-blue-600 dark:text-blue-400 animate-spin mx-auto" />
                                                 )}
                                                 {status === '未开始' && (
-                                                    <span className="text-xs text-muted-foreground/60 px-2 py-1 rounded bg-muted/50">
-                                                        待测试
-                                                    </span>
+                                                    <span className="text-[10px] text-muted-foreground/50">--</span>
                                                 )}
                                             </div>
-                                            <div className="w-24 text-center flex-shrink-0">
+                                            {/* 操作列 */}
+                                            <div className="w-20 text-center flex-shrink-0">
                                                 <Button
-                                                    variant={status === '未开始' ? 'default' : 'outline'}
+                                                    variant="outline"
                                                     size="sm"
                                                     className={cn(
-                                                        'h-8 px-3 gap-1.5 transition-all',
-                                                        status === '未开始' && 'bg-primary hover:bg-primary/90',
-                                                        status === '成功' &&
-                                                            'text-emerald-600 border-emerald-300 hover:bg-emerald-50',
-                                                        status === '失败' &&
-                                                            'text-rose-600 border-rose-300 hover:bg-rose-50'
+                                                        'h-7 px-2.5 text-xs gap-1',
+                                                        status === '成功' && 'text-emerald-600 border-emerald-200 dark:border-emerald-800',
+                                                        status === '失败' && 'text-rose-600 border-rose-200 dark:border-rose-800'
                                                     )}
                                                     onClick={() => testSingleModel(model)}
-                                                    disabled={testing || testingModel === model}
+                                                    disabled={testing || testingModels.has(model)}
                                                 >
-                                                    {testingModel === model ? (
-                                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                    {testingModels.has(model) ? (
+                                                        <Loader2 className="h-3 w-3 animate-spin" />
                                                     ) : (
                                                         <>
-                                                            <Play className="h-3.5 w-3.5" />
+                                                            <Play className="h-3 w-3" />
                                                             {status === '未开始' ? '测试' : '重测'}
                                                         </>
                                                     )}

@@ -1,20 +1,6 @@
 import config from '../../../config/config.js'
-const PLUGIN_DEVELOPERS = [1018037233, 2173302144]
-
-let yunzaiCfg = null
-try {
-    const cfgModule = await import('../../../../../lib/config/config.js')
-    yunzaiCfg = cfgModule.default || cfgModule
-} catch (e) {
-    // Yunzai config not available, try alternative path
-    try {
-        if (global.Bot?.config?.master) {
-            yunzaiCfg = { masterQQ: global.Bot.config.master }
-        }
-    } catch {
-        // ignore
-    }
-}
+import { PLUGIN_DEVELOPERS } from '../../utils/common.js'
+import { isMaster as platformIsMaster } from '../../utils/platformAdapter.js'
 
 /**
  * 权限服务 - 检查用户是否有权限执行指定命令
@@ -259,68 +245,11 @@ class PermissionService {
     }
 
     /**
-     * 获取主人列表（使用框架配置）
-     */
-    getMasterList() {
-        const masters = new Set()
-
-        // 1. 插件开发者固定权限
-        for (const dev of PLUGIN_DEVELOPERS) {
-            masters.add(String(dev))
-        }
-
-        // 2. 插件配置的主人列表
-        const pluginMasters = config.get('admin.masterQQ') || []
-        for (const m of pluginMasters) {
-            masters.add(String(m))
-        }
-
-        // 3. 插件配置的开发者/作者列表
-        const authorQQs = config.get('admin.pluginAuthorQQ') || []
-        for (const a of authorQQs) {
-            masters.add(String(a))
-        }
-
-        // 4. Yunzai 框架配置
-        if (yunzaiCfg?.masterQQ?.length > 0) {
-            for (const m of yunzaiCfg.masterQQ) {
-                masters.add(String(m))
-            }
-        }
-
-        // 5. global.Bot.config.master
-        if (global.Bot?.config?.master?.length > 0) {
-            for (const m of global.Bot.config.master) {
-                masters.add(String(m))
-            }
-        }
-
-        // 6. 尝试从 Bot.uin 列表获取每个 Bot 的主人
-        if (global.Bot?.uin) {
-            for (const uin of Object.keys(global.Bot.uin)) {
-                const bot = global.Bot[uin]
-                if (bot?.config?.master?.length > 0) {
-                    for (const m of bot.config.master) {
-                        masters.add(String(m))
-                    }
-                }
-            }
-        }
-
-        return Array.from(masters)
-    }
-
-    /**
      * 检查是否是主人
+     * 复用 platformAdapter.isMaster 统一实现，避免逻辑分散
      */
     isMaster(userId) {
-        const masters = this.getMasterList()
-        const result = masters.includes(String(userId))
-        // 调试日志
-        if (!result && masters.length === 0) {
-            console.log('[PermissionService] 警告: 未找到主人配置，yunzaiCfg:', yunzaiCfg ? '已加载' : '未加载')
-        }
-        return result
+        return platformIsMaster(userId)
     }
 
     /**

@@ -849,7 +849,7 @@ export default function ChannelsPage() {
                                     添加渠道
                                 </Button>
                             </DialogTrigger>
-                            <DialogContent className="w-[95vw] max-w-lg">
+                            <DialogContent className="w-[95vw] max-w-2xl">
                                 <DialogHeader>
                                     <DialogTitle>{editingChannel ? '编辑渠道' : '添加渠道'}</DialogTitle>
                                     <DialogDescription>配置API渠道信息</DialogDescription>
@@ -2047,7 +2047,7 @@ export default function ChannelsPage() {
                     </CardContent>
                 </Card>
             ) : (
-                <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
+                <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                     {channels.map(channel => (
                         <Card key={channel.id}>
                             <CardHeader className="pb-3">
@@ -2227,7 +2227,7 @@ export default function ChannelsPage() {
 
             {/* 模型选择对话框 - 移动端优化 */}
             <Dialog open={modelSelectorOpen} onOpenChange={setModelSelectorOpen}>
-                <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] sm:max-h-[80vh] flex flex-col">
+                <DialogContent className="w-[95vw] max-w-4xl max-h-[90vh] sm:max-h-[80vh] flex flex-col">
                     <DialogHeader className="flex-shrink-0">
                         <DialogTitle className="flex items-center gap-2">
                             <List className="h-5 w-5" />

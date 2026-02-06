@@ -1,3 +1,5 @@
+import { PLUGIN_DEVELOPERS } from './common.js'
+
 /**
  * 检测框架类型
  * @returns {'trss'|'miao'}
@@ -942,7 +944,6 @@ export function getBotNickname(e) {
     const bot = getBot(e)
     return bot?.nickname || bot?.info?.nickname || 'Bot'
 }
-const PLUGIN_DEVELOPERS = [1018037233, 2173302144]
 
 /**
  * 检查是否为主人

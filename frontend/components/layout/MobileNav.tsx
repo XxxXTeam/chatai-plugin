@@ -60,7 +60,7 @@ export function MobileNav() {
 
     return (
         <nav className="mobile-nav" role="navigation" aria-label="底部导航">
-            <div className="flex items-center justify-around px-1 py-1">
+            <div className="flex items-center justify-around px-1 py-0.5">
                 {navItems.map(item => {
                     const active = isActive(pathname, item)
                     const Icon = item.icon
@@ -74,20 +74,20 @@ export function MobileNav() {
                         >
                             <div
                                 className={cn(
-                                    'p-2 rounded-xl transition-all duration-200',
+                                    'p-1.5 rounded-xl transition-all duration-200',
                                     active ? 'bg-primary/10 scale-105' : 'hover:bg-muted/50'
                                 )}
                             >
                                 <Icon
                                     className={cn(
-                                        'h-5 w-5 transition-colors',
+                                        'h-[18px] w-[18px] transition-colors',
                                         active ? 'text-primary' : 'text-muted-foreground'
                                     )}
                                 />
                             </div>
                             <span
                                 className={cn(
-                                    'text-[10px] font-medium mt-0.5 transition-colors',
+                                    'text-[9px] font-medium transition-colors',
                                     active ? 'text-primary' : 'text-muted-foreground'
                                 )}
                             >
@@ -99,10 +99,10 @@ export function MobileNav() {
 
                 {/* 更多按钮 - 打开侧边栏 */}
                 <button onClick={toggleSidebar} className="mobile-nav-item flex-1 touch-feedback" aria-label="打开菜单">
-                    <div className="p-2 rounded-xl hover:bg-muted/50 transition-all duration-200">
-                        <MoreHorizontal className="h-5 w-5 text-muted-foreground" />
+                    <div className="p-1.5 rounded-xl hover:bg-muted/50 transition-all duration-200">
+                        <MoreHorizontal className="h-[18px] w-[18px] text-muted-foreground" />
                     </div>
-                    <span className="text-[10px] font-medium mt-0.5 text-muted-foreground">更多</span>
+                    <span className="text-[9px] font-medium text-muted-foreground">更多</span>
                 </button>
             </div>
         </nav>

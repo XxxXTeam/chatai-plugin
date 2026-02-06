@@ -4,6 +4,7 @@
  */
 import { chatLogger } from '../../core/utils/logger.js'
 import { memoryService } from './MemoryService.js'
+import { callMemoryLLM, formatMemoryTime } from './llmHelper.js'
 import { MemoryCategory, CategoryLabels, MemorySource, getCategoryLabel } from './MemoryTypes.js'
 
 const logger = chatLogger
@@ -309,7 +310,9 @@ class MemorySummarizer {
     async decayConfidence(options = {}) {
         const { decayRate = 0.95, minConfidence = 0.3, daysThreshold = 30 } = options
 
-        const db = await this.getDB()
+        const { databaseService } = await import('../storage/DatabaseService.js')
+        databaseService.init()
+        const db = databaseService.db
         const threshold = Date.now() - daysThreshold * 24 * 60 * 60 * 1000
 
         // 更新长时间未访问的记忆可信度
@@ -332,63 +335,84 @@ class MemorySummarizer {
     }
 
     /**
-     * 获取数据库连接
+     * 调用 LLM（使用共享辅助函数）
      */
-    async getDB() {
-        const { databaseService } = await import('../storage/DatabaseService.js')
-        databaseService.init()
-        return databaseService.db
+    async callLLM(prompt) {
+        return callMemoryLLM(this.llmClient, prompt, {
+            maxTokens: 800,
+            temperature: 0.3,
+            caller: 'MemorySummarizer'
+        })
     }
 
     /**
-     * 调用 LLM
+     * 格式化时间（使用共享辅助函数）
      */
-    async callLLM(prompt) {
-        if (!this.llmClient) {
-            throw new Error('LLM client not configured')
+    formatTime(timestamp) {
+        return formatMemoryTime(timestamp)
+    }
+
+    /**
+     * 对话结束时自动触发记忆提取和总结
+     * 可在对话结束（如 #ai结束对话）时调用此方法
+     * @param {string} userId - 用户ID
+     * @param {Array} messages - 本次对话消息列表
+     * @param {Object} [options] - 选项
+     * @param {string} [options.groupId] - 群组ID
+     * @param {boolean} [options.summarize=true] - 是否同时执行总结
+     * @returns {Promise<Object>} 提取和总结结果
+     */
+    async onConversationEnd(userId, messages, options = {}) {
+        const { groupId = null, summarize = true } = options
+
+        const result = {
+            extractedCount: 0,
+            summarized: false,
+            cleanedCount: 0
         }
 
         try {
-            if (typeof this.llmClient.sendMessage === 'function') {
-                const response = await this.llmClient.sendMessage(prompt, {
-                    maxTokens: 800,
-                    temperature: 0.3
-                })
-                return response?.text || response?.content || response
-            } else if (typeof this.llmClient.complete === 'function') {
-                const response = await this.llmClient.complete(prompt, {
-                    maxTokens: 800,
-                    temperature: 0.3
-                })
-                return response
-            } else if (typeof this.llmClient.chat === 'function') {
-                const response = await this.llmClient.chat([{ role: 'user', content: prompt }], {
-                    maxTokens: 800,
-                    temperature: 0.3
-                })
-                return response?.choices?.[0]?.message?.content || response?.content || response
+            // 1. 从对话中提取记忆
+            const { memoryExtractor } = await import('./MemoryExtractor.js')
+            if (this.llmClient && !memoryExtractor.llmClient) {
+                memoryExtractor.setLLMClient(this.llmClient)
             }
 
-            throw new Error('Unknown LLM client type')
-        } catch (error) {
-            logger.error('[MemorySummarizer] LLM call failed:', error)
-            throw error
-        }
-    }
+            const extracted = await memoryExtractor.extractFromSession(userId, messages, {
+                groupId,
+                useLLM: !!this.llmClient
+            })
+            result.extractedCount = extracted.length
 
-    /**
-     * 格式化时间
-     */
-    formatTime(timestamp) {
-        if (!timestamp) return '未知'
-        const date = new Date(timestamp)
-        return date.toLocaleString('zh-CN', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-        })
+            // 2. 如果启用总结且记忆条数超过阈值，执行智能总结
+            if (summarize) {
+                const stats = await memoryService.getStats(userId)
+                if (stats.total > 20) {
+                    const summaryResult = await this.summarizeUserMemories(userId, {
+                        groupId,
+                        useLLM: !!this.llmClient
+                    })
+                    result.summarized = true
+                    result.summaryResult = summaryResult
+                }
+
+                // 3. 清理低质量记忆
+                const cleanResult = await this.cleanupMemories(userId, {
+                    minConfidence: 0.3,
+                    minContentLength: 3
+                })
+                result.cleanedCount = cleanResult.removedCount
+            }
+
+            logger.info(
+                `[MemorySummarizer] 对话结束处理完成: userId=${userId}, 提取=${result.extractedCount}, 总结=${result.summarized}, 清理=${result.cleanedCount}`
+            )
+        } catch (error) {
+            logger.error('[MemorySummarizer] 对话结束处理失败:', error.message)
+            result.error = error.message
+        }
+
+        return result
     }
 
     /**

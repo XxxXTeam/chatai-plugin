@@ -535,14 +535,16 @@ export class PresetManager {
             const snakeName = varName.replace(/([A-Z])/g, '_$1').toLowerCase()
             return vars[varName] ?? vars[snakeName] ?? match
         })
-
-        // 替换 ${expression} 格式的表达式（使用 eval）
-        // 提供 e 对象作为上下文，e 就是 event 对象
         const e = context.event || {}
         result = result.replace(/\$\{([^}]+)\}/g, (match, expression) => {
             try {
-                // eslint-disable-next-line no-eval
-                return eval(expression)
+                const safeEval = new Function(
+                    'e',
+                    'vars',
+                    `"use strict"; try { return (${expression}); } catch { return undefined; }`
+                )
+                const value = safeEval(e, vars)
+                return value !== undefined ? String(value) : match
             } catch (err) {
                 logger.debug(`[PresetManager] 表达式执行失败: ${expression}`, err.message)
                 return match

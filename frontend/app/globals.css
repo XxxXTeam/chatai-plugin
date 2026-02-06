@@ -684,6 +684,20 @@
   }
 }
 
+/* 移动端紧凑模式 - 全局间距压缩 */
+@media (max-width: 640px) {
+  /* 页面容器间距紧凑 */
+  .space-y-6 > :not([hidden]) ~ :not([hidden]) {
+    --tw-space-y-reverse: 0;
+    margin-top: calc(0.75rem * calc(1 - var(--tw-space-y-reverse)));
+    margin-bottom: calc(0.75rem * var(--tw-space-y-reverse));
+  }
+}
+
+/* PageTabs scrollbar hide */
+.scrollbar-none::-webkit-scrollbar { display: none; }
+.scrollbar-none { scrollbar-width: none; -ms-overflow-style: none; }
+
 /* 移动端底部导航 */
 .mobile-nav {
   @apply fixed bottom-0 left-0 right-0 z-50 bg-background/95 backdrop-blur-xl border-t border-border/50;
@@ -691,7 +705,7 @@
 }
 
 .mobile-nav-item {
-  @apply flex flex-col items-center justify-center gap-0.5 py-2 px-3 text-muted-foreground transition-all duration-200;
+  @apply flex flex-col items-center justify-center gap-0 py-1.5 px-2 text-muted-foreground transition-all duration-200;
 }
 
 .mobile-nav-item.active {

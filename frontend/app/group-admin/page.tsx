@@ -709,7 +709,7 @@ export default function GroupAdminPage() {
         <div className="flex flex-col h-screen bg-background">
             {/* 顶部 */}
             <header className="sticky top-0 z-40 bg-background/95 backdrop-blur border-b shrink-0">
-                <div className="container max-w-4xl mx-auto px-4">
+                <div className="max-w-7xl mx-auto px-4">
                     <div className="flex items-center justify-between h-14">
                         <div className="min-w-0">
                             <h1 className="font-semibold truncate">{form.groupName || `群 ${groupId}`}</h1>
@@ -732,28 +732,33 @@ export default function GroupAdminPage() {
 
             {/* 主内容 */}
             <main className="flex-1 overflow-y-auto">
-                <div className="container max-w-4xl mx-auto px-4 py-4 pb-20 sm:pb-4">
-                {/* 桌面端 Tab */}
-                {!isMobile && (
-                    <div className="flex gap-1 p-1 bg-muted rounded-lg mb-4 overflow-x-auto">
-                        {tabs.map(tab => (
-                            <button
-                                key={tab.id}
-                                onClick={() => setActiveTab(tab.id)}
-                                className={cn(
-                                    'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors',
-                                    activeTab === tab.id ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'
-                                )}
-                            >
-                                {tab.icon}
-                                {tab.label}
-                            </button>
-                        ))}
-                    </div>
-                )}
-
+                <div className="max-w-7xl mx-auto px-4 py-4 pb-20 sm:pb-4">
+                <div className={cn(!isMobile && 'flex gap-6')}>
+                    {/* 桌面端侧边Tab导航 */}
+                    {!isMobile && (
+                        <nav className="w-48 shrink-0">
+                            <div className="sticky top-20 space-y-1">
+                                {tabs.map(tab => (
+                                    <button
+                                        key={tab.id}
+                                        onClick={() => setActiveTab(tab.id)}
+                                        className={cn(
+                                            'w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all',
+                                            activeTab === tab.id
+                                                ? 'bg-primary text-primary-foreground shadow-sm'
+                                                : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                                        )}
+                                    >
+                                        {tab.icon}
+                                        {tab.label}
+                                    </button>
+                                ))}
+                            </div>
+                        </nav>
+                    )}
+                    <div className={cn(!isMobile && 'flex-1 min-w-0')}>
                     <Card>
-                        <CardContent className="p-4 sm:p-6">
+                        <CardContent className={cn(!isMobile ? 'p-6' : 'p-4')}>
                             {/* 基础设置 Tab */}
                             {activeTab === 'basic' && (
                                 <div className="space-y-4">
@@ -1243,6 +1248,30 @@ export default function GroupAdminPage() {
                                         </div>
                                     </div>
 
+                                    {/* 使用限制 */}
+                                    <div className="space-y-4 border-t pt-4 mt-4">
+                                        <div className="flex items-center gap-2">
+                                            <Clock className="h-4 w-4 text-amber-500" />
+                                            <Label className="text-base font-medium">使用限制</Label>
+                                        </div>
+                                        <div className="space-y-3 p-3 rounded-lg border bg-card">
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                <div className="space-y-1">
+                                                    <Label className="text-xs">群每日限额</Label>
+                                                    <Input type="number" min={0} value={form.dailyGroupLimit} onChange={e => setForm({ ...form, dailyGroupLimit: parseInt(e.target.value) || 0 })} placeholder="0 = 不限制" />
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <Label className="text-xs">用户每日限额</Label>
+                                                    <Input type="number" min={0} value={form.dailyUserLimit} onChange={e => setForm({ ...form, dailyUserLimit: parseInt(e.target.value) || 0 })} placeholder="0 = 不限制" />
+                                                </div>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <Label className="text-xs">超限提示消息</Label>
+                                                <Input value={form.usageLimitMessage} onChange={e => setForm({ ...form, usageLimitMessage: e.target.value })} placeholder="留空使用默认提示" />
+                                            </div>
+                                        </div>
+                                    </div>
+
                                     {/* 群独立渠道 */}
                                     <div className="space-y-4 border-t pt-4 mt-4">
                                         <div className="flex items-center justify-between">
@@ -1384,6 +1413,8 @@ export default function GroupAdminPage() {
                             )}
                         </CardContent>
                     </Card>
+                    </div>{/* close flex-1 wrapper */}
+                </div>{/* close flex gap-6 wrapper */}
 
                     <div className="mt-6 text-center text-xs text-muted-foreground">
                         ChatGPT Plugin 群管理面板 · 群 {groupId}
@@ -1394,7 +1425,7 @@ export default function GroupAdminPage() {
             {/* 移动端底部导航 */}
             {isMobile && (
                 <nav className="fixed bottom-0 left-0 right-0 z-50 bg-background border-t">
-                    <div className="grid grid-cols-5 h-14">
+                    <div className="grid grid-cols-6 h-14">
                         {tabs.map(tab => (
                             <button
                                 key={tab.id}

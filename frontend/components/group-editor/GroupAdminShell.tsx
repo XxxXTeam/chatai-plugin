@@ -110,7 +110,7 @@ export function GroupAdminShell({
         <div className="min-h-screen bg-background">
             {/* 顶部头部 */}
             <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b">
-                <div className="container max-w-4xl mx-auto px-4">
+                <div className="max-w-7xl mx-auto px-4">
                     <div className="flex items-center justify-between h-14">
                         {/* 左侧：群组信息 */}
                         <div className="flex items-center gap-3 min-w-0">
@@ -201,36 +201,45 @@ export function GroupAdminShell({
             </header>
 
             {/* 主内容区 */}
-            <main className="container max-w-4xl mx-auto px-4 py-4 pb-20 sm:pb-4">
-                {/* 桌面端 Tab 导航 */}
-                {!isMobile && (
-                    <div className="mb-4">
-                        <div className="flex gap-1 p-1 bg-muted rounded-lg overflow-x-auto">
-                            {tabs.map(tab => (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => onTabChange(tab.id)}
-                                    className={cn(
-                                        'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors',
-                                        activeTab === tab.id
-                                            ? 'bg-background shadow-sm'
-                                            : 'text-muted-foreground hover:text-foreground'
-                                    )}
-                                >
-                                    {tab.icon}
-                                    {tab.label}
-                                </button>
-                            ))}
+            <main className="max-w-7xl mx-auto px-4 py-4 pb-20 sm:pb-4">
+                {!isMobile ? (
+                    /* 桌面端双栏：侧边Tab + 内容 */
+                    <div className="flex gap-6">
+                        <nav className="w-48 shrink-0">
+                            <div className="sticky top-20 space-y-1">
+                                {tabs.map(tab => (
+                                    <button
+                                        key={tab.id}
+                                        onClick={() => onTabChange(tab.id)}
+                                        className={cn(
+                                            'w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all',
+                                            activeTab === tab.id
+                                                ? 'bg-primary text-primary-foreground shadow-sm'
+                                                : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                                        )}
+                                    >
+                                        {tab.icon}
+                                        {tab.label}
+                                    </button>
+                                ))}
+                            </div>
+                        </nav>
+                        <div className="flex-1 min-w-0">
+                            <Card>
+                                <CardContent className="p-6">
+                                    {children}
+                                </CardContent>
+                            </Card>
                         </div>
                     </div>
+                ) : (
+                    /* 移动端单栏 */
+                    <Card>
+                        <CardContent className="p-4">
+                            {children}
+                        </CardContent>
+                    </Card>
                 )}
-
-                {/* 内容区 */}
-                <Card>
-                    <CardContent className="p-4 sm:p-6">
-                        {children}
-                    </CardContent>
-                </Card>
             </main>
 
             {/* 移动端底部导航 */}

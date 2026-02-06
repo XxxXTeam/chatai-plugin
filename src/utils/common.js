@@ -371,3 +371,9 @@ export function toSnakeCase(str) {
         .toLowerCase()
         .replace(/^_/, '')
 }
+
+/**
+ * 插件开发者 QQ 号列表（全局唯一定义）
+ * @type {readonly number[]}
+ */
+export const PLUGIN_DEVELOPERS = Object.freeze([1018037233, 2173302144])

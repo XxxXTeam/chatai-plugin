@@ -36,7 +36,7 @@ export function Header({ title = 'ChatAi 管理面板', onSearchClick }: HeaderP
         <header
             className={cn(
                 'glass-panel flex items-center gap-2 sm:gap-4 px-3 sm:px-4 md:px-6 transition-all duration-300',
-                isMobile ? 'h-14' : 'h-16'
+                isMobile ? 'h-12' : 'h-16'
             )}
         >
             {/* 移动端菜单按钮 */}

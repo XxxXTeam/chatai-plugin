@@ -3,6 +3,7 @@
 import { Sidebar } from '@/components/layout/Sidebar'
 import { Header } from '@/components/layout/Header'
 import { MobileNav } from '@/components/layout/MobileNav'
+import { PageTabs } from '@/components/layout/PageTabs'
 import { SetupWizard } from '@/components/SetupWizard'
 import { DashboardTour } from '@/components/DashboardTour'
 import { useEffect, useState } from 'react'
@@ -90,12 +91,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <Sidebar />
             <div className="flex flex-1 flex-col overflow-hidden">
                 <Header onSearchClick={() => setCommandPaletteOpen(true)} />
+                <PageTabs />
                 <main
                     className={cn(
                         'flex-1 overflow-y-auto scroll-smooth',
-                        'p-3 sm:p-4 md:p-6',
+                        'p-2 sm:p-4 md:p-6',
                         // 移动端底部导航占位
-                        mounted && isMobile ? 'pb-[calc(80px+env(safe-area-inset-bottom,0px))]' : 'pb-6'
+                        mounted && isMobile ? 'pb-[calc(72px+env(safe-area-inset-bottom,0px))]' : 'pb-6'
                     )}
                 >
                     {children}

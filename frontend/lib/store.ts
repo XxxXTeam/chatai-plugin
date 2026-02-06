@@ -114,3 +114,81 @@ export const useNotificationStore = create<NotificationState>()(set => ({
         })),
     clearNotifications: () => set({ notifications: [] })
 }))
+
+// 页面标签状态管理
+const MAX_TABS = 10
+
+export interface TabItem {
+    path: string
+    label: string
+    icon?: string // lucide icon name
+    closable: boolean
+}
+
+interface TabState {
+    tabs: TabItem[]
+    activeTab: string
+    addTab: (tab: TabItem) => void
+    removeTab: (path: string) => void
+    setActiveTab: (path: string) => void
+    clearOtherTabs: (path: string) => void
+    clearTabs: () => void
+}
+
+const HOME_TAB: TabItem = { path: '/', label: '仪表盘', icon: 'LayoutDashboard', closable: false }
+
+export const useTabStore = create<TabState>()(
+    persist(
+        (set, get) => ({
+            tabs: [HOME_TAB],
+            activeTab: '/',
+            addTab: (tab: TabItem) => {
+                const { tabs } = get()
+                // Already exists, just activate
+                if (tabs.some(t => t.path === tab.path)) {
+                    set({ activeTab: tab.path })
+                    return
+                }
+                const newTabs = [...tabs, tab]
+                // Enforce max tabs - remove oldest closable tab
+                if (newTabs.length > MAX_TABS) {
+                    const activeTab = get().activeTab
+                    const removeIdx = newTabs.findIndex(t => t.closable && t.path !== activeTab && t.path !== tab.path)
+                    if (removeIdx !== -1) {
+                        newTabs.splice(removeIdx, 1)
+                    }
+                }
+                set({ tabs: newTabs, activeTab: tab.path })
+            },
+            removeTab: (path: string) => {
+                const { tabs, activeTab } = get()
+                const tab = tabs.find(t => t.path === path)
+                if (!tab || !tab.closable) return
+                const newTabs = tabs.filter(t => t.path !== path)
+                // If removing active tab, switch to adjacent tab
+                if (activeTab === path) {
+                    const idx = tabs.findIndex(t => t.path === path)
+                    const nextTab = tabs[idx + 1] || tabs[idx - 1] || newTabs[0]
+                    set({ tabs: newTabs, activeTab: nextTab?.path || '/' })
+                } else {
+                    set({ tabs: newTabs })
+                }
+            },
+            setActiveTab: (path: string) => set({ activeTab: path }),
+            clearOtherTabs: (path: string) => {
+                const { tabs } = get()
+                const kept = tabs.filter(t => !t.closable || t.path === path)
+                set({ tabs: kept, activeTab: path })
+            },
+            clearTabs: () => set({ tabs: [HOME_TAB], activeTab: '/' })
+        }),
+        {
+            name: 'chatai-tabs',
+            // Only persist the tabs list, NOT activeTab
+            // activeTab is always derived from current URL to avoid hydration mismatch
+            partialize: state => ({
+                tabs: state.tabs
+            })
+        }
+    )
+)

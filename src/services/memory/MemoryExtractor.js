@@ -4,6 +4,7 @@
  */
 import { chatLogger } from '../../core/utils/logger.js'
 import { memoryService } from './MemoryService.js'
+import { callMemoryLLM } from './llmHelper.js'
 import {
     MemoryCategory,
     ProfileSubType,
@@ -239,43 +240,14 @@ class MemoryExtractor {
     }
 
     /**
-     * 调用 LLM
+     * 调用 LLM（使用共享辅助函数）
      */
     async callLLM(prompt) {
-        if (!this.llmClient) {
-            throw new Error('LLM client not configured')
-        }
-
-        try {
-            // 根据不同的客户端类型调用
-            if (typeof this.llmClient.sendMessage === 'function') {
-                // ChatGPT/Claude style
-                const response = await this.llmClient.sendMessage(prompt, {
-                    maxTokens: 1000,
-                    temperature: 0.3
-                })
-                return response?.text || response?.content || response
-            } else if (typeof this.llmClient.complete === 'function') {
-                // Completion style
-                const response = await this.llmClient.complete(prompt, {
-                    maxTokens: 1000,
-                    temperature: 0.3
-                })
-                return response
-            } else if (typeof this.llmClient.chat === 'function') {
-                // Chat style
-                const response = await this.llmClient.chat([{ role: 'user', content: prompt }], {
-                    maxTokens: 1000,
-                    temperature: 0.3
-                })
-                return response?.choices?.[0]?.message?.content || response?.content || response
-            }
-
-            throw new Error('Unknown LLM client type')
-        } catch (error) {
-            logger.error('[MemoryExtractor] LLM call failed:', error)
-            throw error
-        }
+        return callMemoryLLM(this.llmClient, prompt, {
+            maxTokens: 1000,
+            temperature: 0.3,
+            caller: 'MemoryExtractor'
+        })
     }
 
     /**

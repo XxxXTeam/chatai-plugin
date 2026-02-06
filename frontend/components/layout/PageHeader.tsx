@@ -64,8 +64,8 @@ export function PageHeader({ title, description, icon: Icon, actions, className 
             {actions && (
                 <div
                     className={cn(
-                        'flex items-center gap-2 flex-shrink-0',
-                        isMobile ? 'mt-2 overflow-x-auto -mx-1 px-1 pb-1' : 'overflow-x-auto pb-1 -mb-1'
+                        'flex items-center flex-shrink-0',
+                        isMobile ? 'mt-1.5 gap-1.5 overflow-x-auto -mx-1 px-1 pb-1' : 'gap-2 overflow-x-auto pb-1 -mb-1'
                     )}
                 >
                     {actions}
@@ -75,14 +75,14 @@ export function PageHeader({ title, description, icon: Icon, actions, className 
     )
 }
 
-// 页面容器组件
+// 页面容器组件 - 移动端紧凑间距
 interface PageContainerProps {
     children: ReactNode
     className?: string
 }
 
 export function PageContainer({ children, className }: PageContainerProps) {
-    return <div className={cn('space-y-6', className)}>{children}</div>
+    return <div className={cn('space-y-3 sm:space-y-6', className)}>{children}</div>
 }
 
 // 内容区块组件

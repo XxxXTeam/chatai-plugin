@@ -666,18 +666,35 @@ class GalgameService {
 
     /**
      * 添加对话记录
+     * @param {number} sessionId - 会话ID
+     * @param {string} role - 角色 'user' | 'assistant'
+     * @param {string} content - 内容
+     * @param {string|null} eventType - 事件类型
+     * @param {string|null} eventResult - 事件结果
+     * @param {number} affectionChange - 好感度变化
+     * @param {number} trustChange - 信任度变化
+     * @param {number} goldChange - 金币变化
      */
-    async addHistory(sessionId, role, content, eventType = null, eventResult = null, affectionChange = 0) {
+    async addHistory(
+        sessionId,
+        role,
+        content,
+        eventType = null,
+        eventResult = null,
+        affectionChange = 0,
+        trustChange = 0,
+        goldChange = 0
+    ) {
         await this.init()
         const db = databaseService.db
 
         db.prepare(
             `
             INSERT INTO galgame_history 
-            (session_id, role, content, event_type, event_result, affection_change, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (session_id, role, content, event_type, event_result, affection_change, trust_change, gold_change, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
-        ).run(sessionId, role, content, eventType, eventResult, affectionChange, Date.now())
+        ).run(sessionId, role, content, eventType, eventResult, affectionChange, trustChange, goldChange, Date.now())
     }
 
     /**
@@ -899,38 +916,74 @@ class GalgameService {
     }
 
     /**
-     * 初始化环境设定（请求AI生成）
+     * 统一 LLM 调用辅助方法（消除重复代码）
+     * @param {Object} options - 调用选项
+     * @param {Array} options.messages - 消息数组
+     * @param {string} options.source - 调用来源标识
+     * @param {string} [options.userId] - 用户ID（统计用）
+     * @param {string} [options.groupId] - 群组ID（统计用，用于群组配置）
+     * @param {boolean} [options.enableTools=false] - 是否启用工具
+     * @returns {Promise<string>} AI响应文本
      */
-    async initializeEnvironment(userId, characterId, event, groupId = null) {
-        // 使用唯一ID确保不共享上下文，game_前缀用于独立统计
-        const uniqueId = `game_init_${Date.now()}_${Math.random().toString(36).slice(2)}`
+    async callGameLLM(options) {
+        const { messages, source, userId, groupId, enableTools = false } = options
 
-        gameLogger.info(`初始化环境: userId=${uniqueId}, 提示词长度=${INIT_PROMPT.length}`)
+        // 获取群组配置
+        let groupGameConfig = null
+        if (groupId) {
+            try {
+                const scopeManager = getScopeManager(databaseService)
+                await scopeManager.init()
+                const groupSettings = await scopeManager.getGroupSettings(groupId)
+                groupGameConfig = groupSettings?.settings || null
+            } catch (err) {
+                gameLogger.debug(`获取群组游戏配置失败: ${err.message}`)
+            }
+        }
 
-        // 获取游戏模型配置
-        const gameModel = config.get('llm.models.game') || LlmService.getModel()
-        const gameTemperature = config.get('game.temperature') || 0.8
-        const gameMaxTokens = config.get('game.maxTokens') || 1000
+        // 模型优先级: 群组配置 > 全局game模型 > 默认模型
+        const configGameModel = config.get('llm.models.game') || ''
+        const groupGameModel = groupGameConfig?.gameModel || ''
+        const gameModel = groupGameModel || configGameModel || LlmService.getModel()
+        const gameTemperature = groupGameConfig?.gameTemperature ?? config.get('game.temperature') ?? 0.8
+        const gameMaxTokens = groupGameConfig?.gameMaxTokens ?? config.get('game.maxTokens') ?? 1000
+        const gameEnableTools =
+            enableTools && (groupGameConfig?.gameEnableTools ?? config.get('game.enableTools') !== false)
 
-        gameLogger.info(`初始化使用模型: ${gameModel}`)
+        gameLogger.info(`[${source}] 使用模型: ${gameModel}`)
 
-        // 使用 LlmService 直接调用
         const client = await LlmService.getChatClient({
             model: gameModel,
-            enableTools: false
+            enableTools: gameEnableTools
         })
-
-        const messages = [
-            { role: 'system', content: INIT_PROMPT },
-            { role: 'user', content: '请生成' }
-        ]
 
         const startTime = Date.now()
-        const response = await client.sendMessageWithHistory(messages, {
-            model: gameModel,
-            temperature: gameTemperature,
-            maxTokens: gameMaxTokens
-        })
+        let response = null
+        let requestSuccess = false
+
+        try {
+            response = await client.sendMessageWithHistory(messages, {
+                model: gameModel,
+                temperature: gameTemperature,
+                maxTokens: gameMaxTokens
+            })
+            requestSuccess = true
+        } catch (err) {
+            gameLogger.error(`[${source}] LLM 调用失败: ${err.message}`)
+            // 记录失败统计
+            try {
+                await statsService.recordApiCall({
+                    channelId: client._channelInfo?.id || 'game',
+                    channelName: client._channelInfo?.name || '游戏模式',
+                    model: gameModel,
+                    duration: Date.now() - startTime,
+                    success: false,
+                    source: 'game',
+                    userId: userId || source
+                })
+            } catch {}
+            throw err
+        }
 
         // 记录统计
         try {
@@ -939,21 +992,43 @@ class GalgameService {
                 channelName: client._channelInfo?.name || '游戏模式',
                 model: gameModel,
                 duration: Date.now() - startTime,
-                success: true,
+                success: requestSuccess,
                 source: 'game',
-                userId: uniqueId
+                userId: userId || source,
+                groupId: groupId || null
             })
         } catch (err) {
             gameLogger.debug(`统计记录失败: ${err.message}`)
         }
 
-        // content 是数组 [{type: 'text', text: '...'}]
+        // 提取文本响应
         const contentArray = Array.isArray(response?.content) ? response.content : []
         const aiResponse =
             contentArray
                 ?.filter(c => c.type === 'text')
                 ?.map(c => c.text)
                 ?.join('') || ''
+
+        return { text: aiResponse, response, usage: response?.usage || {} }
+    }
+
+    /**
+     * 初始化环境设定（请求AI生成）
+     */
+    async initializeEnvironment(userId, characterId, event, groupId = null) {
+        gameLogger.info(`初始化环境: 提示词长度=${INIT_PROMPT.length}`)
+
+        const messages = [
+            { role: 'system', content: INIT_PROMPT },
+            { role: 'user', content: '请生成' }
+        ]
+
+        const { text: aiResponse } = await this.callGameLLM({
+            messages,
+            source: 'game_init',
+            userId: `game_init_${Date.now()}`,
+            groupId
+        })
 
         gameLogger.info(`AI返回环境设定: ${aiResponse.substring(0, 300)}...`)
 
@@ -993,56 +1068,17 @@ class GalgameService {
         // 使用 PromptBuilder 构建开场提示词
         const openingPrompt = buildOpeningPrompt(env)
 
-        // game_前缀用于独立统计
-        const uniqueId = `game_opening_${Date.now()}_${Math.random().toString(36).slice(2)}`
-
-        // 获取游戏模型配置
-        const gameModel = config.get('llm.models.game') || LlmService.getModel()
-        const gameTemperature = config.get('game.temperature') || 0.8
-        const gameMaxTokens = config.get('game.maxTokens') || 1000
-
-        gameLogger.info(`开场生成使用模型: ${gameModel}`)
-
-        // 使用 LlmService 直接调用
-        const client = await LlmService.getChatClient({
-            model: gameModel,
-            enableTools: false
-        })
-
         const messages = [
             { role: 'system', content: openingPrompt },
             { role: 'user', content: '请开始' }
         ]
 
-        const startTime = Date.now()
-        const response = await client.sendMessageWithHistory(messages, {
-            model: gameModel,
-            temperature: gameTemperature,
-            maxTokens: gameMaxTokens
+        const { text: aiResponse } = await this.callGameLLM({
+            messages,
+            source: 'game_opening',
+            userId: `game_opening_${Date.now()}`,
+            groupId
         })
-
-        // 记录统计
-        try {
-            await statsService.recordApiCall({
-                channelId: client._channelInfo?.id || 'game',
-                channelName: client._channelInfo?.name || '游戏模式',
-                model: gameModel,
-                duration: Date.now() - startTime,
-                success: true,
-                source: 'game',
-                userId: uniqueId
-            })
-        } catch (err) {
-            gameLogger.debug(`统计记录失败: ${err.message}`)
-        }
-
-        // content 是数组 [{type: 'text', text: '...'}]
-        const contentArray = Array.isArray(response?.content) ? response.content : []
-        const aiResponse =
-            contentArray
-                ?.filter(c => c.type === 'text')
-                ?.map(c => c.text)
-                ?.join('') || ''
 
         gameLogger.info(`开场上下文生成完成: ${aiResponse.substring(0, 200)}...`)
 
@@ -1170,14 +1206,13 @@ class GalgameService {
         const session = await this.getOrCreateSession(userId, characterId, groupId)
         const character = await this.getCharacter(characterId)
 
-        // 获取历史对话用于上下文
+        // 获取历史对话用于上下文 - 同时构建实际对话消息
         const history = await this.getHistory(session.id, 10)
         const historySummary = history
             .map(h => `${h.role === 'user' ? '玩家' : '角色'}: ${h.content.substring(0, 100)}`)
             .join('\n')
 
         // 构建系统提示词
-        // 获取已触发事件列表（用于构建提示词）
         const triggeredEvents = await this.getTriggeredEvents(session.user_id, session.character_id, session.group_id)
         const settings = await this.getSessionSettings(session.user_id, session.character_id, session.group_id)
         const systemPrompt = buildSystemPrompt({
@@ -1193,122 +1228,36 @@ class GalgameService {
         if (isOptionChoice && optionIndex !== null) {
             actualMessage = `[玩家选择了选项${optionIndex}] ${message}`
         }
-        const images = (imageUrls || []).map(url => ({ type: 'url', url }))
 
-        // 获取游戏配置（支持群组独立配置）
-        let groupGameConfig = null
-        if (groupId) {
-            try {
-                const scopeManager = getScopeManager(databaseService)
-                await scopeManager.init()
-                const groupSettings = await scopeManager.getGroupSettings(groupId)
-                groupGameConfig = groupSettings?.settings || null
-            } catch (err) {
-                gameLogger.debug(`获取群组游戏配置失败: ${err.message}`)
-            }
-        }
-
-        // 模型优先级: 群组配置 > 全局game模型 > 默认模型
-        const configGameModel = config.get('llm.models.game') || ''
-        const groupGameModel = groupGameConfig?.gameModel || ''
-        const gameModel = groupGameModel || configGameModel || LlmService.getModel()
-
-        // 其他参数: 群组配置 > 全局配置
-        const gameEnableTools =
-            groupGameConfig?.gameEnableTools !== undefined
-                ? groupGameConfig.gameEnableTools
-                : config.get('game.enableTools') !== false
-        const gameTemperature =
-            groupGameConfig?.gameTemperature !== undefined
-                ? groupGameConfig.gameTemperature
-                : config.get('game.temperature') || 0.8
-        const gameMaxTokens =
-            groupGameConfig?.gameMaxTokens !== undefined
-                ? groupGameConfig.gameMaxTokens
-                : config.get('game.maxTokens') || 1000
-
-        gameLogger.info(`游戏模型: ${gameModel} (群组: ${groupGameModel || '无'}, 全局: ${configGameModel || '无'})`)
-        gameLogger.debug(
-            `游戏参数: temperature=${gameTemperature}, maxTokens=${gameMaxTokens}, tools=${gameEnableTools}`
-        )
-        const client = await LlmService.getChatClient({
-            model: gameModel,
-            enableTools: gameEnableTools
-        })
-
-        // 构建消息内容
+        // 构建消息内容（支持图片）
         const messageContent = [{ type: 'text', text: actualMessage }]
-        // 添加图片（如果有）
-        for (const img of images) {
-            if (img.type === 'url' && img.url) {
-                messageContent.push({
-                    type: 'image_url',
-                    image_url: { url: img.url }
-                })
+        for (const url of imageUrls || []) {
+            if (url) {
+                messageContent.push({ type: 'image_url', image_url: { url } })
             }
         }
 
-        // 构建请求消息
-        const messages = [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: messageContent }
-        ]
-
-        // 直接调用 LLM
-        const startTime = Date.now()
-        let response = null
-        let requestSuccess = false
-
-        try {
-            response = await client.sendMessageWithHistory(messages, {
-                model: gameModel,
-                temperature: gameTemperature,
-                maxTokens: gameMaxTokens
+        // 构建请求消息 - 包含实际历史对话轮次（而不仅是摘要）
+        const messages = [{ role: 'system', content: systemPrompt }]
+        // 添加最近的历史对话消息（最多最近6轮）
+        const recentHistory = history.slice(-6)
+        for (const h of recentHistory) {
+            messages.push({
+                role: h.role === 'user' ? 'user' : 'assistant',
+                content: h.content
             })
-            requestSuccess = true
-        } catch (err) {
-            gameLogger.error(`游戏模式 LLM 调用失败: ${err.message}`)
-            throw err
         }
+        // 添加当前用户消息
+        messages.push({ role: 'user', content: messageContent })
 
-        const duration = Date.now() - startTime
-
-        // 记录统计
-        try {
-            await statsService.recordApiCall({
-                channelId: client._channelInfo?.id || 'game',
-                channelName: client._channelInfo?.name || '游戏模式',
-                model: gameModel,
-                duration,
-                success: requestSuccess,
-                source: 'game',
-                userId: String(userId),
-                groupId: groupId ? String(groupId) : null,
-                messages,
-                responseText: response?.content || '',
-                apiUsage: response?.usage || null,
-                request: {
-                    model: gameModel,
-                    temperature: gameTemperature,
-                    maxToken: gameMaxTokens
-                }
-            })
-        } catch (err) {
-            gameLogger.debug(`游戏统计记录失败: ${err.message}`)
-        }
-
-        // 转换响应格式 - content 是数组 [{type: 'text', text: '...'}]
-        const contentArray = Array.isArray(response?.content) ? response.content : []
-        const result = {
-            response: contentArray,
-            usage: response?.usage || {}
-        }
-
-        let aiResponse =
-            contentArray
-                ?.filter(c => c.type === 'text')
-                ?.map(c => c.text)
-                ?.join('') || ''
+        // 使用统一 LLM 调用方法
+        const { text: aiResponse } = await this.callGameLLM({
+            messages,
+            source: 'game_chat',
+            userId: String(userId),
+            groupId,
+            enableTools: true
+        })
 
         // 解析回复中的所有标记
         const parsed = parseResponse(aiResponse)
@@ -1355,14 +1304,16 @@ class GalgameService {
             await this.addItem(userId, characterId, item, groupId)
         }
 
-        // 记录AI回复
+        // 记录AI回复（包含好感度、信任度、金币变化）
         await this.addHistory(
             session.id,
             'assistant',
             parsed.cleanResponse,
             eventInfo?.name || null,
             null,
-            totalAffectionChange
+            totalAffectionChange,
+            totalTrustChange,
+            totalGoldChange
         )
 
         // 获取更新后的会话

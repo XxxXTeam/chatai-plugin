@@ -1,4 +1,8 @@
-import { detectFramework as getBotFramework, detectAdapter as getAdapter } from '../src/utils/platformAdapter.js'
+import {
+    detectFramework as getBotFramework,
+    detectAdapter as getAdapter,
+    isMaster
+} from '../src/utils/platformAdapter.js'
 import { formatTimeToBeiJing } from '../src/utils/common.js'
 import { renderService } from '../src/services/media/RenderService.js'
 import { statsService } from '../src/services/stats/StatsService.js'
@@ -10,65 +14,6 @@ import {
     MsgRecordExtractor,
     NapCatMessageUtils
 } from '../src/utils/messageParser.js'
-// 插件开发者固定权限（与 platformAdapter.js 保持一致）
-const PLUGIN_DEVELOPERS = [1018037233, 2173302144]
-
-let masterList = null
-async function getMasterList() {
-    if (masterList === null) {
-        const masters = new Set()
-
-        // 1. 插件开发者固定权限
-        for (const dev of PLUGIN_DEVELOPERS) {
-            masters.add(String(dev))
-            masters.add(dev)
-        }
-
-        // 2. 插件配置
-        try {
-            const config = (await import('../config/config.js')).default
-            const pluginMasters = config.get('admin.masterQQ') || []
-            for (const m of pluginMasters) {
-                masters.add(String(m))
-                masters.add(Number(m))
-            }
-            const authorQQs = config.get('admin.pluginAuthorQQ') || []
-            for (const a of authorQQs) {
-                masters.add(String(a))
-                masters.add(Number(a))
-            }
-        } catch {}
-
-        // 3. Yunzai 框架配置
-        try {
-            const yunzaiCfg = (await import('../../../lib/config/config.js')).default
-            if (yunzaiCfg?.masterQQ?.length > 0) {
-                for (const m of yunzaiCfg.masterQQ) {
-                    masters.add(String(m))
-                    masters.add(Number(m))
-                }
-            }
-        } catch {}
-
-        // 4. global.Bot 配置
-        const botMasters = global.Bot?.config?.master || []
-        for (const m of botMasters) {
-            masters.add(String(m))
-            masters.add(Number(m))
-        }
-
-        masterList = Array.from(masters)
-    }
-    return masterList
-}
-
-/**
- * 检查是否是主人
- */
-async function isMaster(userId) {
-    const masters = await getMasterList()
-    return masters.includes(String(userId)) || masters.includes(Number(userId))
-}
 
 /**
  * 获取框架类型
@@ -93,8 +38,18 @@ export class MessageInspector extends plugin {
             priority: 1, // 高优先级，确保命令能被触发
             rule: [
                 {
-                    reg: '^#取(\\d*)$', // 简化正则，匹配#取 或 #取123
+                    reg: '^#取(\\d*)$', // 匹配 #取 或 #取123
                     fnc: 'inspectMessage',
+                    permission: 'master'
+                },
+                {
+                    reg: '^#取上(\\d+)条?$', // 匹配 #取上5条 或 #取上5
+                    fnc: 'inspectPreviousMessages',
+                    permission: 'master'
+                },
+                {
+                    reg: '^#取\\$(\\d+)$', // 匹配 #取$12345 (明确按seq取)
+                    fnc: 'inspectBySeq',
                     permission: 'master'
                 },
                 {
@@ -233,6 +188,145 @@ export class MessageInspector extends plugin {
             await this.sendNestedForward(e, fullData)
         } catch (error) {
             logger.error('[MessageInspector] Error:', error)
+            await this.reply(`❌ 获取消息失败: ${error.message}`, true)
+        }
+
+        return true
+    }
+    async inspectPreviousMessages() {
+        const e = this.e
+        const bot = e.bot || Bot
+        const botId = bot.uin || bot.self_id || 10000
+
+        const match = e.msg.match(/#取上(\d+)条?/)
+        const count = match ? Math.min(parseInt(match[1]), 50) : 5 // 最多50条
+
+        try {
+            let history = null
+
+            if (e.group_id) {
+                const group = bot.pickGroup(e.group_id)
+                if (group?.getChatHistory) {
+                    history = await group.getChatHistory(0, count + 1) // +1 因为可能包含当前消息
+                } else if (bot?.sendApi) {
+                    const result = await bot.sendApi('get_group_msg_history', {
+                        group_id: e.group_id,
+                        count: count + 1
+                    })
+                    history = result?.data?.messages || result?.messages || []
+                }
+            } else {
+                const friend = bot.pickFriend(e.user_id)
+                if (friend?.getChatHistory) {
+                    history = await friend.getChatHistory(0, count + 1)
+                }
+            }
+
+            if (!history || history.length === 0) {
+                await this.reply('❌ 获取历史消息失败', true)
+                return true
+            }
+
+            // 排除当前命令消息本身（如果存在）
+            const messages = history
+                .filter(msg => {
+                    const msgSeq = msg.seq || msg.message_seq
+                    return msgSeq !== e.seq
+                })
+                .slice(-count)
+
+            if (messages.length === 0) {
+                await this.reply('❌ 没有找到历史消息', true)
+                return true
+            }
+
+            // 构建主节点列表
+            const mainNodes = []
+
+            // 标题节点
+            const timeRange = `${messages.length > 0 ? formatTimeToBeiJing(messages[0].time * 1000) : '?'} ~ ${messages.length > 0 ? formatTimeToBeiJing(messages[messages.length - 1].time * 1000) : '?'}`
+            mainNodes.push(
+                this.createTextNode(
+                    botId,
+                    'MessageInspector',
+                    `📋 获取前 ${messages.length} 条消息\n时间范围: ${timeRange}`
+                )
+            )
+
+            // 逐条完整解析
+            for (let i = 0; i < messages.length; i++) {
+                const msg = messages[i]
+
+                // 完整解析消息（包括 proto/pb/转发等）
+                const fullData = await this.parseMessageComplete(e, msg, { maxDepth: 10 })
+
+                // 构建该消息的详情子节点
+                const subNodes = await this.buildInspectNodes(e, fullData)
+
+                // 获取发送者信息作为子转发标题
+                const senderName = msg.sender?.nickname || msg.sender?.card || String(msg.user_id || '?')
+                const seq = msg.seq || msg.message_seq || '?'
+                const time = msg.time ? formatTimeToBeiJing(msg.time * 1000) : '?'
+
+                // 包裹为子合并转发
+                const subForward = await this.createForwardNode(
+                    e,
+                    `[${i + 1}/${messages.length}] ${senderName} (seq:${seq} ${time})`,
+                    subNodes
+                )
+                mainNodes.push(subForward)
+            }
+
+            // 发送合并转发
+            const sendResult = await this.sendForwardNodes(e, mainNodes)
+            if (!sendResult) {
+                // 回退：直接发送文本摘要
+                const text = messages
+                    .map(msg => {
+                        const seq = msg.seq || '?'
+                        const sender = msg.sender?.nickname || msg.user_id || '?'
+                        const content = msg.raw_message || '[无法解析]'
+                        return `[${seq}] ${sender}: ${content}`
+                    })
+                    .join('\n')
+                await this.reply(`📋 前 ${messages.length} 条消息:\n${text}`, true)
+            }
+        } catch (error) {
+            logger.error('[MessageInspector] inspectPreviousMessages Error:', error)
+            await this.reply(`❌ 获取历史消息失败: ${error.message}`, true)
+        }
+
+        return true
+    }
+
+    /**
+     * 按 seq 获取消息（明确按序列号）
+     * 命令: #取$12345
+     */
+    async inspectBySeq() {
+        const e = this.e
+        const bot = e.bot || Bot
+
+        const match = e.msg.match(/#取\$(\d+)/)
+        if (!match || !match[1]) {
+            await this.reply('❌ 请提供消息seq，如: #取$12345', true)
+            return true
+        }
+
+        const targetSeq = parseInt(match[1])
+
+        try {
+            const rawMsg = await this.fetchMessage(bot, e, targetSeq, null)
+
+            if (!rawMsg) {
+                await this.reply(`❌ 未找到 seq=${targetSeq} 的消息`, true)
+                return true
+            }
+
+            const fullData = await this.parseMessageComplete(e, rawMsg, { maxDepth: 10 })
+            await this.sendNestedForward(e, fullData)
+        } catch (error) {
+            logger.error('[MessageInspector] inspectBySeq Error:', error)
             await this.reply(`❌ 获取消息失败: ${error.message}`, true)
         }
 
@@ -540,15 +634,13 @@ export class MessageInspector extends plugin {
     }
 
     /**
-     * 使用嵌套合并转发发送数据
-     * 太长的数据会被包裹到子合并转发中
+     * 构建消息检查的详情节点列表（可复用）
      */
-    async sendNestedForward(e, data) {
+    async buildInspectNodes(e, data) {
         const bot = e.bot || Bot
         const botId = bot?.uin || e.self_id || 10000
 
-        // 构建主节点列表
-        const mainNodes = []
+        const nodes = []
 
         // 1. 基础信息节点
         const basicInfo = {
@@ -561,38 +653,37 @@ export class MessageInspector extends plugin {
             sender: data.sender,
             raw_message: data.raw_message
         }
-        mainNodes.push(this.createTextNode(botId, '📋 基础信息', this.safeStringify(basicInfo)))
+        nodes.push(this.createTextNode(botId, '📋 基础信息', this.safeStringify(basicInfo)))
 
         // 2. 消息段节点
         if (data.message?.length > 0) {
             const msgStr = this.safeStringify(data.message)
             if (msgStr.length > 3000) {
-                // 太长，包裹到子合并转发
-                mainNodes.push(await this.wrapInForward(e, '💬 消息段', this.chunkString(msgStr, 2500)))
+                nodes.push(await this.wrapInForward(e, '💬 消息段', this.chunkString(msgStr, 2500)))
             } else {
-                mainNodes.push(this.createTextNode(botId, '💬 消息段', msgStr))
+                nodes.push(this.createTextNode(botId, '💬 消息段', msgStr))
             }
         }
 
         // 3. icqq 特有字段
         const icqqFields = { font: data.font, pktnum: data.pktnum, atme: data.atme, atall: data.atall }
         if (Object.values(icqqFields).some(v => v !== null)) {
-            mainNodes.push(this.createTextNode(botId, '🎲 icqq字段', this.safeStringify(icqqFields)))
+            nodes.push(this.createTextNode(botId, '🎲 icqq字段', this.safeStringify(icqqFields)))
         }
 
         // 4. elems 数据
         if (data.elems) {
             const elemsStr = this.safeStringify(data.elems)
             if (elemsStr.length > 3000) {
-                mainNodes.push(await this.wrapInForward(e, '📦 elems', this.chunkString(elemsStr, 2500)))
+                nodes.push(await this.wrapInForward(e, '📦 elems', this.chunkString(elemsStr, 2500)))
             } else {
-                mainNodes.push(this.createTextNode(botId, '📦 elems', elemsStr))
+                nodes.push(this.createTextNode(botId, '📦 elems', elemsStr))
             }
         }
 
         // 5. parsed 数据
         if (data.parsed) {
-            mainNodes.push(this.createTextNode(botId, '📝 parsed', this.safeStringify(data.parsed)))
+            nodes.push(this.createTextNode(botId, '📝 parsed', this.safeStringify(data.parsed)))
         }
 
         // 6. pb 数据
@@ -612,9 +703,9 @@ export class MessageInspector extends plugin {
             }
             const pbContent = pbNodes.join('')
             if (pbContent.length > 3000) {
-                mainNodes.push(await this.wrapInForward(e, '📦 pb数据', this.chunkString(pbContent, 2500)))
+                nodes.push(await this.wrapInForward(e, '📦 pb数据', this.chunkString(pbContent, 2500)))
             } else {
-                mainNodes.push(this.createTextNode(botId, '📦 pb数据', pbContent))
+                nodes.push(this.createTextNode(botId, '📦 pb数据', pbContent))
             }
         }
 
@@ -622,9 +713,9 @@ export class MessageInspector extends plugin {
         if (data.proto) {
             const protoStr = this.safeStringify(data.proto)
             if (protoStr.length > 3000) {
-                mainNodes.push(await this.wrapInForward(e, '📦 proto', this.chunkString(protoStr, 2500)))
+                nodes.push(await this.wrapInForward(e, '📦 proto', this.chunkString(protoStr, 2500)))
             } else {
-                mainNodes.push(this.createTextNode(botId, '📦 proto', protoStr))
+                nodes.push(this.createTextNode(botId, '📦 proto', protoStr))
             }
         }
 
@@ -632,34 +723,50 @@ export class MessageInspector extends plugin {
         if (data.protoDecoded) {
             const decodedStr = this.safeStringify(data.protoDecoded)
             if (decodedStr.length > 3000) {
-                mainNodes.push(await this.wrapInForward(e, '🔓 proto解码', this.chunkString(decodedStr, 2500)))
+                nodes.push(await this.wrapInForward(e, '🔓 proto解码', this.chunkString(decodedStr, 2500)))
             } else {
-                mainNodes.push(this.createTextNode(botId, '🔓 proto解码', decodedStr))
+                nodes.push(this.createTextNode(botId, '🔓 proto解码', decodedStr))
             }
         }
 
         // 9. serialized 数据
         if (data.serialized) {
-            mainNodes.push(this.createTextNode(botId, '📦 serialized', data.serialized))
+            nodes.push(this.createTextNode(botId, '📦 serialized', data.serialized))
         }
 
         // 10. msgrecord
         if (data.msgrecord) {
-            mainNodes.push(this.createTextNode(botId, '📋 msgrecord', this.safeStringify(data.msgrecord)))
+            nodes.push(this.createTextNode(botId, '📋 msgrecord', this.safeStringify(data.msgrecord)))
         }
 
         // 11. 转发消息（深度递归）
         if (data.isForward && data.forwardMessages) {
             const forwardNode = await this.buildForwardDataNode(e, data.forwardMessages, 0)
             if (forwardNode) {
-                mainNodes.push(forwardNode)
+                nodes.push(forwardNode)
             }
         }
+
+        return nodes
+    }
+
+    /**
+     * 使用嵌套合并转发发送数据
+     * 太长的数据会被包裹到子合并转发中
+     */
+    async sendNestedForward(e, data) {
+        const mainNodes = await this.buildInspectNodes(e, data)
 
         // 发送合并转发
         const sendResult = await this.sendForwardNodes(e, mainNodes)
         if (!sendResult) {
             // 回退到普通消息
+            const basicInfo = {
+                message_id: data.message_id,
+                seq: data.seq,
+                time: data.time,
+                user_id: data.user_id
+            }
             await this.reply(
                 `📋 消息数据 (seq: ${data.seq})\n${this.safeStringify(basicInfo).substring(0, 1000)}`,
                 true

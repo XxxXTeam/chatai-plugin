@@ -1,11 +1,13 @@
 'use client'
 
 import { useState, ReactNode } from 'react'
+import { cn } from '@/lib/utils'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { useIsMobile } from '@/lib/hooks/useResponsive'
 import {
     Loader2,
     Save,
@@ -75,6 +77,7 @@ export function GroupEditorLayout({
     error
 }: GroupEditorLayoutProps) {
     const [activeTab, setActiveTab] = useState<TabId>(defaultTab)
+    const isMobile = useIsMobile()
 
     // 过滤可见的 Tab
     const visibleTabs = tabs.filter(tab => tab.visible !== false)
@@ -90,7 +93,7 @@ export function GroupEditorLayout({
     return (
         <div className="space-y-4">
             {/* 头部工具栏 */}
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
                 <div className="flex items-center gap-3">
                     {onBack && (
                         <Button variant="ghost" size="icon" onClick={onBack}>
@@ -155,20 +158,58 @@ export function GroupEditorLayout({
                 </div>
             )}
 
-            {/* 主内容区 */}
-            <Card>
-                <CardContent className="pt-6">
-                    <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabId)}>
-                        <TabsList className={`grid w-full mb-4 grid-cols-${Math.min(visibleTabs.length, 6)}`}>
+            {/* 主内容区 - 桌面端双栏布局 */}
+            {!isMobile ? (
+                <div className="flex gap-6">
+                    {/* 桌面端侧边Tab导航 */}
+                    <nav className="w-48 shrink-0">
+                        <div className="sticky top-4 space-y-1">
                             {visibleTabs.map(tab => (
-                                <TabsTrigger key={tab.id} value={tab.id}>
-                                    <span className="hidden sm:inline mr-1">{tab.icon}</span>
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id)}
+                                    className={cn(
+                                        'w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all text-left',
+                                        activeTab === tab.id
+                                            ? 'bg-primary text-primary-foreground shadow-sm'
+                                            : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                                    )}
+                                >
+                                    {tab.icon}
                                     {tab.label}
-                                </TabsTrigger>
+                                </button>
                             ))}
-                        </TabsList>
+                        </div>
+                    </nav>
+                    {/* 桌面端内容区 - 自适应高度 */}
+                    <div className="flex-1 min-w-0">
+                        <Card>
+                            <CardContent className="p-6">
+                                {visibleTabs.map(tab => (
+                                    <div
+                                        key={tab.id}
+                                        className={cn('space-y-4', activeTab !== tab.id && 'hidden')}
+                                    >
+                                        {tab.content}
+                                    </div>
+                                ))}
+                            </CardContent>
+                        </Card>
+                    </div>
+                </div>
+            ) : (
+                /* 移动端: 原有Tabs组件 */
+                <Card>
+                    <CardContent className="pt-4 px-3">
+                        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabId)}>
+                            <TabsList className={`grid w-full mb-3 grid-cols-${Math.min(visibleTabs.length, 6)}`}>
+                                {visibleTabs.map(tab => (
+                                    <TabsTrigger key={tab.id} value={tab.id} className="text-xs">
+                                        {tab.label}
+                                    </TabsTrigger>
+                                ))}
+                            </TabsList>
 
-                        <ScrollArea className="h-[calc(100vh-280px)] sm:h-[65vh] pr-4 -mr-4">
                             {visibleTabs.map(tab => (
                                 <TabsContent
                                     key={tab.id}
@@ -178,10 +219,10 @@ export function GroupEditorLayout({
                                     {tab.content}
                                 </TabsContent>
                             ))}
-                        </ScrollArea>
-                    </Tabs>
-                </CardContent>
-            </Card>
+                        </Tabs>
+                    </CardContent>
+                </Card>
+            )}
         </div>
     )
 }

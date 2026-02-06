@@ -69,7 +69,7 @@ export function GroupEditorShell({
         <div className={cn('flex flex-col h-full', className)}>
             {/* 头部 */}
             <header className="shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-                <div className="container max-w-4xl mx-auto px-4">
+                <div className="max-w-7xl mx-auto px-4">
                     <div className="flex items-center justify-between h-14">
                         {/* 左侧：标题信息 */}
                         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
@@ -108,39 +108,48 @@ export function GroupEditorShell({
                 </div>
             </header>
 
-            {/* Tab 导航 - 桌面端 */}
-            {!isMobile && (
-                <div className="shrink-0 border-b bg-muted/30">
-                    <div className="container max-w-4xl mx-auto px-4">
-                        <div className="flex gap-1 py-1">
-                            {tabs.map(tab => (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => onTabChange(tab.id)}
-                                    className={cn(
-                                        'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors',
-                                        activeTab === tab.id
-                                            ? 'bg-background text-foreground shadow-sm'
-                                            : 'text-muted-foreground hover:text-foreground hover:bg-background/50'
-                                    )}
-                                >
-                                    {tab.icon}
-                                    {tab.label}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* 主内容区 */}
+            {/* 主内容区 - 桌面端双栏：侧边Tab + 内容 */}
             <main className="flex-1 overflow-y-auto">
-                <div className="container max-w-4xl mx-auto px-4 py-4 pb-20 sm:pb-6">
-                    <Card>
-                        <CardContent className="p-4 sm:p-6">
-                            {children}
-                        </CardContent>
-                    </Card>
+                <div className="max-w-7xl mx-auto px-4 py-4 pb-20 sm:pb-6">
+                    {!isMobile ? (
+                        <div className="flex gap-6">
+                            {/* 桌面端侧边Tab导航 */}
+                            <nav className="w-48 shrink-0">
+                                <div className="sticky top-4 space-y-1">
+                                    {tabs.map(tab => (
+                                        <button
+                                            key={tab.id}
+                                            onClick={() => onTabChange(tab.id)}
+                                            className={cn(
+                                                'w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all',
+                                                activeTab === tab.id
+                                                    ? 'bg-primary text-primary-foreground shadow-sm'
+                                                    : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                                            )}
+                                        >
+                                            {tab.icon}
+                                            {tab.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </nav>
+                            {/* 桌面端内容区 */}
+                            <div className="flex-1 min-w-0">
+                                <Card>
+                                    <CardContent className="p-6">
+                                        {children}
+                                    </CardContent>
+                                </Card>
+                            </div>
+                        </div>
+                    ) : (
+                        /* 移动端单栏 */
+                        <Card>
+                            <CardContent className="p-4">
+                                {children}
+                            </CardContent>
+                        </Card>
+                    )}
                 </div>
             </main>
 
@@ -148,7 +157,7 @@ export function GroupEditorShell({
             {isMobile && (
                 <nav className="fixed bottom-0 left-0 right-0 z-50 bg-background border-t safe-area-pb">
                     <div className={cn(
-                        'grid h-16',
+                        'grid h-14',
                         tabs.length <= 5 ? `grid-cols-${tabs.length}` : 'grid-cols-5'
                     )}>
                         {tabs.map(tab => (
@@ -156,7 +165,7 @@ export function GroupEditorShell({
                                 key={tab.id}
                                 onClick={() => onTabChange(tab.id)}
                                 className={cn(
-                                    'flex flex-col items-center justify-center gap-1 transition-colors',
+                                    'flex flex-col items-center justify-center gap-0.5 transition-colors',
                                     activeTab === tab.id
                                         ? 'text-primary'
                                         : 'text-muted-foreground'

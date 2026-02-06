@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { cn } from '@/lib/utils'
+import { useIsMobile } from '@/lib/hooks/useResponsive'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -60,9 +62,11 @@ interface GroupEditorProps {
 
 export function GroupEditor({ id }: GroupEditorProps) {
     const router = useRouter()
+    const isMobile = useIsMobile()
     const isNew = id === 'new'
     const [loading, setLoading] = useState(!isNew)
     const [saving, setSaving] = useState(false)
+    const [activeTab, setActiveTab] = useState('basic')
     const [presets, setPresets] = useState<Preset[]>([])
     const [knowledgeDocs, setKnowledgeDocs] = useState<{ id: string; name: string }[]>([])
     const [allModels, setAllModels] = useState<string[]>([])
@@ -422,8 +426,17 @@ export function GroupEditor({ id }: GroupEditorProps) {
         )
     }
 
+    const editorTabs = [
+        { id: 'basic', label: '基础', icon: <Settings className="h-4 w-4" /> },
+        { id: 'features', label: '功能', icon: <Zap className="h-4 w-4" /> },
+        { id: 'bym', label: '伪人', icon: <Smile className="h-4 w-4" /> },
+        { id: 'game', label: '游戏', icon: <Gamepad2 className="h-4 w-4" /> },
+        { id: 'channel', label: '渠道', icon: <Server className="h-4 w-4" /> },
+        { id: 'advanced', label: '高级', icon: <Sparkles className="h-4 w-4" /> },
+    ]
+
     return (
-        <div className="container max-w-4xl px-4 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6 flex-1 h-full flex flex-col">
+        <div className="max-w-7xl mx-auto px-4 py-4 space-y-4 flex-1 h-full flex flex-col">
             {/* 头部 */}
             <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 sm:gap-3 min-w-0">
@@ -443,33 +456,40 @@ export function GroupEditor({ id }: GroupEditorProps) {
                 </Button>
             </div>
 
-            <Tabs defaultValue="basic" className="space-y-4">
-                <TabsList className="grid w-full grid-cols-5 h-auto">
-                    <TabsTrigger value="basic" className="text-xs sm:text-sm px-1 sm:px-3 py-2">
-                        <Settings className="h-4 w-4 sm:mr-1" />
-                        <span className="hidden sm:inline">基础</span>
-                    </TabsTrigger>
-                    <TabsTrigger value="features" className="text-xs sm:text-sm px-1 sm:px-3 py-2">
-                        <Zap className="h-4 w-4 sm:mr-1" />
-                        <span className="hidden sm:inline">功能</span>
-                    </TabsTrigger>
-                    <TabsTrigger value="bym" className="text-xs sm:text-sm px-1 sm:px-3 py-2">
-                        <Smile className="h-4 w-4 sm:mr-1" />
-                        <span className="hidden sm:inline">伪人</span>
-                    </TabsTrigger>
-                    <TabsTrigger value="game" className="text-xs sm:text-sm px-1 sm:px-3 py-2">
-                        <Gamepad2 className="h-4 w-4 sm:mr-1" />
-                        <span className="hidden sm:inline">游戏</span>
-                    </TabsTrigger>
-                    <TabsTrigger value="channel" className="text-xs sm:text-sm px-1 sm:px-3 py-2">
-                        <Server className="h-4 w-4 sm:mr-1" />
-                        <span className="hidden sm:inline">渠道</span>
-                    </TabsTrigger>
-                    <TabsTrigger value="advanced" className="text-xs sm:text-sm px-1 sm:px-3 py-2">
-                        <Sparkles className="h-4 w-4 sm:mr-1" />
-                        <span className="hidden sm:inline">高级</span>
-                    </TabsTrigger>
-                </TabsList>
+            <Tabs value={activeTab} onValueChange={setActiveTab} className={cn(!isMobile && 'flex gap-6', 'flex-1 min-h-0')}>
+                {/* 桌面端：侧边Tab导航 */}
+                {!isMobile ? (
+                    <nav className="w-48 shrink-0">
+                        <div className="sticky top-4 space-y-1">
+                            {editorTabs.map(tab => (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id)}
+                                    className={cn(
+                                        'w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-all',
+                                        activeTab === tab.id
+                                            ? 'bg-primary text-primary-foreground shadow-sm'
+                                            : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                                    )}
+                                >
+                                    {tab.icon}
+                                    {tab.label}
+                                </button>
+                            ))}
+                        </div>
+                    </nav>
+                ) : (
+                    /* 移动端：水平 Tab 条 */
+                    <TabsList className="grid w-full grid-cols-6 h-auto mb-3">
+                        {editorTabs.map(tab => (
+                            <TabsTrigger key={tab.id} value={tab.id} className="text-xs px-1 py-2">
+                                {tab.icon}
+                            </TabsTrigger>
+                        ))}
+                    </TabsList>
+                )}
+
+                <div className={cn(!isMobile && 'flex-1 min-w-0')}>
 
                 {/* 基础设置 */}
                 <TabsContent value="basic" className="space-y-4">
@@ -1262,10 +1282,10 @@ export function GroupEditor({ id }: GroupEditorProps) {
                                 />
                                 <div className="space-y-1">
                                     <Label className="text-xs">游戏模型</Label>
-                                    <Select value={form.gameModel} onValueChange={v => setForm({ ...form, gameModel: v })}>
+                                    <Select value={form.gameModel || '__inherit__'} onValueChange={v => setForm({ ...form, gameModel: v === '__inherit__' ? '' : v })}>
                                         <SelectTrigger><SelectValue placeholder="继承全局" /></SelectTrigger>
                                         <SelectContent>
-                                            <SelectItem value="">继承全局</SelectItem>
+                                            <SelectItem value="__inherit__">继承全局</SelectItem>
                                             {allModels.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
                                         </SelectContent>
                                     </Select>
@@ -1634,8 +1654,8 @@ export function GroupEditor({ id }: GroupEditorProps) {
                                 </div>
                             )}
                             <Select
-                                value=""
-                                onValueChange={v => v && !form.knowledgeIds.includes(v) && setForm({
+                                value="__placeholder__"
+                                onValueChange={v => v && v !== '__placeholder__' && !form.knowledgeIds.includes(v) && setForm({
                                     ...form,
                                     knowledgeIds: [...form.knowledgeIds, v]
                                 })}
@@ -1652,6 +1672,7 @@ export function GroupEditor({ id }: GroupEditorProps) {
                         </CardContent>
                     </Card>
                 </TabsContent>
+                </div>
             </Tabs>
         </div>
     )
