@@ -394,10 +394,40 @@ export class AIManagement extends plugin {
                 }
             }
             if (target?.sendMsg) {
-                // 构建合并转发消息
-                const forwardMsg = await this.makeForwardMsg(messages)
-                if (forwardMsg) {
-                    await target.sendMsg(forwardMsg)
+                let forwardSent = false
+                if (bot?.sendApi) {
+                    try {
+                        const nodes = messages.map(m => ({
+                            type: 'node',
+                            data: {
+                                user_id: String(m.user_id || this.e.self_id || 10000),
+                                nickname: m.nickname || 'AI管理面板',
+                                content: [{ type: 'text', data: { text: String(m.message || '') } }]
+                            }
+                        }))
+                        const result = await bot.sendApi('send_private_forward_msg', {
+                            user_id: parseInt(userId),
+                            messages: nodes
+                        })
+                        if (
+                            result?.status === 'ok' ||
+                            result?.retcode === 0 ||
+                            result?.message_id ||
+                            result?.data?.message_id
+                        ) {
+                            forwardSent = true
+                        }
+                    } catch {}
+                }
+                if (!forwardSent) {
+                    const forwardMsg = await this.makeForwardMsg(messages)
+                    if (forwardMsg) {
+                        await target.sendMsg(forwardMsg)
+                        forwardSent = true
+                    }
+                }
+
+                if (forwardSent) {
                     // 如果在群聊中，提示已私聊发送
                     if (this.e.group_id) {
                         await this.reply('✅ 管理面板链接已私聊发送，请查收', true)

@@ -462,17 +462,45 @@ async function sendGalgameResponse(bot, groupId, userId, characterId, result) {
     // 尝试发送合并转发
     let sent = false
     let sentMsgInfo = null
-    try {
-        if (groupId && bot?.pickGroup && bot?.makeForwardMsg) {
-            const group = bot.pickGroup(parseInt(groupId))
-            const forwardMsg = await bot.makeForwardMsg(forwardMsgs)
-            if (forwardMsg) {
-                sentMsgInfo = await group.sendMsg(forwardMsg)
+
+    // NapCat/OneBot: sendApi
+    if (!sent && bot?.sendApi && groupId) {
+        try {
+            const nodes = forwardMsgs.map(m => ({
+                type: 'node',
+                data: {
+                    user_id: String(m.user_id || botId),
+                    nickname: m.nickname || 'Bot',
+                    content: [{ type: 'text', data: { text: String(m.message || '') } }]
+                }
+            }))
+            const result = await bot.sendApi('send_group_forward_msg', {
+                group_id: parseInt(groupId),
+                messages: nodes
+            })
+            if (result?.status === 'ok' || result?.retcode === 0 || result?.message_id || result?.data?.message_id) {
+                sentMsgInfo = result
                 sent = true
             }
+        } catch (err) {
+            gameLogger.debug(`NapCat合并转发失败: ${err.message}`)
         }
-    } catch (err) {
-        gameLogger.debug(`合并转发失败，使用普通发送: ${err.message}`)
+    }
+
+    // icqq: makeForwardMsg
+    if (!sent) {
+        try {
+            if (groupId && bot?.pickGroup && bot?.makeForwardMsg) {
+                const group = bot.pickGroup(parseInt(groupId))
+                const forwardMsg = await bot.makeForwardMsg(forwardMsgs)
+                if (forwardMsg) {
+                    sentMsgInfo = await group.sendMsg(forwardMsg)
+                    sent = true
+                }
+            }
+        } catch (err) {
+            gameLogger.debug(`合并转发失败，使用普通发送: ${err.message}`)
+        }
     }
 
     // 合并转发失败，使用普通发送（但合并为一条）

@@ -1006,6 +1006,36 @@ export class Chat extends plugin {
         try {
             const bot = e.bot || Bot
             const botId = bot?.uin || e.self_id || 10000
+
+            // NapCat/OneBot: 使用 sendApi
+            if (bot?.sendApi) {
+                const nodes = messages.map(msg => ({
+                    type: 'node',
+                    data: {
+                        user_id: String(botId),
+                        nickname: title || 'Bot',
+                        content: Array.isArray(msg)
+                            ? msg.map(m => (typeof m === 'string' ? { type: 'text', data: { text: m } } : m))
+                            : [{ type: 'text', data: { text: String(msg) } }]
+                    }
+                }))
+                const isGroup = e.isGroup && e.group_id
+                const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
+                const params = isGroup
+                    ? { group_id: parseInt(e.group_id), messages: nodes }
+                    : { user_id: parseInt(e.user_id), messages: nodes }
+                const result = await bot.sendApi(apiName, params)
+                if (
+                    result?.status === 'ok' ||
+                    result?.retcode === 0 ||
+                    result?.message_id ||
+                    result?.data?.message_id
+                ) {
+                    return true
+                }
+            }
+
+            // icqq: makeForwardMsg
             const forwardNodes = messages.map(msg => ({
                 user_id: botId,
                 nickname: title || 'Bot',

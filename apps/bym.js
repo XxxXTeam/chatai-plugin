@@ -593,14 +593,41 @@ ${contextText}
                     if (mode === 'forward' || mode === 'auto') {
                         try {
                             const paragraphs = replyText.split(/\n{2,}/).filter(p => p.trim())
-                            if (paragraphs.length > 0 && e.group?.makeForwardMsg) {
-                                const forwardMsgs = paragraphs.map(p => ({
-                                    message: p,
-                                    nickname: 'AI',
-                                    user_id: e.self_id
-                                }))
-                                await e.reply(await e.group.makeForwardMsg(forwardMsgs))
-                                handled = true
+                            if (paragraphs.length > 0) {
+                                const bot = e.bot || Bot
+                                // NapCat/OneBot: sendApi
+                                if (bot?.sendApi && e.group_id) {
+                                    const nodes = paragraphs.map(p => ({
+                                        type: 'node',
+                                        data: {
+                                            user_id: String(e.self_id || bot?.uin || 10000),
+                                            nickname: 'AI',
+                                            content: [{ type: 'text', data: { text: p } }]
+                                        }
+                                    }))
+                                    const result = await bot.sendApi('send_group_forward_msg', {
+                                        group_id: parseInt(e.group_id),
+                                        messages: nodes
+                                    })
+                                    if (
+                                        result?.status === 'ok' ||
+                                        result?.retcode === 0 ||
+                                        result?.message_id ||
+                                        result?.data?.message_id
+                                    ) {
+                                        handled = true
+                                    }
+                                }
+                                // icqq: makeForwardMsg
+                                if (!handled && e.group?.makeForwardMsg) {
+                                    const forwardMsgs = paragraphs.map(p => ({
+                                        message: p,
+                                        nickname: 'AI',
+                                        user_id: e.self_id
+                                    }))
+                                    await e.reply(await e.group.makeForwardMsg(forwardMsgs))
+                                    handled = true
+                                }
                             }
                         } catch {}
                     }

@@ -1336,13 +1336,47 @@ export class ImageGen extends plugin {
 
                     // 发送合并转发
                     let sent = false
-                    if (e.isGroup && e.group?.makeForwardMsg) {
+
+                    // NapCat/OneBot: sendApi
+                    if (!sent && bot?.sendApi) {
+                        try {
+                            const onebotNodes = forwardNodes.map(n => ({
+                                type: 'node',
+                                data: {
+                                    user_id: String(n.user_id),
+                                    nickname: n.nickname,
+                                    content: Array.isArray(n.message)
+                                        ? n.message.map(m =>
+                                              typeof m === 'string' ? { type: 'text', data: { text: m } } : m
+                                          )
+                                        : [{ type: 'text', data: { text: String(n.message) } }]
+                                }
+                            }))
+                            const isGroup = e.isGroup && e.group_id
+                            const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
+                            const params = isGroup
+                                ? { group_id: parseInt(e.group_id), messages: onebotNodes }
+                                : { user_id: parseInt(e.user_id), messages: onebotNodes }
+                            const result = await bot.sendApi(apiName, params)
+                            if (
+                                result?.status === 'ok' ||
+                                result?.retcode === 0 ||
+                                result?.message_id ||
+                                result?.data?.message_id
+                            ) {
+                                sent = true
+                            }
+                        } catch {}
+                    }
+
+                    // icqq: makeForwardMsg
+                    if (!sent && e.isGroup && e.group?.makeForwardMsg) {
                         const forwardMsg = await e.group.makeForwardMsg(forwardNodes)
                         if (forwardMsg) {
                             await e.group.sendMsg(forwardMsg)
                             sent = true
                         }
-                    } else if (!e.isGroup && e.friend?.makeForwardMsg) {
+                    } else if (!sent && !e.isGroup && e.friend?.makeForwardMsg) {
                         const forwardMsg = await e.friend.makeForwardMsg(forwardNodes)
                         if (forwardMsg) {
                             await e.friend.sendMsg(forwardMsg)
