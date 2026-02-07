@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { Suspense, useEffect, useState, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -299,9 +299,12 @@ const MODEL_CATEGORY_DESCRIPTIONS: Record<ModelCategory, string> = {
     fallback: '主模型失败时使用'
 }
 
-export default function SettingsPage() {
+function useDefaultTab() {
     const searchParams = useSearchParams()
-    const defaultTab = searchParams.get('tab') || 'trigger'
+    return searchParams.get('tab') || 'trigger'
+}
+
+function SettingsPageInner({ defaultTab }: { defaultTab: string }) {
     const [activeTab, setActiveTab] = useState(defaultTab)
     const [config, setConfig] = useState<Config | null>(null)
     const [loading, setLoading] = useState(true)
@@ -317,11 +320,10 @@ export default function SettingsPage() {
     const isInitialLoad = useRef(true)
     const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
-    // 当URL参数变化时更新tab
+    // 当 defaultTab (来自URL参数) 变化时更新 tab
     useEffect(() => {
-        const tab = searchParams.get('tab')
-        if (tab) setActiveTab(tab)
-    }, [searchParams])
+        if (defaultTab) setActiveTab(defaultTab)
+    }, [defaultTab])
     const debouncedSave = useCallback(async (configToSave: Config) => {
         if (saveTimeoutRef.current) {
             clearTimeout(saveTimeoutRef.current)
@@ -2918,5 +2920,22 @@ export default function SettingsPage() {
                 </DialogContent>
             </Dialog>
         </PageContainer>
+    )
+}
+
+function SettingsPageWithParams() {
+    const defaultTab = useDefaultTab()
+    return <SettingsPageInner defaultTab={defaultTab} />
+}
+
+export default function SettingsPage() {
+    return (
+        <Suspense fallback={
+            <div className="flex items-center justify-center py-20">
+                <div className="w-8 h-8 rounded-full border-4 border-muted border-t-primary animate-spin" />
+            </div>
+        }>
+            <SettingsPageWithParams />
+        </Suspense>
     )
 }

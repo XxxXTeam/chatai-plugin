@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -40,7 +40,7 @@ interface Conversation {
 
 const INTERNAL_PREFIXES = ['group_summary_', 'user_profile_', 'memory_', 'system_']
 
-export default function ConversationDetailPage() {
+function ConversationDetailContent() {
     const router = useRouter()
     const searchParams = useSearchParams()
     const conversationId = searchParams.get('id') || ''
@@ -346,5 +346,17 @@ export default function ConversationDetailPage() {
                 </Card>
             )}
         </div>
+    )
+}
+
+export default function ConversationDetailPage() {
+    return (
+        <Suspense fallback={
+            <div className="flex items-center justify-center py-20">
+                <div className="w-8 h-8 rounded-full border-4 border-muted border-t-primary animate-spin" />
+            </div>
+        }>
+            <ConversationDetailContent />
+        </Suspense>
     )
 }

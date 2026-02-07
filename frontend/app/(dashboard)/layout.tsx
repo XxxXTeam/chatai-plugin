@@ -21,46 +21,62 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     const { isMobile, mounted } = useResponsive()
 
     useEffect(() => {
-        // 检查 URL 参数中的 auth_token（从后端重定向过来）
-        const urlParams = new URLSearchParams(window.location.search)
-        const authTokenFromUrl = urlParams.get('auth_token')
-        if (authTokenFromUrl) {
-            localStorage.setItem('chatai_token', authTokenFromUrl)
-            // 清除 URL 参数
-            window.history.replaceState({}, '', window.location.pathname)
-        }
-        let token = localStorage.getItem('chatai_token')
-        if (!token) {
-            const cookies = document.cookie.split(';')
-            for (const cookie of cookies) {
-                const [name, value] = cookie.trim().split('=')
-                if (name === 'auth_token' && value) {
-                    token = value
-                    // 同步到localStorage
-                    localStorage.setItem('chatai_token', value)
-                    break
+        let cancelled = false
+
+        const checkAuth = async () => {
+            try {
+                // 检查 URL 参数中的 auth_token（从后端重定向过来）
+                const urlParams = new URLSearchParams(window.location.search)
+                const authTokenFromUrl = urlParams.get('auth_token')
+                if (authTokenFromUrl) {
+                    localStorage.setItem('chatai_token', authTokenFromUrl)
+                    // 清除 URL 参数
+                    window.history.replaceState({}, '', window.location.pathname)
+                }
+                let token = localStorage.getItem('chatai_token')
+                if (!token) {
+                    const cookies = document.cookie.split(';')
+                    for (const cookie of cookies) {
+                        const [name, value] = cookie.trim().split('=')
+                        if (name === 'auth_token' && value) {
+                            token = value
+                            // 同步到localStorage
+                            localStorage.setItem('chatai_token', value)
+                            break
+                        }
+                    }
+                }
+
+                if (!token) {
+                    if (!cancelled) {
+                        setLoading(false)
+                        router.push('/login/')
+                    }
+                    return
+                }
+
+                // 使用受保护的API验证token有效性
+                await systemApi.getState()
+                if (!cancelled) {
+                    setAuthenticated(true)
+                    setLoading(false)
+                }
+            } catch {
+                if (!cancelled) {
+                    localStorage.removeItem('chatai_token')
+                    // 清除cookie
+                    document.cookie = 'auth_token=; path=/chatai; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+                    setLoading(false)
+                    router.push('/login/')
                 }
             }
         }
 
-        if (!token) {
-            router.push('/login/')
-            return
-        }
+        checkAuth()
 
-        // 使用受保护的API验证token有效性
-        systemApi
-            .getState()
-            .then(() => {
-                setAuthenticated(true)
-                setLoading(false)
-            })
-            .catch(() => {
-                localStorage.removeItem('chatai_token')
-                // 清除cookie
-                document.cookie = 'auth_token=; path=/chatai; expires=Thu, 01 Jan 1970 00:00:00 GMT'
-                router.push('/login/')
-            })
+        return () => {
+            cancelled = true
+        }
     }, [router])
 
     if (loading) {
@@ -78,7 +94,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
 
     if (!authenticated) {
-        return null
+        return (
+            <div className="flex h-screen items-center justify-center bg-background">
+                <div className="flex flex-col items-center gap-4 animate-fade-in">
+                    <div className="relative">
+                        <div className="w-12 h-12 rounded-full border-4 border-muted" />
+                        <div className="absolute top-0 left-0 w-12 h-12 rounded-full border-4 border-primary border-t-transparent animate-spin" />
+                    </div>
+                    <p className="text-sm text-muted-foreground animate-pulse-soft">正在跳转登录...</p>
+                </div>
+            </div>
+        )
     }
 
     return (

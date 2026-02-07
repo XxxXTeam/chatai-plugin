@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { Suspense, useEffect, useState, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -79,7 +79,7 @@ interface Channel {
 
 const getStatusText = (enabled: boolean) => (enabled ? '已启用' : '已禁用')
 
-export default function UsersPage() {
+function UsersPageContent() {
     const searchParams = useSearchParams()
     const [users, setUsers] = useState<UserScope[]>([])
     const [presets, setPresets] = useState<Preset[]>([])
@@ -849,5 +849,17 @@ export default function UsersPage() {
                 loading={deleting}
             />
         </div>
+    )
+}
+
+export default function UsersPage() {
+    return (
+        <Suspense fallback={
+            <div className="flex items-center justify-center py-20">
+                <div className="w-8 h-8 rounded-full border-4 border-muted border-t-primary animate-spin" />
+            </div>
+        }>
+            <UsersPageContent />
+        </Suspense>
     )
 }
