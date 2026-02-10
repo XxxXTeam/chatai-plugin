@@ -364,12 +364,15 @@ export class ImageGen extends plugin {
     }
 
     /**
-     * 获取群组的图像生成模型（支持群组独立配置）
-     * @returns {Promise<string|null>} 群组独立模型，如果没有配置则返回null
+     * 获取图像生成模型（支持群组独立配置 + 文生图/图生图独立模型）
+     * 优先级：群组特定类型模型 > 群组通用绘图模型 > 全局特定类型模型 > 全局通用绘图模型
+     * @param {'text2img'|'img2img'|null} genType - 生成类型，null表示不区分
+     * @returns {Promise<string|null>} 最终使用的模型，null表示使用全局默认
      */
-    async getGroupImageModel() {
+    async getImageModel(genType = null) {
         const e = this.e
 
+        // 1. 尝试获取群组独立模型
         if (e.isGroup && e.group_id) {
             try {
                 const groupId = String(e.group_id)
@@ -377,8 +380,18 @@ export class ImageGen extends plugin {
                 const groupSettings = await scopeManager.getGroupSettings(groupId)
                 const groupFeatures = groupSettings?.settings || {}
 
+                // 群组特定类型模型（text2imgModel / img2imgModel）
+                if (genType) {
+                    const groupTypeModel = groupFeatures[`${genType}Model`]
+                    if (groupTypeModel && groupTypeModel.trim()) {
+                        logger.info(`[ImageGen] 使用群组${genType}独立模型: ${groupTypeModel} (群: ${groupId})`)
+                        return groupTypeModel.trim()
+                    }
+                }
+
+                // 群组通用绘图模型
                 if (groupFeatures.imageGenModel && groupFeatures.imageGenModel.trim()) {
-                    logger.info(`[ImageGen] 使用群组独立模型: ${groupFeatures.imageGenModel} (群: ${groupId})`)
+                    logger.debug(`[ImageGen] 使用群组通用绘图模型: ${groupFeatures.imageGenModel} (群: ${groupId})`)
                     return groupFeatures.imageGenModel.trim()
                 }
             } catch (err) {
@@ -386,7 +399,25 @@ export class ImageGen extends plugin {
             }
         }
 
+        // 2. 尝试获取全局特定类型模型
+        if (genType) {
+            const globalTypeModel = config.get(`features.imageGen.${genType}Model`)
+            if (globalTypeModel && globalTypeModel.trim()) {
+                logger.debug(`[ImageGen] 使用全局${genType}独立模型: ${globalTypeModel}`)
+                return globalTypeModel.trim()
+            }
+        }
+
+        // 3. 返回null，由调用方使用全局默认绘图模型
         return null
+    }
+
+    /**
+     * 兼容旧接口：获取群组的图像生成模型
+     * @returns {Promise<string|null>}
+     */
+    async getGroupImageModel() {
+        return this.getImageModel(null)
     }
 
     /**
@@ -394,6 +425,12 @@ export class ImageGen extends plugin {
      */
     async showHelp() {
         const e = this.e
+
+        // 检查功能是否启用（支持群组独立配置）
+        if (!(await this.isImageGenEnabled())) {
+            return false
+        }
+
         const stats = presetMgr.getStats()
 
         // 构建预设列表
@@ -406,7 +443,7 @@ export class ImageGen extends plugin {
             })
             .join('\n')
 
-        const helpContent = [
+        const helpHeader = [
             '【AI绘图指令帮助】',
             '',
             '一、基础命令',
@@ -415,19 +452,147 @@ export class ImageGen extends plugin {
             '  #文生视频 [描述] - 根据文字生成视频',
             '  #图生视频 [描述] - 根据图片生成视频',
             '',
-            `二、预设模板 (共${stats.total}个: 内置${stats.builtin} + 云端${stats.remote} + 自定义${stats.custom})`,
-            presetLines,
-            '',
-            '三、使用方式',
+            '二、使用方式',
             '  发送指令时带图片，或引用他人图片发送指令',
             '',
-            '四、管理命令',
+            '三、管理命令',
             '  #更新预设 - 从云端拉取最新预设',
             '  #重载预设 - 热重载所有预设',
-            '  #画图状态 - 查看API状态'
+            '  #画图状态 - 查看API状态',
+            '  #绘图模型 - 查看/切换绘图模型'
         ].join('\n')
 
-        await e.reply(helpContent, true)
+        /**
+         * 将预设列表分页，每页最多 pageSize 条
+         * 避免单条消息过长被QQ截断
+         */
+        const allPresets = presetMgr.getAllPresets()
+        const pageSize = 30
+        const presetPages = []
+        for (let i = 0; i < allPresets.length; i += pageSize) {
+            const chunk = allPresets.slice(i, i + pageSize)
+            const lines = chunk
+                .map((p, idx) => {
+                    const keys = p.keywords.join(' / ')
+                    const sourceTag = p.source === 'builtin' ? '' : p.source === 'custom' ? ' [自定义]' : ` [云端]`
+                    return `${i + idx + 1}. ${keys}${sourceTag}`
+                })
+                .join('\n')
+            const pageNum = presetPages.length + 1
+            const totalPages = Math.ceil(allPresets.length / pageSize)
+            const header =
+                totalPages > 1
+                    ? `【预设模板 ${pageNum}/${totalPages}】`
+                    : `【预设模板】共${stats.total}个: 内置${stats.builtin} + 云端${stats.remote} + 自定义${stats.custom}`
+            presetPages.push(`${header}\n\n${lines}`)
+        }
+
+        if (presetPages.length === 0) {
+            presetPages.push(`【预设模板】暂无预设`)
+        }
+
+        /* 使用合并转发发送，避免预设列表过长被截断 */
+        const bot = e.bot || Bot
+        const botInfo = {
+            user_id: bot.uin || bot.self_id || e.self_id || 10000,
+            nickname: bot.nickname || bot.info?.nickname || 'Bot'
+        }
+
+        const makeNode = text => ({
+            user_id: botInfo.user_id,
+            nickname: botInfo.nickname,
+            message: [text]
+        })
+
+        const forwardNodes = [makeNode(helpHeader), ...presetPages.map(page => makeNode(page))]
+
+        let sent = false
+
+        // NapCat/OneBot: sendApi
+        if (!sent && bot?.sendApi) {
+            try {
+                const onebotNodes = forwardNodes.map(n => ({
+                    type: 'node',
+                    data: {
+                        user_id: String(n.user_id),
+                        nickname: n.nickname,
+                        content: Array.isArray(n.message)
+                            ? n.message.map(m => (typeof m === 'string' ? { type: 'text', data: { text: m } } : m))
+                            : [{ type: 'text', data: { text: String(n.message) } }]
+                    }
+                }))
+                const isGroup = e.isGroup && e.group_id
+                const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
+                const params = isGroup
+                    ? { group_id: parseInt(e.group_id), messages: onebotNodes }
+                    : { user_id: parseInt(e.user_id), messages: onebotNodes }
+                const result = await bot.sendApi(apiName, params)
+                if (
+                    result?.status === 'ok' ||
+                    result?.retcode === 0 ||
+                    result?.message_id ||
+                    result?.data?.message_id
+                ) {
+                    sent = true
+                    logger.debug('[ImageGen] 绘图帮助已通过sendApi合并转发发送')
+                }
+            } catch (err) {
+                logger.warn('[ImageGen] sendApi合并转发失败:', err.message)
+            }
+        }
+
+        // icqq: makeForwardMsg
+        if (!sent && e.isGroup && e.group?.makeForwardMsg) {
+            try {
+                const forwardMsg = await e.group.makeForwardMsg(forwardNodes)
+                if (forwardMsg) {
+                    await e.group.sendMsg(forwardMsg)
+                    sent = true
+                    logger.debug('[ImageGen] 绘图帮助已通过group.makeForwardMsg发送')
+                }
+            } catch (err) {
+                logger.warn('[ImageGen] group.makeForwardMsg失败:', err.message)
+            }
+        } else if (!sent && !e.isGroup && e.friend?.makeForwardMsg) {
+            try {
+                const forwardMsg = await e.friend.makeForwardMsg(forwardNodes)
+                if (forwardMsg) {
+                    await e.friend.sendMsg(forwardMsg)
+                    sent = true
+                    logger.debug('[ImageGen] 绘图帮助已通过friend.makeForwardMsg发送')
+                }
+            } catch (err) {
+                logger.warn('[ImageGen] friend.makeForwardMsg失败:', err.message)
+            }
+        }
+
+        // 回退: Bot.makeForwardMsg
+        if (!sent && typeof bot?.makeForwardMsg === 'function') {
+            try {
+                const forwardMsg = await bot.makeForwardMsg(forwardNodes)
+                if (e.group?.sendMsg) {
+                    await e.group.sendMsg(forwardMsg)
+                    sent = true
+                } else if (e.friend?.sendMsg) {
+                    await e.friend.sendMsg(forwardMsg)
+                    sent = true
+                }
+                if (sent) logger.debug('[ImageGen] 绘图帮助已通过Bot.makeForwardMsg发送')
+            } catch (err) {
+                logger.warn('[ImageGen] Bot.makeForwardMsg失败:', err.message)
+            }
+        }
+
+        // 最终回退：分批发送文本
+        if (!sent) {
+            logger.warn('[ImageGen] 所有合并转发方式均失败，回退到分批文本发送')
+            await e.reply(helpHeader, true)
+            for (const page of presetPages) {
+                await e.reply(page, true)
+                await new Promise(r => setTimeout(r, 300))
+            }
+        }
+
         return true
     }
 
@@ -624,7 +789,7 @@ export class ImageGen extends plugin {
         await e.reply('正在生成图片，请稍候...', true, { recallMsg: recallDelay })
 
         try {
-            const result = await this.generateImage({ prompt })
+            const result = await this.generateImage({ prompt, genType: 'text2img' })
             await this.sendResult(e, result)
         } catch (err) {
             logger.error('[ImageGen] 文生图失败:', err)
@@ -658,7 +823,8 @@ export class ImageGen extends plugin {
         try {
             const result = await this.generateImage({
                 prompt,
-                imageUrls: urls.slice(0, this.maxImages)
+                imageUrls: urls.slice(0, this.maxImages),
+                genType: 'img2img'
             })
             await this.sendResult(e, result)
         } catch (err) {
@@ -1099,15 +1265,19 @@ export class ImageGen extends plugin {
 
     /**
      * 调用图片生成 API
+     * @param {Object} options
+     * @param {string} options.prompt - 提示词
+     * @param {string[]} options.imageUrls - 图片URL列表
+     * @param {'text2img'|'img2img'|null} options.genType - 生成类型，用于选择独立模型
      */
-    async generateImage({ prompt, imageUrls = [] }) {
-        // 获取群组独立模型配置
-        const groupModel = await this.getGroupImageModel()
+    async generateImage({ prompt, imageUrls = [], genType = null }) {
+        // 获取模型配置（支持文生图/图生图独立模型）
+        const overrideModel = await this.getImageModel(genType)
 
         const result = await this.callGenApi({
             prompt,
             imageUrls,
-            getApiConfig: idx => this.getImageApiConfig(idx, groupModel),
+            getApiConfig: idx => this.getImageApiConfig(idx, overrideModel),
             extractResult: data => this.extractImages(data),
             maxEmptyRetries: 2,
             retryDelay: 1000,

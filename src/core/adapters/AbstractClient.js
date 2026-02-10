@@ -1044,16 +1044,32 @@ export async function preprocessMediaToBase64(histories, options = {}) {
                 try {
                     // 处理 image 类型
                     if (item.type === 'image' && item.image && !item.image.startsWith('data:')) {
-                        const { mimeType, data, error } = await urlToBase64(item.image, 'image/jpeg')
-                        if (data && !error) {
+                        // 判断是否为原始 base64 数据（非URL格式）
+                        const isRawBase64 =
+                            !item.image.startsWith('http://') &&
+                            !item.image.startsWith('https://') &&
+                            !item.image.startsWith('file://') &&
+                            !item.image.startsWith('base64://') &&
+                            !item.image.startsWith('/')
+                        if (isRawBase64) {
+                            const mimeType = item.mimeType || 'image/jpeg'
                             newContent.push({
                                 type: 'image',
-                                image: `data:${mimeType};base64,${data}`
+                                image: `data:${mimeType};base64,${item.image}`
                             })
-                            logger.debug('[MediaPreprocess] 图片转base64:', item.image?.substring(0, 50))
+                            logger.debug('[MediaPreprocess] 原始base64图片直接转换:', mimeType)
                         } else {
-                            // 图片获取失败，跳过（不添加空数据）
-                            logger.debug('[MediaPreprocess] 图片跳过:', item.image?.substring(0, 50))
+                            const { mimeType, data, error } = await urlToBase64(item.image, 'image/jpeg')
+                            if (data && !error) {
+                                newContent.push({
+                                    type: 'image',
+                                    image: `data:${mimeType};base64,${data}`
+                                })
+                                logger.debug('[MediaPreprocess] 图片转base64:', item.image?.substring(0, 50))
+                            } else {
+                                // 图片获取失败，跳过（不添加空数据）
+                                logger.debug('[MediaPreprocess] 图片跳过:', item.image?.substring(0, 50))
+                            }
                         }
                     }
                     // 处理 image_url 类型

@@ -70,6 +70,8 @@ interface ApiConfig {
 interface ImageGenConfig {
     enabled: boolean
     model: string
+    text2imgModel: string
+    img2imgModel: string
     videoModel: string
     timeout: number
     maxImages: number
@@ -94,6 +96,8 @@ export default function ImageGenPage() {
     const [updating, setUpdating] = useState(false)
     const [activeTab, setActiveTab] = useState('presets') // 受控 Tab
     const [imageModelSelectorOpen, setImageModelSelectorOpen] = useState(false)
+    const [text2imgModelSelectorOpen, setText2imgModelSelectorOpen] = useState(false)
+    const [img2imgModelSelectorOpen, setImg2imgModelSelectorOpen] = useState(false)
     const [videoModelSelectorOpen, setVideoModelSelectorOpen] = useState(false)
 
     // 弹窗状态
@@ -1008,6 +1012,97 @@ export default function ImageGenPage() {
                                     </Collapsible>
                                 </div>
                             </div>
+
+                            {/* 文生图/图生图 独立模型（留空使用上方通用图片模型） */}
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <div className="space-y-2">
+                                    <Label>文生图独立模型</Label>
+                                    <p className="text-xs text-muted-foreground">留空则使用通用图片模型</p>
+                                    <Collapsible open={text2imgModelSelectorOpen} onOpenChange={setText2imgModelSelectorOpen}>
+                                        <CollapsibleTrigger asChild>
+                                            <Button variant="outline" className="w-full justify-between">
+                                                <span className="truncate">{config?.text2imgModel || '(使用通用模型)'}</span>
+                                                <Settings
+                                                    className={`h-4 w-4 shrink-0 transition-transform ${text2imgModelSelectorOpen ? 'rotate-90' : ''}`}
+                                                />
+                                            </Button>
+                                        </CollapsibleTrigger>
+                                        <CollapsibleContent className="mt-2">
+                                            <div className="border rounded-lg p-3">
+                                                <ModelSelector
+                                                    value={config?.text2imgModel ? [config.text2imgModel] : []}
+                                                    allModels={Array.from(
+                                                        new Set((config?.apis || []).flatMap(a => a.models || []))
+                                                    )}
+                                                    onChange={models => {
+                                                        handleUpdateConfig({ text2imgModel: models[0] || '' })
+                                                        if (models.length > 0) setText2imgModelSelectorOpen(false)
+                                                    }}
+                                                    singleSelect={true}
+                                                    allowCustom={true}
+                                                />
+                                                {config?.text2imgModel && (
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="mt-2 text-xs"
+                                                        onClick={() => {
+                                                            handleUpdateConfig({ text2imgModel: '' })
+                                                            setText2imgModelSelectorOpen(false)
+                                                        }}
+                                                    >
+                                                        清除（使用通用模型）
+                                                    </Button>
+                                                )}
+                                            </div>
+                                        </CollapsibleContent>
+                                    </Collapsible>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>图生图独立模型</Label>
+                                    <p className="text-xs text-muted-foreground">留空则使用通用图片模型</p>
+                                    <Collapsible open={img2imgModelSelectorOpen} onOpenChange={setImg2imgModelSelectorOpen}>
+                                        <CollapsibleTrigger asChild>
+                                            <Button variant="outline" className="w-full justify-between">
+                                                <span className="truncate">{config?.img2imgModel || '(使用通用模型)'}</span>
+                                                <Settings
+                                                    className={`h-4 w-4 shrink-0 transition-transform ${img2imgModelSelectorOpen ? 'rotate-90' : ''}`}
+                                                />
+                                            </Button>
+                                        </CollapsibleTrigger>
+                                        <CollapsibleContent className="mt-2">
+                                            <div className="border rounded-lg p-3">
+                                                <ModelSelector
+                                                    value={config?.img2imgModel ? [config.img2imgModel] : []}
+                                                    allModels={Array.from(
+                                                        new Set((config?.apis || []).flatMap(a => a.models || []))
+                                                    )}
+                                                    onChange={models => {
+                                                        handleUpdateConfig({ img2imgModel: models[0] || '' })
+                                                        if (models.length > 0) setImg2imgModelSelectorOpen(false)
+                                                    }}
+                                                    singleSelect={true}
+                                                    allowCustom={true}
+                                                />
+                                                {config?.img2imgModel && (
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="mt-2 text-xs"
+                                                        onClick={() => {
+                                                            handleUpdateConfig({ img2imgModel: '' })
+                                                            setImg2imgModelSelectorOpen(false)
+                                                        }}
+                                                    >
+                                                        清除（使用通用模型）
+                                                    </Button>
+                                                )}
+                                            </div>
+                                        </CollapsibleContent>
+                                    </Collapsible>
+                                </div>
+                            </div>
+
                             <Separator />
                             <div className="grid gap-4 md:grid-cols-2">
                                 <div className="space-y-2">

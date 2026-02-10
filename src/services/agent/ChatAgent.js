@@ -14,7 +14,7 @@ import { imageService } from '../media/ImageService.js'
 import { setToolContext } from '../../core/utils/toolAdapter.js'
 import historyManager from '../../core/utils/history.js'
 import config from '../../../config/config.js'
-import { SkillsAgent } from './SkillsAgent.js'
+import { SkillsAgent, convertMcpTools } from './SkillsAgent.js'
 let _scopeManager = null
 async function ensureScopeManager() {
     if (!_scopeManager) {
@@ -237,11 +237,23 @@ export class ChatAgent {
         const scopeToolsEnabled = scopeFeatures.toolsEnabled !== false
         const toolsAllowed = !disableTools && presetEnableTools && scopeToolsEnabled
 
-        // 加载工具
+        // 加载工具（支持 ToolGroupManager 分组调度）
         let allTools = []
         if (toolsAllowed && this.skillsAgent) {
-            allTools = this.skillsAgent.getExecutableSkills()
-            logger.debug(`[ChatAgent] 加载技能: ${allTools.length}个`)
+            // 从 SkillsConfig 获取 dispatch 配置（优先），回退到 config.get
+            const dispatchConfig = this._getDispatchConfig()
+            const dispatchEnabled = dispatchConfig.enabled === true
+
+            if (dispatchEnabled && typeof message === 'string') {
+                // 使用 ToolGroupManager 分组调度
+                allTools = await this._dispatchTools(message, event, dispatchConfig)
+            }
+
+            // 回退：调度未启用或调度返回空 -> 使用全量工具
+            if (allTools.length === 0 && !dispatchEnabled) {
+                allTools = this.skillsAgent.getExecutableSkills()
+            }
+            logger.debug(`[ChatAgent] 加载技能: ${allTools.length}个${dispatchEnabled ? ' (调度模式)' : ''}`)
         }
 
         // 确定模型
@@ -311,6 +323,11 @@ export class ChatAgent {
             systemPrompt = this._addGroupContext(systemPrompt, groupId, event, userId)
         }
 
+        // 添加工具能力提示词（当有工具可用时）
+        if (allTools.length > 0) {
+            systemPrompt = this._addToolPrompt(systemPrompt, allTools)
+        }
+
         // 过滤历史
         let validHistory = history.filter(msg => {
             if (msg.role === 'assistant') {
@@ -327,6 +344,9 @@ export class ChatAgent {
         }
         messages.push(...validHistory, userMessage)
 
+        // 给工具注入 skills 分组标签，让模型从 description 识别工具类别
+        const taggedTools = this._tagToolsWithSkillGroup(allTools)
+
         // 创建客户端
         const clientOptions = await this._buildClientOptions({
             model: llmModel,
@@ -334,7 +354,7 @@ export class ChatAgent {
             adapterType,
             event,
             presetId: effectivePresetId,
-            tools: allTools,
+            tools: taggedTools,
             preset: currentPreset
         })
 
@@ -462,8 +482,17 @@ export class ChatAgent {
                     if (imageRef.type === 'image_url' && imageRef.image_url?.url) {
                         content.push({ type: 'image_url', image_url: { url: imageRef.image_url.url } })
                         continue
-                    } else if (imageRef.type === 'url' && imageRef.url) {
+                    }
+                    if (imageRef.type === 'url' && imageRef.url) {
                         content.push({ type: 'image_url', image_url: { url: imageRef.url } })
+                        continue
+                    }
+                    if (imageRef.type === 'image' && imageRef.image) {
+                        const mimeType = imageRef.mimeType || 'image/jpeg'
+                        const base64Data = imageRef.image.startsWith('data:')
+                            ? imageRef.image
+                            : `data:${mimeType};base64,${imageRef.image}`
+                        content.push({ type: 'image_url', image_url: { url: base64Data } })
                         continue
                     }
                 }
@@ -523,6 +552,145 @@ export class ChatAgent {
         }
 
         return { scopePresetId, scopeModelId, scopeFeatures }
+    }
+
+    /**
+     * 获取 dispatch 配置（从 SkillsConfig 优先，回退到 config.get）
+     * @returns {{ enabled: boolean, useSummary: boolean, maxGroups: number }}
+     */
+    _getDispatchConfig() {
+        try {
+            const skillsConfig = global.chatAiSkillsConfig
+            if (skillsConfig?.getDispatchConfig) {
+                return skillsConfig.getDispatchConfig()
+            }
+        } catch {}
+        // 回退：从旧的 config.get 路径读取
+        return {
+            enabled: config.get('skills.dispatch.enabled') === true,
+            useSummary: config.get('skills.dispatch.useSummary') !== false,
+            maxGroups: config.get('skills.dispatch.maxGroups') || 3
+        }
+    }
+
+    /**
+     * 使用 ToolGroupManager 进行工具分组调度
+     * 先用轻量模型判断需要哪些工具组，再只加载相关工具
+     * @param {string} message - 用户消息
+     * @param {Object} event - 事件对象
+     * @param {Object} dispatchConfig - 调度配置
+     * @returns {Array} 调度后的工具列表
+     */
+    async _dispatchTools(message, event, dispatchConfig = {}) {
+        try {
+            const { toolGroupManager } = await import('../tools/ToolGroupManager.js')
+            await toolGroupManager.init()
+
+            const { useSummary = true, maxGroups = 3 } = dispatchConfig
+
+            // 快速意图检测 - 纯闲聊不需要工具
+            if (!toolGroupManager.detectToolIntent(message)) {
+                logger.debug('[ChatAgent] 调度: 无工具意图，跳过工具加载')
+                return []
+            }
+
+            // 构建调度提示词（根据 useSummary 决定是否使用摘要模式）
+            const dispatchPrompt = useSummary
+                ? toolGroupManager.buildDispatchPrompt()
+                : this._buildFullDispatchPrompt(toolGroupManager)
+
+            // 用轻量模型做调度判断
+            const dispatchModel =
+                config.get('llm.models.dispatch') || config.get('llm.defaultModel') || LlmService.getModel()
+            const client = await LlmService.getChatClient({
+                model: dispatchModel,
+                enableTools: false
+            })
+
+            const dispatchMessages = [
+                { role: 'system', content: dispatchPrompt },
+                { role: 'user', content: message }
+            ]
+
+            const response = await client.sendMessageWithHistory(dispatchMessages, {
+                model: dispatchModel,
+                temperature: 0.1,
+                maxTokens: 500
+            })
+
+            // 解析响应
+            const contentArray = Array.isArray(response?.content) ? response.content : []
+            const responseText =
+                contentArray
+                    .filter(c => c.type === 'text')
+                    .map(c => c.text)
+                    .join('') || ''
+
+            const dispatchResult = toolGroupManager.parseDispatchResponseV2(responseText, message)
+            logger.debug(
+                `[ChatAgent] 调度结果: 分析="${dispatchResult.analysis}", 工具组=[${dispatchResult.toolGroups.join(',')}]`
+            )
+
+            if (dispatchResult.toolGroups.length > 0) {
+                // 应用 maxGroups 限制
+                let selectedGroups = dispatchResult.toolGroups
+                if (maxGroups > 0 && selectedGroups.length > maxGroups) {
+                    logger.debug(`[ChatAgent] 工具组数 ${selectedGroups.length} 超过限制 ${maxGroups}，截断`)
+                    selectedGroups = selectedGroups.slice(0, maxGroups)
+                }
+
+                // 按组获取工具，传入用户权限做组级权限检查
+                const userPermission = event?.sender?.role || 'member'
+                const groupTools = await toolGroupManager.getToolsByGroupIndexes(selectedGroups, { userPermission })
+                if (groupTools.length > 0) {
+                    // 包装为可执行格式（与 getExecutableSkills 一致）
+                    const executableTools = convertMcpTools(groupTools, {
+                        event: this.event,
+                        bot: this.bot
+                    })
+                    logger.info(
+                        `[ChatAgent] 调度成功: ${executableTools.length} 个工具（组: ${selectedGroups.join(',')}，限制: ${maxGroups}）`
+                    )
+                    return executableTools
+                }
+            }
+
+            // 调度判断为chat类型 或 工具组为空 -> 不传工具
+            const hasChatTask = dispatchResult.tasks.some(t => t.type === 'chat')
+            if (hasChatTask && dispatchResult.toolGroups.length === 0) {
+                return []
+            }
+
+            // 回退：加载全量工具
+            logger.debug('[ChatAgent] 调度回退: 使用全量工具')
+            return this.skillsAgent ? this.skillsAgent.getExecutableSkills() : []
+        } catch (err) {
+            logger.warn(`[ChatAgent] 工具调度失败，回退到全量: ${err.message}`)
+            return this.skillsAgent ? this.skillsAgent.getExecutableSkills() : []
+        }
+    }
+
+    /**
+     * 构建完整模式的调度提示词（useSummary=false 时使用，列出每个工具的详细信息）
+     */
+    _buildFullDispatchPrompt(toolGroupManager) {
+        const summary = toolGroupManager.getGroupSummary()
+        let prompt = `你是智能任务调度器。分析用户请求，选择需要的工具组。
+
+## 可用工具组（含详细工具列表）：
+`
+        for (const group of summary) {
+            const displayName = group.displayName || group.name
+            prompt += `\n[${group.index}] ${displayName} (${group.toolCount}个工具): ${group.description}\n`
+        }
+
+        prompt += `
+## 返回格式（JSON）：
+{"analysis": "意图分析", "tasks": [{"type": "tool", "priority": 1, "params": {"toolGroups": [索引]}}], "executionMode": "sequential"}
+
+用户纯闲聊返回: {"analysis": "闲聊", "tasks": [{"type": "chat", "priority": 1, "params": {}}], "executionMode": "sequential"}
+只返回JSON。`
+        return prompt
     }
 
     /**
@@ -676,6 +844,132 @@ export class ChatAgent {
 当前用户: ${userLabel}(QQ:${userUin})`
 
         return systemPrompt
+    }
+
+    /**
+     * 添加工具能力提示词到 system prompt
+     * 从 skills.yaml 分组读取，让模型按技能组发现和选择工具
+     */
+    _addToolPrompt(systemPrompt, tools) {
+        if (!tools || tools.length === 0) return systemPrompt
+
+        // 收集当前可用工具名集合（用于过滤）
+        const availableNames = new Set()
+        for (const tool of tools) {
+            const name = tool.name || tool.function?.name || ''
+            if (name) availableNames.add(name)
+        }
+
+        // 尝试从 skills.yaml 分组构建结构化提示
+        const groupPrompt = this._buildSkillsGroupPrompt(availableNames)
+
+        if (groupPrompt) {
+            systemPrompt += `\n\n【可用技能】\n你拥有 ${tools.length} 个工具，按功能分组如下：\n${groupPrompt}\n需要时调用对应工具。优先直接回答，仅在必要时调用工具。`
+        } else {
+            // 回退：无分组信息时用简洁汇总
+            systemPrompt += `\n\n【可用工具能力】\n你拥有 ${tools.length} 个工具可调用。需要时调用工具获取信息或执行操作。优先直接回答，仅在必要时调用工具。`
+        }
+
+        return systemPrompt
+    }
+
+    /**
+     * 从 skills.yaml 分组构建结构化技能提示词
+     * 让模型看到按组织好的技能目录，便于发现和选用
+     * @param {Set<string>} availableNames - 当前可用的工具名集合
+     * @returns {string|null} 分组提示词，或 null
+     */
+    _buildSkillsGroupPrompt(availableNames) {
+        try {
+            const skillsConfig = global.chatAiSkillsConfig
+            if (!skillsConfig?.getEnabledGroups) return null
+
+            const groups = skillsConfig.getEnabledGroups()
+            if (!groups || groups.length === 0) return null
+
+            const lines = []
+            for (const group of groups) {
+                if (!group.tools || group.tools.length === 0) continue
+
+                // 只展示当前实际可用的工具
+                const activeTools = group.tools.filter(t => availableNames.has(t))
+                if (activeTools.length === 0) continue
+
+                // 取分组描述的简短形式（冒号前部分）
+                const label = group.description ? group.description.split('：')[0].split(':')[0] : group.name
+
+                // 列出组内工具名（最多8个，超出用省略号）
+                let toolList
+                if (activeTools.length <= 8) {
+                    toolList = activeTools.join(', ')
+                } else {
+                    toolList = activeTools.slice(0, 8).join(', ') + ` 等${activeTools.length}个`
+                }
+
+                lines.push(`• ${label} (${activeTools.length}): ${toolList}`)
+            }
+
+            return lines.length > 0 ? lines.join('\n') : null
+        } catch (err) {
+            logger.debug(`[ChatAgent] 构建技能分组提示失败: ${err.message}`)
+            return null
+        }
+    }
+
+    /**
+     * 给工具的 description 注入 skills 分组标签
+     * 模型会看到 "[消息操作] 发送私聊消息" 而非仅 "发送私聊消息"
+     * @param {Array} tools - 工具列表 [{function: {name, description, parameters}, run}]
+     * @returns {Array} 标签注入后的工具列表（浅拷贝，不修改原始对象）
+     */
+    _tagToolsWithSkillGroup(tools) {
+        if (!tools || tools.length === 0) return tools
+
+        try {
+            const skillsConfig = global.chatAiSkillsConfig
+            if (!skillsConfig?.getEnabledGroups) return tools
+
+            const groups = skillsConfig.getEnabledGroups()
+            if (!groups || groups.length === 0) return tools
+
+            // 构建 toolName → groupLabel 映射
+            const toolGroupMap = new Map()
+            for (const group of groups) {
+                if (!group.tools || group.tools.length === 0) continue
+                const label = group.description ? group.description.split('：')[0].split(':')[0] : group.name
+                for (const toolName of group.tools) {
+                    if (!toolGroupMap.has(toolName)) {
+                        toolGroupMap.set(toolName, label)
+                    }
+                }
+            }
+
+            if (toolGroupMap.size === 0) return tools
+
+            // 浅拷贝工具，给 description 加分组前缀
+            return tools.map(tool => {
+                const name = tool.name || tool.function?.name
+                if (!name) return tool
+
+                const groupLabel = toolGroupMap.get(name)
+                if (!groupLabel) return tool
+
+                const origDesc = tool.function?.description || ''
+                // 避免重复标签
+                if (origDesc.startsWith(`[${groupLabel}]`)) return tool
+
+                return {
+                    ...tool,
+                    function: {
+                        ...tool.function,
+                        description: `[${groupLabel}] ${origDesc}`
+                    }
+                }
+            })
+        } catch (err) {
+            logger.debug(`[ChatAgent] 工具分组标签注入失败: ${err.message}`)
+            return tools
+        }
     }
 
     /**

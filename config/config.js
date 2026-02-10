@@ -507,7 +507,9 @@ class Config {
                 // AI绘图
                 imageGen: {
                     enabled: true, // 启用绘图功能
-                    model: 'gemini-3-pro-image', // 默认模型
+                    model: 'gemini-3-pro-image', // 默认绘图模型（文生图和图生图共用）
+                    text2imgModel: '', // 文生图独立模型（留空使用默认绘图模型）
+                    img2imgModel: '', // 图生图独立模型（留空使用默认绘图模型）
                     videoModel: 'veo-2.0-generate-001', // 视频生成模型
                     timeout: 600000, // 超时时间（毫秒）
                     maxImages: 3, // 最大图片数

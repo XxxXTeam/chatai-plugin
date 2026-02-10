@@ -134,6 +134,8 @@ export function getDefaultForm(): GroupFormState {
         summaryPushMessageCount: 100,
 
         // 绘图配置
+        text2imgModel: '',
+        img2imgModel: '',
         imageGenSize: '1024x1024',
         imageGenQuality: 'standard',
         imageGenDailyLimit: 10,
@@ -256,6 +258,8 @@ export function apiToForm(config: GroupConfig): GroupFormState {
         summaryPushMessageCount: config.summary?.push?.messageCount ?? defaults.summaryPushMessageCount,
 
         // 绘图配置
+        text2imgModel: config.imageGen?.text2imgModel || defaults.text2imgModel,
+        img2imgModel: config.imageGen?.img2imgModel || defaults.img2imgModel,
         imageGenSize: config.imageGen?.size || defaults.imageGenSize,
         imageGenQuality: config.imageGen?.quality || defaults.imageGenQuality,
         imageGenDailyLimit: config.imageGen?.maxDailyLimit ?? defaults.imageGenDailyLimit,
@@ -422,6 +426,8 @@ export function formToApi(form: GroupFormState): Partial<GroupConfig> {
         imageGen: {
             enabled: form.imageGenEnabled === 'on',
             modelId: form.imageGenModel,
+            text2imgModel: form.text2imgModel,
+            img2imgModel: form.img2imgModel,
             size: form.imageGenSize,
             quality: form.imageGenQuality,
             maxDailyLimit: form.imageGenDailyLimit

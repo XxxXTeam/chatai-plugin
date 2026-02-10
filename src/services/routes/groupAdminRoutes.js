@@ -370,6 +370,8 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                 imageGen: {
                     enabled: settings.imageGenEnabled,
                     modelId: settings.drawModel || settings.imageGenModel,
+                    text2imgModel: settings.text2imgModel || '',
+                    img2imgModel: settings.img2imgModel || '',
                     size: settings.imageGenSize || '1024x1024',
                     quality: settings.imageGenQuality || 'standard',
                     style: settings.imageGenStyle || 'vivid',
@@ -587,6 +589,8 @@ router.put('/config', groupAdminAuth, async (req, res) => {
             // 绘图配置
             imageGenEnabled: body.imageGen?.enabled,
             imageGenModel: body.imageGen?.modelId,
+            text2imgModel: body.imageGen?.text2imgModel,
+            img2imgModel: body.imageGen?.img2imgModel,
             imageGenSize: body.imageGen?.size,
             imageGenQuality: body.imageGen?.quality,
             imageGenStyle: body.imageGen?.style,

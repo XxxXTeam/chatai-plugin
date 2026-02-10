@@ -113,6 +113,8 @@ export interface GroupConfig {
     imageGen?: {
         enabled?: boolean
         modelId?: string
+        text2imgModel?: string
+        img2imgModel?: string
         size?: string
         quality?: string
         style?: string
@@ -275,6 +277,8 @@ export interface GroupFormState {
     summaryPushMessageCount: number
     
     // 绘图配置
+    text2imgModel: string
+    img2imgModel: string
     imageGenSize: string
     imageGenQuality: string
     imageGenDailyLimit: number

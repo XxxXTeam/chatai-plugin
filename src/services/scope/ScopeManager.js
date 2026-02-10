@@ -890,6 +890,8 @@ export class ScopeManager {
             toolsEnabled: undefined,
             imageGenEnabled: undefined,
             imageGenModel: undefined,
+            text2imgModel: undefined,
+            img2imgModel: undefined,
             summaryEnabled: undefined,
             summaryModel: undefined,
             triggerMode: undefined,
@@ -996,6 +998,12 @@ export class ScopeManager {
                     }
                     if (featureConfig.imageGenModel === undefined && innerSettings.imageGenModel) {
                         featureConfig.imageGenModel = innerSettings.imageGenModel
+                    }
+                    if (featureConfig.text2imgModel === undefined && innerSettings.text2imgModel) {
+                        featureConfig.text2imgModel = innerSettings.text2imgModel
+                    }
+                    if (featureConfig.img2imgModel === undefined && innerSettings.img2imgModel) {
+                        featureConfig.img2imgModel = innerSettings.img2imgModel
                     }
                     if (featureConfig.summaryEnabled === undefined && innerSettings.summaryEnabled !== undefined) {
                         featureConfig.summaryEnabled = innerSettings.summaryEnabled

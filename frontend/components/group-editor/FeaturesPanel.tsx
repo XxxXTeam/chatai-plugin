@@ -70,6 +70,42 @@ export function FeaturesPanel({
                     </Select>
                 </FormField>
                 <FormRow>
+                    <FormField label="文生图模型" hint="留空继承通用绘图模型">
+                        <Select
+                            value={form.text2imgModel || '__default__'}
+                            onValueChange={v => onChange({ text2imgModel: v === '__default__' ? '' : v })}
+                            disabled={disabled}
+                        >
+                            <SelectTrigger>
+                                <SelectValue placeholder="继承通用" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="__default__">继承通用</SelectItem>
+                                {models.map(m => (
+                                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </FormField>
+                    <FormField label="图生图模型" hint="留空继承通用绘图模型">
+                        <Select
+                            value={form.img2imgModel || '__default__'}
+                            onValueChange={v => onChange({ img2imgModel: v === '__default__' ? '' : v })}
+                            disabled={disabled}
+                        >
+                            <SelectTrigger>
+                                <SelectValue placeholder="继承通用" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="__default__">继承通用</SelectItem>
+                                {models.map(m => (
+                                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </FormField>
+                </FormRow>
+                <FormRow>
                     <FormField label="图片尺寸">
                         <Select
                             value={form.imageGenSize}
