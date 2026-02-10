@@ -184,6 +184,86 @@ router.post('/execute', async (req, res) => {
     }
 })
 
+// ========== 发现 (Discovery) API ==========
+
+// GET /search - 搜索技能
+router.get('/search', async (req, res) => {
+    try {
+        const { q = '', limit = '20', category, source } = req.query
+        const agent = await createSkillsAgent({})
+        const results = agent.searchSkills(q, {
+            limit: parseInt(limit) || 20,
+            category: category || undefined,
+            source: source || undefined
+        })
+        res.json(ChaiteResponse.ok({ query: q, count: results.length, results }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// GET /discover - 获取发现摘要（分类统计）
+router.get('/discover', async (req, res) => {
+    try {
+        const agent = await createSkillsAgent({})
+        const summary = agent.getDiscoverySummary()
+        const total = agent.skills.size
+        res.json(ChaiteResponse.ok({ total, categories: summary }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// GET /tools/:name/detail - 获取技能详情
+router.get('/tools/:name/detail', async (req, res) => {
+    try {
+        const agent = await createSkillsAgent({})
+        const detail = agent.getSkillDetail(req.params.name)
+        if (!detail) {
+            return res.status(404).json(ChaiteResponse.fail(null, `技能 ${req.params.name} 不存在`))
+        }
+        res.json(ChaiteResponse.ok(detail))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// POST /recommend - 根据上下文推荐技能
+router.post('/recommend', async (req, res) => {
+    try {
+        const { context = '', limit = 5 } = req.body
+        if (!context) {
+            return res.status(400).json(ChaiteResponse.fail(null, 'context is required'))
+        }
+        const agent = await createSkillsAgent({})
+        const recommendations = agent.getRecommendations(context, { limit })
+        res.json(ChaiteResponse.ok({ context, count: recommendations.length, recommendations }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// POST /execute/batch - 批量执行技能
+router.post('/execute/batch', async (req, res) => {
+    try {
+        const { calls = [], presetId = 'default' } = req.body
+        if (!Array.isArray(calls) || calls.length === 0) {
+            return res.status(400).json(ChaiteResponse.fail(null, 'calls array is required'))
+        }
+        const agent = await createSkillsAgent({ presetId })
+        const results = await agent.executeBatch(calls)
+
+        broadcastSSE('batch-executed', {
+            count: calls.length,
+            timestamp: Date.now()
+        })
+
+        res.json(ChaiteResponse.ok({ count: results.length, results }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
 // GET /categories - 获取工具类别
 router.get('/categories', async (req, res) => {
     try {

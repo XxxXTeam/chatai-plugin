@@ -78,10 +78,18 @@ export class LlmService {
         if (enableTools) {
             // 优先使用预选的工具列表（来自工具组调度）
             if (options.preSelectedTools && options.preSelectedTools.length > 0) {
-                // 将预选工具转换为客户端格式
-                const { convertMcpTools } = await import('../../core/utils/toolAdapter.js')
-                const requestContext = options.event ? { event: options.event, bot: options.event.bot || Bot } : null
-                tools = convertMcpTools(options.preSelectedTools, requestContext)
+                const firstTool = options.preSelectedTools[0]
+                if (firstTool?.function?.name) {
+                    // 已是 Chaite 格式（来自 getExecutableSkills 或 convertMcpTools），直接使用
+                    tools = options.preSelectedTools
+                } else {
+                    // 原始 MCP 格式 {name, description, inputSchema}，需要转换
+                    const { convertMcpTools } = await import('../../core/utils/toolAdapter.js')
+                    const requestContext = options.event
+                        ? { event: options.event, bot: options.event.bot || Bot }
+                        : null
+                    tools = convertMcpTools(options.preSelectedTools, requestContext)
+                }
                 logger.debug(`[LlmService] 使用预选工具: ${tools.length} 个`)
             } else {
                 // 如果可用，获取预设工具配置

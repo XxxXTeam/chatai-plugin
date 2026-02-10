@@ -8,7 +8,8 @@ import { toolCategories } from '../../mcp/tools/index.js'
  * 工具组管理器
  *
  * 管理工具的分组和调度，支持:
- * - 内置工具类别
+ * - skills.yaml 配置的工具组（优先）
+ * - 内置工具类别（回退）
  * - 自定义JS工具
  * - 外部MCP服务器工具
  *
@@ -24,23 +25,82 @@ export class ToolGroupManager {
         this.groups = new Map()
         this.mcpServerGroups = new Map() // MCP服务器工具组
         this.initialized = false
+        this._skillsConfig = null
     }
 
     /**
      * 初始化工具组
-     * 加载内置工具类别和外部MCP服务器工具
+     * 优先从 skills.yaml 加载分组，否则回退到内置分类
      */
     async init() {
         if (this.initialized) return
 
         await mcpManager.init()
-        this.loadFromBuiltinCategories()
+
+        // 尝试从 skills.yaml 加载分组（优先）
+        const loadedFromSkills = await this._loadFromSkillsConfig()
+        if (!loadedFromSkills) {
+            // 回退：从内置 toolCategories 加载
+            this.loadFromBuiltinCategories()
+        }
+
         this.loadFromMcpServers()
         this.initialized = true
 
         const mcpCount = this.mcpServerGroups.size
-        logger.info(`[ToolGroupManager] 初始化完成，${this.groups.size} 个内置工具组，${mcpCount} 个MCP服务器组`)
+        const source = loadedFromSkills ? 'skills.yaml' : '内置分类'
+        logger.info(
+            `[ToolGroupManager] 初始化完成，${this.groups.size} 个工具组 (来源: ${source})，${mcpCount} 个MCP服务器组`
+        )
     }
+
+    /**
+     * 从 skills.yaml 配置加载工具组
+     * @returns {boolean} 是否成功加载
+     */
+    async _loadFromSkillsConfig() {
+        try {
+            // 动态导入避免循环依赖
+            if (!this._skillsConfig) {
+                const { skillsConfig } = await import('../skills/SkillsConfig.js')
+                this._skillsConfig = skillsConfig
+            }
+
+            // 确保 skillsConfig 已初始化
+            if (!this._skillsConfig.initialized) {
+                return false
+            }
+
+            const groups = this._skillsConfig.getEnabledGroups()
+            if (!groups || groups.length === 0) {
+                logger.debug('[ToolGroupManager] skills.yaml 无工具组配置，回退到内置分类')
+                return false
+            }
+
+            this.groups.clear()
+
+            for (const group of groups) {
+                const index = group.index ?? this.groups.size
+                this.groups.set(index, {
+                    index,
+                    name: group.name,
+                    displayName: group.description?.split('：')[0] || group.name,
+                    description: group.description || group.name,
+                    tools: Array.isArray(group.tools) ? group.tools : [],
+                    enabled: group.enabled !== false,
+                    source: 'skills-config',
+                    requiredPermission: group.requiredPermission || null
+                })
+            }
+
+            logger.debug(`[ToolGroupManager] 从 skills.yaml 加载 ${this.groups.size} 个工具组`)
+            return true
+        } catch (err) {
+            logger.debug(`[ToolGroupManager] 加载 skills.yaml 失败: ${err.message}，回退到内置分类`)
+            return false
+        }
+    }
+
     loadFromBuiltinCategories() {
         this.groups.clear()
 
@@ -407,6 +467,18 @@ export class ToolGroupManager {
         for (const index of indexes) {
             const group = this.groups.get(index)
             if (group && group.enabled) {
+                // 权限检查：如果工具组需要特定权限，验证用户权限
+                if (group.requiredPermission && options.userPermission) {
+                    const permLevels = { member: 0, admin: 1, owner: 2, master: 3 }
+                    const userLevel = permLevels[options.userPermission] || 0
+                    const requiredLevel = permLevels[group.requiredPermission] || 0
+                    if (userLevel < requiredLevel) {
+                        logger.debug(
+                            `[ToolGroupManager] 权限不足跳过工具组 [${index}] ${group.name}，需要 ${group.requiredPermission}`
+                        )
+                        continue
+                    }
+                }
                 group.tools.forEach(name => toolNames.add(name))
             }
         }
@@ -415,8 +487,28 @@ export class ToolGroupManager {
             return []
         }
 
-        // 从 MCP 获取完整工具定义
-        const allTools = mcpManager.getTools(options)
+        // 优先通过 SkillsLoader 获取工具（已应用 skills.yaml 的过滤和安全检查）
+        let allTools
+        try {
+            if (this._skillsLoader) {
+                allTools = this._skillsLoader.getTools()
+            }
+            if (!allTools || allTools.length === 0) {
+                const { skillsLoader } = await import('../skills/SkillsLoader.js')
+                if (skillsLoader.initialized) {
+                    this._skillsLoader = skillsLoader
+                    allTools = skillsLoader.getTools()
+                }
+            }
+        } catch {
+            // SkillsLoader 不可用，回退
+        }
+
+        // 回退：直接从 mcpManager 获取
+        if (!allTools || allTools.length === 0) {
+            allTools = mcpManager.getTools(options)
+        }
+
         const selectedTools = allTools.filter(t => toolNames.has(t.name))
 
         logger.debug(`[ToolGroupManager] 选中工具组 [${indexes.join(',')}]，返回 ${selectedTools.length} 个工具`)
@@ -461,10 +553,13 @@ export class ToolGroupManager {
     }
 
     /**
-     * 刷新工具组（重新加载MCP服务器）
+     * 刷新工具组（重新加载所有来源）
      */
     async refresh() {
-        this.loadFromBuiltinCategories()
+        const loadedFromSkills = await this._loadFromSkillsConfig()
+        if (!loadedFromSkills) {
+            this.loadFromBuiltinCategories()
+        }
         this.loadFromMcpServers()
         logger.info(`[ToolGroupManager] 刷新完成，${this.groups.size} 个工具组`)
     }

@@ -354,6 +354,49 @@ export class SkillsAgent {
         }))
     }
 
+    // ========== 执行 (Execution) ==========
+
+    /**
+     * 获取执行配置（从 skills.yaml）
+     * @returns {{ timeout: number, maxParallel: number, retryOnError: boolean, maxRetries: number, cacheResults: boolean, cacheTTL: number }}
+     */
+    _getExecutionConfig() {
+        try {
+            const cfg = global.chatAiSkillsConfig
+            if (cfg?.getExecutionConfig) {
+                return cfg.getExecutionConfig()
+            }
+        } catch {}
+        return {
+            timeout: 30000,
+            maxParallel: 5,
+            retryOnError: false,
+            maxRetries: 2,
+            cacheResults: true,
+            cacheTTL: 60000
+        }
+    }
+
+    /**
+     * 带超时的 Promise 包装
+     */
+    _withTimeout(promise, ms, skillName) {
+        if (!ms || ms <= 0) return promise
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error(`技能 ${skillName} 执行超时 (${ms}ms)`)), ms)
+            promise.then(
+                val => {
+                    clearTimeout(timer)
+                    resolve(val)
+                },
+                err => {
+                    clearTimeout(timer)
+                    reject(err)
+                }
+            )
+        })
+    }
+
     async execute(skillName, args = {}) {
         if (!this.initialized) await this.init()
 
@@ -378,46 +421,294 @@ export class SkillsAgent {
         if (props.group_id && !filled.group_id && this.groupId) filled.group_id = this.groupId
         if (props.user_id && !filled.user_id && this.userId) filled.user_id = this.userId
 
+        // 从 skills.yaml 读取执行配置
+        const execConfig = this._getExecutionConfig()
+        const { timeout, retryOnError, maxRetries, cacheResults, cacheTTL } = execConfig
+
         const startTime = Date.now()
-        try {
-            logger.debug(`[SkillsAgent] 执行: ${skillName}`)
-            const result = await mcpManager.callTool(skillName, filled, {
-                useCache: true,
-                cacheTTL: 60000
-            })
+        let lastError = null
 
-            this.executionLog.push({
-                skill: skillName,
-                args: filled,
-                result,
-                duration: Date.now() - startTime,
-                success: true,
-                timestamp: Date.now()
-            })
-            return result
-        } catch (error) {
-            logger.error(`[SkillsAgent] 执行失败: ${skillName}`, error)
-            this.executionLog.push({
-                skill: skillName,
-                args: filled,
-                error: error.message,
-                duration: Date.now() - startTime,
-                success: false,
-                timestamp: Date.now()
-            })
-            return { content: [{ type: 'text', text: `执行失败: ${error.message}` }], isError: true }
+        // 带重试的执行循环
+        const attempts = retryOnError ? maxRetries + 1 : 1
+        for (let attempt = 1; attempt <= attempts; attempt++) {
+            try {
+                if (attempt > 1) {
+                    logger.debug(`[SkillsAgent] 重试 ${skillName} (第${attempt}次, 共${attempts}次)`)
+                } else {
+                    logger.debug(`[SkillsAgent] 执行: ${skillName}`)
+                }
+
+                // 带超时包装
+                const callPromise = mcpManager.callTool(skillName, filled, {
+                    useCache: cacheResults,
+                    cacheTTL: cacheTTL
+                })
+                const result = await this._withTimeout(callPromise, timeout, skillName)
+
+                this.executionLog.push({
+                    skill: skillName,
+                    args: filled,
+                    result,
+                    duration: Date.now() - startTime,
+                    success: true,
+                    attempts: attempt,
+                    timestamp: Date.now()
+                })
+                return result
+            } catch (error) {
+                lastError = error
+                logger.error(`[SkillsAgent] 执行失败 (第${attempt}次): ${skillName}`, error.message)
+
+                // 最后一次失败，不再重试
+                if (attempt >= attempts) break
+
+                // 重试前短暂等待（指数退避）
+                await new Promise(r => setTimeout(r, Math.min(1000 * attempt, 3000)))
+            }
         }
+
+        // 所有尝试都失败
+        this.executionLog.push({
+            skill: skillName,
+            args: filled,
+            error: lastError?.message,
+            duration: Date.now() - startTime,
+            success: false,
+            attempts,
+            timestamp: Date.now()
+        })
+        return { content: [{ type: 'text', text: `执行失败: ${lastError?.message}` }], isError: true }
     }
 
+    /**
+     * 批量执行技能，受 maxParallel 限制
+     * @param {Array<{name: string, args: Object}>} calls - 调用列表
+     * @returns {Promise<Array>} 结果数组
+     */
     async executeBatch(calls) {
-        return Promise.all(calls.map(c => this.execute(c.name, c.args)))
+        if (!calls || calls.length === 0) return []
+
+        const execConfig = this._getExecutionConfig()
+        const maxParallel = execConfig.maxParallel || 5
+
+        // 分批并行执行
+        const results = []
+        for (let i = 0; i < calls.length; i += maxParallel) {
+            const batch = calls.slice(i, i + maxParallel)
+            const batchResults = await Promise.all(batch.map(c => this.execute(c.name, c.args)))
+            results.push(...batchResults)
+        }
+        return results
     }
+
+    // ========== 发现 (Discovery) ==========
+
     hasSkill(name) {
         return this.skills.has(name)
     }
+
     getSkill(name) {
         return this.skills.get(name) || null
     }
+
+    /**
+     * 获取技能的详细信息（含参数定义和示例）
+     * @param {string} name - 技能名称
+     * @returns {Object|null} 技能详情
+     */
+    getSkillDetail(name) {
+        const skill = this.skills.get(name)
+        if (!skill) return null
+
+        const params = skill.inputSchema?.properties || {}
+        const required = skill.inputSchema?.required || []
+
+        return {
+            name: skill.name,
+            description: skill.description,
+            category: skill.category,
+            source: skill.isBuiltin ? 'builtin' : skill.isCustom || skill.isJsTool ? 'custom' : 'mcp',
+            serverName: skill.serverName,
+            parameters: Object.entries(params).map(([key, schema]) => ({
+                name: key,
+                type: schema.type || 'string',
+                description: schema.description || '',
+                required: required.includes(key),
+                default: schema.default,
+                enum: schema.enum
+            })),
+            isDangerous: toolFilterService.getDangerousTools().includes(name)
+        }
+    }
+
+    /**
+     * 模糊搜索技能（按名称和描述匹配）
+     * @param {string} query - 搜索关键词
+     * @param {Object} options - 搜索选项
+     * @param {number} options.limit - 最大结果数（默认20）
+     * @param {string} options.category - 限定类别
+     * @param {string} options.source - 限定来源 'builtin'|'custom'|'mcp'
+     * @returns {Array} 匹配的技能列表（按相关度排序）
+     */
+    searchSkills(query, options = {}) {
+        const { limit = 20, category, source } = options
+        const q = (query || '').toLowerCase()
+
+        if (!q) {
+            // 无关键词时返回全部（分页）
+            let all = Array.from(this.skills.values())
+            if (category) all = all.filter(s => s.category === category)
+            if (source) all = all.filter(s => this._matchSource(s, source))
+            return all.slice(0, limit).map(s => ({
+                name: s.name,
+                description: s.description,
+                category: s.category,
+                source: this._getSource(s)
+            }))
+        }
+
+        const scored = []
+        for (const [name, skill] of this.skills) {
+            if (category && skill.category !== category) continue
+            if (source && !this._matchSource(skill, source)) continue
+
+            let score = 0
+            const lName = name.toLowerCase()
+            const lDesc = (skill.description || '').toLowerCase()
+
+            // 精确名称匹配
+            if (lName === q) score += 100
+            // 名称前缀匹配
+            else if (lName.startsWith(q)) score += 80
+            // 名称包含匹配
+            else if (lName.includes(q)) score += 60
+            // 描述包含匹配
+            if (lDesc.includes(q)) score += 40
+            // 拆分关键词匹配
+            const words = q.split(/[\s_-]+/)
+            for (const w of words) {
+                if (w && lName.includes(w)) score += 20
+                if (w && lDesc.includes(w)) score += 10
+            }
+
+            if (score > 0) {
+                scored.push({
+                    name,
+                    description: skill.description,
+                    category: skill.category,
+                    source: this._getSource(skill),
+                    score
+                })
+            }
+        }
+
+        return scored.sort((a, b) => b.score - a.score).slice(0, limit)
+    }
+
+    /**
+     * 根据上下文推荐技能（基于关键词和类别启发）
+     * @param {string} context - 用户消息或上下文描述
+     * @param {Object} options - 选项
+     * @param {number} options.limit - 最大推荐数（默认5）
+     * @returns {Array} 推荐的技能列表
+     */
+    getRecommendations(context, options = {}) {
+        const { limit = 5 } = options
+        if (!context || typeof context !== 'string') return []
+
+        const msg = context.toLowerCase()
+
+        // 关键词到类别的映射表
+        const hintMap = [
+            { keywords: ['时间', '几点', '日期', '星期', '今天', 'time', 'date'], categories: ['basic', 'time'] },
+            { keywords: ['天气', '温度', '下雨', 'weather'], categories: ['search', 'extra', 'web'] },
+            { keywords: ['群', '成员', '管理', '禁言', '踢'], categories: ['group', 'group-stats', 'admin'] },
+            { keywords: ['发消息', '私聊', '艾特', '@', '转发'], categories: ['message'] },
+            { keywords: ['搜索', '查找', '百科', '翻译'], categories: ['search', 'web'] },
+            {
+                keywords: ['图片', '视频', '语音', '音乐', '表情'],
+                categories: ['media', 'voice', 'bltools-emoji', 'bltools-image']
+            },
+            { keywords: ['文件', '上传', '下载', '读取'], categories: ['file'] },
+            { keywords: ['记忆', '记住', '忘记'], categories: ['memory'] },
+            { keywords: ['定时', '提醒', '闹钟'], categories: ['schedule', 'reminder'] },
+            { keywords: ['用户', '好友', '头像', '资料'], categories: ['user', 'bot'] },
+            { keywords: ['计算', '随机', '编码', '哈希'], categories: ['utils'] },
+            { keywords: ['b站', 'bilibili', '视频'], categories: ['bltools-bilibili', 'bltools-video'] },
+            { keywords: ['github', '仓库'], categories: ['bltools-github'] },
+            { keywords: ['思维导图', 'mindmap'], categories: ['bltools-mindmap'] },
+            { keywords: ['音乐', 'qq音乐'], categories: ['bltools-music'] }
+        ]
+
+        // 匹配相关类别
+        const matchedCategories = new Set()
+        for (const hint of hintMap) {
+            for (const kw of hint.keywords) {
+                if (msg.includes(kw)) {
+                    hint.categories.forEach(c => matchedCategories.add(c))
+                }
+            }
+        }
+
+        if (matchedCategories.size === 0) return []
+
+        // 从匹配的类别中选取技能
+        const recommended = []
+        const seen = new Set()
+        for (const cat of matchedCategories) {
+            const catInfo = this.categories.get(cat)
+            if (!catInfo) continue
+            for (const toolName of catInfo.tools) {
+                if (seen.has(toolName)) continue
+                seen.add(toolName)
+                const skill = this.skills.get(toolName)
+                if (skill) {
+                    recommended.push({
+                        name: skill.name,
+                        description: skill.description,
+                        category: skill.category,
+                        source: this._getSource(skill)
+                    })
+                }
+                if (recommended.length >= limit) break
+            }
+            if (recommended.length >= limit) break
+        }
+
+        return recommended
+    }
+
+    /**
+     * 获取分类统计摘要（适合展示给用户）
+     * @returns {Array<{category: string, count: number, source: string, skills: string[]}>}
+     */
+    getDiscoverySummary() {
+        const summary = []
+        for (const [key, cat] of this.categories) {
+            summary.push({
+                category: key,
+                count: cat.tools.length,
+                serverName: cat.serverName || null,
+                skills: cat.tools.slice(0, 5) // 每类展示前5个
+            })
+        }
+        return summary.sort((a, b) => b.count - a.count)
+    }
+
+    _matchSource(skill, source) {
+        if (source === 'builtin') return skill.isBuiltin
+        if (source === 'custom') return skill.isCustom || skill.isJsTool
+        if (source === 'mcp') return skill.isMcpTool
+        return true
+    }
+
+    _getSource(skill) {
+        if (skill.isBuiltin) return 'builtin'
+        if (skill.isCustom || skill.isJsTool) return 'custom'
+        if (skill.isMcpTool) return 'mcp'
+        return 'unknown'
+    }
+
     getSkillsByCategory(cat) {
         const c = this.categories.get(cat)
         return c ? c.tools.map(n => this.skills.get(n)).filter(Boolean) : []
