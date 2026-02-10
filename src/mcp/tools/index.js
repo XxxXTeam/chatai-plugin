@@ -25,7 +25,9 @@ const toolModules = {
     shell: { file: './shell.js', export: 'shellTools' },
     schedule: { file: './nlSchedule.js', export: 'nlScheduleTools' },
     bltools: { file: './bltools.js', export: 'bltoolsTools' },
-    reminder: { file: './reminder.js', export: 'reminderTools' }
+    reminder: { file: './reminder.js', export: 'reminderTools' },
+    imageGen: { file: './imageGen.js', export: 'imageGenTools' },
+    qzone: { file: './qzone.js', export: 'qzoneTools' }
 }
 
 // 类别元信息
@@ -67,6 +69,16 @@ const categoryMeta = {
         name: '定时提醒',
         description: '设置定时提醒，支持相对时间、绝对时间、每天/每周重复',
         icon: 'Bell'
+    },
+    imageGen: {
+        name: '绘图服务',
+        description: 'AI绘图生成，支持文生图、图生图、预设关键词、文生视频、图生视频',
+        icon: 'Palette'
+    },
+    qzone: {
+        name: 'QQ空间/说说',
+        description: '发布说说、获取说说列表、点赞、删除说说、个性签名、戳一戳、收藏等',
+        icon: 'Star'
     }
 }
 

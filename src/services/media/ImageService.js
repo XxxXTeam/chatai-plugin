@@ -298,11 +298,8 @@ export class ImageService {
         try {
             const controller = new AbortController()
             const timeoutId = setTimeout(() => controller.abort(), timeout)
-
-            // QQ图片需要特殊的 Referer
             const isQQPic = url.includes('gchat.qpic.cn') || url.includes('c2cpicdw.qpic.cn')
             const referer = isQQPic ? 'https://qzone.qq.com/' : undefined
-
             const response = await fetch(url, {
                 method: 'HEAD',
                 signal: controller.signal,
@@ -315,13 +312,12 @@ export class ImageService {
             clearTimeout(timeoutId)
 
             if (!response.ok) {
-                // HEAD失败，尝试GET（某些服务器不支持HEAD）
                 const getResponse = await fetch(url, {
                     method: 'GET',
                     signal: AbortSignal.timeout(timeout),
                     headers: {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        Range: 'bytes=0-1024', // 只获取前1KB验证
+                        Range: 'bytes=0-1024',
                         ...(referer && { Referer: referer })
                     }
                 })

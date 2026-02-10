@@ -267,6 +267,35 @@ skills:
         - cancel_reminder
       enabled: true
 
+    # ========== 绘图服务 ==========
+    - index: 26
+      name: 'imageGen'
+      description: 'AI绘图服务：文生图、图生图、文生视频、图生视频、使用预设关键词生成图片'
+      tools:
+        - generate_image
+        - generate_video
+        - list_image_presets
+        - use_image_preset
+        - get_image_gen_status
+      enabled: true
+
+    # ========== QQ空间/说说 ==========
+    - index: 27
+      name: 'qzone'
+      description: 'QQ空间说说：发布/删除说说、获取说说列表、点赞、个性签名、戳一戳、收藏等'
+      tools:
+        - publish_qzone_mood
+        - get_qzone_feeds
+        - like_qzone_post
+        - delete_qzone_mood
+        - set_self_longnick
+        - friend_poke
+        - group_poke
+        - get_profile_like
+        - create_collection
+        - get_collection_list
+      enabled: true
+
   # 工具执行配置
   execution:
     # 单个工具超时时间（毫秒）

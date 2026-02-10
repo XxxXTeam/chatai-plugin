@@ -265,15 +265,29 @@ export class BuiltinMcpServer {
 
             // 获取工具配置
             const builtinConfig = config.get('builtinTools') || {}
-            const enabledCategories = builtinConfig.enabledCategories // 未设置则启用所有
+            let enabledCategories = builtinConfig.enabledCategories // 未设置则启用所有
             const disabledTools = builtinConfig.disabledTools || []
+
+            // 先加载类别信息，用于检测新增分类
+            const categories = await loadToolModules(forceReload)
+            this.toolCategories = categories
+
+            /*
+             * 自动启用新增分类：当 enabledCategories 已持久化时，
+             * 检测代码中新增的分类并自动加入启用列表，避免更新后需要手动启用
+             */
+            if (enabledCategories && Array.isArray(enabledCategories)) {
+                const allCategoryKeys = Object.keys(categories)
+                const newCategories = allCategoryKeys.filter(k => !enabledCategories.includes(k))
+                if (newCategories.length > 0) {
+                    enabledCategories = [...enabledCategories, ...newCategories]
+                    await config.set('builtinTools.enabledCategories', enabledCategories)
+                    logger.info(`[BuiltinMCP] 自动启用新增工具分类: ${newCategories.join(', ')}`)
+                }
+            }
 
             // 加载工具（强制重载时传递 forceReload 参数）
             this.modularTools = await getAllTools({ enabledCategories, disabledTools, forceReload })
-
-            // 获取类别信息
-            const categories = await loadToolModules(forceReload)
-            this.toolCategories = categories
 
             logger.debug(`[BuiltinMCP] 加载模块化工具: ${this.modularTools.length} 个`)
         } catch (err) {
