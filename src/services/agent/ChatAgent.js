@@ -1004,6 +1004,10 @@ export class ChatAgent {
             if (channel.customHeaders) {
                 clientOptions.customHeaders = channel.customHeaders
             }
+            // 传递图片处理配置
+            if (channel.imageConfig) {
+                clientOptions.imageConfig = channel.imageConfig
+            }
         }
 
         const channelAdvanced = channel?.advanced || {}
@@ -1045,7 +1049,8 @@ export class ChatAgent {
                         ...clientOptions,
                         adapterType: newChannel.adapterType,
                         baseUrl: newChannel.baseUrl,
-                        apiKey: keyInfo.key
+                        apiKey: keyInfo.key,
+                        imageConfig: newChannel.imageConfig || clientOptions.imageConfig
                     }
                     currentClient = await LlmService.createClient(newClientOptions)
                 }

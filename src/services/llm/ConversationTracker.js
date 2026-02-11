@@ -205,7 +205,8 @@ class ConversationTrackerService {
                 enableTools: false,
                 adapterType: channel.adapterType,
                 baseUrl: channel.baseUrl,
-                apiKey: channelManager.getChannelKey(channel).key
+                apiKey: channelManager.getChannelKey(channel).key,
+                imageConfig: channel.imageConfig || {}
             })
 
             const response = await client.chat({
@@ -332,7 +333,8 @@ ${recentHistory || '(无)'}
                 enableTools: false,
                 adapterType: channel.adapterType,
                 baseUrl: channel.baseUrl,
-                apiKey: channelManager.getChannelKey(channel).key
+                apiKey: channelManager.getChannelKey(channel).key,
+                imageConfig: channel.imageConfig || {}
             })
 
             const response = await client.chat({

@@ -41,7 +41,14 @@ export class GeminiClient extends AbstractClient {
         const genAI = new GoogleGenerativeAI(apiKey)
         const requestOptions = this.baseUrl ? { baseUrl: this.baseUrl } : undefined
         const model = options.model || 'gemini-2.5-flash'
-        const preprocessedHistories = await preprocessImageUrls(histories)
+
+        /*
+         * 图片预处理：根据渠道 imageConfig.transferMode 决定处理方式
+         * Gemini 原生需要 base64，'auto' 模式默认转换
+         */
+        const imageConfig = this.options?.imageConfig || {}
+        const transferMode = imageConfig.transferMode || 'auto'
+        const preprocessedHistories = transferMode !== 'url' ? await preprocessImageUrls(histories) : histories
 
         // 从历史记录中分离系统提示词
         let systemInstruction = options.systemOverride || ''
@@ -176,8 +183,13 @@ export class GeminiClient extends AbstractClient {
         const genAI = new GoogleGenerativeAI(apiKey, requestOptions)
         const model = options.model || 'gemini-1.5-flash'
 
-        // 预处理图片URL为base64（Gemini不支持直接使用URL）
-        const preprocessedHistories = await preprocessImageUrls(histories)
+        /*
+         * 图片预处理：根据渠道 imageConfig.transferMode 决定处理方式
+         * Gemini 原生需要 base64，'auto' 模式默认转换
+         */
+        const streamImageConfig = this.options?.imageConfig || {}
+        const streamTransferMode = streamImageConfig.transferMode || 'auto'
+        const preprocessedHistories = streamTransferMode !== 'url' ? await preprocessImageUrls(histories) : histories
 
         let systemInstruction = options.systemOverride || ''
         const converter = getFromChaiteConverter('gemini')

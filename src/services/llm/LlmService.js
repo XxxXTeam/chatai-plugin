@@ -51,6 +51,10 @@ export class LlmService {
             adapterType = channel.adapterType || 'openai'
             chatPath = channel.chatPath || ''
             modelsPath = channel.modelsPath || ''
+            // 自动选择渠道时，从渠道获取 imageConfig（调用方未显式传入的场景）
+            if (!options.imageConfig && channel.imageConfig) {
+                options.imageConfig = channel.imageConfig
+            }
         }
 
         // 根据适配器类型选择客户端类
@@ -119,6 +123,11 @@ export class LlmService {
             tools,
             enableReasoning,
             reasoningEffort
+        }
+
+        // 传递图片处理配置
+        if (options.imageConfig) {
+            clientConfig.imageConfig = options.imageConfig
         }
 
         // 传递自定义请求头（支持 XFF/Auth/UA 等复写）
@@ -222,7 +231,8 @@ export class LlmService {
             apiKey: keyInfo.key,
             baseUrl: channel.baseUrl,
             features: ['chat'],
-            tools: [] // 无工具
+            tools: [], // 无工具
+            imageConfig: channel.imageConfig || {}
         })
         client._channelInfo = {
             id: channel.id,

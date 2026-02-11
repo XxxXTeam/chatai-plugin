@@ -1430,10 +1430,7 @@ export class ImageGen extends plugin {
         if (sendMode === 'link_qrcode') {
             /* 上传到QQ图床获取CDN链接 */
             const cdnUrls = await Promise.all(result.images.map(url => this.uploadToQQImageBed(e, url)))
-            const msgs = [
-                ...result.images.map(url => segment.image(url)),
-                `⚠️ 模型返回了图片而非视频 (${result.duration})`
-            ]
+            const msgs = [`⚠️ 模型返回了图片而非视频 (${result.duration})`]
 
             const validCdnUrls = cdnUrls.filter(u => u !== null)
             if (validCdnUrls.length > 0) {
@@ -1835,7 +1832,7 @@ export class ImageGen extends plugin {
         if (sendMode === 'link_qrcode') {
             /* 上传到QQ图床获取CDN链接，发送图片 + CDN链接 + 二维码 */
             const cdnUrls = await Promise.all(result.images.map(url => this.uploadToQQImageBed(e, url)))
-            const msgs = [...result.images.map(url => segment.image(url)), `✅ 生成完成 (${result.duration})`]
+            const msgs = [`✅ 生成完成 (${result.duration})`]
 
             const validCdnUrls = cdnUrls.filter(u => u !== null)
             if (validCdnUrls.length > 0) {
@@ -1885,12 +1882,9 @@ export class ImageGen extends plugin {
             /* 发送原图预览时根据 sendMode 决定是否发送原图 */
             const sendMode = this.getSendMode()
             if (sendMode === 'link_qrcode') {
-                /* link_qrcode 模式：上传QQ图床，发送图片 + CDN链接 + 二维码，然后切割 */
+                /* link_qrcode 模式：上传QQ图床，发送CDN链接 + 二维码，然后切割 */
                 const cdnUrls = await Promise.all(result.images.map(url => this.uploadToQQImageBed(e, url)))
-                const previewMsgs = [
-                    ...result.images.map(url => segment.image(url)),
-                    `✅ 表情生成完成，正在切割...请稍等`
-                ]
+                const previewMsgs = [`✅ 表情生成完成，正在切割...请稍等`]
 
                 const validCdnUrls = cdnUrls.filter(u => u !== null)
                 if (validCdnUrls.length > 0) {

@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import crypto from 'node:crypto'
-import { AbstractClient, parseXmlToolCalls } from '../AbstractClient.js'
+import { AbstractClient, parseXmlToolCalls, preprocessImageUrls } from '../AbstractClient.js'
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
 
@@ -40,6 +40,19 @@ export class ClaudeClient extends AbstractClient {
         })
 
         const model = options.model || 'claude-3-5-sonnet-20241022'
+
+        /*
+         * 图片预处理：根据渠道 imageConfig.transferMode 决定处理方式
+         * Claude 原生不支持 URL 图片，因此 'auto' 模式默认转 base64
+         * - 'base64': 强制转换
+         * - 'url': 保持URL不转换（可能导致图片无法识别）
+         * - 'auto'(默认): 转base64（Claude需要）
+         */
+        const imageConfig = this.options?.imageConfig || {}
+        const transferMode = imageConfig.transferMode || 'auto'
+        if (transferMode !== 'url') {
+            histories = await preprocessImageUrls(histories)
+        }
 
         // 从历史记录中分离系统提示词
         let systemPrompt = options.systemOverride || ''
@@ -146,6 +159,16 @@ export class ClaudeClient extends AbstractClient {
         })
 
         const model = options.model || 'claude-3-5-sonnet-20241022'
+
+        /*
+         * 图片预处理：根据渠道 imageConfig.transferMode 决定处理方式
+         * Claude 原生不支持 URL 图片，'auto' 模式默认转 base64
+         */
+        const streamImageConfig = this.options?.imageConfig || {}
+        const streamTransferMode = streamImageConfig.transferMode || 'auto'
+        if (streamTransferMode !== 'url') {
+            histories = await preprocessImageUrls(histories)
+        }
 
         let systemPrompt = options.systemOverride || ''
         const converter = getFromChaiteConverter('claude')

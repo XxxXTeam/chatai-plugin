@@ -642,11 +642,13 @@ export const bltoolsTools = [
                     return { error: '未配置图片模型，请在配置中设置 llm.models.image' }
                 }
 
-                // 创建LLM客户端
+                // 创建LLM客户端（从渠道获取imageConfig）
+                const imgChannel = channelManager.getBestChannel(imageModel)
                 const client = await LlmService.createClient({
                     model: imageModel,
                     enableTools: false,
-                    event: e
+                    event: e,
+                    imageConfig: imgChannel?.imageConfig || {}
                 })
 
                 // 构建消息
@@ -1016,7 +1018,8 @@ export const bltoolsTools = [
                     apiKey: channelManager.getChannelKey(selectedChannel),
                     baseUrl: selectedChannel.baseUrl,
                     enableTools: false,
-                    event: e
+                    event: e,
+                    imageConfig: selectedChannel.imageConfig || {}
                 })
 
                 const messages = [
@@ -1123,7 +1126,8 @@ export const bltoolsTools = [
                     model,
                     apiKey: keyInfo.key,
                     baseUrl: channel.baseUrl,
-                    enableTools: false
+                    enableTools: false,
+                    imageConfig: channel.imageConfig || {}
                 })
 
                 const userMessage = {

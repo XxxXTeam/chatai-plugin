@@ -143,12 +143,14 @@ router.post('/test', async (req, res) => {
     let customHeaders = {}
     let headersTemplate = ''
     let requestBodyTemplate = ''
+    let imageConfig = {}
     if (id) {
         const channel = channelManager.get(id)
         if (channel) {
             customHeaders = channel.customHeaders || {}
             headersTemplate = channel.headersTemplate || ''
             requestBodyTemplate = channel.requestBodyTemplate || ''
+            imageConfig = channel.imageConfig || {}
         }
     }
 
@@ -162,6 +164,7 @@ router.post('/test', async (req, res) => {
                 customHeaders, // 自定义请求头
                 headersTemplate, // 请求头模板
                 requestBodyTemplate, // 请求体模板
+                imageConfig, // 图片处理配置
                 features: ['chat'],
                 tools: []
             })
@@ -403,6 +406,7 @@ router.post('/batch-test', async (req, res) => {
                 customHeaders: channel.customHeaders || {},
                 headersTemplate: channel.headersTemplate || '',
                 requestBodyTemplate: channel.requestBodyTemplate || '',
+                imageConfig: channel.imageConfig || {},
                 features: ['chat'],
                 tools: []
             })
@@ -493,6 +497,7 @@ router.post('/test-model', async (req, res) => {
             customHeaders: channel.customHeaders || {},
             headersTemplate: channel.headersTemplate || '',
             requestBodyTemplate: channel.requestBodyTemplate || '',
+            imageConfig: channel.imageConfig || {},
             features: ['chat'],
             tools: []
         })

@@ -538,6 +538,10 @@ export class ChatService {
             clientOptions.keyIndex = keyInfo.keyIndex
             clientOptions.keyObj = keyInfo.keyObj
             clientOptions.channelName = channel.name
+            // 传递图片处理配置
+            if (channel.imageConfig) {
+                clientOptions.imageConfig = channel.imageConfig
+            }
             // 传递自定义路径配置
             if (channel.chatPath) {
                 clientOptions.chatPath = channel.chatPath
@@ -1065,7 +1069,8 @@ export class ChatService {
                             adapterType: currentChannel.adapterType,
                             baseUrl: currentChannel.baseUrl,
                             apiKey: keyInfo.key,
-                            keyIndex: keyInfo.keyIndex
+                            keyIndex: keyInfo.keyIndex,
+                            imageConfig: currentChannel.imageConfig || clientOptions.imageConfig
                         }
                         currentClient = await LlmService.createClient(fallbackClientOptions)
 
@@ -1201,7 +1206,8 @@ export class ChatService {
                                         adapterType: altChannel.adapterType,
                                         baseUrl: altChannel.baseUrl,
                                         apiKey: altKeyInfo.key,
-                                        keyIndex: altKeyInfo.keyIndex
+                                        keyIndex: altKeyInfo.keyIndex,
+                                        imageConfig: altChannel.imageConfig || clientOptions.imageConfig
                                     }
                                     currentClient = await LlmService.createClient(altClientOptions)
                                     emptyRetryCount = 0
@@ -1328,7 +1334,8 @@ export class ChatService {
                                         adapterType: altChannel.adapterType,
                                         baseUrl: altChannel.baseUrl,
                                         apiKey: altKeyInfo.key,
-                                        keyIndex: altKeyInfo.keyIndex
+                                        keyIndex: altKeyInfo.keyIndex,
+                                        imageConfig: altChannel.imageConfig || clientOptions.imageConfig
                                     }
                                     currentClient = await LlmService.createClient(altClientOptions)
                                     errorSwitched = true

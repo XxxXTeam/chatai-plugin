@@ -248,10 +248,23 @@ export class OpenAIClient extends AbstractClient {
 
         const messages = []
 
-        // Gemini模型需要将图片URL转为base64
+        /*
+         * 图片预处理：根据渠道 imageConfig.transferMode 决定处理方式
+         * - 'base64': 强制将所有图片URL转为base64
+         * - 'url': 保持URL不转换
+         * - 'auto'(默认): 按模型类型自动判断（Gemini需要base64）
+         */
+        const imageConfig = this.options?.imageConfig || {}
+        const transferMode = imageConfig.transferMode || 'auto'
         const isGeminiModel = model.toLowerCase().includes('gemini')
-        if (needsImageBase64Preprocess(model)) {
+        const shouldPreprocessToBase64 =
+            transferMode === 'base64' || (transferMode === 'auto' && needsImageBase64Preprocess(model))
+
+        if (shouldPreprocessToBase64) {
+            logger.debug(`[OpenAI适配器] 图片转换模式: ${transferMode}, 执行base64预处理`)
             histories = await preprocessImageUrls(histories)
+        } else {
+            logger.debug(`[OpenAI适配器] 图片转换模式: ${transferMode}, 保持原始格式`)
         }
         // Gemini模型不支持thinking model的特殊参数（developer角色、max_completion_tokens等）
         const isThinkingModel = !isGeminiModel && (options.enableReasoning || options.isThinkingModel)
@@ -682,10 +695,23 @@ export class OpenAIClient extends AbstractClient {
         const messages = []
         const model = options.model || 'gpt-4o-mini'
 
-        // Gemini模型需要将图片URL转为base64
+        /*
+         * 图片预处理：根据渠道 imageConfig.transferMode 决定处理方式
+         * - 'base64': 强制将所有图片URL转为base64
+         * - 'url': 保持URL不转换
+         * - 'auto'(默认): 按模型类型自动判断（Gemini需要base64）
+         */
+        const streamImageConfig = this.options?.imageConfig || {}
+        const streamTransferMode = streamImageConfig.transferMode || 'auto'
         const isGeminiModel = model.toLowerCase().includes('gemini')
-        if (needsImageBase64Preprocess(model)) {
+        const shouldPreprocessStream =
+            streamTransferMode === 'base64' || (streamTransferMode === 'auto' && needsImageBase64Preprocess(model))
+
+        if (shouldPreprocessStream) {
+            logger.debug(`[OpenAI适配器][Stream] 图片转换模式: ${streamTransferMode}, 执行base64预处理`)
             histories = await preprocessImageUrls(histories)
+        } else {
+            logger.debug(`[OpenAI适配器][Stream] 图片转换模式: ${streamTransferMode}, 保持原始格式`)
         }
         // Gemini模型不支持thinking model的特殊参数（developer角色、max_completion_tokens等）
         const isThinkingModel = !isGeminiModel && (options.enableReasoning || options.isThinkingModel)

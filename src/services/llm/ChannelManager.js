@@ -147,6 +147,8 @@ export class ChannelManager {
                 overrides: channelConfig.overrides || {},
                 endpoints: channelConfig.endpoints || {},
                 auth: channelConfig.auth || { type: 'bearer' },
+                // 图片处理配置
+                imageConfig: channelConfig.imageConfig || {},
                 // 高级配置
                 timeout: channelConfig.timeout || { connect: 10000, read: 60000 },
                 retry: channelConfig.retry || { maxAttempts: 3, delay: 1000, backoff: 'exponential' },
@@ -707,6 +709,7 @@ export class ChannelManager {
                     apiKey: apiKey,
                     baseUrl: channel.baseUrl,
                     chatPath: channel.chatPath, // 自定义对话路径
+                    imageConfig: channel.imageConfig || {},
                     features: ['chat'],
                     tools: []
                 })
@@ -783,6 +786,7 @@ export class ChannelManager {
                 const client = new GeminiClient({
                     apiKey: this.getChannelKey(channel).key,
                     baseUrl: channel.baseUrl,
+                    imageConfig: channel.imageConfig || {},
                     features: ['chat'],
                     tools: []
                 })
@@ -836,6 +840,7 @@ export class ChannelManager {
                 const client = new ClaudeClient({
                     apiKey: this.getChannelKey(channel).key,
                     baseUrl: channel.baseUrl,
+                    imageConfig: channel.imageConfig || {},
                     features: ['chat'],
                     tools: []
                 })

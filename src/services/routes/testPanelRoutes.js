@@ -104,6 +104,7 @@ router.post('/batch-test', async (req, res) => {
                 customHeaders: channel.customHeaders || {},
                 headersTemplate: channel.headersTemplate || '',
                 requestBodyTemplate: channel.requestBodyTemplate || '',
+                imageConfig: channel.imageConfig || {},
                 features: ['chat'],
                 tools: []
             })
@@ -292,6 +293,7 @@ router.post('/quick-test', async (req, res) => {
             apiKey,
             baseUrl: channel.baseUrl,
             chatPath: channel.chatPath, // 自定义对话路径
+            imageConfig: channel.imageConfig || {},
             features: ['chat'],
             tools: []
         })
