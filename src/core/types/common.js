@@ -38,6 +38,19 @@ export class BaseClientOptions {
                 this.historyManager = options.historyManager
             }
             this.logger = options.logger
+
+            /* 适配器扩展属性：请求头复写、自定义路径等 */
+            if (options.customHeaders) this.customHeaders = options.customHeaders
+            if (options.headersTemplate) this.headersTemplate = options.headersTemplate
+            if (options.requestBodyTemplate) this.requestBodyTemplate = options.requestBodyTemplate
+            if (options.chatPath) this.chatPath = options.chatPath
+            if (options.modelsPath) this.modelsPath = options.modelsPath
+            if (options.channelName) this.channelName = options.channelName
+            if (options.userAgent) this.userAgent = options.userAgent
+            if (options.xff) this.xff = options.xff
+            if (options.toolCallLimitConfig) this.toolCallLimitConfig = options.toolCallLimitConfig
+            if (options.onMessageWithToolCall) this.onMessageWithToolCall = options.onMessageWithToolCall
+
             this.init()
         }
     }

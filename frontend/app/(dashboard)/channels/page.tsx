@@ -567,6 +567,10 @@ export default function ChannelsPage() {
                     (channel as unknown as { imageConfig?: typeof defaultImageConfig }).imageConfig || {}
                 )
             })
+            /* 根据已有模板数据自动打开JSON编辑器 */
+            const savedHeadersTemplate = ((channel as unknown as Record<string, unknown>).headersTemplate as string) || ''
+            const savedBodyTemplate = ((channel as unknown as Record<string, unknown>).requestBodyTemplate as string) || ''
+            setShowJsonEditor(!!(savedHeadersTemplate || savedBodyTemplate))
         } else {
             resetForm()
         }

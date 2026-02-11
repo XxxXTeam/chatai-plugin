@@ -347,6 +347,17 @@ export class OpenAIClient extends AbstractClient {
                 delete requestPayload[key]
             }
         })
+
+        /* 应用自定义请求体模板（支持占位符），合并/覆盖已构建的请求体字段 */
+        const requestBodyTemplate = this.options?.requestBodyTemplate || options.requestBodyTemplate
+        if (requestBodyTemplate) {
+            const bodyOverrides = requestTemplateService.buildRequestBody(requestBodyTemplate, templateContext)
+            if (bodyOverrides && typeof bodyOverrides === 'object') {
+                Object.assign(requestPayload, bodyOverrides)
+                logger.debug('[OpenAI适配器] 已应用自定义请求体模板:', Object.keys(bodyOverrides).join(', '))
+            }
+        }
+
         logger.debug(
             '[OpenAI适配器] 请求:',
             JSON.stringify({

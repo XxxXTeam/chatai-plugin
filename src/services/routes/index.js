@@ -16,7 +16,7 @@ import toolsRoutes from './toolsRoutes.js'
 import proxyRoutes from './proxyRoutes.js'
 import mcpRoutes from './mcpRoutes.js'
 import knowledgeRoutes from './knowledgeRoutes.js'
-import imageRoutes from './imageRoutes.js'
+import imageRoutes, { publicImageRouter } from './imageRoutes.js'
 import logsRoutes from './logsRoutes.js'
 import memoryRoutes from './memoryRoutes.js'
 import graphRoutes from './graphRoutes.js'
@@ -38,6 +38,7 @@ export {
     mcpRoutes,
     knowledgeRoutes,
     imageRoutes,
+    publicImageRouter,
     logsRoutes,
     memoryRoutes,
     graphRoutes,

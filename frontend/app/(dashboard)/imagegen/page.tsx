@@ -21,6 +21,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Separator } from '@/components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
     AlertCircle,
     Cloud,
@@ -36,7 +37,10 @@ import {
     Box,
     X,
     Server,
-    Grid3X3
+    Grid3X3,
+    Send,
+    Link,
+    QrCode
 } from 'lucide-react'
 import { imageGenApi, channelsApi } from '@/lib/api'
 import { toast } from 'sonner'
@@ -75,6 +79,9 @@ interface ImageGenConfig {
     videoModel: string
     timeout: number
     maxImages: number
+    sendMode: 'direct' | 'link_qrcode' | 'hybrid'
+    defaultImage: string
+    imageBaseUrl: string
     apis: ApiConfig[]
     presetSources: PresetSource[]
     customPresets: Preset[]
@@ -941,6 +948,103 @@ export default function ImageGenPage() {
                                 <div className="text-center py-6 text-sm text-muted-foreground border border-dashed rounded-lg">
                                     暂无API配置，点击上方按钮添加
                                 </div>
+                            )}
+                        </CardContent>
+                    </Card>
+
+                    {/* 发送模式配置 */}
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <Send className="h-5 w-5" />
+                                发送模式
+                            </CardTitle>
+                            <CardDescription>配置绘图结果的发送方式</CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="space-y-2">
+                                <Label>发送模式</Label>
+                                <Select
+                                    value={config?.sendMode || 'direct'}
+                                    onValueChange={(value: string) =>
+                                        handleUpdateConfig({ sendMode: value as ImageGenConfig['sendMode'] })
+                                    }
+                                >
+                                    <SelectTrigger className="w-full">
+                                        <SelectValue placeholder="选择发送模式" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="direct">
+                                            <div className="flex items-center gap-2">
+                                                <Image className="h-4 w-4" />
+                                                直接发送图片
+                                            </div>
+                                        </SelectItem>
+                                        <SelectItem value="link_qrcode">
+                                            <div className="flex items-center gap-2">
+                                                <QrCode className="h-4 w-4" />
+                                                占位图 + 链接 + 二维码
+                                            </div>
+                                        </SelectItem>
+                                        <SelectItem value="hybrid">
+                                            <div className="flex items-center gap-2">
+                                                <Link className="h-4 w-4" />
+                                                图片 + 链接 + 二维码
+                                            </div>
+                                        </SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                <p className="text-xs text-muted-foreground">
+                                    {config?.sendMode === 'link_qrcode'
+                                        ? '发送默认占位图，附带图片访问链接和二维码，适合需要查看高清原图的场景'
+                                        : config?.sendMode === 'hybrid'
+                                          ? '同时发送原图和访问链接+二维码，方便用户在其他设备查看高清图片'
+                                          : '直接发送生成的图片，不附带链接（默认模式）'}
+                                </p>
+                            </div>
+
+                            {(config?.sendMode === 'link_qrcode' || config?.sendMode === 'hybrid') && (
+                                <>
+                                    <Separator />
+                                    <div className="grid gap-4 md:grid-cols-2">
+                                        <div className="space-y-2">
+                                            <Label>默认占位图</Label>
+                                            <Input
+                                                value={config?.defaultImage || ''}
+                                                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                                                    setConfig(c =>
+                                                        c ? { ...c, defaultImage: e.target.value } : c
+                                                    )
+                                                }
+                                                onBlur={() =>
+                                                    config && handleUpdateConfig({ defaultImage: config.defaultImage })
+                                                }
+                                                placeholder="留空使用内置默认图片"
+                                            />
+                                            <p className="text-xs text-muted-foreground">
+                                                link_qrcode 模式下替代原图发送的占位图，支持本地路径或URL
+                                            </p>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label>图片访问基础URL</Label>
+                                            <Input
+                                                value={config?.imageBaseUrl || ''}
+                                                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                                                    setConfig(c =>
+                                                        c ? { ...c, imageBaseUrl: e.target.value } : c
+                                                    )
+                                                }
+                                                onBlur={() =>
+                                                    config && handleUpdateConfig({ imageBaseUrl: config.imageBaseUrl })
+                                                }
+                                                placeholder="留空自动获取（推荐）"
+                                            />
+                                            <p className="text-xs text-muted-foreground">
+                                                用于生成图片访问链接的基础URL，留空将自动从公网URL或本地地址获取
+                                            </p>
+                                        </div>
+                                    </div>
+                                </>
                             )}
                         </CardContent>
                     </Card>
