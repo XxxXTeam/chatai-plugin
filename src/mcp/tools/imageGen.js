@@ -101,19 +101,34 @@ export const imageGenTools = [
                     return { success: false, error: result.error }
                 }
 
-                /* 自动发送图片 */
+                /* 自动发送图片（内部根据 sendMode 配置选择发送方式） */
                 if (auto_send && e) {
                     await imageGen.sendResult(e, result)
                 }
 
-                return {
+                /* 返回结果中附带发送模式信息 */
+                const sendMode = imageGen.getSendMode()
+                const returnData = {
                     success: true,
                     images: result.images,
                     duration: result.duration,
                     apiUsed: result.apiUsed,
                     image_count: result.images?.length || 0,
-                    mode: genType
+                    mode: genType,
+                    sendMode
                 }
+
+                /* 非 direct 模式时生成访问链接 */
+                if (sendMode !== 'direct') {
+                    const viewUrls = []
+                    for (const url of result.images) {
+                        const linkInfo = await imageGen.saveAndBuildViewUrl(url)
+                        if (linkInfo) viewUrls.push(linkInfo.viewUrl)
+                    }
+                    if (viewUrls.length > 0) returnData.viewUrls = viewUrls
+                }
+
+                return returnData
             } catch (err) {
                 return { success: false, error: `图片生成失败: ${err.message}` }
             }

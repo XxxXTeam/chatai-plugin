@@ -9,6 +9,7 @@ import { getAvatarUrl, getUserInfo } from '../src/utils/platformAdapter.js'
 // 懒加载服务
 let _statsService = null
 let _imageService = null
+let _imageRouteUtils = null
 let _scopeManager = null
 let _databaseService = null
 
@@ -26,6 +27,21 @@ async function getImageService() {
         _imageService = imageService
     }
     return _imageService
+}
+
+/**
+ * 获取图片路由工具（懒加载）
+ * @returns {Promise<{buildImageViewUrl: Function, getImageBaseUrl: Function}>}
+ */
+async function getImageRouteUtils() {
+    if (!_imageRouteUtils) {
+        const mod = await import('../src/services/routes/imageRoutes.js')
+        _imageRouteUtils = {
+            buildImageViewUrl: mod.buildImageViewUrl,
+            getImageBaseUrl: mod.getImageBaseUrl
+        }
+    }
+    return _imageRouteUtils
 }
 
 async function getScopeManagerLazy() {
@@ -1376,31 +1392,81 @@ export class ImageGen extends plugin {
     }
 
     /**
-     * 发送视频结果
+     * 发送视频结果（支持三种发送模式）
      */
     async sendVideoResult(e, result) {
-        if (result.success) {
-            if (result.isImage) {
-                const msgs = [
-                    ...result.images.map(url => segment.image(url)),
-                    `⚠️ 模型返回了图片而非视频 (${result.duration})`
-                ]
-                await e.reply(msgs, true)
-            } else {
-                const msgs = []
-                for (const url of result.videos) {
-                    try {
-                        msgs.push(segment.video(url))
-                    } catch {
-                        msgs.push(`🎬 视频链接: ${url}`)
-                    }
-                }
-                msgs.push(`✅ 视频生成完成 (${result.duration})`)
-                await e.reply(msgs, true)
-            }
-        } else {
+        if (!result.success) {
             await e.reply(`❌ ${result.error}`, true)
+            return
         }
+
+        /* 视频结果直接发送（视频不走链接模式） */
+        if (!result.isImage) {
+            const msgs = []
+            for (const url of result.videos) {
+                try {
+                    msgs.push(segment.video(url))
+                } catch {
+                    msgs.push(`🎬 视频链接: ${url}`)
+                }
+            }
+            msgs.push(`✅ 视频生成完成 (${result.duration})`)
+            await e.reply(msgs, true)
+            return
+        }
+
+        /* 模型返回图片而非视频，走图片发送模式 */
+        const sendMode = this.getSendMode()
+
+        if (sendMode === 'direct') {
+            const msgs = [
+                ...result.images.map(url => segment.image(url)),
+                `⚠️ 模型返回了图片而非视频 (${result.duration})`
+            ]
+            await e.reply(msgs, true)
+            return
+        }
+
+        if (sendMode === 'link_qrcode') {
+            /* 上传到QQ图床获取CDN链接 */
+            const cdnUrls = await Promise.all(result.images.map(url => this.uploadToQQImageBed(e, url)))
+            const msgs = [
+                ...result.images.map(url => segment.image(url)),
+                `⚠️ 模型返回了图片而非视频 (${result.duration})`
+            ]
+
+            const validCdnUrls = cdnUrls.filter(u => u !== null)
+            if (validCdnUrls.length > 0) {
+                for (let i = 0; i < validCdnUrls.length; i++) {
+                    msgs.push(...this.buildLinkMessages(validCdnUrls[i], i, validCdnUrls.length))
+                }
+            }
+            await e.reply(msgs, true)
+            /* QQ图床失败时，将图片压缩为zip发送 */
+            if (validCdnUrls.length === 0) {
+                await this.sendImagesAsZip(e, result.images)
+            }
+            return
+        }
+
+        /* hybrid 模式 */
+        const linkResults = await Promise.all(result.images.map(url => this.saveAndBuildViewUrl(url)))
+        const validLinks = linkResults.filter(r => r !== null)
+
+        if (validLinks.length === 0) {
+            const msgs = [
+                ...result.images.map(url => segment.image(url)),
+                `⚠️ 模型返回了图片而非视频 (${result.duration})`
+            ]
+            await e.reply(msgs, true)
+            return
+        }
+
+        const msgs = [...result.images.map(url => segment.image(url)), `⚠️ 模型返回了图片而非视频 (${result.duration})`]
+        for (let i = 0; i < validLinks.length; i++) {
+            msgs.push(...this.buildLinkMessages(validLinks[i].viewUrl, i, validLinks.length))
+        }
+        await e.reply(msgs, true)
     }
 
     /**
@@ -1431,15 +1497,376 @@ export class ImageGen extends plugin {
         return images
     }
     /**
-     * 发送结果
+     * 获取绘图结果发送模式
+     * @returns {'direct'|'link_qrcode'|'hybrid'}
+     */
+    getSendMode() {
+        return config.get('features.imageGen.sendMode') || 'direct'
+    }
+
+    /**
+     * 将图片URL保存到本地并生成访问链接
+     * @param {string} imageUrl - 图片URL（可以是 base64:// 或 http(s)://）
+     * @returns {Promise<{viewUrl: string, imageId: string}|null>}
+     */
+    async saveAndBuildViewUrl(imageUrl) {
+        try {
+            const imgSvc = await getImageService()
+            const routeUtils = await getImageRouteUtils()
+
+            let imageData
+            if (imageUrl.startsWith('base64://')) {
+                const base64Data = imageUrl.replace('base64://', '')
+                const buffer = Buffer.from(base64Data, 'base64')
+                imageData = await imgSvc.uploadImage(buffer, 'generated_image.png')
+            } else if (imageUrl.startsWith('data:image')) {
+                const base64Data = imageUrl.split(',')[1]
+                const buffer = Buffer.from(base64Data, 'base64')
+                imageData = await imgSvc.uploadImage(buffer, 'generated_image.png')
+            } else if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+                imageData = await imgSvc.downloadImage(imageUrl)
+            } else {
+                return null
+            }
+
+            const viewUrl = routeUtils.buildImageViewUrl(imageData.id)
+            return viewUrl ? { viewUrl, imageId: imageData.id } : null
+        } catch (err) {
+            logger.warn('[ImageGen] 保存图片并生成链接失败:', err.message)
+            return null
+        }
+    }
+
+    /**
+     * 将图片URL/base64/本地路径转换为 Buffer
+     * @param {string} imageUrl - 图片来源（http(s)://、base64://、data:image、本地路径）
+     * @returns {Promise<Buffer|null>} 图片 Buffer，失败返回 null
+     */
+    async _getImageBuffer(imageUrl) {
+        try {
+            if (imageUrl.startsWith('base64://')) {
+                return Buffer.from(imageUrl.replace('base64://', ''), 'base64')
+            } else if (imageUrl.startsWith('data:image')) {
+                return Buffer.from(imageUrl.split(',')[1], 'base64')
+            } else if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+                const resp = await fetch(imageUrl, { signal: AbortSignal.timeout(30000) })
+                if (!resp.ok) return null
+                return Buffer.from(await resp.arrayBuffer())
+            } else if (fs.existsSync(imageUrl)) {
+                return fs.readFileSync(imageUrl)
+            }
+            return null
+        } catch (err) {
+            logger.warn('[ImageGen] 获取图片Buffer失败:', err.message)
+            return null
+        }
+    }
+
+    /**
+     * 上传图片到QQ图床，获取CDN链接
+     * 支持 ICQQ 的 uploadImages 接口，其他平台回退返回 null
+     * @param {Object} e - 消息事件
+     * @param {string} imageUrl - 图片URL（http(s)://、base64:// 或 data:image）
+     * @returns {Promise<string|null>} QQ CDN URL，失败返回 null
+     */
+    async uploadToQQImageBed(e, imageUrl) {
+        try {
+            const bot = e.bot || Bot
+            const groupId = e.group_id
+            const buffer = await this._getImageBuffer(imageUrl)
+            if (!buffer || buffer.length === 0) return null
+
+            /* ICQQ: uploadImages 批量上传图片到 QQ 图床（无需发送） */
+            const target =
+                groupId && typeof bot.pickGroup === 'function'
+                    ? bot.pickGroup(parseInt(groupId))
+                    : e.user_id && typeof bot.pickFriend === 'function'
+                      ? bot.pickFriend(parseInt(e.user_id))
+                      : null
+
+            if (target && typeof target.uploadImages === 'function') {
+                const imgElem = { type: 'image', file: buffer }
+                const rejected = await target.uploadImages([imgElem])
+                if (rejected && rejected.length > 0) {
+                    logger.warn('[ImageGen] QQ图床上传被拒绝:', rejected[0]?.reason || '未知原因')
+                    return null
+                }
+                /* 上传成功后通过 getPicUrl 获取 CDN 下载地址 */
+                let url = imgElem.url
+                if (!url && typeof target.getPicUrl === 'function') {
+                    url = await target.getPicUrl(imgElem)
+                }
+                if (url) {
+                    logger.debug('[ImageGen] QQ图床上传成功:', url.substring(0, 80))
+                    return url
+                }
+            }
+
+            return null
+        } catch (err) {
+            logger.warn('[ImageGen] QQ图床上传失败:', err.message)
+            return null
+        }
+    }
+
+    /**
+     * CRC32 计算（ZIP 格式所需）
+     * @param {Buffer} buf - 数据
+     * @returns {number} CRC32 校验值
+     */
+    _crc32(buf) {
+        if (!ImageGen._crc32Table) {
+            ImageGen._crc32Table = new Uint32Array(256)
+            for (let i = 0; i < 256; i++) {
+                let c = i
+                for (let j = 0; j < 8; j++) {
+                    c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+                }
+                ImageGen._crc32Table[i] = c
+            }
+        }
+        let crc = 0xffffffff
+        for (let i = 0; i < buf.length; i++) {
+            crc = ImageGen._crc32Table[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8)
+        }
+        return (crc ^ 0xffffffff) >>> 0
+    }
+
+    /**
+     * 将文件列表构建为 ZIP Buffer（STORE 方式，无压缩）
+     * @param {{ name: string, data: Buffer }[]} files - 文件列表
+     * @returns {Buffer} ZIP 文件 Buffer
+     */
+    _buildZipBuffer(files) {
+        const parts = []
+        const centralParts = []
+        let offset = 0
+
+        for (const file of files) {
+            const nameBuffer = Buffer.from(file.name, 'utf8')
+            const crc = this._crc32(file.data)
+
+            /* 本地文件头 (30 + 文件名长度) */
+            const local = Buffer.alloc(30)
+            local.writeUInt32LE(0x04034b50, 0)
+            local.writeUInt16LE(20, 4)
+            local.writeUInt16LE(0, 8)
+            local.writeUInt32LE(crc, 14)
+            local.writeUInt32LE(file.data.length, 18)
+            local.writeUInt32LE(file.data.length, 22)
+            local.writeUInt16LE(nameBuffer.length, 26)
+
+            const localEntry = Buffer.concat([local, nameBuffer, file.data])
+            parts.push(localEntry)
+
+            /* 中央目录头 (46 + 文件名长度) */
+            const central = Buffer.alloc(46)
+            central.writeUInt32LE(0x02014b50, 0)
+            central.writeUInt16LE(20, 4)
+            central.writeUInt16LE(20, 6)
+            central.writeUInt32LE(crc, 16)
+            central.writeUInt32LE(file.data.length, 20)
+            central.writeUInt32LE(file.data.length, 24)
+            central.writeUInt16LE(nameBuffer.length, 28)
+            central.writeUInt32LE(offset, 42)
+
+            centralParts.push(Buffer.concat([central, nameBuffer]))
+            offset += localEntry.length
+        }
+
+        const centralDir = Buffer.concat(centralParts)
+
+        /* 中央目录结束记录 (22 bytes) */
+        const eocd = Buffer.alloc(22)
+        eocd.writeUInt32LE(0x06054b50, 0)
+        eocd.writeUInt16LE(files.length, 8)
+        eocd.writeUInt16LE(files.length, 10)
+        eocd.writeUInt32LE(centralDir.length, 12)
+        eocd.writeUInt32LE(offset, 16)
+
+        return Buffer.concat([...parts, centralDir, eocd])
+    }
+
+    /**
+     * 将图片压缩为 ZIP 文件并通过群文件/私聊文件发送
+     * QQ图床上传失败时的回退方案
+     * @param {Object} e - 消息事件
+     * @param {string[]} imageUrls - 图片URL列表
+     */
+    async sendImagesAsZip(e, imageUrls) {
+        try {
+            const files = []
+            for (let i = 0; i < imageUrls.length; i++) {
+                const buffer = await this._getImageBuffer(imageUrls[i])
+                if (buffer && buffer.length > 0) {
+                    files.push({ name: `image_${i + 1}.png`, data: buffer })
+                }
+            }
+            if (files.length === 0) {
+                logger.warn('[ImageGen] 没有可打包的图片')
+                return
+            }
+
+            const zipBuffer = this._buildZipBuffer(files)
+            const __dirname = path.dirname(fileURLToPath(import.meta.url))
+            const tmpDir = path.join(__dirname, '..', 'data', 'temp')
+            fs.mkdirSync(tmpDir, { recursive: true })
+            const zipName = `生成图片_${Date.now()}.zip`
+            const zipPath = path.join(tmpDir, zipName)
+            fs.writeFileSync(zipPath, zipBuffer)
+
+            const bot = e.bot || Bot
+            const groupId = e.group_id
+
+            /* ICQQ: group.sendFile / friend.sendFile */
+            if (groupId && typeof bot.pickGroup === 'function') {
+                const group = bot.pickGroup(parseInt(groupId))
+                if (typeof group.sendFile === 'function') {
+                    await group.sendFile(zipPath, '/', zipName)
+                    setTimeout(() => {
+                        try {
+                            fs.unlinkSync(zipPath)
+                        } catch {}
+                    }, 60000)
+                    return
+                }
+            }
+            if (!groupId && e.user_id && typeof bot.pickFriend === 'function') {
+                const friend = bot.pickFriend(parseInt(e.user_id))
+                if (typeof friend.sendFile === 'function') {
+                    await friend.sendFile(zipPath, zipName)
+                    setTimeout(() => {
+                        try {
+                            fs.unlinkSync(zipPath)
+                        } catch {}
+                    }, 60000)
+                    return
+                }
+            }
+
+            /* OneBotv11: upload_group_file / upload_private_file */
+            if (typeof bot.sendApi === 'function') {
+                if (groupId) {
+                    await bot.sendApi('upload_group_file', {
+                        group_id: parseInt(groupId),
+                        file: zipPath,
+                        name: zipName
+                    })
+                } else if (e.user_id) {
+                    await bot.sendApi('upload_private_file', {
+                        user_id: parseInt(e.user_id),
+                        file: zipPath,
+                        name: zipName
+                    })
+                }
+            }
+
+            setTimeout(() => {
+                try {
+                    fs.unlinkSync(zipPath)
+                } catch {}
+            }, 60000)
+        } catch (err) {
+            logger.warn('[ImageGen] 发送图片ZIP失败:', err.message)
+        }
+    }
+
+    /**
+     * 生成QR码图片URL
+     * @param {string} text - 要编码的内容
+     * @param {number} [size=300] - 二维码尺寸
+     * @returns {string}
+     */
+    getQRCodeUrl(text, size = 300) {
+        return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(text)}`
+    }
+
+    /**
+     * 获取默认占位图
+     * @returns {string|null} 占位图路径或URL
+     */
+    getDefaultImage() {
+        const defaultImage = config.get('features.imageGen.defaultImage')
+        if (defaultImage) return defaultImage
+
+        /* 未配置时使用内置默认占位图 */
+        const builtinDefault = path.join(__dirname, '../image/image.png')
+        if (fs.existsSync(builtinDefault)) return builtinDefault
+        return null
+    }
+
+    /**
+     * 构建链接+二维码消息段
+     * @param {string} viewUrl - 图片访问链接
+     * @param {number} [index] - 图片序号（多图时使用）
+     * @param {number} [total] - 图片总数
+     * @returns {Array} 消息段数组
+     */
+    buildLinkMessages(viewUrl, index, total) {
+        const msgs = []
+        const qrUrl = this.getQRCodeUrl(viewUrl)
+        const label = total > 1 ? `图片${index + 1}/${total}` : '图片'
+
+        msgs.push(`🔗 ${label}链接:\n${viewUrl}`)
+        msgs.push(segment.image(qrUrl))
+        return msgs
+    }
+
+    /**
+     * 发送结果（支持三种模式：direct / link_qrcode / hybrid）
+     * @param {Object} e - 消息事件
+     * @param {Object} result - 生成结果
      */
     async sendResult(e, result) {
-        if (result.success) {
+        if (!result.success) {
+            await e.reply(`❌ ${result.error}`, true)
+            return
+        }
+
+        const sendMode = this.getSendMode()
+
+        if (sendMode === 'direct') {
+            /* 直接发送图片（原始行为） */
             const msgs = [...result.images.map(url => segment.image(url)), `✅ 生成完成 (${result.duration})`]
             await e.reply(msgs, true)
-        } else {
-            await e.reply(`❌ ${result.error}`, true)
+            return
         }
+
+        if (sendMode === 'link_qrcode') {
+            /* 上传到QQ图床获取CDN链接，发送图片 + CDN链接 + 二维码 */
+            const cdnUrls = await Promise.all(result.images.map(url => this.uploadToQQImageBed(e, url)))
+            const msgs = [...result.images.map(url => segment.image(url)), `✅ 生成完成 (${result.duration})`]
+
+            const validCdnUrls = cdnUrls.filter(u => u !== null)
+            if (validCdnUrls.length > 0) {
+                for (let i = 0; i < validCdnUrls.length; i++) {
+                    msgs.push(...this.buildLinkMessages(validCdnUrls[i], i, validCdnUrls.length))
+                }
+            }
+            await e.reply(msgs, true)
+            /* QQ图床失败时，将图片压缩为zip发送 */
+            if (validCdnUrls.length === 0) {
+                await this.sendImagesAsZip(e, result.images)
+            }
+            return
+        }
+
+        /* hybrid 模式：发送原图 + 本地服务器链接 + 二维码 */
+        const linkResults = await Promise.all(result.images.map(url => this.saveAndBuildViewUrl(url)))
+        const validLinks = linkResults.filter(r => r !== null)
+
+        if (validLinks.length === 0) {
+            logger.warn('[ImageGen] 链接生成失败，回退到直接发送模式')
+            const msgs = [...result.images.map(url => segment.image(url)), `✅ 生成完成 (${result.duration})`]
+            await e.reply(msgs, true)
+            return
+        }
+
+        const msgs = [...result.images.map(url => segment.image(url)), `✅ 生成完成 (${result.duration})`]
+        for (let i = 0; i < validLinks.length; i++) {
+            msgs.push(...this.buildLinkMessages(validLinks[i].viewUrl, i, validLinks.length))
+        }
+        await e.reply(msgs, true)
     }
 
     /**
@@ -1455,7 +1882,46 @@ export class ImageGen extends plugin {
         }
 
         try {
-            await e.reply([...result.images.map(url => segment.image(url)), `✅ 表情生成完成，正在切割...请稍等`], true)
+            /* 发送原图预览时根据 sendMode 决定是否发送原图 */
+            const sendMode = this.getSendMode()
+            if (sendMode === 'link_qrcode') {
+                /* link_qrcode 模式：上传QQ图床，发送图片 + CDN链接 + 二维码，然后切割 */
+                const cdnUrls = await Promise.all(result.images.map(url => this.uploadToQQImageBed(e, url)))
+                const previewMsgs = [
+                    ...result.images.map(url => segment.image(url)),
+                    `✅ 表情生成完成，正在切割...请稍等`
+                ]
+
+                const validCdnUrls = cdnUrls.filter(u => u !== null)
+                if (validCdnUrls.length > 0) {
+                    for (let i = 0; i < validCdnUrls.length; i++) {
+                        previewMsgs.push(...this.buildLinkMessages(validCdnUrls[i], i, validCdnUrls.length))
+                    }
+                }
+                await e.reply(previewMsgs, true)
+                /* QQ图床失败时，将图片压缩为zip发送 */
+                if (validCdnUrls.length === 0) {
+                    await this.sendImagesAsZip(e, result.images)
+                }
+            } else if (sendMode === 'hybrid') {
+                /* hybrid 模式：发送原图 + 链接 + 二维码，然后切割 */
+                const previewMsgs = [
+                    ...result.images.map(url => segment.image(url)),
+                    `✅ 表情生成完成，正在切割...请稍等`
+                ]
+                const linkResults = await Promise.all(result.images.map(url => this.saveAndBuildViewUrl(url)))
+                const validLinks = linkResults.filter(r => r !== null)
+                for (let i = 0; i < validLinks.length; i++) {
+                    previewMsgs.push(...this.buildLinkMessages(validLinks[i].viewUrl, i, validLinks.length))
+                }
+                await e.reply(previewMsgs, true)
+            } else {
+                /* direct 模式：直接发送原图 */
+                await e.reply(
+                    [...result.images.map(url => segment.image(url)), `✅ 表情生成完成，正在切割...请稍等`],
+                    true
+                )
+            }
 
             const { cols, rows } = splitGrid
             const bot = e.bot || Bot

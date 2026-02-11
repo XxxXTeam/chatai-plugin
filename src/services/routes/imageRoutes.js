@@ -4,6 +4,7 @@
 import express from 'express'
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import config from '../../../config/config.js'
 import { ChaiteResponse } from './shared.js'
@@ -484,3 +485,134 @@ router.delete('/sources/:index', (req, res) => {
 })
 
 export default router
+
+/* ==================== 公开图片访问路由（无需认证） ==================== */
+
+const IMAGE_DIR = path.join(__dirname, '../../../data/images')
+const IMAGE_TOKEN_SECRET = 'chatai-image-view-2026'
+
+/**
+ * 生成图片访问 Token（HMAC 签名，防止路径遍历）
+ * @param {string} imageId - 图片唯一标识
+ * @param {number} [expireMs=86400000] - 有效期（毫秒），默认24小时
+ * @returns {{ token: string, expires: number }}
+ */
+export function generateImageToken(imageId, expireMs = 86400000) {
+    const expires = Date.now() + expireMs
+    const payload = `${imageId}|${expires}`
+    const hmac = crypto.createHmac('sha256', IMAGE_TOKEN_SECRET).update(payload).digest('hex').substring(0, 16)
+    return { token: `${hmac}.${expires}`, expires }
+}
+
+/**
+ * 验证图片访问 Token
+ * @param {string} imageId - 图片唯一标识
+ * @param {string} token - 访问令牌
+ * @returns {boolean}
+ */
+function verifyImageToken(imageId, token) {
+    if (!token || !imageId) return false
+    const parts = token.split('.')
+    if (parts.length !== 2) return false
+    const [hmacPart, expiresPart] = parts
+    const expires = parseInt(expiresPart)
+    if (isNaN(expires) || Date.now() > expires) return false
+    const payload = `${imageId}|${expires}`
+    const expected = crypto.createHmac('sha256', IMAGE_TOKEN_SECRET).update(payload).digest('hex').substring(0, 16)
+    return hmacPart === expected
+}
+
+/**
+ * 根据图片ID查找实际文件路径
+ * @param {string} imageId - 图片ID
+ * @returns {string|null}
+ */
+function findImageFile(imageId) {
+    /* 安全检查：只允许十六进制字符的ID */
+    if (!/^[a-f0-9]+$/i.test(imageId)) return null
+    if (!fs.existsSync(IMAGE_DIR)) return null
+
+    const files = fs.readdirSync(IMAGE_DIR)
+    const match = files.find(f => f.startsWith(imageId) && !f.includes('_thumb'))
+    if (!match) return null
+    return path.join(IMAGE_DIR, match)
+}
+
+/**
+ * 构建完整的图片访问URL
+ * @param {string} imageId - 图片ID
+ * @param {number} [expireMs] - 有效期
+ * @returns {string|null}
+ */
+export function buildImageViewUrl(imageId, expireMs) {
+    const { token } = generateImageToken(imageId, expireMs)
+    const baseUrl = getImageBaseUrl()
+    if (!baseUrl) return null
+    return `${baseUrl}/api/images/view/${imageId}?token=${token}`
+}
+
+/**
+ * 获取图片访问的基础URL
+ * @returns {string}
+ */
+export function getImageBaseUrl() {
+    /* 优先使用 imageGen 配置的 imageBaseUrl */
+    const imageBaseUrl = config.get('features.imageGen.imageBaseUrl')
+    if (imageBaseUrl) return imageBaseUrl.replace(/\/$/, '')
+
+    /* 其次使用 web.publicUrl */
+    const publicUrl = config.get('web.publicUrl')
+    if (publicUrl) return `${publicUrl.replace(/\/$/, '')}/chatai`
+
+    /* 最后尝试从 WebServer 获取本地地址 */
+    try {
+        const port = config.get('web.port') || 3000
+        return `http://127.0.0.1:${port}/chatai`
+    } catch {
+        return null
+    }
+}
+
+/**
+ * 公开图片访问路由（无需认证）
+ */
+export const publicImageRouter = express.Router()
+
+/**
+ * @route GET /api/images/view/:id
+ * @description 通过签名 Token 公开访问生成的图片
+ * @query token - 图片访问令牌
+ */
+publicImageRouter.get('/view/:id', (req, res) => {
+    try {
+        const { id } = req.params
+        const { token } = req.query
+
+        if (!verifyImageToken(id, token)) {
+            return res.status(403).json({ error: '链接无效或已过期' })
+        }
+
+        const filepath = findImageFile(id)
+        if (!filepath) {
+            return res.status(404).json({ error: '图片不存在或已过期' })
+        }
+
+        /* 设置缓存头和内容类型 */
+        const ext = path.extname(filepath).toLowerCase()
+        const mimeMap = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.webp': 'image/webp'
+        }
+        res.setHeader('Content-Type', mimeMap[ext] || 'image/jpeg')
+        res.setHeader('Cache-Control', 'public, max-age=3600')
+        res.setHeader('Content-Disposition', `inline; filename="image_${id.substring(0, 8)}${ext}"`)
+
+        const stream = fs.createReadStream(filepath)
+        stream.pipe(res)
+    } catch (error) {
+        res.status(500).json({ error: error.message })
+    }
+})

@@ -513,6 +513,17 @@ class Config {
                     videoModel: 'veo-2.0-generate-001', // 视频生成模型
                     timeout: 600000, // 超时时间（毫秒）
                     maxImages: 3, // 最大图片数
+                    /*
+                     * 绘图结果发送模式：
+                     * direct - 直接发送图片（默认）
+                     * link_qrcode - 发送默认占位图 + 图片链接 + 二维码
+                     * hybrid - 发送图片 + 图片链接 + 二维码
+                     */
+                    sendMode: 'direct',
+                    /* 默认占位图（link_qrcode 模式使用），支持本地路径或 URL */
+                    defaultImage: '',
+                    /* 图片访问基础URL（留空自动从 web.publicUrl 或本地地址获取） */
+                    imageBaseUrl: '',
                     // API列表
                     apis: [{ baseUrl: 'https://business.928100.xyz/v1/chat/completions', apiKey: 'X-Free' }],
                     // 预设来源配置
