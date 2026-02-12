@@ -274,6 +274,21 @@ class Config {
                 // 是否允许危险操作
                 allowDangerous: false
             },
+            /*
+             * 渠道列表，每个渠道的 advanced 配置结构：
+             * {
+             *   streaming: { enabled: false, chunkSize: 1024 },
+             *   thinking: { enableReasoning: false, defaultLevel: 'medium', adaptThinking: true, sendThinkingAsMessage: false },
+             *   llm: {
+             *     temperature: 0.7,
+             *     maxTokens: 4000,
+             *     topP: 1,
+             *     frequencyPenalty: 0,
+             *     presencePenalty: 0,
+             *     maxCharacters: 0  // 字符上限，0 = 不限制，超出上限时从最旧的历史消息开始清理
+             *   }
+             * }
+             */
             channels: [],
             mcp: {
                 enabled: true

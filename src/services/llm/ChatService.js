@@ -855,6 +855,38 @@ export class ChatService {
             logger.debug(`[ChatService] 预设已禁用系统提示词，不发送 system 消息`)
         }
         messages.push(...validHistory, userMessage)
+
+        /*
+         * 字符上限检查
+         * 当渠道配置了 maxCharacters 且大于 0 时，计算 messages 总字符数
+         * 超出上限则从最旧的历史消息开始移除（保留 system 提示词和当前用户消息）
+         */
+        const maxCharacters = channelLlm.maxCharacters || 0
+        if (maxCharacters > 0) {
+            const calcChars = msgs =>
+                msgs.reduce((sum, msg) => {
+                    if (Array.isArray(msg.content)) {
+                        return sum + msg.content.reduce((s, c) => s + (c.text?.length || 0), 0)
+                    }
+                    return sum + (typeof msg.content === 'string' ? msg.content.length : 0)
+                }, 0)
+
+            let totalChars = calcChars(messages)
+            const beforeCount = messages.length
+            // 从最旧的历史消息开始移除（索引1起为历史，跳过 system 和最后的 userMessage）
+            while (totalChars > maxCharacters && messages.length > 2) {
+                const firstHistoryIdx = messages[0]?.role === 'system' ? 1 : 0
+                if (firstHistoryIdx >= messages.length - 1) break
+                messages.splice(firstHistoryIdx, 1)
+                totalChars = calcChars(messages)
+            }
+            if (beforeCount !== messages.length) {
+                logger.info(
+                    `[ChatService] 字符上限裁剪: ${beforeCount} -> ${messages.length} 条消息, 当前字符数: ${totalChars}/${maxCharacters}`
+                )
+            }
+        }
+
         const hasTools = client.tools && client.tools.length > 0
         const useStreaming = stream || channelStreaming.enabled === true
         logger.debug(

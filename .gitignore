@@ -49,3 +49,4 @@ data/instance.json
 .qoder/
 .windsurf/workflows/
 docs/webs/
+.agents/

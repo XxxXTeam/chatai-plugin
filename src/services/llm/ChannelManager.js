@@ -130,6 +130,8 @@ export class ChannelManager {
             this.channels.set(channelConfig.id, {
                 ...channelConfig,
                 baseUrl: normalizedUrl,
+                // 规范化高级配置，确保新增字段有默认值
+                advanced: this.normalizeAdvanced(channelConfig.advanced),
                 status: channelConfig.status || ChannelStatus.IDLE,
                 lastHealthCheck: channelConfig.lastHealthCheck || null,
                 testedAt: channelConfig.testedAt || null,
@@ -196,6 +198,36 @@ export class ChannelManager {
     }
 
     /**
+     * 规范化渠道高级配置，确保所有字段都有默认值
+     * @param {Object} advanced - 原始高级配置
+     * @returns {Object} 标准化后的高级配置
+     */
+    normalizeAdvanced(advanced) {
+        const src = advanced || {}
+        return {
+            streaming: {
+                enabled: src.streaming?.enabled || false,
+                chunkSize: src.streaming?.chunkSize || 1024
+            },
+            thinking: {
+                enableReasoning: src.thinking?.enableReasoning || false,
+                defaultLevel: src.thinking?.defaultLevel || 'medium',
+                adaptThinking: src.thinking?.adaptThinking !== false,
+                sendThinkingAsMessage: src.thinking?.sendThinkingAsMessage || false
+            },
+            llm: {
+                temperature: src.llm?.temperature ?? 0.7,
+                maxTokens: src.llm?.maxTokens || 4000,
+                topP: src.llm?.topP ?? 1,
+                frequencyPenalty: src.llm?.frequencyPenalty ?? 0,
+                presencePenalty: src.llm?.presencePenalty ?? 0,
+                /* 字符上限，0 表示不限制 */
+                maxCharacters: src.llm?.maxCharacters || 0
+            }
+        }
+    }
+
+    /**
      * 获取所有渠道
      * @returns {Array} 渠道列表
      */
@@ -232,7 +264,7 @@ export class ChannelManager {
             models: channelData.models || [],
             priority: channelData.priority || 100,
             enabled: channelData.enabled !== false,
-            advanced: channelData.advanced || {},
+            advanced: this.normalizeAdvanced(channelData.advanced),
             apiKeys: this.normalizeApiKeys(channelData.apiKeys || []),
             strategy: channelData.strategy || KeyStrategy.ROUND_ROBIN,
             customHeaders: channelData.customHeaders || {},

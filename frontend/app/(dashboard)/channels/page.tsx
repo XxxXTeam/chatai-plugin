@@ -182,10 +182,10 @@ const CHANNEL_PRESETS: Record<string, ChannelPreset> = {
     'free-gemini3': {
         name: '免费Gemini',
         adapterType: 'openai',
-        baseUrl: 'https://www.coffeecatai.com/api/proxy/openai',
-        apiKey: 'sk-MiJEspoHHYVl6Wx63pCzRSGU596rJRao70PgAYNkBNfnNQTAqHomGaQejmWeLwAz',
-        models: 'x-ai/grok-4.1-fast,google/gemini-2.5-flash-lite',
-        description: '免费grok和Gemini2.5'
+        baseUrl: 'https://ai.openel.top',
+        apiKey: 'sk-QZLsiCrKlW4BsLUe5EJHbmx9rq8Pb8UBPwxHO7lcmNARUTVJ',
+        models: 'google/gemini-2.5-flash-lite',
+        description: '免费Gemini2.5'
     },
     'free-zhipu': {
         name: '免费智谱',
@@ -429,7 +429,7 @@ export default function ChannelsPage() {
                 adaptThinking: true,
                 sendThinkingAsMessage: false
             },
-            llm: { temperature: 0.7, maxTokens: 4000, topP: 1, frequencyPenalty: 0, presencePenalty: 0 }
+            llm: { temperature: 0.7, maxTokens: 4000, topP: 1, frequencyPenalty: 0, presencePenalty: 0, maxCharacters: 0 }
         },
         overrides: {
             modelMapping: {} as Record<string, string>
@@ -491,7 +491,7 @@ export default function ChannelsPage() {
     const defaultAdvanced = {
         streaming: { enabled: false, chunkSize: 1024 },
         thinking: { enableReasoning: false, defaultLevel: 'medium', adaptThinking: true, sendThinkingAsMessage: false },
-        llm: { temperature: 0.7, maxTokens: 4000, topP: 1, frequencyPenalty: 0, presencePenalty: 0 }
+        llm: { temperature: 0.7, maxTokens: 4000, topP: 1, frequencyPenalty: 0, presencePenalty: 0, maxCharacters: 0 }
     }
 
     const defaultImageConfig = {
@@ -1809,6 +1809,32 @@ export default function ChannelsPage() {
                                                                 })
                                                             }
                                                         />
+                                                    </div>
+                                                    {/* 字符上限设置 */}
+                                                    <div className="grid gap-2">
+                                                        <Label className="text-sm">字符上限</Label>
+                                                        <Input
+                                                            type="number"
+                                                            value={form.advanced.llm.maxCharacters || ''}
+                                                            onChange={e =>
+                                                                setForm({
+                                                                    ...form,
+                                                                    advanced: {
+                                                                        ...form.advanced,
+                                                                        llm: {
+                                                                            ...form.advanced.llm,
+                                                                            maxCharacters:
+                                                                                parseInt(e.target.value) || 0
+                                                                        }
+                                                                    }
+                                                                })
+                                                            }
+                                                            placeholder="0 = 不限制"
+                                                        />
+                                                        <p className="text-xs text-muted-foreground">
+                                                            限制发送给模型的消息总字符数，超出上限时会从最旧的历史消息开始清理。设为
+                                                            0 或留空表示不限制。
+                                                        </p>
                                                     </div>
                                                 </div>
 

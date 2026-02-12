@@ -268,23 +268,6 @@ refactor(core): 重构消息处理流程
 2. 使用 `config.get('key')` 读取
 
 ---
-
-## Agent Workflows
-
-项目提供了以下 Agent Workflows (`.windsurf/workflows/`):
-
-| 命令 | 用途 |
-|------|------|
-| `/feature` | 新功能开发 |
-| `/bugfix` | Bug 修复 |
-| `/context` | 代码理解 |
-| `/mcp-tool` | MCP 工具开发 |
-| `/adapter` | LLM 适配器开发 |
-| `/refactor` | 代码重构 |
-| `/review` | 代码审查 |
-
----
-
 ## 注意事项
 
 1. **保持兼容**: 修改时注意向后兼容，特别是导出接口
