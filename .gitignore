@@ -50,3 +50,6 @@ data/instance.json
 .windsurf/workflows/
 docs/webs/
 .agents/
+
+# 前端源码已迁移到 frontend 分支，v3 仅保留构建产物 resources/web/
+frontend/

@@ -32,26 +32,18 @@ jobs:
       
       - name: Build native modules
         run: pnpm rebuild better-sqlite3
-      
-      - name: Build frontend and copy to resources/web
+      - name: Verify frontend build output
         run: |
-          if [ -d "frontend" ]; then
-            cd frontend
-            pnpm install --frozen-lockfile
-            pnpm build
-            
-            # Copy built static files to resources/web
-            cd ..
-            rm -rf resources/web
-            mkdir -p resources/web
-            cp -r frontend/out/* resources/web/
+          if [ ! -d "resources/web" ] || [ -z "$(ls -A resources/web)" ]; then
+            echo "::warning::resources/web 目录为空，请先在 frontend 分支触发构建"
+          else
+            echo "Frontend build output found: $(find resources/web -type f | wc -l) files"
           fi
       
       - name: Create release package
         run: |
           # Create release.zip with only plugin files
           zip -r release.zip . \
-            -x "frontend/*" \
             -x "docs/*" \
             -x ".git/*" \
             -x ".github/*" \
