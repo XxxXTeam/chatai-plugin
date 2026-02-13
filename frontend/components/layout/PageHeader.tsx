@@ -29,6 +29,7 @@ export function PageHeader({ title, description, icon: Icon, actions, className 
                     <div
                         className={cn(
                             'flex items-center justify-center rounded-xl bg-gradient-to-br from-primary/10 via-primary/5 to-transparent border border-primary/10 shadow-sm glass-card group flex-shrink-0',
+                            'animate-scale-in',
                             isMobile ? 'h-9 w-9' : 'h-10 w-10 sm:h-14 sm:w-14 sm:rounded-2xl'
                         )}
                     >
@@ -44,6 +45,7 @@ export function PageHeader({ title, description, icon: Icon, actions, className 
                     <h1
                         className={cn(
                             'font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/70 truncate',
+                            'animate-slide-in-up',
                             isMobile ? 'text-lg' : 'text-xl sm:text-2xl md:text-3xl'
                         )}
                     >
@@ -53,6 +55,7 @@ export function PageHeader({ title, description, icon: Icon, actions, className 
                         <p
                             className={cn(
                                 'text-muted-foreground/80 font-medium line-clamp-1',
+                                'animate-slide-in-up delay-100',
                                 isMobile ? 'text-[11px]' : 'text-xs sm:text-sm'
                             )}
                         >
@@ -64,8 +67,10 @@ export function PageHeader({ title, description, icon: Icon, actions, className 
             {actions && (
                 <div
                     className={cn(
-                        'flex items-center flex-shrink-0',
-                        isMobile ? 'mt-1.5 gap-1.5 overflow-x-auto -mx-1 px-1 pb-1' : 'gap-2 overflow-x-auto pb-1 -mb-1'
+                        'flex items-center flex-shrink-0 animate-fade-in delay-200',
+                        isMobile
+                            ? 'mt-1.5 gap-1.5 overflow-x-auto -mx-1 px-1 pb-1 scroll-smooth scrollbar-none'
+                            : 'gap-2 overflow-x-auto pb-1 -mb-1'
                     )}
                 >
                     {actions}

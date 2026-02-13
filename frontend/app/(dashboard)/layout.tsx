@@ -4,6 +4,8 @@ import { Sidebar } from '@/components/layout/Sidebar'
 import { Header } from '@/components/layout/Header'
 import { MobileNav } from '@/components/layout/MobileNav'
 import { PageTabs } from '@/components/layout/PageTabs'
+import { PageTransition } from '@/components/layout/PageTransition'
+import { RoutePreloader } from '@/components/layout/RoutePreloader'
 import { SetupWizard } from '@/components/SetupWizard'
 import { DashboardTour } from '@/components/DashboardTour'
 import { useEffect, useState } from 'react'
@@ -126,7 +128,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                         mounted && isMobile ? 'pb-[calc(72px+env(safe-area-inset-bottom,0px))]' : 'pb-6'
                     )}
                 >
-                    {children}
+                    <PageTransition>
+                        {children}
+                    </PageTransition>
                 </main>
             </div>
 
@@ -135,6 +139,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
             {/* 全局命令面板 */}
             <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+
+            {/* 路由预加载 */}
+            <RoutePreloader />
 
             {/* 首次使用引导 */}
             <SetupWizard />

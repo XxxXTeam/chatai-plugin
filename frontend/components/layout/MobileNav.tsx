@@ -69,26 +69,29 @@ export function MobileNav() {
                         <Link
                             key={item.href}
                             href={item.href}
+                            prefetch={true}
                             className={cn('mobile-nav-item flex-1 touch-feedback', active && 'active')}
                             aria-current={active ? 'page' : undefined}
                         >
                             <div
                                 className={cn(
                                     'p-1.5 rounded-xl transition-all duration-200',
-                                    active ? 'bg-primary/10 scale-105' : 'hover:bg-muted/50'
+                                    active
+                                        ? 'bg-primary/10 scale-110 shadow-sm shadow-primary/10'
+                                        : 'hover:bg-muted/50 active:scale-95'
                                 )}
                             >
                                 <Icon
                                     className={cn(
-                                        'h-[18px] w-[18px] transition-colors',
+                                        'h-[18px] w-[18px] transition-all duration-200',
                                         active ? 'text-primary' : 'text-muted-foreground'
                                     )}
                                 />
                             </div>
                             <span
                                 className={cn(
-                                    'text-[9px] font-medium transition-colors',
-                                    active ? 'text-primary' : 'text-muted-foreground'
+                                    'text-[9px] font-medium transition-all duration-200',
+                                    active ? 'text-primary font-semibold' : 'text-muted-foreground'
                                 )}
                             >
                                 {item.label}

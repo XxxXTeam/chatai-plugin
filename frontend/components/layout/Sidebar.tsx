@@ -124,6 +124,7 @@ function NavGroupItem({
         return (
             <Link
                 href={item.href}
+                prefetch={true}
                 className={cn(
                     'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-300 relative overflow-hidden group/item',
                     isActive
@@ -191,11 +192,12 @@ function NavGroupItem({
                         <Link
                             key={item.href}
                             href={item.href}
+                            prefetch={true}
                             className={cn(
-                                'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-150',
+                                'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-200',
                                 isActive
                                     ? 'bg-primary text-primary-foreground font-medium shadow-sm'
-                                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground active:scale-[0.98]'
                             )}
                             onClick={onNavClick}
                             {...(item.tourId ? { 'data-tour': item.tourId } : {})}

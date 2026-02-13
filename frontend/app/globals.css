@@ -702,10 +702,25 @@
 .mobile-nav {
   @apply fixed bottom-0 left-0 right-0 z-50 bg-background/95 backdrop-blur-xl border-t border-border/50;
   padding-bottom: env(safe-area-inset-bottom, 0);
+  /* 入场动画 */
+  animation: mobile-nav-enter 0.35s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes mobile-nav-enter {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .mobile-nav-item {
   @apply flex flex-col items-center justify-center gap-0 py-1.5 px-2 text-muted-foreground transition-all duration-200;
+  /* 触摸优化 */
+  -webkit-tap-highlight-color: transparent;
 }
 
 .mobile-nav-item.active {
@@ -714,6 +729,7 @@
 
 .mobile-nav-item:active {
   @apply scale-95;
+  transition-duration: 100ms;
 }
 
 /* 移动端触摸优化 */
@@ -791,7 +807,13 @@
   @apply w-10 h-1 bg-muted-foreground/30 rounded-full mx-auto mt-2 mb-4;
 }
 
-/* 移动端页面过渡 */
+/* 页面过渡容器 */
+.page-transition-container {
+  will-change: auto;
+  min-height: 0;
+}
+
+/* 页面过渡 - 传统 CSS 类方式（备用） */
 .page-transition {
   @apply transition-all duration-200 ease-out;
 }
@@ -804,6 +826,39 @@
 .page-enter-active {
   opacity: 1;
   transform: translateY(0);
+}
+
+/* View Transition API 支持（渐进增强） */
+@supports (view-transition-name: page) {
+  ::view-transition-old(page-content) {
+    animation: vt-fade-out 0.2s ease-out forwards;
+  }
+
+  ::view-transition-new(page-content) {
+    animation: vt-fade-in 0.25s ease-out forwards;
+  }
+
+  @keyframes vt-fade-out {
+    from {
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+    }
+    to {
+      opacity: 0;
+      transform: translate3d(0, -4px, 0);
+    }
+  }
+
+  @keyframes vt-fade-in {
+    from {
+      opacity: 0;
+      transform: translate3d(0, 8px, 0);
+    }
+    to {
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+    }
+  }
 }
 
 /* 移动端下拉刷新指示器 */

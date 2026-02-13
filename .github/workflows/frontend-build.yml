@@ -1,0 +1,98 @@
+name: Frontend Build & Deploy
+
+on:
+  push:
+    branches: [frontend]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend-build.yml'
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      ## 检出 frontend 分支源码
+      - name: Checkout frontend branch
+        uses: actions/checkout@v4
+        with:
+          ref: frontend
+          fetch-depth: 2
+
+      ## 配置 Node.js 环境
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      ## 安装前端依赖
+      - name: Install dependencies
+        working-directory: frontend
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      ## 构建前端静态导出
+      - name: Build frontend
+        working-directory: frontend
+        run: npx next build
+
+      ## 验证构建产物
+      - name: Verify build output
+        run: |
+          if [ ! -d "frontend/out" ] || [ -z "$(ls -A frontend/out)" ]; then
+            echo "::error::Build output directory 'frontend/out' is empty or missing"
+            exit 1
+          fi
+          echo "Build output size: $(du -sh frontend/out | cut -f1)"
+          echo "File count: $(find frontend/out -type f | wc -l)"
+
+      ## 获取触发提交的信息用于 commit 消息
+      - name: Get commit info
+        id: commit-info
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=format:"%s")
+          COMMIT_SHA=$(git log -1 --pretty=format:"%h")
+          echo "message=${COMMIT_MSG}" >> "$GITHUB_OUTPUT"
+          echo "sha=${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
+
+      ## 检出 v3 分支到独立目录
+      - name: Checkout v3 branch
+        uses: actions/checkout@v4
+        with:
+          ref: v3
+          path: v3-branch
+          fetch-depth: 1
+
+      ## 替换 v3 分支的 resources/web 目录
+      - name: Deploy build output to v3
+        run: |
+          rm -rf v3-branch/resources/web
+          mkdir -p v3-branch/resources/web
+          cp -r frontend/out/* v3-branch/resources/web/
+
+      ## 提交并推送到 v3 分支
+      - name: Commit and push to v3
+        working-directory: v3-branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add resources/web/
+
+          # 检查是否有实际变更
+          if git diff --staged --quiet; then
+            echo "::notice::构建产物无变化，跳过提交"
+            exit 0
+          fi
+
+          git commit -m "chore: 更新前端构建产物 [${{ steps.commit-info.outputs.sha }}] ${{ steps.commit-info.outputs.message }}"
+          git push origin v3
+
+          echo "::notice::已成功将前端构建产物更新"
