@@ -766,13 +766,20 @@ channels:
 
 这是 SQLite 原生模块未编译或编译版本不匹配的问题。
 
-**方法一：在 Yunzai 根目录重新构建**
+**方法一：运行 pnpm 周期脚本（推荐）**
+
+在 **Yunzai 根目录** 执行：
 ```bash
-cd /path/to/Yunzai
-pnpm rebuild better-sqlite3
+pnpm approve-builds
 ```
 
-**方法二：进入模块目录手动构建**
+运行周期脚本后，需要删除依赖和锁文件重新安装：
+```bash
+rm -rf node_modules pnpm-lock.yaml
+pnpm install
+```
+
+**方法二：进入依赖目录手动构建**
 ```bash
 # 找到 better-sqlite3 目录（路径可能因包管理器不同而异）
 cd node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3
@@ -781,11 +788,7 @@ cd node_modules/better-sqlite3
 
 # 运行构建脚本
 npm run build-release
-```
-
-**方法三：使用 node-gyp 直接构建**
-```bash
-cd node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3
+# 或使用 node-gyp 直接构建
 npx node-gyp rebuild
 ```
 
@@ -815,12 +818,13 @@ xcode-select --install
 
 ```bash
 cd /path/to/Yunzai
-pnpm rebuild
+pnpm approve-builds
 ```
 
-或仅重建 better-sqlite3：
+运行周期脚本后，删除依赖和锁文件重新安装：
 ```bash
-pnpm rebuild better-sqlite3
+rm -rf node_modules pnpm-lock.yaml
+pnpm install
 ```
 </details>
 
@@ -858,7 +862,7 @@ pnpm rebuild better-sqlite3
 <details>
 <summary><b>Q: 启动时提示 "数据库初始化失败"？</b></summary>
 
-1. 确保已执行 `pnpm rebuild better-sqlite3`
+1. 确保已执行 `pnpm approve-builds` 并重新安装依赖
 2. 检查 `data/` 目录是否有写入权限：
    ```bash
    ls -la plugins/chatai-plugin/data/
