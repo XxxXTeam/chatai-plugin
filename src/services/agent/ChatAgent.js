@@ -14,6 +14,7 @@ import { imageService } from '../media/ImageService.js'
 import { setToolContext } from '../../core/utils/toolAdapter.js'
 import historyManager from '../../core/utils/history.js'
 import config from '../../../config/config.js'
+import { enforceMaxCharacters } from '../../utils/common.js'
 import { SkillsAgent, convertMcpTools } from './SkillsAgent.js'
 let _scopeManager = null
 async function ensureScopeManager() {
@@ -363,6 +364,10 @@ export class ChatAgent {
         // 请求参数
         const channelAdvanced = channel?.advanced || {}
         const channelLlm = channelAdvanced.llm || {}
+
+        /* 字符上限检查 */
+        const maxCharacters = channelLlm.maxCharacters || 0
+        enforceMaxCharacters(messages, maxCharacters, 'ChatAgent')
         const channelStreaming = channelAdvanced.streaming || {}
         const presetParams = currentPreset?.modelParams || {}
 

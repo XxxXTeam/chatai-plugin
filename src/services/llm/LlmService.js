@@ -237,7 +237,8 @@ export class LlmService {
         client._channelInfo = {
             id: channel.id,
             name: channel.name,
-            model: targetModel
+            model: targetModel,
+            maxCharacters: channel.advanced?.llm?.maxCharacters || 0
         }
 
         return client

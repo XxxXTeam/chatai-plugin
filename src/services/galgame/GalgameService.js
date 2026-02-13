@@ -9,6 +9,7 @@ import { LlmService } from '../llm/LlmService.js'
 import { getScopeManager } from '../scope/ScopeManager.js'
 import { statsService } from '../stats/StatsService.js'
 import config from '../../../config/config.js'
+import { enforceMaxCharacters } from '../../utils/common.js'
 import chatLogger from '../../core/utils/logger.js'
 
 // 从拆分的模块导入
@@ -1056,6 +1057,10 @@ class GalgameService {
             model: gameModel,
             enableTools: gameEnableTools
         })
+
+        /* 字符上限检查 */
+        const maxCharacters = client._channelInfo?.maxCharacters || 0
+        enforceMaxCharacters(messages, maxCharacters, 'GalgameService')
 
         const startTime = Date.now()
         let response = null
