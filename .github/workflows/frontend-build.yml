@@ -4,8 +4,8 @@ on:
   push:
     branches: [frontend]
     paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend-build.yml'
+      - '**'
+      - '!.github/**'
   workflow_dispatch:
 
 jobs:
@@ -30,7 +30,6 @@ jobs:
 
       ## 安装前端依赖
       - name: Install dependencies
-        working-directory: frontend
         run: |
           if [ -f package-lock.json ]; then
             npm ci
@@ -40,18 +39,17 @@ jobs:
 
       ## 构建前端静态导出
       - name: Build frontend
-        working-directory: frontend
         run: npx next build
 
       ## 验证构建产物
       - name: Verify build output
         run: |
-          if [ ! -d "frontend/out" ] || [ -z "$(ls -A frontend/out)" ]; then
-            echo "::error::Build output directory 'frontend/out' is empty or missing"
+          if [ ! -d "out" ] || [ -z "$(ls -A out)" ]; then
+            echo "::error::Build output directory 'out' is empty or missing"
             exit 1
           fi
-          echo "Build output size: $(du -sh frontend/out | cut -f1)"
-          echo "File count: $(find frontend/out -type f | wc -l)"
+          echo "Build output size: $(du -sh out | cut -f1)"
+          echo "File count: $(find out -type f | wc -l)"
 
       ## 获取触发提交的信息用于 commit 消息
       - name: Get commit info
@@ -75,7 +73,7 @@ jobs:
         run: |
           rm -rf v3-branch/resources/web
           mkdir -p v3-branch/resources/web
-          cp -r frontend/out/* v3-branch/resources/web/
+          cp -r out/* v3-branch/resources/web/
 
       ## 提交并推送到 v3 分支
       - name: Commit and push to v3
