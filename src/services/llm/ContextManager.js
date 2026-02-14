@@ -247,7 +247,9 @@ ${dialogText}
 3. 总结长度控制在${options.maxTokens || 400}字内。`
 
             const { LlmService } = await import('./LlmService.js')
-            const client = await LlmService.getChatClient({ model })
+            /* 从 conversationId 提取群ID（格式: group:${groupId}），使总结也能使用群独立渠道 */
+            const groupIdMatch = conversationId?.match?.(/^group:(\d+)/)
+            const client = await LlmService.getChatClient({ model, groupId: groupIdMatch?.[1] || undefined })
             const result = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
                 {

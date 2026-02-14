@@ -206,7 +206,8 @@ export class bym extends plugin {
             }
             const client = await LlmService.getChatClient({
                 enableTools: false,
-                model: bymModel
+                model: bymModel,
+                groupId: groupId || undefined
             })
 
             if (!client) {

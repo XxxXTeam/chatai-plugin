@@ -200,7 +200,18 @@ export class ChatService {
             const sm = await ensureScopeManager()
             groupChannelConfig = await sm.getGroupChannelConfig(String(groupId))
             if (groupChannelConfig?.baseUrl && groupChannelConfig?.apiKey) {
-                logger.info(`[ChatService] 群 ${groupId} 使用独立渠道配置`)
+                logger.info(`[ChatService] 群 ${groupId} 使用遗留独立渠道配置`)
+            }
+            if (
+                Array.isArray(groupChannelConfig?.independentChannels) &&
+                groupChannelConfig.independentChannels.length > 0
+            ) {
+                const enabledCount = groupChannelConfig.independentChannels.filter(
+                    ch => ch.enabled !== false && ch.baseUrl && ch.apiKey
+                ).length
+                logger.info(
+                    `[ChatService] 群 ${groupId} 配置了 ${groupChannelConfig.independentChannels.length} 个独立渠道 (${enabledCount} 个启用)`
+                )
             }
         }
 
@@ -443,9 +454,53 @@ export class ChatService {
         let channelSource = 'global'
         const forbidGlobalModel = groupChannelConfig?.forbidGlobal === true
 
-        // 优先使用群独立渠道配置
-        if (groupChannelConfig?.baseUrl && groupChannelConfig?.apiKey) {
-            // 构建群独立渠道对象
+        // 优先使用群独立渠道配置（多渠道 > 遗留单渠道 > 全局渠道）
+        const independentChannels = groupChannelConfig?.independentChannels || []
+        const enabledIndependentChannels = independentChannels.filter(
+            ch => ch.enabled !== false && ch.baseUrl && ch.apiKey
+        )
+
+        if (enabledIndependentChannels.length > 0) {
+            /* 多独立渠道：按优先级和模型匹配选择最佳渠道 */
+            const modelsList = ch =>
+                (ch.models || '')
+                    .split(',')
+                    .map(m => m.trim())
+                    .filter(Boolean)
+
+            /* 1) 优先匹配支持当前模型的渠道 */
+            let matched = enabledIndependentChannels
+                .filter(ch => {
+                    const models = modelsList(ch)
+                    return models.length === 0 || models.includes(llmModel) || models.includes('*')
+                })
+                .sort((a, b) => (a.priority || 100) - (b.priority || 100))
+
+            /* 2) 无模型匹配时，回退到任意启用渠道 */
+            if (matched.length === 0) {
+                matched = enabledIndependentChannels.sort((a, b) => (a.priority || 100) - (b.priority || 100))
+            }
+
+            const best = matched[0]
+            channel = {
+                id: best.id || `group-${groupId}-ch-0`,
+                name: best.name || `群${groupId}独立渠道`,
+                adapterType: best.adapterType || 'openai',
+                baseUrl: best.baseUrl,
+                apiKey: best.apiKey,
+                enabled: true,
+                priority: best.priority || 100,
+                models: modelsList(best),
+                chatPath: best.chatPath || undefined,
+                modelsPath: best.modelsPath || undefined,
+                imageConfig: best.imageConfig || {},
+                advanced: {},
+                overrides: {}
+            }
+            channelSource = 'group-independent-multi'
+            logger.info(`[ChatService] 使用群独立渠道: ${channel.name} (${channel.baseUrl}), 匹配模型: ${llmModel}`)
+        } else if (groupChannelConfig?.baseUrl && groupChannelConfig?.apiKey) {
+            /* 遗留单渠道兼容 */
             channel = {
                 id: `group-${groupId}-independent`,
                 name: `群${groupId}独立渠道`,
@@ -453,20 +508,18 @@ export class ChatService {
                 baseUrl: groupChannelConfig.baseUrl,
                 apiKey: groupChannelConfig.apiKey,
                 enabled: true,
-                priority: 1000, // 最高优先级
+                priority: 1000,
                 models: groupChannelConfig.modelId ? [groupChannelConfig.modelId] : [],
                 advanced: {},
                 overrides: {}
             }
             channelSource = 'group-independent'
-            // 如果群配置了独立模型，使用群独立模型
             if (groupChannelConfig.modelId) {
                 llmModel = groupChannelConfig.modelId
                 logger.info(`[ChatService] 使用群独立模型: ${llmModel}`)
             }
-            logger.info(`[ChatService] 使用群独立渠道: ${channel.name} (${channel.baseUrl})`)
+            logger.info(`[ChatService] 使用群独立渠道(遗留): ${channel.name} (${channel.baseUrl})`)
         } else if (forbidGlobalModel) {
-            // 如果禁用全局且没有独立渠道，抛出错误
             throw new Error(`本群已禁用全局模型但未配置独立渠道，请在管理面板中配置群独立渠道后使用`)
         } else {
             // 使用全局渠道

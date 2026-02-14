@@ -135,13 +135,31 @@ router.get('/group/:groupId', async (req, res) => {
 router.put('/group/:groupId', async (req, res) => {
     try {
         const sm = await ensureScopeManager()
-        const { enabled, groupName, triggerMode, ...otherData } = req.body
-        // 将 enabled, groupName, triggerMode 合并到 settings 中
+        const { enabled, groupName, triggerMode, usageLimit, independentChannels, ...otherData } = req.body
+
+        /* 拉平 usageLimit 嵌套对象为平铺键，与 groupAdminRoutes 存储格式一致 */
+        const flatUsageLimit = usageLimit
+            ? {
+                  dailyGroupLimit: usageLimit.dailyGroupLimit,
+                  dailyUserLimit: usageLimit.dailyUserLimit,
+                  usageLimitMessage: usageLimit.limitMessage
+              }
+            : {}
+
         const dataToSave = {
             ...otherData,
+            ...flatUsageLimit,
             enabled,
             groupName,
-            triggerMode
+            triggerMode,
+            /* independentChannels 序列化为 JSON 字符串，与 setGroupChannelConfig 格式一致 */
+            ...(independentChannels !== undefined
+                ? {
+                      independentChannels: Array.isArray(independentChannels)
+                          ? JSON.stringify(independentChannels)
+                          : independentChannels
+                  }
+                : {})
         }
         await sm.setGroupSettings(req.params.groupId, dataToSave)
         res.json(ChaiteResponse.ok({ success: true }))

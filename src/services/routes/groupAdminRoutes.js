@@ -379,17 +379,26 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                     maxDailyLimit: settings.imageGenDailyLimit ?? 0,
                     cooldown: settings.imageGenCooldown ?? 0
                 },
+                // 游戏模式配置
+                game: {
+                    probability: settings.gameProbability,
+                    enableTools: settings.gameEnableTools,
+                    temperature: settings.gameTemperature,
+                    maxTokens: settings.gameMaxTokens,
+                    modelId: settings.gameModel
+                },
                 // 模型配置
                 models: {
                     chat: settings.chatModel || settings.modelId,
                     tools: settings.toolModel,
                     dispatch: settings.dispatchModel,
                     vision: settings.imageModel,
-                    image: settings.drawModel,
+                    image: settings.drawModel || settings.imageGenModel,
                     search: settings.searchModel,
-                    bym: settings.roleplayModel,
+                    bym: settings.roleplayModel || settings.bymModel,
                     summary: settings.summaryModel,
-                    profile: settings.profileModel
+                    profile: settings.profileModel,
+                    game: settings.gameModel
                 },
                 // 黑白名单
                 listMode: settings.listMode || 'none',
@@ -479,7 +488,13 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                         pokeBack: settings.pokeBack ?? false,
                         probability: settings.pokeProbability,
                         message: settings.pokeMessage || ''
-                    }
+                    },
+                    recall: { enabled: settings.recallEnabled, probability: settings.recallProbability },
+                    ban: { enabled: settings.banEnabled, probability: settings.banProbability },
+                    luckyKing: { enabled: settings.luckyKingEnabled, probability: settings.luckyKingProbability },
+                    honor: { enabled: settings.honorEnabled, probability: settings.honorProbability },
+                    essence: { enabled: settings.essenceEnabled, probability: settings.essenceProbability },
+                    admin: { enabled: settings.adminEnabled, probability: settings.adminProbability }
                 },
                 // 表情小偷管理
                 emojiStats,
@@ -597,6 +612,12 @@ router.put('/config', groupAdminAuth, async (req, res) => {
             imageGenNegativePrompt: body.imageGen?.negativePrompt,
             imageGenDailyLimit: body.imageGen?.maxDailyLimit,
             imageGenCooldown: body.imageGen?.cooldown,
+            // 游戏模式
+            gameProbability: body.game?.probability,
+            gameEnableTools: body.game?.enableTools,
+            gameTemperature: body.game?.temperature,
+            gameMaxTokens: body.game?.maxTokens,
+            gameModel: body.models?.game,
             // 模型
             chatModel: body.models?.chat,
             toolModel: body.models?.tools,
@@ -645,6 +666,19 @@ router.put('/config', groupAdminAuth, async (req, res) => {
             pokeBack: body.events?.poke?.pokeBack,
             pokeProbability: body.events?.poke?.probability,
             pokeMessage: body.events?.poke?.message,
+            // 其他事件
+            recallEnabled: body.events?.recall?.enabled,
+            recallProbability: body.events?.recall?.probability,
+            banEnabled: body.events?.ban?.enabled,
+            banProbability: body.events?.ban?.probability,
+            luckyKingEnabled: body.events?.luckyKing?.enabled,
+            luckyKingProbability: body.events?.luckyKing?.probability,
+            honorEnabled: body.events?.honor?.enabled,
+            honorProbability: body.events?.honor?.probability,
+            essenceEnabled: body.events?.essence?.enabled,
+            essenceProbability: body.events?.essence?.probability,
+            adminEnabled: body.events?.admin?.enabled,
+            adminProbability: body.events?.admin?.probability,
             // 群独立渠道配置
             independentBaseUrl: body.independentChannel?.baseUrl,
             independentApiKey:
@@ -881,6 +915,82 @@ router.post('/scheduler/trigger', groupAdminAuth, async (req, res) => {
         res.json(ChaiteResponse.ok({ success: false, message: '定时总结功能已重构，请使用新的自然语言定时任务' }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * POST /api/group-admin/models/fetch - 群管理面板获取模型列表
+ * 使用群管理员认证，独立于主管理面板的模型获取接口
+ */
+router.post('/models/fetch', groupAdminAuth, async (req, res) => {
+    try {
+        let { adapterType, baseUrl, apiKey, modelsPath } = req.body
+
+        if (!baseUrl || !apiKey) {
+            return res.status(400).json(ChaiteResponse.fail(null, '请提供 baseUrl 和 apiKey'))
+        }
+
+        /* 规范化 baseUrl */
+        const { normalizeBaseUrl } = await import('../llm/ChannelManager.js')
+        if (baseUrl) {
+            baseUrl = normalizeBaseUrl(baseUrl, adapterType)
+        }
+
+        if (adapterType === 'openai' || !adapterType) {
+            if (modelsPath) {
+                /* 自定义模型列表路径 */
+                const finalUrl = baseUrl.replace(/\/+$/, '') + modelsPath
+                const response = await fetch(finalUrl, {
+                    method: 'GET',
+                    headers: {
+                        Authorization: `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    }
+                })
+                if (!response.ok) {
+                    const text = await response.text()
+                    throw new Error(`API请求失败: ${response.status} ${text}`)
+                }
+                const data = await response.json()
+                let models = []
+                if (Array.isArray(data)) {
+                    models = data.map(m => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean)
+                } else if (data.data && Array.isArray(data.data)) {
+                    models = data.data.map(m => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean)
+                } else if (data.models && Array.isArray(data.models)) {
+                    models = data.models.map(m => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean)
+                }
+                return res.json(ChaiteResponse.ok(models.sort()))
+            }
+
+            /* 默认使用 OpenAI SDK */
+            const OpenAI = (await import('openai')).default
+            const openai = new OpenAI({
+                apiKey,
+                baseURL: baseUrl,
+                defaultHeaders: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            })
+            const modelsList = await openai.models.list()
+            if (!modelsList || !modelsList.data || !Array.isArray(modelsList.data)) {
+                return res.status(500).json(ChaiteResponse.fail(null, 'API返回格式不正确'))
+            }
+            const isOfficialOpenAI = baseUrl.includes('api.openai.com')
+            let models = modelsList.data.map(m => m.id)
+            if (isOfficialOpenAI) {
+                models = models.filter(
+                    id => id.includes('gpt') || id.includes('text-embedding') || id.includes('o1') || id.includes('o3')
+                )
+            }
+            return res.json(ChaiteResponse.ok(models.sort()))
+        }
+
+        res.status(400).json(ChaiteResponse.fail(null, '不支持的适配器类型'))
+    } catch (error) {
+        chatLogger.error('[GroupAdmin] 获取模型失败:', error.message)
+        res.status(500).json(ChaiteResponse.fail(null, `获取模型失败: ${error.message}`))
     }
 })
 

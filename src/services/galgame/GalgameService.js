@@ -1055,6 +1055,7 @@ class GalgameService {
 
         const client = await LlmService.getChatClient({
             model: gameModel,
+            groupId: groupId || undefined,
             enableTools: gameEnableTools
         })
 

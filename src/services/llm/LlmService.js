@@ -195,6 +195,7 @@ export class LlmService {
      * Create a simple chat client (无工具，用于内部任务如记忆提取、伪人模式等)
      * @param {Object} options - 可选配置
      * @param {string} [options.model] - 指定模型，用于选择对应的渠道
+     * @param {string} [options.groupId] - 群组ID，传入时优先使用群独立渠道
      * @param {boolean} [options.enableTools] - 是否启用工具（默认false）
      * @returns {Promise<OpenAIClient|GeminiClient|ClaudeClient>}
      */
@@ -202,16 +203,77 @@ export class LlmService {
         const { channelManager } = await import('./ChannelManager.js')
         await channelManager.init()
 
-        // 优先使用传入的 model 参数，否则使用默认模型
         const targetModel = options.model || config.get('llm.defaultModel')
-        const channels = channelManager.getAll()
+        let channel = null
 
-        // 优先查找支持指定模型的渠道
-        let channel = channels.find(c => c.enabled && c.models?.includes(targetModel))
+        /* ====== 群独立渠道优先 ====== */
+        if (options.groupId) {
+            try {
+                const { ensureScopeManager } = await import('../../core/utils/scopeInit.js')
+                const sm = await ensureScopeManager()
+                const groupCfg = await sm.getGroupChannelConfig(String(options.groupId))
 
-        // 回退：查找任何可用的启用渠道
+                /* 多独立渠道 */
+                const indChannels = (groupCfg?.independentChannels || []).filter(
+                    ch => ch.enabled !== false && ch.baseUrl && ch.apiKey
+                )
+                if (indChannels.length > 0) {
+                    const modelsList = ch =>
+                        (ch.models || '')
+                            .split(',')
+                            .map(m => m.trim())
+                            .filter(Boolean)
+                    let matched = indChannels
+                        .filter(ch => {
+                            const m = modelsList(ch)
+                            return m.length === 0 || m.includes(targetModel) || m.includes('*')
+                        })
+                        .sort((a, b) => (a.priority || 100) - (b.priority || 100))
+                    if (matched.length === 0)
+                        matched = indChannels.sort((a, b) => (a.priority || 100) - (b.priority || 100))
+                    const best = matched[0]
+                    channel = {
+                        id: best.id,
+                        name: best.name || `群${options.groupId}独立渠道`,
+                        adapterType: best.adapterType || 'openai',
+                        baseUrl: best.baseUrl,
+                        apiKey: best.apiKey,
+                        enabled: true,
+                        models: modelsList(best),
+                        chatPath: best.chatPath,
+                        imageConfig: best.imageConfig || {},
+                        advanced: {}
+                    }
+                    logger.debug(`[LlmService] getChatClient 使用群${options.groupId}独立渠道: ${channel.name}`)
+                }
+
+                /* 遗留单渠道 */
+                if (!channel && groupCfg?.baseUrl && groupCfg?.apiKey) {
+                    channel = {
+                        id: `group-${options.groupId}-independent`,
+                        name: `群${options.groupId}独立渠道`,
+                        adapterType: groupCfg.adapterType || 'openai',
+                        baseUrl: groupCfg.baseUrl,
+                        apiKey: groupCfg.apiKey,
+                        enabled: true,
+                        models: groupCfg.modelId ? [groupCfg.modelId] : [],
+                        imageConfig: {},
+                        advanced: {}
+                    }
+                    logger.debug(`[LlmService] getChatClient 使用群${options.groupId}遗留独立渠道`)
+                }
+            } catch (e) {
+                logger.warn(`[LlmService] 获取群${options.groupId}独立渠道失败: ${e.message}`)
+            }
+        }
+
+        /* ====== 回退到全局渠道 ====== */
         if (!channel) {
-            channel = channels.find(c => c.enabled && c.apiKey)
+            const channels = channelManager.getAll()
+            channel = channels.find(c => c.enabled && c.models?.includes(targetModel))
+            if (!channel) {
+                channel = channels.find(c => c.enabled && c.apiKey)
+            }
         }
 
         if (!channel) {
@@ -227,13 +289,16 @@ export class LlmService {
             `[LlmService] getChatClient 选择渠道: ${channel.name}, 模型: ${targetModel}, 适配器: ${adapterType}`
         )
 
-        const client = new ClientClass({
+        const clientOptions = {
             apiKey: keyInfo.key,
             baseUrl: channel.baseUrl,
             features: ['chat'],
-            tools: [], // 无工具
+            tools: [],
             imageConfig: channel.imageConfig || {}
-        })
+        }
+        if (channel.chatPath) clientOptions.chatPath = channel.chatPath
+
+        const client = new ClientClass(clientOptions)
         client._channelInfo = {
             id: channel.id,
             name: channel.name,

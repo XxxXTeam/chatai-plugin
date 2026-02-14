@@ -609,6 +609,7 @@ export class ChatAgent {
                 config.get('llm.models.dispatch') || config.get('llm.defaultModel') || LlmService.getModel()
             const client = await LlmService.getChatClient({
                 model: dispatchModel,
+                groupId: event?.group_id ? String(event.group_id) : undefined,
                 enableTools: false
             })
 

@@ -1738,7 +1738,13 @@ export class ScopeManager {
     async hasIndependentChannel(groupId) {
         if (!groupId) return false
         const channelConfig = await this.getGroupChannelConfig(groupId)
-        return !!(channelConfig?.baseUrl && channelConfig?.apiKey)
+        /* 检查遗留单渠道 */
+        if (channelConfig?.baseUrl && channelConfig?.apiKey) return true
+        /* 检查多独立渠道：至少有一个已启用且配置完整的渠道 */
+        if (Array.isArray(channelConfig?.independentChannels) && channelConfig.independentChannels.length > 0) {
+            return channelConfig.independentChannels.some(ch => ch.enabled !== false && ch.baseUrl && ch.apiKey)
+        }
+        return false
     }
 
     // ==================== 群组使用次数限制 ====================
