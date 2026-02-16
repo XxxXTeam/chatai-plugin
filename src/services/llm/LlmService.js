@@ -4,6 +4,20 @@ import { mcpManager } from '../../mcp/McpManager.js'
 import { getAllTools, setToolContext } from '../../core/utils/toolAdapter.js'
 import { presetManager } from '../preset/PresetManager.js'
 import { channelManager } from './ChannelManager.js'
+import { getScopeManager } from '../scope/ScopeManager.js'
+import { databaseService } from '../storage/DatabaseService.js'
+
+let _scopeManager = null
+const ensureScopeManager = async () => {
+    if (!_scopeManager) {
+        if (!databaseService.initialized) {
+            await databaseService.init()
+        }
+        _scopeManager = getScopeManager(databaseService)
+        await _scopeManager.init()
+    }
+    return _scopeManager
+}
 
 /**
  * LLM客户端和配置管理服务
@@ -209,7 +223,6 @@ export class LlmService {
         /* ====== 群独立渠道优先 ====== */
         if (options.groupId) {
             try {
-                const { ensureScopeManager } = await import('../../core/utils/scopeInit.js')
                 const sm = await ensureScopeManager()
                 const groupCfg = await sm.getGroupChannelConfig(String(options.groupId))
 

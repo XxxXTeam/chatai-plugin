@@ -61,6 +61,7 @@ export class bym extends plugin {
         const globalEnabled = config.get('bym.enable')
         let enabled = globalEnabled
         let groupBymConfig = null
+        let cachedGroupSettings = null // 缓存群组设置，避免重复查询
 
         // 检查群组独立设置
         if (e.isGroup && e.group_id) {
@@ -71,8 +72,8 @@ export class bym extends plugin {
                 }
                 const scopeManager = getScopeManager(databaseService)
                 await scopeManager.init()
-                const groupSettings = await scopeManager.getGroupSettings(groupId)
-                const groupFeatures = groupSettings?.settings || {}
+                cachedGroupSettings = await scopeManager.getGroupSettings(groupId)
+                const groupFeatures = cachedGroupSettings?.settings || {}
 
                 // 保存群组配置供后续使用
                 groupBymConfig = groupFeatures
@@ -205,10 +206,11 @@ export class bym extends plugin {
                 logger.debug(`[BYM] 使用群组独立模型: ${bymModel}`)
             }
 
+            const bymGroupIdForClient = e.group_id ? String(e.group_id) : undefined
             const client = await LlmService.getChatClient({
                 enableTools: false,
                 model: bymModel,
-                groupId: groupId || undefined
+                groupId: bymGroupIdForClient
             })
 
             if (!client) {
@@ -232,15 +234,15 @@ export class bym extends plugin {
                     const scopeManager = getScopeManager(databaseService)
                     await scopeManager.init()
 
-                    const userId = String(e.user_id || e.sender?.user_id)
+                    const scopeUserId = String(e.user_id || e.sender?.user_id)
                     const defaultBymPrompt =
                         config.get('bym.systemPrompt') ||
                         '你是一个真实的人类用户，正在和朋友们聊天。请用简短、自然、口语化的方式回复，就像真人一样。不要说你是AI。'
 
                     // 使用新的群组有效配置方法（包含继承和群组知识库）
-                    if (groupId) {
-                        // 首先检查群组是否设置了伪人专用预设
-                        const groupSettings = await scopeManager.getGroupSettings(groupId)
+                    if (groupId || e.group_id) {
+                        // 复用之前缓存的群组设置，避免重复查询
+                        const groupSettings = cachedGroupSettings || (await scopeManager.getGroupSettings(groupId))
                         const bymPresetId = groupSettings?.settings?.bymPresetId
                         const bymPrompt = groupSettings?.settings?.bymPrompt
 
@@ -268,13 +270,15 @@ export class bym extends plugin {
                             }
                         }
 
-                        // 如果没有专用伪人预设，使用群组有效配置
-                        if (!systemPrompt) {
-                            const bymConfig = await scopeManager.getEffectiveBymConfig(groupId, userId, {
-                                defaultPrompt: defaultBymPrompt,
-                                includeKnowledge: true
-                            })
+                        // 只调用一次 getEffectiveBymConfig，同时获取 systemPrompt 和知识库
+                        const effectiveGroupId = groupId || String(e.group_id)
+                        const bymConfig = await scopeManager.getEffectiveBymConfig(effectiveGroupId, scopeUserId, {
+                            defaultPrompt: systemPrompt ? '' : defaultBymPrompt,
+                            includeKnowledge: true
+                        })
 
+                        // 如果没有专用伪人预设，使用群组有效配置的 systemPrompt
+                        if (!systemPrompt) {
                             systemPrompt = bymConfig.systemPrompt || defaultBymPrompt
                             scopePresetId = bymConfig.presetId
 
@@ -285,10 +289,6 @@ export class bym extends plugin {
                         }
 
                         // 添加群组知识库（无论使用哪种预设都添加）
-                        const bymConfig = await scopeManager.getEffectiveBymConfig(groupId, userId, {
-                            defaultPrompt: '',
-                            includeKnowledge: true
-                        })
                         if (bymConfig.knowledgePrompt) {
                             systemPrompt += '\n\n' + bymConfig.knowledgePrompt
                             logger.debug(
@@ -297,7 +297,7 @@ export class bym extends plugin {
                         }
                     } else {
                         // 私聊场景：使用原有逻辑
-                        const effectiveSettings = await scopeManager.getEffectiveSettings(null, userId, {
+                        const effectiveSettings = await scopeManager.getEffectiveSettings(null, scopeUserId, {
                             isPrivate: true
                         })
 
@@ -315,7 +315,7 @@ export class bym extends plugin {
                         if (!systemPrompt) {
                             const independentResult = await scopeManager.getIndependentPrompt(
                                 null,
-                                userId,
+                                scopeUserId,
                                 defaultBymPrompt
                             )
                             systemPrompt = independentResult.prompt
@@ -439,14 +439,14 @@ export class bym extends plugin {
             }
 
             const bymStartTime = Date.now()
-            const groupId = e.group_id ? String(e.group_id) : null
-            const userId = String(e.user_id || e.sender?.user_id)
-            const fullUserId = groupId ? `bym_group_${groupId}` : userId
-            if (groupId) {
+            const bymGroupId = e.group_id ? String(e.group_id) : null
+            const bymUserId = String(e.user_id || e.sender?.user_id)
+            const fullUserId = bymGroupId ? `bym_group_${bymGroupId}` : bymUserId
+            if (bymGroupId) {
                 try {
                     const { memoryManager } = await import('../src/services/storage/MemoryManager.js')
                     await memoryManager.init()
-                    const recentMessages = memoryManager.getGroupMessageBuffer(groupId) || []
+                    const recentMessages = memoryManager.getGroupMessageBuffer(bymGroupId) || []
 
                     if (recentMessages.length > 0) {
                         const contextMessages = recentMessages.slice(-15)
@@ -492,7 +492,7 @@ ${contextText}
 
             const chatResult = await chatService.sendMessage({
                 userId: fullUserId,
-                groupId: groupId,
+                groupId: bymGroupId,
                 message: messageText,
                 images:
                     processImage && imageUrls.length > 0
