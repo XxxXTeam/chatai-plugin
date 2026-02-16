@@ -204,7 +204,7 @@ export class bym extends plugin {
             if (groupBymModel && groupBymModel.trim()) {
                 logger.debug(`[BYM] 使用群组独立模型: ${bymModel}`)
             }
-            const groupId = e.group_id ? String(e.group_id) : null
+
             const client = await LlmService.getChatClient({
                 enableTools: false,
                 model: bymModel,
