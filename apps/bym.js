@@ -204,6 +204,7 @@ export class bym extends plugin {
             if (groupBymModel && groupBymModel.trim()) {
                 logger.debug(`[BYM] 使用群组独立模型: ${bymModel}`)
             }
+            const groupId = e.group_id ? String(e.group_id) : null
             const client = await LlmService.getChatClient({
                 enableTools: false,
                 model: bymModel,
@@ -231,7 +232,6 @@ export class bym extends plugin {
                     const scopeManager = getScopeManager(databaseService)
                     await scopeManager.init()
 
-                    const groupId = e.group_id ? String(e.group_id) : null
                     const userId = String(e.user_id || e.sender?.user_id)
                     const defaultBymPrompt =
                         config.get('bym.systemPrompt') ||
