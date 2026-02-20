@@ -1024,6 +1024,98 @@ export class ChannelManager {
     }
 
     /**
+     * 为群组解析最佳渠道（优先群独立渠道，回退全局渠道）
+     * 统一的群独立渠道选择逻辑，供 ChatService / ChatAgent / LlmService 等复用
+     *
+     * @param {Object} groupChannelConfig - 群渠道配置（来自 ScopeManager.getGroupChannelConfig）
+     * @param {string} model - 当前请求的模型名称
+     * @param {string} groupId - 群组ID（仅用于日志）
+     * @returns {{ channel: Object|null, source: string, model: string }}
+     *   channel: 解析后的渠道对象（或 null），source: 渠道来源标识，model: 可能被修改的模型名
+     */
+    resolveGroupChannel(groupChannelConfig, model, groupId) {
+        if (!groupChannelConfig) {
+            return { channel: null, source: 'global', model }
+        }
+
+        let resolvedModel = model
+
+        /* 多独立渠道优先 */
+        const independentChannels = groupChannelConfig.independentChannels || []
+        const enabled = independentChannels.filter(ch => ch.enabled !== false && ch.baseUrl && ch.apiKey)
+
+        if (enabled.length > 0) {
+            /* models 兼容数组和逗号分隔字符串两种格式 */
+            const modelsList = ch => {
+                const raw = ch.models
+                if (Array.isArray(raw)) return raw.map(m => String(m).trim()).filter(Boolean)
+                return (raw || '')
+                    .split(',')
+                    .map(m => m.trim())
+                    .filter(Boolean)
+            }
+
+            let matched = enabled
+                .filter(ch => {
+                    const m = modelsList(ch)
+                    return m.length === 0 || m.includes(model) || m.includes('*')
+                })
+                .sort((a, b) => (a.priority || 100) - (b.priority || 100))
+
+            if (matched.length === 0) {
+                matched = enabled.sort((a, b) => (a.priority || 100) - (b.priority || 100))
+            }
+
+            const best = matched[0]
+            const channel = {
+                id: best.id || `group-${groupId}-ch-0`,
+                name: best.name || `群${groupId}独立渠道`,
+                adapterType: best.adapterType || 'openai',
+                baseUrl: best.baseUrl,
+                apiKey: best.apiKey,
+                enabled: true,
+                priority: best.priority || 100,
+                models: modelsList(best),
+                chatPath: best.chatPath || undefined,
+                modelsPath: best.modelsPath || undefined,
+                imageConfig: best.imageConfig || {},
+                advanced: {},
+                overrides: {}
+            }
+            logger.info(`[ChannelManager] 群 ${groupId} 使用独立渠道: ${channel.name} (${channel.baseUrl})`)
+            return { channel, source: 'group-independent-multi', model: resolvedModel }
+        }
+
+        /* 遗留单渠道兼容 */
+        if (groupChannelConfig.baseUrl && groupChannelConfig.apiKey) {
+            const channel = {
+                id: `group-${groupId}-independent`,
+                name: `群${groupId}独立渠道`,
+                adapterType: groupChannelConfig.adapterType || 'openai',
+                baseUrl: groupChannelConfig.baseUrl,
+                apiKey: groupChannelConfig.apiKey,
+                enabled: true,
+                priority: 1000,
+                models: groupChannelConfig.modelId ? [groupChannelConfig.modelId] : [],
+                advanced: {},
+                overrides: {}
+            }
+            if (groupChannelConfig.modelId) {
+                resolvedModel = groupChannelConfig.modelId
+            }
+            logger.info(`[ChannelManager] 群 ${groupId} 使用遗留独立渠道`)
+            return { channel, source: 'group-independent', model: resolvedModel }
+        }
+
+        /* 检查 forbidGlobal */
+        if (groupChannelConfig.forbidGlobal === true) {
+            return { channel: null, source: 'forbidden', model: resolvedModel }
+        }
+
+        return { channel: null, source: 'global', model: resolvedModel }
+    }
+
+    /**
      * 获取实际请求的模型名称
      * @param {string} channelId - 渠道ID
      * @param {string} requestedModel - 请求的模型名称

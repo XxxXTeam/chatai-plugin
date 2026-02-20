@@ -81,14 +81,18 @@ export function createPresetRoutes(authMiddleware) {
         asyncHandler(async (req, res) => {
             // 如果设置 isDefault=true，需要先取消其他预设的 isDefault 状态
             if (req.body.isDefault === true) {
+                config.set('presets.defaultId', req.params.id)
+                config.set('llm.defaultChatPresetId', req.params.id)
                 const allPresets = presetManager.getAll()
                 for (const p of allPresets) {
                     if (p.id !== req.params.id && p.isDefault) {
-                        await presetManager.update(p.id, { isDefault: false })
+                        try {
+                            await presetManager.update(p.id, { isDefault: false })
+                        } catch {
+                            /* 内置/只读预设无法更新，跳过 */
+                        }
                     }
                 }
-                config.set('presets.defaultId', req.params.id)
-                config.set('llm.defaultChatPresetId', req.params.id)
             }
 
             const preset = await presetManager.update(req.params.id, req.body)
@@ -125,17 +129,20 @@ export function createPresetRoutes(authMiddleware) {
                 return res.status(404).json(ChaiteResponse.fail(null, 'Preset not found'))
             }
 
-            const allPresets = presetManager.getAll()
-            for (const p of allPresets) {
-                if (p.id === req.params.id) {
-                    await presetManager.update(p.id, { isDefault: true })
-                } else if (p.isDefault) {
-                    await presetManager.update(p.id, { isDefault: false })
-                }
-            }
-
             config.set('presets.defaultId', req.params.id)
             config.set('llm.defaultChatPresetId', req.params.id)
+            const allPresets = presetManager.getAll()
+            for (const p of allPresets) {
+                try {
+                    if (p.id === req.params.id) {
+                        await presetManager.update(p.id, { isDefault: true })
+                    } else if (p.isDefault) {
+                        await presetManager.update(p.id, { isDefault: false })
+                    }
+                } catch {
+                    /* 内置/只读预设无法更新，跳过 */
+                }
+            }
 
             res.json(ChaiteResponse.ok({ success: true }))
         })

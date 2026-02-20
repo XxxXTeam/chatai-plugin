@@ -748,11 +748,11 @@ export class AIManagement extends plugin {
                 category: 'Galgame 游戏',
                 icon: '🎮',
                 commands: [
-                    { cmd: '#游戏开始', desc: '开始Galgame冒险', icon: '🎬' },
-                    { cmd: '#游戏状态', desc: '查看游戏状态', icon: '📈' },
-                    { cmd: '#游戏退出', desc: '暂时退出游戏', icon: '⏸️' },
-                    { cmd: '#游戏结束', desc: '结束并清空数据', icon: '⏹️' },
-                    { cmd: '#游戏导出', desc: '导出对话数据', icon: '💾' }
+                    { cmd: `${cmdPrefix}游戏 开始`, desc: '开始Galgame冒险', icon: '🎬' },
+                    { cmd: `${cmdPrefix}游戏 状态`, desc: '查看游戏状态', icon: '📈' },
+                    { cmd: `${cmdPrefix}游戏 退出`, desc: '暂时退出游戏', icon: '⏸️' },
+                    { cmd: `${cmdPrefix}游戏 结束`, desc: '结束并清空数据', icon: '⏹️' },
+                    { cmd: `${cmdPrefix}游戏 帮助`, desc: '查看游戏帮助', icon: '❓' }
                 ]
             },
             {

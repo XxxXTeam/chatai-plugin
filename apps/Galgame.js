@@ -645,6 +645,8 @@ ${affectionEmoji} 好感度变化: ${result.affectionChange > 0 ? '+' : ''}${res
 
 export class Galgame extends plugin {
     constructor() {
+        const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
+
         super({
             name: 'AI-Galgame',
             dsc: 'Galgame对话游戏',
@@ -652,75 +654,75 @@ export class Galgame extends plugin {
             priority: 5, // 最高优先级，拦截游戏模式中的所有消息
             rule: [
                 {
-                    reg: /^#游戏开始(\s+\S+)?$/i,
+                    reg: `^${cmdPrefix}游戏\\s*开始(\\s+\\S+)?$`,
                     fnc: 'startGame'
                 },
                 {
-                    reg: /^#游戏状态$/i,
+                    reg: `^${cmdPrefix}游戏\\s*状态$`,
                     fnc: 'showStatus'
                 },
                 {
-                    reg: /^#游戏退出$/i,
+                    reg: `^${cmdPrefix}游戏\\s*退出$`,
                     fnc: 'exitGame'
                 },
                 {
-                    reg: /^#游戏结束$/i,
+                    reg: `^${cmdPrefix}游戏\\s*结束$`,
                     fnc: 'endGame'
                 },
                 {
-                    reg: /^#游戏导出(对话)?$/i,
+                    reg: `^${cmdPrefix}游戏\\s*导出(对话)?$`,
                     fnc: 'exportGame'
                 },
                 {
-                    reg: /^#游戏导入$/i,
+                    reg: `^${cmdPrefix}游戏\\s*导入$`,
                     fnc: 'importGame'
                 },
                 {
-                    reg: /^#游戏角色列表$/i,
+                    reg: `^${cmdPrefix}游戏\\s*角色列表$`,
                     fnc: 'listCharacters'
                 },
                 {
-                    reg: /^#游戏创建角色$/i,
+                    reg: `^${cmdPrefix}游戏\\s*创建角色$`,
                     fnc: 'createCharacter'
                 },
                 {
-                    reg: /^#游戏删除角色\s+\S+$/i,
+                    reg: `^${cmdPrefix}游戏\\s*删除角色\\s+\\S+$`,
                     fnc: 'deleteCharacter'
                 },
                 {
-                    reg: /^#游戏帮助$/i,
+                    reg: `^${cmdPrefix}游戏\\s*帮助$`,
                     fnc: 'showHelp'
                 },
                 {
-                    reg: /^#(背包|物品|道具)$/i,
+                    reg: `^${cmdPrefix}游戏\\s*(背包|物品|道具)$`,
                     fnc: 'showInventory'
                 },
                 {
-                    reg: /^#(日常|日常事件)$/i,
+                    reg: `^${cmdPrefix}游戏\\s*(日常|日常事件)$`,
                     fnc: 'triggerDailyEvent'
                 },
                 {
-                    reg: /^#(探索|探索事件)$/i,
+                    reg: `^${cmdPrefix}游戏\\s*(探索|探索事件)$`,
                     fnc: 'triggerExploreEvent'
                 },
                 {
-                    reg: /^#任务$/i,
+                    reg: `^${cmdPrefix}游戏\\s*任务$`,
                     fnc: 'showCurrentTask'
                 },
                 {
-                    reg: /^#(商店|购买)$/i,
+                    reg: `^${cmdPrefix}游戏\\s*(商店|购买)$`,
                     fnc: 'triggerShopEvent'
                 },
                 {
-                    reg: /^#(打工|赚钱|工作)$/i,
+                    reg: `^${cmdPrefix}游戏\\s*(打工|赚钱|工作)$`,
                     fnc: 'triggerWorkEvent'
                 },
                 {
-                    reg: /^#(物品|背包)$/i,
+                    reg: `^${cmdPrefix}游戏\\s*(物品|背包)$`,
                     fnc: 'showItems'
                 },
                 {
-                    reg: /^#游戏(在线)?编辑$/i,
+                    reg: `^${cmdPrefix}游戏\\s*(在线)?编辑$`,
                     fnc: 'onlineEdit'
                 },
                 {
@@ -731,6 +733,7 @@ export class Galgame extends plugin {
             ]
         })
 
+        this.cmdPrefix = cmdPrefix
         registerGalgameReactionListener()
     }
     async interceptGameMode() {
@@ -964,7 +967,7 @@ export class Galgame extends plugin {
         const e = this.e
         const userId = String(e.user_id)
         const groupId = e.group_id ? String(e.group_id) : null
-        const match = e.msg.match(/^#游戏开始(?:\s+(\S+))?$/i)
+        const match = e.msg.match(new RegExp(`^${this.cmdPrefix}游戏\\s*开始(?:\\s+(\\S+))?$`, 'i'))
         const characterId = match?.[1] || 'default'
 
         try {
@@ -1198,7 +1201,7 @@ export class Galgame extends plugin {
         await galgameService.exitGame(groupId, userId)
 
         if (wasInGame) {
-            await this.reply('✅ 已退出游戏模式\n💾 对话数据已保存\n📝 下次使用 #游戏开始 可继续')
+            await this.reply(`✅ 已退出游戏模式\n💾 对话数据已保存\n📝 下次使用 ${this.cmdPrefix}游戏 开始 可继续`)
         } else {
             await this.reply('ℹ️ 你当前不在游戏模式中')
         }
@@ -1221,7 +1224,7 @@ export class Galgame extends plugin {
             // 重置会话数据并退出游戏模式
             await galgameService.resetSession(userId, characterId, groupId)
 
-            await this.reply('✅ 游戏已结束\n🗑️ 所有数据已清空\n📝 下次使用 #游戏开始 将开始全新游戏')
+            await this.reply(`✅ 游戏已结束\n🗑️ 所有数据已清空\n📝 下次使用 ${this.cmdPrefix}游戏 开始 将开始全新游戏`)
         } catch (err) {
             gameLogger.error(' 结束游戏失败:', err)
             await this.reply(`❌ 结束游戏失败: ${err.message}`)
@@ -1262,11 +1265,11 @@ export class Galgame extends plugin {
                     if (group?.fs?.upload) {
                         await group.fs.upload(tempFilePath)
                         fileSent = true
-                        await this.reply(`✅ 对话已导出\n📁 文件: ${filename}\n💡 使用 #游戏导入 恢复`)
+                        await this.reply(`✅ 对话已导出\n📁 文件: ${filename}\n💡 使用 ${this.cmdPrefix}游戏 导入 恢复`)
                     } else if (group?.sendFile) {
                         await group.sendFile(tempFilePath)
                         fileSent = true
-                        await this.reply(`✅ 对话已导出\n📁 文件: ${filename}\n💡 使用 #游戏导入 恢复`)
+                        await this.reply(`✅ 对话已导出\n📁 文件: ${filename}\n💡 使用 ${this.cmdPrefix}游戏 导入 恢复`)
                     } else {
                         gameLogger.warn(' 群文件API不可用')
                     }
@@ -1279,7 +1282,7 @@ export class Galgame extends plugin {
             if (!fileSent) {
                 if (jsonContent.length < 4000) {
                     await this.reply(
-                        `📋 游戏数据导出\n━━━━━━━━━━━━━━━━\n\`\`\`json\n${jsonContent}\n\`\`\`\n━━━━━━━━━━━━━━━━\n💡 复制上方JSON，使用 #游戏导入 恢复`
+                        `📋 游戏数据导出\n━━━━━━━━━━━━━━━━\n\`\`\`json\n${jsonContent}\n\`\`\`\n━━━━━━━━━━━━━━━━\n💡 复制上方JSON，使用 ${this.cmdPrefix}游戏 导入 恢复`
                     )
                 } else {
                     await this.reply(
@@ -1601,7 +1604,7 @@ export class Galgame extends plugin {
             // 检查是否在游戏中
             const gameSession = galgameService.getUserGameSession(groupId, userId)
             if (!gameSession || !gameSession.inGame) {
-                await this.reply('❌ 你当前没有进行中的游戏，请先使用 #游戏开始')
+                await this.reply(`❌ 你当前没有进行中的游戏，请先使用 ${this.cmdPrefix}游戏 开始`)
                 return true
             }
 
@@ -1750,8 +1753,8 @@ ${urlText}
 ━━━━━━━━━━━━━━━━
 暂无公开角色
 
-💡 使用 #游戏创建角色 来创建自定义角色
-💡 或直接使用 #游戏开始 使用默认角色`)
+💡 使用 ${this.cmdPrefix}游戏 创建角色 来创建自定义角色
+💡 或直接使用 ${this.cmdPrefix}游戏 开始 使用默认角色`)
                 return true
             }
 
@@ -1763,7 +1766,7 @@ ${urlText}
                     reply += `\n   ${char.description.substring(0, 50)}...`
                 }
             }
-            reply += `\n\n💡 使用 #游戏开始 <角色ID> 选择角色`
+            reply += `\n\n💡 使用 ${this.cmdPrefix}游戏 开始 <角色ID> 选择角色`
 
             await this.reply(reply)
         } catch (err) {
@@ -1859,7 +1862,7 @@ ${urlText}
 📝 ID: ${character.character_id}
 🌐 公开: ${character.is_public ? '是' : '否'}
 
-使用 #游戏开始 ${character.character_id} 开始游戏`)
+使用 ${this.cmdPrefix}游戏 开始 ${character.character_id} 开始游戏`)
         } catch (err) {
             gameLogger.error(' 创建角色失败:', err)
             await this.reply(`❌ 创建失败: ${err.message}\n发送"取消"取消创建`)
@@ -1874,7 +1877,7 @@ ${urlText}
     async deleteCharacter() {
         const e = this.e
         const userId = String(e.user_id)
-        const match = e.msg.match(/^#游戏删除角色\s+(\S+)$/i)
+        const match = e.msg.match(new RegExp(`^${this.cmdPrefix}游戏\\s*删除角色\\s+(\\S+)$`, 'i'))
         const characterId = match?.[1]
 
         if (!characterId) {
@@ -1981,28 +1984,28 @@ ${urlText}
 ━━━━━━━━━━━━━━━━
 
 📌 基础命令：
-• #游戏开始 [角色ID] - 进入游戏
-• #游戏状态 - 查看全部状态
-• #游戏退出 - 暂时退出
-• #游戏结束 - 结束游戏
+• ${this.cmdPrefix}游戏 开始 [角色ID] - 进入游戏
+• ${this.cmdPrefix}游戏 状态 - 查看全部状态
+• ${this.cmdPrefix}游戏 退出 - 暂时退出
+• ${this.cmdPrefix}游戏 结束 - 结束游戏
 
 📌 事件命令：
-• #日常 - 日常互动事件
-• #探索 - 探索冒险事件
-• #商店 - 购买物品
-• #打工 - 赚取金币
+• ${this.cmdPrefix}游戏 日常 - 日常互动事件
+• ${this.cmdPrefix}游戏 探索 - 探索冒险事件
+• ${this.cmdPrefix}游戏 商店 - 购买物品
+• ${this.cmdPrefix}游戏 打工 - 赚取金币
 
 📌 查看命令：
-• #任务 - 查看任务进度
-• #物品 - 查看背包物品
+• ${this.cmdPrefix}游戏 任务 - 查看任务进度
+• ${this.cmdPrefix}游戏 物品 - 查看背包物品
 
 📌 角色管理：
-• #游戏角色列表
-• #游戏创建角色
-• #游戏删除角色 <ID>
+• ${this.cmdPrefix}游戏 角色列表
+• ${this.cmdPrefix}游戏 创建角色
+• ${this.cmdPrefix}游戏 删除角色 <ID>
 
 📌 数据管理：
-• #游戏导出 / #游戏导入
+• ${this.cmdPrefix}游戏 导出 / ${this.cmdPrefix}游戏 导入
 
 📌 游玩方式：
 • 直接发消息对话
@@ -2025,7 +2028,7 @@ ${urlText}
 
         // 检查是否在游戏中
         if (!galgameService.isUserInGame(groupId, userId)) {
-            await this.reply('❌ 请先使用 #游戏开始 进入游戏')
+            await this.reply(`❌ 请先使用 ${this.cmdPrefix}游戏 开始 进入游戏`)
             return true
         }
 
@@ -2105,7 +2108,7 @@ ${urlText}
 
         // 检查是否在游戏中
         if (!galgameService.isUserInGame(groupId, userId)) {
-            await this.reply('❌ 请先使用 #游戏开始 进入游戏')
+            await this.reply(`❌ 请先使用 ${this.cmdPrefix}游戏 开始 进入游戏`)
             return true
         }
 
@@ -2177,7 +2180,7 @@ ${urlText}
 
         // 检查是否在游戏中
         if (!galgameService.isUserInGame(groupId, userId)) {
-            await this.reply('❌ 请先使用 #游戏开始 进入游戏')
+            await this.reply(`❌ 请先使用 ${this.cmdPrefix}游戏 开始 进入游戏`)
             return true
         }
 
@@ -2228,7 +2231,7 @@ ${urlText}
                 taskText += `\n   ${status.triggeredEvents.slice(-5).join('、')}`
             }
 
-            taskText += `\n\n💡 使用 #日常 #探索 #商店 #打工 触发事件`
+            taskText += `\n\n💡 使用 ${this.cmdPrefix}游戏 日常、${this.cmdPrefix}游戏 探索 等触发事件`
 
             await this.reply(taskText)
         } catch (err) {
@@ -2248,7 +2251,7 @@ ${urlText}
         const groupId = e.group_id ? String(e.group_id) : null
 
         if (!galgameService.isUserInGame(groupId, userId)) {
-            await this.reply('❌ 请先使用 #游戏开始 进入游戏')
+            await this.reply(`❌ 请先使用 ${this.cmdPrefix}游戏 开始 进入游戏`)
             return true
         }
 
@@ -2299,7 +2302,7 @@ ${urlText}
         const groupId = e.group_id ? String(e.group_id) : null
 
         if (!galgameService.isUserInGame(groupId, userId)) {
-            await this.reply('❌ 请先使用 #游戏开始 进入游戏')
+            await this.reply(`❌ 请先使用 ${this.cmdPrefix}游戏 开始 进入游戏`)
             return true
         }
 

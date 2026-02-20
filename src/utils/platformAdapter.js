@@ -1,4 +1,5 @@
 import { PLUGIN_DEVELOPERS } from './common.js'
+import { chatLogger as logger } from '../core/utils/logger.js'
 
 /**
  * 检测框架类型

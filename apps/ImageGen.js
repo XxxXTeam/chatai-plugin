@@ -316,24 +316,34 @@ export class ImageGen extends plugin {
         // 初始化预设管理器
         presetMgr.init().catch(err => logger.warn('[ImageGen] 预设初始化失败:', err.message))
 
+        /* 读取自定义前缀配置，动态生成触发规则 */
+        const customPrefix = config.get('features.imageGen.customPrefix') || ''
+        const rules = [
+            { reg: /^#?文生图\s*(.+)$/s, fnc: 'text2img' },
+            { reg: /^#?图生图\s*(.*)$/s, fnc: 'img2img' },
+            { reg: /^#?文生视频\s*(.+)$/s, fnc: 'text2video' },
+            { reg: /^#?图生视频\s*(.*)$/s, fnc: 'img2video' },
+            { reg: /^.+$/, fnc: 'presetHandler', log: false },
+            { reg: /^#?(谷歌状态|画图状态|api状态)$/i, fnc: 'apiStatus' },
+            { reg: /^#?(绘图帮助|画图帮助|绘图帮助)$/i, fnc: 'showHelp' },
+            { reg: /^#?(更新预设|更新焚决|刷新预设|重载预设)$/i, fnc: 'updatePresets' },
+            { reg: /^#?(绘图模型|画图模型|设置绘图模型|切换绘图模型)\s*(.*)$/i, fnc: 'setModel' }
+        ]
+        /* 自定义前缀触发：如配置了 customPrefix，添加 「前缀+描述」 触发绘图的规则 */
+        if (customPrefix) {
+            const escaped = customPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+            rules.unshift({ reg: new RegExp(`^${escaped}\\s*(.+)$`, 's'), fnc: 'customPrefixDraw' })
+        }
+
         super({
             name: 'AI-ImageGen',
             dsc: 'AI图片/视频生成 - 文生图/图生图/文生视频/图生视频',
             event: 'message',
             priority: 50,
-            rule: [
-                { reg: /^#?文生图\s*(.+)$/s, fnc: 'text2img' },
-                { reg: /^#?图生图\s*(.*)$/s, fnc: 'img2img' },
-                { reg: /^#?文生视频\s*(.+)$/s, fnc: 'text2video' },
-                { reg: /^#?图生视频\s*(.*)$/s, fnc: 'img2video' },
-                { reg: /^.+$/, fnc: 'presetHandler', log: false },
-                { reg: /^#?(谷歌状态|画图状态|api状态)$/i, fnc: 'apiStatus' },
-                { reg: /^#?(绘图帮助|画图帮助|绘图帮助)$/i, fnc: 'showHelp' },
-                { reg: /^#?(更新预设|更新焚决|刷新预设|重载预设)$/i, fnc: 'updatePresets' },
-                { reg: /^#?(绘图模型|画图模型|设置绘图模型|切换绘图模型)\s*(.*)$/i, fnc: 'setModel' }
-            ]
+            rule: rules
         })
 
+        this.customPrefix = customPrefix
         this.timeout = config.get('features.imageGen.timeout') || 600000
         this.maxImages = config.get('features.imageGen.maxImages') || 3
     }
@@ -459,14 +469,21 @@ export class ImageGen extends plugin {
             })
             .join('\n')
 
-        const helpHeader = [
+        const helpLines = [
             '【AI绘图指令帮助】',
             '',
             '一、基础命令',
             '  #文生图 [描述] - 根据文字生成图片',
             '  #图生图 [描述] - 根据图片+文字重绘',
             '  #文生视频 [描述] - 根据文字生成视频',
-            '  #图生视频 [描述] - 根据图片生成视频',
+            '  #图生视频 [描述] - 根据图片生成视频'
+        ]
+        /* 自定义前缀提示 */
+        const cfgPrefix = config.get('features.imageGen.customPrefix')
+        if (cfgPrefix) {
+            helpLines.push(`  ${cfgPrefix} [描述] - 快捷绘图（有图时自动图生图）`)
+        }
+        helpLines.push(
             '',
             '二、使用方式',
             '  发送指令时带图片，或引用他人图片发送指令',
@@ -476,7 +493,8 @@ export class ImageGen extends plugin {
             '  #重载预设 - 热重载所有预设',
             '  #画图状态 - 查看API状态',
             '  #绘图模型 - 查看/切换绘图模型'
-        ].join('\n')
+        )
+        const helpHeader = helpLines.join('\n')
 
         /**
          * 将预设列表分页，每页最多 pageSize 条
@@ -779,6 +797,47 @@ export class ImageGen extends plugin {
                 })
                 .join('\n\n')
             await e.reply(`📊 画图API状态\n${'━'.repeat(15)}\n${textOutput}`, true)
+        }
+
+        return true
+    }
+
+    /**
+     * 自定义前缀绘图（customPrefix 触发）
+     * 自动判断：有图片时为图生图，否则为文生图
+     */
+    async customPrefixDraw() {
+        const e = this.e
+
+        if (!(await this.isImageGenEnabled())) {
+            return false
+        }
+
+        const prefix = this.customPrefix
+        if (!prefix) return false
+
+        const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const prompt = e.msg.replace(new RegExp(`^${escaped}\\s*`, 's'), '').trim()
+        if (!prompt) {
+            await e.reply(`请输入图片描述，例如：${prefix} 一只可爱的猫咪`, true)
+            return true
+        }
+
+        const imageUrls = await this.getAllImages(e)
+        const genType = imageUrls.length > 0 ? 'img2img' : 'text2img'
+        const recallDelay = this.getRecallDelay(60)
+        await e.reply(`正在${genType === 'img2img' ? '重绘' : '生成'}图片，请稍候...`, true, { recallMsg: recallDelay })
+
+        try {
+            const result = await this.generateImage({
+                prompt,
+                imageUrls: imageUrls.slice(0, this.maxImages),
+                genType
+            })
+            await this.sendResult(e, result)
+        } catch (err) {
+            logger.error('[ImageGen] 自定义前缀绘图失败:', err)
+            await e.reply(`生成失败: ${err.message}`, true)
         }
 
         return true

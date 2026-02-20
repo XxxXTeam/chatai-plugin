@@ -17,7 +17,7 @@ import proxyRoutes from './proxyRoutes.js'
 import mcpRoutes from './mcpRoutes.js'
 import knowledgeRoutes from './knowledgeRoutes.js'
 import imageRoutes, { publicImageRouter } from './imageRoutes.js'
-import logsRoutes from './logsRoutes.js'
+import logsRoutes, { placeholdersRouter } from './logsRoutes.js'
 import memoryRoutes from './memoryRoutes.js'
 import graphRoutes from './graphRoutes.js'
 import groupAdminRoutes, { generateGroupAdminLoginCode } from './groupAdminRoutes.js'
@@ -40,6 +40,7 @@ export {
     imageRoutes,
     publicImageRouter,
     logsRoutes,
+    placeholdersRouter,
     memoryRoutes,
     graphRoutes,
     groupAdminRoutes,

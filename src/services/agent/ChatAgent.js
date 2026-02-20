@@ -272,9 +272,39 @@ export class ChatAgent {
             setToolContext({ event, bot: event.bot || Bot })
         }
 
-        // 获取渠道
+        // 获取渠道（支持群独立渠道）
         await channelManager.init()
-        const channel = channelManager.getBestChannel(llmModel)
+        let channel = null
+        let channelSource = 'global'
+
+        if (groupId) {
+            try {
+                const sm = await ensureScopeManager()
+                const groupChannelConfig = await sm.getGroupChannelConfig(String(groupId))
+                const resolved = channelManager.resolveGroupChannel(groupChannelConfig, llmModel, groupId)
+
+                if (resolved.source === 'forbidden') {
+                    throw new Error('本群已禁用全局模型但未配置独立渠道，请在管理面板中配置群独立渠道后使用')
+                }
+
+                if (resolved.channel) {
+                    channel = resolved.channel
+                    channelSource = resolved.source
+                    llmModel = resolved.model
+                }
+            } catch (e) {
+                if (e.message.includes('禁用全局模型')) throw e
+                logger.debug(`[ChatAgent] 获取群独立渠道失败: ${e.message}`)
+            }
+        }
+
+        if (!channel) {
+            channel = channelManager.getBestChannel(llmModel)
+        }
+
+        if (!channel) {
+            throw new Error(`未找到可用的渠道，请检查模型配置: ${llmModel}`)
+        }
 
         // 收集渠道调试信息
         if (debugInfo && channel) {
@@ -282,7 +312,8 @@ export class ChatAgent {
                 id: channel.id,
                 name: channel.name,
                 adapterType: channel.adapterType,
-                baseUrl: channel.baseUrl
+                baseUrl: channel.baseUrl,
+                source: channelSource
             }
         }
 
@@ -1018,7 +1049,10 @@ export class ChatAgent {
 
         const channelAdvanced = channel?.advanced || {}
         if (channelAdvanced.thinking) {
-            clientOptions.enableReasoning = preset?.enableReasoning ?? channelAdvanced.thinking.enableReasoning
+            clientOptions.enableReasoning =
+                config.get('thinking.enabled') !== false
+                    ? (preset?.enableReasoning ?? channelAdvanced.thinking.enableReasoning)
+                    : false
             clientOptions.reasoningEffort = channelAdvanced.thinking.defaultLevel || 'low'
         }
 

@@ -990,9 +990,10 @@ class RenderService {
         `
 
         let browser = null
+        let page = null
         try {
             browser = await this.getBrowser()
-            const page = await browser.newPage()
+            page = await browser.newPage()
             await page.setViewport({ width, height: 600, deviceScaleFactor: 2 })
             await page.setContent(styledHtml, { waitUntil: 'networkidle0', timeout: 30000 })
 
@@ -1007,11 +1008,15 @@ class RenderService {
             }
 
             const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
-            await page.close()
             return imageBuffer
         } catch (error) {
             logService.error('[RenderService] 渲染图片失败', error)
             throw error
+        } finally {
+            if (page)
+                try {
+                    await page.close()
+                } catch {}
         }
     }
 
@@ -1706,9 +1711,10 @@ class RenderService {
 </html>`
 
         let browser = null
+        let page = null
         try {
             browser = await this.getBrowser()
-            const page = await browser.newPage()
+            page = await browser.newPage()
             await page.setViewport({ width: width + 30, height: 800, deviceScaleFactor: 2 })
             await page.setContent(beautifulHtml, { waitUntil: 'networkidle0', timeout: 30000 })
             // 等待头像图片加载完成
@@ -1719,11 +1725,15 @@ class RenderService {
                 } catch (e) {}
             }
             const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
-            await page.close()
             return imageBuffer
         } catch (error) {
             logService.error('[RenderService] 渲染群聊总结失败', error)
             throw error
+        } finally {
+            if (page)
+                try {
+                    await page.close()
+                } catch {}
         }
     }
 
@@ -1771,9 +1781,10 @@ class RenderService {
         })
 
         let browser = null
+        let page = null
         try {
             browser = await this.getBrowser()
-            const page = await browser.newPage()
+            page = await browser.newPage()
             await page.setViewport({ width: width + 30, height: 800, deviceScaleFactor: 2 })
             await page.setContent(beautifulHtml, { waitUntil: 'networkidle0', timeout: 30000 })
             if (topUsers.some(u => u.avatar)) {
@@ -1783,11 +1794,15 @@ class RenderService {
                 } catch (e) {}
             }
             const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
-            await page.close()
             return imageBuffer
         } catch (error) {
             logService.error('[RenderService] 渲染深色风格群聊总结失败', error)
             throw error
+        } finally {
+            if (page)
+                try {
+                    await page.close()
+                } catch {}
         }
     }
 
@@ -2147,9 +2162,10 @@ class RenderService {
 </html>`
 
         let browser = null
+        let page = null
         try {
             browser = await this.getBrowser()
-            const page = await browser.newPage()
+            page = await browser.newPage()
             await page.setViewport({ width: width + 30, height: 800, deviceScaleFactor: 2 })
             await page.setContent(profileHtml, { waitUntil: 'networkidle0', timeout: 30000 })
             // 等待头像图片加载完成
@@ -2162,11 +2178,15 @@ class RenderService {
                 }
             }
             const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
-            await page.close()
             return imageBuffer
         } catch (error) {
             logService.error('[RenderService] 渲染用户画像失败', error)
             throw error
+        } finally {
+            if (page)
+                try {
+                    await page.close()
+                } catch {}
         }
     }
 
@@ -2470,9 +2490,10 @@ class RenderService {
         `
 
         let browser = null
+        let page = null
         try {
             browser = await this.getBrowser()
-            const page = await browser.newPage()
+            page = await browser.newPage()
             await page.setViewport({ width, height, deviceScaleFactor: 2 })
             await page.setContent(wordCloudHtml, { waitUntil: 'networkidle0', timeout: 30000 })
             // 等待词云布局完成
@@ -2486,11 +2507,15 @@ class RenderService {
                 )
                 .catch(() => {})
             const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
-            await page.close()
             return imageBuffer
         } catch (error) {
             logService.error('[RenderService] 渲染词云失败', error)
             throw error
+        } finally {
+            if (page)
+                try {
+                    await page.close()
+                } catch {}
         }
     }
     /**
@@ -2701,17 +2726,22 @@ class RenderService {
 </html>`
 
         let browser = null
+        let page = null
         try {
             browser = await this.getBrowser()
-            const page = await browser.newPage()
+            page = await browser.newPage()
             await page.setViewport({ width: width + 24, height: 800, deviceScaleFactor: 2 })
             await page.setContent(helpHtml, { waitUntil: 'networkidle0', timeout: 30000 })
             const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
-            await page.close()
             return imageBuffer
         } catch (error) {
             logService.error('[RenderService] 渲染帮助图片失败', error)
             throw error
+        } finally {
+            if (page)
+                try {
+                    await page.close()
+                } catch {}
         }
     }
 }

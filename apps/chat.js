@@ -313,8 +313,17 @@ export class Chat extends plugin {
         const groupCfg = cfg.group || {}
         if (!groupCfg.enabled) return { triggered: false }
 
-        // @触发
-        if (groupCfg.at && e.atBot) {
+        // @触发（兼容不设置 e.atBot 的适配器：额外检查消息中的 at 段）
+        const botId = e.self_id || e.bot?.uin || Bot?.uin
+        const isAtBot =
+            e.atBot ||
+            (botId &&
+                e.message?.some?.(
+                    seg =>
+                        (seg.type === 'at' && String(seg.qq) === String(botId)) ||
+                        (seg.type === 'at' && String(seg.data?.qq) === String(botId))
+                ))
+        if (groupCfg.at && isAtBot) {
             const isReplyToBot = isReplyToBotMessage(e)
             const hasReply = !!e.source
             const cleanedMsg = this.cleanAtBot(rawMsg)

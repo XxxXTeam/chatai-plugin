@@ -5,6 +5,7 @@
 import jwt from 'jsonwebtoken'
 import crypto from 'node:crypto'
 import config from '../../../config/config.js'
+import { chatLogger as logger } from '../../core/utils/logger.js'
 
 // JWT签名密钥（运行时生成，重启后失效）
 let jwtSecret = crypto.randomUUID()

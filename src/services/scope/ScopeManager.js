@@ -170,6 +170,7 @@ export class ScopeManager {
 
             const mergedSettings = { ...existingSettings }
             for (const [key, value] of Object.entries(otherSettings)) {
+                if (value === undefined) continue
                 if (isGlobalValue(value)) {
                     delete mergedSettings[key]
                 } else {
@@ -266,6 +267,7 @@ export class ScopeManager {
 
             const mergedSettings = { ...existingSettings }
             for (const [key, value] of Object.entries(finalOtherSettings)) {
+                if (value === undefined) continue // undefined 表示"不修改此字段"，跳过
                 if (isGlobalValue(value)) {
                     delete mergedSettings[key]
                 } else {
@@ -555,6 +557,7 @@ export class ScopeManager {
 
             const mergedSettings = { ...existingSettings }
             for (const [key, value] of Object.entries(otherSettings)) {
+                if (value === undefined) continue
                 if (isGlobalValue(value)) {
                     delete mergedSettings[key]
                 } else {
@@ -755,6 +758,7 @@ export class ScopeManager {
 
             const mergedSettings = { ...existingSettings }
             for (const [key, value] of Object.entries(otherSettings)) {
+                if (value === undefined) continue
                 if (isGlobalValue(value)) {
                     delete mergedSettings[key]
                 } else {

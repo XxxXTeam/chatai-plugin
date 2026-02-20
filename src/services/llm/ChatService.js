@@ -172,10 +172,11 @@ export class ChatService {
         const pureUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
         const cleanUserId = pureUserId?.includes('_') ? pureUserId.split('_').pop() : pureUserId
 
+        // 统一初始化 ScopeManager（整个方法内复用同一实例）
+        const sm = await ensureScopeManager()
+
         // ==================== 群组使用限制检查 ====================
         if (groupId) {
-            const sm = await ensureScopeManager()
-
             // 检查使用次数限制
             const usageCheck = await sm.checkUsageLimit(String(groupId), cleanUserId)
             if (!usageCheck.allowed) {
@@ -197,7 +198,6 @@ export class ChatService {
         // ==================== 群独立渠道配置 ====================
         let groupChannelConfig = null
         if (groupId) {
-            const sm = await ensureScopeManager()
             groupChannelConfig = await sm.getGroupChannelConfig(String(groupId))
             if (groupChannelConfig?.baseUrl && groupChannelConfig?.apiKey) {
                 logger.info(`[ChatService] 群 ${groupId} 使用遗留独立渠道配置`)
@@ -232,7 +232,6 @@ export class ChatService {
         let hasIndependentPersona = false
         if (groupId) {
             try {
-                const sm = await ensureScopeManager()
                 const groupUserSettings = await sm.getGroupUserSettings(String(groupId), cleanUserId)
                 const userSettings = await sm.getUserSettings(cleanUserId)
                 if (groupUserSettings?.systemPrompt || userSettings?.systemPrompt) {
@@ -359,7 +358,6 @@ export class ChatService {
         let scopeModelSource = null
         let scopeFeatures = {}
         try {
-            const sm = await ensureScopeManager()
             const pureUserId = cleanUserId
             const isPrivate = !groupId
             const effectiveSettings = await sm.getEffectiveSettings(groupId ? String(groupId) : null, pureUserId, {
@@ -452,77 +450,21 @@ export class ChatService {
         await channelManager.init()
         let channel = null
         let channelSource = 'global'
-        const forbidGlobalModel = groupChannelConfig?.forbidGlobal === true
 
-        // 优先使用群独立渠道配置（多渠道 > 遗留单渠道 > 全局渠道）
-        const independentChannels = groupChannelConfig?.independentChannels || []
-        const enabledIndependentChannels = independentChannels.filter(
-            ch => ch.enabled !== false && ch.baseUrl && ch.apiKey
-        )
-
-        if (enabledIndependentChannels.length > 0) {
-            /* 多独立渠道：按优先级和模型匹配选择最佳渠道 */
-            const modelsList = ch =>
-                (ch.models || '')
-                    .split(',')
-                    .map(m => m.trim())
-                    .filter(Boolean)
-
-            /* 1) 优先匹配支持当前模型的渠道 */
-            let matched = enabledIndependentChannels
-                .filter(ch => {
-                    const models = modelsList(ch)
-                    return models.length === 0 || models.includes(llmModel) || models.includes('*')
-                })
-                .sort((a, b) => (a.priority || 100) - (b.priority || 100))
-
-            /* 2) 无模型匹配时，回退到任意启用渠道 */
-            if (matched.length === 0) {
-                matched = enabledIndependentChannels.sort((a, b) => (a.priority || 100) - (b.priority || 100))
+        /* 使用 ChannelManager 共享方法解析群独立渠道 */
+        if (groupChannelConfig) {
+            const resolved = channelManager.resolveGroupChannel(groupChannelConfig, llmModel, groupId)
+            if (resolved.source === 'forbidden') {
+                throw new Error('本群已禁用全局模型但未配置独立渠道，请在管理面板中配置群独立渠道后使用')
             }
+            if (resolved.channel) {
+                channel = resolved.channel
+                channelSource = resolved.source
+                llmModel = resolved.model
+            }
+        }
 
-            const best = matched[0]
-            channel = {
-                id: best.id || `group-${groupId}-ch-0`,
-                name: best.name || `群${groupId}独立渠道`,
-                adapterType: best.adapterType || 'openai',
-                baseUrl: best.baseUrl,
-                apiKey: best.apiKey,
-                enabled: true,
-                priority: best.priority || 100,
-                models: modelsList(best),
-                chatPath: best.chatPath || undefined,
-                modelsPath: best.modelsPath || undefined,
-                imageConfig: best.imageConfig || {},
-                advanced: {},
-                overrides: {}
-            }
-            channelSource = 'group-independent-multi'
-            logger.info(`[ChatService] 使用群独立渠道: ${channel.name} (${channel.baseUrl}), 匹配模型: ${llmModel}`)
-        } else if (groupChannelConfig?.baseUrl && groupChannelConfig?.apiKey) {
-            /* 遗留单渠道兼容 */
-            channel = {
-                id: `group-${groupId}-independent`,
-                name: `群${groupId}独立渠道`,
-                adapterType: groupChannelConfig.adapterType || 'openai',
-                baseUrl: groupChannelConfig.baseUrl,
-                apiKey: groupChannelConfig.apiKey,
-                enabled: true,
-                priority: 1000,
-                models: groupChannelConfig.modelId ? [groupChannelConfig.modelId] : [],
-                advanced: {},
-                overrides: {}
-            }
-            channelSource = 'group-independent'
-            if (groupChannelConfig.modelId) {
-                llmModel = groupChannelConfig.modelId
-                logger.info(`[ChatService] 使用群独立模型: ${llmModel}`)
-            }
-            logger.info(`[ChatService] 使用群独立渠道(遗留): ${channel.name} (${channel.baseUrl})`)
-        } else if (forbidGlobalModel) {
-            throw new Error(`本群已禁用全局模型但未配置独立渠道，请在管理面板中配置群独立渠道后使用`)
-        } else {
-            // 使用全局渠道
+        if (!channel) {
             channel = channelManager.getBestChannel(llmModel)
             if (!channel) {
                 throw new Error(`未找到可用的渠道，请检查模型配置: ${llmModel}`)
@@ -570,7 +512,10 @@ export class ChatService {
         const clientOptions = {
             enableTools: actualEnableTools,
             preSelectedTools: actualTools.length > 0 ? actualTools : null,
-            enableReasoning: preset?.enableReasoning ?? channelThinking.enableReasoning,
+            enableReasoning:
+                config.get('thinking.enabled') !== false
+                    ? (preset?.enableReasoning ?? channelThinking.enableReasoning)
+                    : false,
             reasoningEffort: channelThinking.defaultLevel || 'low',
             adapterType: adapterType,
             event,
@@ -661,7 +606,6 @@ export class ChatService {
                 `[ChatService] 已加载全局系统提示词 (${globalPromptText.length} 字符, 模式: ${globalPromptMode})`
             )
         }
-        const sm = await ensureScopeManager()
         let systemPrompt = defaultPrompt
 
         // skipPersona 模式：跳过人设获取，使用空的 systemPrompt（用于总结等场景）
@@ -700,7 +644,6 @@ export class ChatService {
                         promptSource: independentResult.source,
                         presetSource: scopePresetSource || 'default',
                         presetId: scopePresetId || effectivePresetId,
-                        forceIsolation,
                         conversationId,
                         hasPrefixPersona: !!prefixPersona
                     }
@@ -1706,7 +1649,6 @@ export class ChatService {
         // ==================== 记录群组使用次数 ====================
         if (groupId && finalResponse?.length > 0) {
             try {
-                const sm = await ensureScopeManager()
                 const usageResult = await sm.incrementUsage(String(groupId), cleanUserId)
                 if (usageResult.success) {
                     logger.debug(

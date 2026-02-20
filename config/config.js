@@ -522,6 +522,7 @@ class Config {
                 // AI绘图
                 imageGen: {
                     enabled: true, // 启用绘图功能
+                    customPrefix: '', // 自定义绘图触发前缀（如"画"、"draw"），留空使用默认命令
                     model: 'gemini-3-pro-image', // 默认绘图模型（文生图和图生图共用）
                     text2imgModel: '', // 文生图独立模型（留空使用默认绘图模型）
                     img2imgModel: '', // 图生图独立模型（留空使用默认绘图模型）

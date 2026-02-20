@@ -220,67 +220,21 @@ export class LlmService {
         const targetModel = options.model || config.get('llm.defaultModel')
         let channel = null
 
-        /* ====== 群独立渠道优先 ====== */
+        /* 群独立渠道优先（使用 ChannelManager 共享方法） */
         if (options.groupId) {
             try {
                 const sm = await ensureScopeManager()
                 const groupCfg = await sm.getGroupChannelConfig(String(options.groupId))
-
-                /* 多独立渠道 */
-                const indChannels = (groupCfg?.independentChannels || []).filter(
-                    ch => ch.enabled !== false && ch.baseUrl && ch.apiKey
-                )
-                if (indChannels.length > 0) {
-                    const modelsList = ch =>
-                        (ch.models || '')
-                            .split(',')
-                            .map(m => m.trim())
-                            .filter(Boolean)
-                    let matched = indChannels
-                        .filter(ch => {
-                            const m = modelsList(ch)
-                            return m.length === 0 || m.includes(targetModel) || m.includes('*')
-                        })
-                        .sort((a, b) => (a.priority || 100) - (b.priority || 100))
-                    if (matched.length === 0)
-                        matched = indChannels.sort((a, b) => (a.priority || 100) - (b.priority || 100))
-                    const best = matched[0]
-                    channel = {
-                        id: best.id,
-                        name: best.name || `群${options.groupId}独立渠道`,
-                        adapterType: best.adapterType || 'openai',
-                        baseUrl: best.baseUrl,
-                        apiKey: best.apiKey,
-                        enabled: true,
-                        models: modelsList(best),
-                        chatPath: best.chatPath,
-                        imageConfig: best.imageConfig || {},
-                        advanced: {}
-                    }
-                    logger.debug(`[LlmService] getChatClient 使用群${options.groupId}独立渠道: ${channel.name}`)
-                }
-
-                /* 遗留单渠道 */
-                if (!channel && groupCfg?.baseUrl && groupCfg?.apiKey) {
-                    channel = {
-                        id: `group-${options.groupId}-independent`,
-                        name: `群${options.groupId}独立渠道`,
-                        adapterType: groupCfg.adapterType || 'openai',
-                        baseUrl: groupCfg.baseUrl,
-                        apiKey: groupCfg.apiKey,
-                        enabled: true,
-                        models: groupCfg.modelId ? [groupCfg.modelId] : [],
-                        imageConfig: {},
-                        advanced: {}
-                    }
-                    logger.debug(`[LlmService] getChatClient 使用群${options.groupId}遗留独立渠道`)
+                const resolved = channelManager.resolveGroupChannel(groupCfg, targetModel, options.groupId)
+                if (resolved.channel) {
+                    channel = resolved.channel
                 }
             } catch (e) {
                 logger.warn(`[LlmService] 获取群${options.groupId}独立渠道失败: ${e.message}`)
             }
         }
 
-        /* ====== 回退到全局渠道 ====== */
+        /* 回退到全局渠道 */
         if (!channel) {
             const channels = channelManager.getAll()
             channel = channels.find(c => c.enabled && c.models?.includes(targetModel))

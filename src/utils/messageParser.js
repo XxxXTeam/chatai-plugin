@@ -293,7 +293,9 @@ export async function parseUserMessage(e, options = {}) {
                         }
                     }
 
-                    logger.debug(`[MessageParser][Image] 最终 URL: ${imgUrl || '无'}`)
+                    logger.debug(
+                        `[MessageParser][Image] 最终 URL: ${imgUrl ? (imgUrl.length > 80 ? imgUrl.substring(0, 80) + '...' : imgUrl) : '无'}`
+                    )
 
                     if (imgUrl) {
                         try {

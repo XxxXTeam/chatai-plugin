@@ -130,7 +130,7 @@ router.put('/advanced', async (req, res) => {
 // GET /config/triggers - 获取触发器配置
 router.get('/triggers', (req, res) => {
     try {
-        res.json(ChaiteResponse.ok(config.get('triggers') || {}))
+        res.json(ChaiteResponse.ok(config.get('trigger') || {}))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
@@ -139,7 +139,7 @@ router.get('/triggers', (req, res) => {
 // PUT /config/triggers - 更新触发器配置
 router.put('/triggers', async (req, res) => {
     try {
-        config.set('triggers', req.body)
+        config.set('trigger', req.body)
         res.json(ChaiteResponse.ok({ success: true }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))

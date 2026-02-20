@@ -1218,6 +1218,7 @@ export const bltoolsTools = [
                 await page.screenshot({ path: outputPath, fullPage: true, type: 'png' })
 
                 await browser.close()
+                browser = null
 
                 // 发送图片
                 await e.reply(segment.image(outputPath))
@@ -1234,6 +1235,10 @@ export const bltoolsTools = [
                     message: '思维导图已生成并发送'
                 }
             } catch (error) {
+                if (browser)
+                    try {
+                        await browser.close()
+                    } catch {}
                 return { error: `思维导图生成失败: ${error.message}` }
             }
         }

@@ -431,8 +431,7 @@ export class AICommands extends plugin {
             }
 
             // 获取当前使用的模型配置
-            const llmService = new LlmService()
-            const chatModel = llmService.getModel('chat')
+            const chatModel = LlmService.getModel()
 
             // 获取渠道信息
             let channelInfo = { name: '未知', status: '未知' }
@@ -453,7 +452,10 @@ export class AICommands extends plugin {
                 // 尝试获取群组/用户的预设配置
                 const scopeManager = getScopeManager(databaseService)
                 await scopeManager.init()
-                const scopeConfig = await scopeManager.getEffectiveConfig(groupId, String(userId))
+                const scopeConfig = await scopeManager.getEffectiveSettings(
+                    groupId ? String(groupId) : null,
+                    String(userId)
+                )
                 if (scopeConfig?.presetId) {
                     const preset = presetManager.get(scopeConfig.presetId)
                     if (preset) {
@@ -764,7 +766,8 @@ export class AICommands extends plugin {
                     dataSource = '内存缓冲'
                 }
             }
-            if (messages.length < maxMessages) {
+            /* 数据库始终作为保底来源，即使其他来源已有数据，数据库可能包含更多历史 */
+            {
                 try {
                     databaseService.init()
                     const conversationId = `group_summary_${groupId}`
@@ -1159,7 +1162,8 @@ ${dialogText}${truncatedNote}`
                     dataSource = '内存缓冲'
                 }
             }
-            if (messages.length < maxMessages) {
+            /* 数据库始终作为保底来源，即使其他来源已有数据，数据库可能包含更多历史 */
+            {
                 try {
                     databaseService.init()
                     const conversationId = `group_summary_${groupId}`

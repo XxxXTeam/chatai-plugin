@@ -132,6 +132,7 @@ import {
     imageRoutes,
     publicImageRouter,
     logsRoutes,
+    placeholdersRouter,
     memoryRoutes,
     graphRoutes,
     channelRoutes,
@@ -524,7 +525,7 @@ window.location.href = '${mountPath}/';
         this.router.use('/api/knowledge', auth, knowledgeRoutes)
         this.router.use('/api/imagegen', auth, imageRoutes)
         this.router.use('/api/logs', auth, logsRoutes)
-        this.router.use('/api/placeholders', auth, logsRoutes)
+        this.router.use('/api/placeholders', auth, placeholdersRouter)
         this.router.use('/api/memory', auth, memoryRoutes)
         this.router.use('/api/graph', auth, graphRoutes)
         this.router.use('/api/images', publicImageRouter) // 公开图片访问，无需认证

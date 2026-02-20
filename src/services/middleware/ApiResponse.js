@@ -2,6 +2,8 @@
  * 统一API响应格式
  * 规范化HTTP状态码和响应结构
  */
+import { chatLogger as logger } from '../../core/utils/logger.js'
+
 export const HttpStatus = {
     OK: 200,
     CREATED: 201,

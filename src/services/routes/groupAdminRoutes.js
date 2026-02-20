@@ -259,7 +259,7 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                 : ''
         }))
 
-        // 获取渠道列表（仅返回模型名称）
+        // 获取渠道列表（仅返回模型名称，包含群独立渠道的模型）
         const { channelManager } = await import('../llm/ChannelManager.js')
         await channelManager.init()
         const channels = channelManager.getAll().map(c => ({
@@ -267,6 +267,36 @@ router.get('/config', groupAdminAuth, async (req, res) => {
             name: c.name,
             models: c.models || []
         }))
+
+        /* 将群独立渠道的模型合并到渠道列表，使前端模型下拉框能显示 */
+        try {
+            let indChannels = settings.independentChannels || []
+            if (typeof indChannels === 'string') {
+                try {
+                    indChannels = JSON.parse(indChannels)
+                } catch {
+                    indChannels = []
+                }
+            }
+            if (Array.isArray(indChannels) && indChannels.length > 0) {
+                for (const ch of indChannels) {
+                    if (!ch.enabled && ch.enabled !== undefined) continue
+                    const chModels = (ch.models || '')
+                        .split(',')
+                        .map(m => m.trim())
+                        .filter(Boolean)
+                    if (chModels.length > 0) {
+                        channels.push({
+                            id: ch.id || `group-ind-${channels.length}`,
+                            name: ch.name || `群独立渠道`,
+                            models: chModels
+                        })
+                    }
+                }
+            }
+        } catch {
+            /* 静默 */
+        }
 
         // 获取知识库列表
         let knowledgeBases = []
@@ -369,7 +399,7 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                 // 绘图配置
                 imageGen: {
                     enabled: settings.imageGenEnabled,
-                    modelId: settings.drawModel || settings.imageGenModel,
+                    modelId: settings.drawModel || '',
                     text2imgModel: settings.text2imgModel || '',
                     img2imgModel: settings.img2imgModel || '',
                     size: settings.imageGenSize || '1024x1024',
@@ -387,18 +417,18 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                     maxTokens: settings.gameMaxTokens,
                     modelId: settings.gameModel
                 },
-                // 模型配置
+                // 模型配置（不使用遗留字段回退，避免清除后仍显示旧值）
                 models: {
-                    chat: settings.chatModel || settings.modelId,
-                    tools: settings.toolModel,
-                    dispatch: settings.dispatchModel,
-                    vision: settings.imageModel,
-                    image: settings.drawModel || settings.imageGenModel,
-                    search: settings.searchModel,
-                    bym: settings.roleplayModel || settings.bymModel,
-                    summary: settings.summaryModel,
-                    profile: settings.profileModel,
-                    game: settings.gameModel
+                    chat: settings.chatModel || '',
+                    tools: settings.toolModel || '',
+                    dispatch: settings.dispatchModel || '',
+                    vision: settings.imageModel || '',
+                    image: settings.drawModel || '',
+                    search: settings.searchModel || '',
+                    bym: settings.roleplayModel || '',
+                    summary: settings.summaryModel || '',
+                    profile: settings.profileModel || '',
+                    game: settings.gameModel || ''
                 },
                 // 黑白名单
                 listMode: settings.listMode || 'none',
@@ -558,11 +588,7 @@ router.put('/config', groupAdminAuth, async (req, res) => {
             groupName: body.groupName,
             triggerMode: body.triggerMode,
             customPrefix: body.customPrefix,
-            // 功能开关
-            toolsEnabled: body.toolsEnabled,
-            imageGenEnabled: body.imageGenEnabled,
-            summaryEnabled: body.summaryEnabled,
-            eventEnabled: body.eventHandler,
+            // 功能开关（具体赋值在下方各分类配置中，此处不重复赋值）
             // 表情小偷
             emojiThiefEnabled: body.emojiThief?.enabled,
             emojiThiefSeparateFolder: body.emojiThief?.independent,
@@ -626,7 +652,6 @@ router.put('/config', groupAdminAuth, async (req, res) => {
             drawModel: body.models?.image,
             searchModel: body.models?.search,
             roleplayModel: body.models?.bym,
-            summaryModel: body.models?.summary,
             profileModel: body.models?.profile,
             // 黑白名单
             listMode: body.listMode,
@@ -687,7 +712,7 @@ router.put('/config', groupAdminAuth, async (req, res) => {
                     : undefined,
             independentAdapterType: body.independentChannel?.adapterType,
             // forbidGlobalModel 不允许通过群管理面板修改，该设置仅主管理面板可修改
-            independentChannels: newChannels,
+            independentChannels: Array.isArray(newChannels) ? JSON.stringify(newChannels) : newChannels,
             // 使用限制
             dailyGroupLimit: body.usageLimit?.dailyGroupLimit,
             dailyUserLimit: body.usageLimit?.dailyUserLimit,
@@ -928,6 +953,34 @@ router.post('/models/fetch', groupAdminAuth, async (req, res) => {
 
         if (!baseUrl || !apiKey) {
             return res.status(400).json(ChaiteResponse.fail(null, '请提供 baseUrl 和 apiKey'))
+        }
+
+        /* 检测掩码 apiKey 并从已有渠道配置中恢复完整 key */
+        if (apiKey.startsWith('****')) {
+            try {
+                const { groupId } = req.groupAdmin
+                const db = getDatabase()
+                const sm = getScopeManager(db)
+                await sm.init()
+                const channelConfig = await sm.getGroupChannelConfig(groupId)
+                /* 从遗留单渠道恢复 */
+                if (channelConfig?.apiKey && channelConfig.apiKey.endsWith(apiKey.slice(4))) {
+                    apiKey = channelConfig.apiKey
+                }
+                /* 从多独立渠道恢复 */
+                const indChannels = channelConfig?.independentChannels || []
+                for (const ch of indChannels) {
+                    if (ch.apiKey && ch.apiKey.endsWith(apiKey.slice(4))) {
+                        apiKey = ch.apiKey
+                        break
+                    }
+                }
+            } catch {
+                /* 恢复失败，继续使用原始值 */
+            }
+            if (apiKey.startsWith('****')) {
+                return res.status(400).json(ChaiteResponse.fail(null, '请输入完整的 API Key（当前为掩码值）'))
+            }
         }
 
         /* 规范化 baseUrl */
