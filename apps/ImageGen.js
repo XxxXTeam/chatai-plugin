@@ -1100,70 +1100,97 @@ export class ImageGen extends plugin {
     }
 
     /**
-     * 标准化baseUrl为完整API地址
-     * @param {string} baseUrl - 基础URL
-     * @returns {string} 完整的chat/completions地址
+     * 根据 baseUrl 和自定义 path 构建完整请求地址
+     * @param {string} baseUrl - API基础地址
+     * @param {string} [apiPath] - 自定义请求路径，默认 /v1/chat/completions
+     * @returns {string} 完整的请求地址
      */
-    normalizeApiUrl(baseUrl) {
+    buildApiUrl(baseUrl, apiPath) {
         if (!baseUrl) return ''
         let url = baseUrl.trim().replace(/\/$/, '')
-        if (url.endsWith('/chat/completions')) {
-            return url
-        }
-        // 如果只有/v1
-        if (url.endsWith('/v1')) {
-            return url + '/chat/completions'
-        }
-        // 如果是根路径
-        return url + '/v1/chat/completions'
+        let p = (apiPath || '/v1/chat/completions').trim()
+        if (!p.startsWith('/')) p = '/' + p
+        return url + p
     }
 
     /**
-     * 获取所有API列表（图片+视频通用）
+     * 获取所有API列表（图片+视频通用），按优先级排序
+     * 每个 API 支持：独立模型、多Key轮询、自定义请求方法/路径、流式开关
      * @param {string} [overrideModel] - 覆盖模型（用于群组独立配置）
-     * @returns {Array<{baseUrl: string, apiKey: string, model: string, videoModel: string}>}
+     * @returns {Array<Object>} API 配置列表
      */
     getApiList(overrideModel = null) {
         const apiConfig = config.get('features.imageGen') || {}
         const globalModel = overrideModel || apiConfig.model || 'gemini-3-pro-image'
         const globalVideoModel = apiConfig.videoModel || 'veo-2.0-generate-001'
+
         if (Array.isArray(apiConfig.apis) && apiConfig.apis.length > 0) {
             return apiConfig.apis
-                .filter(api => api && api.baseUrl)
-                .map(api => ({
-                    baseUrl: this.normalizeApiUrl(api.baseUrl),
-                    apiKey: api.apiKey || 'X-Free',
-                    model: globalModel,
-                    videoModel: globalVideoModel,
-                    models: api.models || []
-                }))
+                .filter(api => api && api.baseUrl && api.enabled !== false)
+                .map((api, idx) => {
+                    /* 向后兼容：旧 apiKey 字段自动迁移为 apiKeys 数组 */
+                    const apiKeys =
+                        Array.isArray(api.apiKeys) && api.apiKeys.filter(k => k?.trim()).length > 0
+                            ? api.apiKeys.filter(k => k?.trim())
+                            : api.apiKey
+                              ? [api.apiKey]
+                              : ['']
+
+                    return {
+                        name: api.name || `API ${idx + 1}`,
+                        baseUrl: api.baseUrl.trim().replace(/\/$/, ''),
+                        path: api.path?.trim() || '/v1/chat/completions',
+                        method: (api.method || 'POST').toUpperCase(),
+                        apiKeys,
+                        model: overrideModel || api.model?.trim() || globalModel,
+                        videoModel: api.videoModel?.trim() || globalVideoModel,
+                        stream: api.stream === true,
+                        priority: api.priority ?? idx,
+                        models: api.models || [],
+                        enabled: true
+                    }
+                })
+                .sort((a, b) => a.priority - b.priority)
         }
+
+        /* 旧版单 API 兼容 */
         if (apiConfig.apiUrl) {
             return [
                 {
-                    baseUrl: this.normalizeApiUrl(apiConfig.apiUrl),
-                    apiKey: apiConfig.apiKey || '',
+                    name: '默认API',
+                    baseUrl: apiConfig.apiUrl.trim().replace(/\/$/, ''),
+                    path: '/v1/chat/completions',
+                    method: 'POST',
+                    apiKeys: [apiConfig.apiKey || ''],
                     model: globalModel,
                     videoModel: globalVideoModel,
-                    models: []
+                    stream: false,
+                    priority: 0,
+                    models: [],
+                    enabled: true
                 }
             ]
         }
 
-        // 默认API
         return [
             {
-                baseUrl: 'https://business2api.openel.top/v1/chat/completions',
-                apiKey: '',
+                name: '默认API',
+                baseUrl: 'https://business2api.openel.top',
+                path: '/v1/chat/completions',
+                method: 'POST',
+                apiKeys: [''],
                 model: globalModel,
                 videoModel: globalVideoModel,
-                models: []
+                stream: false,
+                priority: 0,
+                models: [],
+                enabled: true
             }
         ]
     }
 
     /**
-     * 获取图片生成API配置
+     * 获取图片生成API配置（含多Key、请求方法/路径、流式开关）
      * @param {number} apiIndex - API索引
      * @param {string} [overrideModel] - 覆盖模型（用于群组独立配置）
      */
@@ -1173,9 +1200,12 @@ export class ImageGen extends plugin {
 
         const api = apis[apiIndex]
         return {
-            apiUrl: api.baseUrl,
-            apiKey: api.apiKey,
-            model: api.model
+            apiUrl: this.buildApiUrl(api.baseUrl, api.path),
+            apiKeys: api.apiKeys,
+            model: api.model,
+            method: api.method,
+            stream: api.stream,
+            name: api.name
         }
     }
 
@@ -1236,97 +1266,129 @@ export class ImageGen extends plugin {
             const apiConf = getApiConfig(apiIndex)
             if (!apiConf) break
 
-            for (let retry = 0; retry <= maxEmptyRetries; retry++) {
-                try {
-                    if (apiIndex > 0 || retry > 0) {
-                        logger.info(`[ImageGen] ${logPrefix}重试 (API=${apiIndex}, retry=${retry})`)
-                    }
+            const apiKeys = apiConf.apiKeys || ['']
+            let skipToNextApi = false
 
-                    const content = []
-                    if (prompt) content.push({ type: 'text', text: prompt })
-                    if (preparedUrls.length) {
-                        content.push(...preparedUrls.map(url => ({ type: 'image_url', image_url: { url } })))
-                    }
+            /* 多 Key 轮询：依次尝试每个 Key，认证失败自动切换 */
+            for (let keyIdx = 0; keyIdx < apiKeys.length && !skipToNextApi; keyIdx++) {
+                const currentKey = apiKeys[keyIdx]
 
-                    const response = await fetch(apiConf.apiUrl, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            Authorization: `Bearer ${apiConf.apiKey}`
-                        },
-                        body: JSON.stringify({
-                            model: apiConf.model,
-                            messages: [{ role: 'user', content }],
-                            stream: false,
-                            temperature: 0.7
-                        }),
-                        signal: AbortSignal.timeout(this.timeout)
-                    })
+                for (let retry = 0; retry <= maxEmptyRetries; retry++) {
+                    try {
+                        const keyInfo = apiKeys.length > 1 ? ` Key${keyIdx + 1}/${apiKeys.length}` : ''
+                        const apiLabel = apiConf.name || `API${apiIndex}`
+                        if (apiIndex > 0 || retry > 0 || keyIdx > 0) {
+                            logger.info(
+                                `[ImageGen] ${logPrefix}重试 ${apiLabel}${keyInfo} (retry=${retry}, model=${apiConf.model})`
+                            )
+                        } else {
+                            logger.info(
+                                `[ImageGen] ${logPrefix}调用 ${apiLabel}${keyInfo} (model=${apiConf.model}, method=${apiConf.method || 'POST'}, stream=${apiConf.stream || false})`
+                            )
+                        }
 
-                    if (!response.ok) {
-                        const errorText = await response.text().catch(() => '')
-                        logger.error(`[ImageGen] API响应错误 ${response.status}:`, errorText)
-                        throw new Error(`API 错误 ${response.status}: ${errorText || '未知错误'}`)
-                    }
+                        const content = []
+                        if (prompt) content.push({ type: 'text', text: prompt })
+                        if (preparedUrls.length) {
+                            content.push(...preparedUrls.map(url => ({ type: 'image_url', image_url: { url } })))
+                        }
 
-                    const data = await response.json()
-                    const result = extractResult(data)
-                    if (result && result.length) {
-                        // 记录绘图统计（使用统一入口）
-                        try {
-                            const estimateImageTokens = base64OrUrl => {
-                                if (!base64OrUrl) return 1000
-                                if (base64OrUrl.startsWith('data:') || base64OrUrl.startsWith('base64:')) {
-                                    const base64Part = base64OrUrl.split(',').pop() || base64OrUrl
-                                    return Math.ceil((base64Part.length * 0.75) / 100)
-                                }
-                                return 1000
-                            }
-                            // 估算输入tokens（文本 + 图片）
-                            const stats = await getStatsService()
-                            const textTokens = stats.estimateTokens(prompt || '')
-                            const inputImgTokens = imageUrls.reduce((sum, url) => sum + estimateImageTokens(url), 0)
-                            const inputTokens = textTokens + inputImgTokens
-                            // 估算输出tokens（生成的图片）
-                            const outputTokens = result.reduce((sum, img) => sum + estimateImageTokens(img), 0)
+                        const isStream = apiConf.stream || false
+                        const method = apiConf.method || 'POST'
+                        const headers = { 'Content-Type': 'application/json' }
+                        if (currentKey) headers['Authorization'] = `Bearer ${currentKey}`
 
-                            await stats.recordApiCall({
-                                channelId: `imagegen-api${apiIndex}`,
-                                channelName: `绘图API${apiIndex + 1}`,
+                        const fetchOptions = { method, headers, signal: AbortSignal.timeout(this.timeout) }
+                        /* GET 请求不携带 body */
+                        if (method !== 'GET') {
+                            fetchOptions.body = JSON.stringify({
                                 model: apiConf.model,
-                                inputTokens,
-                                outputTokens,
-                                duration: Date.now() - startTime,
-                                success: true,
-                                source: 'imagegen',
-                                apiUsage: data.usage,
-                                request: {
-                                    prompt: prompt?.substring(0, 200),
-                                    imageCount: imageUrls.length,
-                                    model: apiConf.model
-                                }
+                                messages: [{ role: 'user', content }],
+                                stream: isStream,
+                                temperature: 0.7
                             })
-                        } catch (e) {
-                            /* 统计失败不影响主流程 */
                         }
-                        return {
-                            success: true,
-                            result,
-                            duration: this.formatDuration(Date.now() - startTime),
-                            apiUsed: apiIndex > 0 ? `备用API${apiIndex}` : '主API'
-                        }
-                    }
 
-                    logger.warn(`[ImageGen] ${logPrefix}API返回空结果，准备重试...`)
-                    await new Promise(r => setTimeout(r, retryDelay))
-                } catch (err) {
-                    lastError = err
-                    if (err.name === 'TimeoutError') {
-                        logger.warn(`[ImageGen] ${logPrefix}请求超时，切换下一个API`)
-                        break
+                        const response = await fetch(apiConf.apiUrl, fetchOptions)
+
+                        if (!response.ok) {
+                            const errorText = await response.text().catch(() => '')
+                            /* 认证失败(401/403)时尝试下一个 Key，而非直接抛错 */
+                            if ((response.status === 401 || response.status === 403) && keyIdx < apiKeys.length - 1) {
+                                logger.warn(
+                                    `[ImageGen] ${logPrefix}Key${keyIdx + 1} 认证失败(${response.status})，尝试下一个Key`
+                                )
+                                break
+                            }
+                            logger.error(`[ImageGen] API响应错误 ${response.status}:`, errorText)
+                            throw new Error(`API 错误 ${response.status}: ${errorText || '未知错误'}`)
+                        }
+
+                        /* 根据 stream 配置解析响应 */
+                        let data
+                        if (isStream) {
+                            data = await this.parseStreamResponse(response)
+                        } else {
+                            data = await response.json()
+                        }
+
+                        const result = extractResult(data)
+                        if (result && result.length) {
+                            // 记录绘图统计（使用统一入口）
+                            try {
+                                const estimateImageTokens = base64OrUrl => {
+                                    if (!base64OrUrl) return 1000
+                                    if (base64OrUrl.startsWith('data:') || base64OrUrl.startsWith('base64:')) {
+                                        const base64Part = base64OrUrl.split(',').pop() || base64OrUrl
+                                        return Math.ceil((base64Part.length * 0.75) / 100)
+                                    }
+                                    return 1000
+                                }
+                                const stats = await getStatsService()
+                                const textTokens = stats.estimateTokens(prompt || '')
+                                const inputImgTokens = imageUrls.reduce((sum, url) => sum + estimateImageTokens(url), 0)
+                                const inputTokens = textTokens + inputImgTokens
+                                const outputTokens = result.reduce((sum, img) => sum + estimateImageTokens(img), 0)
+
+                                await stats.recordApiCall({
+                                    channelId: `imagegen-api${apiIndex}`,
+                                    channelName: apiConf.name || `绘图API${apiIndex + 1}`,
+                                    model: apiConf.model,
+                                    inputTokens,
+                                    outputTokens,
+                                    duration: Date.now() - startTime,
+                                    success: true,
+                                    source: 'imagegen',
+                                    apiUsage: data.usage,
+                                    request: {
+                                        prompt: prompt?.substring(0, 200),
+                                        imageCount: imageUrls.length,
+                                        model: apiConf.model
+                                    }
+                                })
+                            } catch (e) {
+                                /* 统计失败不影响主流程 */
+                            }
+                            return {
+                                success: true,
+                                result,
+                                duration: this.formatDuration(Date.now() - startTime),
+                                apiUsed: apiConf.name || (apiIndex > 0 ? `备用API${apiIndex}` : '主API')
+                            }
+                        }
+
+                        logger.warn(`[ImageGen] ${logPrefix}API返回空结果，准备重试...`)
+                        await new Promise(r => setTimeout(r, retryDelay))
+                    } catch (err) {
+                        lastError = err
+                        if (err.name === 'TimeoutError') {
+                            logger.warn(`[ImageGen] ${logPrefix}请求超时，切换下一个API`)
+                            skipToNextApi = true
+                            break
+                        }
+                        logger.warn(`[ImageGen] ${logPrefix}API请求失败: ${err.message}`)
+                        await new Promise(r => setTimeout(r, retryDelay / 2))
                     }
-                    logger.warn(`[ImageGen] ${logPrefix}API请求失败: ${err.message}`)
-                    await new Promise(r => setTimeout(r, retryDelay / 2))
                 }
             }
         }
@@ -1365,7 +1427,7 @@ export class ImageGen extends plugin {
     }
 
     /**
-     * 获取视频生成API配置
+     * 获取视频生成API配置（含多Key、请求方法/路径、流式开关）
      * @param {number} apiIndex - API索引
      */
     getVideoApiConfig(apiIndex = 0) {
@@ -1374,9 +1436,12 @@ export class ImageGen extends plugin {
 
         const api = apis[apiIndex]
         return {
-            apiUrl: api.baseUrl,
-            apiKey: api.apiKey,
-            model: api.videoModel
+            apiUrl: this.buildApiUrl(api.baseUrl, api.path),
+            apiKeys: api.apiKeys,
+            model: api.videoModel,
+            method: api.method,
+            stream: api.stream,
+            name: api.name
         }
     }
 
@@ -1523,6 +1588,58 @@ export class ImageGen extends plugin {
             msgs.push(...this.buildLinkMessages(validLinks[i].viewUrl, i, validLinks.length))
         }
         await e.reply(msgs, true)
+    }
+
+    /**
+     * 解析 SSE 流式响应，将流式数据拼合为完整的 OpenAI 兼容响应对象
+     * @param {Response} response - fetch 返回的 Response 对象
+     * @returns {Promise<Object>} 拼合后的 OpenAI 格式响应
+     */
+    async parseStreamResponse(response) {
+        const text = await response.text()
+        const lines = text.split('\n')
+
+        let accumulatedText = ''
+        const mediaItems = []
+
+        for (const rawLine of lines) {
+            const line = rawLine.trim()
+            if (!line.startsWith('data:')) continue
+            const jsonStr = line.slice(5).trim()
+            if (jsonStr === '[DONE]') break
+
+            try {
+                const chunk = JSON.parse(jsonStr)
+                const delta = chunk?.choices?.[0]?.delta
+                if (!delta) continue
+
+                if (typeof delta.content === 'string') {
+                    accumulatedText += delta.content
+                } else if (Array.isArray(delta.content)) {
+                    for (const item of delta.content) {
+                        if (item?.type === 'text' && item?.text) {
+                            accumulatedText += item.text
+                        } else if (item?.type === 'image_url' || item?.type === 'video_url' || item?.type === 'file') {
+                            mediaItems.push(item)
+                        }
+                    }
+                }
+            } catch {
+                /* 跳过无法解析的行 */
+            }
+        }
+
+        /* 构建与非流式响应兼容的消息结构 */
+        let content
+        if (mediaItems.length > 0) {
+            content = []
+            if (accumulatedText) content.push({ type: 'text', text: accumulatedText })
+            content.push(...mediaItems)
+        } else {
+            content = accumulatedText
+        }
+
+        return { choices: [{ message: { role: 'assistant', content } }] }
     }
 
     /**
