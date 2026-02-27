@@ -71,15 +71,16 @@ export class LlmService {
             }
         }
 
-        // 根据适配器类型选择客户端类
-        if (adapterType === 'openai') {
-            ClientClass = OpenAIClient
-        } else if (adapterType === 'gemini') {
+        /*
+         * 根据适配器类型选择客户端类
+         * 未识别的类型（如 deepseek / groq 等 OpenAI 兼容提供商）自动回退到 OpenAI 适配器
+         */
+        if (adapterType === 'gemini') {
             ClientClass = GeminiClient
         } else if (adapterType === 'claude') {
             ClientClass = ClaudeClient
         } else {
-            throw new Error(`Unsupported adapter type: ${adapterType}`)
+            ClientClass = OpenAIClient
         }
 
         if (!apiKey) {
@@ -219,8 +220,6 @@ export class LlmService {
 
         const targetModel = options.model || config.get('llm.defaultModel')
         let channel = null
-
-        /* 群独立渠道优先（使用 ChannelManager 共享方法） */
         if (options.groupId) {
             try {
                 const sm = await ensureScopeManager()

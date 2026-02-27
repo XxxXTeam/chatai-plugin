@@ -2283,3 +2283,16 @@ export function toolDisabledError(toolName, reason = '已被管理员禁用') {
         toolName
     }
 }
+
+/**
+ * 从参数或上下文中提取并校验群号
+ * @param {Object} args - 工具参数
+ * @param {Object} ctx - MCP 上下文
+ * @returns {number} 群号
+ * @throws {Error} 缺少群号时抛出
+ */
+export function requireGroupId(args, ctx) {
+    const gid = args.group_id || ctx.getEvent?.()?.group_id || ctx.getEvent?.()?.group?.group_id
+    if (!gid) throw new Error('缺少群号 group_id')
+    return parseInt(gid)
+}

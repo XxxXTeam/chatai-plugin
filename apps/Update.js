@@ -5,6 +5,7 @@
 import { createRequire } from 'module'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { isMaster } from '../src/utils/platformAdapter.js'
 
 const require = createRequire(import.meta.url)
 const { exec, execSync } = require('child_process')
@@ -16,12 +17,6 @@ const pluginPath = path.resolve(__dirname, '..')
 let uping = false
 let upingTimeout = null
 const UPING_TIMEOUT = 120000 // 2分钟超时
-
-// 缓存 Yunzai 主人配置
-let yunzaiCfg = null
-try {
-    yunzaiCfg = (await import('../../../lib/config/config.js')).default
-} catch (e) {}
 
 export class AIUpdate extends plugin {
     constructor() {
@@ -58,48 +53,7 @@ export class AIUpdate extends plugin {
      * 检查是否是主人
      */
     isMasterUser(userId) {
-        const masters = this.getMasterList()
-        return masters.includes(String(userId)) || masters.includes(Number(userId))
-    }
-
-    /**
-     * 获取主人 QQ 列表
-     */
-    getMasterList() {
-        const masters = new Set()
-        const PLUGIN_DEVELOPERS = [1018037233, 2173302144]
-        for (const dev of PLUGIN_DEVELOPERS) {
-            masters.add(String(dev))
-            masters.add(dev)
-        }
-        try {
-            const config = global.chatgptPluginConfig
-            if (config) {
-                const pluginMasters = config.get?.('admin.masterQQ') || []
-                for (const m of pluginMasters) {
-                    masters.add(String(m))
-                    masters.add(Number(m))
-                }
-                const authorQQs = config.get?.('admin.pluginAuthorQQ') || []
-                for (const a of authorQQs) {
-                    masters.add(String(a))
-                    masters.add(Number(a))
-                }
-            }
-        } catch {}
-        if (yunzaiCfg?.masterQQ?.length > 0) {
-            for (const m of yunzaiCfg.masterQQ) {
-                masters.add(String(m))
-                masters.add(Number(m))
-            }
-        }
-        const botMasters = global.Bot?.config?.master || []
-        for (const m of botMasters) {
-            masters.add(String(m))
-            masters.add(Number(m))
-        }
-
-        return Array.from(masters)
+        return isMaster(userId)
     }
 
     /**

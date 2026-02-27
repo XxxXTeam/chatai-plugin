@@ -34,6 +34,13 @@ if (!fs.existsSync(dataDir)) {
 }
 config.startSync(dataDir)
 global.chatgptPluginConfig = config
+
+// 缓存 Yunzai 主人配置到全局，供 platformAdapter.isMaster() 统一使用
+try {
+    global._yunzaiCfgCache = (await import('../../lib/config/config.js')).default
+} catch {
+    global._yunzaiCfgCache = null
+}
 let webServerPort = null
 initTasks.push(
     (async () => {

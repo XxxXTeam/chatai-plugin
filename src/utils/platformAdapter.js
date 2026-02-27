@@ -953,16 +953,18 @@ export function getBotNickname(e) {
  */
 export function isMaster(userId) {
     const uid = Number(userId)
+    const uidStr = String(userId)
 
     // 插件开发者固定权限
     if (PLUGIN_DEVELOPERS.includes(uid)) {
         return true
     }
 
-    // Yunzai主人配置
-    const masters = Bot?.config?.masterQQ || []
-    if (masters.includes(uid) || masters.includes(String(userId))) {
-        return true
+    // Yunzai主人配置（兼容 masterQQ 和 master 两种键名）
+    const masterQQ = Bot?.config?.masterQQ || []
+    const masterList = Bot?.config?.master || []
+    for (const arr of [masterQQ, masterList]) {
+        if (arr.includes(uid) || arr.includes(uidStr)) return true
     }
 
     // 插件配置的主人
@@ -970,17 +972,27 @@ export function isMaster(userId) {
         const config = global.chatgptPluginConfig
         if (config) {
             const pluginMasters = config.get?.('admin.masterQQ') || []
-            if (pluginMasters.includes(uid) || pluginMasters.includes(String(userId))) {
+            if (pluginMasters.includes(uid) || pluginMasters.includes(uidStr)) {
                 return true
             }
             const authorQQs = config.get?.('admin.pluginAuthorQQ') || []
-            if (authorQQs.includes(Number(userId)) || authorQQs.includes(String(userId))) {
+            if (authorQQs.includes(uid) || authorQQs.includes(uidStr)) {
                 return true
             }
         }
     } catch (e) {
         // 配置未加载时忽略
     }
+
+    // Yunzai lib 配置（兼容传统框架）
+    try {
+        const yunzaiCfg = global._yunzaiCfgCache
+        if (yunzaiCfg?.masterQQ?.length > 0) {
+            if (yunzaiCfg.masterQQ.includes(uid) || yunzaiCfg.masterQQ.includes(uidStr)) {
+                return true
+            }
+        }
+    } catch {}
 
     return false
 }
@@ -1013,6 +1025,27 @@ export function isAdmin(e) {
     if (isMaster(e.user_id)) return true
     if (e.sender?.role === 'admin' || e.sender?.role === 'owner') return true
     return false
+}
+
+/**
+ * @function checkAccessList
+ * @description 统一黑白名单权限检查
+ * @param {string|number} userId - 用户ID
+ * @param {string|number} groupId - 群组ID（可选）
+ * @param {Object} cfg - 包含 blacklistUsers/whitelistUsers/blacklistGroups/whitelistGroups 的配置
+ * @returns {boolean} true=允许, false=拒绝
+ */
+export function checkAccessList(userId, groupId, cfg) {
+    if (!cfg) return true
+    const uid = String(userId || '')
+    const gid = String(groupId || '')
+    const includes = (arr, val) => Array.isArray(arr) && val && arr.some(item => String(item) === val)
+
+    if (includes(cfg.blacklistUsers, uid)) return false
+    if (cfg.whitelistUsers?.length > 0 && !includes(cfg.whitelistUsers, uid)) return false
+    if (gid && includes(cfg.blacklistGroups, gid)) return false
+    if (gid && cfg.whitelistGroups?.length > 0 && !includes(cfg.whitelistGroups, gid)) return false
+    return true
 }
 
 /**
@@ -1061,6 +1094,78 @@ export async function safeReply(e, msg, quote = false) {
 }
 
 /**
+ * @function sendForwardMsg
+ * @description 统一合并转发消息发送（兼容 NapCat/OneBot sendApi 和 icqq makeForwardMsg）
+ * @param {Object} e - 事件对象
+ * @param {string} title - 转发标题/昵称
+ * @param {Array<string|Array>} messages - 消息列表
+ * @returns {Promise<boolean>} 是否发送成功
+ */
+export async function sendForwardMsg(e, title, messages) {
+    if (!e || !messages?.length) return false
+    try {
+        const bot = e.bot || Bot
+        const botId = bot?.uin || e.self_id || 10000
+
+        /* NapCat/OneBot: 使用 sendApi */
+        if (bot?.sendApi) {
+            const nodes = messages.map(msg => ({
+                type: 'node',
+                data: {
+                    user_id: String(botId),
+                    nickname: title || 'Bot',
+                    content: Array.isArray(msg)
+                        ? msg.map(m => (typeof m === 'string' ? { type: 'text', data: { text: m } } : m))
+                        : [{ type: 'text', data: { text: String(msg) } }]
+                }
+            }))
+            const isGroup = e.isGroup && e.group_id
+            const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
+            const params = isGroup
+                ? { group_id: parseInt(e.group_id), messages: nodes }
+                : { user_id: parseInt(e.user_id), messages: nodes }
+            const result = await bot.sendApi(apiName, params)
+            if (result?.status === 'ok' || result?.retcode === 0 || result?.message_id || result?.data?.message_id) {
+                return true
+            }
+        }
+
+        /* icqq: makeForwardMsg */
+        const forwardNodes = messages.map(msg => ({
+            user_id: botId,
+            nickname: title || 'Bot',
+            message: Array.isArray(msg) ? msg : [msg]
+        }))
+        if (e.isGroup && e.group?.makeForwardMsg) {
+            const forwardMsg = await e.group.makeForwardMsg(forwardNodes)
+            if (forwardMsg) {
+                await e.group.sendMsg(forwardMsg)
+                return true
+            }
+        } else if (!e.isGroup && e.friend?.makeForwardMsg) {
+            const forwardMsg = await e.friend.makeForwardMsg(forwardNodes)
+            if (forwardMsg) {
+                await e.friend.sendMsg(forwardMsg)
+                return true
+            }
+        }
+        if (typeof Bot?.makeForwardMsg === 'function') {
+            const forwardMsg = Bot.makeForwardMsg(forwardNodes)
+            if (e.group?.sendMsg) {
+                await e.group.sendMsg(forwardMsg)
+                return true
+            } else if (e.friend?.sendMsg) {
+                await e.friend.sendMsg(forwardMsg)
+                return true
+            }
+        }
+        return false
+    } catch {
+        return false
+    }
+}
+
+/**
  * 将URL转换为二维码图片（base64格式）
  * @param {string} url - 要转换的URL
  * @returns {Promise<string|null>} base64图片字符串，失败返回null
@@ -1095,10 +1200,12 @@ export default {
     isMaster,
     isPluginAuthor,
     isAdmin,
+    checkAccessList,
     getSenderName,
     isGroupMessage,
     isPrivateMessage,
     safeReply,
+    sendForwardMsg,
     urlToQRCode,
     getUserInfo,
     getGroupInfo,

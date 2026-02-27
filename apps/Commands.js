@@ -11,76 +11,13 @@ import { channelManager } from '../src/services/llm/ChannelManager.js'
 import { presetManager } from '../src/services/preset/PresetManager.js'
 import { usageStats } from '../src/services/stats/UsageStats.js'
 import { LlmService } from '../src/services/llm/LlmService.js'
-import { getScopeManager } from '../src/services/scope/ScopeManager.js'
+import { ensureScopeManager, isGroupFeatureEnabled, getGroupFeatureModel } from '../src/services/scope/ScopeManager.js'
+import { isMaster } from '../src/utils/platformAdapter.js'
 import { generateGroupAdminLoginCode } from '../src/services/routes/groupAdminRoutes.js'
 import { getWebServer } from '../src/services/webServer.js'
 
-// 缓存 Yunzai 主人配置
-let yunzaiCfg = null
-try {
-    yunzaiCfg = (await import('../../../lib/config/config.js')).default
-} catch (e) {}
-
 // Debug模式状态管理（运行时内存，重启后重置）
 const debugSessions = new Map() // key: groupId或`private_${userId}`, value: boolean
-
-/**
- * 检查群组功能是否启用
- * @param {string} groupId - 群组ID
- * @param {string} feature - 功能名称 (bymEnabled, imageGenEnabled, summaryEnabled, eventEnabled)
- * @param {boolean} globalDefault - 全局默认值
- * @returns {Promise<boolean>}
- */
-async function isGroupFeatureEnabled(groupId, feature, globalDefault) {
-    if (!groupId) return globalDefault
-
-    try {
-        if (!databaseService.initialized) {
-            await databaseService.init()
-        }
-        const scopeManager = getScopeManager(databaseService)
-        await scopeManager.init()
-        const groupSettings = await scopeManager.getGroupSettings(String(groupId))
-        const settings = groupSettings?.settings || {}
-
-        if (settings[feature] !== undefined) {
-            return settings[feature]
-        }
-    } catch (err) {
-        logger.debug(`[Commands] 获取群组${feature}设置失败:`, err.message)
-    }
-
-    return globalDefault
-}
-
-/**
- * 获取群组的功能模型配置
- * @param {string} groupId - 群组ID
- * @param {string} modelKey - 模型配置键名 (summaryModel, imageGenModel等)
- * @returns {Promise<string|null>}
- */
-async function getGroupFeatureModel(groupId, modelKey) {
-    if (!groupId) return null
-
-    try {
-        if (!databaseService.initialized) {
-            await databaseService.init()
-        }
-        const scopeManager = getScopeManager(databaseService)
-        await scopeManager.init()
-        const groupSettings = await scopeManager.getGroupSettings(String(groupId))
-        const settings = groupSettings?.settings || {}
-
-        if (settings[modelKey] && settings[modelKey].trim()) {
-            logger.debug(`[Commands] 使用群组独立${modelKey}: ${settings[modelKey]} (群: ${groupId})`)
-            return settings[modelKey].trim()
-        }
-    } catch (err) {
-        logger.debug(`[Commands] 获取群组${modelKey}设置失败:`, err.message)
-    }
-
-    return null
-}
 
 /**
  * 检查是否启用debug模式
@@ -190,45 +127,7 @@ export class AICommands extends plugin {
      * @returns {boolean}
      */
     isMasterUser(userId) {
-        const masters = this.getMasterList()
-        return masters.includes(String(userId)) || masters.includes(Number(userId))
-    }
-
-    /**
-     * 获取主人 QQ 列表
-     * @returns {Array}
-     */
-    getMasterList() {
-        const masters = new Set()
-
-        const PLUGIN_DEVELOPERS = [1018037233, 2173302144]
-        for (const dev of PLUGIN_DEVELOPERS) {
-            masters.add(String(dev))
-            masters.add(dev)
-        }
-        const pluginMasters = config.get('admin.masterQQ') || []
-        for (const m of pluginMasters) {
-            masters.add(String(m))
-            masters.add(Number(m))
-        }
-        const authorQQs = config.get('admin.pluginAuthorQQ') || []
-        for (const a of authorQQs) {
-            masters.add(String(a))
-            masters.add(Number(a))
-        }
-        if (yunzaiCfg?.masterQQ?.length > 0) {
-            for (const m of yunzaiCfg.masterQQ) {
-                masters.add(String(m))
-                masters.add(Number(m))
-            }
-        }
-        const botMasters = global.Bot?.config?.master || []
-        for (const m of botMasters) {
-            masters.add(String(m))
-            masters.add(Number(m))
-        }
-
-        return Array.from(masters)
+        return isMaster(userId)
     }
 
     /**
@@ -450,8 +349,7 @@ export class AICommands extends plugin {
             let presetInfo = { name: '默认', id: 'default' }
             try {
                 // 尝试获取群组/用户的预设配置
-                const scopeManager = getScopeManager(databaseService)
-                await scopeManager.init()
+                const scopeManager = await ensureScopeManager()
                 const scopeConfig = await scopeManager.getEffectiveSettings(
                     groupId ? String(groupId) : null,
                     String(userId)

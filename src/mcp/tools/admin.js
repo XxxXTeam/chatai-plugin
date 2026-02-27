@@ -3,13 +3,7 @@
  * 禁言、踢人、设置群名片等管理功能
  */
 
-import { icqqGroup, callOneBotApi, groupNoticeApi, qqWebApi, getGroupMemberList } from './helpers.js'
-
-function requireGroupId(args, ctx) {
-    const gid = args.group_id || ctx.getEvent?.()?.group_id || ctx.getEvent?.()?.group?.group_id
-    if (!gid) throw new Error('缺少群号 group_id')
-    return parseInt(gid)
-}
+import { icqqGroup, callOneBotApi, groupNoticeApi, qqWebApi, getGroupMemberList, requireGroupId } from './helpers.js'
 
 export const adminTools = [
     {

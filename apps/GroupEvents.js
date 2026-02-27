@@ -16,48 +16,7 @@
  */
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'
-
-// 懒加载服务
-let _scopeManager = null
-let _databaseService = null
-
-async function getScopeManagerLazy() {
-    if (!_scopeManager) {
-        const { getScopeManager } = await import('../src/services/scope/ScopeManager.js')
-        const { databaseService } = await import('../src/services/storage/DatabaseService.js')
-        _databaseService = databaseService
-        if (!_databaseService.initialized) {
-            await _databaseService.init()
-        }
-        _scopeManager = getScopeManager(_databaseService)
-        await _scopeManager.init()
-    }
-    return _scopeManager
-}
-
-/**
- * 检查群组事件处理是否启用
- * @param {string} groupId
- * @param {boolean} globalDefault
- * @returns {Promise<boolean>}
- */
-async function isGroupEventEnabled(groupId, globalDefault) {
-    if (!groupId) return globalDefault
-
-    try {
-        const scopeManager = await getScopeManagerLazy()
-        const groupSettings = await scopeManager.getGroupSettings(String(groupId))
-        const settings = groupSettings?.settings || {}
-
-        if (settings.eventEnabled !== undefined) {
-            return settings.eventEnabled
-        }
-    } catch (err) {
-        logger.debug('[GroupEvents] 获取群组eventEnabled设置失败:', err.message)
-    }
-
-    return globalDefault
-}
+import { ensureScopeManager, isGroupFeatureEnabled } from '../src/services/scope/ScopeManager.js'
 import {
     parseRecallEvent,
     parseBanEvent,
@@ -486,7 +445,7 @@ async function handleGroupEvent(eventType, e, bot) {
     const globalEnabled = config.get(configKey)
 
     // 检查群组级别的事件处理开关
-    const isEnabled = await isGroupEventEnabled(e.group_id, globalEnabled)
+    const isEnabled = await isGroupFeatureEnabled(e.group_id, 'eventEnabled', globalEnabled)
     if (!isEnabled) return
 
     // 事件概率检查

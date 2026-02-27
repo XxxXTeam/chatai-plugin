@@ -1967,3 +1967,67 @@ export function getScopeManager(databaseService) {
  * 注意：使用前需要确保 databaseService 已初始化
  */
 export { scopeManagerInstance as scopeManager }
+
+/**
+ * @function ensureScopeManager
+ * @description 懒初始化 ScopeManager 单例（自动处理 databaseService 初始化）
+ * 消除各 apps 文件中重复的初始化样板代码
+ * @returns {Promise<ScopeManager>}
+ */
+export async function ensureScopeManager() {
+    if (!scopeManagerInstance) {
+        const { databaseService } = await import('../storage/DatabaseService.js')
+        if (!databaseService.initialized) {
+            await databaseService.init()
+        }
+        scopeManagerInstance = new ScopeManager(databaseService)
+    }
+    if (!scopeManagerInstance.initialized) {
+        await scopeManagerInstance.init()
+    }
+    return scopeManagerInstance
+}
+
+/**
+ * @function isGroupFeatureEnabled
+ * @description 检查群组功能开关（群组设置优先，回退到全局默认值）
+ * @param {string} groupId - 群组ID
+ * @param {string} feature - 功能名称 (bymEnabled, imageGenEnabled, summaryEnabled, eventEnabled 等)
+ * @param {boolean} globalDefault - 全局默认值
+ * @returns {Promise<boolean>}
+ */
+export async function isGroupFeatureEnabled(groupId, feature, globalDefault) {
+    if (!groupId) return globalDefault
+    try {
+        const sm = await ensureScopeManager()
+        const gs = await sm.getGroupSettings(String(groupId))
+        const val = gs?.settings?.[feature]
+        if (val !== undefined) return val
+    } catch (err) {
+        logger.debug(`[ScopeManager] 获取群组 ${feature} 设置失败:`, err.message)
+    }
+    return globalDefault
+}
+
+/**
+ * @function getGroupFeatureModel
+ * @description 获取群组的功能模型配置
+ * @param {string} groupId - 群组ID
+ * @param {string} modelKey - 模型配置键名 (summaryModel, imageGenModel 等)
+ * @returns {Promise<string|null>}
+ */
+export async function getGroupFeatureModel(groupId, modelKey) {
+    if (!groupId) return null
+    try {
+        const sm = await ensureScopeManager()
+        const gs = await sm.getGroupSettings(String(groupId))
+        const val = gs?.settings?.[modelKey]
+        if (val && typeof val === 'string' && val.trim()) {
+            logger.debug(`[ScopeManager] 使用群组独立 ${modelKey}: ${val} (群: ${groupId})`)
+            return val.trim()
+        }
+    } catch (err) {
+        logger.debug(`[ScopeManager] 获取群组 ${modelKey} 设置失败:`, err.message)
+    }
+    return null
+}

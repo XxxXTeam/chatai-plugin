@@ -4,18 +4,12 @@
  */
 import config from '../config/config.js'
 import { getWebServer } from '../src/services/webServer.js'
-import { getScopeManager } from '../src/services/scope/ScopeManager.js'
+import { ensureScopeManager } from '../src/services/scope/ScopeManager.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
+import { isMaster, urlToQRCode } from '../src/utils/platformAdapter.js'
 import { chatService } from '../src/services/llm/ChatService.js'
-import { urlToQRCode } from '../src/utils/platformAdapter.js'
 import { renderService } from '../src/services/media/RenderService.js'
 import { segment } from '../src/utils/messageParser.js'
-
-// 缓存 Yunzai 主人配置
-let yunzaiCfg = null
-try {
-    yunzaiCfg = (await import('../../../lib/config/config.js')).default
-} catch (e) {}
 
 export class AIManagement extends plugin {
     constructor() {
@@ -140,43 +134,7 @@ export class AIManagement extends plugin {
      * 检查是否是主人
      */
     isMasterUser(userId) {
-        const masters = this.getMasterList()
-        return masters.includes(String(userId)) || masters.includes(Number(userId))
-    }
-
-    /**
-     * 获取主人 QQ 列表
-     */
-    getMasterList() {
-        const masters = new Set()
-        const PLUGIN_DEVELOPERS = [1018037233, 2173302144]
-        for (const dev of PLUGIN_DEVELOPERS) {
-            masters.add(String(dev))
-            masters.add(dev)
-        }
-        const pluginMasters = config.get('admin.masterQQ') || []
-        for (const m of pluginMasters) {
-            masters.add(String(m))
-            masters.add(Number(m))
-        }
-        const authorQQs = config.get('admin.pluginAuthorQQ') || []
-        for (const a of authorQQs) {
-            masters.add(String(a))
-            masters.add(Number(a))
-        }
-        if (yunzaiCfg?.masterQQ?.length > 0) {
-            for (const m of yunzaiCfg.masterQQ) {
-                masters.add(String(m))
-                masters.add(Number(m))
-            }
-        }
-        const botMasters = global.Bot?.config?.master || []
-        for (const m of botMasters) {
-            masters.add(String(m))
-            masters.add(Number(m))
-        }
-
-        return Array.from(masters)
+        return isMaster(userId)
     }
 
     /**
@@ -220,12 +178,7 @@ export class AIManagement extends plugin {
      */
     async getGroupFeatureSettings(groupId) {
         try {
-            if (!databaseService.initialized) {
-                await databaseService.init()
-            }
-            const scopeManager = getScopeManager(databaseService)
-            await scopeManager.init()
-
+            const scopeManager = await ensureScopeManager()
             const groupSettings = await scopeManager.getGroupSettings(groupId)
             return groupSettings?.settings || {}
         } catch (err) {
@@ -243,12 +196,7 @@ export class AIManagement extends plugin {
      */
     async setGroupFeature(groupId, feature, enabled) {
         try {
-            if (!databaseService.initialized) {
-                await databaseService.init()
-            }
-            const scopeManager = getScopeManager(databaseService)
-            await scopeManager.init()
-
+            const scopeManager = await ensureScopeManager()
             const existingSettings = (await scopeManager.getGroupSettings(groupId)) || {}
             const currentFeatures = existingSettings.settings || {}
 
@@ -552,11 +500,7 @@ export class AIManagement extends plugin {
                 return
             }
 
-            if (!databaseService.initialized) {
-                await databaseService.init()
-            }
-            const scopeManager = getScopeManager(databaseService)
-            await scopeManager.init()
+            const scopeManager = await ensureScopeManager()
 
             const userId = this.e.user_id?.toString()
             await scopeManager.setUserPrompt(userId, prompt)
@@ -588,11 +532,7 @@ export class AIManagement extends plugin {
                 return
             }
 
-            if (!databaseService.initialized) {
-                await databaseService.init()
-            }
-            const scopeManager = getScopeManager(databaseService)
-            await scopeManager.init()
+            const scopeManager = await ensureScopeManager()
 
             const groupId = this.e.group_id?.toString()
             await scopeManager.setGroupPrompt(groupId, prompt)
@@ -608,11 +548,7 @@ export class AIManagement extends plugin {
      */
     async viewPersonality() {
         try {
-            if (!databaseService.initialized) {
-                await databaseService.init()
-            }
-            const scopeManager = getScopeManager(databaseService)
-            await scopeManager.init()
+            const scopeManager = await ensureScopeManager()
 
             const userId = this.e.user_id?.toString()
             const groupId = this.e.group_id?.toString()
@@ -639,11 +575,7 @@ export class AIManagement extends plugin {
      */
     async clearPersonality() {
         try {
-            if (!databaseService.initialized) {
-                await databaseService.init()
-            }
-            const scopeManager = getScopeManager(databaseService)
-            await scopeManager.init()
+            const scopeManager = await ensureScopeManager()
 
             const userId = this.e.user_id?.toString()
             await scopeManager.deleteUserSettings(userId)
@@ -664,11 +596,7 @@ export class AIManagement extends plugin {
         }
 
         try {
-            if (!databaseService.initialized) {
-                await databaseService.init()
-            }
-            const scopeManager = getScopeManager(databaseService)
-            await scopeManager.init()
+            const scopeManager = await ensureScopeManager()
 
             const groupId = this.e.group_id?.toString()
             await scopeManager.deleteGroupSettings(groupId)
@@ -982,11 +910,7 @@ export class AIManagement extends plugin {
 
         try {
             const groupId = String(this.e.group_id)
-            if (!databaseService.initialized) {
-                await databaseService.init()
-            }
-            const scopeManager = getScopeManager(databaseService)
-            await scopeManager.init()
+            const scopeManager = await ensureScopeManager()
 
             const channelConfig = await scopeManager.getGroupChannelConfig(groupId)
             const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
@@ -1041,11 +965,7 @@ export class AIManagement extends plugin {
             const groupId = String(this.e.group_id)
             const action = this.e.msg.includes('禁用')
 
-            if (!databaseService.initialized) {
-                await databaseService.init()
-            }
-            const scopeManager = getScopeManager(databaseService)
-            await scopeManager.init()
+            const scopeManager = await ensureScopeManager()
 
             // 如果要禁用全局，检查是否有独立渠道
             if (action) {
@@ -1109,11 +1029,7 @@ export class AIManagement extends plugin {
 
         try {
             const groupId = String(this.e.group_id)
-            if (!databaseService.initialized) {
-                await databaseService.init()
-            }
-            const scopeManager = getScopeManager(databaseService)
-            await scopeManager.init()
+            const scopeManager = await ensureScopeManager()
 
             const limitConfig = await scopeManager.getGroupUsageLimitConfig(groupId)
             const cmdPrefix = config.get('basic.commandPrefix') || '#ai'
@@ -1166,11 +1082,7 @@ export class AIManagement extends plugin {
             const dailyGroupLimit = parseInt(match[1]) || 0
             const dailyUserLimit = parseInt(match[2]) || 0
 
-            if (!databaseService.initialized) {
-                await databaseService.init()
-            }
-            const scopeManager = getScopeManager(databaseService)
-            await scopeManager.init()
+            const scopeManager = await ensureScopeManager()
 
             await scopeManager.setGroupUsageLimitConfig(groupId, {
                 dailyGroupLimit,
@@ -1205,11 +1117,7 @@ export class AIManagement extends plugin {
 
         try {
             const groupId = String(this.e.group_id)
-            if (!databaseService.initialized) {
-                await databaseService.init()
-            }
-            const scopeManager = getScopeManager(databaseService)
-            await scopeManager.init()
+            const scopeManager = await ensureScopeManager()
 
             const summary = await scopeManager.getUsageSummary(groupId)
 
@@ -1253,11 +1161,7 @@ export class AIManagement extends plugin {
 
         try {
             const groupId = String(this.e.group_id)
-            if (!databaseService.initialized) {
-                await databaseService.init()
-            }
-            const scopeManager = getScopeManager(databaseService)
-            await scopeManager.init()
+            const scopeManager = await ensureScopeManager()
 
             await scopeManager.resetUsage(groupId)
             await this.reply('✅ 今日使用统计已重置', true)

@@ -6,12 +6,12 @@ import { fileURLToPath } from 'url'
 import { getBotIds } from '../src/utils/messageDedup.js'
 import { getAvatarUrl, getUserInfo } from '../src/utils/platformAdapter.js'
 
+import { ensureScopeManager } from '../src/services/scope/ScopeManager.js'
+
 // 懒加载服务
 let _statsService = null
 let _imageService = null
 let _imageRouteUtils = null
-let _scopeManager = null
-let _databaseService = null
 
 async function getStatsService() {
     if (!_statsService) {
@@ -44,19 +44,8 @@ async function getImageRouteUtils() {
     return _imageRouteUtils
 }
 
-async function getScopeManagerLazy() {
-    if (!_scopeManager) {
-        const { getScopeManager } = await import('../src/services/scope/ScopeManager.js')
-        const { databaseService } = await import('../src/services/storage/DatabaseService.js')
-        _databaseService = databaseService
-        if (!_databaseService.initialized) {
-            await _databaseService.init()
-        }
-        _scopeManager = getScopeManager(_databaseService)
-        await _scopeManager.init()
-    }
-    return _scopeManager
-}
+/* getScopeManagerLazy 已统一到 ensureScopeManager */
+const getScopeManagerLazy = ensureScopeManager
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PRESET_CACHE_DIR = path.join(__dirname, '../data/presets')

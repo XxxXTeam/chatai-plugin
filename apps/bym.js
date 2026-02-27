@@ -1,5 +1,5 @@
 import config from '../config/config.js'
-import { cleanCQCode } from '../src/utils/messageParser.js'
+import { cleanCQCode, segment } from '../src/utils/messageParser.js'
 import {
     isMessageProcessed,
     markMessageProcessed,
@@ -7,9 +7,8 @@ import {
     isReplyToBotMessage
 } from '../src/utils/messageDedup.js'
 import { renderService } from '../src/services/media/RenderService.js'
-import { segment } from '../src/utils/messageParser.js'
-import { getScopeManager } from '../src/services/scope/ScopeManager.js'
-import { databaseService } from '../src/services/storage/DatabaseService.js'
+import { ensureScopeManager } from '../src/services/scope/ScopeManager.js'
+import { checkAccessList, sendForwardMsg } from '../src/utils/platformAdapter.js'
 import { statsService } from '../src/services/stats/StatsService.js'
 import { emojiThiefService } from './EmojiThief.js'
 
@@ -67,11 +66,7 @@ export class bym extends plugin {
         if (e.isGroup && e.group_id) {
             try {
                 const groupId = String(e.group_id)
-                if (!databaseService.initialized) {
-                    await databaseService.init()
-                }
-                const scopeManager = getScopeManager(databaseService)
-                await scopeManager.init()
+                const scopeManager = await ensureScopeManager()
                 cachedGroupSettings = await scopeManager.getGroupSettings(groupId)
                 const groupFeatures = cachedGroupSettings?.settings || {}
 
@@ -92,30 +87,10 @@ export class bym extends plugin {
             return false
         }
         const triggerCfg = config.get('trigger') || {}
-        const blacklistUsers = triggerCfg.blacklistUsers || []
-        const whitelistUsers = triggerCfg.whitelistUsers || []
-        const blacklistGroups = triggerCfg.blacklistGroups || []
-        const whitelistGroups = triggerCfg.whitelistGroups || []
-
         const userId = String(e.user_id || e.sender?.user_id || '')
         const groupId = e.group_id ? String(e.group_id) : ''
-        if (blacklistUsers.length > 0 && blacklistUsers.map(String).includes(userId)) {
-            logger.debug(`[BYM] 用户在黑名单中: ${userId}`)
-            return false
-        }
-        // 检查用户白名单（如果配置了白名单，则只允许白名单用户）
-        if (whitelistUsers.length > 0 && !whitelistUsers.map(String).includes(userId)) {
-            logger.debug(`[BYM] 用户不在白名单中: ${userId}`)
-            return false
-        }
-        // 检查群组黑名单
-        if (groupId && blacklistGroups.length > 0 && blacklistGroups.map(String).includes(groupId)) {
-            logger.debug(`[BYM] 群组在黑名单中: ${groupId}`)
-            return false
-        }
-        // 检查群组白名单（如果配置了白名单，则只允许白名单群组）
-        if (groupId && whitelistGroups.length > 0 && !whitelistGroups.map(String).includes(groupId)) {
-            logger.debug(`[BYM] 群组不在白名单中: ${groupId}`)
+        if (!checkAccessList(userId, groupId, triggerCfg)) {
+            logger.debug(`[BYM] 黑白名单检查未通过: userId=${userId}, groupId=${groupId}`)
             return false
         }
 
@@ -228,11 +203,7 @@ export class bym extends plugin {
             const inheritPersonality = config.get('bym.inheritPersonality') !== false
             if (inheritPersonality) {
                 try {
-                    if (!databaseService.initialized) {
-                        await databaseService.init()
-                    }
-                    const scopeManager = getScopeManager(databaseService)
-                    await scopeManager.init()
+                    const scopeManager = await ensureScopeManager()
 
                     const scopeUserId = String(e.user_id || e.sender?.user_id)
                     const defaultBymPrompt =
@@ -595,40 +566,7 @@ ${contextText}
                         try {
                             const paragraphs = replyText.split(/\n{2,}/).filter(p => p.trim())
                             if (paragraphs.length > 0) {
-                                const bot = e.bot || Bot
-                                // NapCat/OneBot: sendApi
-                                if (bot?.sendApi && e.group_id) {
-                                    const nodes = paragraphs.map(p => ({
-                                        type: 'node',
-                                        data: {
-                                            user_id: String(e.self_id || bot?.uin || 10000),
-                                            nickname: 'AI',
-                                            content: [{ type: 'text', data: { text: p } }]
-                                        }
-                                    }))
-                                    const result = await bot.sendApi('send_group_forward_msg', {
-                                        group_id: parseInt(e.group_id),
-                                        messages: nodes
-                                    })
-                                    if (
-                                        result?.status === 'ok' ||
-                                        result?.retcode === 0 ||
-                                        result?.message_id ||
-                                        result?.data?.message_id
-                                    ) {
-                                        handled = true
-                                    }
-                                }
-                                // icqq: makeForwardMsg
-                                if (!handled && e.group?.makeForwardMsg) {
-                                    const forwardMsgs = paragraphs.map(p => ({
-                                        message: p,
-                                        nickname: 'AI',
-                                        user_id: e.self_id
-                                    }))
-                                    await e.reply(await e.group.makeForwardMsg(forwardMsgs))
-                                    handled = true
-                                }
+                                handled = await sendForwardMsg(e, longTextCfg.forwardTitle || 'AI 回复', paragraphs)
                             }
                         } catch {}
                     }

@@ -261,7 +261,7 @@ export function createGameRoutes(authMiddleware) {
         asyncHandler(async (req, res) => {
             try {
                 await galgameService.init()
-                const db = (await import('../database/DatabaseService.js')).databaseService.db
+                const db = (await import('../storage/DatabaseService.js')).databaseService.db
                 const sessions = db
                     .prepare(
                         `
@@ -290,7 +290,7 @@ export function createGameRoutes(authMiddleware) {
         asyncHandler(async (req, res) => {
             try {
                 await galgameService.init()
-                const db = (await import('../database/DatabaseService.js')).databaseService.db
+                const db = (await import('../storage/DatabaseService.js')).databaseService.db
                 const sessionId = parseInt(req.params.id)
 
                 // 删除历史记录
@@ -314,7 +314,7 @@ export function createGameRoutes(authMiddleware) {
         asyncHandler(async (req, res) => {
             try {
                 await galgameService.init()
-                const db = (await import('../database/DatabaseService.js')).databaseService.db
+                const db = (await import('../storage/DatabaseService.js')).databaseService.db
                 const characters = db
                     .prepare(
                         `
@@ -338,7 +338,7 @@ export function createGameRoutes(authMiddleware) {
         asyncHandler(async (req, res) => {
             try {
                 await galgameService.init()
-                const db = (await import('../database/DatabaseService.js')).databaseService.db
+                const db = (await import('../storage/DatabaseService.js')).databaseService.db
                 const characterId = req.params.id
 
                 db.prepare('DELETE FROM galgame_characters WHERE character_id = ?').run(characterId)
@@ -359,7 +359,7 @@ export function createGameRoutes(authMiddleware) {
         asyncHandler(async (req, res) => {
             try {
                 await galgameService.init()
-                const db = (await import('../database/DatabaseService.js')).databaseService.db
+                const db = (await import('../storage/DatabaseService.js')).databaseService.db
 
                 const totalSessions = db.prepare('SELECT COUNT(*) as count FROM galgame_sessions').get()
                 const activeSessions = db

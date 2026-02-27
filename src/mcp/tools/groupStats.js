@@ -4,14 +4,8 @@
  * 参考 yenai-plugin 实现
  */
 
-import { qqWebApi, getGroupMemberList } from './helpers.js'
+import { qqWebApi, getGroupMemberList, requireGroupId } from './helpers.js'
 import { formatTimeToBeiJing } from '../../utils/common.js'
-
-function requireGroupId(args, ctx) {
-    const gid = args.group_id || ctx.getEvent?.()?.group_id || ctx.getEvent?.()?.group?.group_id
-    if (!gid) throw new Error('缺少群号 group_id')
-    return parseInt(gid)
-}
 
 export const groupStatsTools = [
     {

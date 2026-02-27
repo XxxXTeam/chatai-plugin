@@ -17,8 +17,9 @@ import { emojiThiefService } from './EmojiThief.js'
 import { chatService } from '../src/services/llm/ChatService.js'
 import { memoryManager } from '../src/services/storage/MemoryManager.js'
 import { statsService } from '../src/services/stats/StatsService.js'
-import { getScopeManager } from '../src/services/scope/ScopeManager.js'
+import { ensureScopeManager } from '../src/services/scope/ScopeManager.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
+import { checkAccessList, sendForwardMsg as platformSendForwardMsg } from '../src/utils/platformAdapter.js'
 import { mcpManager } from '../src/mcp/McpManager.js'
 import { setToolContext } from '../src/core/utils/toolAdapter.js'
 import { conversationTracker } from '../src/services/llm/ConversationTracker.js'
@@ -31,19 +32,6 @@ export {
     isSelfMessage,
     isReplyToBotMessage,
     getBotIds
-}
-
-// ScopeManager 初始化
-let _scopeManager = null
-async function ensureScopeManager() {
-    if (!_scopeManager) {
-        if (!databaseService.initialized) {
-            await databaseService.init()
-        }
-        _scopeManager = getScopeManager(databaseService)
-        await _scopeManager.init()
-    }
-    return _scopeManager
 }
 
 // 群组触发配置缓存
@@ -231,18 +219,7 @@ export class Chat extends plugin {
      */
     checkAccess(cfg) {
         const e = this.e
-        const userId = String(e.user_id || '')
-        const groupId = String(e.group_id || '')
-        const includesAsString = (arr, val) => {
-            if (!Array.isArray(arr) || !val) return false
-            return arr.some(item => String(item) === val)
-        }
-        if (includesAsString(cfg.blacklistUsers, userId)) return false
-        if (cfg.whitelistUsers?.length > 0 && !includesAsString(cfg.whitelistUsers, userId)) return false
-        if (e.isGroup && includesAsString(cfg.blacklistGroups, groupId)) return false
-        if (e.isGroup && cfg.whitelistGroups?.length > 0 && !includesAsString(cfg.whitelistGroups, groupId))
-            return false
-        return true
+        return checkAccessList(e.user_id, e.isGroup ? e.group_id : null, cfg)
     }
 
     /**
@@ -1010,72 +987,6 @@ export class Chat extends plugin {
      * 发送合并转发消息
      */
     async sendForwardMsg(title, messages) {
-        const e = this.e
-        if (!e) return false
-        try {
-            const bot = e.bot || Bot
-            const botId = bot?.uin || e.self_id || 10000
-
-            // NapCat/OneBot: 使用 sendApi
-            if (bot?.sendApi) {
-                const nodes = messages.map(msg => ({
-                    type: 'node',
-                    data: {
-                        user_id: String(botId),
-                        nickname: title || 'Bot',
-                        content: Array.isArray(msg)
-                            ? msg.map(m => (typeof m === 'string' ? { type: 'text', data: { text: m } } : m))
-                            : [{ type: 'text', data: { text: String(msg) } }]
-                    }
-                }))
-                const isGroup = e.isGroup && e.group_id
-                const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
-                const params = isGroup
-                    ? { group_id: parseInt(e.group_id), messages: nodes }
-                    : { user_id: parseInt(e.user_id), messages: nodes }
-                const result = await bot.sendApi(apiName, params)
-                if (
-                    result?.status === 'ok' ||
-                    result?.retcode === 0 ||
-                    result?.message_id ||
-                    result?.data?.message_id
-                ) {
-                    return true
-                }
-            }
-
-            // icqq: makeForwardMsg
-            const forwardNodes = messages.map(msg => ({
-                user_id: botId,
-                nickname: title || 'Bot',
-                message: Array.isArray(msg) ? msg : [msg]
-            }))
-            if (e.isGroup && e.group?.makeForwardMsg) {
-                const forwardMsg = await e.group.makeForwardMsg(forwardNodes)
-                if (forwardMsg) {
-                    await e.group.sendMsg(forwardMsg)
-                    return true
-                }
-            } else if (!e.isGroup && e.friend?.makeForwardMsg) {
-                const forwardMsg = await e.friend.makeForwardMsg(forwardNodes)
-                if (forwardMsg) {
-                    await e.friend.sendMsg(forwardMsg)
-                    return true
-                }
-            }
-            if (typeof Bot?.makeForwardMsg === 'function') {
-                const forwardMsg = Bot.makeForwardMsg(forwardNodes)
-                if (e.group?.sendMsg) {
-                    await e.group.sendMsg(forwardMsg)
-                    return true
-                } else if (e.friend?.sendMsg) {
-                    await e.friend.sendMsg(forwardMsg)
-                    return true
-                }
-            }
-            return false
-        } catch {
-            return false
-        }
+        return platformSendForwardMsg(this.e, title, messages)
     }
 }

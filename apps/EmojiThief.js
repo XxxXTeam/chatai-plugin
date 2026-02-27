@@ -3,8 +3,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import axios from 'axios'
 import crypto from 'crypto'
-import { getScopeManager } from '../src/services/scope/ScopeManager.js'
-import { databaseService } from '../src/services/storage/DatabaseService.js'
+import { ensureScopeManager } from '../src/services/scope/ScopeManager.js'
 import { getBfaceUrl } from '../src/utils/messageParser.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -50,11 +49,7 @@ class EmojiThiefService {
      */
     async getGroupConfig(groupId) {
         try {
-            if (!databaseService.initialized) {
-                await databaseService.init()
-            }
-            const scopeManager = getScopeManager(databaseService)
-            await scopeManager.init()
+            const scopeManager = await ensureScopeManager()
             const groupSettings = await scopeManager.getGroupSettings(String(groupId))
             const settings = groupSettings?.settings || {}
 
