@@ -291,7 +291,16 @@ class Config {
              */
             channels: [],
             mcp: {
-                enabled: true
+                enabled: true,
+                /*
+                 * MCP Server 暴露配置
+                 * 将插件内置工具以标准 MCP 协议暴露给外部客户端
+                 * 访问路径: /chatai/mcp
+                 */
+                server: {
+                    enabled: false, // 是否启用 MCP Server 暴露（默认关闭）
+                    apiKey: '' // Bearer Token 鉴权密钥，留空则无法访问
+                }
             },
             bilibili: {
                 sessdata: '' // B站登录Cookie的SESSDATA，用于获取AI视频总结

@@ -25,6 +25,7 @@ router.get('/', (req, res) => {
             thinking: config.get('thinking'),
             features: config.get('features'),
             memory: config.get('memory'),
+            mcp: config.get('mcp'),
             web: {
                 enabled: config.get('web.enabled'),
                 port: config.get('web.port'),
@@ -414,6 +415,80 @@ router.post('/quick-setup', async (req, res) => {
 
         chatLogger.info('[ConfigRoutes] 快速配置已完成')
         res.json(ChaiteResponse.ok({ success: true }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// ==================== MCP Server 暴露管理 ====================
+
+/**
+ * GET /config/mcp-server - 获取 MCP Server 配置和运行状态
+ */
+router.get('/mcp-server', async (req, res) => {
+    try {
+        const serverConfig = config.get('mcp.server') || {}
+        const mcpEnabled = config.get('mcp.enabled') !== false
+
+        /* 获取运行状态 */
+        let status = { toolCount: 0, activeSessions: 0 }
+        try {
+            const { default: mcpServerRoutes } = await import('./mcpServerRoutes.js')
+            /* 直接读取模块级变量不可行，改为通过 HTTP 内联调用获取工具数 */
+            const { BuiltinMcpServer } = await import('../../mcp/BuiltinMcpServer.js')
+            const srv = new BuiltinMcpServer()
+            await srv.init()
+            status.toolCount = srv.listTools().length
+        } catch {
+            /* 忽略 */
+        }
+
+        res.json(
+            ChaiteResponse.ok({
+                enabled: serverConfig.enabled === true,
+                apiKey: serverConfig.apiKey || '',
+                mcpEnabled,
+                toolCount: status.toolCount,
+                activeSessions: status.activeSessions,
+                endpoint: '/chatai/mcp'
+            })
+        )
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * PUT /config/mcp-server - 更新 MCP Server 配置
+ */
+router.put('/mcp-server', async (req, res) => {
+    try {
+        const current = config.get('mcp.server') || {}
+        const { enabled, apiKey } = req.body
+
+        if (enabled !== undefined) current.enabled = !!enabled
+        if (apiKey !== undefined) current.apiKey = apiKey
+
+        config.set('mcp.server', current)
+        chatLogger.info(`[ConfigRoutes] MCP Server 配置已更新: enabled=${current.enabled}`)
+        res.json(ChaiteResponse.ok({ success: true }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * POST /config/mcp-server/generate-key - 生成新的 API Key
+ */
+router.post('/mcp-server/generate-key', async (req, res) => {
+    try {
+        const crypto = await import('node:crypto')
+        const apiKey = `mcp-${crypto.randomBytes(24).toString('hex')}`
+        const current = config.get('mcp.server') || {}
+        current.apiKey = apiKey
+        config.set('mcp.server', current)
+        chatLogger.info('[ConfigRoutes] MCP Server API Key 已生成')
+        res.json(ChaiteResponse.ok({ apiKey }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }

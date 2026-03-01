@@ -145,6 +145,7 @@ import {
     createPresetsConfigRoutes,
     createGameRoutes,
     createGameEditRoutes,
+    mcpServerRoutes,
     ChaiteResponse
 } from './routes/index.js'
 import { nlSchedulerService } from './scheduler/NLSchedulerService.js'
@@ -529,6 +530,7 @@ window.location.href = '${mountPath}/';
         this.router.use('/api/memory', auth, memoryRoutes)
         this.router.use('/api/graph', auth, graphRoutes)
         this.router.use('/api/images', publicImageRouter) // 公开图片访问，无需认证
+        this.router.use('/mcp', mcpServerRoutes) // MCP Server 暴露端点，使用独立 apiKey 鉴权
         this.router.use('/api/group-admin', groupAdminRoutes)
         this.router.use('/api/skills', auth, skillsRoutes)
         // 游戏编辑路由必须在通用/api路由之前注册，避免被auth中间件拦截

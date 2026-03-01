@@ -399,14 +399,16 @@ export class ImageGen extends plugin {
                 if (genType) {
                     const groupTypeModel = groupFeatures[`${genType}Model`]
                     if (groupTypeModel && groupTypeModel.trim()) {
-                        logger.info(`[ImageGen] 使用群组${genType}独立模型: ${groupTypeModel} (群: ${groupId})`)
+                        logger.info(`[ImageGen] 模型选择: 群组${genType}独立模型 → ${groupTypeModel} (群: ${groupId})`)
                         return groupTypeModel.trim()
                     }
                 }
 
                 // 群组通用绘图模型
                 if (groupFeatures.imageGenModel && groupFeatures.imageGenModel.trim()) {
-                    logger.debug(`[ImageGen] 使用群组通用绘图模型: ${groupFeatures.imageGenModel} (群: ${groupId})`)
+                    logger.info(
+                        `[ImageGen] 模型选择: 群组通用绘图模型 → ${groupFeatures.imageGenModel} (群: ${groupId})`
+                    )
                     return groupFeatures.imageGenModel.trim()
                 }
             } catch (err) {
@@ -418,12 +420,13 @@ export class ImageGen extends plugin {
         if (genType) {
             const globalTypeModel = config.get(`features.imageGen.${genType}Model`)
             if (globalTypeModel && globalTypeModel.trim()) {
-                logger.debug(`[ImageGen] 使用全局${genType}独立模型: ${globalTypeModel}`)
+                logger.info(`[ImageGen] 模型选择: 全局${genType}独立模型 → ${globalTypeModel}`)
                 return globalTypeModel.trim()
             }
         }
 
-        // 3. 返回null，由调用方使用全局默认绘图模型
+        // 3. 返回null，由调用方使用API自定义模型或全局默认模型
+        logger.debug(`[ImageGen] 模型选择: 无覆盖模型(genType=${genType})，将使用API自定义模型或全局默认`)
         return null
     }
 
@@ -995,7 +998,8 @@ export class ImageGen extends plugin {
         try {
             const result = await this.generateImage({
                 prompt: preset.prompt,
-                imageUrls: urls.slice(0, this.maxImages)
+                imageUrls: urls.slice(0, this.maxImages),
+                genType: urls.length > 0 ? 'img2img' : 'text2img'
             })
 
             if (hasSplit && result.success && result.images?.length > 0) {
@@ -1399,6 +1403,14 @@ export class ImageGen extends plugin {
     async generateImage({ prompt, imageUrls = [], genType = null }) {
         // 获取模型配置（支持文生图/图生图独立模型）
         const overrideModel = await this.getImageModel(genType)
+        if (overrideModel) {
+            logger.info(`[ImageGen] generateImage: 覆盖模型=${overrideModel}, genType=${genType}`)
+        } else {
+            const apiConfig = config.get('features.imageGen') || {}
+            const firstApi = Array.isArray(apiConfig.apis) && apiConfig.apis[0]
+            const effectiveModel = firstApi?.model?.trim() || apiConfig.model || 'gemini-3-pro-image'
+            logger.info(`[ImageGen] generateImage: 使用API/全局模型=${effectiveModel}, genType=${genType}`)
+        }
 
         const result = await this.callGenApi({
             prompt,
