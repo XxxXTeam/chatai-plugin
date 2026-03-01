@@ -22,6 +22,7 @@ import memoryRoutes from './memoryRoutes.js'
 import graphRoutes from './graphRoutes.js'
 import groupAdminRoutes, { generateGroupAdminLoginCode } from './groupAdminRoutes.js'
 import skillsRoutes, { broadcastSSE } from './skillsRoutes.js'
+import mcpServerRoutes from './mcpServerRoutes.js'
 import { ChaiteResponse, ApiResponse, getDatabase, ErrorCodes } from './shared.js'
 
 export {
