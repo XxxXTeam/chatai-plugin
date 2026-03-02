@@ -362,6 +362,16 @@ export class McpManager {
                 return { success: true, tools: this.servers.get('custom-tools')?.tools?.length || 0 }
             }
 
+            /*
+             * 自引用检测：跳过指向本插件自身 MCP Server 端点的配置
+             * 工具已通过内置服务器提供，自连接会导致启动时序 fetch failed
+             */
+            const serverUrl = normalizedConfig?.url || ''
+            if (serverUrl && /\/chatai\/mcp\b/.test(serverUrl)) {
+                logger.info(`[MCP] 跳过自引用服务器 ${name}: ${serverUrl} (工具已通过内置服务器提供)`)
+                return { success: true, tools: 0, skipped: true }
+            }
+
             // Disconnect existing server if any
             if (this.servers.has(name)) {
                 await this.disconnectServer(name)

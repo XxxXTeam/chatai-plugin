@@ -52,6 +52,7 @@ export {
     createPresetsConfigRoutes,
     createGameRoutes,
     createGameEditRoutes,
+    mcpServerRoutes,
     ChaiteResponse,
     ApiResponse,
     getDatabase,
