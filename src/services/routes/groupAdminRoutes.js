@@ -399,7 +399,7 @@ router.get('/config', groupAdminAuth, async (req, res) => {
                 // 绘图配置
                 imageGen: {
                     enabled: settings.imageGenEnabled,
-                    modelId: settings.drawModel || '',
+                    modelId: settings.imageGenModel || settings.drawModel || '',
                     text2imgModel: settings.text2imgModel || '',
                     img2imgModel: settings.img2imgModel || '',
                     size: settings.imageGenSize || '1024x1024',

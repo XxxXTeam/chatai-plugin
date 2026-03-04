@@ -1135,7 +1135,7 @@ export class ImageGen extends plugin {
                         path: api.path?.trim() || '/v1/chat/completions',
                         method: (api.method || 'POST').toUpperCase(),
                         apiKeys,
-                        model: overrideModel || api.model?.trim() || globalModel,
+                        model: api.model?.trim() || overrideModel || globalModel,
                         videoModel: api.videoModel?.trim() || globalVideoModel,
                         stream: api.stream === true,
                         priority: api.priority ?? idx,
@@ -1401,15 +1401,24 @@ export class ImageGen extends plugin {
      * @param {'text2img'|'img2img'|null} options.genType - 生成类型，用于选择独立模型
      */
     async generateImage({ prompt, imageUrls = [], genType = null }) {
-        // 获取模型配置（支持文生图/图生图独立模型）
+        /*
+         * 获取模型覆盖配置（群组/全局特定类型模型）
+         * 优先级：API自定义模型 > overrideModel > 全局通用模型（在 getApiList 中实现）
+         */
         const overrideModel = await this.getImageModel(genType)
-        if (overrideModel) {
-            logger.info(`[ImageGen] generateImage: 覆盖模型=${overrideModel}, genType=${genType}`)
+        const apiConfig = config.get('features.imageGen') || {}
+        const firstApi = Array.isArray(apiConfig.apis) && apiConfig.apis[0]
+        const firstApiModel = firstApi?.model?.trim() || ''
+        const globalModel = apiConfig.model || 'gemini-3-pro-image'
+
+        if (firstApiModel) {
+            logger.info(
+                `[ImageGen] generateImage: API自定义模型=${firstApiModel}${overrideModel ? `, 群组/全局覆盖=${overrideModel}(已被API模型优先)` : ''}, genType=${genType}`
+            )
+        } else if (overrideModel) {
+            logger.info(`[ImageGen] generateImage: 群组/全局覆盖模型=${overrideModel}, genType=${genType}`)
         } else {
-            const apiConfig = config.get('features.imageGen') || {}
-            const firstApi = Array.isArray(apiConfig.apis) && apiConfig.apis[0]
-            const effectiveModel = firstApi?.model?.trim() || apiConfig.model || 'gemini-3-pro-image'
-            logger.info(`[ImageGen] generateImage: 使用API/全局模型=${effectiveModel}, genType=${genType}`)
+            logger.info(`[ImageGen] generateImage: 全局通用模型=${globalModel}, genType=${genType}`)
         }
 
         const result = await this.callGenApi({
@@ -2164,12 +2173,12 @@ export class ImageGen extends plugin {
                             const params = isGroup
                                 ? { group_id: parseInt(e.group_id), messages: onebotNodes }
                                 : { user_id: parseInt(e.user_id), messages: onebotNodes }
-                            const result = await bot.sendApi(apiName, params)
+                            const apiResult = await bot.sendApi(apiName, params)
                             if (
-                                result?.status === 'ok' ||
-                                result?.retcode === 0 ||
-                                result?.message_id ||
-                                result?.data?.message_id
+                                apiResult?.status === 'ok' ||
+                                apiResult?.retcode === 0 ||
+                                apiResult?.message_id ||
+                                apiResult?.data?.message_id
                             ) {
                                 sent = true
                             }

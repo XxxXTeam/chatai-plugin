@@ -218,7 +218,7 @@ export class LlmService {
         const { channelManager } = await import('./ChannelManager.js')
         await channelManager.init()
 
-        const targetModel = options.model || config.get('llm.defaultModel')
+        let targetModel = options.model || config.get('llm.defaultModel')
         let channel = null
         if (options.groupId) {
             try {
@@ -227,6 +227,7 @@ export class LlmService {
                 const resolved = channelManager.resolveGroupChannel(groupCfg, targetModel, options.groupId)
                 if (resolved.channel) {
                     channel = resolved.channel
+                    targetModel = resolved.model
                 }
             } catch (e) {
                 logger.warn(`[LlmService] 获取群${options.groupId}独立渠道失败: ${e.message}`)
