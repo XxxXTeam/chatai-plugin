@@ -50,7 +50,7 @@ export async function callMemoryLLM(llmClient, prompt, options = {}) {
         // 方式4: sendMessageWithHistory (内部 LLM 客户端)
         if (typeof llmClient.sendMessageWithHistory === 'function') {
             const response = await llmClient.sendMessageWithHistory([{ role: 'user', content: prompt }], {
-                maxTokens,
+                maxToken: maxTokens,
                 temperature
             })
             const contentArray = Array.isArray(response?.content) ? response.content : []

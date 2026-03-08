@@ -1071,7 +1071,7 @@ class GalgameService {
             response = await client.sendMessageWithHistory(messages, {
                 model: gameModel,
                 temperature: gameTemperature,
-                maxTokens: gameMaxTokens
+                maxToken: gameMaxTokens
             })
             requestSuccess = true
         } catch (err) {

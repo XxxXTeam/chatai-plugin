@@ -5,6 +5,7 @@
 
 import express from 'express'
 import { asyncHandler } from '../middleware/routeFactory.js'
+import { ChaiteResponse } from './shared.js'
 import config from '../../../config/config.js'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -15,20 +16,6 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const logger = global.logger || console
-
-class ChaiteResponse {
-    constructor(code, data, message) {
-        this.code = code
-        this.data = data
-        this.message = message
-    }
-    static ok(data) {
-        return new ChaiteResponse(0, data, 'ok')
-    }
-    static fail(data, msg) {
-        return new ChaiteResponse(-1, data, msg)
-    }
-}
 
 // 预设存储路径
 const PRESETS_DIR = path.join(__dirname, '../../../data/game')

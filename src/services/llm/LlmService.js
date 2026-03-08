@@ -54,13 +54,15 @@ export class LlmService {
         } else {
             const model = options.model || config.get('llm.defaultModel')
             const channel =
-                channelManager.getBestChannel(model) || channelManager.getAll().find(c => c.enabled && c.apiKey)
+                channelManager.getBestChannel(model) ||
+                channelManager.getAll().find(c => c.enabled !== false && c.apiKey)
 
             if (!channel) {
                 throw new Error('未找到可用的 API 渠道配置，请先配置渠道')
             }
 
-            apiKey = channelManager.getChannelKey(channel)
+            const keyInfo = channelManager.getChannelKey(channel)
+            apiKey = keyInfo.key
             baseUrl = channel.baseUrl
             adapterType = channel.adapterType || 'openai'
             chatPath = channel.chatPath || ''
@@ -179,15 +181,15 @@ export class LlmService {
 
         // 优先查找包含 embedding 模型的渠道，然后是默认模型
         const channels = channelManager.getAll()
-        let channel = channels.find(c => c.enabled && c.models?.includes(embeddingModel))
+        let channel = channels.find(c => c.enabled !== false && c.models?.includes(embeddingModel))
 
         if (!channel) {
-            channel = channels.find(c => c.enabled && c.models?.includes(defaultModel))
+            channel = channels.find(c => c.enabled !== false && c.models?.includes(defaultModel))
         }
 
         // 回退：使用第一个可用的启用渠道
         if (!channel) {
-            channel = channels.find(c => c.enabled && c.apiKey)
+            channel = channels.find(c => c.enabled !== false && c.apiKey)
         }
 
         if (!channel) {
@@ -237,9 +239,9 @@ export class LlmService {
         /* 回退到全局渠道 */
         if (!channel) {
             const channels = channelManager.getAll()
-            channel = channels.find(c => c.enabled && c.models?.includes(targetModel))
+            channel = channels.find(c => c.enabled !== false && c.models?.includes(targetModel))
             if (!channel) {
-                channel = channels.find(c => c.enabled && c.apiKey)
+                channel = channels.find(c => c.enabled !== false && c.apiKey)
             }
         }
 

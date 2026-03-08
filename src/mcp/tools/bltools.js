@@ -663,13 +663,17 @@ export const bltoolsTools = [
                 ]
 
                 // 发送请求
-                const response = await client.chat(messages, {
+                const response = await client.sendMessageWithHistory(messages, {
                     model: imageModel,
                     stream: false
                 })
 
-                // 处理响应 - 检查是否有图片输出
-                const content = response?.content || response?.choices?.[0]?.message?.content || ''
+                // 处理响应 - 从 Chaite 格式提取文本内容
+                const content =
+                    response?.content
+                        ?.filter(c => c.type === 'text')
+                        ?.map(c => c.text)
+                        ?.join('') || ''
 
                 // 尝试从响应中提取图片
                 // Markdown格式: ![xxx](data:image/...;base64,xxx) 或 ![xxx](https://...)
@@ -966,7 +970,7 @@ export const bltoolsTools = [
                 // 如果没有找到视频模型渠道，尝试使用智谱渠道
                 if (!selectedChannel) {
                     const allChannels = channelManager.getAll()
-                    selectedChannel = allChannels.find(c => c.enabled && c.baseUrl?.includes('bigmodel.cn'))
+                    selectedChannel = allChannels.find(c => c.enabled !== false && c.baseUrl?.includes('bigmodel.cn'))
                     if (selectedChannel) {
                         selectedModel = 'glm-4.1v-thinking-flash'
                     }
@@ -997,11 +1001,11 @@ export const bltoolsTools = [
                         const blob = new Blob([buffer], { type: 'video/mp4' })
                         formData.append('file', blob, `video_${Date.now()}.mp4`)
 
-                        const apiKey = channelManager.getChannelKey(selectedChannel)
+                        const keyInfo = channelManager.getChannelKey(selectedChannel)
                         const uploadRes = await fetch('https://www.bigmodel.cn/api/biz/file/uploadTemporaryImage', {
                             method: 'POST',
                             body: formData,
-                            headers: { authorization: `Bearer ${apiKey}` }
+                            headers: { authorization: `Bearer ${keyInfo.key}` }
                         })
                         const uploadResult = await uploadRes.json()
                         if (uploadResult.url) {
@@ -1015,7 +1019,7 @@ export const bltoolsTools = [
                 // 创建LLM客户端并发送请求
                 const client = await LlmService.createClient({
                     model: selectedModel,
-                    apiKey: channelManager.getChannelKey(selectedChannel),
+                    apiKey: channelManager.getChannelKey(selectedChannel).key,
                     baseUrl: selectedChannel.baseUrl,
                     enableTools: false,
                     event: e,
@@ -1032,12 +1036,16 @@ export const bltoolsTools = [
                     }
                 ]
 
-                const response = await client.chat(messages, {
+                const response = await client.sendMessageWithHistory(messages, {
                     model: selectedModel,
                     stream: false
                 })
 
-                const analysis = response?.content || response?.choices?.[0]?.message?.content || ''
+                const analysis =
+                    response?.content
+                        ?.filter(c => c.type === 'text')
+                        ?.map(c => c.text)
+                        ?.join('') || ''
 
                 if (!analysis) {
                     return { error: '视频分析失败，未获取到分析结果' }
@@ -1137,7 +1145,7 @@ export const bltoolsTools = [
 
                 const response = await client.sendMessage(userMessage, {
                     model,
-                    systemPrompt,
+                    systemOverride: systemPrompt,
                     stream: false,
                     maxToken: 4096
                 })

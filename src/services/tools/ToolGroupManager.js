@@ -104,6 +104,11 @@ export class ToolGroupManager {
     loadFromBuiltinCategories() {
         this.groups.clear()
 
+        if (!toolCategories || typeof toolCategories !== 'object') {
+            logger.warn('[ToolGroupManager] toolCategories 尚未加载，跳过内置分类')
+            return
+        }
+
         let index = 0
         for (const [key, category] of Object.entries(toolCategories)) {
             if (category.tools && category.tools.length > 0) {

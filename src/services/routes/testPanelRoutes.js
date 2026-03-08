@@ -1,20 +1,11 @@
 import express from 'express'
 import { channelManager } from '../llm/ChannelManager.js'
 import { statsService } from '../stats/StatsService.js'
+import { ApiResponse } from './shared.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import config from '../../../config/config.js'
 
 const router = express.Router()
-
-// Response helper
-class ApiResponse {
-    static ok(data) {
-        return { code: 0, data, message: 'ok' }
-    }
-    static fail(data, msg) {
-        return { code: -1, data, message: msg }
-    }
-}
 
 // 活跃的批量测试任务
 const activeBatchTests = new Map()

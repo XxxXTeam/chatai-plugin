@@ -226,10 +226,21 @@ class ToolFilterService {
         // 特殊工具参数验证
         switch (toolName) {
             case 'kick_member':
+                // 不能对自己操作
+                if (args.user_id && String(args.user_id) === String(userId)) {
+                    return { valid: false, reason: '不能对自己执行此操作' }
+                }
+                break
+
             case 'mute_member':
                 // 不能对自己操作
                 if (args.user_id && String(args.user_id) === String(userId)) {
                     return { valid: false, reason: '不能对自己执行此操作' }
+                }
+                // 禁言时间限制
+                const duration = parseInt(args.duration) || 0
+                if (duration < 0 || duration > 2592000) {
+                    return { valid: false, reason: '禁言时间必须在0-30天之间' }
                 }
                 break
 
@@ -241,7 +252,7 @@ class ToolFilterService {
                 }
                 break
 
-            case 'execute_command':
+            case 'execute_command': {
                 // 检查危险命令
                 const cmd = (args.command || '').toLowerCase()
                 const dangerousPatterns = [
@@ -260,15 +271,7 @@ class ToolFilterService {
                     }
                 }
                 break
-
-            case 'mute_member':
-                // 禁言时间限制
-                const duration = parseInt(args.duration) || 0
-                if (duration < 0 || duration > 2592000) {
-                    // 30天
-                    return { valid: false, reason: '禁言时间必须在0-30天之间' }
-                }
-                break
+            }
         }
 
         return { valid: true }

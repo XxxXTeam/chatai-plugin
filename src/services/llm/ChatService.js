@@ -6,16 +6,13 @@
 
 import { chatLogger } from '../../core/utils/logger.js'
 const logger = chatLogger
-import crypto from 'node:crypto'
-import fs from 'node:fs'
-import path from 'node:path'
 import { LlmService } from './LlmService.js'
 import { imageService } from '../media/ImageService.js'
 import { contextManager } from './ContextManager.js'
 import { channelManager } from './ChannelManager.js'
 import historyManager from '../../core/utils/history.js'
 import config from '../../../config/config.js'
-import { setToolContext, getAllTools } from '../../core/utils/toolAdapter.js'
+import { setToolContext } from '../../core/utils/toolAdapter.js'
 import { presetManager } from '../preset/PresetManager.js'
 import { memoryManager } from '../storage/MemoryManager.js'
 import { mcpManager } from '../../mcp/McpManager.js'
@@ -1704,7 +1701,7 @@ export class ChatService {
     async getHistory(userId, limit = 20, groupId = null) {
         await contextManager.init()
         const conversationId = contextManager.getConversationId(userId, groupId)
-        return await historyManager.getHistory(conversationId, limit)
+        return await historyManager.getHistory(undefined, conversationId)
     }
 
     async clearHistory(userId, groupId = null) {

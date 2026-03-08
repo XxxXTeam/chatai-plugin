@@ -433,12 +433,9 @@ router.get('/mcp-server', async (req, res) => {
         /* 获取运行状态 */
         let status = { toolCount: 0, activeSessions: 0 }
         try {
-            const { default: mcpServerRoutes } = await import('./mcpServerRoutes.js')
-            /* 直接读取模块级变量不可行，改为通过 HTTP 内联调用获取工具数 */
-            const { BuiltinMcpServer } = await import('../../mcp/BuiltinMcpServer.js')
-            const srv = new BuiltinMcpServer()
-            await srv.init()
-            status.toolCount = srv.listTools().length
+            const { builtinMcpServer } = await import('../../mcp/BuiltinMcpServer.js')
+            await builtinMcpServer.init()
+            status.toolCount = builtinMcpServer.listTools().length
         } catch {
             /* 忽略 */
         }

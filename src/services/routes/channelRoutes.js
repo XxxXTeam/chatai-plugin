@@ -4,17 +4,9 @@ import { statsService } from '../stats/StatsService.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import config from '../../../config/config.js'
 
-const router = express.Router()
+import { ApiResponse } from './shared.js'
 
-// Response helper
-class ApiResponse {
-    static ok(data) {
-        return { code: 0, data, message: 'ok' }
-    }
-    static fail(data, msg) {
-        return { code: -1, data, message: msg }
-    }
-}
+const router = express.Router()
 
 // GET /api/channels/list
 router.get('/list', async (req, res) => {

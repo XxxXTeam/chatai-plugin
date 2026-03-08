@@ -1165,21 +1165,9 @@ export class ImageGen extends plugin {
             ]
         }
 
-        return [
-            {
-                name: '默认API',
-                baseUrl: 'https://business2api.openel.top',
-                path: '/v1/chat/completions',
-                method: 'POST',
-                apiKeys: [''],
-                model: globalModel,
-                videoModel: globalVideoModel,
-                stream: false,
-                priority: 0,
-                models: [],
-                enabled: true
-            }
-        ]
+        /* 无任何 API 配置时返回空数组，避免硬编码第三方地址 */
+        logger.warn('[ImageGen] 未配置绘图API，请在管理面板中配置 features.imageGen.apis')
+        return []
     }
 
     /**

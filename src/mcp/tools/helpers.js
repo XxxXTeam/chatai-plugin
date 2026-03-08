@@ -486,7 +486,7 @@ export async function getGroupMemberList({ bot, event, groupId }) {
             memberList = Array.isArray(result) ? result : []
         }
     } catch (err) {
-        console.error('[helpers] 获取群成员列表失败:', err.message)
+        logger.error('[helpers] 获取群成员列表失败:', err.message)
     }
 
     return memberList

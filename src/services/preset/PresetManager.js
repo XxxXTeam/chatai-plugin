@@ -117,7 +117,7 @@ export class PresetManager {
             this.knowledgeService = knowledgeService
             await knowledgeService.init()
         } catch (err) {
-            console.warn('[PresetManager] 知识库服务加载失败:', err.message)
+            logger.warn('[PresetManager] 知识库服务加载失败:', err.message)
         }
 
         this.initialized = true
@@ -147,7 +147,7 @@ export class PresetManager {
                 presets.forEach(p => this.presets.set(p.id, p))
             }
         } catch (err) {
-            console.error('[PresetManager] Failed to load presets:', err)
+            logger.error('[PresetManager] 加载预设失败:', err)
         }
 
         // 只有在没有任何用户预设时才创建默认预设
@@ -208,7 +208,7 @@ export class PresetManager {
             const data = JSON.stringify(Array.from(this.presets.values()), null, 2)
             fs.writeFileSync(PRESETS_FILE, data, 'utf-8')
         } catch (err) {
-            console.error('[PresetManager] Failed to save presets:', err)
+            logger.error('[PresetManager] 保存预设失败:', err)
         }
     }
 
@@ -387,7 +387,7 @@ export class PresetManager {
                         personaParts.push(`\n【角色详细设定】\n${docContent}`)
                     }
                 } catch (e) {
-                    console.warn('[PresetManager] 加载人格文档失败:', e.message)
+                    logger.warn('[PresetManager] 加载人格文档失败:', e.message)
                 }
             }
 
@@ -725,7 +725,7 @@ export class PresetManager {
             try {
                 if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
                     const content = fs.readFileSync(filePath, 'utf-8')
-                    console.log(`[PresetManager] 加载人格文档: ${filePath}`)
+                    logger.debug(`[PresetManager] 加载人格文档: ${filePath}`)
                     return content.trim()
                 }
             } catch (e) {
@@ -733,7 +733,7 @@ export class PresetManager {
             }
         }
 
-        console.warn(`[PresetManager] 人格文档不存在: ${docPath}`)
+        logger.warn(`[PresetManager] 人格文档不存在: ${docPath}`)
         return null
     }
 

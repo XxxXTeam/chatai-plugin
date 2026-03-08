@@ -652,7 +652,7 @@ export class ChatAgent {
             const response = await client.sendMessageWithHistory(dispatchMessages, {
                 model: dispatchModel,
                 temperature: 0.1,
-                maxTokens: 500
+                maxToken: 500
             })
 
             // 解析响应

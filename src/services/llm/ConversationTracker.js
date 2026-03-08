@@ -209,12 +209,10 @@ class ConversationTrackerService {
                 imageConfig: channel.imageConfig || {}
             })
 
-            const response = await client.chat({
-                model: trackingModel,
-                messages: [
-                    {
-                        role: 'system',
-                        content: `你是QQ群聊对话判断助手。机器人名字叫"${botName}"，QQ号${botId}。
+            const messages = [
+                {
+                    role: 'system',
+                    content: `你是QQ群聊对话判断助手。机器人名字叫"${botName}"，QQ号${botId}。
 
 判断用户新消息是否可能在跟机器人说话。
 
@@ -230,16 +228,18 @@ class ConversationTrackerService {
 - 话题完全无关且明显是跟别人说的
 
 你只回复true或false,绝对不要输出其他内容。`
-                    },
-                    {
-                        role: 'user',
-                        content: `【近期对话记录】\n${historyText}\n\n【用户新消息】\n${userMessage}\n\n这条新消息是在跟机器人说话吗？`
-                    }
-                ],
-                max_tokens: 10
+                },
+                {
+                    role: 'user',
+                    content: `【近期对话记录】\n${historyText}\n\n【用户新消息】\n${userMessage}\n\n这条新消息是在跟机器人说话吗？`
+                }
+            ]
+            const response = await client.sendMessageWithHistory(messages, {
+                model: trackingModel,
+                maxToken: 10
             })
 
-            const answer = response?.choices?.[0]?.message?.content?.toLowerCase()?.trim()
+            const answer = (response?.content?.find(c => c.type === 'text')?.text || '').toLowerCase().trim()
             return answer === 'true' || answer?.includes('true')
         } catch (error) {
             logger.error('[ConversationTracker] AI判断失败:', error.message)
@@ -337,12 +337,10 @@ ${recentHistory || '(无)'}
                 imageConfig: channel.imageConfig || {}
             })
 
-            const response = await client.chat({
-                model: trackingModel,
-                messages: [
-                    {
-                        role: 'system',
-                        content: `你是QQ群聊对话判断助手。机器人名字叫"${botName}"。
+            const batchMessages = [
+                {
+                    role: 'system',
+                    content: `你是QQ群聊对话判断助手。机器人名字叫"${botName}"。
 
 每条消息来自不同用户，有独立的对话历史，请分别独立判断。
 - true: 该用户在跟机器人说话（话题延续、回应机器人、一般闲聊）
@@ -351,16 +349,18 @@ ${recentHistory || '(无)'}
 返回JSON对象，key为消息ID，value为判断结果。
 示例: {"MSG_1_12345": true, "MSG_2_67890": false}
 只返回JSON对象，不要其他内容。`
-                    },
-                    {
-                        role: 'user',
-                        content: `分别判断以下${batchWithIds.length}条来自不同用户的消息:\n\n${messagesText}\n\n返回JSON对象:`
-                    }
-                ],
-                max_tokens: 200
+                },
+                {
+                    role: 'user',
+                    content: `分别判断以下${batchWithIds.length}条来自不同用户的消息:\n\n${messagesText}\n\n返回JSON对象:`
+                }
+            ]
+            const response = await client.sendMessageWithHistory(batchMessages, {
+                model: trackingModel,
+                maxToken: 200
             })
 
-            let content = response?.choices?.[0]?.message?.content?.trim() || '{}'
+            let content = (response?.content?.find(c => c.type === 'text')?.text || '').trim() || '{}'
             const jsonMatch = content.match(/\{[\s\S]*\}/)
             if (jsonMatch) {
                 content = jsonMatch[0]

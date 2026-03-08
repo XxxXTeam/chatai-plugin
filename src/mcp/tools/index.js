@@ -125,7 +125,7 @@ async function loadToolModules(forceReload = false) {
                 ...(meta.dangerous && { dangerous: true })
             }
         } catch (err) {
-            console.warn(`[BuiltinMCP] 加载工具模块 ${category} 失败:`, err.message)
+            logger.warn(`[BuiltinMCP] 加载工具模块 ${category} 失败:`, err.message)
             toolCategories[category] = {
                 ...categoryMeta[category],
                 tools: []

@@ -9,7 +9,6 @@ import crypto from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import config from '../../config/config.js'
 import { chatLogger, c as colors } from '../core/utils/logger.js'
-import { redisClient } from '../core/cache/RedisClient.js'
 
 /**
  * 检测是否为TRSS环境

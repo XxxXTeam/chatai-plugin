@@ -235,6 +235,7 @@ class DatabaseService {
      * 搜索记忆（简单文本匹配）
      */
     searchMemories(userId, query, limit = 10) {
+        this.ensureInit()
         // 修复 "LIKE or GLOB pattern too complex" 错误
         // 1. 限制查询字符串长度（防止过长导致模式复杂）
         // 2. 转义特殊字符
@@ -297,6 +298,7 @@ class DatabaseService {
      * 清空所有用户的记忆
      */
     clearAllMemories() {
+        this.ensureInit()
         const stmt = this.db.prepare('DELETE FROM memories')
         return stmt.run().changes
     }
@@ -305,6 +307,7 @@ class DatabaseService {
      * 按前缀获取记忆
      */
     getMemoriesByPrefix(prefix, limit = 100) {
+        this.ensureInit()
         const stmt = this.db.prepare(`
             SELECT * FROM memories 
             WHERE user_id LIKE ? 
@@ -326,6 +329,7 @@ class DatabaseService {
      * 获取记忆统计
      */
     getMemoryStats(userId) {
+        this.ensureInit()
         if (userId) {
             const stmt = this.db.prepare(`
                 SELECT COUNT(*) as count, MIN(timestamp) as oldest, MAX(timestamp) as newest
@@ -373,6 +377,7 @@ class DatabaseService {
      * @param {Object} message
      */
     saveMessage(conversationId, message) {
+        this.ensureInit()
         // 去重：检查是否已存在相同 ID 的消息
         if (message.id) {
             const existing = this.db
@@ -462,6 +467,7 @@ class DatabaseService {
      * @returns {Array}
      */
     getMessages(conversationId, limit = 100) {
+        this.ensureInit()
         let query = `
             SELECT * FROM messages 
             WHERE conversation_id = ? 
@@ -525,6 +531,7 @@ class DatabaseService {
      * @param {string} conversationId
      */
     deleteConversation(conversationId) {
+        this.ensureInit()
         const stmt = this.db.prepare('DELETE FROM messages WHERE conversation_id = ?')
         stmt.run(conversationId)
     }
@@ -535,6 +542,7 @@ class DatabaseService {
      * @param {number} keepCount
      */
     trimMessages(conversationId, keepCount) {
+        this.ensureInit()
         const countStmt = this.db.prepare('SELECT COUNT(*) as count FROM messages WHERE conversation_id = ?')
         const { count } = countStmt.get(conversationId)
 
@@ -627,6 +635,7 @@ class DatabaseService {
      * @param {string} userIdPattern - 用户ID模式（支持前缀匹配）
      */
     listUserConversations(userIdPattern) {
+        this.ensureInit()
         const stmt = this.db.prepare(`
             SELECT conversation_id, COUNT(*) as message_count, MAX(timestamp) as last_message
             FROM messages
@@ -645,6 +654,7 @@ class DatabaseService {
      * 清理所有会话
      */
     clearAllConversations() {
+        this.ensureInit()
         const stmt = this.db.prepare('DELETE FROM messages')
         const result = stmt.run()
         return result.changes
@@ -655,6 +665,7 @@ class DatabaseService {
      * @param {number} days
      */
     cleanupOldConversations(days = 30) {
+        this.ensureInit()
         const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
         const stmt = this.db.prepare(`
             DELETE FROM messages 
@@ -690,6 +701,7 @@ class DatabaseService {
      * 获取所有用户列表（从会话和用户设置中提取）
      */
     getUsers() {
+        this.ensureInit()
         const userMap = new Map()
 
         // 1. 先从 user_settings 文件加载所有已设置的用户
@@ -844,6 +856,7 @@ class DatabaseService {
      * 清除用户数据
      */
     clearUserData(userId) {
+        this.ensureInit()
         // 删除该用户的所有会话
         const stmt = this.db.prepare(`
             DELETE FROM messages 

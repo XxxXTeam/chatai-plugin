@@ -668,22 +668,20 @@ export function formatDuration(seconds) {
  * @param {Object} bot - Bot 实例
  * @param {string|number} groupId - 群ID
  * @param {string|Array} message - 消息内容
- * @returns {Promise<boolean>}
+ * @returns {Promise<Object|null>} 发送结果对象（包含 message_id 等），失败返回 null
  */
 export async function sendGroupMessage(bot, groupId, message) {
-    if (!message || !groupId) return false
+    if (!message || !groupId) return null
 
     try {
-        // 构造一个最小事件对象以适配 platformAdapter 接口
         const e = { bot }
         const { sendGroupMessage: platformSendGroupMessage } = await import('./platformAdapter.js')
-        const result = await platformSendGroupMessage(e, groupId, message)
-        return !!result
+        return await platformSendGroupMessage(e, groupId, message)
     } catch (err) {
         logger.warn(`[EventAdapter] 发送群消息失败: ${err.message}`)
     }
 
-    return false
+    return null
 }
 
 /**

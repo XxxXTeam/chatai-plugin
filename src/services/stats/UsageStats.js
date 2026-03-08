@@ -149,7 +149,7 @@ class UsageStats {
             if (typeof response === 'object') {
                 const jsonStr = JSON.stringify(response)
                 if (jsonStr.length > 2000) {
-                    return JSON.parse(jsonStr.substring(0, 2000) + '"}')
+                    return { truncated: true, preview: jsonStr.substring(0, 2000) + '...' }
                 }
                 return response
             }

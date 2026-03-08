@@ -1385,14 +1385,15 @@ ${dialogText}${truncatedNote}`
             const nickname = e.sender?.nickname || '用户'
             const minMessages = config.get('features.userPortrait.minMessages') || 10
 
-            const userKey = groupId ? `${groupId}_${userId}` : String(userId)
+            /* conversationId 格式与 ChatService 保持一致：群聊 group:${gid}，私聊 user:${uid} */
+            const conversationId = groupId ? `group:${groupId}` : `user:${userId}`
             // 读取配置的消息数量限制 - 优先使用前端配置
             const maxMessages =
                 config.get('features.groupSummary.maxMessages') || config.get('memory.maxMemories') || 100
             const analyzeCount = Math.min(maxMessages, 100)
 
-            const messages = databaseService.getMessages(userKey, maxMessages)
-            const userMessages = messages.filter(m => m.role === 'user')
+            const allMessages = databaseService.getMessages(conversationId, maxMessages)
+            const userMessages = allMessages.filter(m => m.role === 'user')
 
             if (userMessages.length < minMessages) {
                 await this.reply(`消息数量不足（需要至少${minMessages}条），无法生成画像`, true)

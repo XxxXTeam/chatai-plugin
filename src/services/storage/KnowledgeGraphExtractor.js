@@ -86,7 +86,7 @@ class KnowledgeGraphExtractor {
 
         try {
             const { LlmService } = await import('../llm/LlmService.js')
-            this.llmClient = await LlmService.getSimpleChatClient({
+            this.llmClient = await LlmService.getChatClient({
                 enableTools: false
             })
             return this.llmClient
@@ -148,12 +148,15 @@ class KnowledgeGraphExtractor {
 
         try {
             const model = config.get('memory.model') || config.get('llm.defaultModel')
-            const response = await client.sendMessage(prompt, {
-                model,
-                maxTokens: 1000,
-                temperature: 0.3,
-                systemMessage: '你是一个精确的知识图谱实体提取器。只输出 JSON 格式的实体，每行一个。'
-            })
+            const response = await client.sendMessage(
+                { role: 'user', content: [{ type: 'text', text: prompt }] },
+                {
+                    model,
+                    maxToken: 1000,
+                    temperature: 0.3,
+                    systemOverride: '你是一个精确的知识图谱实体提取器。只输出 JSON 格式的实体，每行一个。'
+                }
+            )
 
             const content = this._extractContent(response)
             return this._parseEntities(content)
@@ -178,12 +181,15 @@ class KnowledgeGraphExtractor {
 
         try {
             const model = config.get('memory.model') || config.get('llm.defaultModel')
-            const response = await client.sendMessage(prompt, {
-                model,
-                maxTokens: 800,
-                temperature: 0.3,
-                systemMessage: '你是一个精确的关系提取器。只输出 JSON 格式的关系，每行一个。'
-            })
+            const response = await client.sendMessage(
+                { role: 'user', content: [{ type: 'text', text: prompt }] },
+                {
+                    model,
+                    maxToken: 800,
+                    temperature: 0.3,
+                    systemOverride: '你是一个精确的关系提取器。只输出 JSON 格式的关系，每行一个。'
+                }
+            )
 
             const content = this._extractContent(response)
             return this._parseRelationships(content, entities)

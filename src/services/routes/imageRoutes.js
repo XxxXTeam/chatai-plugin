@@ -8,6 +8,7 @@ import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import config from '../../../config/config.js'
 import { ChaiteResponse } from './shared.js'
+import { chatLogger } from '../../core/utils/logger.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -26,7 +27,7 @@ async function fetchRemotePresets(url) {
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         return await response.json()
     } catch (error) {
-        console.error(`[ImageGen] 获取远程预设失败: ${url}`, error.message)
+        chatLogger.error(`[ImageGen] 获取远程预设失败: ${url}`, error.message)
         return null
     }
 }
@@ -47,7 +48,7 @@ async function getAllPresets() {
             try {
                 remotePresets[source.name] = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'))
             } catch (e) {
-                console.error(`[ImageGen] 读取缓存失败: ${cacheFile}`)
+                chatLogger.error(`[ImageGen] 读取缓存失败: ${cacheFile}`)
             }
         }
     }
@@ -203,7 +204,7 @@ router.delete('/custom-presets/:index', async (req, res) => {
 router.put('/builtin-presets/:uid', async (req, res) => {
     try {
         const { uid } = req.params
-        console.log(`[ImageGen] 更新内置预设: uid=${uid}`)
+        chatLogger.debug(`[ImageGen] 更新内置预设: uid=${uid}`)
         const presets = config.get('features.imageGen.builtinPresets') || []
         const index = presets.findIndex(p => p.uid === uid)
 
@@ -259,7 +260,7 @@ router.put('/remote-presets/:source/:uid', async (req, res) => {
         const decodedSource = decodeURIComponent(source)
         const cacheFile = findCacheFileBySourceName(decodedSource)
 
-        console.log(`[ImageGen] 更新远程预设: source=${decodedSource}, uid=${uid}, file=${cacheFile}`)
+        chatLogger.debug(`[ImageGen] 更新远程预设: source=${decodedSource}, uid=${uid}, file=${cacheFile}`)
 
         if (!cacheFile || !fs.existsSync(cacheFile)) {
             return res.status(404).json(ChaiteResponse.fail(null, `来源 ${decodedSource} 的缓存文件不存在`))

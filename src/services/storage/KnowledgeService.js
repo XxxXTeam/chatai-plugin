@@ -729,6 +729,38 @@ class KnowledgeService {
     }
 
     /**
+     * 通用知识库导入
+     * @param {string|Object} data - 导入数据（纯文本、JSON对象或 OpenIE 格式）
+     * @param {Object} options - 导入选项
+     * @param {string} [options.format='raw'] - 数据格式: raw | openie | json
+     * @param {string} [options.name] - 文档名称
+     * @param {string[]} [options.tags] - 标签
+     * @param {string[]} [options.presetIds] - 关联预设
+     * @returns {Promise<Object>} 导入结果
+     */
+    async importKnowledge(data, options = {}) {
+        const { format = 'raw', name = '导入的知识库', tags = [], presetIds = [] } = options
+
+        if (format === 'openie' && typeof data === 'object') {
+            return await this.importOpenIE(data, { name, tags, presetIds })
+        }
+
+        /* raw / json：直接创建文档 */
+        const content = typeof data === 'string' ? data : JSON.stringify(data, null, 2)
+        const type = format === 'json' || typeof data === 'object' ? 'json' : 'text'
+
+        const doc = await this.create({
+            name,
+            content,
+            type,
+            tags: ['imported', ...tags],
+            presetIds
+        })
+
+        return { success: true, document: doc }
+    }
+
+    /**
      * 搜索知识库
      * @param {string} query
      * @param {Object} options

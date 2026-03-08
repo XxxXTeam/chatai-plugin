@@ -2,19 +2,10 @@ import express from 'express'
 import crypto from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import config from '../../../config/config.js'
+import { ApiResponse } from './shared.js'
 import { chatLogger } from '../../core/utils/logger.js'
 
 const router = express.Router()
-
-// Response helper
-class ApiResponse {
-    static ok(data) {
-        return { code: 0, data, message: 'ok' }
-    }
-    static fail(data, msg) {
-        return { code: -1, data, message: msg }
-    }
-}
 
 // Auth handler singleton
 class FrontendAuthHandler {

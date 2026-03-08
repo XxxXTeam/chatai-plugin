@@ -401,8 +401,9 @@ export class McpClient {
             // Handle notifications or server requests
             this.handleNotification(message)
         } else if (message.id) {
+            const unknownPendingIds = Array.from(this.pendingRequests.keys())
             logger.warn(
-                `[MCP] Received response for unknown request id: ${message.id}, pendingIds=[${pendingIds.join(', ')}]`
+                `[MCP] Received response for unknown request id: ${message.id}, pendingIds=[${unknownPendingIds.join(', ')}]`
             )
         }
     }

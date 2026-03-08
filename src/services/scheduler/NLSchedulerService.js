@@ -3,6 +3,7 @@
  * 支持用户用自然语言创建定时任务，如"5分钟后发一首周杰伦的歌"
  */
 import { chatLogger } from '../../core/utils/logger.js'
+import { getBot as platformGetBot } from '../../utils/platformAdapter.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -411,38 +412,24 @@ class NLSchedulerService {
      */
     async sendToGroup(bot, groupId, message) {
         try {
-            if (bot.pickGroup) {
-                const group = bot.pickGroup(Number(groupId))
-                if (group?.sendMsg) {
-                    await group.sendMsg(message)
-                    return true
-                }
-            }
-            if (bot.sendGroupMsg) {
-                await bot.sendGroupMsg(Number(groupId), message)
-                return true
-            }
+            const { sendGroupMessage } = await import('../../utils/platformAdapter.js')
+            const result = await sendGroupMessage({ bot }, groupId, message)
+            return !!result
         } catch (err) {
             logger.error('[NLScheduler] 发送消息失败:', err.message)
+            return false
         }
-        return false
     }
 
     /**
-     * 获取Bot实例
+     * 获取Bot实例（使用统一适配器，兼容 TRSS/icqq/NapCat）
      */
     getBot() {
-        if (!global.Bot) return null
-        for (const uin of Object.keys(global.Bot.uin || {})) {
-            const bot = global.Bot[uin]
-            if (bot?.pickGroup || bot?.sendGroupMsg) {
-                return bot
-            }
+        try {
+            return platformGetBot() || null
+        } catch {
+            return null
         }
-        if (global.Bot.pickGroup || global.Bot.sendGroupMsg) {
-            return global.Bot
-        }
-        return null
     }
 
     /**
