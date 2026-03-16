@@ -1130,7 +1130,8 @@ router.delete('/channel', groupAdminAuth, async (req, res) => {
             apiKey: null,
             adapterType: 'openai',
             // forbidGlobal 不在清空时重置，保持现有值
-            modelId: null
+            modelId: null,
+            independentChannels: null
         })
 
         chatLogger.info(`[GroupAdmin] 群 ${groupId} 渠道配置已清除`)

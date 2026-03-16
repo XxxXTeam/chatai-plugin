@@ -562,7 +562,20 @@ ${contextText}
                 // 长文本合并转发
                 if (!handled && longTextCfg.enabled !== false && replyText.length > (longTextCfg.threshold || 500)) {
                     const mode = longTextCfg.mode || 'forward'
-                    if (mode === 'forward' || mode === 'auto') {
+                    if (mode === 'image') {
+                        try {
+                            const { renderService } = await import('../src/services/media/RenderService.js')
+                            const imageBuffer = await renderService.renderMarkdownToImage({
+                                markdown: replyText,
+                                title: 'AI 回复',
+                                icon: '💬',
+                                theme: config.get('render.theme') || 'light',
+                                width: config.get('render.width') || 800
+                            })
+                            await e.reply(segment.image(imageBuffer), true)
+                            handled = true
+                        } catch {}
+                    } else if (mode === 'forward' || mode === 'auto') {
                         try {
                             const paragraphs = replyText.split(/\n{2,}/).filter(p => p.trim())
                             if (paragraphs.length > 0) {

@@ -1710,10 +1710,13 @@ export class ScopeManager {
             independentApiKey: channelConfig.apiKey,
             independentAdapterType: channelConfig.adapterType || 'openai',
             forbidGlobalModel: channelConfig.forbidGlobal === true,
-            // 保存多渠道
-            independentChannels: channelConfig.independentChannels
-                ? JSON.stringify(channelConfig.independentChannels)
-                : undefined
+            // 保存多渠道（null 表示清除，undefined 表示不修改）
+            independentChannels:
+                channelConfig.independentChannels === null
+                    ? null
+                    : channelConfig.independentChannels
+                      ? JSON.stringify(channelConfig.independentChannels)
+                      : undefined
         }
 
         if (channelConfig.modelId) {

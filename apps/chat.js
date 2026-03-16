@@ -662,7 +662,23 @@ export class Chat extends plugin {
                         replyTextContent.length > (longTextCfg.threshold || 500)
                     ) {
                         const mode = longTextCfg.mode || 'forward'
-                        if (mode === 'forward' || mode === 'auto') {
+                        if (mode === 'image') {
+                            try {
+                                const { renderService } = await import('../src/services/media/RenderService.js')
+                                const imageBuffer = await renderService.renderMarkdownToImage({
+                                    markdown: replyTextContent,
+                                    title: 'AI 回复',
+                                    icon: '💬',
+                                    theme: config.get('render.theme') || 'light',
+                                    width: config.get('render.width') || 800
+                                })
+                                const replyResult = await this.reply(segment.image(imageBuffer), quoteReply)
+                                this.handleAutoRecall(replyResult, false)
+                                handled = true
+                            } catch {
+                                // 渲染失败，回退到普通发送
+                            }
+                        } else if (mode === 'forward' || mode === 'auto') {
                             try {
                                 const paragraphs = replyTextContent.split(/\n{2,}/).filter(p => p.trim())
                                 if (paragraphs.length > 0) {

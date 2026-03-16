@@ -1110,9 +1110,10 @@ export class ImageGen extends plugin {
      * 获取所有API列表（图片+视频通用），按优先级排序
      * 每个 API 支持：独立模型、多Key轮询、自定义请求方法/路径、流式开关
      * @param {string} [overrideModel] - 覆盖模型（用于群组独立配置）
+     * @param {string} [genType] - 生成类型：'text2img' | 'img2img' | null
      * @returns {Array<Object>} API 配置列表
      */
-    getApiList(overrideModel = null) {
+    getApiList(overrideModel = null, genType = null) {
         const apiConfig = config.get('features.imageGen') || {}
         const globalModel = overrideModel || apiConfig.model || 'gemini-3-pro-image'
         const globalVideoModel = apiConfig.videoModel || 'veo-2.0-generate-001'
@@ -1135,11 +1136,17 @@ export class ImageGen extends plugin {
                         path: api.path?.trim() || '/v1/chat/completions',
                         method: (api.method || 'POST').toUpperCase(),
                         apiKeys,
-                        model: api.model?.trim() || overrideModel || globalModel,
+                        model:
+                            genType === 'text2img'
+                                ? api.text2imgModel?.trim() || overrideModel || globalModel
+                                : genType === 'img2img'
+                                  ? api.img2imgModel?.trim() || api.model?.trim() || overrideModel || globalModel
+                                  : api.model?.trim() || overrideModel || globalModel,
                         videoModel: api.videoModel?.trim() || globalVideoModel,
                         stream: api.stream === true,
                         priority: api.priority ?? idx,
                         models: api.models || [],
+                        imageTransferMode: api.imageTransferMode || 'auto',
                         enabled: true
                     }
                 })
@@ -1174,9 +1181,10 @@ export class ImageGen extends plugin {
      * 获取图片生成API配置（含多Key、请求方法/路径、流式开关）
      * @param {number} apiIndex - API索引
      * @param {string} [overrideModel] - 覆盖模型（用于群组独立配置）
+     * @param {string} [genType] - 生成类型：'text2img' | 'img2img' | null
      */
-    getImageApiConfig(apiIndex = 0, overrideModel = null) {
-        const apis = this.getApiList(overrideModel)
+    getImageApiConfig(apiIndex = 0, overrideModel = null, genType = null) {
+        const apis = this.getApiList(overrideModel, genType)
         if (apiIndex >= apis.length) return null
 
         const api = apis[apiIndex]
@@ -1186,7 +1194,8 @@ export class ImageGen extends plugin {
             model: api.model,
             method: api.method,
             stream: api.stream,
-            name: api.name
+            name: api.name,
+            imageTransferMode: api.imageTransferMode
         }
     }
 
@@ -1221,6 +1230,7 @@ export class ImageGen extends plugin {
         const maxApiCount = this.getApiCount()
         let lastError = null
         let preparedUrls = imageUrls
+        let preparedBase64Urls = null
         if (imageUrls.length > 0) {
             try {
                 const imgSvc = await getImageService()
@@ -1241,6 +1251,27 @@ export class ImageGen extends plugin {
             } catch (prepErr) {
                 logger.warn('[ImageGen] 图片预处理失败，使用原始URL:', prepErr.message)
             }
+        }
+
+        const getUrlsForApi = async apiConf => {
+            if (imageUrls.length === 0) return preparedUrls
+            if (apiConf.imageTransferMode === 'base64') {
+                if (!preparedBase64Urls) {
+                    try {
+                        const imgSvc = await getImageService()
+                        const { urls } = await imgSvc.prepareImagesForApi(imageUrls, {
+                            forceBase64: true,
+                            timeout: 15000
+                        })
+                        preparedBase64Urls = urls
+                    } catch (err) {
+                        logger.warn('[ImageGen] base64转换失败，使用默认URL:', err.message)
+                        return preparedUrls
+                    }
+                }
+                return preparedBase64Urls
+            }
+            return preparedUrls
         }
 
         for (let apiIndex = 0; apiIndex < maxApiCount; apiIndex++) {
@@ -1268,10 +1299,11 @@ export class ImageGen extends plugin {
                             )
                         }
 
+                        const currentUrls = await getUrlsForApi(apiConf)
                         const content = []
                         if (prompt) content.push({ type: 'text', text: prompt })
-                        if (preparedUrls.length) {
-                            content.push(...preparedUrls.map(url => ({ type: 'image_url', image_url: { url } })))
+                        if (currentUrls.length) {
+                            content.push(...currentUrls.map(url => ({ type: 'image_url', image_url: { url } })))
                         }
 
                         const isStream = apiConf.stream || false
@@ -1412,7 +1444,7 @@ export class ImageGen extends plugin {
         const result = await this.callGenApi({
             prompt,
             imageUrls,
-            getApiConfig: idx => this.getImageApiConfig(idx, overrideModel),
+            getApiConfig: idx => this.getImageApiConfig(idx, overrideModel, genType),
             extractResult: data => this.extractImages(data),
             maxEmptyRetries: 2,
             retryDelay: 1000,

@@ -23,6 +23,8 @@ router.get('/', (req, res) => {
             tools: config.get('tools'),
             personality: config.get('personality'),
             thinking: config.get('thinking'),
+            output: config.get('output'),
+            render: config.get('render'),
             features: config.get('features'),
             memory: config.get('memory'),
             mcp: config.get('mcp'),

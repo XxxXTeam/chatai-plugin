@@ -475,6 +475,47 @@ class RenderService {
     }
 
     /**
+     * 文本自动换行辅助方法
+     * @param {CanvasRenderingContext2D} ctx - Canvas上下文
+     * @param {string} text - 文本内容
+     * @param {number} maxWidth - 最大宽度
+     * @returns {string[]} 换行后的文本行数组
+     */
+    wrapText(ctx, text, maxWidth) {
+        if (!text) return ['']
+        const words = []
+        let current = ''
+        for (const char of text) {
+            if (/[\s]/.test(char) && current) {
+                words.push(current)
+                current = ''
+                if (char !== ' ') words.push(char)
+            } else {
+                current += char
+                if (ctx.measureText(current).width > maxWidth * 0.9) {
+                    words.push(current)
+                    current = ''
+                }
+            }
+        }
+        if (current) words.push(current)
+
+        const lines = []
+        let line = ''
+        for (const word of words) {
+            const testLine = line ? line + word : word
+            if (ctx.measureText(testLine).width > maxWidth) {
+                if (line) lines.push(line)
+                line = word
+            } else {
+                line = testLine
+            }
+        }
+        if (line) lines.push(line)
+        return lines.length > 0 ? lines : ['']
+    }
+
+    /**
      * Canvas快速渲染 - 用于简单文本场景
      * @param {Object} options - 渲染选项
      * @returns {Promise<Buffer>}
@@ -511,7 +552,11 @@ class RenderService {
         let totalHeight = contentPadding + headerHeight
         const lineHeightPx = fontSize * lineHeight
 
-        // 预计算每行高度
+        // 预计算每行高度（创建临时canvas用于文本测量）
+        const measureCanvas = createCanvas(1, 1)
+        const measureCtx = measureCanvas.getContext('2d')
+        const textMaxWidth = width - padding * 2 - 24
+
         const parsedLines = lines.map(line => {
             const isTitle = line.startsWith('# ') || line.startsWith('## ')
             const isSubtitle = line.startsWith('### ')
@@ -519,10 +564,26 @@ class RenderService {
             const isQuote = line.startsWith('> ')
             const isEmpty = !line.trim()
 
-            let height = lineHeightPx
-            if (isTitle) height = fontSize * 1.8 * lineHeight
-            else if (isSubtitle) height = fontSize * 1.4 * lineHeight
-            else if (isEmpty) height = lineHeightPx * 0.5
+            let singleLineHeight = lineHeightPx
+            if (isTitle) singleLineHeight = fontSize * 1.8 * lineHeight
+            else if (isSubtitle) singleLineHeight = fontSize * 1.4 * lineHeight
+            else if (isEmpty) singleLineHeight = lineHeightPx * 0.5
+
+            let wrapCount = 1
+            if (!isEmpty) {
+                let cleanText = line
+                if (isTitle) cleanText = line.replace(/^#{1,2}\s*/, '')
+                else if (isSubtitle) cleanText = line.replace(/^###\s*/, '')
+                else if (isList) cleanText = line.replace(/^[-•]\s*/, '').replace(/^\d+\.\s*/, '')
+                else if (isQuote) cleanText = line.replace(/^>\s*/, '')
+
+                const fontSizePx = isTitle ? fontSize * 1.3 : isSubtitle ? fontSize * 1.1 : fontSize
+                measureCtx.font = `${isTitle || isSubtitle ? '600 ' : ''}${fontSizePx}px ${fontFamily}`
+                const wrappedLines = this.wrapText(measureCtx, cleanText, textMaxWidth)
+                wrapCount = wrappedLines.length
+            }
+
+            const height = singleLineHeight * wrapCount
 
             return { text: line, height, isTitle, isSubtitle, isList, isQuote, isEmpty }
         })
@@ -601,7 +662,7 @@ class RenderService {
                 ctx.fillStyle = '#C06830'
                 ctx.fillText(text, x, y)
             } else if (line.isList) {
-                // 列表项
+                // 列表项（支持自动换行）
                 text = text.replace(/^[-•]\s*/, '').replace(/^\d+\.\s*/, '')
                 ctx.font = `${fontSize}px ${fontFamily}`
 
@@ -611,7 +672,11 @@ class RenderService {
                 x += 20
 
                 ctx.fillStyle = textColor
-                ctx.fillText(text, x, y)
+                const listWrapped = this.wrapText(ctx, text, width - padding * 2 - 20)
+                for (let wIdx = 0; wIdx < listWrapped.length; wIdx++) {
+                    ctx.fillText(listWrapped[wIdx], x, y)
+                    if (wIdx < listWrapped.length - 1) y += lineHeightPx
+                }
             } else if (line.isQuote) {
                 text = text.replace(/^>\s*/, '')
 
@@ -627,24 +692,27 @@ class RenderService {
                 ctx.fillStyle = '#7A5545'
                 ctx.fillText(text, x + 12, y)
             } else {
-                // 普通文本
+                // 普通文本（支持自动换行）
                 ctx.font = `${fontSize}px ${fontFamily}`
                 ctx.fillStyle = textColor
 
-                // 处理加粗文本
-                const boldParts = text.split(/\*\*([^*]+)\*\*/g)
-                let currentX = x
-                for (let i = 0; i < boldParts.length; i++) {
-                    if (i % 2 === 1) {
-                        // 加粗部分
-                        ctx.font = `600 ${fontSize}px ${fontFamily}`
-                        ctx.fillStyle = '#C85520'
-                    } else {
-                        ctx.font = `${fontSize}px ${fontFamily}`
-                        ctx.fillStyle = textColor
+                const wrappedLines = this.wrapText(ctx, text, width - padding * 2)
+                for (let wIdx = 0; wIdx < wrappedLines.length; wIdx++) {
+                    const wLine = wrappedLines[wIdx]
+                    const boldParts = wLine.split(/\*\*([^*]+)\*\*/g)
+                    let currentX = x
+                    for (let i = 0; i < boldParts.length; i++) {
+                        if (i % 2 === 1) {
+                            ctx.font = `600 ${fontSize}px ${fontFamily}`
+                            ctx.fillStyle = '#C85520'
+                        } else {
+                            ctx.font = `${fontSize}px ${fontFamily}`
+                            ctx.fillStyle = textColor
+                        }
+                        ctx.fillText(boldParts[i], currentX, y)
+                        currentX += ctx.measureText(boldParts[i]).width
                     }
-                    ctx.fillText(boldParts[i], currentX, y)
-                    currentX += ctx.measureText(boldParts[i]).width
+                    if (wIdx < wrappedLines.length - 1) y += lineHeightPx
                 }
             }
 
@@ -685,22 +753,26 @@ class RenderService {
     /**
      * 清理Markdown内容（移除代码块标记等）
      * @param {string} text
+     * @param {Object} [options]
+     * @param {boolean} [options.stripEmoji=true] - 是否移除Emoji（Canvas需要移除，Puppeteer/浏览器保留）
      * @returns {string}
      */
-    cleanMarkdown(text) {
+    cleanMarkdown(text, { stripEmoji = true } = {}) {
         if (!text) return ''
         let clean = text.trim()
         // 移除开头的 ```markdown 或 ``` 标记
         clean = clean.replace(/^```(?:markdown|md)?\s*\n?/i, '')
         // 移除结尾的 ``` 标记
         clean = clean.replace(/\n?```\s*$/i, '')
-        // 移除无法渲染的 Emoji 字符（保留基本标点和中文）
-        clean = clean.replace(/[\u{1F300}-\u{1F9FF}]/gu, '') // 常见 Emoji
-        clean = clean.replace(/[\u{2600}-\u{26FF}]/gu, '') // 杂项符号
-        clean = clean.replace(/[\u{2700}-\u{27BF}]/gu, '') // 装饰符号
-        clean = clean.replace(/[\u{1F600}-\u{1F64F}]/gu, '') // 表情符号
-        clean = clean.replace(/[\u{1F680}-\u{1F6FF}]/gu, '') // 交通和地图符号
-        clean = clean.replace(/[\u{1F1E0}-\u{1F1FF}]/gu, '') // 国旗
+        if (stripEmoji) {
+            // Canvas 无法渲染 Emoji，需要移除
+            clean = clean.replace(/[\u{1F300}-\u{1F9FF}]/gu, '') // 常见 Emoji
+            clean = clean.replace(/[\u{2600}-\u{26FF}]/gu, '') // 杂项符号
+            clean = clean.replace(/[\u{2700}-\u{27BF}]/gu, '') // 装饰符号
+            clean = clean.replace(/[\u{1F600}-\u{1F64F}]/gu, '') // 表情符号
+            clean = clean.replace(/[\u{1F680}-\u{1F6FF}]/gu, '') // 交通和地图符号
+            clean = clean.replace(/[\u{1F1E0}-\u{1F1FF}]/gu, '') // 国旗
+        }
         return clean.trim()
     }
 
@@ -877,7 +949,7 @@ class RenderService {
             showTimestamp = true
         } = options
 
-        const cleanedMd = this.cleanMarkdown(markdown)
+        const cleanedMd = this.cleanMarkdown(markdown, { stripEmoji: false })
 
         // 保护数学公式
         const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
@@ -1060,7 +1132,7 @@ class RenderService {
             }
         }
 
-        const cleanedMd = this.cleanMarkdown(markdown)
+        const cleanedMd = this.cleanMarkdown(markdown, { stripEmoji: false })
         const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
         let html = marked(protectedMd)
         html = this.restoreMathExpressions(html, expressions)
@@ -1759,7 +1831,7 @@ class RenderService {
             quotes = []
         } = options
 
-        const cleanedMd = this.cleanMarkdown(markdown)
+        const cleanedMd = this.cleanMarkdown(markdown, { stripEmoji: false })
         const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
         let html = marked(protectedMd)
         html = this.restoreMathExpressions(html, expressions)
@@ -1839,7 +1911,7 @@ class RenderService {
             }
         }
 
-        const cleanedMd = this.cleanMarkdown(markdown)
+        const cleanedMd = this.cleanMarkdown(markdown, { stripEmoji: false })
         const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
         let html = marked(protectedMd)
         html = this.restoreMathExpressions(html, expressions)
