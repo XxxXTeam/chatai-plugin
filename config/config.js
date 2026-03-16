@@ -549,7 +549,7 @@ class Config {
                     defaultImage: '',
                     /* 图片访问基础URL（留空自动从 web.publicUrl 或本地地址获取） */
                     imageBaseUrl: '',
-                    // API列表
+                    // API列表（支持 text2imgModel/img2imgModel 独立模型、imageTransferMode: 'auto'|'base64'|'url'）
                     apis: [{ baseUrl: 'https://business.928100.xyz/v1/chat/completions', apiKey: 'X-Free' }],
                     // 预设来源配置
                     presetSources: [{ name: '云端预设', url: 'https://ht.pippi.top/data.json', enabled: true }],

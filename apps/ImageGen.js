@@ -1167,6 +1167,7 @@ export class ImageGen extends plugin {
                     stream: false,
                     priority: 0,
                     models: [],
+                    imageTransferMode: apiConfig.imageTransferMode || 'auto',
                     enabled: true
                 }
             ]
@@ -1259,11 +1260,14 @@ export class ImageGen extends plugin {
                 if (!preparedBase64Urls) {
                     try {
                         const imgSvc = await getImageService()
-                        const { urls } = await imgSvc.prepareImagesForApi(imageUrls, {
+                        const { urls, errors } = await imgSvc.prepareImagesForApi(imageUrls, {
                             forceBase64: true,
                             timeout: 15000
                         })
-                        preparedBase64Urls = urls
+                        if (errors.length > 0) {
+                            logger.warn(`[ImageGen] 部分图片base64转换失败: ${errors.join(', ')}`)
+                        }
+                        preparedBase64Urls = urls.length > 0 ? urls : preparedUrls
                     } catch (err) {
                         logger.warn('[ImageGen] base64转换失败，使用默认URL:', err.message)
                         return preparedUrls

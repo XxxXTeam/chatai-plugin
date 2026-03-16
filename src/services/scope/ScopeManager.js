@@ -1719,7 +1719,7 @@ export class ScopeManager {
                       : undefined
         }
 
-        if (channelConfig.modelId) {
+        if (channelConfig.modelId !== undefined) {
             updateData.chatModel = channelConfig.modelId
         }
 

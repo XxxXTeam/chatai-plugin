@@ -503,12 +503,29 @@ class RenderService {
         const lines = []
         let line = ''
         for (const word of words) {
-            const testLine = line ? line + word : word
-            if (ctx.measureText(testLine).width > maxWidth) {
-                if (line) lines.push(line)
-                line = word
+            if (ctx.measureText(word).width > maxWidth) {
+                if (line) {
+                    lines.push(line)
+                    line = ''
+                }
+                let chunk = ''
+                for (const ch of word) {
+                    if (ctx.measureText(chunk + ch).width > maxWidth) {
+                        if (chunk) lines.push(chunk)
+                        chunk = ch
+                    } else {
+                        chunk += ch
+                    }
+                }
+                line = chunk
             } else {
-                line = testLine
+                const testLine = line ? line + word : word
+                if (ctx.measureText(testLine).width > maxWidth) {
+                    if (line) lines.push(line)
+                    line = word
+                } else {
+                    line = testLine
+                }
             }
         }
         if (line) lines.push(line)
@@ -590,6 +607,7 @@ class RenderService {
 
         totalHeight += parsedLines.reduce((sum, l) => sum + l.height, 0)
         totalHeight += 40 // footer
+        totalHeight = Math.ceil(totalHeight * 1.05) + 20
 
         // 创建 Canvas
         const canvas = createCanvas(width, Math.max(totalHeight, 200))
@@ -2244,7 +2262,14 @@ class RenderService {
             if (avatarUrl) {
                 try {
                     await page.waitForSelector('.avatar img', { timeout: 5000 })
-                    await new Promise(r => setTimeout(r, 500))
+                    await page.waitForFunction(
+                        () => {
+                            const img = document.querySelector('.avatar img')
+                            return !img || img.complete || img.getAttribute('data-failed') === 'true'
+                        },
+                        { timeout: 5000 }
+                    )
+                    await new Promise(r => setTimeout(r, 300))
                 } catch (e) {
                     // 图片加载超时，继续使用降级显示
                 }
