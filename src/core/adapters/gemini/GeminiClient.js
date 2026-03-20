@@ -37,9 +37,21 @@ export class GeminiClient extends AbstractClient {
      * @returns {Promise<HistoryMessage & { usage: ModelUsage }>}
      */
     async _sendMessage(histories, apiKey, options) {
-        // 支持自定义 baseUrl（用于代理服务）
+        // 支持自定义 baseUrl 和端点（用于代理服务）
         const genAI = new GoogleGenerativeAI(apiKey)
-        const requestOptions = this.baseUrl ? { baseUrl: this.baseUrl } : undefined
+
+        // 支持自定义端点配置
+        const customChatPath = this.endpoints?.chat || this.chatPath
+        let baseUrl = this.baseUrl
+
+        // 如果配置了自定义聊天端点，需要构建完整的URL
+        if (customChatPath) {
+            const baseUrlClean = this.baseUrl?.replace(/\/+$/, '') || ''
+            baseUrl = baseUrlClean + (customChatPath.startsWith('/') ? customChatPath : '/' + customChatPath)
+            logger.debug(`[Gemini适配器] 使用自定义对话端点: ${baseUrl}`)
+        }
+
+        const requestOptions = baseUrl ? { baseUrl: baseUrl } : undefined
         const model = options.model || 'gemini-2.5-flash'
 
         /*
@@ -178,8 +190,17 @@ export class GeminiClient extends AbstractClient {
      */
     async streamMessage(histories, options) {
         const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
-        // 支持自定义 baseUrl
-        const requestOptions = this.baseUrl ? { baseUrl: this.baseUrl } : undefined
+        // 支持自定义 baseUrl 和端点
+        const customChatPath = this.endpoints?.chat || this.chatPath
+        let baseUrl = this.baseUrl
+
+        if (customChatPath) {
+            const baseUrlClean = this.baseUrl?.replace(/\/+$/, '') || ''
+            baseUrl = baseUrlClean + (customChatPath.startsWith('/') ? customChatPath : '/' + customChatPath)
+            logger.debug(`[Gemini适配器] 流式使用自定义对话端点: ${baseUrl}`)
+        }
+
+        const requestOptions = baseUrl ? { baseUrl: baseUrl } : undefined
         const genAI = new GoogleGenerativeAI(apiKey, requestOptions)
         const model = options.model || 'gemini-1.5-flash'
 
@@ -268,9 +289,20 @@ export class GeminiClient extends AbstractClient {
      */
     async getEmbedding(text, options) {
         const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
-        // 支持自定义 baseUrl
+        // 支持自定义 baseUrl 和嵌入端点
+        const customEmbeddingsPath = this.endpoints?.embeddings
+        let baseUrl = this.baseUrl
+
+        if (customEmbeddingsPath) {
+            const baseUrlClean = this.baseUrl?.replace(/\/+$/, '') || ''
+            baseUrl =
+                baseUrlClean +
+                (customEmbeddingsPath.startsWith('/') ? customEmbeddingsPath : '/' + customEmbeddingsPath)
+            logger.debug(`[Gemini适配器] 使用自定义嵌入端点: ${baseUrl}`)
+        }
+
         const genAI = new GoogleGenerativeAI(apiKey)
-        const requestOptions = this.baseUrl ? { baseUrl: this.baseUrl } : undefined
+        const requestOptions = baseUrl ? { baseUrl: baseUrl } : undefined
         const model = options.model || 'text-embedding-004'
 
         const embeddingModel = genAI.getGenerativeModel({ model }, requestOptions)
@@ -314,10 +346,19 @@ export class GeminiClient extends AbstractClient {
      */
     async listModels() {
         const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
-        const baseUrl = this.baseUrl || 'https://generativelanguage.googleapis.com'
+        // 支持自定义模型列表端点
+        const customModelsPath = this.endpoints?.models || this.modelsPath
+        let baseUrl = this.baseUrl || 'https://generativelanguage.googleapis.com'
+        let modelsEndpoint = '/v1beta/models'
+
+        if (customModelsPath) {
+            const baseUrlClean = baseUrl.replace(/\/+$/, '')
+            modelsEndpoint = customModelsPath.startsWith('/') ? customModelsPath : '/' + customModelsPath
+            logger.debug(`[Gemini适配器] 使用自定义模型列表端点: ${baseUrlClean}${modelsEndpoint}`)
+        }
 
         try {
-            const response = await fetch(`${baseUrl}/v1beta/models?key=${apiKey}`, {
+            const response = await fetch(`${baseUrl}${modelsEndpoint}?key=${apiKey}`, {
                 method: 'GET',
                 headers: {
                     'Content-Type': 'application/json'
@@ -360,11 +401,26 @@ export class GeminiClient extends AbstractClient {
      */
     async getModelInfo(modelId) {
         const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
-        const baseUrl = this.baseUrl || 'https://generativelanguage.googleapis.com'
+        // 支持自定义模型信息端点
+        const customModelsPath = this.endpoints?.models || this.modelsPath
+        let baseUrl = this.baseUrl || 'https://generativelanguage.googleapis.com'
+        let modelInfoEndpoint = '/v1beta'
+
+        if (customModelsPath) {
+            const baseUrlClean = baseUrl.replace(/\/+$/, '')
+            // 如果自定义路径是完整路径，直接使用；否则拼接
+            if (customModelsPath.includes('/v1beta')) {
+                modelInfoEndpoint = customModelsPath.replace(/\/+$/, '')
+                baseUrl = baseUrlClean
+            } else {
+                modelInfoEndpoint = customModelsPath.startsWith('/') ? customModelsPath : '/' + customModelsPath
+            }
+            logger.debug(`[Gemini适配器] 使用自定义模型信息端点: ${baseUrl}${modelInfoEndpoint}`)
+        }
 
         try {
             const modelName = modelId.startsWith('models/') ? modelId : `models/${modelId}`
-            const response = await fetch(`${baseUrl}/v1beta/${modelName}?key=${apiKey}`, {
+            const response = await fetch(`${baseUrl}${modelInfoEndpoint}/${modelName}?key=${apiKey}`, {
                 method: 'GET',
                 headers: {
                     'Content-Type': 'application/json'

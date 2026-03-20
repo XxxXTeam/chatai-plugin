@@ -34,9 +34,20 @@ export class ClaudeClient extends AbstractClient {
      * @returns {Promise<HistoryMessage & { usage: ModelUsage }>}
      */
     async _sendMessage(histories, apiKey, options) {
+        // 支持自定义端点配置
+        const customChatPath = this.endpoints?.chat || this.chatPath
+        let baseURL = this.baseUrl
+
+        // 如果配置了自定义聊天端点，需要构建完整的URL
+        if (customChatPath) {
+            const baseUrlClean = this.baseUrl?.replace(/\/+$/, '') || ''
+            baseURL = baseUrlClean + (customChatPath.startsWith('/') ? customChatPath : '/' + customChatPath)
+            logger.debug(`[Claude适配器] 使用自定义对话端点: ${baseURL}`)
+        }
+
         const client = new Anthropic({
             apiKey,
-            baseURL: this.baseUrl
+            baseURL: baseURL
         })
 
         const model = options.model || 'claude-3-5-sonnet-20241022'
@@ -153,9 +164,19 @@ export class ClaudeClient extends AbstractClient {
      */
     async streamMessage(histories, options) {
         const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
+        // 支持自定义端点配置
+        const customChatPath = this.endpoints?.chat || this.chatPath
+        let baseURL = this.baseUrl
+
+        if (customChatPath) {
+            const baseUrlClean = this.baseUrl?.replace(/\/+$/, '') || ''
+            baseURL = baseUrlClean + (customChatPath.startsWith('/') ? customChatPath : '/' + customChatPath)
+            logger.debug(`[Claude适配器] 流式使用自定义对话端点: ${baseURL}`)
+        }
+
         const client = new Anthropic({
             apiKey,
-            baseURL: this.baseUrl
+            baseURL: baseURL
         })
 
         const model = options.model || 'claude-3-5-sonnet-20241022'

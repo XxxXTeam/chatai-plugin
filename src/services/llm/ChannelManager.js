@@ -38,12 +38,31 @@ function hasCustomPath(url) {
 /**
  * 规范化 API Base URL
  * 默认添加 /v1，除非用户已指定自定义路径
+ * @param {string|string[]} baseUrl - 单个URL或URL数组
+ * @param {string} adapterType
+ * @returns {string|string[]} 规范化后的URL或URL数组
+ */
+export function normalizeBaseUrl(baseUrl, adapterType) {
+    // 如果为空，使用默认地址
+    if (!baseUrl) {
+        return DEFAULT_BASE_URLS[adapterType] || ''
+    }
+
+    // 处理数组格式
+    if (Array.isArray(baseUrl)) {
+        return baseUrl.map(url => normalizeSingleBaseUrl(url, adapterType)).filter(Boolean)
+    }
+
+    return normalizeSingleBaseUrl(baseUrl, adapterType)
+}
+
+/**
+ * 规范化单个 Base URL
  * @param {string} baseUrl
  * @param {string} adapterType
  * @returns {string}
  */
-export function normalizeBaseUrl(baseUrl, adapterType) {
-    // 如果为空，使用默认地址
+function normalizeSingleBaseUrl(baseUrl, adapterType) {
     if (!baseUrl || !baseUrl.trim()) {
         return DEFAULT_BASE_URLS[adapterType] || ''
     }
@@ -119,17 +138,264 @@ export class ChannelManager {
     }
 
     /**
+     * 测试baseUrl的延迟（HTTP GET）
+     * @param {string} baseUrl - 要测试的baseUrl
+     * @param {Object} options - 选项
+     * @param {number} options.timeout - 超时时间(ms)，默认5000
+     * @returns {Promise<{latency: number, success: boolean, error?: string}>}
+     */
+    async testBaseUrlLatency(baseUrl, options = {}) {
+        const { timeout = 5000 } = options
+
+        if (!baseUrl || !baseUrl.trim()) {
+            return { latency: Infinity, success: false, error: 'BaseUrl为空' }
+        }
+
+        try {
+            // 构建测试URL（使用健康检查端点或根路径）
+            let testUrl = baseUrl.replace(/\/+$/, '')
+
+            // 根据适配器类型选择测试端点
+            // 对于OpenAI兼容API，尝试/models端点
+            // 对于其他API，尝试根路径
+            if (testUrl.includes('/v1')) {
+                testUrl = testUrl + '/models'
+            } else {
+                testUrl = testUrl + '/'
+            }
+
+            const startTime = Date.now()
+            const controller = new AbortController()
+            const timeoutId = setTimeout(() => controller.abort(), timeout)
+
+            try {
+                const response = await fetch(testUrl, {
+                    method: 'GET',
+                    signal: controller.signal,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        Accept: 'application/json'
+                    }
+                })
+                clearTimeout(timeoutId)
+
+                const latency = Date.now() - startTime
+
+                // 即使返回错误状态码，也记录延迟（说明网络可达）
+                return {
+                    latency,
+                    success: response.ok || response.status === 401 || response.status === 403, // 401/403表示API可达但需要认证
+                    status: response.status
+                }
+            } catch (fetchError) {
+                clearTimeout(timeoutId)
+                if (fetchError.name === 'AbortError') {
+                    return { latency: timeout, success: false, error: '请求超时' }
+                }
+                throw fetchError
+            }
+        } catch (error) {
+            logger.debug(`[ChannelManager] BaseUrl延迟测试失败: ${baseUrl}, 错误: ${error.message}`)
+            return { latency: Infinity, success: false, error: error.message }
+        }
+    }
+
+    /**
+     * 测试所有baseUrl的延迟并选择最优的
+     * @param {string} channelId - 渠道ID
+     * @param {Object} options - 选项
+     * @param {boolean} options.forceRetest - 强制重新测试，默认false
+     * @returns {Promise<{selectedIndex: number, latencies: Object, selectedUrl: string}>}
+     */
+    async testAndSelectBestBaseUrl(channelId, options = {}) {
+        const { forceRetest = false } = options
+        const channel = this.channels.get(channelId)
+        if (!channel) {
+            throw new Error('Channel not found')
+        }
+
+        const baseUrls = channel.baseUrls || []
+        if (baseUrls.length === 0) {
+            return { selectedIndex: 0, latencies: {}, selectedUrl: channel.baseUrl || '' }
+        }
+
+        // 如果已有测试结果且不强制重测，直接使用
+        if (!forceRetest && channel.baseUrlLatencies && Object.keys(channel.baseUrlLatencies).length > 0) {
+            const bestIndex = this.selectBestBaseUrlIndex(channel)
+            return {
+                selectedIndex: bestIndex,
+                latencies: channel.baseUrlLatencies,
+                selectedUrl: baseUrls[bestIndex] || ''
+            }
+        }
+
+        // 并行测试所有baseUrl
+        logger.info(`[ChannelManager] 开始测试渠道 ${channel.name} 的 ${baseUrls.length} 个baseUrl延迟`)
+        const testResults = await Promise.allSettled(baseUrls.map(url => this.testBaseUrlLatency(url)))
+
+        const latencies = {}
+        const validResults = []
+
+        for (let i = 0; i < baseUrls.length; i++) {
+            const result = testResults[i]
+            if (result.status === 'fulfilled' && result.value.success) {
+                latencies[baseUrls[i]] = result.value.latency
+                validResults.push({
+                    index: i,
+                    url: baseUrls[i],
+                    latency: result.value.latency
+                })
+                logger.debug(`[ChannelManager] BaseUrl ${baseUrls[i]} 延迟: ${result.value.latency}ms`)
+            } else {
+                latencies[baseUrls[i]] = Infinity
+                logger.warn(
+                    `[ChannelManager] BaseUrl ${baseUrls[i]} 测试失败: ${result.status === 'rejected' ? result.reason?.message : result.value?.error}`
+                )
+            }
+        }
+
+        // 选择延迟最低的baseUrl
+        if (validResults.length === 0) {
+            logger.warn(`[ChannelManager] 所有baseUrl测试失败，使用第一个作为默认`)
+            const selectedIndex = 0
+            channel.baseUrlLatencies = latencies
+            channel.selectedBaseUrlIndex = selectedIndex
+            channel.baseUrl = baseUrls[selectedIndex] || ''
+            await this.saveToConfig()
+            return { selectedIndex, latencies, selectedUrl: baseUrls[selectedIndex] || '' }
+        }
+
+        // 按延迟排序，选择最快的
+        validResults.sort((a, b) => a.latency - b.latency)
+        const bestResult = validResults[0]
+
+        channel.baseUrlLatencies = latencies
+        channel.selectedBaseUrlIndex = bestResult.index
+        channel.baseUrl = bestResult.url
+        await this.saveToConfig()
+
+        logger.info(
+            `[ChannelManager] 渠道 ${channel.name} 选择最优baseUrl: ${bestResult.url} (延迟: ${bestResult.latency}ms)`
+        )
+
+        return {
+            selectedIndex: bestResult.index,
+            latencies,
+            selectedUrl: bestResult.url
+        }
+    }
+
+    /**
+     * 根据延迟测试结果选择最优baseUrl索引
+     * @param {Object} channel - 渠道对象
+     * @returns {number} 选中的baseUrl索引
+     */
+    selectBestBaseUrlIndex(channel) {
+        const baseUrls = channel.baseUrls || []
+        if (baseUrls.length === 0) return 0
+
+        const latencies = channel.baseUrlLatencies || {}
+        let bestIndex = 0
+        let bestLatency = Infinity
+
+        for (let i = 0; i < baseUrls.length; i++) {
+            const latency = latencies[baseUrls[i]]
+            if (latency !== undefined && latency < bestLatency) {
+                bestLatency = latency
+                bestIndex = i
+            }
+        }
+
+        return bestIndex
+    }
+
+    /**
+     * 获取当前渠道的最佳baseUrl（自动选择）
+     * @param {string} channelId - 渠道ID
+     * @returns {string} 当前使用的baseUrl
+     */
+    getCurrentBaseUrl(channelId) {
+        const channel = this.channels.get(channelId)
+        if (!channel) return ''
+
+        const baseUrls = channel.baseUrls || []
+        if (baseUrls.length === 0) return channel.baseUrl || ''
+
+        const selectedIndex =
+            channel.selectedBaseUrlIndex !== undefined
+                ? channel.selectedBaseUrlIndex
+                : this.selectBestBaseUrlIndex(channel)
+
+        return baseUrls[selectedIndex] || baseUrls[0] || channel.baseUrl || ''
+    }
+
+    /**
+     * 切换到下一个可用的baseUrl（用于失败重试）
+     * @param {string} channelId - 渠道ID
+     * @param {number} currentIndex - 当前使用的baseUrl索引
+     * @returns {string|null} 下一个baseUrl，如果没有则返回null
+     */
+    switchToNextBaseUrl(channelId, currentIndex) {
+        const channel = this.channels.get(channelId)
+        if (!channel) return null
+
+        const baseUrls = channel.baseUrls || []
+        if (baseUrls.length <= 1) return null
+
+        // 尝试下一个baseUrl
+        const nextIndex = (currentIndex + 1) % baseUrls.length
+        if (nextIndex === currentIndex) return null // 已经循环一圈
+
+        channel.selectedBaseUrlIndex = nextIndex
+        channel.baseUrl = baseUrls[nextIndex]
+        logger.info(
+            `[ChannelManager] 渠道 ${channel.name} 切换到下一个baseUrl: ${baseUrls[nextIndex]} (索引: ${nextIndex})`
+        )
+
+        // 异步保存，不阻塞
+        this.saveToConfig().catch(err => {
+            logger.error(`[ChannelManager] 保存baseUrl切换失败: ${err.message}`)
+        })
+
+        return baseUrls[nextIndex]
+    }
+
+    /**
      * 从配置加载渠道
      */
     async loadChannels() {
         const channels = config.get('channels') || []
 
         for (const channelConfig of channels) {
-            const normalizedUrl = normalizeBaseUrl(channelConfig.baseUrl, channelConfig.adapterType)
+            // 兼容旧格式：单个baseUrl转换为数组
+            let baseUrls = channelConfig.baseUrls || []
+            if (!Array.isArray(baseUrls) && channelConfig.baseUrl) {
+                baseUrls = [channelConfig.baseUrl]
+            }
+            if (baseUrls.length === 0) {
+                baseUrls = [DEFAULT_BASE_URLS[channelConfig.adapterType] || '']
+            }
+
+            // 规范化所有baseUrl
+            const normalizedUrls = baseUrls
+                .map(url => normalizeSingleBaseUrl(url, channelConfig.adapterType))
+                .filter(Boolean)
+
+            // 加载baseUrl延迟测试结果
+            const baseUrlLatencies = channelConfig.baseUrlLatencies || {}
+            const selectedBaseUrlIndex =
+                channelConfig.selectedBaseUrlIndex !== undefined
+                    ? channelConfig.selectedBaseUrlIndex
+                    : normalizedUrls.length > 0
+                      ? 0
+                      : null
 
             this.channels.set(channelConfig.id, {
                 ...channelConfig,
-                baseUrl: normalizedUrl,
+                baseUrl: normalizedUrls[selectedBaseUrlIndex] || normalizedUrls[0] || '', // 兼容旧代码
+                baseUrls: normalizedUrls, // 多baseUrl数组
+                baseUrlLatencies: baseUrlLatencies, // 延迟测试结果 { url: latency }
+                selectedBaseUrlIndex: selectedBaseUrlIndex, // 当前选中的baseUrl索引
                 // 规范化高级配置，确保新增字段有默认值
                 advanced: this.normalizeAdvanced(channelConfig.advanced),
                 status: channelConfig.status || ChannelStatus.IDLE,
@@ -256,14 +522,55 @@ export class ChannelManager {
     async create(channelData) {
         const id = channelData.id || `${channelData.adapterType}-${crypto.randomBytes(4).toString('hex')}`
 
-        // 规范化 baseUrl
-        const normalizedUrl = normalizeBaseUrl(channelData.baseUrl, channelData.adapterType)
+        // 处理baseUrl：支持单个或数组
+        let baseUrls = channelData.baseUrls || []
+        if (!Array.isArray(baseUrls) && channelData.baseUrl) {
+            baseUrls = [channelData.baseUrl]
+        }
+        if (baseUrls.length === 0) {
+            baseUrls = [DEFAULT_BASE_URLS[channelData.adapterType] || '']
+        }
+
+        // 规范化所有baseUrl
+        const normalizedUrls = baseUrls.map(url => normalizeSingleBaseUrl(url, channelData.adapterType)).filter(Boolean)
+
+        // 自动测试延迟并选择最优的
+        let selectedIndex = 0
+        let baseUrlLatencies = {}
+        if (normalizedUrls.length > 1) {
+            try {
+                // 创建临时渠道对象用于测试
+                const tempChannel = { baseUrls: normalizedUrls, adapterType: channelData.adapterType }
+                const testResults = await Promise.allSettled(normalizedUrls.map(url => this.testBaseUrlLatency(url)))
+
+                const validResults = []
+                for (let i = 0; i < normalizedUrls.length; i++) {
+                    const result = testResults[i]
+                    if (result.status === 'fulfilled' && result.value.success) {
+                        baseUrlLatencies[normalizedUrls[i]] = result.value.latency
+                        validResults.push({ index: i, latency: result.value.latency })
+                    } else {
+                        baseUrlLatencies[normalizedUrls[i]] = Infinity
+                    }
+                }
+
+                if (validResults.length > 0) {
+                    validResults.sort((a, b) => a.latency - b.latency)
+                    selectedIndex = validResults[0].index
+                }
+            } catch (error) {
+                logger.warn(`[ChannelManager] 创建渠道时测试baseUrl延迟失败: ${error.message}`)
+            }
+        }
 
         const channel = {
             id,
             name: channelData.name,
             adapterType: channelData.adapterType,
-            baseUrl: normalizedUrl,
+            baseUrl: normalizedUrls[selectedIndex] || normalizedUrls[0] || '', // 兼容旧代码
+            baseUrls: normalizedUrls, // 多baseUrl数组
+            baseUrlLatencies: baseUrlLatencies, // 延迟测试结果
+            selectedBaseUrlIndex: selectedIndex, // 当前选中的baseUrl索引
             apiKey: channelData.apiKey,
             models: channelData.models || [],
             priority: channelData.priority || 100,
@@ -356,6 +663,9 @@ export class ChannelManager {
             'name',
             'adapterType',
             'baseUrl',
+            'baseUrls',
+            'baseUrlLatencies',
+            'selectedBaseUrlIndex',
             'apiKey',
             'apiKeys',
             'strategy',
@@ -379,10 +689,25 @@ export class ChannelManager {
         ]
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
-                // 规范化 baseUrl
-                if (field === 'baseUrl') {
+                // 处理baseUrls更新
+                if (field === 'baseUrls') {
                     const adapterType = updates.adapterType || channel.adapterType
-                    channel[field] = normalizeBaseUrl(updates[field], adapterType)
+                    const baseUrls = Array.isArray(updates.baseUrls) ? updates.baseUrls : [updates.baseUrls]
+                    channel.baseUrls = baseUrls.map(url => normalizeSingleBaseUrl(url, adapterType)).filter(Boolean)
+                    // 更新baseUrl为第一个（兼容旧代码）
+                    channel.baseUrl = channel.baseUrls[0] || ''
+                    // 清除延迟测试结果，需要重新测试
+                    channel.baseUrlLatencies = {}
+                    channel.selectedBaseUrlIndex = 0
+                } else if (field === 'baseUrl') {
+                    // 兼容旧格式：单个baseUrl转换为数组
+                    const adapterType = updates.adapterType || channel.adapterType
+                    const normalizedUrl = normalizeSingleBaseUrl(updates.baseUrl, adapterType)
+                    channel.baseUrl = normalizedUrl
+                    if (!channel.baseUrls || channel.baseUrls.length === 0) {
+                        channel.baseUrls = [normalizedUrl]
+                        channel.selectedBaseUrlIndex = 0
+                    }
                 } else {
                     channel[field] = updates[field]
                 }
@@ -390,7 +715,7 @@ export class ChannelManager {
         }
 
         // 如果凭据或适配器类型变更，清除模型缓存
-        if (updates.apiKey || updates.baseUrl || updates.apiKeys || updates.adapterType) {
+        if (updates.apiKey || updates.baseUrl || updates.baseUrls || updates.apiKeys || updates.adapterType) {
             channel.modelsCached = false
             channel.status = undefined // Reset status when config changes
             await redisClient.del(`models:${id}`)
@@ -481,16 +806,40 @@ export class ChannelManager {
      */
     async fetchOpenAIModels(channel) {
         const OpenAI = (await import('openai')).default
-        const openai = new OpenAI({
+        // 使用当前选中的baseUrl
+        const currentBaseUrl =
+            channel.baseUrls && channel.baseUrls.length > 0
+                ? channel.baseUrls[channel.selectedBaseUrlIndex] || channel.baseUrls[0]
+                : channel.baseUrl
+
+        // 支持自定义模型列表端点
+        const customModelsPath = channel.endpoints?.models || channel.modelsPath
+        const clientOptions = {
             apiKey: channel.apiKey,
-            baseURL: channel.baseUrl,
+            baseURL: currentBaseUrl,
             defaultHeaders: {
                 'User-Agent':
                     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 Accept: 'application/json, text/plain, */*',
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
             }
-        })
+        }
+
+        // 如果配置了自定义模型列表端点，使用自定义fetch
+        if (customModelsPath) {
+            const baseUrlClean = currentBaseUrl?.replace(/\/+$/, '') || ''
+            const modelsEndpoint = customModelsPath.startsWith('/') ? customModelsPath : '/' + customModelsPath
+            clientOptions.fetch = async (url, init) => {
+                let newUrl = url.toString()
+                if (newUrl.includes('/models')) {
+                    newUrl = baseUrlClean + modelsEndpoint
+                    logger.debug(`[ChannelManager] 使用自定义模型列表端点: ${newUrl}`)
+                }
+                return fetch(newUrl, init)
+            }
+        }
+
+        const openai = new OpenAI(clientOptions)
 
         const modelsList = await openai.models.list()
         const models = modelsList.data.map(m => m.id).sort()
@@ -741,10 +1090,15 @@ export class ChannelManager {
                     logger.info(`[ChannelManager] 健康检查模型重定向: ${testModel} -> ${actualModel}`)
                 }
 
+                // 使用当前选中的baseUrl
+                const currentBaseUrl = this.getCurrentBaseUrl(id) || channel.baseUrl
+
                 const client = new OpenAIClient({
                     apiKey: apiKey,
-                    baseUrl: channel.baseUrl,
-                    chatPath: channel.chatPath, // 自定义对话路径
+                    baseUrl: currentBaseUrl,
+                    chatPath: channel.chatPath, // 自定义对话路径（兼容旧格式）
+                    modelsPath: channel.modelsPath, // 自定义模型列表路径（兼容旧格式）
+                    endpoints: channel.endpoints || {}, // 自定义端点配置
                     imageConfig: channel.imageConfig || {},
                     features: ['chat'],
                     tools: []
@@ -819,9 +1173,14 @@ export class ChannelManager {
             } else if (channel.adapterType === 'gemini') {
                 // Gemini 测试
                 const { GeminiClient } = await import('../core/adapters/index.js')
+                const currentBaseUrl = this.getCurrentBaseUrl(id) || channel.baseUrl
+
                 const client = new GeminiClient({
                     apiKey: this.getChannelKey(channel).key,
-                    baseUrl: channel.baseUrl,
+                    baseUrl: currentBaseUrl,
+                    chatPath: channel.chatPath, // 自定义对话路径（兼容旧格式）
+                    modelsPath: channel.modelsPath, // 自定义模型列表路径（兼容旧格式）
+                    endpoints: channel.endpoints || {}, // 自定义端点配置
                     imageConfig: channel.imageConfig || {},
                     features: ['chat'],
                     tools: []
@@ -873,9 +1232,13 @@ export class ChannelManager {
             } else if (channel.adapterType === 'claude') {
                 // Claude 测试
                 const { ClaudeClient } = await import('../core/adapters/index.js')
+                const currentBaseUrl = this.getCurrentBaseUrl(id) || channel.baseUrl
+
                 const client = new ClaudeClient({
                     apiKey: this.getChannelKey(channel).key,
-                    baseUrl: channel.baseUrl,
+                    baseUrl: currentBaseUrl,
+                    chatPath: channel.chatPath, // 自定义对话路径（兼容旧格式）
+                    endpoints: channel.endpoints || {}, // 自定义端点配置
                     imageConfig: channel.imageConfig || {},
                     features: ['chat'],
                     tools: []
@@ -1437,15 +1800,23 @@ export class ChannelManager {
      * @param {number} options.retryDelay - 重试延迟(ms)，默认1000
      * @param {boolean} options.switchChannel - 是否尝试切换渠道，默认true
      * @param {boolean} options.switchKey - 是否尝试切换同渠道的Key，默认true
+     * @param {boolean} options.switchBaseUrl - 是否尝试切换baseUrl，默认true
      * @returns {Promise<{success: boolean, result?: any, error?: string, attempts: number, channelsUsed: string[]}>}
      */
     async withRetry(model, executor, options = {}) {
-        const { maxRetries = 3, retryDelay = 1000, switchChannel = true, switchKey = true } = options
+        const {
+            maxRetries = 3,
+            retryDelay = 1000,
+            switchChannel = true,
+            switchKey = true,
+            switchBaseUrl = true
+        } = options
 
         let attempts = 0
         let lastError = null
         const channelsUsed = []
         const triedChannels = new Set()
+        const triedBaseUrls = new Map() // channelId -> Set<baseUrlIndex>
 
         // 获取初始渠道
         let currentChannel = this.getBestChannel(model)
@@ -1458,6 +1829,14 @@ export class ChannelManager {
             }
         }
 
+        // 获取当前使用的baseUrl索引
+        let currentBaseUrlIndex =
+            currentChannel.selectedBaseUrlIndex !== undefined
+                ? currentChannel.selectedBaseUrlIndex
+                : currentChannel.baseUrls?.length > 0
+                  ? 0
+                  : null
+
         while (attempts < maxRetries) {
             attempts++
             channelsUsed.push(currentChannel.id)
@@ -1466,10 +1845,20 @@ export class ChannelManager {
             // 获取当前渠道的Key信息
             const keyInfo = this.getChannelKey(currentChannel)
 
+            // 确保使用正确的baseUrl
+            if (currentChannel.baseUrls && currentChannel.baseUrls.length > 0) {
+                const currentBaseUrl = this.getCurrentBaseUrl(currentChannel.id)
+                if (currentBaseUrl !== currentChannel.baseUrl) {
+                    currentChannel.baseUrl = currentBaseUrl
+                }
+            }
+
             try {
                 this.startRequest(currentChannel.id)
 
-                logger.debug(`[ChannelManager] 执行请求: 渠道=${currentChannel.name}, 尝试=${attempts}/${maxRetries}`)
+                logger.debug(
+                    `[ChannelManager] 执行请求: 渠道=${currentChannel.name}, baseUrl=${currentChannel.baseUrl}, 尝试=${attempts}/${maxRetries}`
+                )
 
                 const result = await executor(currentChannel, keyInfo)
 
@@ -1490,7 +1879,7 @@ export class ChannelManager {
                 // 分析错误类型
                 const errorType = this.classifyError(error)
                 logger.warn(
-                    `[ChannelManager] 请求失败: 渠道=${currentChannel.name}, 类型=${errorType}, 错误=${error.message}`
+                    `[ChannelManager] 请求失败: 渠道=${currentChannel.name}, baseUrl=${currentChannel.baseUrl}, 类型=${errorType}, 错误=${error.message}`
                 )
 
                 // 报告错误
@@ -1509,8 +1898,34 @@ export class ChannelManager {
                 // 尝试切换策略
                 let switched = false
 
-                // 1. 先尝试同渠道切换Key
-                if (switchKey && currentChannel.apiKeys?.length > 1) {
+                // 1. 先尝试切换baseUrl（如果是网络错误）
+                if (switchBaseUrl && currentChannel.baseUrls && currentChannel.baseUrls.length > 1) {
+                    if (!triedBaseUrls.has(currentChannel.id)) {
+                        triedBaseUrls.set(currentChannel.id, new Set())
+                    }
+                    const triedIndices = triedBaseUrls.get(currentChannel.id)
+
+                    // 尝试下一个未使用过的baseUrl
+                    for (let i = 0; i < currentChannel.baseUrls.length; i++) {
+                        const nextIndex = (currentBaseUrlIndex + i + 1) % currentChannel.baseUrls.length
+                        if (!triedIndices.has(nextIndex)) {
+                            const nextBaseUrl = this.switchToNextBaseUrl(currentChannel.id, currentBaseUrlIndex)
+                            if (nextBaseUrl) {
+                                triedIndices.add(nextIndex)
+                                currentBaseUrlIndex = nextIndex
+                                currentChannel.baseUrl = nextBaseUrl
+                                logger.info(
+                                    `[ChannelManager] 切换baseUrl: ${currentChannel.name} -> ${nextBaseUrl} (索引: ${nextIndex})`
+                                )
+                                switched = true
+                                break
+                            }
+                        }
+                    }
+                }
+
+                // 2. baseUrl切换失败，尝试同渠道切换Key
+                if (!switched && switchKey && currentChannel.apiKeys?.length > 1) {
                     const nextKey = this.getNextAvailableKey(currentChannel.id, keyInfo.keyIndex)
                     if (nextKey) {
                         logger.info(
@@ -1521,7 +1936,7 @@ export class ChannelManager {
                     }
                 }
 
-                // 2. Key切换失败，尝试切换渠道
+                // 3. Key切换失败，尝试切换渠道
                 if (!switched && switchChannel) {
                     const fallbackChannels = this.getAvailableChannels(model, {
                         excludeChannelId: currentChannel.id
@@ -1531,13 +1946,19 @@ export class ChannelManager {
                         const nextChannel = fallbackChannels[0]
                         logger.info(`[ChannelManager] 切换渠道: ${currentChannel.name} -> ${nextChannel.name}`)
                         currentChannel = nextChannel
+                        currentBaseUrlIndex =
+                            nextChannel.selectedBaseUrlIndex !== undefined
+                                ? nextChannel.selectedBaseUrlIndex
+                                : nextChannel.baseUrls?.length > 0
+                                  ? 0
+                                  : null
                         switched = true
                     }
                 }
 
-                // 3. 都无法切换，延迟后重试当前渠道
+                // 4. 都无法切换，延迟后重试当前渠道
                 if (!switched) {
-                    logger.debug(`[ChannelManager] 无可切换渠道，延迟${retryDelay}ms后重试`)
+                    logger.debug(`[ChannelManager] 无可切换选项，延迟${retryDelay}ms后重试`)
                 }
 
                 // 延迟重试
@@ -1645,7 +2066,10 @@ export class ChannelManager {
                 id: ch.id,
                 name: ch.name,
                 adapterType: ch.adapterType,
-                baseUrl: ch.baseUrl,
+                baseUrl: ch.baseUrl, // 保留兼容性
+                baseUrls: ch.baseUrls || (ch.baseUrl ? [ch.baseUrl] : []), // 多baseUrl数组
+                baseUrlLatencies: ch.baseUrlLatencies || {}, // 延迟测试结果
+                selectedBaseUrlIndex: ch.selectedBaseUrlIndex !== undefined ? ch.selectedBaseUrlIndex : 0, // 选中的索引
                 apiKey: ch.apiKey,
                 models: ch.models,
                 priority: ch.priority,

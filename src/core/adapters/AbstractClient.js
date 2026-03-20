@@ -1242,8 +1242,9 @@ export class AbstractClient {
         this.features = options.features || []
         this.tools = options.tools || []
         this.baseUrl = options.baseUrl || ''
-        this.chatPath = options.chatPath || '' // 自定义对话接口路径
-        this.modelsPath = options.modelsPath || '' // 自定义模型列表路径
+        this.chatPath = options.chatPath || '' // 自定义对话接口路径（兼容旧格式）
+        this.modelsPath = options.modelsPath || '' // 自定义模型列表路径（兼容旧格式）
+        this.endpoints = options.endpoints || {} // 自定义端点配置 { chat, models, embeddings, images }
         this.apiKey = options.apiKey || ''
         this.multipleKeyStrategy = options.multipleKeyStrategy || MultipleKeyStrategyChoice.RANDOM
         this.logger = options.logger || DefaultLogger

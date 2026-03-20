@@ -282,6 +282,61 @@ router.post('/test', async (req, res) => {
     }
 })
 
+// POST /api/channels/:id/test-baseurls - 测试渠道的所有baseUrl延迟
+router.post('/:id/test-baseurls', async (req, res) => {
+    try {
+        await channelManager.init()
+        const { id } = req.params
+        const { forceRetest = false } = req.body
+
+        const result = await channelManager.testAndSelectBestBaseUrl(id, { forceRetest })
+
+        res.json(
+            ApiResponse.ok({
+                selectedIndex: result.selectedIndex,
+                selectedUrl: result.selectedUrl,
+                latencies: result.latencies,
+                message: `测试完成，已选择最优baseUrl: ${result.selectedUrl} (延迟: ${result.latencies[result.selectedUrl]}ms)`
+            })
+        )
+    } catch (error) {
+        res.status(500).json(ApiResponse.fail(null, error.message))
+    }
+})
+
+// PUT /api/channels/:id/select-baseurl - 手动选择baseUrl
+router.put('/:id/select-baseurl', async (req, res) => {
+    try {
+        await channelManager.init()
+        const { id } = req.params
+        const { index } = req.body
+
+        const channel = channelManager.get(id)
+        if (!channel) {
+            return res.status(404).json(ApiResponse.fail(null, 'Channel not found'))
+        }
+
+        const baseUrls = channel.baseUrls || []
+        if (index < 0 || index >= baseUrls.length) {
+            return res.status(400).json(ApiResponse.fail(null, 'Invalid baseUrl index'))
+        }
+
+        channel.selectedBaseUrlIndex = index
+        channel.baseUrl = baseUrls[index]
+        await channelManager.saveToConfig()
+
+        res.json(
+            ApiResponse.ok({
+                selectedIndex: index,
+                selectedUrl: baseUrls[index],
+                message: `已切换到baseUrl: ${baseUrls[index]}`
+            })
+        )
+    } catch (error) {
+        res.status(500).json(ApiResponse.fail(null, error.message))
+    }
+})
+
 // POST /api/channels/fetch-models
 router.post('/fetch-models', async (req, res) => {
     let { adapterType, baseUrl, apiKey, modelsPath } = req.body

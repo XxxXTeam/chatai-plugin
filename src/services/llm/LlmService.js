@@ -43,7 +43,7 @@ export class LlmService {
         // 从渠道管理器加载配置
         await channelManager.init()
 
-        let apiKey, baseUrl, ClientClass, adapterType, chatPath, modelsPath
+        let apiKey, baseUrl, ClientClass, adapterType, chatPath, modelsPath, endpoints
 
         // 优先使用传入的选项
         if (options.apiKey && options.baseUrl) {
@@ -64,10 +64,12 @@ export class LlmService {
 
             const keyInfo = channelManager.getChannelKey(channel)
             apiKey = keyInfo.key
-            baseUrl = channel.baseUrl
+            // 使用getCurrentBaseUrl确保获取最优的baseUrl
+            baseUrl = channelManager.getCurrentBaseUrl(channel.id) || channel.baseUrl
             adapterType = channel.adapterType || 'openai'
-            chatPath = channel.chatPath || ''
-            modelsPath = channel.modelsPath || ''
+            chatPath = channel.chatPath || '' // 兼容旧格式
+            modelsPath = channel.modelsPath || '' // 兼容旧格式
+            endpoints = channel.endpoints || {} // 自定义端点配置
             // 自动选择渠道时，从渠道获取 imageConfig（调用方未显式传入的场景）
             if (!options.imageConfig && channel.imageConfig) {
                 options.imageConfig = channel.imageConfig
@@ -141,8 +143,9 @@ export class LlmService {
         const clientConfig = {
             apiKey,
             baseUrl,
-            chatPath, // 自定义对话路径
-            modelsPath, // 自定义模型列表路径
+            chatPath, // 自定义对话路径（兼容旧格式）
+            modelsPath, // 自定义模型列表路径（兼容旧格式）
+            endpoints: endpoints || {}, // 自定义端点配置 { chat, models, embeddings, images }
             features: ['chat'],
             tools,
             enableReasoning,

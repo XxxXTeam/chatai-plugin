@@ -275,19 +275,103 @@ class Config {
                 allowDangerous: false
             },
             /*
-             * 渠道列表，每个渠道的 advanced 配置结构：
+             * 渠道列表，每个渠道的配置结构：
              * {
-             *   streaming: { enabled: false, chunkSize: 1024 },
-             *   thinking: { enableReasoning: false, defaultLevel: 'medium', adaptThinking: true, sendThinkingAsMessage: false },
-             *   llm: {
-             *     temperature: 0.7,
-             *     maxTokens: 4000,
-             *     topP: 1,
-             *     frequencyPenalty: 0,
-             *     presencePenalty: 0,
-             *     maxCharacters: 0  // 字符上限，0 = 不限制，超出上限时从最旧的历史消息开始清理
-             *   }
+             *   id: string,                    // 渠道ID（唯一标识）
+             *   name: string,                   // 渠道名称
+             *   adapterType: string,            // 适配器类型: 'openai' | 'claude' | 'gemini'
+             *   baseUrl: string,                // 单个Base URL（兼容旧格式）
+             *   baseUrls: string[],             // 多个Base URL数组（支持自动选择最优延迟）
+             *   baseUrlLatencies: object,       // Base URL延迟测试结果 { url: latency(ms) }
+             *   selectedBaseUrlIndex: number,    // 当前选中的Base URL索引
+             *   apiKey: string,                 // API密钥
+             *   apiKeys: array,                 // 多API Key配置（支持轮询策略）
+             *   strategy: string,               // API Key轮询策略: 'round-robin' | 'random' | 'weighted' | 'least-used' | 'failover'
+             *   models: string[],               // 支持的模型列表
+             *   enabled: boolean,               // 是否启用
+             *   priority: number,               // 优先级（数字越小优先级越高）
+             *   chatPath: string,               // 自定义对话接口路径（兼容旧格式，如 '/chat/completions'）
+             *   modelsPath: string,              // 自定义模型列表路径（兼容旧格式，如 '/models'）
+             *   endpoints: {                    // 自定义端点配置（优先使用，覆盖chatPath/modelsPath）
+             *     chat: string,                  // 对话端点，如 '/chat/completions' 或 '/v1/chat'
+             *     models: string,                // 模型列表端点，如 '/models' 或 '/v1/models'
+             *     embeddings: string,            // 嵌入端点，如 '/embeddings' 或 '/v1/embeddings'
+             *     images: string                 // 图像生成端点，如 '/images/generations' 或 '/v1/images'
+             *   },
+             *   customHeaders: object,          // 自定义请求头
+             *   headersTemplate: string,        // 请求头JSON模板（支持占位符）
+             *   requestBodyTemplate: string,    // 请求体JSON模板（支持占位符）
+             *   auth: {                         // 认证方式配置
+             *     type: string,                 // 认证类型: 'bearer' | 'api-key' | 'custom'
+             *     headerName: string,           // 自定义认证头名称
+             *     prefix: string                 // 认证值前缀
+             *   },
+             *   imageConfig: {                  // 图片处理配置
+             *     transferMode: string,         // 图片传递方式: 'base64' | 'url' | 'auto'
+             *     convertFormat: boolean,       // 是否转换图片格式
+             *     targetFormat: string,         // 目标格式: 'png' | 'jpeg' | 'auto'
+             *     compress: boolean,            // 是否压缩图片
+             *     quality: number,              // 压缩质量 (0-100)
+             *     maxSize: number,              // 最大尺寸（像素）
+             *     processAnimated: boolean       // 是否处理动图
+             *   },
+             *   timeout: {                      // 超时配置
+             *     connect: number,              // 连接超时（毫秒）
+             *     read: number                  // 读取超时（毫秒）
+             *   },
+             *   retry: {                        // 重试配置
+             *     maxAttempts: number,          // 最大重试次数
+             *     delay: number,                // 重试延迟（毫秒）
+             *     backoff: string               // 退避策略: 'exponential' | 'linear' | 'fixed'
+             *   },
+             *   quota: {                        // 配额配置
+             *     daily: number,                // 每日配额（0=无限制）
+             *     hourly: number,               // 每小时配额（0=无限制）
+             *     perMinute: number             // 每分钟配额（0=无限制）
+             *   },
+             *   weight: number,                 // 负载均衡权重 (1-100)
+             *   overrides: {                   // 参数覆盖配置
+             *     temperature: number,          // 温度覆盖
+             *     maxTokens: number,            // 最大token覆盖
+             *     modelMapping: object,        // 模型映射 { "requested": "actual" }
+             *     systemPromptPrefix: string,   // 系统提示前缀
+             *     systemPromptSuffix: string    // 系统提示后缀
+             *   },
+             *   advanced: {                     // 高级配置
+             *     streaming: { enabled: false, chunkSize: 1024 },
+             *     thinking: {
+             *       enableReasoning: false,
+             *       defaultLevel: 'medium',
+             *       adaptThinking: true,
+             *       sendThinkingAsMessage: false,
+             *       vendorThinkingControl: 'auto'  // 'auto' | 'off' | 'glm'
+             *     },
+             *     llm: {
+             *       temperature: 0.7,
+             *       maxTokens: 4000,
+             *       topP: 1,
+             *       frequencyPenalty: 0,
+             *       presencePenalty: 0,
+             *       maxCharacters: 0  // 字符上限，0 = 不限制，超出上限时从最旧的历史消息开始清理
+             *     }
+             *   },
+             *   status: string,                 // 渠道状态: 'idle' | 'active' | 'error' | 'disabled' | 'quota_exceeded'
+             *   lastHealthCheck: number,        // 最后健康检查时间戳
+             *   testedAt: number,              // 最后测试时间戳
+             *   errorCount: number,             // 错误计数
+             *   lastErrorTime: number           // 最后错误时间戳
              * }
+             *
+             * 多Base URL配置说明：
+             * - baseUrls: 支持配置多个Base URL，系统会自动测试延迟并选择最优的
+             * - baseUrlLatencies: 延迟测试结果，格式为 { "url": latency(ms) }
+             * - selectedBaseUrlIndex: 当前选中的Base URL索引（自动选择或手动指定）
+             * - 当第一个Base URL不可用时，系统会自动切换到下一个Base URL
+             *
+             * 自定义端点配置说明：
+             * - endpoints: 优先使用此配置，支持自定义所有API端点
+             * - chatPath/modelsPath: 兼容旧格式，如果未配置endpoints则使用此配置
+             * - 如果都未配置，则使用适配器默认端点
              */
             channels: [],
             mcp: {

@@ -271,14 +271,39 @@ export class OpenAIClient extends AbstractClient {
             clientOptions.httpAgent = channelProxy
             logger.debug('[OpenAI适配器] 使用代理:', proxyService.getProfileForScope('channel')?.name)
         }
-        if (this.chatPath) {
-            const customChatPath = this.chatPath
+        // 支持自定义端点配置（优先使用endpoints.chat，其次使用chatPath兼容旧格式）
+        const customChatPath = this.endpoints?.chat || this.chatPath
+        if (customChatPath) {
             const originalBaseUrl = this.baseUrl?.replace(/\/+$/, '') || ''
             clientOptions.fetch = async (url, init) => {
                 let newUrl = url.toString()
+                // 替换聊天端点
                 if (newUrl.includes('/chat/completions')) {
-                    newUrl = originalBaseUrl + customChatPath
-                    logger.debug(`[OpenAI适配器] 使用自定义对话路径: ${newUrl}`)
+                    newUrl = originalBaseUrl + (customChatPath.startsWith('/') ? customChatPath : '/' + customChatPath)
+                    logger.debug(`[OpenAI适配器] 使用自定义对话端点: ${newUrl}`)
+                }
+                // 替换模型列表端点
+                const customModelsPath = this.endpoints?.models || this.modelsPath
+                if (customModelsPath && newUrl.includes('/models')) {
+                    newUrl =
+                        originalBaseUrl + (customModelsPath.startsWith('/') ? customModelsPath : '/' + customModelsPath)
+                    logger.debug(`[OpenAI适配器] 使用自定义模型列表端点: ${newUrl}`)
+                }
+                // 替换嵌入端点
+                if (this.endpoints?.embeddings && newUrl.includes('/embeddings')) {
+                    newUrl =
+                        originalBaseUrl +
+                        (this.endpoints.embeddings.startsWith('/')
+                            ? this.endpoints.embeddings
+                            : '/' + this.endpoints.embeddings)
+                    logger.debug(`[OpenAI适配器] 使用自定义嵌入端点: ${newUrl}`)
+                }
+                // 替换图像生成端点
+                if (this.endpoints?.images && newUrl.includes('/images/generations')) {
+                    newUrl =
+                        originalBaseUrl +
+                        (this.endpoints.images.startsWith('/') ? this.endpoints.images : '/' + this.endpoints.images)
+                    logger.debug(`[OpenAI适配器] 使用自定义图像生成端点: ${newUrl}`)
                 }
                 return fetch(newUrl, init)
             }
