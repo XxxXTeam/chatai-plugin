@@ -36,8 +36,9 @@ export class LlmService {
         const enableTools = options.enableTools !== false
 
         // 使用传入的选项，不再读取全局thinking配置
-        const enableReasoning = options.enableReasoning || false
-        const reasoningEffort = options.reasoningEffort || 'low'
+        let enableReasoning = options.enableReasoning || false
+        let reasoningEffort = options.reasoningEffort || 'low'
+        let thinkingVendorControl = options.thinkingVendorControl
 
         // 从渠道管理器加载配置
         await channelManager.init()
@@ -71,7 +72,13 @@ export class LlmService {
             if (!options.imageConfig && channel.imageConfig) {
                 options.imageConfig = channel.imageConfig
             }
+            const chThinking = channel.advanced?.thinking
+            if (thinkingVendorControl === undefined && chThinking?.vendorThinkingControl !== undefined) {
+                thinkingVendorControl = chThinking.vendorThinkingControl
+            }
         }
+
+        thinkingVendorControl = thinkingVendorControl ?? 'auto'
 
         /*
          * 根据适配器类型选择客户端类
@@ -139,7 +146,8 @@ export class LlmService {
             features: ['chat'],
             tools,
             enableReasoning,
-            reasoningEffort
+            reasoningEffort,
+            thinkingVendorControl
         }
 
         // 传递图片处理配置

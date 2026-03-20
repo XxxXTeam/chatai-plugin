@@ -12,6 +12,7 @@ import {
     validateParams,
     paramError,
     getBotPermission,
+    getGroupMemberRoleFromBot,
     isToolResultError,
     permissionDeniedError,
     toolDisabledError
@@ -1348,54 +1349,12 @@ export class BuiltinMcpServer {
      * @returns {Promise<'owner'|'admin'|'member'|'unknown'>}
      */
     async getGroupMemberRole(bot, groupId, userId) {
-        if (!bot || !groupId || !userId) return 'unknown'
-
-        const gid = parseInt(groupId)
-        const uid = parseInt(userId)
-
         try {
-            // 方式1: 从群列表缓存获取群主信息
-            const groupInfo = bot.gl?.get(gid)
-            if (groupInfo?.owner_id === uid) {
-                return 'owner'
-            }
-
-            // 方式2: 通过 pickGroup 获取成员信息
-            if (bot.pickGroup) {
-                try {
-                    const group = bot.pickGroup(gid)
-                    const memberInfo = group?.pickMember?.(uid)?.info
-                    if (memberInfo?.role) {
-                        return memberInfo.role
-                    }
-                    // 检查管理员列表
-                    const admins = group?.admin_list || []
-                    if (admins.includes(uid)) {
-                        return 'admin'
-                    }
-                } catch (e) {
-                    // 忽略
-                }
-            }
-
-            // 方式3: OneBot API
-            if (bot.sendApi) {
-                try {
-                    const info = await bot.sendApi('get_group_member_info', {
-                        group_id: gid,
-                        user_id: uid
-                    })
-                    const role = info?.data?.role || info?.role
-                    if (role) return role
-                } catch (e) {
-                    // 忽略
-                }
-            }
+            return await getGroupMemberRoleFromBot(bot, groupId, userId)
         } catch (e) {
             logger.debug(`[BuiltinMCP] getGroupMemberRole error: ${e.message}`)
+            return 'member'
         }
-
-        return 'member' // 默认返回普通成员
     }
 
     /**

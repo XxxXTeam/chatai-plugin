@@ -17,6 +17,7 @@
  * @property {boolean} [isThinkingModel]
  * @property {boolean} [enableReasoning]
  * @property {'high' | 'medium' | 'low' | 'minimal'} [reasoningEffort]
+ * @property {'auto' | 'off' | 'glm'} [thinkingVendorControl] - BigModel/智谱等需在 body 中传 thinking.type 时的策略
  * @property {number} [reasoningBudgetTokens]
  * @property {ToolChoice} [toolChoice]
  * @property {string[]} [postProcessorIds]
@@ -93,6 +94,7 @@ export class SendMessageOption {
             isThinkingModel: this.isThinkingModel,
             enableReasoning: this.enableReasoning,
             reasoningEffort: this.reasoningEffort,
+            thinkingVendorControl: this.thinkingVendorControl,
             reasoningBudgetTokens: this.reasoningBudgetTokens,
             toolChoice: this.toolChoice,
             preProcessorIds: this.preProcessorIds,

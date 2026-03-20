@@ -2105,6 +2105,136 @@ export const qqWebApi = {
 }
 
 /**
+ * 将 OneBot get_group_member_info 返回的 role 规范为 owner/admin/member
+ * @param {string|number} role
+ * @returns {'owner'|'admin'|'member'}
+ */
+export function normalizeMemberRole(role) {
+    if (role === undefined || role === null) return 'member'
+    if (typeof role === 'string') {
+        const r = role.trim().toLowerCase()
+        if (r === 'administrator') return 'admin'
+        if (r === 'owner' || r === 'admin' || r === 'member') return r
+    }
+    return 'member'
+}
+
+/**
+ * 解析 OneBot get_group_member_info 响应
+ * @param {Object} info - sendApi 返回值
+ * @returns {{ role: 'owner'|'admin'|'member' }|null}
+ */
+function parseOneBotGetGroupMemberInfo(info) {
+    if (!info || info.status === 'failed') return null
+    const retcode = info.retcode ?? info.retCode
+    if (retcode !== undefined && retcode !== 0) return null
+    const roleRaw = info.data?.role ?? info.role
+    if (roleRaw === undefined || roleRaw === null) return null
+    return { role: normalizeMemberRole(roleRaw) }
+}
+
+/**
+ * 从 icqq Map 中按 QQ 号取成员（兼容 number / string key）
+ * @param {Map|undefined} memberMap
+ * @param {number} uid
+ * @returns {object|undefined}
+ */
+function getMemberFromIcqqMap(memberMap, uid) {
+    if (!memberMap || typeof memberMap.get !== 'function') return undefined
+    return memberMap.get(uid) ?? memberMap.get(String(uid)) ?? memberMap.get(Number(uid))
+}
+
+/**
+ * icqq：通过 getMemberMap 拉取成员身份（优先于 gl / 同步 pickMember.info）
+ * @returns {Promise<'owner'|'admin'|'member'|null>}
+ */
+async function getIcqqMemberRoleFromMemberMap(bot, groupId, userId) {
+    if (!bot?.pickGroup) return null
+    const gid = parseInt(groupId, 10)
+    const uid = parseInt(userId, 10)
+    if (Number.isNaN(gid) || Number.isNaN(uid)) return null
+    try {
+        const group = bot.pickGroup(gid)
+        if (!group?.getMemberMap) return null
+        const memberMap = await group.getMemberMap()
+        const memberData = getMemberFromIcqqMap(memberMap, uid)
+        if (!memberData) return null
+        const roleRaw = memberData.role
+        if (roleRaw === undefined || roleRaw === null) return null
+        return normalizeMemberRole(roleRaw)
+    } catch (e) {
+        logger.debug(`[helpers] getIcqqMemberRoleFromMemberMap: ${e.message}`)
+        return null
+    }
+}
+
+/**
+ * 将 icqq 解析出的角色写入 getBotPermission 结果对象
+ * @param {object} result
+ * @param {'owner'|'admin'|'member'} role
+ */
+function applyRoleToBotPermissionResult(result, role) {
+    result.inGroup = true
+    result.role = role
+    result.isOwner = role === 'owner'
+    result.isAdmin = role === 'owner' || role === 'admin'
+}
+
+/**
+ * 获取群成员角色（优先 OneBot API，避免 gl 缓存不准）
+ * @param {Object} bot
+ * @param {number|string} groupId
+ * @param {number|string} userId
+ * @returns {Promise<'owner'|'admin'|'member'|'unknown'>}
+ */
+export async function getGroupMemberRoleFromBot(bot, groupId, userId) {
+    if (!bot || groupId == null || userId == null) return 'unknown'
+    const gid = parseInt(groupId, 10)
+    const uid = parseInt(userId, 10)
+    if (Number.isNaN(gid) || Number.isNaN(uid)) return 'unknown'
+
+    try {
+        if (bot.sendApi) {
+            try {
+                const info = await bot.sendApi('get_group_member_info', {
+                    group_id: gid,
+                    user_id: uid
+                })
+                const parsed = parseOneBotGetGroupMemberInfo(info)
+                if (parsed) return parsed.role
+            } catch (e) {
+                logger.debug(`[helpers] getGroupMemberRoleFromBot API: ${e.message}`)
+            }
+        }
+
+        const icqqRole = await getIcqqMemberRoleFromMemberMap(bot, gid, uid)
+        if (icqqRole) return icqqRole
+
+        const groupInfo = bot.gl?.get(gid)
+        if (groupInfo?.owner_id != null && String(groupInfo.owner_id) === String(uid)) {
+            return 'owner'
+        }
+
+        if (bot.pickGroup) {
+            try {
+                const group = bot.pickGroup(gid)
+                const memberInfo = group?.pickMember?.(uid)?.info
+                if (memberInfo?.role) return normalizeMemberRole(memberInfo.role)
+                const admins = group?.admin_list || []
+                if (admins.some(a => String(a) === String(uid))) return 'admin'
+            } catch (e) {
+                // 忽略
+            }
+        }
+
+        return 'member'
+    } catch (e) {
+        logger.debug(`[helpers] getGroupMemberRoleFromBot: ${e.message}`)
+    }
+    return 'member'
+}
+
+/**
  * 获取 Bot 在指定群内的权限信息
  * @param {Object} bot - Bot实例
  * @param {number|string} groupId - 群号
@@ -2127,65 +2257,63 @@ export async function getBotPermission(bot, groupId) {
 
     const gid = parseInt(groupId)
     const botId = bot.uin || bot.self_id
+    const botUid = Number.isNaN(Number(botId)) ? botId : Number(botId)
 
     try {
-        // 方式1: 从 gl (群列表缓存) 获取
-        const groupInfo = bot.gl?.get(gid)
-        if (groupInfo) {
-            result.inGroup = true
-            // admin_flag: 是否是管理员
-            // owner_id: 群主QQ
-            if (groupInfo.owner_id === botId) {
-                result.role = 'owner'
-                result.isOwner = true
-                result.isAdmin = true
-            } else if (groupInfo.admin_flag) {
-                result.role = 'admin'
-                result.isAdmin = true
-            } else {
-                result.role = 'member'
-            }
-        }
-
-        // 方式2: 通过 pickGroup 获取成员信息
-        if (result.role === 'unknown' && bot.pickGroup) {
-            try {
-                const group = bot.pickGroup(gid)
-                const memberInfo = group?.pickMember?.(botId)?.info
-                if (memberInfo) {
-                    result.inGroup = true
-                    if (memberInfo.role === 'owner') {
-                        result.role = 'owner'
-                        result.isOwner = true
-                        result.isAdmin = true
-                    } else if (memberInfo.role === 'admin') {
-                        result.role = 'admin'
-                        result.isAdmin = true
-                    } else {
-                        result.role = 'member'
-                    }
-                }
-            } catch (e) {
-                // 忽略错误
-            }
-        }
-
-        // 方式3: OneBot API
-        if (result.role === 'unknown' && bot.sendApi) {
+        // 优先 OneBot API（与 QQ 侧一致，避免 gl 中 admin_flag 等缓存错误导致误判）
+        if (bot.sendApi) {
             try {
                 const info = await bot.sendApi('get_group_member_info', {
                     group_id: gid,
-                    user_id: botId
+                    user_id: botUid
                 })
-                if (info?.data || info?.role) {
+                const parsed = parseOneBotGetGroupMemberInfo(info)
+                if (parsed) {
                     result.inGroup = true
-                    const role = info?.data?.role || info?.role || 'member'
-                    result.role = role
-                    result.isOwner = role === 'owner'
-                    result.isAdmin = role === 'owner' || role === 'admin'
+                    result.role = parsed.role
+                    result.isOwner = parsed.role === 'owner'
+                    result.isAdmin = parsed.role === 'owner' || parsed.role === 'admin'
+                }
+            } catch (e) {
+                logger.debug(`[helpers] getBotPermission API: ${e.message}`)
+            }
+        }
+
+        // icqq：getMemberMap 拉取 Bot 自身身份（优先于同步 pickMember.info / gl）
+        if (result.role === 'unknown') {
+            const icqqRole = await getIcqqMemberRoleFromMemberMap(bot, gid, botUid)
+            if (icqqRole) applyRoleToBotPermissionResult(result, icqqRole)
+        }
+
+        // 再尝试同步 pickMember.info
+        if (result.role === 'unknown' && bot.pickGroup) {
+            try {
+                const group = bot.pickGroup(gid)
+                const memberInfo = group?.pickMember?.(botId)?.info ?? group?.pickMember?.(botUid)?.info
+                if (memberInfo) {
+                    const mr = normalizeMemberRole(memberInfo.role)
+                    applyRoleToBotPermissionResult(result, mr)
                 }
             } catch (e) {
                 // 忽略错误
+            }
+        }
+
+        // 最后使用 gl 缓存
+        if (result.role === 'unknown') {
+            const groupInfo = bot.gl?.get(gid)
+            if (groupInfo) {
+                result.inGroup = true
+                if (groupInfo.owner_id != null && String(groupInfo.owner_id) === String(botId)) {
+                    result.role = 'owner'
+                    result.isOwner = true
+                    result.isAdmin = true
+                } else if (groupInfo.admin_flag) {
+                    result.role = 'admin'
+                    result.isAdmin = true
+                } else {
+                    result.role = 'member'
+                }
             }
         }
 

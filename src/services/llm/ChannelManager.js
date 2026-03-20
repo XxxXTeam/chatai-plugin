@@ -213,7 +213,11 @@ export class ChannelManager {
                 enableReasoning: src.thinking?.enableReasoning || false,
                 defaultLevel: src.thinking?.defaultLevel || 'medium',
                 adaptThinking: src.thinking?.adaptThinking !== false,
-                sendThinkingAsMessage: src.thinking?.sendThinkingAsMessage || false
+                sendThinkingAsMessage: src.thinking?.sendThinkingAsMessage || false,
+                /** auto: 按 baseUrl 识别 BigModel/智谱并附加 thinking.type；glm: 始终附加；off: 不附加 */
+                vendorThinkingControl: ['auto', 'off', 'glm'].includes(src.thinking?.vendorThinkingControl)
+                    ? src.thinking.vendorThinkingControl
+                    : 'auto'
             },
             llm: {
                 temperature: src.llm?.temperature ?? 0.7,

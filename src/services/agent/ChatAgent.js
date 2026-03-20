@@ -395,6 +395,11 @@ export class ChatAgent {
         // 请求参数
         const channelAdvanced = channel?.advanced || {}
         const channelLlm = channelAdvanced.llm || {}
+        const channelThinking = channelAdvanced.thinking || {}
+        const effectiveEnableReasoning =
+            config.get('thinking.enabled') !== false
+                ? (currentPreset?.enableReasoning ?? channelThinking.enableReasoning)
+                : false
 
         /* 字符上限检查 */
         const maxCharacters = channelLlm.maxCharacters || 0
@@ -419,7 +424,10 @@ export class ChatAgent {
             conversationId,
             systemOverride: systemPrompt,
             stream: stream || channelStreaming.enabled === true,
-            disableHistoryRead: skipHistory
+            disableHistoryRead: skipHistory,
+            enableReasoning: effectiveEnableReasoning,
+            reasoningEffort: channelThinking.defaultLevel || 'low',
+            thinkingVendorControl: channelThinking.vendorThinkingControl ?? 'auto'
         }
 
         logger.info(`[ChatAgent] 模型: ${llmModel}, 工具: ${allTools.length}个`)
@@ -1049,11 +1057,11 @@ export class ChatAgent {
 
         const channelAdvanced = channel?.advanced || {}
         if (channelAdvanced.thinking) {
+            const chT = channelAdvanced.thinking
             clientOptions.enableReasoning =
-                config.get('thinking.enabled') !== false
-                    ? (preset?.enableReasoning ?? channelAdvanced.thinking.enableReasoning)
-                    : false
-            clientOptions.reasoningEffort = channelAdvanced.thinking.defaultLevel || 'low'
+                config.get('thinking.enabled') !== false ? (preset?.enableReasoning ?? chT.enableReasoning) : false
+            clientOptions.reasoningEffort = chT.defaultLevel || 'low'
+            clientOptions.thinkingVendorControl = chT.vendorThinkingControl ?? 'auto'
         }
 
         return clientOptions

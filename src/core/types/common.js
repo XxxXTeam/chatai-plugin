@@ -51,6 +51,11 @@ export class BaseClientOptions {
             if (options.toolCallLimitConfig) this.toolCallLimitConfig = options.toolCallLimitConfig
             if (options.onMessageWithToolCall) this.onMessageWithToolCall = options.onMessageWithToolCall
 
+            /* 推理 / 深度思考（供 OpenAI 兼容适配器与单次请求合并） */
+            if (options.enableReasoning !== undefined) this.enableReasoning = options.enableReasoning
+            if (options.reasoningEffort !== undefined) this.reasoningEffort = options.reasoningEffort
+            if (options.thinkingVendorControl !== undefined) this.thinkingVendorControl = options.thinkingVendorControl
+
             this.init()
         }
     }

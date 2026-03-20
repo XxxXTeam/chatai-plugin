@@ -506,14 +506,16 @@ export class ChatService {
         const channelLlm = channelAdvanced.llm || {}
         const channelThinking = channelAdvanced.thinking || {}
         const channelStreaming = channelAdvanced.streaming || {}
+        const effectiveEnableReasoning =
+            config.get('thinking.enabled') !== false
+                ? (preset?.enableReasoning ?? channelThinking.enableReasoning)
+                : false
         const clientOptions = {
             enableTools: actualEnableTools,
             preSelectedTools: actualTools.length > 0 ? actualTools : null,
-            enableReasoning:
-                config.get('thinking.enabled') !== false
-                    ? (preset?.enableReasoning ?? channelThinking.enableReasoning)
-                    : false,
+            enableReasoning: effectiveEnableReasoning,
             reasoningEffort: channelThinking.defaultLevel || 'low',
+            thinkingVendorControl: channelThinking.vendorThinkingControl ?? 'auto',
             adapterType: adapterType,
             event,
             presetId: effectivePresetId,
@@ -896,7 +898,10 @@ export class ChatService {
             conversationId,
             systemOverride: systemPrompt,
             stream: useStreaming,
-            disableHistoryRead: skipHistory
+            disableHistoryRead: skipHistory,
+            enableReasoning: effectiveEnableReasoning,
+            reasoningEffort: channelThinking.defaultLevel || 'low',
+            thinkingVendorControl: channelThinking.vendorThinkingControl ?? 'auto'
         }
         const tempSource =
             overrideTemperature !== undefined

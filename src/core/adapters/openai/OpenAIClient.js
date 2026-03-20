@@ -152,6 +152,44 @@ function sanitizeToolEnums(obj) {
 }
 
 /**
+ * 合并单次请求与客户端上的推理相关选项（单次请求优先）
+ * @param {object} options
+ * @param {object} [clientOpts]
+ */
+function mergeOpenAIReasoningOptions(options, clientOpts) {
+    const enableReasoning = options.enableReasoning ?? clientOpts?.enableReasoning ?? false
+    const reasoningEffort = options.reasoningEffort ?? clientOpts?.reasoningEffort ?? 'low'
+    const thinkingVendorControl = options.thinkingVendorControl ?? clientOpts?.thinkingVendorControl ?? 'auto'
+    const isThinkingModelFlag = options.isThinkingModel
+    return { enableReasoning, reasoningEffort, thinkingVendorControl, isThinkingModelFlag }
+}
+
+/**
+ * @param {'auto' | 'off' | 'glm'} control
+ * @param {string} [baseUrl]
+ */
+function shouldAttachVendorThinkingType(control, baseUrl) {
+    if (control === 'off') return false
+    if (control === 'glm') return true
+    const u = (baseUrl || '').toLowerCase()
+    return (
+        u.includes('bigmodel') ||
+        u.includes('open.bigmodel') ||
+        u.includes('zhipu') ||
+        u.includes('glm') ||
+        u.includes('maas')
+    )
+}
+
+/**
+ * BigModel / 智谱等：请求体需显式传 thinking.type（enabled/disabled），否则关闭 UI 后仍可能触发自适应思考
+ */
+function applyVendorThinkingPayload(requestPayload, enableReasoning, baseUrl, thinkingVendorControl) {
+    if (!shouldAttachVendorThinkingType(thinkingVendorControl, baseUrl)) return
+    requestPayload.thinking = { type: enableReasoning ? 'enabled' : 'disabled' }
+}
+
+/**
  * OpenAI客户端实现
  */
 export class OpenAIClient extends AbstractClient {
@@ -177,6 +215,8 @@ export class OpenAIClient extends AbstractClient {
 
         // 构建请求头 - 支持JSON模板和占位符
         const model = options.model || 'gpt-4o-mini'
+        const { enableReasoning, reasoningEffort, thinkingVendorControl, isThinkingModelFlag } =
+            mergeOpenAIReasoningOptions(options, this.options)
         const templateContext = {
             apiKey,
             model,
@@ -267,7 +307,7 @@ export class OpenAIClient extends AbstractClient {
             logger.debug(`[OpenAI适配器] 图片转换模式: ${transferMode}, 保持原始格式`)
         }
         // Gemini模型不支持thinking model的特殊参数（developer角色、max_completion_tokens等）
-        const isThinkingModel = !isGeminiModel && (options.enableReasoning || options.isThinkingModel)
+        const isThinkingModel = !isGeminiModel && (enableReasoning || isThinkingModelFlag)
 
         if (options.systemOverride) {
             if (isThinkingModel) {
@@ -347,8 +387,8 @@ export class OpenAIClient extends AbstractClient {
         if (isThinkingModel) {
             requestPayload.max_completion_tokens = options.maxToken
             // Only add reasoning_effort if explicitly set, as not all APIs support it
-            if (options.reasoningEffort) {
-                requestPayload.reasoning_effort = options.reasoningEffort
+            if (reasoningEffort) {
+                requestPayload.reasoning_effort = reasoningEffort
             }
         } else {
             requestPayload.max_tokens = options.maxToken
@@ -370,6 +410,8 @@ export class OpenAIClient extends AbstractClient {
                 logger.debug('[OpenAI适配器] 已应用自定义请求体模板:', Object.keys(bodyOverrides).join(', '))
             }
         }
+
+        applyVendorThinkingPayload(requestPayload, enableReasoning, this.baseUrl, thinkingVendorControl)
 
         logger.debug(
             '[OpenAI适配器] 请求:',
@@ -694,6 +736,8 @@ export class OpenAIClient extends AbstractClient {
 
         const messages = []
         const model = options.model || 'gpt-4o-mini'
+        const { enableReasoning, reasoningEffort, thinkingVendorControl, isThinkingModelFlag } =
+            mergeOpenAIReasoningOptions(options, this.options)
 
         /*
          * 图片预处理：根据渠道 imageConfig.transferMode 决定处理方式
@@ -714,7 +758,7 @@ export class OpenAIClient extends AbstractClient {
             logger.debug(`[OpenAI适配器][Stream] 图片转换模式: ${streamTransferMode}, 保持原始格式`)
         }
         // Gemini模型不支持thinking model的特殊参数（developer角色、max_completion_tokens等）
-        const isThinkingModel = !isGeminiModel && (options.enableReasoning || options.isThinkingModel)
+        const isThinkingModel = !isGeminiModel && (enableReasoning || isThinkingModelFlag)
 
         if (options.systemOverride) {
             if (isThinkingModel) {
@@ -786,8 +830,8 @@ export class OpenAIClient extends AbstractClient {
         if (isThinkingModel) {
             requestPayload.max_completion_tokens = options.maxToken
             // Only add reasoning_effort if explicitly set, as not all APIs support it
-            if (options.reasoningEffort) {
-                requestPayload.reasoning_effort = options.reasoningEffort
+            if (reasoningEffort) {
+                requestPayload.reasoning_effort = reasoningEffort
             }
         } else {
             requestPayload.max_tokens = options.maxToken
@@ -799,6 +843,9 @@ export class OpenAIClient extends AbstractClient {
                 delete requestPayload[key]
             }
         })
+
+        applyVendorThinkingPayload(requestPayload, enableReasoning, this.baseUrl, thinkingVendorControl)
+
         logger.debug(
             '[OpenAI适配器] Streaming请求:',
             JSON.stringify({
