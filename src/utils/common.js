@@ -206,3 +206,242 @@ export function enforceMaxCharacters(messages, maxCharacters, tag = '') {
  * @type {readonly number[]}
  */
 export const PLUGIN_DEVELOPERS = Object.freeze([1018037233, 2173302144])
+
+/**
+ * djb2 哈希算法，用于内容去重
+ * @param {string} content - 要哈希的内容
+ * @param {string} [salt=''] - 可选盐值（如 role）
+ * @returns {string} 十六进制哈希字符串
+ */
+export function hashContent(content, salt = '') {
+    const str = salt ? JSON.stringify(content) + salt : content.toLowerCase().replace(/\s+/g, '')
+    let hash = 0
+    for (let i = 0; i < str.length; i++) {
+        hash = (hash << 5) - hash + str.charCodeAt(i)
+        hash = hash & hash
+    }
+    return hash.toString(16)
+}
+
+/**
+ * 判断两段文本内容是否相似（Jaccard + 包含检测）
+ * @param {string} content1
+ * @param {string} content2
+ * @param {Object} [options]
+ * @param {number} [options.threshold=0.8] - Jaccard 相似度阈值
+ * @param {boolean} [options.useJaccard=true] - 是否启用 Jaccard 计算
+ * @returns {boolean}
+ */
+export function isSimilarContent(content1, content2, options = {}) {
+    if (!content1 || !content2) return false
+    const { threshold = 0.8, useJaccard = true } = options
+
+    const normalize = s =>
+        s
+            .toLowerCase()
+            .replace(/\s+/g, '')
+            .replace(/[，。！？、：；""''（）【】]/g, '')
+    const n1 = normalize(content1)
+    const n2 = normalize(content2)
+
+    if (n1 === n2) return true
+    if (n1.includes(n2) || n2.includes(n1)) return true
+
+    if (useJaccard) {
+        const set1 = new Set(n1.split(''))
+        const set2 = new Set(n2.split(''))
+        const intersection = new Set([...set1].filter(x => set2.has(x)))
+        const union = new Set([...set1, ...set2])
+        return intersection.size / union.size > threshold
+    }
+
+    return false
+}
+
+/**
+ * 调用 AI 生成简短响应（用于事件处理）
+ * @param {string} eventDesc - 事件描述/提示词
+ * @param {Object} [options]
+ * @param {string|number} options.userId
+ * @param {string|number} [options.groupId]
+ * @param {number} [options.maxLength=100] - 最大回复字符数
+ * @param {string} [options.mode='roleplay'] - 对话模式
+ * @param {boolean} [options.disableTools=false]
+ * @param {string} [options.logTag='AI'] - 日志标签
+ * @returns {Promise<string|null>}
+ */
+export async function getAIResponse(eventDesc, options = {}) {
+    const { userId, groupId, maxLength = 100, mode = 'roleplay', disableTools = false, logTag = 'AI' } = options
+    try {
+        const { chatService } = await import('../services/llm/ChatService.js')
+        const sendOpts = {
+            userId: String(userId),
+            groupId: groupId ? String(groupId) : null,
+            message: eventDesc,
+            mode,
+            skipHistory: true
+        }
+        if (disableTools) sendOpts.disableTools = true
+
+        const result = await chatService.sendMessage(sendOpts)
+        let reply =
+            result.response
+                ?.filter(c => c.type === 'text')
+                ?.map(c => c.text)
+                ?.join('') || ''
+        if (maxLength && reply.length > maxLength) {
+            reply = reply.substring(0, maxLength)
+        }
+        return reply
+    } catch (err) {
+        const log = global.logger || console
+        log.debug?.(`[${logTag}] AI响应失败: ${err.message}`) || log.log?.(`[${logTag}] AI响应失败: ${err.message}`)
+        return null
+    }
+}
+
+/**
+ * 中文停用词集合，用于词频分析、词云等
+ */
+export const STOP_WORDS = new Set([
+    '的',
+    '了',
+    '是',
+    '在',
+    '我',
+    '有',
+    '和',
+    '就',
+    '不',
+    '人',
+    '都',
+    '一',
+    '一个',
+    '上',
+    '也',
+    '很',
+    '到',
+    '说',
+    '要',
+    '去',
+    '你',
+    '会',
+    '着',
+    '没有',
+    '看',
+    '好',
+    '自己',
+    '这',
+    '那',
+    '他',
+    '她',
+    '它',
+    '们',
+    '什么',
+    '吗',
+    '啊',
+    '呢',
+    '吧',
+    '嗯',
+    '哦',
+    '哈',
+    '呀',
+    '诶',
+    '嘿',
+    '哎',
+    '唉',
+    '噢',
+    '额',
+    '昂',
+    '啦',
+    '咯',
+    '喔',
+    '这个',
+    '那个',
+    '怎么',
+    '为什么',
+    '可以',
+    '能',
+    '想',
+    '知道',
+    '觉得',
+    '还是',
+    '但是',
+    '因为',
+    '所以',
+    '如果',
+    '虽然',
+    '而且',
+    '或者',
+    '还',
+    '又',
+    '再',
+    '才',
+    '只',
+    '从',
+    '被',
+    '把',
+    '给',
+    '让',
+    '比',
+    '等',
+    '对',
+    '跟',
+    '向',
+    '于',
+    '并',
+    '与',
+    '及',
+    '以',
+    '用',
+    '为',
+    '由',
+    '以及',
+    '而',
+    '且',
+    '之',
+    '其',
+    '如',
+    '则',
+    '么',
+    '来',
+    '过',
+    '得',
+    '地',
+    '里',
+    '后',
+    '前',
+    '中',
+    '下',
+    '多',
+    '少',
+    '大',
+    '小',
+    '好',
+    '坏',
+    '真',
+    '假',
+    '新',
+    '旧',
+    '高',
+    '低',
+    '长',
+    '短',
+    '快',
+    '慢',
+    '但',
+    '或',
+    '个',
+    '然后',
+    '现在',
+    '看看',
+    '说说',
+    '图片',
+    '表情',
+    '动画表情',
+    '图片评论',
+    '已经',
+    '可能',
+    '应该',
+    '不'
+])

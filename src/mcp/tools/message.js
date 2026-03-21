@@ -785,7 +785,7 @@ export const messageTools = [
 
     {
         name: 'get_chat_history',
-        description: '获取聊天历史记录',
+        description: '获取聊天历史记录。当用户问"刚才说了什么""之前聊了什么"或需要了解对话上下文时调用。',
         inputSchema: {
             type: 'object',
             properties: {
@@ -2539,7 +2539,20 @@ export const messageTools = [
                     type: 'array',
                     description: '消息列表，每条消息为字符串或消息段数组',
                     items: {
-                        oneOf: [{ type: 'string' }, { type: 'array' }]
+                        oneOf: [
+                            { type: 'string' },
+                            {
+                                type: 'array',
+                                items: {
+                                    type: 'object',
+                                    properties: {
+                                        type: { type: 'string', description: '消息段类型，如 text, image, at 等' },
+                                        data: { type: 'object', description: '消息段数据' }
+                                    },
+                                    required: ['type', 'data']
+                                }
+                            }
+                        ]
                     }
                 },
                 group_id: { type: 'string', description: '目标群号' },

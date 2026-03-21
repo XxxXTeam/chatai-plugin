@@ -309,7 +309,8 @@ export const searchTools = [
 
     {
         name: 'web_search',
-        description: '使用搜索引擎搜索内容（支持bing和duckduckgo）',
+        description:
+            '使用搜索引擎搜索内容（支持bing和duckduckgo）。当用户询问最新信息、新闻、不确定的事实性问题时，应优先调用此工具搜索获取最新数据再回答。',
         inputSchema: {
             type: 'object',
             properties: {
@@ -530,7 +531,8 @@ export const searchTools = [
 
     {
         name: 'get_weather',
-        description: '获取天气信息',
+        description:
+            '获取天气信息。当用户问"天气怎么样""会不会下雨""温度多少"等天气相关问题时，必须调用此工具获取实时天气数据。',
         inputSchema: {
             type: 'object',
             properties: {

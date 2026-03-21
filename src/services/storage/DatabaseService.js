@@ -2,6 +2,7 @@ import Database from 'better-sqlite3'
 import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { hashContent as hashContentUtil } from '../../utils/common.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -450,14 +451,7 @@ class DatabaseService {
      * @returns {string}
      */
     hashContent(content, role) {
-        const str = JSON.stringify(content) + role
-        let hash = 0
-        for (let i = 0; i < str.length; i++) {
-            const char = str.charCodeAt(i)
-            hash = (hash << 5) - hash + char
-            hash = hash & hash
-        }
-        return hash.toString(16)
+        return hashContentUtil(content, role)
     }
 
     /**

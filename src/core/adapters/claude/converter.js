@@ -13,19 +13,20 @@ registerFromChaiteConverter('claude', source => {
         case 'assistant': {
             const content = []
 
-            // Add text content
-            for (const part of source.content) {
-                if (part.type === 'text') {
-                    content.push({
-                        type: 'text',
-                        text: part.text
-                    })
+            if (Array.isArray(source.content)) {
+                for (const part of source.content) {
+                    if (part.type === 'text') {
+                        content.push({
+                            type: 'text',
+                            text: part.text
+                        })
+                    }
                 }
             }
 
-            // Add tool use if present
             if (source.toolCalls && source.toolCalls.length > 0) {
                 for (const toolCall of source.toolCalls) {
+                    if (!toolCall?.function) continue
                     content.push({
                         type: 'tool_use',
                         id: toolCall.id,
@@ -41,15 +42,18 @@ registerFromChaiteConverter('claude', source => {
             }
         }
         case 'user': {
+            if (!Array.isArray(source.content) || source.content.length === 0) {
+                return { role: 'user', content: [{ type: 'text', text: '' }] }
+            }
             const content = source.content.map(t => {
                 switch (t.type) {
                     case 'text':
                         return {
                             type: 'text',
-                            text: t.text
+                            text: t.text || ''
                         }
                     case 'image': {
-                        // Claude expects base64 images with media type
+                        if (!t.image) return { type: 'text', text: '[Image unavailable]' }
                         let source_data
                         let media_type = 'image/jpeg'
 
@@ -91,8 +95,8 @@ registerFromChaiteConverter('claude', source => {
             }
         }
         case 'tool': {
-            // Claude expects tool results as user messages with tool_result content
-            const content = source.content.map(tcr => ({
+            const srcContent = Array.isArray(source.content) ? source.content : []
+            const content = srcContent.map(tcr => ({
                 type: 'tool_result',
                 tool_use_id: tcr.tool_call_id,
                 content: tcr.content
@@ -116,7 +120,10 @@ registerIntoChaiteConverter('claude', response => {
     const content = []
     const toolCalls = []
 
-    // Process content blocks
+    if (!Array.isArray(response?.content)) {
+        return { role: 'assistant', content: [{ type: 'text', text: '' }] }
+    }
+
     for (const block of response.content) {
         if (block.type === 'text') {
             content.push({

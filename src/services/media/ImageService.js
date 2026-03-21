@@ -55,6 +55,16 @@ export class ImageService {
                 },
                 60 * 60 * 1000
             )
+            if (typeof process !== 'undefined') {
+                process.once('exit', () => this.stopCleanup())
+            }
+        }
+    }
+
+    stopCleanup() {
+        if (this.cleanupInterval) {
+            clearInterval(this.cleanupInterval)
+            this.cleanupInterval = null
         }
     }
 
@@ -296,30 +306,24 @@ export class ImageService {
         }
 
         try {
-            const controller = new AbortController()
-            const timeoutId = setTimeout(() => controller.abort(), timeout)
             const isQQPic = url.includes('gchat.qpic.cn') || url.includes('c2cpicdw.qpic.cn')
             const referer = isQQPic ? 'https://qzone.qq.com/' : undefined
+            const headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                ...(referer && { Referer: referer })
+            }
+
             const response = await fetch(url, {
                 method: 'HEAD',
-                signal: controller.signal,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    ...(referer && { Referer: referer })
-                }
+                signal: AbortSignal.timeout(timeout),
+                headers
             })
-
-            clearTimeout(timeoutId)
 
             if (!response.ok) {
                 const getResponse = await fetch(url, {
                     method: 'GET',
                     signal: AbortSignal.timeout(timeout),
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        Range: 'bytes=0-1024',
-                        ...(referer && { Referer: referer })
-                    }
+                    headers: { ...headers, Range: 'bytes=0-1024' }
                 })
 
                 if (!getResponse.ok && getResponse.status !== 206) {

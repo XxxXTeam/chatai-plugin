@@ -482,12 +482,7 @@ export class ChatAgent {
                 })
             }
 
-            // 自动记忆提取
-            if (config.get('memory.enabled') && config.get('memory.autoExtract') !== false) {
-                memoryManager
-                    .extractMemoryFromConversation(userId, message, textContent)
-                    .catch(err => logger.warn('[ChatAgent] 自动记忆提取失败:', err.message))
-            }
+            // 记忆由模型通过 save_user_memory 工具主动添加，不再自动提取
         }
 
         // 收集调试信息
@@ -720,9 +715,9 @@ export class ChatAgent {
      */
     _buildFullDispatchPrompt(toolGroupManager) {
         const summary = toolGroupManager.getGroupSummary()
-        let prompt = `你是智能任务调度器。分析用户请求，选择需要的工具组。
+        let prompt = `你是智能任务调度器。分析用户请求，选择需要的工具组。原则：只要请求可能需要数据或操作，就选择工具组；只有纯问候闲聊才用 chat。
 
-## 可用工具组（含详细工具列表）：
+## 可用工具组：
 `
         for (const group of summary) {
             const displayName = group.displayName || group.name
@@ -733,7 +728,7 @@ export class ChatAgent {
 ## 返回格式（JSON）：
 {"analysis": "意图分析", "tasks": [{"type": "tool", "priority": 1, "params": {"toolGroups": [索引]}}], "executionMode": "sequential"}
 
-用户纯闲聊返回: {"analysis": "闲聊", "tasks": [{"type": "chat", "priority": 1, "params": {}}], "executionMode": "sequential"}
+仅纯闲聊问候(你好/谢谢/再见等)返回: {"analysis": "闲聊", "tasks": [{"type": "chat", "priority": 1, "params": {}}], "executionMode": "sequential"}
 只返回JSON。`
         return prompt
     }
@@ -909,10 +904,31 @@ export class ChatAgent {
         const groupPrompt = this._buildSkillsGroupPrompt(availableNames)
 
         if (groupPrompt) {
-            systemPrompt += `\n\n【可用技能】\n你拥有 ${tools.length} 个工具，按功能分组如下：\n${groupPrompt}\n需要时调用对应工具。优先直接回答，仅在必要时调用工具。`
+            systemPrompt += `\n\n【可用技能】\n你拥有 ${tools.length} 个工具，按功能分组如下：\n${groupPrompt}
+
+【工具使用原则】
+- 当用户请求涉及实时数据（时间、天气、群信息、用户信息、新闻等）时，必须先调用工具获取数据，再基于数据回答
+- 当用户请求执行操作（发消息、禁言、踢人、发图、搜索等）时，直接调用对应工具
+- 当可以通过工具获取更准确信息时，优先调用工具而非凭记忆回答
+- 当用户的问题你不确定答案时，尝试使用搜索或相关工具查找
+- 只有纯闲聊、创作、情感交流等无需外部数据的场景才直接回复
+
+【记忆管理】
+- 当用户透露个人信息（名字、生日、喜好、位置、职业等）或者你认为需要保存相关信息的时候，使用 save_user_memory 工具保存
+- 当用户明确说"记住"或"别忘了"时，必须调用 save_user_memory 保存
+- 回答涉及用户个人信息的问题前，先用 get_user_memories 或 search_user_memory 查询
+- 当用户纠正之前的信息时，用 update_user_memory 更新对应记忆`
         } else {
-            // 回退：无分组信息时用简洁汇总
-            systemPrompt += `\n\n【可用工具能力】\n你拥有 ${tools.length} 个工具可调用。需要时调用工具获取信息或执行操作。优先直接回答，仅在必要时调用工具。`
+            systemPrompt += `\n\n【可用工具能力】\n你拥有 ${tools.length} 个工具可调用。
+
+【工具使用原则】
+- 涉及实时信息、查询、操作时，优先调用工具获取数据后再回答
+- 不确定的问题，尝试使用工具搜索或查询
+- 只有纯闲聊或创作场景才直接回复
+
+【记忆管理】
+- 用户透露个人信息时，调用 save_user_memory 保存
+- 需要回忆用户信息时，调用 get_user_memories 或 search_user_memory 查询`
         }
 
         return systemPrompt
@@ -1144,6 +1160,27 @@ export class ChatAgent {
         if (lastError) throw lastError
 
         return { response: [], usage: {}, toolLogs: [] }
+    }
+
+    /**
+     * 异步触发结构化记忆提取和淡忘处理
+     */
+    async _triggerMemoryExtraction(userId, message, response, groupId) {
+        try {
+            const { memorySummarizer } = await import('../memory/MemorySummarizer.js')
+
+            const messages = [
+                { role: 'user', content: message },
+                { role: 'assistant', content: response }
+            ]
+
+            await memorySummarizer.onConversationEnd(userId, messages, {
+                groupId: groupId ? String(groupId) : null,
+                summarize: false
+            })
+        } catch (err) {
+            logger.debug('[ChatAgent] 记忆提取失败:', err.message)
+        }
     }
 
     /**

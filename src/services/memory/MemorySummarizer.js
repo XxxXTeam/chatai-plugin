@@ -171,11 +171,9 @@ class MemorySummarizer {
                 return memories
             }
 
-            // 删除旧记忆，保存新的总结记忆
+            // 批量删除旧记忆
             const oldIds = memories.map(m => m.id)
-            for (const id of oldIds) {
-                await memoryService.deleteMemory(id, true)
-            }
+            await memoryService.deleteMemoriesBatch(oldIds, true)
 
             const newMemories = []
             for (const content of summarizedContents) {
@@ -250,40 +248,24 @@ class MemorySummarizer {
 
         const memories = await memoryService.getMemoriesByUser(userId, { limit: 1000 })
         const now = Date.now()
-        let removedCount = 0
 
-        for (const memory of memories) {
-            let shouldRemove = false
+        const toRemoveIds = memories
+            .filter(
+                memory =>
+                    memory.confidence < minConfidence ||
+                    (memory.expiresAt && memory.expiresAt < now) ||
+                    (now - memory.updatedAt > maxAge && memory.confidence < 0.6) ||
+                    memory.content.length < minContentLength
+            )
+            .map(m => m.id)
 
-            // 低可信度
-            if (memory.confidence < minConfidence) {
-                shouldRemove = true
-            }
-
-            // 过期
-            if (memory.expiresAt && memory.expiresAt < now) {
-                shouldRemove = true
-            }
-
-            // 太老且可信度不高
-            if (now - memory.updatedAt > maxAge && memory.confidence < 0.6) {
-                shouldRemove = true
-            }
-
-            // 内容太短
-            if (memory.content.length < minContentLength) {
-                shouldRemove = true
-            }
-
-            if (shouldRemove) {
-                await memoryService.deleteMemory(memory.id, true)
-                removedCount++
-            }
+        if (toRemoveIds.length > 0) {
+            await memoryService.deleteMemoriesBatch(toRemoveIds, true)
         }
 
-        logger.info(`[MemorySummarizer] 清理用户 ${userId} 低质量记忆: ${removedCount} 条`)
+        logger.info(`[MemorySummarizer] 清理用户 ${userId} 低质量记忆: ${toRemoveIds.length} 条`)
 
-        return { removedCount }
+        return { removedCount: toRemoveIds.length }
     }
 
     /**
@@ -291,11 +273,20 @@ class MemorySummarizer {
      */
     async globalCleanup() {
         const users = await memoryService.listUsers()
+        const BATCH_SIZE = 10
         let totalRemoved = 0
 
-        for (const user of users) {
-            const result = await this.cleanupMemories(user.userId)
-            totalRemoved += result.removedCount
+        for (let i = 0; i < users.length; i += BATCH_SIZE) {
+            const batch = users.slice(i, i + BATCH_SIZE)
+            const results = await Promise.all(
+                batch.map(user =>
+                    this.cleanupMemories(user.userId).catch(err => {
+                        logger.warn(`[MemorySummarizer] 清理用户 ${user.userId} 失败:`, err.message)
+                        return { removedCount: 0 }
+                    })
+                )
+            )
+            totalRemoved += results.reduce((sum, r) => sum + r.removedCount, 0)
         }
 
         logger.info(`[MemorySummarizer] 全局清理完成: 共清理 ${totalRemoved} 条记忆`)

@@ -8,7 +8,7 @@ import { icqqFriend, callOneBotApi } from './helpers.js'
 export const userTools = [
     {
         name: 'get_user_info',
-        description: '获取QQ用户的基本信息，包括昵称、头像、性别等',
+        description: '获取QQ用户的基本信息，包括昵称、头像、性别等。当用户问某人信息或需要了解用户身份时调用。',
         inputSchema: {
             type: 'object',
             properties: {

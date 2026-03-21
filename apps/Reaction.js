@@ -13,6 +13,7 @@ import {
     getBot
 } from '../src/utils/eventAdapter.js'
 import { galgameService } from '../src/services/galgame/GalgameService.js'
+import { getAIResponse } from '../src/utils/common.js'
 
 const EMOJI_MAP = {
     // 经典QQ表情 (0-200)
@@ -182,33 +183,6 @@ const EMOJI_MAP = {
 
 function getEmojiDescription(emojiId) {
     return EMOJI_MAP[String(emojiId)] || `表情[${emojiId}]`
-}
-
-async function getAIResponse(eventDesc, options = {}) {
-    const { userId, groupId, maxLength = 50 } = options
-    try {
-        const { chatService } = await import('../src/services/llm/ChatService.js')
-        const result = await chatService.sendMessage({
-            userId: String(userId),
-            groupId: groupId ? String(groupId) : null,
-            message: eventDesc,
-            mode: 'chat',
-            skipHistory: true,
-            disableTools: true
-        })
-        let reply =
-            result.response
-                ?.filter(c => c.type === 'text')
-                ?.map(c => c.text)
-                ?.join('') || ''
-        if (maxLength && reply.length > maxLength) {
-            reply = reply.substring(0, maxLength)
-        }
-        return reply
-    } catch (err) {
-        logger.debug('[AI-Reaction] AI响应失败:', err.message)
-        return null
-    }
 }
 
 // 标记是否已注册事件监听器
@@ -422,7 +396,10 @@ async function handleReactionEvent(e, bot) {
         const aiReply = await getAIResponse(eventDesc, {
             userId,
             groupId: groupId,
-            maxLength: 50
+            maxLength: 50,
+            mode: 'chat',
+            disableTools: true,
+            logTag: 'AI-Reaction'
         })
 
         if (aiReply && groupId) {

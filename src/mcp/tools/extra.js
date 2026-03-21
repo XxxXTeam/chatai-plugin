@@ -8,7 +8,7 @@ const activeReminders = new Map()
 export const extraTools = [
     {
         name: 'get_weather',
-        description: '查询指定城市的天气信息',
+        description: '查询指定城市的天气信息。用户问天气相关问题时必须调用此工具获取实时数据，不要编造天气信息。',
         inputSchema: {
             type: 'object',
             properties: {

@@ -5,35 +5,7 @@
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'
 import { parsePokeEvent, sendPoke, getUserNickname, getBot, checkEventProbability } from '../src/utils/eventAdapter.js'
-
-/**
- * 调用AI生成响应
- */
-async function getAIResponse(eventDesc, options = {}) {
-    const { userId, groupId, maxLength = 100 } = options
-    try {
-        const { chatService } = await import('../src/services/llm/ChatService.js')
-        const result = await chatService.sendMessage({
-            userId: String(userId),
-            groupId: groupId ? String(groupId) : null,
-            message: eventDesc,
-            mode: 'roleplay',
-            skipHistory: true
-        })
-        let reply =
-            result.response
-                ?.filter(c => c.type === 'text')
-                ?.map(c => c.text)
-                ?.join('') || ''
-        if (maxLength && reply.length > maxLength) {
-            reply = reply.substring(0, maxLength)
-        }
-        return reply
-    } catch (err) {
-        logger.debug('[AI-Poke] AI响应失败:', err.message)
-        return null
-    }
-}
+import { getAIResponse } from '../src/utils/common.js'
 
 export class AI_Poke extends plugin {
     constructor() {
@@ -91,7 +63,8 @@ export class AI_Poke extends plugin {
         const aiReply = await getAIResponse(eventDesc, {
             userId: operatorId,
             groupId: groupId,
-            maxLength: 100
+            maxLength: 100,
+            logTag: 'AI-Poke'
         })
 
         if (aiReply) {

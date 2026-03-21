@@ -15,6 +15,7 @@ import { ensureScopeManager, isGroupFeatureEnabled, getGroupFeatureModel } from 
 import { isMaster } from '../src/utils/platformAdapter.js'
 import { generateGroupAdminLoginCode } from '../src/services/routes/groupAdminRoutes.js'
 import { getWebServer } from '../src/services/webServer.js'
+import { STOP_WORDS } from '../src/utils/common.js'
 
 // Debug模式状态管理（运行时内存，重启后重置）
 const debugSessions = new Map() // key: groupId或`private_${userId}`, value: boolean
@@ -773,65 +774,11 @@ export class AICommands extends plugin {
             if (useModernStyle) {
                 // 提取关键词
                 const wordCounts = {}
-                const stopWords = new Set([
-                    '的',
-                    '了',
-                    '是',
-                    '我',
-                    '你',
-                    '他',
-                    '她',
-                    '它',
-                    '们',
-                    '这',
-                    '那',
-                    '有',
-                    '在',
-                    '吗',
-                    '啊',
-                    '呢',
-                    '吧',
-                    '嗯',
-                    '哦',
-                    '哈',
-                    '呀',
-                    '好',
-                    '不',
-                    '也',
-                    '都',
-                    '就',
-                    '和',
-                    '与',
-                    '但',
-                    '而',
-                    '或',
-                    '一',
-                    '个',
-                    '什么',
-                    '怎么',
-                    '为什么',
-                    '可以',
-                    '没有',
-                    '还是',
-                    '已经',
-                    '可能',
-                    '应该',
-                    '因为',
-                    '所以',
-                    '如果',
-                    '虽然',
-                    '然后',
-                    '现在',
-                    '知道',
-                    '觉得',
-                    '看看',
-                    '说说'
-                ])
                 for (const msg of recentMessages) {
                     const content = typeof msg.content === 'string' ? msg.content : ''
                     const words = content.match(/[\u4e00-\u9fa5]{2,4}|[a-zA-Z]{3,}/g) || []
                     for (const word of words) {
-                        if (!stopWords.has(word) && word.length >= 2) {
+                        if (!STOP_WORDS.has(word) && word.length >= 2) {
                             wordCounts[word] = (wordCounts[word] || 0) + 1
                         }
                     }
@@ -1153,65 +1100,11 @@ ${dialogText}${truncatedNote}`
 
             // 提取关键词（简单词频统计）
             const wordCounts = {}
-            const stopWords = new Set([
-                '的',
-                '了',
-                '是',
-                '我',
-                '你',
-                '他',
-                '她',
-                '它',
-                '们',
-                '这',
-                '那',
-                '有',
-                '在',
-                '吗',
-                '啊',
-                '呢',
-                '吧',
-                '嗯',
-                '哦',
-                '哈',
-                '呀',
-                '好',
-                '不',
-                '也',
-                '都',
-                '就',
-                '和',
-                '与',
-                '但',
-                '而',
-                '或',
-                '一',
-                '个',
-                '什么',
-                '怎么',
-                '为什么',
-                '可以',
-                '没有',
-                '还是',
-                '已经',
-                '可能',
-                '应该',
-                '因为',
-                '所以',
-                '如果',
-                '虽然',
-                '然后',
-                '现在',
-                '知道',
-                '觉得',
-                '看看',
-                '说说'
-            ])
             for (const msg of recentMessages) {
                 const content = typeof msg.content === 'string' ? msg.content : ''
                 const words = content.match(/[\u4e00-\u9fa5]{2,4}|[a-zA-Z]{3,}/g) || []
                 for (const word of words) {
-                    if (!stopWords.has(word) && word.length >= 2) {
+                    if (!STOP_WORDS.has(word) && word.length >= 2) {
                         wordCounts[word] = (wordCounts[word] || 0) + 1
                     }
                 }
@@ -1978,140 +1871,6 @@ ${rawChatHistory}`
     analyzeWordFrequency(texts) {
         const wordMap = new Map()
 
-        // 停用词列表
-        const stopWords = new Set([
-            '的',
-            '了',
-            '是',
-            '在',
-            '我',
-            '有',
-            '和',
-            '就',
-            '不',
-            '人',
-            '都',
-            '一',
-            '一个',
-            '上',
-            '也',
-            '很',
-            '到',
-            '说',
-            '要',
-            '去',
-            '你',
-            '会',
-            '着',
-            '没有',
-            '看',
-            '好',
-            '自己',
-            '这',
-            '那',
-            '他',
-            '她',
-            '它',
-            '们',
-            '什么',
-            '吗',
-            '啊',
-            '呢',
-            '吧',
-            '嗯',
-            '哦',
-            '哈',
-            '呀',
-            '诶',
-            '嘿',
-            '哎',
-            '唉',
-            '噢',
-            '额',
-            '昂',
-            '啦',
-            '咯',
-            '喔',
-            '这个',
-            '那个',
-            '怎么',
-            '为什么',
-            '可以',
-            '能',
-            '想',
-            '知道',
-            '觉得',
-            '还是',
-            '但是',
-            '因为',
-            '所以',
-            '如果',
-            '虽然',
-            '而且',
-            '或者',
-            '还',
-            '又',
-            '再',
-            '才',
-            '只',
-            '从',
-            '被',
-            '把',
-            '给',
-            '让',
-            '比',
-            '等',
-            '对',
-            '跟',
-            '向',
-            '于',
-            '并',
-            '与',
-            '及',
-            '以',
-            '用',
-            '为',
-            '由',
-            '以及',
-            '而',
-            '且',
-            '之',
-            '其',
-            '如',
-            '则',
-            '么',
-            '来',
-            '去',
-            '过',
-            '得',
-            '地',
-            '里',
-            '后',
-            '前',
-            '中',
-            '下',
-            '多',
-            '少',
-            '大',
-            '小',
-            '好',
-            '坏',
-            '真',
-            '假',
-            '新',
-            '旧',
-            '高',
-            '低',
-            '长',
-            '短',
-            '快',
-            '慢',
-            '图片',
-            '表情',
-            '动画表情',
-            '图片评论'
-        ])
-
         for (const text of texts) {
             if (!text) continue
 
@@ -2135,7 +1894,7 @@ ${rawChatHistory}`
             const allWords = [...chineseWords, ...englishWords.map(w => w.toLowerCase())]
 
             for (const word of allWords) {
-                if (stopWords.has(word) || word.length < 2) continue
+                if (STOP_WORDS.has(word) || word.length < 2) continue
                 wordMap.set(word, (wordMap.get(word) || 0) + 1)
             }
         }

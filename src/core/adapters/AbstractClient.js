@@ -1333,46 +1333,11 @@ export class AbstractClient {
                     )
                 }
 
-                // 检查工具调用限制（使用去重后的列表）
-                const limitReason = this.updateToolCallTracking(options, deduplicatedToolCalls)
-                if (limitReason) {
-                    this.resetToolCallTracking(options)
+                // 追踪工具调用状态（仅记录，不阻断）
+                this.updateToolCallTracking(options, deduplicatedToolCalls)
 
-                    // 如果已有文本内容，返回它；否则返回限制提示
-                    const textContent =
-                        modelResponse.content
-                            ?.filter(c => c.type === 'text')
-                            .map(c => c.text)
-                            .join('') || ''
-                    return {
-                        id: modelResponse.id,
-                        model: options.model,
-                        contents: textContent ? modelResponse.content : [{ type: 'text', text: limitReason }],
-                        usage: modelResponse.usage,
-                        toolCallLogs: options._toolCallLogs || []
-                    }
-                }
-
-                // 检查当前响应中的工具调用是否已经全部执行过
-                const filteredToolCalls = deduplicatedToolCalls.filter(tc => {
-                    const sig = this.buildToolCallSignature([tc])
-                    if (options._executedToolSignatures?.has(sig)) {
-                        this.logger.info(`[Tool] 过滤已执行过的重复调用: ${tc.function?.name}`)
-                        return false
-                    }
-                    return true
-                })
-
-                if (filteredToolCalls.length === 0 && deduplicatedToolCalls.length > 0) {
-                    this.logger.warn(`[Tool] 模型返回的所有工具调用均已执行过，停止递归以防止死循环`)
-                    return {
-                        id: modelResponse.id,
-                        model: options.model,
-                        contents: modelResponse.content,
-                        usage: modelResponse.usage,
-                        toolCallLogs: options._toolCallLogs || []
-                    }
-                }
+                // 直接使用去重后的工具调用列表，不过滤已执行过的调用
+                const filteredToolCalls = deduplicatedToolCalls
 
                 const intermediateTextContent = modelResponse.content?.filter(c => c.type === 'text') || []
                 let intermediateText = intermediateTextContent
@@ -1399,13 +1364,6 @@ export class AbstractClient {
 
                 // 执行工具调用
                 const { toolCallResults, toolCallLogs } = await this.executeToolCalls(filteredToolCalls, options)
-
-                // 记录已成功执行的签名
-                if (!options._executedToolSignatures) options._executedToolSignatures = new Set()
-                for (const tc of filteredToolCalls) {
-                    const sig = this.buildToolCallSignature([tc])
-                    options._executedToolSignatures.add(sig)
-                }
 
                 // 记录日志
                 if (!options._toolCallLogs) options._toolCallLogs = []
@@ -1696,8 +1654,7 @@ export class AbstractClient {
         options._lastToolCallSignature = undefined
         options._lastSimplifiedSignature = undefined
         options._toolCallSignatureHistory = new Map()
-        options._simplifiedSignatureHistory = new Map() // 用于检测功能相似的调用
-        options._executedToolSignatures = new Set() // 追踪已成功执行的工具调用签名
+        options._simplifiedSignatureHistory = new Map()
         options._toolCallLogs = []
     }
 
@@ -1708,57 +1665,23 @@ export class AbstractClient {
      * @returns {string|undefined} 如果超过限制返回原因
      */
     updateToolCallTracking(options, toolCalls) {
-        const limitConfig = this.toolCallLimitConfig
-        if (!limitConfig) return undefined
-
-        // 递增连续调用计数
+        // 递增轮次计数
         options._consecutiveToolCallCount = (options._consecutiveToolCallCount || 0) + 1
-
-        // 递增总调用计数
         options._totalToolCallCount = (options._totalToolCallCount || 0) + toolCalls.length
 
-        // 检查最大连续调用次数
-        if (limitConfig.maxConsecutiveCalls && options._consecutiveToolCallCount > limitConfig.maxConsecutiveCalls) {
-            return `工具调用轮次超过限制(${limitConfig.maxConsecutiveCalls})，已自动停止`
-        }
-
-        // 检查总调用次数
-        if (limitConfig.maxTotalToolCalls && options._totalToolCallCount > limitConfig.maxTotalToolCalls) {
-            return `工具调用总次数超过限制(${limitConfig.maxTotalToolCalls})，已自动停止`
-        }
         const signature = this.buildToolCallSignature(toolCalls)
 
-        // 检查是否与上次调用完全相同
         if (options._lastToolCallSignature === signature) {
             options._consecutiveIdenticalToolCallCount = (options._consecutiveIdenticalToolCallCount || 0) + 1
-            this.logger.warn(`[Tool] 检测到完全相同的重复调用 #${options._consecutiveIdenticalToolCallCount}`)
+            if (options._consecutiveIdenticalToolCallCount > 2) {
+                this.logger.warn(
+                    `[Tool] 连续相同调用 #${options._consecutiveIdenticalToolCallCount}: ${toolCalls[0]?.function?.name}`
+                )
+            }
         } else {
             options._lastToolCallSignature = signature
             options._consecutiveIdenticalToolCallCount = 1
         }
-        if (
-            limitConfig.maxConsecutiveIdenticalCalls &&
-            options._consecutiveIdenticalToolCallCount > limitConfig.maxConsecutiveIdenticalCalls
-        ) {
-            return `检测到连续${options._consecutiveIdenticalToolCallCount}次完全相同的工具调用，已自动停止`
-        }
-        if (!options._toolCallSignatureHistory) {
-            options._toolCallSignatureHistory = new Map()
-        }
-        const prevCount = options._toolCallSignatureHistory.get(signature) || 0
-        options._toolCallSignatureHistory.set(signature, prevCount + 1)
-        if (prevCount >= 5) {
-            return `工具调用"${toolCalls[0]?.function?.name}"已重复${prevCount + 1}次（完全相同的参数），检测到循环调用`
-        }
-        if (toolCalls.length > 1) {
-            const callSignatures = toolCalls.map(tc => `${tc.function?.name}:${tc.function?.arguments}`)
-            const uniqueSignatures = new Set(callSignatures)
-            if (uniqueSignatures.size < toolCalls.length) {
-                this.logger.warn(`[Tool] 检测到同一响应中的重复工具调用，去重处理`)
-            }
-        }
-
-        return undefined
     }
 
     /**
@@ -1774,7 +1697,6 @@ export class AbstractClient {
         options._lastSimplifiedSignature = undefined
         options._toolCallSignatureHistory?.clear()
         options._simplifiedSignatureHistory?.clear()
-        options._executedToolSignatures?.clear()
     }
 
     /**
@@ -1785,18 +1707,23 @@ export class AbstractClient {
     deduplicateToolCalls(toolCalls) {
         if (!toolCalls || toolCalls.length <= 1) return toolCalls
 
-        const seen = new Map()
         const deduplicated = []
 
-        for (const tc of toolCalls) {
-            // 使用简化签名来检测功能相同的调用
-            const sig = this.buildSimplifiedSignature([tc])
-            if (!seen.has(sig)) {
-                seen.set(sig, true)
-                deduplicated.push(tc)
-            } else {
-                this.logger.warn(`[Tool] 去重: 移除重复调用 ${tc.function?.name}`)
+        for (let i = 0; i < toolCalls.length; i++) {
+            const tc = toolCalls[i]
+            const prev = deduplicated[deduplicated.length - 1]
+
+            // 只去除连续且完全相同（名称+参数）的调用
+            if (prev) {
+                const prevSig = this.buildToolCallSignature([prev])
+                const curSig = this.buildToolCallSignature([tc])
+                if (prevSig === curSig) {
+                    this.logger.debug(`[Tool] 去重: 跳过连续相同调用 ${tc.function?.name}`)
+                    continue
+                }
             }
+
+            deduplicated.push(tc)
         }
 
         return deduplicated

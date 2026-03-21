@@ -676,37 +676,31 @@ export class ImageGen extends plugin {
 
         await e.reply('正在获取API状态...', true)
 
-        const results = []
+        const results = await Promise.all(
+            apis.map(async (api, i) => {
+                try {
+                    const statusUrl = api.baseUrl
+                        .replace(/\/v1\/chat\/completions\/?$/, '')
+                        .replace(/\/v1\/?$/, '')
+                        .replace(/\/$/, '')
 
-        for (let i = 0; i < apis.length; i++) {
-            const api = apis[i]
-            try {
-                const statusUrl = api.baseUrl
-                    .replace(/\/v1\/chat\/completions\/?$/, '')
-                    .replace(/\/v1\/?$/, '')
-                    .replace(/\/$/, '')
-
-                const response = await fetch(statusUrl, {
-                    method: 'GET',
-                    headers: { 'Content-Type': 'application/json' },
-                    signal: AbortSignal.timeout(10000)
-                })
-
-                if (response.ok) {
-                    const data = await response.json()
-                    results.push({ index: i + 1, baseUrl: api.baseUrl, success: true, data, models: api.models || [] })
-                } else {
-                    results.push({
-                        index: i + 1,
-                        baseUrl: api.baseUrl,
-                        success: false,
-                        error: `HTTP ${response.status}`
+                    const response = await fetch(statusUrl, {
+                        method: 'GET',
+                        headers: { 'Content-Type': 'application/json' },
+                        signal: AbortSignal.timeout(10000)
                     })
+
+                    if (response.ok) {
+                        const data = await response.json()
+                        return { index: i + 1, baseUrl: api.baseUrl, success: true, data, models: api.models || [] }
+                    } else {
+                        return { index: i + 1, baseUrl: api.baseUrl, success: false, error: `HTTP ${response.status}` }
+                    }
+                } catch (err) {
+                    return { index: i + 1, baseUrl: api.baseUrl, success: false, error: err.message }
                 }
-            } catch (err) {
-                results.push({ index: i + 1, baseUrl: api.baseUrl, success: false, error: err.message })
-            }
-        }
+            })
+        )
         const mdLines = ['# 📊 画图API状态', '', `> 检测时间: ${new Date().toLocaleString()}`, '']
 
         for (const r of results) {

@@ -217,16 +217,16 @@ export class ToolGroupManager {
         let prompt = `你是智能任务调度器。分析用户请求，拆分为一个或多个任务。
 
 ## 核心原则：
-1. **多任务拆分**：复杂请求拆分为多个独立任务，按执行顺序排列
-2. **依赖关系**：后续任务依赖前置任务结果时，设置dependsOn
-3. **默认用工具**：涉及查询/操作的请求用tool，纯闲聊用chat
+1. **工具优先**：只要请求可能涉及数据查询、信息获取或操作执行，就使用 tool 类型。不确定时优先选择 tool 而非 chat
+2. **多任务拆分**：复杂请求拆分为多个独立任务，按执行顺序排列
+3. **依赖关系**：后续任务依赖前置任务结果时，设置 dependsOn
 
-## 任务类型：
-- **tool** - 查询/操作（关键词：查、找、获取、发送、时间、天气、群、成员...）
-- **draw** - 绘图（关键词：画、绘制、生成图片...）
+## 任务类型（优先级从高到低）：
+- **tool** - 查询、获取数据、执行操作（时间、天气、群信息、用户信息、成员列表、发消息、文件、搜索历史记录等）。**当不确定是否需要工具时，默认选择 tool**
+- **draw** - 绘图/生成图片（关键词：画、绘制、生成图片...）
 - **image_understand** - 理解图片内容
-- **search** - 联网搜索（关键词：搜索、最新、新闻...）
-- **chat** - 纯闲聊/问候/创作
+- **search** - 联网搜索新知识（关键词：搜索、最新消息、新闻、查一下...）
+- **chat** - **仅限**纯闲聊问候（你好、谢谢）或创意写作（写诗、编故事），不涉及任何数据查询
 
 `
         if (summary.length > 0) {
@@ -248,7 +248,7 @@ export class ToolGroupManager {
   "executionMode": "sequential"
 }
 
-## 多任务示例：
+## 示例：
 
 用户："帮我查群成员，然后画一张他们的合照"
 {"analysis":"先查群成员，再绘图","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[群管理工具组索引]}},{"type":"draw","priority":2,"params":{"drawPrompt":"group photo of people"},"dependsOn":1}],"executionMode":"sequential"}
@@ -256,8 +256,17 @@ export class ToolGroupManager {
 用户："查天气和时间"
 {"analysis":"并行查询","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[天气工具组]}},{"type":"tool","priority":1,"params":{"toolGroups":[时间工具组]}}],"executionMode":"parallel"}
 
+用户："现在几点了"
+{"analysis":"查询当前时间","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[基础工具组索引]}}],"executionMode":"sequential"}
+
+用户："群里有多少人"
+{"analysis":"查询群成员数据","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[群组信息工具组索引]}}],"executionMode":"sequential"}
+
+用户："今天天气怎么样"
+{"analysis":"查询天气数据","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[搜索/天气工具组索引]}}],"executionMode":"sequential"}
+
 用户："你好"
-{"analysis":"问候","tasks":[{"type":"chat","priority":1,"params":{}}],"executionMode":"sequential"}
+{"analysis":"纯问候闲聊","tasks":[{"type":"chat","priority":1,"params":{}}],"executionMode":"sequential"}
 
 只返回JSON。`
         return prompt

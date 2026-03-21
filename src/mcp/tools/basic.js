@@ -6,7 +6,8 @@
 export const basicTools = [
     {
         name: 'get_current_time',
-        description: '获取当前时间和日期信息',
+        description:
+            '获取当前时间和日期信息。当用户问"几点了""现在什么时间""今天几号""星期几"等时间相关问题时，必须调用此工具获取准确时间，不要猜测。',
         inputSchema: {
             type: 'object',
             properties: {
@@ -148,7 +149,7 @@ export const basicTools = [
         handler: async args => {
             try {
                 const { getCategoryInfo } = await import('./index.js')
-                const categories = getCategoryInfo()
+                const categories = await getCategoryInfo()
 
                 let result = []
 
@@ -200,7 +201,7 @@ export const basicTools = [
         handler: async args => {
             try {
                 const { getToolByName } = await import('./index.js')
-                const tool = getToolByName(args.tool_name)
+                const tool = await getToolByName(args.tool_name)
 
                 if (!tool) {
                     return { success: false, error: `未找到工具: ${args.tool_name}` }

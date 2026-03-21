@@ -8,7 +8,7 @@ import { groupNoticeApi } from './helpers.js'
 export const groupTools = [
     {
         name: 'get_group_info',
-        description: '获取群组的基本信息，包括群名、成员数量等',
+        description: '获取群组的基本信息，包括群名、成员数量等。当用户问"这个群叫什么""群里有多少人"时必须调用。',
         inputSchema: {
             type: 'object',
             properties: {

@@ -5,6 +5,7 @@
 import { chatLogger } from '../../core/utils/logger.js'
 import { memoryService } from './MemoryService.js'
 import { callMemoryLLM } from './llmHelper.js'
+import { isSimilarContent as isSimilarContentUtil } from '../../utils/common.js'
 import {
     MemoryCategory,
     ProfileSubType,
@@ -440,18 +441,8 @@ class MemoryExtractor {
         return []
     }
 
-    /**
-     * 简单内容相似度检查
-     */
     isSimilarContent(content1, content2) {
-        const normalize = s =>
-            s
-                .toLowerCase()
-                .replace(/\s+/g, '')
-                .replace(/[，。！？、：；""''（）【】]/g, '')
-        const n1 = normalize(content1)
-        const n2 = normalize(content2)
-        return n1 === n2 || n1.includes(n2) || n2.includes(n1)
+        return isSimilarContentUtil(content1, content2, { useJaccard: false })
     }
 }
 

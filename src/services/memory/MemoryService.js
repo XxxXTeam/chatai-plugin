@@ -5,12 +5,14 @@
 import { chatLogger } from '../../core/utils/logger.js'
 import { databaseService } from '../storage/DatabaseService.js'
 import { MemoryCategory, CategoryLabels, isValidCategory, getCategoryLabel, getSubTypeLabel } from './MemoryTypes.js'
+import { hashContent, isSimilarContent as isSimilarContentUtil } from '../../utils/common.js'
 
 const logger = chatLogger
 
 class MemoryService {
     constructor() {
         this.initialized = false
+        this._decayTimer = null
     }
 
     /**
@@ -20,7 +22,61 @@ class MemoryService {
         if (this.initialized) return
         databaseService.init()
         this.initialized = true
+        this._startDecayTimer()
         logger.debug('[MemoryService] Initialized')
+    }
+
+    /**
+     * 启动记忆淡忘定时器（每6小时执行一次衰减）
+     */
+    _startDecayTimer() {
+        if (this._decayTimer) return
+        const DECAY_INTERVAL = 6 * 60 * 60 * 1000
+
+        // 延迟5分钟首次执行，避免影响启动
+        setTimeout(
+            () => {
+                this._runDecay()
+                this._decayTimer = setInterval(() => this._runDecay(), DECAY_INTERVAL)
+            },
+            5 * 60 * 1000
+        )
+
+        if (typeof process !== 'undefined') {
+            process.once('exit', () => this.stopDecayTimer())
+        }
+    }
+
+    async _runDecay() {
+        try {
+            const { memorySummarizer } = await import('./MemorySummarizer.js')
+            const decayResult = await memorySummarizer.decayConfidence({
+                decayRate: 0.96,
+                minConfidence: 0.2,
+                daysThreshold: 14
+            })
+            if (decayResult.affected > 0) {
+                logger.info(`[MemoryService] 记忆淡忘: ${decayResult.affected} 条记忆可信度降低`)
+            }
+
+            // 清理可信度过低的记忆
+            const db = databaseService.db
+            const cleaned = db
+                .prepare('DELETE FROM structured_memories WHERE is_active = 1 AND confidence < 0.15')
+                .run()
+            if (cleaned.changes > 0) {
+                logger.info(`[MemoryService] 清理已淡忘记忆: ${cleaned.changes} 条`)
+            }
+        } catch (err) {
+            logger.debug('[MemoryService] 记忆淡忘执行失败:', err.message)
+        }
+    }
+
+    stopDecayTimer() {
+        if (this._decayTimer) {
+            clearInterval(this._decayTimer)
+            this._decayTimer = null
+        }
     }
 
     /**
@@ -152,35 +208,8 @@ class MemoryService {
         return null
     }
 
-    /**
-     * 判断内容是否相似
-     */
     isSimilarContent(content1, content2) {
-        if (!content1 || !content2) return false
-
-        // 标准化内容
-        const normalize = s =>
-            s
-                .toLowerCase()
-                .replace(/\s+/g, '')
-                .replace(/[，。！？、：；""''（）【】]/g, '')
-        const n1 = normalize(content1)
-        const n2 = normalize(content2)
-
-        // 完全相同
-        if (n1 === n2) return true
-
-        // 一个包含另一个
-        if (n1.includes(n2) || n2.includes(n1)) return true
-
-        // 简单相似度计算（Jaccard）
-        const set1 = new Set(n1.split(''))
-        const set2 = new Set(n2.split(''))
-        const intersection = new Set([...set1].filter(x => set2.has(x)))
-        const union = new Set([...set1, ...set2])
-        const similarity = intersection.size / union.size
-
-        return similarity > 0.8
+        return isSimilarContentUtil(content1, content2)
     }
 
     /**
@@ -248,6 +277,31 @@ class MemoryService {
         }
 
         return true
+    }
+
+    /**
+     * 批量删除记忆（事务化，避免循环内逐条 await）
+     */
+    async deleteMemoriesBatch(ids, hard = false) {
+        if (!ids || ids.length === 0) return 0
+        await this.ensureInit()
+        const db = databaseService.db
+
+        const deleteTransaction = db.transaction(idList => {
+            const stmt = hard
+                ? db.prepare('DELETE FROM structured_memories WHERE id = ?')
+                : db.prepare('UPDATE structured_memories SET is_active = 0, updated_at = ? WHERE id = ?')
+            for (const id of idList) {
+                if (hard) {
+                    stmt.run(id)
+                } else {
+                    stmt.run(Date.now(), id)
+                }
+            }
+            return idList.length
+        })
+
+        return deleteTransaction(ids)
     }
 
     // ==================== 查询方法 ====================
@@ -568,10 +622,7 @@ class MemoryService {
             }
         }
 
-        // 删除重复的
-        for (const id of toDelete) {
-            await this.deleteMemory(id, true)
-        }
+        await this.deleteMemoriesBatch(toDelete, true)
 
         return {
             originalCount: memories.length,
@@ -610,17 +661,8 @@ class MemoryService {
         return str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)
     }
 
-    /**
-     * 简单内容哈希
-     */
     hashContent(content) {
-        let hash = 0
-        const str = content.toLowerCase().replace(/\s+/g, '')
-        for (let i = 0; i < str.length; i++) {
-            hash = (hash << 5) - hash + str.charCodeAt(i)
-            hash = hash & hash
-        }
-        return hash.toString(16)
+        return hashContent(content)
     }
 
     // ==================== 上下文构建 ====================

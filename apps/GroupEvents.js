@@ -32,6 +32,7 @@ import {
     getBot,
     checkEventProbability
 } from '../src/utils/eventAdapter.js'
+import { getAIResponse } from '../src/utils/common.js'
 const messageCache = new Map()
 const MESSAGE_CACHE_TTL = 10 * 60 * 1000 // 10分钟
 const MESSAGE_CACHE_MAX = 2000
@@ -163,32 +164,6 @@ async function getUserNickname(e, userId, bot) {
 
 function getGroupName(e, bot) {
     return getAdapterGroupName(e, bot)
-}
-
-async function getAIResponse(prompt, options = {}) {
-    const { userId, groupId, maxLength = 100 } = options
-    try {
-        const { chatService } = await import('../src/services/llm/ChatService.js')
-        const result = await chatService.sendMessage({
-            userId: String(userId),
-            groupId: groupId ? String(groupId) : null,
-            message: prompt,
-            mode: 'roleplay',
-            skipHistory: true
-        })
-        let reply =
-            result.response
-                ?.filter(c => c.type === 'text')
-                ?.map(c => c.text)
-                ?.join('') || ''
-        if (maxLength && reply.length > maxLength) {
-            reply = reply.substring(0, maxLength)
-        }
-        return reply
-    } catch (err) {
-        logger.debug('[GroupEvents] AI响应失败:', err.message)
-        return null
-    }
 }
 
 async function sendMessage(bot, groupId, message) {
@@ -608,7 +583,8 @@ async function handleGroupEvent(eventType, e, bot) {
         const aiReply = await getAIResponse(prompt, {
             userId: userId,
             groupId: groupId,
-            maxLength: config.get(`features.${eventType}.maxLength`) || 100
+            maxLength: config.get(`features.${eventType}.maxLength`) || 100,
+            logTag: 'GroupEvents'
         })
 
         if (aiReply) {

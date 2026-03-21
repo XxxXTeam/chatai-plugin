@@ -77,8 +77,11 @@ function cleanExpiredSessions() {
     }
 }
 
-// 定期清理
-setInterval(cleanExpiredSessions, 5 * 60 * 1000)
+// 定期清理（保存引用以支持热更新时清理）
+const _cleanupTimer = setInterval(cleanExpiredSessions, 5 * 60 * 1000)
+if (typeof process !== 'undefined') {
+    process.once('exit', () => clearInterval(_cleanupTimer))
+}
 
 // 受保护的字段（不可通过在线编辑修改）
 const PROTECTED_FIELDS = ['userId', 'groupId', 'characterId', 'createdAt', 'messageCount']
