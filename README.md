@@ -1,6 +1,7 @@
-# ChatAI Plugin - Yunzai AI 聊天插件
-
-<div align="center">
+<h1 align="center">
+  <img src="https://api.iconify.design/logos:openai-icon.svg" width="32" height="32" style="vertical-align: middle;">
+  <span style="vertical-align: middle;">ChatAI Plugin - Yunzai AI 聊天插件</span>
+</h1>
 
 [![GitHub](https://img.shields.io/badge/GitHub-XxxXTeam%2Fchatai--plugin-blue?logo=github)](https://github.com/XxxXTeam/chatai-plugin)
 [![Version](https://img.shields.io/badge/version-1.0.0-blue?logo=semantic-release)](https://github.com/XxxXTeam/chatai-plugin/releases)

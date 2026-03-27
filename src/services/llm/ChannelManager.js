@@ -82,6 +82,20 @@ function normalizeSingleBaseUrl(baseUrl, adapterType) {
     return url
 }
 
+/**
+ * 从原始配置解析 baseUrls 列表。
+ * saveToConfig 会写入 baseUrls；旧数据或仅单地址时可能为 [] 但仍带 baseUrl，此时必须回退到 baseUrl，否则会误用 DEFAULT_BASE_URLS。
+ */
+function resolveChannelBaseUrls(raw) {
+    let urls = []
+    if (Array.isArray(raw.baseUrls) && raw.baseUrls.length > 0) {
+        urls = raw.baseUrls.filter(u => u != null && String(u).trim())
+    } else if (raw.baseUrl != null && String(raw.baseUrl).trim()) {
+        urls = [String(raw.baseUrl).trim()]
+    }
+    return urls
+}
+
 // APIKey轮询策略
 export const KeyStrategy = {
     ROUND_ROBIN: 'round-robin', // 轮询
@@ -367,11 +381,7 @@ export class ChannelManager {
         const channels = config.get('channels') || []
 
         for (const channelConfig of channels) {
-            // 兼容旧格式：单个baseUrl转换为数组
-            let baseUrls = channelConfig.baseUrls || []
-            if (!Array.isArray(baseUrls) && channelConfig.baseUrl) {
-                baseUrls = [channelConfig.baseUrl]
-            }
+            let baseUrls = resolveChannelBaseUrls(channelConfig)
             if (baseUrls.length === 0) {
                 baseUrls = [DEFAULT_BASE_URLS[channelConfig.adapterType] || '']
             }
@@ -522,11 +532,7 @@ export class ChannelManager {
     async create(channelData) {
         const id = channelData.id || `${channelData.adapterType}-${crypto.randomBytes(4).toString('hex')}`
 
-        // 处理baseUrl：支持单个或数组
-        let baseUrls = channelData.baseUrls || []
-        if (!Array.isArray(baseUrls) && channelData.baseUrl) {
-            baseUrls = [channelData.baseUrl]
-        }
+        let baseUrls = resolveChannelBaseUrls(channelData)
         if (baseUrls.length === 0) {
             baseUrls = [DEFAULT_BASE_URLS[channelData.adapterType] || '']
         }
