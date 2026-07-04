@@ -88,9 +88,11 @@ router.post('/servers', async (req, res) => {
             if (!serverConfig.package) {
                 return res.status(400).json(ChaiteResponse.fail(null, 'package is required for npm/npx type'))
             }
-        } else if (type === 'sse' || type === 'http') {
+        } else if (type === 'sse' || type === 'http' || type === 'streamable-http') {
             if (!serverConfig.url) {
-                return res.status(400).json(ChaiteResponse.fail(null, 'url is required for sse/http type'))
+                return res
+                    .status(400)
+                    .json(ChaiteResponse.fail(null, 'url is required for sse/http/streamable-http type'))
             }
         } else {
             return res.status(400).json(ChaiteResponse.fail(null, `Unsupported server type: ${type}`))

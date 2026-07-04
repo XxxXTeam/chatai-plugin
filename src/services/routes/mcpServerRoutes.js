@@ -228,14 +228,14 @@ async function handleToolsCall(params, id) {
                 isMaster: true
             })
         } else if (server.jsTools.has(name)) {
-        /* 2. JS 自定义工具 */
+            /* 2. JS 自定义工具 */
             const jsTool = server.jsTools.get(name)
             result = await jsTool.run(args || {}, {
                 getBot: () => global.Bot,
                 getEvent: () => null
             })
         } else {
-        /* 3. 自定义代码工具 */
+            /* 3. 自定义代码工具 */
             const customTools = server.getCustomTools()
             const ct = customTools.find(t => t.name === name)
             if (ct?.handler) {
@@ -328,6 +328,13 @@ router.post('/', mcpAuthMiddleware, express.json(), async (req, res) => {
     if (!response) {
         /* 通知类消息（如 initialized）无需响应 */
         return res.status(204).end()
+    }
+
+    // Streamable HTTP 会话管理：initialize 响应返回 Mcp-Session-Id
+    if (req.body?.method === 'initialize' && response.result) {
+        const sessionId = crypto.randomUUID()
+        activeSessions.set(sessionId, { res: null, createdAt: Date.now(), isStreamableHttp: true })
+        res.setHeader('Mcp-Session-Id', sessionId)
     }
 
     res.json(response)

@@ -10,6 +10,21 @@ const router = express.Router()
 // 活跃的批量测试任务
 const activeBatchTests = new Map()
 
+/**
+ * SSE 响应辅助函数
+ */
+function sseResponse(res) {
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    res.setHeader('X-Accel-Buffering', 'no')
+    return (event, data) => {
+        if (!res.writableEnded) {
+            res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+        }
+    }
+}
+
 // POST /api/test-panel/batch-test - 批量测试渠道模型（SSE）
 router.post('/batch-test', async (req, res) => {
     const { channelId, models, concurrency = 3, clearPrevious = true } = req.body
@@ -260,7 +275,7 @@ router.get('/active-tests', async (req, res) => {
     res.json(ApiResponse.ok(tests))
 })
 
-// POST /api/test-panel/quick-test - 快速测试单个模型
+// POST /api/test-panel/quick-test - 快速测试单个模型（SSE，防止长耗时请求挂起）
 router.post('/quick-test', async (req, res) => {
     const { channelId, model, message = '说一声你好' } = req.body
     const startTime = Date.now()
@@ -270,6 +285,18 @@ router.post('/quick-test', async (req, res) => {
 
     if (!channel) {
         return res.status(404).json(ApiResponse.fail(null, '渠道不存在'))
+    }
+
+    // 设置 SSE 响应，防止长耗时请求被前端/代理超时切断
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    res.setHeader('X-Accel-Buffering', 'no')
+
+    const sendEvent = (event, data) => {
+        if (!res.writableEnded) {
+            res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+        }
     }
 
     try {
@@ -285,10 +312,16 @@ router.post('/quick-test', async (req, res) => {
         const client = new OpenAIClient({
             apiKey,
             baseUrl: channel.baseUrl,
-            chatPath: channel.chatPath, // 自定义对话路径
+            chatPath: channel.chatPath,
             imageConfig: channel.imageConfig || {},
             features: ['chat'],
             tools: []
+        })
+
+        sendEvent('start', {
+            model: model || channel.models?.[0],
+            channel: channel.name,
+            message
         })
 
         const response = await client.sendMessage(
@@ -307,28 +340,25 @@ router.post('/quick-test', async (req, res) => {
                 .map(c => c.text)
                 .join('') || ''
 
-        res.json(
-            ApiResponse.ok({
-                success: true,
-                model: model || channel.models?.[0],
-                elapsed,
-                response: replyText,
-                keyInfo: keyInfo ? { name: keyInfo.keyName, index: keyInfo.keyIndex } : null
-            })
-        )
+        sendEvent('result', {
+            success: true,
+            model: model || channel.models?.[0],
+            elapsed,
+            response: replyText,
+            keyInfo: keyInfo ? { name: keyInfo.keyName, index: keyInfo.keyIndex } : null
+        })
     } catch (error) {
         const elapsed = Date.now() - startTime
-        res.status(500).json(
-            ApiResponse.fail(
-                {
-                    success: false,
-                    model: model || channel.models?.[0],
-                    elapsed,
-                    error: error.message
-                },
-                error.message
-            )
-        )
+        sendEvent('error', {
+            success: false,
+            model: model || channel.models?.[0],
+            elapsed,
+            error: error.message
+        })
+    } finally {
+        if (!res.writableEnded) {
+            res.end()
+        }
     }
 })
 

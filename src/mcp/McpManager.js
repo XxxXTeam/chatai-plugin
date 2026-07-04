@@ -340,7 +340,18 @@ export class McpManager {
      * 2. transport嵌套格式: { transport: { type: 'http', url: '...' } }
      */
     inferServerType(serverConfig) {
-        if (serverConfig.url) return 'sse'
+        if (serverConfig.url) {
+            // 根据 URL 路径或显式 type 推断 HTTP 类型
+            if (serverConfig.type === 'streamable-http' || serverConfig.type === 'http') {
+                return serverConfig.type
+            }
+            // 如果 URL 包含 /mcp 或 /sse 但没有显式 type，优先推断为 streamable-http
+            const urlPath = serverConfig.url.toLowerCase()
+            if (urlPath.includes('/mcp') || urlPath.endsWith('/sse')) {
+                return 'streamable-http'
+            }
+            return 'sse'
+        }
         if (serverConfig.package) return 'npm'
         if (serverConfig.command) return 'stdio'
         return undefined
@@ -390,7 +401,13 @@ export class McpManager {
         }
 
         const normalized = { ...config }
-        normalized.type = (normalized.type || this.inferServerType(normalized) || 'stdio').toLowerCase()
+        const inferredType = this.inferServerType(normalized)
+        normalized.type = (normalized.type || inferredType || 'stdio').toLowerCase()
+
+        // 如果显式配置了 streamable-http，保留该类型
+        if (config.type === 'streamable-http' || config.type === 'http') {
+            normalized.type = config.type
+        }
 
         return this.normalizeNpxServerConfig(normalized)
     }

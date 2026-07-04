@@ -424,6 +424,21 @@ class Config {
             mcp: {
                 enabled: true,
                 /*
+                 * MCP 超时配置（毫秒）
+                 * 支持从全局配置统一控制所有 MCP 客户端的超时行为
+                 * 单个服务器配置中的 timeouts 字段可覆盖全局值
+                 */
+                timeouts: {
+                    connect: 30000, // 连接超时
+                    request: 600000, // 请求超时：10 分钟（image_create 等长耗时工具）
+                    sseConnect: 15000, // SSE 连接超时
+                    sseEndpoint: 2000, // SSE endpoint 等待超时
+                    startup: 5000, // 进程启动超时
+                    ping: 5000, // ping 超时
+                    heartbeat: 30000, // 心跳间隔
+                    terminate: 3000 // 进程强制终止超时
+                },
+                /*
                  * MCP Server 暴露配置
                  * 将插件内置工具以标准 MCP 协议暴露给外部客户端
                  * 访问路径: /chatai/mcp

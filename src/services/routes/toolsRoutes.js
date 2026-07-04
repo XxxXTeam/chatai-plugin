@@ -474,10 +474,22 @@ router.post('/refresh', async (req, res) => {
 
 // POST /test - 测试工具
 router.post('/test', async (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    res.setHeader('X-Accel-Buffering', 'no')
+
+    const sendEvent = (event, data) => {
+        if (!res.writableEnded) {
+            res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+        }
+    }
+
     try {
         const { toolName, arguments: args } = req.body
         if (!toolName) {
-            return res.status(400).json(ChaiteResponse.fail(null, 'toolName is required'))
+            sendEvent('error', { code: 400, message: 'toolName is required' })
+            return res.end()
         }
 
         await mcpManager.init()
@@ -488,21 +500,26 @@ router.post('/test', async (req, res) => {
             callOptions.serverName = identityMatch[1]
             callName = identityMatch[2]
         }
+
+        sendEvent('start', { toolName: callName })
+
         const startTime = Date.now()
         const result = await mcpManager.callTool(callName, args || {}, callOptions)
         const duration = Date.now() - startTime
 
-        res.json(
-            ChaiteResponse.ok({
-                toolName,
-                arguments: args || {},
-                result,
-                duration,
-                success: !result?.error
-            })
-        )
+        sendEvent('result', {
+            toolName: callName,
+            arguments: args || {},
+            result,
+            duration,
+            success: !result?.error
+        })
     } catch (error) {
-        res.status(500).json(ChaiteResponse.fail(null, error.message))
+        sendEvent('error', { code: 500, message: error.message })
+    } finally {
+        if (!res.writableEnded) {
+            res.end()
+        }
     }
 })
 

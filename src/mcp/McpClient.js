@@ -2,8 +2,25 @@ import { spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import { EventSource } from 'eventsource'
 import { chatLogger } from '../core/utils/logger.js'
+import config from '../../config/config.js'
 
 const logger = chatLogger
+
+/** 从全局配置读取 MCP 超时配置 */
+function getConfigTimeouts() {
+    const mcpConfig = config.get('mcp') || {}
+    const timeouts = mcpConfig.timeouts || {}
+    return {
+        connect: timeouts.connect || 30000,
+        request: timeouts.request || 30000,
+        sseConnect: timeouts.sseConnect || 15000,
+        sseEndpoint: timeouts.sseEndpoint || 2000,
+        startup: timeouts.startup || 5000,
+        ping: timeouts.ping || 5000,
+        heartbeat: timeouts.heartbeat || 30000,
+        terminate: timeouts.terminate || 3000
+    }
+}
 
 /**
  * MCP Client - Model Context Protocol 客户端实现
@@ -37,14 +54,23 @@ const logger = chatLogger
 export class McpClient {
     /**
      * @param {Object} config - 客户端配置
-     * @param {string} [config.type='stdio'] - 传输类型: stdio | npm | npx | sse | http
+     * @param {string} [config.type='stdio'] - 传输类型: stdio | npm | npx | sse | http | streamable-http
      * @param {string} [config.command] - stdio 模式的命令
      * @param {string[]} [config.args] - 命令参数
      * @param {string} [config.package] - npm/npx 模式的包名（如 @anthropic/mcp-server-filesystem）
      * @param {string} [config.url] - SSE/HTTP 模式的 URL
      * @param {Object} [config.env] - 环境变量
      * @param {Object} [config.headers] - HTTP 请求头
-     * @param {number} [config.timeout=30000] - 连接超时时间（毫秒）
+     * @param {number} [config.timeout=30000] - 连接超时时间（毫秒，兼容旧版）
+     * @param {Object} [config.timeouts] - 细分超时配置
+     * @param {number} [config.timeouts.connect=30000] - 连接超时
+     * @param {number} [config.timeouts.request=30000] - 请求超时
+     * @param {number} [config.timeouts.sseConnect=15000] - SSE 连接超时
+     * @param {number} [config.timeouts.sseEndpoint=2000] - SSE endpoint 等待超时
+     * @param {number} [config.timeouts.startup=5000] - 进程启动超时
+     * @param {number} [config.timeouts.ping=5000] - ping 超时
+     * @param {number} [config.timeouts.heartbeat=30000] - 心跳间隔
+     * @param {number} [config.timeouts.terminate=3000] - 进程强制终止超时
      * @param {boolean} [config.autoReconnect=true] - 是否自动重连
      */
     constructor(config) {
@@ -72,14 +98,27 @@ export class McpClient {
         this.reconnectAttempts = 0
         /** @type {number} 最大重连次数 */
         this.maxReconnectAttempts = config.maxReconnectAttempts || 5
-        /** @type {number} 连接超时时间 */
-        this.timeout = config.timeout || 30000
         /** @type {boolean} 是否自动重连 */
         this.autoReconnect = config.autoReconnect !== false
         /** @type {Object|null} 服务器信息 */
         this.serverInfo = null
         /** @type {string|null} 服务器名称 */
         this.serverName = config.name || null
+
+        // 从全局配置读取超时时间，允许单个配置覆盖
+        const cfgTimeouts = getConfigTimeouts()
+        this.timeouts = {
+            connect: config.timeout ?? config.timeouts?.connect ?? cfgTimeouts.connect,
+            request: config.timeouts?.request ?? cfgTimeouts.request,
+            sseConnect: config.timeouts?.sseConnect ?? cfgTimeouts.sseConnect,
+            sseEndpoint: config.timeouts?.sseEndpoint ?? cfgTimeouts.sseEndpoint,
+            startup: config.timeouts?.startup ?? cfgTimeouts.startup,
+            ping: config.timeouts?.ping ?? cfgTimeouts.ping,
+            heartbeat: config.timeouts?.heartbeat ?? cfgTimeouts.heartbeat,
+            terminate: config.timeouts?.terminate ?? cfgTimeouts.terminate
+        }
+        // 兼容旧版单字段 timeout
+        this.timeout = this.timeouts.connect
     }
 
     /**
@@ -102,13 +141,13 @@ export class McpClient {
                 await this.connectNpm()
             } else if (this.type === 'sse') {
                 await this.connectSSE()
-            } else if (this.type === 'http') {
+            } else if (this.type === 'http' || this.type === 'streamable-http') {
                 await this.connectHTTP()
             } else {
                 throw new Error(`Unsupported transport type: ${this.type}`)
             }
             await this.initialize()
-            if (this.type !== 'http') {
+            if (this.type !== 'http' && this.type !== 'streamable-http') {
                 this.startHeartbeat()
             }
             this.reconnectAttempts = 0
@@ -184,7 +223,7 @@ export class McpClient {
                 if (!this.initialized) {
                     logger.warn(`[MCP] npm server startup timeout: ${pkg}`)
                 }
-            }, this.timeout)
+            }, this.timeouts.startup)
 
             this.process.stdout.on('data', data => {
                 clearTimeout(startupTimeout)
@@ -241,7 +280,7 @@ export class McpClient {
                     } else {
                         resolve()
                     }
-                }, 5000)
+                }, this.timeouts.startup)
             })
         } catch (error) {
             logger.error(`[MCP] Failed to spawn npm server: ${error.message}`)
@@ -321,7 +360,7 @@ export class McpClient {
                     this.eventSource?.close()
                     reject(new Error('SSE connection timeout'))
                 }
-            }, 15000)
+            }, this.timeouts.sseConnect)
             this.eventSource.addEventListener('endpoint', event => {
                 this.sseMessageEndpoint = this.resolveSSEEndpoint(event.data)
                 logger.debug(`[MCP] SSE endpoint received: ${this.sseMessageEndpoint}`)
@@ -361,7 +400,7 @@ export class McpClient {
                         clearTimeout(timeout)
                         resolve()
                     }
-                }, 2000)
+                }, this.timeouts.sseEndpoint)
             }
         })
     }
@@ -370,6 +409,84 @@ export class McpClient {
         const { url, headers } = this.config
         this.httpUrl = url
         this.httpHeaders = headers || {}
+        this.httpSessionId = null
+        // Streamable HTTP 模式下初始化会话
+        if (this.config.useStreamableHttp !== false) {
+            await this.initStreamableHttpSession()
+        }
+    }
+
+    /**
+     * 初始化 Streamable HTTP 会话
+     * 根据 MCP 2025-03-26 规范，发送 initialize 请求并获取 Mcp-Session-Id
+     */
+    async initStreamableHttpSession() {
+        try {
+            const controller = new AbortController()
+            const timer = setTimeout(() => controller.abort(), this.timeouts.connect)
+
+            const initBody = {
+                jsonrpc: '2.0',
+                id: crypto.randomUUID(),
+                method: 'initialize',
+                params: {
+                    protocolVersion: '2024-11-05',
+                    capabilities: {
+                        roots: { listChanged: false },
+                        sampling: {},
+                        tools: { listChanged: true }
+                    },
+                    clientInfo: {
+                        name: 'chatgpt-plugin',
+                        version: '1.0.0'
+                    }
+                }
+            }
+
+            logger.debug(`[MCP] Streamable HTTP initializing session to ${this.httpUrl}`)
+            const response = await fetch(this.httpUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json, text/event-stream',
+                    ...this.httpHeaders
+                },
+                body: JSON.stringify(initBody),
+                signal: controller.signal
+            })
+
+            clearTimeout(timer)
+
+            // 提取会话 ID
+            const sessionId = response.headers.get('Mcp-Session-Id')
+            if (sessionId) {
+                this.httpSessionId = sessionId
+                logger.debug(`[MCP] Streamable HTTP session established: ${sessionId}`)
+            }
+
+            if (!response.ok) {
+                const text = await response.text().catch(() => '')
+                logger.warn(`[MCP] Streamable HTTP init returned ${response.status}: ${text}`)
+                return
+            }
+
+            // 处理 SSE 流式响应或 JSON 响应
+            const contentType = response.headers.get('content-type') || ''
+            if (contentType.includes('text/event-stream')) {
+                await this.parseSSEResponse(response)
+            } else {
+                const result = await response.json()
+                if (result?.result?.capabilities) {
+                    this.serverCapabilities = result.result.capabilities
+                }
+                if (result?.result?.serverInfo) {
+                    this.serverInfo = result.result.serverInfo
+                }
+            }
+        } catch (error) {
+            logger.warn(`[MCP] Streamable HTTP session init failed: ${error.message}`)
+            // 非致命错误，继续尝试无状态模式
+        }
     }
 
     handleData(data) {
@@ -515,7 +632,7 @@ export class McpClient {
                 logger.warn('[MCP] Heartbeat failed:', error)
                 this.handleDisconnect()
             }
-        }, 30000) // 30 seconds
+        }, this.timeouts.heartbeat)
     }
 
     stopHeartbeat() {
@@ -527,7 +644,7 @@ export class McpClient {
 
     async ping() {
         try {
-            await this.request('ping', undefined, 5000)
+            await this.request('ping', undefined, this.timeouts.ping)
             return true
         } catch (error) {
             // Ping not supported, ignore
@@ -535,7 +652,7 @@ export class McpClient {
         }
     }
 
-    async request(method, params, timeout = 30000) {
+    async request(method, params, timeout = this.timeouts.request) {
         if (this.type === 'http') {
             return await this.httpRequest(method, params, timeout)
         }
@@ -678,7 +795,7 @@ export class McpClient {
         throw lastError || new Error('SSE notification failed')
     }
 
-    async sendSSERequest(request, timeout = 30000) {
+    async sendSSERequest(request, timeout = this.timeouts.request) {
         const { headers: configHeaders = {} } = this.config
         const messageUrls = this.getSSEMessageUrlCandidates()
         const messageUrl = messageUrls[0]
@@ -687,17 +804,21 @@ export class McpClient {
             logger.debug(`[MCP] SSE POST to: ${messageUrl}, id: ${request.id}, method: ${request.method}`)
         }
 
+        // 使用 AbortController 确保 fetch 在超时时能被中断
+        const controller = new AbortController()
         let cleanupPending = () => {}
         const responsePromise = new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
                 if (this.pendingRequests.has(request.id)) {
                     this.pendingRequests.delete(request.id)
+                    controller.abort()
                     reject(new Error(`SSE response timeout for ${request.method}`))
                 }
             }, timeout)
 
             cleanupPending = err => {
                 clearTimeout(timer)
+                controller.abort()
                 this.pendingRequests.delete(request.id)
                 if (err) reject(err)
             }
@@ -735,10 +856,15 @@ export class McpClient {
                         Accept: 'application/json, text/event-stream',
                         ...configHeaders
                     },
-                    body: JSON.stringify(request)
+                    body: JSON.stringify(request),
+                    signal: controller.signal
                 })
             } catch (fetchError) {
-                lastError = new Error(`SSE POST failed: ${fetchError.message}`)
+                if (fetchError.name === 'AbortError' || fetchError.message?.includes('aborted')) {
+                    lastError = new Error(`SSE request aborted: ${fetchError.message}`)
+                } else {
+                    lastError = new Error(`SSE POST failed: ${fetchError.message}`)
+                }
                 continue
             }
 
@@ -794,7 +920,7 @@ export class McpClient {
         }
     }
 
-    async httpRequest(method, params, timeout = 30000) {
+    async httpRequest(method, params, timeout = this.timeouts.request) {
         const controller = new AbortController()
         const timer = setTimeout(() => controller.abort(), timeout)
 
@@ -807,18 +933,31 @@ export class McpClient {
                 params
             }
 
+            // 构建请求头，支持 Streamable HTTP 会话 ID
+            const headers = {
+                'Content-Type': 'application/json',
+                Accept: 'application/json, text/event-stream',
+                ...this.httpHeaders
+            }
+            if (this.httpSessionId) {
+                headers['Mcp-Session-Id'] = this.httpSessionId
+            }
+
             const response = await fetch(this.httpUrl, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Accept: 'application/json, text/event-stream',
-                    ...this.httpHeaders
-                },
+                headers,
                 body: JSON.stringify(requestBody),
                 signal: controller.signal
             })
 
             clearTimeout(timer)
+
+            // 更新会话 ID（服务器可能返回新的）
+            const newSessionId = response.headers.get('Mcp-Session-Id')
+            if (newSessionId && newSessionId !== this.httpSessionId) {
+                this.httpSessionId = newSessionId
+                logger.debug(`[MCP] Streamable HTTP session ID updated: ${newSessionId}`)
+            }
 
             if (!response.ok) {
                 const text = await response.text().catch(() => '')
@@ -908,18 +1047,27 @@ export class McpClient {
 
     async initialize() {
         try {
-            const result = await this.request('initialize', {
-                protocolVersion: '2024-11-05',
-                capabilities: {
-                    roots: { listChanged: false },
-                    sampling: {},
-                    tools: { listChanged: true }
-                },
-                clientInfo: {
-                    name: 'chatgpt-plugin',
-                    version: '1.0.0'
+            // Streamable HTTP 模式下，initialize 已在会话初始化时发送
+            let result = null
+            if (this.type === 'streamable-http' && this.serverCapabilities && this.serverInfo) {
+                result = {
+                    capabilities: this.serverCapabilities,
+                    serverInfo: this.serverInfo
                 }
-            })
+            } else {
+                result = await this.request('initialize', {
+                    protocolVersion: '2024-11-05',
+                    capabilities: {
+                        roots: { listChanged: false },
+                        sampling: {},
+                        tools: { listChanged: true }
+                    },
+                    clientInfo: {
+                        name: 'chatgpt-plugin',
+                        version: '1.0.0'
+                    }
+                })
+            }
 
             this.initialized = true
             this.serverCapabilities = result?.capabilities || {}
@@ -941,6 +1089,11 @@ export class McpClient {
                 this.process.stdin.write(JSON.stringify(initializedNotification) + '\n')
             } else if (this.type === 'sse') {
                 await this.sendSSENotification(initializedNotification)
+            } else if (this.type === 'streamable-http') {
+                // Streamable HTTP 模式下发送 initialized 通知
+                await this.httpRequest('notifications/initialized', {}).catch(err =>
+                    logger.debug(`[MCP] Streamable HTTP initialized notification: ${err.message}`)
+                )
             }
 
             const capabilities = Object.keys(this.serverCapabilities || {})
@@ -1108,7 +1261,7 @@ export class McpClient {
                 }
                 this.process = null
                 resolve()
-            }, 3000)
+            }, this.timeouts.terminate)
 
             try {
                 this.process.once('exit', () => {
