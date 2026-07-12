@@ -24,6 +24,10 @@ class SkillsLoader {
         this.mcpServerTools = new Map()
         this.initialized = false
         this.pluginRoot = null
+        // 懒加载：暴露给模型的技能清单（仅名称+描述），key 为技能名
+        this.exposedSkills = new Map()
+        // 懒加载：已完整加载到会话上下文的技能，key 为技能名，value 为完整文档
+        this.loadedSkills = new Map()
     }
 
     /**
@@ -44,11 +48,30 @@ class SkillsLoader {
         // 加载工具
         await this.loadAll()
         await skillDocumentLoader.init(pluginRoot, skillsConfig)
+        this._syncExposedSkills()
+        this.autoLoadSkills()
 
         this.initialized = true
         logger.debug(`[SkillsLoader] 初始化完成: ${this.tools.size} 个工具, mode=${skillsConfig.getMode()}`)
 
         return this
+    }
+
+    /**
+     * 将文档技能同步到 exposedSkills 列表
+     * @private
+     */
+    _syncExposedSkills() {
+        this.exposedSkills.clear()
+        const documents = skillDocumentLoader.getDocuments()
+        for (const doc of documents) {
+            this.exposedSkills.set(doc.name, {
+                name: doc.name,
+                description: doc.description || '',
+                autoActivate: doc.autoActivate !== false,
+                priority: doc.priority || 0
+            })
+        }
     }
 
     /**
@@ -276,6 +299,7 @@ class SkillsLoader {
         await mcpManager.refreshBuiltinTools()
         await this.loadAll()
         await skillDocumentLoader.load()
+        this._syncExposedSkills()
         logger.debug(`[SkillsLoader] 重新加载完成: ${this.tools.size} 个工具`)
     }
 
@@ -538,6 +562,92 @@ class SkillsLoader {
         }
 
         return tools.filter(tool => allowedTools.has(tool.name) || allowedTools.has(getToolIdentity(tool)))
+    }
+
+    // ========== Skills 懒加载机制 ==========
+
+    /**
+     * 获取暴露给模型的技能列表（仅名称和描述）
+     * @returns {Array<{name: string, description: string, autoActivate: boolean, priority: number}>}
+     */
+    getExposedSkillList() {
+        const documents = skillDocumentLoader.getDocuments()
+        return documents.map(doc => ({
+            name: doc.name,
+            description: doc.description || '',
+            autoActivate: doc.autoActivate !== false,
+            priority: doc.priority || 0,
+            type: doc.type || 'markdown',
+            triggers: doc.triggers || []
+        }))
+    }
+
+    /**
+     * 加载指定的 skill 到当前会话
+     * @param {string} name - 技能名称
+     * @returns {boolean} 是否成功加载
+     */
+    loadSkill(name) {
+        if (!name) return false
+        const key = String(name).trim()
+
+        if (this.loadedSkills.has(key)) return true
+
+        const doc = skillDocumentLoader.getDocumentByName(key)
+        if (!doc) return false
+
+        this.loadedSkills.set(key, {
+            ...doc,
+            loadedAt: Date.now()
+        })
+        logger.debug(`[SkillsLoader] 技能已加载: ${key}`)
+        return true
+    }
+
+    /**
+     * 卸载指定的 skill
+     * @param {string} name - 技能名称
+     * @returns {boolean} 是否成功卸载
+     */
+    unloadSkill(name) {
+        if (!name) return false
+        const key = String(name).trim()
+        const deleted = this.loadedSkills.delete(key)
+        if (deleted) {
+            logger.debug(`[SkillsLoader] 技能已卸载: ${key}`)
+        }
+        return deleted
+    }
+
+    /**
+     * 获取已加载的技能名称列表
+     * @returns {string[]}
+     */
+    getLoadedSkillNames() {
+        return Array.from(this.loadedSkills.keys())
+    }
+
+    /**
+     * 获取已加载的技能完整信息
+     * @returns {Array}
+     */
+    getLoadedSkillDocuments() {
+        return Array.from(this.loadedSkills.values())
+    }
+
+    /**
+     * 初始化时自动加载 autoActivate 的技能
+     */
+    autoLoadSkills() {
+        const documents = skillDocumentLoader.getDocuments()
+        for (const doc of documents) {
+            if (doc.autoActivate !== false) {
+                this.loadedSkills.set(doc.name, { ...doc, loadedAt: Date.now() })
+            }
+        }
+        if (this.loadedSkills.size > 0) {
+            logger.debug(`[SkillsLoader] 自动加载 ${this.loadedSkills.size} 个技能`)
+        }
     }
 }
 

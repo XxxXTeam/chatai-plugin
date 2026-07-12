@@ -22,6 +22,7 @@ import {
     toggleTool
 } from '../agent/SkillsAgent.js'
 import { skillsLoader } from '../skills/SkillsLoader.js'
+import config from '../../../config/config.js'
 
 const router = express.Router()
 
@@ -484,6 +485,125 @@ router.get('/stats', async (req, res) => {
     try {
         const stats = getToolStats()
         res.json(ChaiteResponse.ok(stats))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// ========== 上下文压缩配置 ==========
+
+/**
+ * 上下文压缩配置允许更新的字段白名单
+ * @type {string[]}
+ */
+const CONTEXT_CONFIG_ALLOWED_KEYS = [
+    'maxTokens',
+    'maxMessages',
+    'compressionThreshold',
+    'compressionStrategy',
+    'preserveSystemPrompt',
+    'preserveRecentMessages',
+    'autoReloadSkills'
+]
+
+/**
+ * GET /context-config - 获取当前上下文压缩配置
+ * @returns {ChaiteResponse} 当前 context 配置对象
+ */
+router.get('/context-config', async (req, res) => {
+    try {
+        const contextConfig = config.get('context') || {}
+        res.json(ChaiteResponse.ok(contextConfig))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * POST /context-config - 更新上下文压缩配置
+ * 仅接受白名单字段，以 merge 方式写入 config 的 context key
+ * @returns {ChaiteResponse} 本次实际生效的字段
+ */
+router.post('/context-config', async (req, res) => {
+    try {
+        const updates = req.body || {}
+        const filtered = {}
+        for (const key of CONTEXT_CONFIG_ALLOWED_KEYS) {
+            if (key in updates) filtered[key] = updates[key]
+        }
+
+        const current = config.get('context') || {}
+        config.set('context', { ...current, ...filtered })
+
+        res.json(ChaiteResponse.ok(filtered, '上下文配置已更新'))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// ========== 已加载技能管理 ==========
+
+/**
+ * GET /loaded - 获取当前已加载（激活）的技能列表
+ * @returns {ChaiteResponse} { skills: 全部文档, loaded: 已加载名称数组 }
+ */
+router.get('/loaded', async (req, res) => {
+    try {
+        const loader = global.chatAiSkillsLoader
+        if (!loader?.initialized) {
+            return res.json(ChaiteResponse.ok({ skills: [], loaded: [] }))
+        }
+        res.json(
+            ChaiteResponse.ok({
+                skills: loader.getSkillDocuments(),
+                loaded: loader.getLoadedSkillNames()
+            })
+        )
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * POST /load/:name - 加载（激活）指定技能
+ * @returns {ChaiteResponse} { name, loaded: true } 或 404
+ */
+router.post('/load/:name', async (req, res) => {
+    try {
+        const { name } = req.params
+        const loader = global.chatAiSkillsLoader
+        if (!loader?.initialized) {
+            return res.status(500).json(ChaiteResponse.fail(null, 'Skills 未初始化'))
+        }
+
+        const loaded = loader.loadSkill(name)
+        if (!loaded) {
+            return res.status(404).json(ChaiteResponse.fail(null, `技能 ${name} 不存在`))
+        }
+
+        broadcastSSE('skill-loaded', { name, timestamp: Date.now() })
+        res.json(ChaiteResponse.ok({ name, loaded: true }))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * POST /unload/:name - 卸载指定技能
+ * @returns {ChaiteResponse} { name, loaded: false }
+ */
+router.post('/unload/:name', async (req, res) => {
+    try {
+        const { name } = req.params
+        const loader = global.chatAiSkillsLoader
+        if (!loader?.initialized) {
+            return res.status(500).json(ChaiteResponse.fail(null, 'Skills 未初始化'))
+        }
+
+        loader.unloadSkill(name)
+
+        broadcastSSE('skill-unloaded', { name, timestamp: Date.now() })
+        res.json(ChaiteResponse.ok({ name, loaded: false }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }

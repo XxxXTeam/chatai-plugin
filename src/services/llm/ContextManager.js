@@ -1460,6 +1460,275 @@ ${dialogText}
 
         return { text: quoteText, chain }
     }
+
+    // ========== 上下文压缩与 Skills 重注入 ==========
+
+    /**
+     * 获取上下文压缩配置
+     * @param {Object} options - 运行时覆盖选项
+     * @returns {Object}
+     */
+    getContextConfig(options = {}) {
+        const base = config.get('context') || {}
+        return {
+            maxTokens: options.maxTokens ?? base.maxTokens ?? 0,
+            maxMessages: options.maxMessages ?? base.maxMessages ?? this.maxContextMessages,
+            compressionThreshold: base.compressionThreshold ?? 0.8,
+            compressionStrategy: base.compressionStrategy ?? 'summarize',
+            preserveSystemPrompt: base.preserveSystemPrompt !== false,
+            preserveRecentMessages: base.preserveRecentMessages ?? 4,
+            autoReloadSkills: base.autoReloadSkills !== false
+        }
+    }
+
+    /**
+     * 估算消息列表的 token 数
+     * @param {Array} messages
+     * @returns {number}
+     */
+    estimateTokens(messages) {
+        let total = 0
+        for (const msg of messages) {
+            const content = Array.isArray(msg.content)
+                ? msg.content
+                      .filter(c => c.type === 'text')
+                      .map(c => c.text || '')
+                      .join('')
+                : typeof msg.content === 'string'
+                  ? msg.content
+                  : ''
+            total += Math.ceil(content.length / 3)
+        }
+        return total
+    }
+
+    /**
+     * 检查上下文长度并在必要时压缩
+     * @param {string} conversationId
+     * @param {Array} messages - 当前消息列表
+     * @param {Object} options - 包含 model, maxTokens, loadedSkills 等
+     * @returns {Promise<{messages: Array, compressed: boolean, skillsReinjected: boolean}>}
+     */
+    async checkAndCompress(conversationId, messages, options = {}) {
+        const ctxConfig = this.getContextConfig(options)
+        let compressed = false
+        let skillsReinjected = false
+
+        if (!messages || messages.length === 0) {
+            return { messages, compressed, skillsReinjected }
+        }
+
+        let needsCompression = false
+
+        if (ctxConfig.maxTokens > 0) {
+            const estimatedTokens = this.estimateTokens(messages)
+            const threshold = Math.floor(ctxConfig.maxTokens * ctxConfig.compressionThreshold)
+            if (estimatedTokens > threshold) {
+                needsCompression = true
+                logger.debug(
+                    `[ContextManager] Token 阈值触发压缩: ${estimatedTokens}/${ctxConfig.maxTokens} (阈值 ${ctxConfig.compressionThreshold})`
+                )
+            }
+        }
+
+        if (!needsCompression && ctxConfig.maxMessages > 0) {
+            const nonSystemMessages = messages.filter(m => m.role !== 'system')
+            if (nonSystemMessages.length > ctxConfig.maxMessages) {
+                needsCompression = true
+                logger.debug(
+                    `[ContextManager] 消息数阈值触发压缩: ${nonSystemMessages.length}/${ctxConfig.maxMessages}`
+                )
+            }
+        }
+
+        if (!needsCompression) {
+            return { messages, compressed, skillsReinjected }
+        }
+
+        const compressedMessages = await this.compressMessages(conversationId, messages, options)
+        compressed = true
+
+        const finalMessages = this.reinjectSkills(compressedMessages, options)
+        skillsReinjected = finalMessages !== compressedMessages
+
+        return { messages: finalMessages, compressed, skillsReinjected }
+    }
+
+    /**
+     * 执行对话压缩
+     * @param {string} conversationId
+     * @param {Array} messages
+     * @param {Object} options
+     * @returns {Promise<Array>}
+     */
+    async compressMessages(conversationId, messages, options = {}) {
+        const ctxConfig = this.getContextConfig(options)
+        const strategy = ctxConfig.compressionStrategy
+
+        switch (strategy) {
+            case 'summarize':
+                return this._compressBySummarize(messages, ctxConfig, options)
+            case 'truncate':
+                return this._compressByTruncate(messages, ctxConfig)
+            case 'sliding-window':
+                return this._compressBySlidingWindow(messages, ctxConfig)
+            default:
+                return this._compressBySummarize(messages, ctxConfig, options)
+        }
+    }
+
+    /**
+     * 总结策略压缩
+     * @private
+     */
+    async _compressBySummarize(messages, ctxConfig, options = {}) {
+        const preserveCount = ctxConfig.preserveRecentMessages
+        const systemMessages = messages.filter(m => m.role === 'system')
+        const nonSystemMessages = messages.filter(m => m.role !== 'system')
+
+        if (nonSystemMessages.length <= preserveCount + 2) {
+            return messages
+        }
+
+        const toSummarize = nonSystemMessages.slice(0, -preserveCount)
+        const toKeep = nonSystemMessages.slice(-preserveCount)
+
+        const dialogText = toSummarize
+            .map(msg => {
+                const roleLabel = msg.role === 'assistant' ? '助手' : '用户'
+                const text = Array.isArray(msg.content)
+                    ? msg.content
+                          .filter(c => c.type === 'text')
+                          .map(c => c.text || '')
+                          .join('')
+                    : typeof msg.content === 'string'
+                      ? msg.content
+                      : ''
+                return `${roleLabel}: ${text}`.trim()
+            })
+            .filter(Boolean)
+            .join('\n')
+
+        if (!dialogText || dialogText.length < 50) {
+            return this._compressByTruncate(messages, ctxConfig)
+        }
+
+        try {
+            const model = options.model || config.get('llm.defaultModel')
+            const prompt = `请用简洁的中文总结以下对话要点，保留关键信息和未解决事项。\n\n${dialogText.slice(0, 8000)}\n\n要求：条目列出要点，200字以内。`
+
+            const { LlmService } = await import('./LlmService.js')
+            const groupIdMatch = options.conversationId?.match?.(/^group:(\d+)/)
+            const client = await LlmService.getChatClient({
+                model,
+                groupId: groupIdMatch?.[1] || undefined
+            })
+            const result = await client.sendMessage(
+                { role: 'user', content: [{ type: 'text', text: prompt }] },
+                { model, maxToken: 300, temperature: 0.2, disableHistorySave: true }
+            )
+            const summaryText = result.contents?.[0]?.text?.trim()
+
+            if (summaryText) {
+                const summaryMsg = {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: `【对话摘要】\n${summaryText}` }],
+                    timestamp: Date.now(),
+                    metadata: { compressed: true }
+                }
+                const result = [...systemMessages, summaryMsg, ...toKeep]
+                logger.debug(`[ContextManager] 总结压缩完成: ${messages.length} -> ${result.length} 条`)
+                return result
+            }
+        } catch (err) {
+            logger.debug('[ContextManager] 总结压缩失败，回退到截断策略:', err.message)
+        }
+
+        return this._compressByTruncate(messages, ctxConfig)
+    }
+
+    /**
+     * 截断策略压缩
+     * @private
+     */
+    _compressByTruncate(messages, ctxConfig) {
+        const preserveCount = ctxConfig.preserveRecentMessages
+        const systemMessages = ctxConfig.preserveSystemPrompt ? messages.filter(m => m.role === 'system') : []
+        const nonSystemMessages = messages.filter(m => m.role !== 'system')
+        const kept = nonSystemMessages.slice(-preserveCount)
+        const result = [...systemMessages, ...kept]
+        logger.debug(`[ContextManager] 截断压缩完成: ${messages.length} -> ${result.length} 条`)
+        return result
+    }
+
+    /**
+     * 滑动窗口策略压缩
+     * @private
+     */
+    _compressBySlidingWindow(messages, ctxConfig) {
+        const maxMessages = ctxConfig.maxMessages || this.maxContextMessages
+        const systemMessages = ctxConfig.preserveSystemPrompt ? messages.filter(m => m.role === 'system') : []
+        const nonSystemMessages = messages.filter(m => m.role !== 'system')
+        const windowSize = Math.max(maxMessages - systemMessages.length, 4)
+        const kept = nonSystemMessages.slice(-windowSize)
+        const result = [...systemMessages, ...kept]
+        logger.debug(`[ContextManager] 滑动窗口压缩完成: ${messages.length} -> ${result.length} 条`)
+        return result
+    }
+
+    /**
+     * 压缩后重新注入 skills 到上下文
+     * @param {Array} messages - 压缩后的消息列表
+     * @param {Object} options - 包含 loadedSkills, contextText 等
+     * @returns {Array}
+     */
+    reinjectSkills(messages, options = {}) {
+        const ctxConfig = this.getContextConfig(options)
+        if (!ctxConfig.autoReloadSkills) return messages
+
+        const skillsLoader = global.chatAiSkillsLoader
+        if (!skillsLoader?.initialized) return messages
+
+        const instructions = skillsLoader.getSkillDocumentInstructions({
+            contextText: options.contextText || '',
+            selectedNames: options.loadedSkills || null,
+            mode: options.loadedSkills ? undefined : 'all'
+        })
+
+        if (!instructions) return messages
+
+        const systemIndex = messages.findIndex(m => m.role === 'system')
+        if (systemIndex >= 0) {
+            const systemMsg = messages[systemIndex]
+            const content =
+                typeof systemMsg.content === 'string'
+                    ? systemMsg.content
+                    : Array.isArray(systemMsg.content)
+                      ? systemMsg.content
+                            .filter(c => c.type === 'text')
+                            .map(c => c.text || '')
+                            .join('')
+                      : ''
+
+            if (!content.includes('【Agent Skills】')) {
+                const updatedMessages = [...messages]
+                updatedMessages[systemIndex] = {
+                    ...systemMsg,
+                    content:
+                        typeof systemMsg.content === 'string'
+                            ? systemMsg.content + '\n\n' + instructions
+                            : [
+                                  ...(Array.isArray(systemMsg.content) ? systemMsg.content : []),
+                                  { type: 'text', text: '\n\n' + instructions }
+                              ]
+                }
+                logger.debug('[ContextManager] Skills 已重新注入到压缩后的上下文')
+                return updatedMessages
+            }
+        }
+
+        return messages
+    }
 }
 
 export const contextManager = new ContextManager()

@@ -30,7 +30,8 @@ const toolModules = {
     reminder: { file: './reminder.js', export: 'reminderTools' },
     imageGen: { file: './imageGen.js', export: 'imageGenTools' },
     qzone: { file: './qzone.js', export: 'qzoneTools' },
-    emoji: { file: './emoji.js', export: 'emojiTools' }
+    emoji: { file: './emoji.js', export: 'emojiTools' },
+    skills: { file: './skills.js', export: 'skillsTools' }
 }
 
 // 类别元信息
@@ -127,6 +128,11 @@ const categoryMeta = {
         name: '表情包管理',
         description: '保存表情包、发送已存表情、列出表情库。用户说"偷图""保存表情""发个表情""之前的图呢"时调用',
         icon: 'Smile'
+    },
+    skills: {
+        name: 'Skills 技能管理',
+        description: '查看、加载、卸载文档技能。模型需要了解或启用某个 skill 时调用',
+        icon: 'BookOpen'
     }
 }
 

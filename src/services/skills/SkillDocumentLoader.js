@@ -6,6 +6,45 @@ import { chatLogger } from '../../core/utils/logger.js'
 const logger = chatLogger
 const IGNORED_DIRS = new Set(['.git', '.hg', '.svn', 'node_modules', '.next', 'dist', 'build', 'coverage'])
 
+// 目录内被识别为“文件夹型 skill 定义”的固定文件名
+const FOLDER_SKILL_FILES = new Set(['skill.yaml', 'skill.yml', 'skill.json'])
+
+/**
+ * 判断文件名是否为可识别的 skill 定义文件，并返回其类型
+ * @param {string} fileName - 文件名（basename）
+ * @returns {'markdown'|'yaml'|'json'|null} skill 文件类型，非 skill 文件返回 null
+ */
+function classifySkillFile(fileName) {
+    if (fileName === 'SKILL.md') return 'markdown'
+    if (/\.skill\.ya?ml$/i.test(fileName)) return 'yaml'
+    if (/\.skill\.json$/i.test(fileName)) return 'json'
+    const lower = fileName.toLowerCase()
+    if (lower === 'skill.yaml' || lower === 'skill.yml') return 'yaml'
+    if (lower === 'skill.json') return 'json'
+    return null
+}
+
+/**
+ * 从 skill 定义文件名推导默认 skill 名称
+ * @param {string} filePath - skill 文件绝对路径
+ * @param {'markdown'|'yaml'|'json'} type - skill 文件类型
+ * @returns {string} 默认名称（去除 skill 后缀，或回退到所在目录名）
+ */
+function deriveDefaultName(filePath, type) {
+    const fileName = path.basename(filePath)
+    const lower = fileName.toLowerCase()
+    // 命名型定义 <name>.skill.yaml / <name>.skill.json 直接取前缀
+    const namedMatch = fileName.match(/^(.+)\.skill\.(?:ya?ml|json)$/i)
+    if (namedMatch && namedMatch[1].trim()) {
+        return namedMatch[1].trim()
+    }
+    // SKILL.md / skill.yaml / skill.json 这类固定名，回退到目录名
+    if (type === 'markdown' || lower === 'skill.yaml' || lower === 'skill.yml' || lower === 'skill.json') {
+        return path.basename(path.dirname(filePath))
+    }
+    return path.basename(fileName, path.extname(fileName))
+}
+
 function parseSkillMarkdown(content) {
     const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/)
     if (!match) {
@@ -125,14 +164,14 @@ class SkillDocumentLoader {
             }
         }
 
-        logger.debug(`[SkillDocumentLoader] 加载 SKILL.md 文档技能: ${this.documents.length} 个`)
+        logger.debug(`[SkillDocumentLoader] 加载文档技能: ${this.documents.length} 个`)
     }
 
     findSkillFiles(root, maxDepth) {
         const files = []
         const stat = fs.statSync(root)
         if (stat.isFile()) {
-            if (path.basename(root) === 'SKILL.md') files.push(root)
+            if (classifySkillFile(path.basename(root))) files.push(root)
             return files
         }
         if (!stat.isDirectory()) return files
@@ -152,7 +191,7 @@ class SkillDocumentLoader {
 
             for (const entry of entries) {
                 const fullPath = path.join(current.dir, entry.name)
-                if (entry.isFile() && entry.name === 'SKILL.md') {
+                if (entry.isFile() && classifySkillFile(entry.name)) {
                     files.push(fullPath)
                 } else if (entry.isDirectory() && !IGNORED_DIRS.has(entry.name) && current.depth < maxDepth) {
                     stack.push({ dir: fullPath, depth: current.depth + 1 })
@@ -163,7 +202,27 @@ class SkillDocumentLoader {
         return files
     }
 
+    /**
+     * 读取单个 skill 定义文件，按扩展名分派到对应解析器
+     * @param {string} filePath - skill 文件绝对路径
+     * @param {number} maxFileBytes - 单文件最大字节数
+     * @returns {object|null} 规范化后的 skill 文档对象，读取失败返回 null
+     */
     readSkillFile(filePath, maxFileBytes) {
+        const type = classifySkillFile(path.basename(filePath))
+        if (type === 'yaml' || type === 'json') {
+            return this.readSkillYamlJson(filePath, maxFileBytes, type)
+        }
+        return this.readSkillMarkdown(filePath, maxFileBytes)
+    }
+
+    /**
+     * 解析 SKILL.md 格式技能（frontmatter + 正文）
+     * @param {string} filePath - SKILL.md 绝对路径
+     * @param {number} maxFileBytes - 单文件最大字节数
+     * @returns {object|null} 规范化 skill 文档，失败返回 null
+     */
+    readSkillMarkdown(filePath, maxFileBytes) {
         try {
             const stat = fs.statSync(filePath)
             if (stat.size > maxFileBytes) {
@@ -173,53 +232,125 @@ class SkillDocumentLoader {
 
             const content = fs.readFileSync(filePath, 'utf-8')
             const { metadata, body } = parseSkillMarkdown(content)
-            const directory = path.dirname(filePath)
-            const name =
-                typeof metadata.name === 'string' && metadata.name.trim()
-                    ? metadata.name.trim()
-                    : path.basename(directory)
-            const description =
-                typeof metadata.description === 'string' && metadata.description.trim()
-                    ? metadata.description.trim()
-                    : ''
-            const triggers = [
-                ...toStringList(metadata.triggers),
-                ...toStringList(metadata.trigger),
-                ...toStringList(metadata.aliases),
-                ...toStringList(metadata.alias)
-            ]
-            const allowedTools = [
-                ...toStringList(metadata.allowedTools),
-                ...toStringList(metadata.allowed_tools),
-                ...toStringList(metadata['allowed-tools'])
-            ]
-            const disallowedTools = [
-                ...toStringList(metadata.disallowedTools),
-                ...toStringList(metadata.disallowed_tools),
-                ...toStringList(metadata['disallowed-tools'])
-            ]
-
-            return {
-                name,
-                description,
-                triggers,
-                allowedTools,
-                disallowedTools,
-                metadata,
-                body: body.trim(),
-                path: filePath,
-                relativePath: relativeToPlugin(this.pluginRoot, filePath),
-                directory,
-                loadedAt: Date.now()
-            }
+            return this.buildDocument(filePath, metadata, body.trim(), 'markdown')
         } catch (error) {
             logger.warn(`[SkillDocumentLoader] 读取 SKILL.md 失败: ${filePath}, ${error.message}`)
             return null
         }
     }
 
+    /**
+     * 解析 YAML / JSON 格式技能定义文件
+     * @param {string} filePath - skill 文件绝对路径
+     * @param {number} maxFileBytes - 单文件最大字节数
+     * @param {'yaml'|'json'} type - 文件类型
+     * @returns {object|null} 规范化 skill 文档，失败返回 null
+     */
+    readSkillYamlJson(filePath, maxFileBytes, type) {
+        try {
+            const stat = fs.statSync(filePath)
+            if (stat.size > maxFileBytes) {
+                logger.warn(`[SkillDocumentLoader] 跳过过大的 skill 定义: ${filePath}`)
+                return null
+            }
+
+            const content = fs.readFileSync(filePath, 'utf-8')
+            const resolvedType = type || classifySkillFile(path.basename(filePath)) || 'yaml'
+            let metadata
+            if (resolvedType === 'json') {
+                metadata = JSON.parse(content)
+            } else {
+                metadata = YAML.parse(content)
+            }
+            if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+                logger.warn(`[SkillDocumentLoader] skill 定义顶层需为对象: ${filePath}`)
+                return null
+            }
+
+            // instructions 作为技能正文；兼容 body 字段
+            const body =
+                typeof metadata.instructions === 'string'
+                    ? metadata.instructions.trim()
+                    : typeof metadata.body === 'string'
+                      ? metadata.body.trim()
+                      : ''
+
+            return this.buildDocument(filePath, metadata, body, resolvedType)
+        } catch (error) {
+            logger.warn(`[SkillDocumentLoader] 读取 skill 定义失败: ${filePath}, ${error.message}`)
+            return null
+        }
+    }
+
+    /**
+     * 将解析出的元数据与正文规范化为统一的 skill 文档对象
+     * @param {string} filePath - skill 文件绝对路径
+     * @param {object} metadata - 解析出的元数据对象
+     * @param {string} body - 技能正文/指令
+     * @param {'markdown'|'yaml'|'json'} type - 来源文件类型
+     * @returns {object} 规范化 skill 文档
+     */
+    buildDocument(filePath, metadata, body, type) {
+        const directory = path.dirname(filePath)
+        const name =
+            typeof metadata.name === 'string' && metadata.name.trim()
+                ? metadata.name.trim()
+                : deriveDefaultName(filePath, type)
+        const description =
+            typeof metadata.description === 'string' && metadata.description.trim() ? metadata.description.trim() : ''
+        const triggers = [
+            ...toStringList(metadata.triggers),
+            ...toStringList(metadata.trigger),
+            ...toStringList(metadata.aliases),
+            ...toStringList(metadata.alias)
+        ]
+        const allowedTools = [
+            ...toStringList(metadata.allowedTools),
+            ...toStringList(metadata.allowed_tools),
+            ...toStringList(metadata['allowed-tools'])
+        ]
+        const disallowedTools = [
+            ...toStringList(metadata.disallowedTools),
+            ...toStringList(metadata.disallowed_tools),
+            ...toStringList(metadata['disallowed-tools'])
+        ]
+        const capabilities = toStringList(metadata.capabilities)
+        const priority = Number.isFinite(metadata.priority) ? metadata.priority : 0
+        const autoActivate = metadata.autoActivate !== false
+
+        return {
+            name,
+            description,
+            triggers,
+            allowedTools,
+            disallowedTools,
+            capabilities,
+            priority,
+            autoActivate,
+            type,
+            metadata,
+            body,
+            path: filePath,
+            relativePath: relativeToPlugin(this.pluginRoot, filePath),
+            directory,
+            loadedAt: Date.now()
+        }
+    }
+
     getDocuments() {
         return this.documents.map(document => ({ ...document }))
+    }
+
+    /**
+     * 按名称或相对路径获取单个文档技能
+     * @param {string} name - 技能名称或相对路径
+     * @returns {object|null} 匹配的文档副本，未找到返回 null
+     */
+    getDocumentByName(name) {
+        if (!name) return null
+        const key = String(name).trim()
+        const found = this.documents.find(doc => doc.name === key || doc.relativePath === key)
+        return found ? { ...found } : null
     }
 
     getMatchingDocuments(options = {}) {

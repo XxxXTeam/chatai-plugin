@@ -26,6 +26,7 @@ import { conversationTracker } from '../src/services/llm/ConversationTracker.js'
 import { contextManager } from '../src/services/llm/ContextManager.js'
 import { toolApprovalService } from '../src/services/tools/ToolApprovalService.js'
 import { presetManager } from '../src/services/preset/PresetManager.js'
+import { errorNotifier } from '../src/services/ErrorNotifier.js'
 
 export {
     recordSentMessage,
@@ -774,9 +775,25 @@ export class Chat extends plugin {
                 this.sendDebugInfo(result.debugInfo, debugLogs)
             }
         } catch (error) {
-            const userFriendlyError = this.formatErrorForUser(error)
-            const errorResult = await this.reply(userFriendlyError, true)
-            this.handleAutoRecall(errorResult, true)
+            if (debugMode) {
+                debugLogs.push({
+                    title: '❌ 错误信息',
+                    content: `${error.message || error}\n${error.stack || ''}`
+                })
+                this.sendDebugInfo({}, debugLogs)
+            }
+
+            const notified = await errorNotifier.notify(error, {
+                e: this.e,
+                userId: this.e?.user_id,
+                groupId: this.e?.group_id,
+                model: config.get('llm.defaultModel')
+            })
+            if (!notified) {
+                const userFriendlyError = this.formatErrorForUser(error)
+                const errorResult = await this.reply(userFriendlyError, true)
+                this.handleAutoRecall(errorResult, true)
+            }
         }
 
         return true

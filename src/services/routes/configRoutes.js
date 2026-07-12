@@ -29,6 +29,7 @@ router.get('/', (req, res) => {
             features: config.get('features'),
             memory: config.get('memory'),
             mcp: config.get('mcp'),
+            errorNotify: config.get('errorNotify'),
             web: {
                 enabled: config.get('web.enabled'),
                 port: config.get('web.port'),
