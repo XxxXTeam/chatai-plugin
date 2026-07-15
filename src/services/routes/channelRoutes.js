@@ -4,6 +4,7 @@ import { statsService } from '../stats/StatsService.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import config from '../../../config/config.js'
 import { resolveThinkingOptions } from '../llm/ThinkingOptions.js'
+import { resolveTemperature } from '../llm/TemperatureResolver.js'
 
 import { ApiResponse } from './shared.js'
 
@@ -264,9 +265,16 @@ router.post('/test', async (req, res) => {
             }
         }
         const useStreaming = advanced?.streaming?.enabled || false
-        const temperature = advanced?.llm?.temperature ?? 0.7
         const maxTokens = advanced?.llm?.maxTokens || 100
         const thinkingOptions = resolveThinkingOptions({ channel: { advanced } })
+
+        /* 渠道测试尊重温度覆盖/禁用配置：有 id 时用完整渠道，否则用 req.body 的 advanced 构造 */
+        const { temperature } = resolveTemperature({
+            actualModel: actualTestModel,
+            requestOptions: {},
+            preset: null,
+            channel: id ? channel : { advanced, overrides: {} }
+        })
 
         const options = {
             model: actualTestModel,
@@ -514,12 +522,19 @@ router.post('/batch-test', async (req, res) => {
             const actualModel = mapping.actualModel
 
             const thinkingOptions = resolveThinkingOptions({ channel })
+            /* 批量测试尊重温度覆盖/禁用配置 */
+            const { temperature: batchTestTemperature } = resolveTemperature({
+                actualModel,
+                requestOptions: {},
+                preset: null,
+                channel
+            })
             const response = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
                 {
                     model: actualModel,
                     maxToken: 50,
-                    temperature: 0.7,
+                    temperature: batchTestTemperature,
                     systemPromptConfig: channel.systemPromptConfig || undefined,
                     systemOverride:
                         channel.systemPromptConfig?.mode === 'replace'
@@ -617,12 +632,19 @@ router.post('/test-model', async (req, res) => {
         }
 
         const thinkingOptions = resolveThinkingOptions({ channel })
+        /* 单模型测试尊重温度覆盖/禁用配置 */
+        const { temperature: singleTestTemperature } = resolveTemperature({
+            actualModel,
+            requestOptions: {},
+            preset: null,
+            channel
+        })
         const response = await client.sendMessage(
             { role: 'user', content: [{ type: 'text', text: '说一声你好' }] },
             {
                 model: actualModel,
                 maxToken: 50,
-                temperature: 0.7,
+                temperature: singleTestTemperature,
                 systemPromptConfig: channel.systemPromptConfig || undefined,
                 systemOverride:
                     channel.systemPromptConfig?.mode === 'replace'

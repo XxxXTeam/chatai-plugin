@@ -22,6 +22,7 @@ import { enforceMaxCharacters } from '../../utils/common.js'
 import { resolveConfiguredToolChoice } from '../tools/ToolChoiceService.js'
 import { resolveThinkingOptions as resolveConfiguredThinkingOptions } from './ThinkingOptions.js'
 import { resolveChannelSystemPrompt } from './SystemPromptConfig.js'
+import { resolveTemperature } from './TemperatureResolver.js'
 import { applySkillToolConstraints, getSkillToolConstraints } from '../skills/SkillToolConstraints.js'
 import { resolveToolPermission } from '../tools/ToolPermission.js'
 
@@ -945,7 +946,6 @@ export class ChatService {
         let actualSwitchChain = []
         const presetParams = currentPreset?.modelParams || {}
         const baseMaxToken = presetParams.max_tokens || presetParams.maxTokens || channelLlm.maxTokens || 4000
-        const baseTemperature = presetParams.temperature ?? channelLlm.temperature ?? 0.7
 
         // 应用模型映射/复写 - 框架内使用 llmModel，实际API请求使用 actualModel
         logger.debug(
@@ -959,10 +959,18 @@ export class ChatService {
             `[ChatService] 模型映射结果: ${llmModel} -> ${actualModel} (mapped=${modelMapping.mapped}, 渠道: ${channel?.name})`
         )
 
+        /* 温度优先级：模型级覆盖 > 渠道覆盖(禁用/固定) > 调用方 > 渠道默认 > 预设 > 0.7 */
+        const { temperature: resolvedTemperature, source: resolvedTempSource } = resolveTemperature({
+            actualModel,
+            requestOptions: { temperature: overrideTemperature },
+            preset: currentPreset,
+            channel
+        })
+
         const requestOptions = {
             model: actualModel, // 使用映射后的实际模型名称
             maxToken: overrideMaxTokens ?? baseMaxToken,
-            temperature: overrideTemperature ?? baseTemperature,
+            temperature: resolvedTemperature,
             topP: presetParams.top_p ?? presetParams.topP ?? channelLlm.topP,
             conversationId,
             systemOverride: systemPrompt,
@@ -981,16 +989,8 @@ export class ChatService {
             ...(options.responsesToolChoice !== undefined ? { responsesToolChoice: options.responsesToolChoice } : {}),
             ...(options.responseToolChoice !== undefined ? { responseToolChoice: options.responseToolChoice } : {})
         }
-        const tempSource =
-            overrideTemperature !== undefined
-                ? '调用方'
-                : presetParams.temperature !== undefined
-                  ? '预设'
-                  : channelLlm.temperature !== undefined
-                    ? '渠道'
-                    : '默认'
         logger.debug(
-            `[ChatService] 请求参数: temperature=${requestOptions.temperature}, maxToken=${requestOptions.maxToken}, 来源: ${tempSource}`
+            `[ChatService] 请求参数: temperature=${requestOptions.temperature}, maxToken=${requestOptions.maxToken}, 来源: ${resolvedTempSource}`
         )
 
         try {

@@ -4,6 +4,7 @@ import { statsService } from '../stats/StatsService.js'
 import { ApiResponse } from './shared.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import config from '../../../config/config.js'
+import { resolveTemperature } from '../llm/TemperatureResolver.js'
 
 const router = express.Router()
 
@@ -115,9 +116,17 @@ router.post('/batch-test', async (req, res) => {
                 tools: []
             })
 
+            /* 批量测试尊重渠道/模型级温度覆盖与禁用配置 */
+            const { temperature: testTemperature } = resolveTemperature({
+                actualModel: model,
+                requestOptions: {},
+                preset: null,
+                channel
+            })
+
             const response = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: '你好' }] },
-                { model, maxToken: 50, temperature: 0.7 }
+                { model, maxToken: 50, temperature: testTemperature }
             )
 
             const elapsed = Date.now() - startTime

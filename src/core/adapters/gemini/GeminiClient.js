@@ -152,8 +152,11 @@ export class GeminiClient extends AbstractClient {
         options._exposedTools = tools || []
 
         const generationConfig = {
-            temperature: options.temperature,
             maxOutputTokens: options.maxToken
+        }
+        /* 禁用温度传递时 temperature 为 undefined，不写入以避免携带 */
+        if (Number.isFinite(options.temperature)) {
+            generationConfig.temperature = options.temperature
         }
         const thinkingConfig = getGeminiThinkingConfig(options, this.options)
         if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig
@@ -313,8 +316,11 @@ export class GeminiClient extends AbstractClient {
         options._exposedTools = tools || []
 
         const generationConfig = {
-            temperature: options.temperature,
             maxOutputTokens: options.maxToken
+        }
+        /* 禁用温度传递时 temperature 为 undefined，不写入以避免携带 */
+        if (Number.isFinite(options.temperature)) {
+            generationConfig.temperature = options.temperature
         }
         const thinkingConfig = getGeminiThinkingConfig(options, this.options)
         if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig

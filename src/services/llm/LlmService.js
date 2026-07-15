@@ -364,7 +364,10 @@ export class LlmService {
             id: channel.id,
             name: channel.name,
             model: targetModel,
-            maxCharacters: channel.advanced?.llm?.maxCharacters || 0
+            maxCharacters: channel.advanced?.llm?.maxCharacters || 0,
+            /* 暴露温度覆盖配置，供绕过 ChatService 的调用方（Galgame/bym 等）解析温度 */
+            llm: channel.advanced?.llm || {},
+            overrides: channel.overrides || {}
         }
 
         return client

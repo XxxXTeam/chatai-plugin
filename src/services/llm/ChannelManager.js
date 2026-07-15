@@ -125,6 +125,45 @@ function normalizeModelMapping(mapping) {
     return normalized
 }
 
+/**
+ * 规范化单层温度覆盖配置
+ * @param {Object} layer - 单层覆盖配置（含 disableTemperature / temperature）
+ * @returns {Object} 规范化后的覆盖配置；空配置返回 null 以避免污染存储
+ */
+function normalizeTemperatureOverrideLayer(layer) {
+    if (!layer || typeof layer !== 'object' || Array.isArray(layer)) return null
+    const result = {}
+    if (layer.disableTemperature === true) {
+        result.disableTemperature = true
+    }
+    const numericTemperature = Number(layer.temperature)
+    if (Number.isFinite(numericTemperature)) {
+        result.temperature = numericTemperature
+    }
+    return Object.keys(result).length > 0 ? result : null
+}
+
+/**
+ * 规范化模型级温度覆盖映射
+ * @param {Object} modelTemperatures - 模型到覆盖配置的映射
+ * @returns {Object|null} 规范化后的映射；空则返回 null
+ */
+function normalizeModelTemperatures(modelTemperatures) {
+    if (!modelTemperatures || typeof modelTemperatures !== 'object' || Array.isArray(modelTemperatures)) {
+        return null
+    }
+    const normalized = {}
+    for (const [modelName, layer] of Object.entries(modelTemperatures)) {
+        const key = String(modelName || '').trim()
+        if (!key) continue
+        const normalizedLayer = normalizeTemperatureOverrideLayer(layer)
+        if (normalizedLayer) {
+            normalized[key] = normalizedLayer
+        }
+    }
+    return Object.keys(normalized).length > 0 ? normalized : null
+}
+
 function pickModelMappingTarget(channel, mappingKey, target) {
     const targets = normalizeModelMappingTarget(target)
     if (targets.length === 0) return null
@@ -478,7 +517,9 @@ export class ChannelManager {
                 // 拓展覆盖配置
                 overrides: {
                     ...(channelConfig.overrides || {}),
-                    modelMapping: normalizeModelMapping(channelConfig.overrides?.modelMapping || {})
+                    modelMapping: normalizeModelMapping(channelConfig.overrides?.modelMapping || {}),
+                    disableTemperature: channelConfig.overrides?.disableTemperature === true,
+                    modelTemperatures: normalizeModelTemperatures(channelConfig.overrides?.modelTemperatures)
                 },
                 endpoints: channelConfig.endpoints || {},
                 auth: channelConfig.auth || { type: 'bearer' },
@@ -669,7 +710,9 @@ export class ChannelManager {
                 systemPromptPrefix: channelData.overrides?.systemPromptPrefix || '', // 系统提示前缀
                 systemPromptSuffix: channelData.overrides?.systemPromptSuffix || '', // 系统提示后缀
                 ...(channelData.overrides || {}),
-                modelMapping: normalizeModelMapping(channelData.overrides?.modelMapping || {})
+                modelMapping: normalizeModelMapping(channelData.overrides?.modelMapping || {}),
+                disableTemperature: channelData.overrides?.disableTemperature === true,
+                modelTemperatures: normalizeModelTemperatures(channelData.overrides?.modelTemperatures)
             },
             endpoints: {
                 chat: channelData.endpoints?.chat || '', // 聊天端点，如 /chat/completions
@@ -800,7 +843,9 @@ export class ChannelManager {
                 } else if (field === 'overrides') {
                     channel.overrides = {
                         ...(updates.overrides || {}),
-                        modelMapping: normalizeModelMapping(updates.overrides?.modelMapping || {})
+                        modelMapping: normalizeModelMapping(updates.overrides?.modelMapping || {}),
+                        disableTemperature: updates.overrides?.disableTemperature === true,
+                        modelTemperatures: normalizeModelTemperatures(updates.overrides?.modelTemperatures)
                     }
                 } else {
                     channel[field] = updates[field]
@@ -1591,7 +1636,9 @@ export class ChannelManager {
                 advanced: this.normalizeAdvanced(best.advanced),
                 overrides: {
                     ...(best.overrides || {}),
-                    modelMapping: normalizeModelMapping(best.overrides?.modelMapping || {})
+                    modelMapping: normalizeModelMapping(best.overrides?.modelMapping || {}),
+                    disableTemperature: best.overrides?.disableTemperature === true,
+                    modelTemperatures: normalizeModelTemperatures(best.overrides?.modelTemperatures)
                 },
                 auth: best.auth || { type: 'bearer' },
                 timeout: best.timeout || { connect: 10000, read: 60000 },
@@ -1630,7 +1677,9 @@ export class ChannelManager {
                 advanced: this.normalizeAdvanced(groupChannelConfig.advanced),
                 overrides: {
                     ...(groupChannelConfig.overrides || {}),
-                    modelMapping: normalizeModelMapping(groupChannelConfig.overrides?.modelMapping || {})
+                    modelMapping: normalizeModelMapping(groupChannelConfig.overrides?.modelMapping || {}),
+                    disableTemperature: groupChannelConfig.overrides?.disableTemperature === true,
+                    modelTemperatures: normalizeModelTemperatures(groupChannelConfig.overrides?.modelTemperatures)
                 },
                 auth: groupChannelConfig.auth || { type: 'bearer' },
                 timeout: groupChannelConfig.timeout || { connect: 10000, read: 60000 },

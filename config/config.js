@@ -378,7 +378,9 @@ class Config {
              *   },
              *   weight: number,                 // 负载均衡权重 (1-100)
              *   overrides: {                   // 参数覆盖配置
-             *     temperature: number,          // 温度覆盖
+             *     temperature: number,          // 固定温度（0-2），强制覆盖渠道默认与预设温度
+             *     disableTemperature: boolean,  // true 表示该渠道请求不携带 temperature 字段
+             *     modelTemperatures: object,    // 模型级温度覆盖 { "model": { disableTemperature, temperature } }
              *     maxTokens: number,            // 最大token覆盖
              *     modelMapping: object,        // 模型映射 { "requested": "actual" }
              *     systemPromptPrefix: string,   // 系统提示前缀

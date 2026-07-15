@@ -19,6 +19,7 @@ import { SkillsAgent, convertMcpTools } from './SkillsAgent.js'
 import { resolveConfiguredToolChoice } from '../tools/ToolChoiceService.js'
 import { resolveThinkingOptions as resolveConfiguredThinkingOptions } from '../llm/ThinkingOptions.js'
 import { resolveChannelSystemPrompt } from '../llm/SystemPromptConfig.js'
+import { resolveTemperature } from '../llm/TemperatureResolver.js'
 import { attachToolMetadata } from '../../core/adapters/tooling.js'
 import { applySkillToolConstraints, getSkillToolConstraints } from '../skills/SkillToolConstraints.js'
 import { resolveToolPermission } from '../tools/ToolPermission.js'
@@ -486,10 +487,18 @@ export class ChatAgent {
             logger.info(`[ChatAgent] 模型重定向: ${llmModel} -> ${actualModel} (渠道: ${channel?.name})`)
         }
 
+        /* 温度优先级：模型级覆盖 > 渠道覆盖(禁用/固定) > 调用方 > 渠道默认 > 预设 > 0.7 */
+        const { temperature: resolvedTemperature, source: resolvedTempSource } = resolveTemperature({
+            actualModel,
+            requestOptions: { temperature: overrideTemperature },
+            preset: currentPreset,
+            channel
+        })
+
         const requestOptions = {
             model: actualModel,
             maxToken: overrideMaxTokens ?? presetParams.max_tokens ?? channelLlm.maxTokens ?? 4000,
-            temperature: overrideTemperature ?? presetParams.temperature ?? channelLlm.temperature ?? 0.7,
+            temperature: resolvedTemperature,
             topP: presetParams.top_p ?? channelLlm.topP,
             conversationId,
             systemOverride: systemPrompt,

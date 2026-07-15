@@ -149,11 +149,14 @@ export class ClaudeClient extends AbstractClient {
         const requestPayload = {
             model,
             max_tokens: options.maxToken || 4096,
-            temperature: options.temperature,
             system: systemPrompt || undefined,
             messages,
             tools,
             tool_choice: tools ? choiceResolution.toolChoice : undefined
+        }
+        /* 禁用温度传递时 temperature 为 undefined，不写入以避免携带 */
+        if (Number.isFinite(options.temperature)) {
+            requestPayload.temperature = options.temperature
         }
         const thinking = getClaudeThinkingConfig(options, this.options)
         if (thinking) requestPayload.thinking = thinking
@@ -274,12 +277,15 @@ export class ClaudeClient extends AbstractClient {
         const requestPayload = {
             model,
             max_tokens: options.maxToken || 4096,
-            temperature: options.temperature,
             system: systemPrompt || undefined,
             messages,
             tools,
             tool_choice: tools ? choiceResolution.toolChoice : undefined,
             stream: true
+        }
+        /* 禁用温度传递时 temperature 为 undefined，不写入以避免携带 */
+        if (Number.isFinite(options.temperature)) {
+            requestPayload.temperature = options.temperature
         }
         const thinking = getClaudeThinkingConfig(options, this.options)
         if (thinking) requestPayload.thinking = thinking

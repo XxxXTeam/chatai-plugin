@@ -6,6 +6,7 @@
 
 import { databaseService } from '../storage/DatabaseService.js'
 import { LlmService } from '../llm/LlmService.js'
+import { resolveTemperature } from '../llm/TemperatureResolver.js'
 import { getScopeManager } from '../scope/ScopeManager.js'
 import { statsService } from '../stats/StatsService.js'
 import config from '../../../config/config.js'
@@ -1063,6 +1064,18 @@ class GalgameService {
         const maxCharacters = client._channelInfo?.maxCharacters || 0
         enforceMaxCharacters(messages, maxCharacters, 'GalgameService')
 
+        /* 温度优先级：模型级覆盖 > 渠道覆盖(禁用/固定) > game配置 > 渠道默认 > 0.7
+           渠道禁用/固定会覆盖 gameTemperature，确保 game 模式调用受限模型也不报错 */
+        const { temperature: gameResolvedTemperature } = resolveTemperature({
+            actualModel: gameModel,
+            requestOptions: { temperature: gameTemperature },
+            preset: null,
+            channel: {
+                advanced: { llm: client._channelInfo?.llm || {} },
+                overrides: client._channelInfo?.overrides || {}
+            }
+        })
+
         const startTime = Date.now()
         let response = null
         let requestSuccess = false
@@ -1070,7 +1083,7 @@ class GalgameService {
         try {
             response = await client.sendMessageWithHistory(messages, {
                 model: gameModel,
-                temperature: gameTemperature,
+                temperature: gameResolvedTemperature,
                 maxToken: gameMaxTokens
             })
             requestSuccess = true
