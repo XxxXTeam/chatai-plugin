@@ -8,6 +8,7 @@ import { chatLogger } from '../../core/utils/logger.js'
 import config from '../../../config/config.js'
 import { LlmService } from './LlmService.js'
 import { channelManager } from './ChannelManager.js'
+import { resolveTemperature } from './TemperatureResolver.js'
 
 const logger = chatLogger
 
@@ -234,9 +235,16 @@ class ConversationTrackerService {
                     content: `【近期对话记录】\n${historyText}\n\n【用户新消息】\n${userMessage}\n\n这条新消息是在跟机器人说话吗？`
                 }
             ]
+            const { temperature: _trackTemp } = resolveTemperature({
+                actualModel: trackingModel,
+                requestOptions: { temperature: 0.1 },
+                preset: null,
+                channel: { advanced: { llm: channel.advanced?.llm || {} }, overrides: channel.overrides || {} }
+            })
             const response = await client.sendMessageWithHistory(messages, {
                 model: trackingModel,
-                maxToken: 10
+                maxToken: 10,
+                ...(_trackTemp !== undefined ? { temperature: _trackTemp } : {})
             })
 
             const answer = (response?.content?.find(c => c.type === 'text')?.text || '').toLowerCase().trim()
@@ -355,9 +363,16 @@ ${recentHistory || '(无)'}
                     content: `分别判断以下${batchWithIds.length}条来自不同用户的消息:\n\n${messagesText}\n\n返回JSON对象:`
                 }
             ]
+            const { temperature: _batchTemp } = resolveTemperature({
+                actualModel: trackingModel,
+                requestOptions: { temperature: 0.1 },
+                preset: null,
+                channel: { advanced: { llm: channel.advanced?.llm || {} }, overrides: channel.overrides || {} }
+            })
             const response = await client.sendMessageWithHistory(batchMessages, {
                 model: trackingModel,
-                maxToken: 200
+                maxToken: 200,
+                ...(_batchTemp !== undefined ? { temperature: _batchTemp } : {})
             })
 
             let content = (response?.content?.find(c => c.type === 'text')?.text || '').trim() || '{}'

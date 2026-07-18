@@ -10,6 +10,7 @@ import config from '../../../config/config.js'
 import { databaseService } from './DatabaseService.js'
 import { LlmService } from '../llm/LlmService.js'
 import { statsService } from '../stats/StatsService.js'
+import { resolveClientTemperature } from '../llm/TemperatureResolver.js'
 
 /**
  * @class MemoryManager
@@ -238,13 +239,14 @@ ${dialogText}
             const client = await LlmService.getChatClient({ model: memoryModel || undefined })
             const channelInfo = client._channelInfo || {}
             const model = channelInfo.model || config.get('llm.defaultModel')
+            const _temp = resolveClientTemperature(client, 0.3)
             const result = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
                 {
                     model,
                     maxToken: 600,
                     disableHistorySave: true,
-                    temperature: 0.3
+                    ...(_temp !== undefined ? { temperature: _temp } : {})
                 }
             )
 
@@ -626,13 +628,14 @@ ${dialogText}
             const client = await LlmService.getChatClient({ model: memoryModel2 || undefined })
             const channelInfo2 = client._channelInfo || {}
             const model2 = channelInfo2.model || config.get('llm.defaultModel')
+            const _temp2 = resolveClientTemperature(client, 0.3)
             const result = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
                 {
                     model: model2,
                     maxToken: 500,
                     disableHistorySave: true,
-                    temperature: 0.3
+                    ...(_temp2 !== undefined ? { temperature: _temp2 } : {})
                 }
             )
 
@@ -789,9 +792,15 @@ ${existingMemoryList || '暂无'}
             const client = await LlmService.getChatClient({ model: memoryModel3 || undefined })
             const channelInfo3 = client._channelInfo || {}
             const model3 = channelInfo3.model || config.get('llm.defaultModel')
+            const _temp3 = resolveClientTemperature(client, 0.3)
             const result = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: extractPrompt }] },
-                { model: model3, maxToken: 400, disableHistorySave: true, temperature: 0.3 }
+                {
+                    model: model3,
+                    maxToken: 400,
+                    disableHistorySave: true,
+                    ...(_temp3 !== undefined ? { temperature: _temp3 } : {})
+                }
             )
 
             const responseText = result.contents?.[0]?.text?.trim()
@@ -1259,13 +1268,14 @@ ${dialogText}
             const channelInfo = client._channelInfo || {}
             const usedModel = channelInfo.model || config.get('llm.defaultModel')
 
+            const _temp4 = resolveClientTemperature(client, 0.3)
             const result = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
                 {
                     model: usedModel,
                     maxToken: 800,
                     disableHistorySave: true,
-                    temperature: 0.3
+                    ...(_temp4 !== undefined ? { temperature: _temp4 } : {})
                 }
             )
 

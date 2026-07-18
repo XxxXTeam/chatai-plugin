@@ -3,6 +3,7 @@
  * 消除 MemoryExtractor 和 MemorySummarizer 中的重复 callLLM 实现
  */
 import { chatLogger } from '../../core/utils/logger.js'
+import { resolveClientTemperature } from '../llm/TemperatureResolver.js'
 
 const logger = chatLogger
 
@@ -24,22 +25,25 @@ export async function callMemoryLLM(llmClient, prompt, options = {}) {
         throw new Error('LLM client not configured')
     }
 
+    const resolvedTemp = resolveClientTemperature(llmClient, temperature)
+    const tempOpts = resolvedTemp !== undefined ? { temperature: resolvedTemp } : {}
+
     try {
         // 方式1: sendMessage (ChatGPT/Claude style)
         if (typeof llmClient.sendMessage === 'function') {
-            const response = await llmClient.sendMessage(prompt, { maxTokens, temperature })
+            const response = await llmClient.sendMessage(prompt, { maxTokens, ...tempOpts })
             return response?.text || response?.content || (typeof response === 'string' ? response : '')
         }
 
         // 方式2: complete (Completion style)
         if (typeof llmClient.complete === 'function') {
-            const response = await llmClient.complete(prompt, { maxTokens, temperature })
+            const response = await llmClient.complete(prompt, { maxTokens, ...tempOpts })
             return typeof response === 'string' ? response : response?.text || response?.content || ''
         }
 
         // 方式3: chat (Chat style)
         if (typeof llmClient.chat === 'function') {
-            const response = await llmClient.chat([{ role: 'user', content: prompt }], { maxTokens, temperature })
+            const response = await llmClient.chat([{ role: 'user', content: prompt }], { maxTokens, ...tempOpts })
             return (
                 response?.choices?.[0]?.message?.content ||
                 response?.content ||
@@ -51,7 +55,7 @@ export async function callMemoryLLM(llmClient, prompt, options = {}) {
         if (typeof llmClient.sendMessageWithHistory === 'function') {
             const response = await llmClient.sendMessageWithHistory([{ role: 'user', content: prompt }], {
                 maxToken: maxTokens,
-                temperature
+                ...tempOpts
             })
             const contentArray = Array.isArray(response?.content) ? response.content : []
             return (

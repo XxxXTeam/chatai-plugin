@@ -20,6 +20,9 @@
  *   5. preset.modelParams.temperature            预设
  *   6. 0.7                                       全局默认
  *
+ * 其他 LLM 参数（topP / maxTokens）同样遵循「渠道 > 预设」，
+ * 由 ChatService / ChatAgent 在构建 requestOptions 时直接使用 ?? 实现。
+ *
  * 禁用语义：当某层 disableTemperature=true 时，立即停止解析并返回 undefined，
  * 适配器层会在发送请求体前删除 undefined 字段，从而实现「不传温度」。
  *
@@ -95,4 +98,25 @@ export function resolveTemperature({ actualModel = '', requestOptions = {}, pres
 
     // 6. 全局默认
     return { temperature: 0.7, source: '默认' }
+}
+
+/**
+ * 从 LLM client 实例解析温度（便捷方法）
+ * 供绕过 ChatService 的辅助调用（记忆、总结、Agent dispatch 等）使用，
+ * 使其尊重渠道 disableTemperature / overrides.temperature 配置。
+ * @param {Object} client - LlmService.getChatClient() 返回的客户端实例
+ * @param {number} [defaultTemperature] - 调用方期望的默认温度（作为 requestOptions.temperature 参与优先级）
+ * @returns {number|undefined} 最终温度；undefined 表示不传
+ */
+export function resolveClientTemperature(client, defaultTemperature) {
+    const channelInfo = client?._channelInfo || {}
+    const { temperature } = resolveTemperature({
+        actualModel: channelInfo.model || '',
+        requestOptions: { temperature: defaultTemperature },
+        channel: {
+            overrides: channelInfo.overrides,
+            advanced: { llm: channelInfo.llm }
+        }
+    })
+    return temperature
 }

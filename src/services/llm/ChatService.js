@@ -945,7 +945,7 @@ export class ChatService {
         let actualTotalRetryCount = 0
         let actualSwitchChain = []
         const presetParams = currentPreset?.modelParams || {}
-        const baseMaxToken = presetParams.max_tokens || presetParams.maxTokens || channelLlm.maxTokens || 4000
+        const baseMaxToken = channelLlm.maxTokens || presetParams.max_tokens || presetParams.maxTokens || 4000
 
         // 应用模型映射/复写 - 框架内使用 llmModel，实际API请求使用 actualModel
         logger.debug(
@@ -971,7 +971,7 @@ export class ChatService {
             model: actualModel, // 使用映射后的实际模型名称
             maxToken: overrideMaxTokens ?? baseMaxToken,
             temperature: resolvedTemperature,
-            topP: presetParams.top_p ?? presetParams.topP ?? channelLlm.topP,
+            topP: channelLlm.topP ?? presetParams.top_p ?? presetParams.topP,
             conversationId,
             systemOverride: systemPrompt,
             systemPromptConfig: channelPromptState.systemPromptConfig,

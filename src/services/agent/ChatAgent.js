@@ -19,7 +19,7 @@ import { SkillsAgent, convertMcpTools } from './SkillsAgent.js'
 import { resolveConfiguredToolChoice } from '../tools/ToolChoiceService.js'
 import { resolveThinkingOptions as resolveConfiguredThinkingOptions } from '../llm/ThinkingOptions.js'
 import { resolveChannelSystemPrompt } from '../llm/SystemPromptConfig.js'
-import { resolveTemperature } from '../llm/TemperatureResolver.js'
+import { resolveTemperature, resolveClientTemperature } from '../llm/TemperatureResolver.js'
 import { attachToolMetadata } from '../../core/adapters/tooling.js'
 import { applySkillToolConstraints, getSkillToolConstraints } from '../skills/SkillToolConstraints.js'
 import { resolveToolPermission } from '../tools/ToolPermission.js'
@@ -497,9 +497,9 @@ export class ChatAgent {
 
         const requestOptions = {
             model: actualModel,
-            maxToken: overrideMaxTokens ?? presetParams.max_tokens ?? channelLlm.maxTokens ?? 4000,
+            maxToken: overrideMaxTokens ?? channelLlm.maxTokens ?? presetParams.max_tokens ?? 4000,
             temperature: resolvedTemperature,
-            topP: presetParams.top_p ?? channelLlm.topP,
+            topP: channelLlm.topP ?? presetParams.top_p,
             conversationId,
             systemOverride: systemPrompt,
             systemPromptConfig: channelPromptState.systemPromptConfig,
@@ -748,9 +748,10 @@ export class ChatAgent {
                 { role: 'user', content: message }
             ]
 
+            const _dispatchTemp = resolveClientTemperature(client, 0.1)
             const response = await client.sendMessageWithHistory(dispatchMessages, {
                 model: dispatchModel,
-                temperature: 0.1,
+                ...(_dispatchTemp !== undefined ? { temperature: _dispatchTemp } : {}),
                 maxToken: 500
             })
 

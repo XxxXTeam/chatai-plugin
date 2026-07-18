@@ -8,6 +8,7 @@
 import { knowledgeGraphService } from './KnowledgeGraphService.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import config from '../../../config/config.js'
+import { resolveClientTemperature } from '../llm/TemperatureResolver.js'
 
 const logger = chatLogger
 
@@ -148,12 +149,13 @@ class KnowledgeGraphExtractor {
 
         try {
             const model = config.get('memory.model') || config.get('llm.defaultModel')
+            const _temp = resolveClientTemperature(client, 0.3)
             const response = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
                 {
                     model,
                     maxToken: 1000,
-                    temperature: 0.3,
+                    ...(_temp !== undefined ? { temperature: _temp } : {}),
                     systemOverride: '你是一个精确的知识图谱实体提取器。只输出 JSON 格式的实体，每行一个。'
                 }
             )
@@ -181,12 +183,13 @@ class KnowledgeGraphExtractor {
 
         try {
             const model = config.get('memory.model') || config.get('llm.defaultModel')
+            const _temp = resolveClientTemperature(client, 0.3)
             const response = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
                 {
                     model,
                     maxToken: 800,
-                    temperature: 0.3,
+                    ...(_temp !== undefined ? { temperature: _temp } : {}),
                     systemOverride: '你是一个精确的关系提取器。只输出 JSON 格式的关系，每行一个。'
                 }
             )

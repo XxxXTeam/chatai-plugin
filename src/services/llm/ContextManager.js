@@ -11,6 +11,7 @@ import config from '../../../config/config.js'
 import historyManager from '../../core/utils/history.js'
 import { databaseService } from '../storage/DatabaseService.js'
 import { MessageApi } from '../../utils/messageParser.js'
+import { resolveClientTemperature } from './TemperatureResolver.js'
 
 /**
  * @class ContextManager
@@ -251,12 +252,13 @@ ${dialogText}
             /* 从 conversationId 提取群ID（格式: group:${groupId}），使总结也能使用群独立渠道 */
             const groupIdMatch = conversationId?.match?.(/^group:(\d+)/)
             const client = await LlmService.getChatClient({ model, groupId: groupIdMatch?.[1] || undefined })
+            const _temp = resolveClientTemperature(client, 0.2)
             const result = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
                 {
                     model,
                     maxToken: options.maxTokens || 400,
-                    temperature: 0.2,
+                    ...(_temp !== undefined ? { temperature: _temp } : {}),
                     disableHistorySave: true
                 }
             )
@@ -1623,9 +1625,15 @@ ${dialogText}
                 model,
                 groupId: groupIdMatch?.[1] || undefined
             })
+            const _temp2 = resolveClientTemperature(client, 0.2)
             const result = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
-                { model, maxToken: 300, temperature: 0.2, disableHistorySave: true }
+                {
+                    model,
+                    maxToken: 300,
+                    ...(_temp2 !== undefined ? { temperature: _temp2 } : {}),
+                    disableHistorySave: true
+                }
             )
             const summaryText = result.contents?.[0]?.text?.trim()
 

@@ -4,7 +4,7 @@ import { statsService } from '../stats/StatsService.js'
 import { ApiResponse } from './shared.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import config from '../../../config/config.js'
-import { resolveTemperature } from '../llm/TemperatureResolver.js'
+import { resolveTemperature, resolveClientTemperature } from '../llm/TemperatureResolver.js'
 
 const router = express.Router()
 
@@ -333,12 +333,13 @@ router.post('/quick-test', async (req, res) => {
             message
         })
 
+        const _temp = resolveClientTemperature(client, 0.7)
         const response = await client.sendMessage(
             { role: 'user', content: [{ type: 'text', text: message }] },
             {
                 model: model || channel.models?.[0],
                 maxToken: 100,
-                temperature: 0.7
+                ...(_temp !== undefined ? { temperature: _temp } : {})
             }
         )
 
