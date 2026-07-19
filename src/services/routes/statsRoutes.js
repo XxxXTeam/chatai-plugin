@@ -69,7 +69,8 @@ router.get('/usage', async (req, res) => {
     try {
         const { days = 7 } = req.query
         const stats = await usageStats.getStats(parseInt(days))
-        res.json(ApiResponse.ok(stats))
+        const today = await usageStats.getTodayStats()
+        res.json(ApiResponse.ok({ ...stats, today }))
     } catch (error) {
         res.status(500).json(ApiResponse.fail(null, error.message))
     }

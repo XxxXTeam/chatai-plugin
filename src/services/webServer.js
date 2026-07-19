@@ -300,9 +300,16 @@ class WebServer {
     }
 
     setupMiddleware() {
-        // 全局中间件
-        this.app.use(express.json({ limit: '50mb' }))
-        this.app.use(express.urlencoded({ extended: true }))
+        const jsonParser = express.json({ limit: '50mb' })
+        const urlencodedParser = express.urlencoded({ extended: true })
+        this.app.use((req, res, next) => {
+            if (req._body) return next()
+            jsonParser(req, res, next)
+        })
+        this.app.use((req, res, next) => {
+            if (req._body) return next()
+            urlencodedParser(req, res, next)
+        })
         this.app.use(cookieParser())
 
         // CORS
