@@ -8,7 +8,7 @@ import { chatLogger } from '../../core/utils/logger.js'
 const logger = chatLogger
 import { LlmService } from './LlmService.js'
 import { imageService } from '../media/ImageService.js'
-import { contextManager } from './ContextManager.js'
+import { contextManager, buildGroupEnvironmentPrompt, AUTO_CLEAN_NOTICE } from './ContextManager.js'
 import { channelManager } from './ChannelManager.js'
 import historyManager from '../../core/utils/history.js'
 import config from '../../../config/config.js'
@@ -103,7 +103,7 @@ export class ChatService {
                     // 向用户回复结清提示（检查 notifyUser 配置）
                     if (autoCleanConfig?.notifyUser !== false && options.event && options.event.reply) {
                         try {
-                            await options.event.reply(`历史对话已自动清理`, true)
+                            await options.event.reply(AUTO_CLEAN_NOTICE, true)
                         } catch (replyErr) {
                             logger.error('[ChatService] 回复结清提示失败:', replyErr.message)
                         }
@@ -572,6 +572,10 @@ export class ChatService {
             clientOptions.keyIndex = keyInfo.keyIndex
             clientOptions.keyObj = keyInfo.keyObj
             clientOptions.channelName = channel.name
+            // 传递渠道超时配置 { connect, read }，由适配器接到各 SDK 的 timeout 选项
+            if (channel.timeout) {
+                clientOptions.timeout = channel.timeout
+            }
             // 传递图片处理配置
             if (channel.imageConfig) {
                 clientOptions.imageConfig = channel.imageConfig
@@ -611,7 +615,6 @@ export class ChatService {
             if (channel.systemPromptConfig) {
                 clientOptions.systemPromptConfig = channel.systemPromptConfig
             }
-            channelManager.startRequest(channel.id)
         }
 
         const client = await LlmService.createClient(clientOptions)
@@ -887,21 +890,24 @@ export class ChatService {
             const groupName = event?.group_name || event?.group?.name || ''
 
             // 在系统提示中说明多用户环境，并包含群基本信息
-            systemPrompt += `\n\n[当前对话环境]
-群号: ${groupId}${groupName ? `\n群名: ${groupName}` : ''}
-当前发送消息的用户: ${currentUserLabel}(QQ:${currentUserUin})
-你正在群聊中与多位用户对话。每条用户消息都以 [用户名(QQ号)]: 格式标注发送者。
-消息中的 [提及用户 QQ:xxx ...] 表示被@的用户，包含其QQ号、群名片、昵称等信息。
-请根据消息前的用户标签区分不同用户，回复时针对当前用户。`
+            systemPrompt += buildGroupEnvironmentPrompt({
+                groupId,
+                groupName,
+                userLabel: currentUserLabel,
+                userUin: currentUserUin,
+                labeledHistory: true,
+                mentionHint: true
+            })
         } else if (groupId && (!groupContextSharingEnabled || isolation.groupUserIsolation)) {
             // 群上下文传递关闭或用户隔离模式：只添加基本群信息，不传递群聊历史
-            const groupName = event?.group_name || event?.group?.name || ''
-            const currentUserLabel = event?.sender?.card || event?.sender?.nickname || `用户${userId}`
-            const currentUserUin = event?.user_id || userId
-            systemPrompt += `\n\n[当前对话环境]
-群号: ${groupId}${groupName ? `\n群名: ${groupName}` : ''}
-当前用户: ${currentUserLabel}(QQ:${currentUserUin})
-消息中的 [提及用户 QQ:xxx ...] 表示被@的用户，包含其QQ号、群名片、昵称等信息。`
+            systemPrompt += buildGroupEnvironmentPrompt({
+                groupId,
+                groupName: event?.group_name || event?.group?.name || '',
+                userLabel: event?.sender?.card || event?.sender?.nickname || `用户${userId}`,
+                userUin: event?.user_id || userId,
+                labeledHistory: false,
+                mentionHint: true
+            })
 
             if (!groupContextSharingEnabled) {
                 validHistory = []
@@ -994,6 +1000,12 @@ export class ChatService {
         )
 
         try {
+            // 并发计数必须在 try 内递增，否则中途抛错会跳过 finally 的 endRequest，
+            // 导致该渠道计数单调递增、被 least-connection 调度永久判定为满载
+            if (channel) {
+                channelManager.startRequest(channel.id)
+            }
+
             if (event && event.reply) {
                 client.setOnMessageWithToolCall(async data => {
                     if (data?.intermediateText && data.isIntermediate) {
@@ -1079,6 +1091,7 @@ export class ChatService {
             }
             const concurrentCount = contextManager.recordRequest(conversationId)
             if (concurrentCount > 1) {
+                logger.debug(`[ChatService] 会话 ${conversationId} 检测到并发请求: ${concurrentCount}`)
             }
             {
                 const fallbackConfig = config.get('llm.fallback') || {}
@@ -1118,9 +1131,38 @@ export class ChatService {
                     totalAttempts: 0,
                     channelsTriedForMainModel: new Set(),
                     keysTriedPerChannel: new Map(),
+                    channelsErrorReported: new Set(),
+                    keySwitchCount: 0,
                     errors: [],
                     mainModelExhausted: false
                 }
+
+                // Key切换独立预算：Key切换不累加 retryCount，仅靠已试集合与该预算共同终止，
+                // 否则多Key渠道会在Key之间反复循环，每次循环都是一次真实计费调用
+                const maxKeySwitches = Math.max(2, maxRetries * 2)
+
+                /**
+                 * 记录某渠道在本次请求中已尝试过的Key索引
+                 * @param {string} channelId - 渠道ID
+                 * @param {number} keyIndex - Key索引
+                 * @returns {void}
+                 */
+                const markKeyTried = (channelId, keyIndex) => {
+                    if (!channelId || !(keyIndex >= 0)) return
+                    let tried = retryStats.keysTriedPerChannel.get(channelId)
+                    if (!tried) {
+                        tried = new Set()
+                        retryStats.keysTriedPerChannel.set(channelId, tried)
+                    }
+                    tried.add(keyIndex)
+                }
+
+                /**
+                 * 获取某渠道本次请求已尝试过的Key索引集合
+                 * @param {string} channelId - 渠道ID
+                 * @returns {Set<number>|null} 已尝试集合
+                 */
+                const getTriedKeys = channelId => retryStats.keysTriedPerChannel.get(channelId) || null
 
                 for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
                     const currentModel = modelsToTry[modelIndex]
@@ -1153,6 +1195,7 @@ export class ChatService {
                             apiKey: keyInfo.key,
                             keyIndex: keyInfo.keyIndex,
                             imageConfig: currentChannel.imageConfig || clientOptions.imageConfig,
+                            timeout: currentChannel.timeout || clientOptions.timeout,
                             chatPath: currentChannel.chatPath || '',
                             modelsPath: currentChannel.modelsPath || '',
                             responsePath: currentChannel.responsePath || currentChannel.endpoints?.responses || '',
@@ -1184,6 +1227,10 @@ export class ChatService {
                     // 记录当前渠道
                     if (currentChannel && isMainModel) {
                         retryStats.channelsTriedForMainModel.add(currentChannel.id)
+                    }
+                    // 记录该渠道的起始Key，避免后续切换又转回来
+                    if (currentChannel) {
+                        markKeyTried(currentChannel.id, currentKeyIndex)
                     }
 
                     while (retryCount <= (isMainModel ? maxRetries : 1)) {
@@ -1257,8 +1304,17 @@ export class ChatService {
 
                             // 空响应重试耗尽，尝试切换Key
                             let switched = false
-                            if (enableKeyRotation && currentChannel && currentKeyIndex >= 0) {
-                                const nextKey = channelManager.getNextAvailableKey(currentChannel.id, currentKeyIndex)
+                            if (
+                                enableKeyRotation &&
+                                currentChannel &&
+                                currentKeyIndex >= 0 &&
+                                retryStats.keySwitchCount < maxKeySwitches
+                            ) {
+                                const nextKey = channelManager.getNextAvailableKey(
+                                    currentChannel.id,
+                                    currentKeyIndex,
+                                    getTriedKeys(currentChannel.id)
+                                )
                                 if (nextKey) {
                                     logger.info(
                                         `[ChatService] 空响应后切换Key: ${currentChannel.name} Key#${currentKeyIndex + 1} -> Key#${nextKey.keyIndex + 1}`
@@ -1270,7 +1326,9 @@ export class ChatService {
                                         toKey: nextKey.keyIndex + 1,
                                         reason: 'empty'
                                     })
+                                    retryStats.keySwitchCount++
                                     currentKeyIndex = nextKey.keyIndex
+                                    markKeyTried(currentChannel.id, currentKeyIndex)
                                     const newClientOptions = {
                                         ...clientOptions,
                                         apiKey: nextKey.key,
@@ -1313,8 +1371,9 @@ export class ChatService {
                                     currentChannel = altChannel
                                     currentKeyIndex = altKeyInfo.keyIndex
                                     channelSwitched = true
-                                    // 记录已尝试的渠道
+                                    // 记录已尝试的渠道及其起始Key
                                     retryStats.channelsTriedForMainModel.add(altChannel.id)
+                                    markKeyTried(altChannel.id, currentKeyIndex)
                                     const altClientOptions = {
                                         ...clientOptions,
                                         adapterType: altChannel.adapterType,
@@ -1322,6 +1381,7 @@ export class ChatService {
                                         apiKey: altKeyInfo.key,
                                         keyIndex: altKeyInfo.keyIndex,
                                         imageConfig: altChannel.imageConfig || clientOptions.imageConfig,
+                                        timeout: altChannel.timeout || clientOptions.timeout,
                                         chatPath: altChannel.chatPath || '',
                                         modelsPath: altChannel.modelsPath || '',
                                         responsePath: altChannel.responsePath || altChannel.endpoints?.responses || '',
@@ -1393,11 +1453,16 @@ export class ChatService {
                             logger.error(`[ChatService] 模型 ${currentModel} 请求失败 (${errorType}): ${errorMsg}`)
 
                             // 报告渠道错误
+                            // 单次用户请求内，同一渠道只累加一次渠道级 errorCount，
+                            // 否则重试会把 errorCount 推到阈值使渠道被整体标记 ERROR，误伤所有用户
                             if (currentChannel) {
+                                const alreadyReported = retryStats.channelsErrorReported.has(currentChannel.id)
+                                retryStats.channelsErrorReported.add(currentChannel.id)
                                 await channelManager.reportError(currentChannel.id, {
                                     keyIndex: currentKeyIndex,
                                     errorType,
-                                    errorMessage: errorMsg
+                                    errorMessage: errorMsg,
+                                    isRetry: alreadyReported
                                 })
                             }
 
@@ -1408,8 +1473,18 @@ export class ChatService {
                             let errorSwitched = false
 
                             // 尝试切换Key（认证错误优先切换Key）
-                            if (shouldTrySwitch && enableKeyRotation && currentChannel && currentKeyIndex >= 0) {
-                                const nextKey = channelManager.getNextAvailableKey(currentChannel.id, currentKeyIndex)
+                            if (
+                                shouldTrySwitch &&
+                                enableKeyRotation &&
+                                currentChannel &&
+                                currentKeyIndex >= 0 &&
+                                retryStats.keySwitchCount < maxKeySwitches
+                            ) {
+                                const nextKey = channelManager.getNextAvailableKey(
+                                    currentChannel.id,
+                                    currentKeyIndex,
+                                    getTriedKeys(currentChannel.id)
+                                )
                                 if (nextKey) {
                                     logger.info(
                                         `[ChatService] ${errorType}错误后切换Key: ${currentChannel.name} Key#${currentKeyIndex + 1} -> Key#${nextKey.keyIndex + 1}`
@@ -1421,7 +1496,9 @@ export class ChatService {
                                         toKey: nextKey.keyIndex + 1,
                                         reason: errorType
                                     })
+                                    retryStats.keySwitchCount++
                                     currentKeyIndex = nextKey.keyIndex
+                                    markKeyTried(currentChannel.id, currentKeyIndex)
                                     const newClientOptions = {
                                         ...clientOptions,
                                         apiKey: nextKey.key,
@@ -1463,8 +1540,9 @@ export class ChatService {
                                     currentChannel = altChannel
                                     currentKeyIndex = altKeyInfo.keyIndex
                                     channelSwitched = true
-                                    // 记录已尝试的渠道
+                                    // 记录已尝试的渠道及其起始Key
                                     retryStats.channelsTriedForMainModel.add(altChannel.id)
+                                    markKeyTried(altChannel.id, currentKeyIndex)
                                     const altClientOptions = {
                                         ...clientOptions,
                                         adapterType: altChannel.adapterType,
@@ -1472,6 +1550,7 @@ export class ChatService {
                                         apiKey: altKeyInfo.key,
                                         keyIndex: altKeyInfo.keyIndex,
                                         imageConfig: altChannel.imageConfig || clientOptions.imageConfig,
+                                        timeout: altChannel.timeout || clientOptions.timeout,
                                         chatPath: altChannel.chatPath || '',
                                         modelsPath: altChannel.modelsPath || '',
                                         responsePath: altChannel.responsePath || altChannel.endpoints?.responses || '',
@@ -1750,9 +1829,12 @@ export class ChatService {
                 .map(c => c.text)
                 .join('\n')
             if (textContent.length > 50) {
+                // message 为可选参数（纯图片消息时为空），不做保护会抛 TypeError
+                // 并被外层 catch 触发 autoCleanOnError 清空用户历史
+                const topicText = typeof message === 'string' ? message.substring(0, 100) : ''
                 await contextManager.updateContext(conversationId, {
                     lastInteraction: Date.now(),
-                    recentTopics: [message.substring(0, 100)]
+                    ...(topicText ? { recentTopics: [topicText] } : {})
                 })
             }
             // Auto Memory

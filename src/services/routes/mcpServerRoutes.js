@@ -62,6 +62,22 @@ function getMcpServerApiKey() {
 }
 
 /**
+ * 常量时间比较两个字符串
+ *
+ * 直接用 !== 比较密钥会在首个不同字节处提前返回，可被响应耗时侧信道逐字节爆破。
+ * @param {string} a - 待比较值
+ * @param {string} b - 期望值
+ * @returns {boolean} 完全相等返回 true
+ */
+function timingSafeEqualString(a, b) {
+    if (typeof a !== 'string' || typeof b !== 'string') return false
+    const bufA = Buffer.from(a)
+    const bufB = Buffer.from(b)
+    if (bufA.length !== bufB.length) return false
+    return crypto.timingSafeEqual(bufA, bufB)
+}
+
+/**
  * API Key 鉴权中间件
  */
 function mcpAuthMiddleware(req, res, next) {
@@ -85,7 +101,7 @@ function mcpAuthMiddleware(req, res, next) {
     const authHeader = req.headers.authorization
     const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null
 
-    if (!token || token !== apiKey) {
+    if (!token || !timingSafeEqualString(token, apiKey)) {
         return res.status(401).json({
             jsonrpc: '2.0',
             error: { code: -32003, message: '鉴权失败: 无效的 API Key' },
@@ -301,21 +317,34 @@ router.get('/sse', mcpAuthMiddleware, (req, res) => {
  * POST /message - 接收 JSON-RPC 消息，通过 SSE 通道返回响应
  */
 router.post('/message', mcpAuthMiddleware, express.json(), async (req, res) => {
-    const sessionId = req.query.sessionId
+    try {
+        const sessionId = req.query.sessionId
 
-    if (!sessionId || !activeSessions.has(sessionId)) {
-        return res.status(400).json(jsonRpcError(-32000, '无效或过期的 sessionId', req.body?.id))
+        if (!sessionId || !activeSessions.has(sessionId)) {
+            return res.status(400).json(jsonRpcError(-32000, '无效或过期的 sessionId', req.body?.id))
+        }
+
+        const session = activeSessions.get(sessionId)
+        // Streamable HTTP 模式创建的会话是 { res: null, isStreamableHttp: true }，
+        // 不加区分直接 session.res.write() 会抛 TypeError: Cannot read properties of null
+        if (!session?.res || session.res.writableEnded) {
+            return res.status(400).json(jsonRpcError(-32000, '该会话没有可用的 SSE 通道', req.body?.id))
+        }
+
+        const response = await handleJsonRpc(req.body)
+
+        if (response) {
+            /* 通过 SSE 通道发送响应 */
+            session.res.write(`event: message\ndata: ${JSON.stringify(response)}\n\n`)
+        }
+
+        res.status(202).json({ status: 'accepted' })
+    } catch (error) {
+        logger.error('[McpServer] 处理 SSE 消息失败:', error)
+        if (!res.headersSent) {
+            res.status(500).json(jsonRpcError(-32603, `内部错误: ${error.message}`, req.body?.id))
+        }
     }
-
-    const session = activeSessions.get(sessionId)
-    const response = await handleJsonRpc(req.body)
-
-    if (response) {
-        /* 通过 SSE 通道发送响应 */
-        session.res.write(`event: message\ndata: ${JSON.stringify(response)}\n\n`)
-    }
-
-    res.status(202).json({ status: 'accepted' })
 })
 
 /*
@@ -323,21 +352,28 @@ router.post('/message', mcpAuthMiddleware, express.json(), async (req, res) => {
  * POST / - 直接接收 JSON-RPC 请求并返回 JSON-RPC 响应
  */
 router.post('/', mcpAuthMiddleware, express.json(), async (req, res) => {
-    const response = await handleJsonRpc(req.body)
+    try {
+        const response = await handleJsonRpc(req.body)
 
-    if (!response) {
-        /* 通知类消息（如 initialized）无需响应 */
-        return res.status(204).end()
+        if (!response) {
+            /* 通知类消息（如 initialized）无需响应 */
+            return res.status(204).end()
+        }
+
+        // Streamable HTTP 会话管理：initialize 响应返回 Mcp-Session-Id
+        if (req.body?.method === 'initialize' && response.result) {
+            const sessionId = crypto.randomUUID()
+            activeSessions.set(sessionId, { res: null, createdAt: Date.now(), isStreamableHttp: true })
+            res.setHeader('Mcp-Session-Id', sessionId)
+        }
+
+        res.json(response)
+    } catch (error) {
+        logger.error('[McpServer] 处理 JSON-RPC 请求失败:', error)
+        if (!res.headersSent) {
+            res.status(500).json(jsonRpcError(-32603, `内部错误: ${error.message}`, req.body?.id))
+        }
     }
-
-    // Streamable HTTP 会话管理：initialize 响应返回 Mcp-Session-Id
-    if (req.body?.method === 'initialize' && response.result) {
-        const sessionId = crypto.randomUUID()
-        activeSessions.set(sessionId, { res: null, createdAt: Date.now(), isStreamableHttp: true })
-        res.setHeader('Mcp-Session-Id', sessionId)
-    }
-
-    res.json(response)
 })
 
 /*

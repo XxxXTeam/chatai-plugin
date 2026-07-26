@@ -3,6 +3,35 @@ import path from 'node:path'
 import yaml from 'yaml'
 
 /**
+ * 禁止出现在配置路径中的键名。
+ * 这些键名会命中 Object.prototype，导致原型链污染（写入后影响全进程所有对象）。
+ * @type {Set<string>}
+ */
+export const FORBIDDEN_CONFIG_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+/**
+ * 判断配置路径（已按 . 分割）的每一段是否安全
+ * @param {string[]} keys - 配置路径片段
+ * @returns {boolean} 全部安全返回 true
+ */
+export function isSafeConfigPath(keys) {
+    return keys.every(k => !FORBIDDEN_CONFIG_KEYS.has(k))
+}
+
+/**
+ * 校验配置路径，不安全时抛出异常
+ * @param {string[]} keys - 配置路径片段
+ * @param {string} rawKey - 原始配置路径，仅用于错误提示
+ * @returns {void}
+ * @throws {Error} 路径含危险键名时抛出
+ */
+export function assertSafeConfigPath(keys, rawKey) {
+    if (!isSafeConfigPath(keys)) {
+        throw new Error(`非法的配置路径: ${rawKey}`)
+    }
+}
+
+/**
  * Configuration manager for the plugin
  */
 class Config {
@@ -114,6 +143,16 @@ class Config {
                     maxRetries: 3, // 最大重试次数
                     retryDelay: 500, // 重试间隔(ms)
                     notifyOnFallback: false // 切换模型时是否通知用户
+                },
+                /*
+                 * 渠道健康检查的兜底模型（按适配器类型）
+                 * 仅在渠道自身未配置 models 列表时使用；面向自建或中转网关时可按实际可用模型覆盖。
+                 * 留空则跳过该适配器的兜底，改用渠道已配置的模型。
+                 */
+                healthCheckModels: {
+                    openai: 'gpt-4o-mini',
+                    gemini: 'gemini-2.5-flash',
+                    claude: 'claude-3-5-haiku-20241022'
                 },
                 // 旧配置兼容
                 chatModel: '',
@@ -300,6 +339,13 @@ class Config {
                     'create_directory',
                     'execute_command'
                 ],
+                /*
+                 * 用户显式豁免的工具：最终生效名单 = (内置默认 ∪ dangerousTools) - dangerousToolsExcluded
+                 * 单独列一份是因为拦截端必须对默认黑名单取并集（否则 dangerousTools 为空数组时
+                 * execute_command 等会失去保护），此时若只从 dangerousTools 删除，
+                 * 面板上的「取消危险标记」会被并集重新加回，表现为取消不生效
+                 */
+                dangerousToolsExcluded: [],
                 // 是否允许危险操作
                 allowDangerous: false,
                 approvalMode: 'auto',
@@ -355,12 +401,22 @@ class Config {
              *   },
              *   imageConfig: {                  // 图片处理配置
              *     transferMode: string,         // 图片传递方式: 'base64' | 'url' | 'auto'
+             *     requiresBase64: boolean,      // 该端点是否要求 base64 图片；transferMode 为 'auto' 时优先采用此声明，
+             *                                   // 不声明则按模型名推断（仅 Gemini 系列判为需要），
+             *                                   // 供 glm-4v / qwen-vl / 网关重命名后的视觉模型显式指定
              *     convertFormat: boolean,       // 是否转换图片格式
              *     targetFormat: string,         // 目标格式: 'png' | 'jpeg' | 'auto'
              *     compress: boolean,            // 是否压缩图片
              *     quality: number,              // 压缩质量 (0-100)
              *     maxSize: number,              // 最大尺寸（像素）
              *     processAnimated: boolean       // 是否处理动图
+             *   },
+             *   experimental: {                 // 端点能力声明（仅 OpenAI 兼容适配器读取）
+             *     supportsReasoningParams: boolean, // 该端点是否接受推理模型专有参数
+             *                                   // （developer 角色 / max_completion_tokens / reasoning_effort）；
+             *                                   // 不声明则按模型名推断（模型名含 gemini 时判为不接受）。
+             *                                   // 非推理模型的兼容网关开启思考开关会收到 400 时，置为 false
+             *     ws: object                    // Responses API 的 WebSocket 传输配置
              *   },
              *   timeout: {                      // 超时配置
              *     connect: number,              // 连接超时（毫秒）
@@ -468,7 +524,12 @@ class Config {
             web: {
                 port: 3000,
                 sharePort: false, // TRSS环境下共享端口
-                mountPath: '/chatai' // TRSS共享端口时的挂载路径
+                mountPath: '/chatai', // TRSS共享端口时的挂载路径
+                /*
+                 * 额外允许跨域访问的来源，形如 https://panel.example.com
+                 * 同源、本机回环地址、web.publicUrl 与 web.loginLinks 已默认放行，无需重复填写
+                 */
+                corsOrigins: []
             },
             update: {
                 autoCheck: true, // 启用自动检查更新
@@ -769,6 +830,8 @@ class Config {
     get(key) {
         if (!key) return this.config
         const keys = key.split('.')
+        // 非法路径直接视为不存在，避免读取到 Object.prototype 上的属性
+        if (!isSafeConfigPath(keys)) return undefined
         let value = this.config
         for (const k of keys) {
             value = value?.[k]
@@ -780,9 +843,11 @@ class Config {
      * Set configuration value
      * @param {string} key
      * @param {any} value
+     * @throws {Error} 当 key 含有 __proto__ / constructor / prototype 等危险片段时抛出
      */
     set(key, value) {
         const keys = key.split('.')
+        assertSafeConfigPath(keys, key)
         let obj = this.config
         for (let i = 0; i < keys.length - 1; i++) {
             if (!obj[keys[i]]) {

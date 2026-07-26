@@ -35,6 +35,79 @@ async function getStatsService() {
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+/** 单个回调在注册表中的存活时长（毫秒），到期未被触发即视为失效 */
+const CALLBACK_TTL_MS = 10 * 60 * 1000
+
+/** 回调注册表容量上限，超出时淘汰最早写入的条目 */
+const MAX_CALLBACK_ENTRIES = 500
+
+/**
+ * 自定义工具单次执行的等待上限（毫秒）
+ *
+ * 只能约束**异步等待**：handler 里的同步死循环会独占事件循环，
+ * 定时器回调根本得不到调度，Promise.race 也就无从生效——那种情况无法从外部打断，
+ * 只能靠自定义工具的代码审查拦住。这里能保证的是：卡在网络、Redis、数据库等
+ * 异步等待上的调用不会无限期占住 MCP 会话。
+ * @type {number}
+ */
+const CUSTOM_TOOL_TIMEOUT_MS = 60000
+
+/** 自定义工具运行时 http 助手的请求超时（毫秒） */
+const RUNTIME_HTTP_TIMEOUT_MS = 30000
+
+/**
+ * 内置默认危险工具黑名单
+ * 这些工具在 allowDangerous 关闭时始终被拦截，用户配置只能在此基础上追加，不能移除。
+ * 之所以不允许移除：配置中 dangerousTools 常被写成空数组，若空数组直接覆盖默认值，
+ * write_file / delete_file / execute_command 等将完全不受 allowDangerous 约束。
+ * @type {string[]}
+ */
+export const DEFAULT_DANGEROUS_TOOLS = [
+    'kick_member',
+    'mute_member',
+    'recall_message',
+    'mute_all',
+    'set_group_admin',
+    'set_group_card',
+    'set_group_title',
+    'set_group_name',
+    'send_group_notice',
+    'delete_group_notice',
+    'write_file',
+    'delete_file',
+    'move_file',
+    'copy_file',
+    'create_directory',
+    'execute_command'
+]
+
+/**
+ * 计算最终生效的危险工具名单：(内置默认 ∪ 用户新增) - 用户豁免
+ *
+ * 为什么需要豁免清单：用户配置的 dangerousTools 常态是空数组，若直接用它覆盖默认黑名单，
+ * execute_command / write_file 等会全部失去保护（这正是本轮修复的缺陷）；但只取并集又会
+ * 让面板上的「取消危险标记」永远不生效——默认项在下次读取时被并集加回来。
+ * 因此把「用户想移除默认项」这个意图放进独立的 excluded 清单，语义清晰且两边都不失效。
+ * @param {*} configured - 用户配置的 dangerousTools（用户额外标记为危险的工具），非数组时忽略
+ * @param {*} excluded - 用户配置的 dangerousToolsExcluded（用户显式豁免的工具），非数组时忽略
+ * @returns {string[]} 去重后的危险工具名单
+ */
+export function mergeDangerousTools(configured, excluded) {
+    const toNameList = value => (Array.isArray(value) ? value.filter(name => typeof name === 'string') : [])
+    const merged = new Set([...DEFAULT_DANGEROUS_TOOLS, ...toNameList(configured)])
+    for (const name of toNameList(excluded)) merged.delete(name)
+    return Array.from(merged)
+}
+
+/**
+ * 从配置对象中解析出最终生效的危险工具名单
+ * @param {Object} [builtinConfig] - builtinTools 配置节点
+ * @returns {string[]} 去重后的危险工具名单
+ */
+export function resolveDangerousTools(builtinConfig = {}) {
+    return mergeDangerousTools(builtinConfig?.dangerousTools, builtinConfig?.dangerousToolsExcluded)
+}
+
 /**
  * 检测Bot适配器类型
  * @param {Object} bot - Bot实例
@@ -167,22 +240,58 @@ class ToolContext {
 
     /**
      * 注册回调
+     *
+     * 回调闭包通常捕获整个 event / bot 对象，而原实现既无容量上限也无过期路径：
+     * 只要回调没被触发就永久驻留，把它捕获的对象一起留在内存里
+     * @param {string} id - 回调标识
+     * @param {Function} callback - 回调函数
+     * @returns {void}
      */
     registerCallback(id, callback) {
-        this.callbacks.set(id, callback)
+        this.callbacks.set(id, { callback, registeredAt: Date.now() })
+        // 先写入再驱逐，稳态条目数严格不超过 MAX_CALLBACK_ENTRIES
+        this.evictExpiredCallbacks()
+    }
+
+    /**
+     * 清理过期回调，并在超出容量上限时淘汰最早写入的条目
+     * @returns {void}
+     */
+    evictExpiredCallbacks() {
+        const now = Date.now()
+        for (const [key, entry] of this.callbacks) {
+            if (now - entry.registeredAt > CALLBACK_TTL_MS) this.callbacks.delete(key)
+        }
+        // Map 保持插入顺序，超出上限时淘汰最早写入的条目
+        while (this.callbacks.size > MAX_CALLBACK_ENTRIES) {
+            const oldest = this.callbacks.keys().next().value
+            if (oldest === undefined) break
+            this.callbacks.delete(oldest)
+        }
     }
 
     /**
      * 执行回调
+     *
+     * delete 放进 finally：原实现把它写在 await 之后，回调抛错时删除被整个跳过，
+     * 失败的回调连同它捕获的上下文会永久留在注册表里
+     * @param {string} id - 回调标识
+     * @param {*} data - 传给回调的数据
+     * @returns {Promise<*>} 回调返回值；无对应回调或已过期时为 null
      */
     async executeCallback(id, data) {
-        const callback = this.callbacks.get(id)
-        if (callback) {
-            const result = await callback(data)
+        const entry = this.callbacks.get(id)
+        if (!entry) return null
+        if (Date.now() - entry.registeredAt > CALLBACK_TTL_MS) {
             this.callbacks.delete(id)
-            return result
+            logger.debug(`[BuiltinMCP] 回调已过期，不再执行: ${id}`)
+            return null
         }
-        return null
+        try {
+            return await entry.callback(data)
+        } finally {
+            this.callbacks.delete(id)
+        }
     }
 }
 
@@ -219,11 +328,19 @@ export function getBuiltinToolContext() {
 export class BuiltinMcpServer {
     constructor() {
         this.name = 'builtin'
+        /**
+         * 保留字段：工具来源已全部迁移到 modularTools / jsTools / customTools，
+         * 此处不再有任何读取点。仍保留声明是因为 McpManager.reinit() 会显式重置它，
+         * 删除字段会让那行赋值变成凭空创建属性
+         * @type {Array}
+         */
         this.tools = []
         this.jsTools = new Map() // 存储 JS 文件加载的工具
         this.modularTools = [] // 分割后的模块化工具
         this.toolCategories = {} // 工具类别信息
         this.initialized = false
+        /** @type {Promise<void>|null} 初始化在途 Promise，用于并发去重 */
+        this.initPromise = null
         this.fileWatchers = [] // 文件监听器列表
         this.watcherEnabled = false
         this.reloadDebounceTimer = null
@@ -231,21 +348,32 @@ export class BuiltinMcpServer {
 
     /**
      * 初始化服务器
+     *
+     * loadJsTools() 开头会 jsTools.clear()，而 initialized 只在全部加载完成后才置位：
+     * 并发进入时（McpManager._connectServer、refreshBuiltinTools、文件监听触发的 reinit、面板操作）
+     * 后一个调用的 clear() 会清空前一个正在填充的 Map，工具随机丢失。
+     * 这里用 initPromise 做在途去重，并在结束后立即置空，
+     * 这样 McpManager.reinit() 把 initialized 复位后仍能重新走一遍加载。
+     * @returns {Promise<void>}
      */
     async init() {
         if (this.initialized) return
+        if (this.initPromise) return this.initPromise
+        this.initPromise = this._doInit().finally(() => {
+            this.initPromise = null
+        })
+        return this.initPromise
+    }
+
+    /**
+     * 实际的初始化流程，仅由 init() 调用
+     * @returns {Promise<void>}
+     */
+    async _doInit() {
         await this.loadModularTools()
         await this.loadJsTools()
         this.initialized = true
-        logger.debug(
-            '[BuiltinMCP] 初始化完成:',
-            this.tools.length,
-            '内置工具,',
-            this.modularTools.length,
-            '模块化工具,',
-            this.jsTools.size,
-            'JS工具'
-        )
+        logger.debug('[BuiltinMCP] 初始化完成:', this.modularTools.length, '模块化工具,', this.jsTools.size, 'JS工具')
 
         // 自动启动文件监听器
         this.startFileWatcher().catch(err => {
@@ -580,6 +708,22 @@ export class BuiltinMcpServer {
                     handleFileChange(dir.name, filename)
                 })
 
+                /*
+                 * FSWatcher 在没有 'error' 监听者时会把错误当作未捕获异常抛出并终止整个进程。
+                 * 目录被删除、被移动、inotify 句柄耗尽都会触发。
+                 * 出错的监听器已经不可用，直接关闭并从列表移除，其余目录的监听不受影响。
+                 */
+                watcher.on('error', err => {
+                    logger.error(`[BuiltinMCP] 文件监听器错误 (${dir.name}): ${err.message}`)
+                    try {
+                        watcher.close()
+                    } catch (closeErr) {
+                        logger.debug(`[BuiltinMCP] 关闭出错的监听器失败: ${closeErr.message}`)
+                    }
+                    this.fileWatchers = this.fileWatchers.filter(item => item.watcher !== watcher)
+                    this.watcherEnabled = this.fileWatchers.length > 0
+                })
+
                 this.fileWatchers.push({ watcher, path: dir.path, name: dir.name })
                 logger.debug(`[BuiltinMCP] 文件监听器已启动: ${dir.name} (${dir.path})`)
             }
@@ -650,41 +794,23 @@ export class BuiltinMcpServer {
         let tools = []
         const disabledTools = builtinConfig.disabledTools || []
         if (builtinConfig.enabled) {
-            if (this.modularTools.length > 0) {
-                tools = this.modularTools.map(t => ({
-                    name: t.name,
-                    description: t.description,
-                    inputSchema: t.inputSchema,
-                    isBuiltin: true,
-                    source: 'builtin',
-                    ...(t.dangerous !== undefined ? { dangerous: t.dangerous } : {}),
-                    ...(t.requireMaster !== undefined ? { requireMaster: t.requireMaster } : {}),
-                    ...(t.requiredPermission !== undefined ? { requiredPermission: t.requiredPermission } : {})
-                }))
-            } else {
-                let builtinTools = [...this.tools]
-                if (builtinConfig.allowedTools?.length > 0) {
-                    builtinTools = builtinTools.filter(t => builtinConfig.allowedTools.includes(t.name))
-                }
-                if (disabledTools.length > 0) {
-                    builtinTools = builtinTools.filter(t => !disabledTools.includes(t.name))
-                }
-                if (!builtinConfig.allowDangerous) {
-                    const dangerous = builtinConfig.dangerousTools || []
-                    builtinTools = builtinTools.filter(t => !dangerous.includes(t.name))
-                }
-
-                tools = builtinTools.map(t => ({
-                    name: t.name,
-                    description: t.description,
-                    inputSchema: t.inputSchema,
-                    isBuiltin: true,
-                    source: 'builtin',
-                    ...(t.dangerous !== undefined ? { dangerous: t.dangerous } : {}),
-                    ...(t.requireMaster !== undefined ? { requireMaster: t.requireMaster } : {}),
-                    ...(t.requiredPermission !== undefined ? { requiredPermission: t.requiredPermission } : {})
-                }))
-            }
+            /*
+             * 这里原本还有一个 else 分支，在 modularTools 为空时从 this.tools 兜底取工具。
+             * 但 this.tools 恒为空数组（defineTools() 只返回 [] 且全项目无调用点），
+             * 该分支即使执行也只能返回空列表，并不构成"模块化工具加载失败时的降级能力"，
+             * 只会让加载失败被静默掩盖。加载失败是需要暴露的故障，
+             * 由 loadModularTools 的错误日志体现，不在这里伪装成正常空结果。
+             */
+            tools = this.modularTools.map(t => ({
+                name: t.name,
+                description: t.description,
+                inputSchema: t.inputSchema,
+                isBuiltin: true,
+                source: 'builtin',
+                ...(t.dangerous !== undefined ? { dangerous: t.dangerous } : {}),
+                ...(t.requireMaster !== undefined ? { requireMaster: t.requireMaster } : {}),
+                ...(t.requiredPermission !== undefined ? { requiredPermission: t.requiredPermission } : {})
+            }))
         }
         const customTools = this.getCustomTools()
         for (const ct of customTools) {
@@ -712,6 +838,14 @@ export class BuiltinMcpServer {
     /**
      * 执行自定义工具代码
      * 提供完整的内部 API 访问
+     *
+     * 超时保护只覆盖异步等待：见 CUSTOM_TOOL_TIMEOUT_MS 的说明，
+     * handler 内的同步死循环无法被 Promise.race 打断，这里不做该承诺
+     * @param {string} handlerCode - 用户配置的 handler 函数体
+     * @param {Object} args - 工具参数
+     * @param {Object} ctx - 工具上下文
+     * @returns {Promise<*>} handler 返回值
+     * @throws {Error} handler 抛错或超出等待上限时抛出
      */
     async executeCustomHandler(handlerCode, args, ctx) {
         const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
@@ -733,7 +867,7 @@ export class BuiltinMcpServer {
                 handlerCode
             )
 
-            const result = await fn(
+            const execution = fn(
                 args,
                 ctx,
                 fetch,
@@ -746,7 +880,25 @@ export class BuiltinMcpServer {
                 path,
                 crypto
             )
-            return result
+            /*
+             * 超时后原 Promise 仍在后台跑（无法取消），它稍后 reject 会变成 unhandledRejection。
+             * 这个静默订阅只用于兜底，不影响下面 race 对同一个 Promise 的正常订阅。
+             */
+            execution.catch(() => {})
+
+            let timer = null
+            const timeout = new Promise((_resolve, reject) => {
+                timer = setTimeout(
+                    () => reject(new Error(`自定义工具执行超时（${CUSTOM_TOOL_TIMEOUT_MS}ms）`)),
+                    CUSTOM_TOOL_TIMEOUT_MS
+                )
+            })
+
+            try {
+                return await Promise.race([execution, timeout])
+            } finally {
+                clearTimeout(timer)
+            }
         } catch (error) {
             logger.error('[BuiltinMCP] Custom tool execution error:', error)
             throw error
@@ -868,10 +1020,14 @@ export class BuiltinMcpServer {
                     if (!bot) throw new Error('Bot not available')
                     return bot.pickFriend(parseInt(userId)).sendMsg(msg)
                 },
-                // HTTP 请求
+                // HTTP 请求（默认带超时，自定义工具可通过 options.signal 自行接管）
                 http: {
                     get: async (url, options = {}) => {
-                        const res = await fetch(url, { method: 'GET', ...options })
+                        const res = await fetch(url, {
+                            method: 'GET',
+                            ...options,
+                            signal: options.signal ?? AbortSignal.timeout(RUNTIME_HTTP_TIMEOUT_MS)
+                        })
                         return res.json()
                     },
                     post: async (url, data, options = {}) => {
@@ -879,7 +1035,8 @@ export class BuiltinMcpServer {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', ...options.headers },
                             body: JSON.stringify(data),
-                            ...options
+                            ...options,
+                            signal: options.signal ?? AbortSignal.timeout(RUNTIME_HTTP_TIMEOUT_MS)
                         })
                         return res.json()
                     }
@@ -939,14 +1096,14 @@ export class BuiltinMcpServer {
             // MCP 相关
             mcp: {
                 callTool: async (name, toolArgs) => {
-                    const mcpManager = (await import('./McpManager.js')).default
+                    const { mcpManager } = await import('./McpManager.js')
                     const event = ctx?.getEvent?.()
                     const bot = ctx?.getBot?.()
                     const requestContext = event ? { event, bot } : null
                     return mcpManager.callTool(name, toolArgs, { context: requestContext })
                 },
                 listTools: async () => {
-                    const mcpManager = (await import('./McpManager.js')).default
+                    const { mcpManager } = await import('./McpManager.js')
                     return mcpManager.getTools()
                 }
             }
@@ -972,30 +1129,22 @@ export class BuiltinMcpServer {
             config.get('tools.builtin.allowDangerous'),
             false
         )
-        const dangerousTools =
+        // 危险工具名单取"内置默认黑名单 ∪ 用户配置"。
+        // 不能沿用 firstDefined：配置里的 dangerousTools 通常是空数组（而非 undefined），
+        // 会立即短路掉默认黑名单，末尾的 `|| []` 也救不回来，导致拦截彻底失效。
+        // 豁免清单与 dangerousTools 走同一套多路回退，保证两者取自同一层配置
+        const dangerousTools = mergeDangerousTools(
             firstDefined(
                 config.get('builtinTools.dangerousTools'),
                 config.get('bots.default.builtinTools.dangerousTools'),
-                config.get('tools.builtin.dangerousTools'),
-                [
-                    'kick_member',
-                    'mute_member',
-                    'recall_message',
-                    'mute_all',
-                    'set_group_admin',
-                    'set_group_card',
-                    'set_group_title',
-                    'set_group_name',
-                    'send_group_notice',
-                    'delete_group_notice',
-                    'write_file',
-                    'delete_file',
-                    'move_file',
-                    'copy_file',
-                    'create_directory',
-                    'execute_command'
-                ]
-            ) || []
+                config.get('tools.builtin.dangerousTools')
+            ),
+            firstDefined(
+                config.get('builtinTools.dangerousToolsExcluded'),
+                config.get('bots.default.builtinTools.dangerousToolsExcluded'),
+                config.get('tools.builtin.dangerousToolsExcluded')
+            )
+        )
         const disabledTools =
             firstDefined(
                 config.get('builtinTools.disabledTools'),
@@ -1084,6 +1233,16 @@ export class BuiltinMcpServer {
                     // 检查每个目标用户的权限
                     for (const targetId of targetUserIds) {
                         const targetPerm = await this.getGroupMemberRole(bot, groupId, targetId)
+                        if (targetPerm === 'unknown') {
+                            // 查不到目标身份时不能按"普通成员"处理，否则群主/管理员保护会被直接绕过
+                            logger.warn(`[BuiltinMCP] 无法确认目标(${targetId})在群${groupId}的身份，已拒绝 ${name}`)
+                            return this.formatResult({
+                                success: false,
+                                error: `无法确认目标用户(${targetId})的群内身份，出于安全考虑拒绝执行此操作（该用户可能不在群内，或协议端未返回成员信息）`,
+                                isError: true,
+                                permissionDenied: true
+                            })
+                        }
                         if (targetPerm === 'owner') {
                             logger.warn(`[BuiltinMCP] 不能对群主(${targetId})执行 ${name}`)
                             return this.formatResult({
@@ -1105,7 +1264,18 @@ export class BuiltinMcpServer {
                     }
                 }
             } catch (e) {
-                logger.debug(`[BuiltinMCP] 检查Bot权限失败: ${e.message}`)
+                /*
+                 * 权限查询失败必须拒绝而不是放行。
+                 * 能走到这个分支的全是踢人 / 禁言 / 全员禁言 / 改群名 / 设管理 一类危险操作，
+                 * 原实现只记一条 debug 就继续往下执行，等于在"查不到权限"时无条件放行。
+                 */
+                logger.warn(`[BuiltinMCP] 工具 ${name} 的Bot权限检查失败，已拒绝执行: ${e.message}`)
+                return this.formatResult({
+                    success: false,
+                    error: `无法确认Bot在群${groupId}的权限（${e.message}），出于安全考虑拒绝执行"${name}"`,
+                    isError: true,
+                    permissionDenied: true
+                })
             }
         }
 
@@ -1237,38 +1407,13 @@ export class BuiltinMcpServer {
                 }
             }
         }
-        const tool = this.tools.find(t => t.name === name)
-        if (!tool) {
-            await recordStats(null, new Error(`Tool not found: ${name}`))
-            throw new Error(`Tool not found: ${name}`)
-        }
-
-        logger.debug(`[BuiltinMCP] 调用内置工具: ${name}`)
-
-        // 参数验证
-        if (tool.inputSchema) {
-            const validation = validateParams(args, tool.inputSchema, ctx)
-            if (!validation.valid) {
-                logger.debug(`[BuiltinMCP] 参数验证失败: ${name} - ${validation.error}`)
-                const errorResult = paramError(validation)
-                await recordStats(errorResult, new Error(validation.error))
-                return this.formatResult(errorResult)
-            }
-        }
-
-        try {
-            const result = await tool.handler(args, ctx)
-            await recordStats(result)
-            // 格式化为 MCP 标准响应
-            return this.formatResult(result)
-        } catch (error) {
-            logger.error(`[BuiltinMCP] Tool error: ${name}`, error)
-            await recordStats(null, error)
-            return {
-                content: [{ type: 'text', text: `Error: ${error.message}` }],
-                isError: true
-            }
-        }
+        /*
+         * 走到这里说明 JS 工具 / 自定义工具 / 模块化工具三张表都没有这个名字。
+         * 原本这之后还有一段从 this.tools 查找并执行的分支，但 this.tools 恒为空，
+         * 那段代码永远不可达（见 listTools 中的同源说明），已随之删除。
+         */
+        await recordStats(null, new Error(`Tool not found: ${name}`))
+        throw new Error(`Tool not found: ${name}`)
     }
 
     /**
@@ -1389,7 +1534,8 @@ export class BuiltinMcpServer {
             return await getGroupMemberRoleFromBot(bot, groupId, userId)
         } catch (e) {
             logger.debug(`[BuiltinMCP] getGroupMemberRole error: ${e.message}`)
-            return 'member'
+            // 查询失败返回 unknown 由调用方 fail-closed；返回 'member' 会让群主/管理员保护判定静默通过
+            return 'unknown'
         }
     }
 
@@ -1462,9 +1608,6 @@ export class BuiltinMcpServer {
             ...(result.permissionDenied && { permissionDenied: true }),
             ...(result.toolDisabled && { toolDisabled: true })
         }
-    }
-    defineTools() {
-        return []
     }
 }
 export const builtinMcpServer = new BuiltinMcpServer()

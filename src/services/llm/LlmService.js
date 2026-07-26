@@ -2,7 +2,7 @@ import config from '../../../config/config.js'
 import { OpenAIClient, GeminiClient, ClaudeClient } from '../../core/adapters/index.js'
 import { mcpManager } from '../../mcp/McpManager.js'
 import { getAllTools, setToolContext } from '../../core/utils/toolAdapter.js'
-import { presetManager } from '../preset/PresetManager.js'
+import { presetManager, FALLBACK_SYSTEM_PROMPT } from '../preset/PresetManager.js'
 import { channelManager } from './ChannelManager.js'
 import { getScopeManager } from '../scope/ScopeManager.js'
 import { databaseService } from '../storage/DatabaseService.js'
@@ -59,7 +59,8 @@ export class LlmService {
             endpoints,
             apiInterface,
             experimental,
-            openaiResponses
+            openaiResponses,
+            channelTimeout
 
         // 优先使用传入的选项
         if (options.apiKey && options.baseUrl) {
@@ -73,6 +74,7 @@ export class LlmService {
             apiInterface = options.apiInterface || options.openaiApiInterface || 'chat'
             experimental = options.experimental || {}
             openaiResponses = options.openaiResponses || {}
+            channelTimeout = options.timeout
         } else {
             const model = options.model || config.get('llm.defaultModel')
             const channel =
@@ -95,6 +97,8 @@ export class LlmService {
             apiInterface = channel.apiInterface || channel.openaiApiInterface || 'chat'
             experimental = channel.experimental || {}
             openaiResponses = channel.openaiResponses || {}
+            // 渠道超时配置 { connect, read }，调用方显式传入时优先
+            channelTimeout = options.timeout || channel.timeout
             // 自动选择渠道时，从渠道获取 imageConfig（调用方未显式传入的场景）
             if (!options.imageConfig && channel.imageConfig) {
                 options.imageConfig = channel.imageConfig
@@ -180,6 +184,10 @@ export class LlmService {
             ...(thinkingOptions.reasoningBudgetTokens !== undefined
                 ? { reasoningBudgetTokens: thinkingOptions.reasoningBudgetTokens }
                 : {})
+        }
+        // 渠道超时配置 { connect, read }，由适配器的 resolveRequestTimeout 解析后传给各家 SDK
+        if (channelTimeout) {
+            clientConfig.timeout = channelTimeout
         }
         if (options.toolChoice !== undefined && options.toolChoice !== null) {
             clientConfig.toolChoice = options.toolChoice
@@ -356,7 +364,9 @@ export class LlmService {
             channelName: channel.name,
             features: ['chat'],
             tools: [],
-            imageConfig: channel.imageConfig || {}
+            imageConfig: channel.imageConfig || {},
+            /* 渠道超时配置 { connect, read }，供绕过 ChatService 的调用方同样受超时约束 */
+            ...(channel.timeout ? { timeout: channel.timeout } : {})
         }
 
         const client = new ClientClass(clientOptions)
@@ -420,12 +430,9 @@ export class LlmService {
     static getSystemPrompt(presetId) {
         const id = presetId || config.get('llm.defaultChatPresetId') || 'default'
 
+        /* 预设存在但未填 systemPrompt 时同样回落到兜底人设，避免下发空 system 消息 */
         const preset = presetManager.get(id)
-        if (preset) {
-            return preset.systemPrompt
-        }
-
-        return '你是一个有帮助的AI助手。'
+        return preset?.systemPrompt || FALLBACK_SYSTEM_PROMPT
     }
 
     /**

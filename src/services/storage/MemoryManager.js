@@ -11,6 +11,70 @@ import { databaseService } from './DatabaseService.js'
 import { LlmService } from '../llm/LlmService.js'
 import { statsService } from '../stats/StatsService.js'
 import { resolveClientTemperature } from '../llm/TemperatureResolver.js'
+import { formatUserMemoryBlock } from '../memory/MemoryService.js'
+
+/** 时间戳 Map 的条目上限 */
+const TIME_MAP_MAX_SIZE = 5000
+/** 时间戳 Map 的条目最大存活时长(ms) */
+const TIME_MAP_MAX_AGE = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * 构建群聊记忆提取提示词。
+ *
+ * 定时增量分析（analyzeGroupContext）与按时间范围手动总结（summarizeGroupMemoryByTimeRange）
+ * 原本各写一份几乎相同的提示词，仅条数上限不同，措辞漂移会让两条路径产出不同风格的记忆。
+ *
+ * 输出格式与 analyzeGroupContext / summarizeGroupMemoryByTimeRange 中的
+ * `/【用户[:：](.+?)】(.+)/`、`/【话题】(.+)/`、`/【关系】(.+)/` 三个正则严格耦合，禁止改动括号与标签文字。
+ *
+ * @param {Object} options - 构建选项
+ * @param {string} options.dialogText - 群聊记录文本，每行形如 `[昵称]: 内容`
+ * @param {string} options.existingMemoryText - 现有记忆文本，无则传空串
+ * @param {number} options.maxItems - 输出条数上限
+ * @param {string} [options.scopeHint] - 记录范围描述，如“过去30分钟内的120条消息”
+ * @param {string} [options.analysisTypes] - 分析维度描述，缺省为“用户特征、话题、关系”
+ * @returns {string} 完整提示词
+ */
+function buildGroupMemoryPrompt(options = {}) {
+    const {
+        dialogText,
+        existingMemoryText,
+        maxItems,
+        scopeHint = '以下群聊记录',
+        analysisTypes = '用户特征、话题、关系'
+    } = options
+
+    return `你是群聊记忆管理专家。分析${scopeHint}，提取值得长期保留的信息。
+
+【重要规则】
+- 每条消息格式为 [昵称]: 内容，方括号里的昵称就是该用户的群名片
+- 只记录用户自己说出口的具体信息，不要从语气、话题或他人发言推测
+- 按昵称区分用户，不要把不同人的信息混到一起
+- 忽略无实质内容的日常对话（如“哈哈”“好的”“在吗”）
+
+【分析维度】${analysisTypes}
+
+【现有记忆】
+${existingMemoryText || '暂无'}
+
+【群聊记录】
+${dialogText}
+
+【总结要求】
+1. 把现有记忆与新记录合并成一份完整记忆，删除重复、过时或已被推翻的条目
+2. 用户信息必须写明是谁，例如“小明喜欢打游戏”，不能写“有人喜欢打游戏”
+3. 话题必须是具体主题，例如“讨论原神3.0版本”，不能写“聊游戏”
+4. 关系必须写明双方，例如“小明和小红是好友”
+5. 不要输出分析过程、小标题或编号，只输出结果行
+
+【输出格式】
+每行一条，必须严格使用下面三种前缀之一，前缀外不加任何字符：
+【用户:昵称】该用户的具体信息
+【话题】具体话题内容
+【关系】A和B：关系描述
+
+最多${maxItems}条。没有任何值得记录的信息时，只输出一个字：无`
+}
 
 /**
  * @class MemoryManager
@@ -33,6 +97,27 @@ export class MemoryManager {
         this.pollInterval = null
         this.lastPollTime = new Map() // userId -> timestamp
         this.lastSummarizeTime = new Map() // groupId/userId -> timestamp 记录上次总结时间
+    }
+
+    /**
+     * 限制时间戳 Map 的规模：先清理过期条目，仍超限则淘汰最旧的
+     * 这两个 Map 按 userId / groupId 累积且原先永不删除
+     * @param {Map<string, number>} map - 键到时间戳的映射
+     * @returns {void}
+     */
+    _capTimeMap(map) {
+        if (!map || map.size <= TIME_MAP_MAX_SIZE) return
+
+        const now = Date.now()
+        for (const [key, ts] of map) {
+            if (now - ts > TIME_MAP_MAX_AGE) map.delete(key)
+        }
+
+        if (map.size <= TIME_MAP_MAX_SIZE) return
+        const sorted = [...map.entries()].sort((a, b) => a[1] - b[1])
+        for (const [key] of sorted.slice(0, map.size - TIME_MAP_MAX_SIZE)) {
+            map.delete(key)
+        }
     }
 
     /**
@@ -202,37 +287,13 @@ export class MemoryManager {
             if (groupConfig.extractTopics) analysisTypes.push('讨论话题')
             if (groupConfig.extractRelations) analysisTypes.push('社交关系')
 
-            // 覆盖式总结prompt - 改进版：更准确区分用户身份
-            const prompt = `你是群聊记忆管理专家。分析群聊记录，提取有价值的信息。
-
-【重要规则】
-- 每条消息格式为 [昵称]: 内容，昵称就是该用户的群名片
-- 只提取用户自己透露的具体信息，不要推测
-- 区分不同用户，按昵称分别记录
-- 忽略无意义的日常对话（如"哈哈"、"好的"等）
-
-【分析维度】${analysisTypes.join('、') || '用户特征、话题、关系'}
-
-【现有记忆】
-${existingMemoryText || '暂无'}
-
-【新群聊记录】
-${dialogText}
-
-【总结要求】
-1. 合并现有记忆和新信息，删除重复或过时的
-2. 用户信息必须关联到具体昵称（如"小明喜欢打游戏"而不是"有人喜欢打游戏"）
-3. 话题必须是具体主题（如"讨论原神3.0版本"而不是"聊游戏"）
-4. 关系必须指明具体人物（如"小明和小红是好友"）
-5. 不要输出分析过程，只输出结果
-
-【输出格式】
-每行一条，严格按以下格式：
-【用户:昵称】该用户的具体信息
-【话题】具体话题内容
-【关系】A和B：关系描述
-
-最多15条，没有有效信息则只输出"无"：`
+            // 覆盖式总结prompt，与 summarizeGroupMemoryByTimeRange 共用同一份模板
+            const prompt = buildGroupMemoryPrompt({
+                dialogText,
+                existingMemoryText,
+                maxItems: 15,
+                analysisTypes: analysisTypes.join('、') || undefined
+            })
 
             const startTime = Date.now()
             const memoryModel = config.get('memory.model')
@@ -320,41 +381,28 @@ ${dialogText}
                 }
             }
 
-            // 覆盖式替换群记忆
+            // 覆盖式替换群记忆（清空 + 写入在同一事务内，避免中途失败丢失旧记忆）
             if (newTopics.length > 0) {
-                databaseService.clearMemories(`group:${groupId}:topics`)
-                for (const topic of newTopics.slice(0, 10)) {
-                    databaseService.saveMemory(`group:${groupId}:topics`, topic, {
-                        source: 'group_context',
-                        groupId,
-                        type: 'topic'
-                    })
-                }
+                databaseService.replaceMemories(
+                    `group:${groupId}:topics`,
+                    newTopics.slice(0, 10).map(topic => ({ content: topic, source: 'group_context' }))
+                )
             }
 
             if (newRelations.length > 0) {
-                databaseService.clearMemories(`group:${groupId}:relations`)
-                for (const relation of newRelations.slice(0, 10)) {
-                    databaseService.saveMemory(`group:${groupId}:relations`, relation, {
-                        source: 'group_context',
-                        groupId,
-                        type: 'relation'
-                    })
-                }
+                databaseService.replaceMemories(
+                    `group:${groupId}:relations`,
+                    newRelations.slice(0, 10).map(relation => ({ content: relation, source: 'group_context' }))
+                )
             }
 
             if (newUserInfos.size > 0) {
                 // 清除旧用户信息并保存新的
                 for (const [nickname, infos] of newUserInfos) {
-                    const key = `group:${groupId}:user:${nickname}`
-                    databaseService.clearMemories(key)
-                    for (const info of infos.slice(0, 3)) {
-                        databaseService.saveMemory(key, info, {
-                            source: 'group_context',
-                            groupId,
-                            type: 'user_info'
-                        })
-                    }
+                    databaseService.replaceMemories(
+                        `group:${groupId}:user:${nickname}`,
+                        infos.slice(0, 3).map(info => ({ content: info, source: 'group_context' }))
+                    )
                 }
             }
 
@@ -533,6 +581,7 @@ ${dialogText}
                 // 分析该用户的最近对话
                 await this.analyzeUserConversations(userId)
                 this.lastPollTime.set(userId, now)
+                this._capTimeMap(this.lastPollTime)
 
                 // 避免一次处理太多用户，限制单次轮询最多处理10个用户
                 if (processedUsers.size >= 100) {
@@ -615,13 +664,15 @@ ${dialogText}
 - 个性特点：兴趣爱好、性格等
 
 【总结要求】
-1. 合并现有记忆和新信息，删除重复或过时的
-2. 每条必须是用户明确说过的具体事实
-3. 格式：直接描述事实，不超过50字
-4. 不要输出分析过程或格式说明
+1. 合并现有记忆和新信息，删除重复、过时或已被推翻的条目
+2. 每条必须是用户明确说过的具体事实，不超过50字
+3. 全部用中文书写
 
 【输出格式】
-每行一条记忆，最多10条。没有有效信息则只输出"无"：`
+每行一条记忆，最多10条。
+每行只写记忆本身，行首不要加“-”“•”或“1.”之类的符号和编号。
+不要输出小标题、分隔线、步骤说明或任何形式的思考过程。
+没有任何值得记录的信息时，只输出一个字：无`
 
             const startTime2 = Date.now()
             const memoryModel2 = config.get('memory.model')
@@ -719,19 +770,20 @@ ${dialogText}
         try {
             await this.init()
 
-            // 1. 清除该用户所有旧记忆
-            databaseService.clearMemories(userId)
-
-            // 2. 保存新记忆
-            for (const content of memories) {
-                databaseService.saveMemory(userId, content, {
+            // 清除旧记忆与写入新记忆在同一事务内完成，
+            // 否则中途失败会导致旧记忆已删、新记忆未写，用户记忆永久丢失
+            const replacedAt = Date.now()
+            const written = databaseService.replaceMemories(
+                userId,
+                (memories || []).map(content => ({
+                    content,
                     source,
                     importance: 6,
-                    metadata: { replacedAt: Date.now() }
-                })
-            }
+                    metadata: { replacedAt }
+                }))
+            )
 
-            logger.debug(`[MemoryManager] 替换记忆 [${userId}]: ${memories.length}条`)
+            logger.debug(`[MemoryManager] 替换记忆 [${userId}]: ${written}条`)
             return true
         } catch (error) {
             logger.error(`[MemoryManager] 替换记忆失败 [${userId}]:`, error.message)
@@ -919,12 +971,12 @@ ${existingMemoryList || '暂无'}
         // 最多取15条
         const selectedMemories = allMemories.slice(0, 15)
 
-        const memoryText = selectedMemories.map(m => `- ${m.content}`).join('\n')
+        const memoryLines = selectedMemories.map(m => `- ${m.content}`)
         logger.info(
             `[MemoryManager] 为用户 ${pureUserId}${groupId ? ` (群${groupId})` : ''} 加载 ${selectedMemories.length} 条记忆`
         )
-        logger.debug(`[MemoryManager] 记忆内容:\n${memoryText}`)
-        return `\n【用户记忆】\n${memoryText}\n`
+        logger.debug(`[MemoryManager] 记忆内容:\n${memoryLines.join('\n')}`)
+        return formatUserMemoryBlock(memoryLines)
     }
 
     /**
@@ -1231,35 +1283,13 @@ ${existingMemoryList || '暂无'}
             const timeRangeMinutes = Math.round(timeRange / 60000)
             const dialogText = allMessages.map(m => `[${m.nickname}]: ${m.content.substring(0, 150)}`).join('\n')
 
-            // 6. 构建总结prompt
-            const prompt = `你是群聊记忆管理专家。请分析过去${timeRangeMinutes}分钟内的${allMessages.length}条群聊消息，提取有价值的信息。
-
-【重要规则】
-- 每条消息格式为 [昵称]: 内容，昵称是用户的群名片
-- 只提取用户自己透露的具体信息，不推测
-- 区分不同用户，按昵称分别记录
-- 忽略无意义的日常对话（如"哈哈"、"好的"等）
-
-【现有记忆（需要更新或保留）】
-${existingMemoryText || '暂无'}
-
-【最近${timeRangeMinutes}分钟的群聊记录】
-${dialogText}
-
-【总结要求】
-1. 综合现有记忆和新消息，生成更新后的完整记忆
-2. 删除过时或重复的信息
-3. 用户信息必须关联到具体昵称
-4. 话题必须是具体主题
-5. 关系必须指明具体人物
-
-【输出格式】
-每行一条，严格按以下格式：
-【用户:昵称】该用户的具体信息
-【话题】具体话题内容
-【关系】A和B：关系描述
-
-最多20条，没有有效信息则只输出"无"：`
+            // 6. 构建总结prompt，与 analyzeGroupContext 共用同一份模板
+            const prompt = buildGroupMemoryPrompt({
+                dialogText,
+                existingMemoryText,
+                maxItems: 20,
+                scopeHint: `过去${timeRangeMinutes}分钟内的${allMessages.length}条群聊消息`
+            })
 
             // 7. 调用LLM进行总结
             const startApiTime = Date.now()
@@ -1349,48 +1379,33 @@ ${dialogText}
                 }
             }
 
-            // 9. 覆盖式保存记忆
+            // 9. 覆盖式保存记忆（清空 + 写入在同一事务内，避免中途失败丢失旧记忆）
             if (newTopics.length > 0) {
-                databaseService.clearMemories(`group:${groupId}:topics`)
-                for (const topic of newTopics.slice(0, 10)) {
-                    databaseService.saveMemory(`group:${groupId}:topics`, topic, {
-                        source: 'time_range_summary',
-                        groupId,
-                        type: 'topic',
-                        timeRange: timeRangeMinutes
-                    })
-                }
+                databaseService.replaceMemories(
+                    `group:${groupId}:topics`,
+                    newTopics.slice(0, 10).map(topic => ({ content: topic, source: 'time_range_summary' }))
+                )
             }
 
             if (newRelations.length > 0) {
-                databaseService.clearMemories(`group:${groupId}:relations`)
-                for (const relation of newRelations.slice(0, 10)) {
-                    databaseService.saveMemory(`group:${groupId}:relations`, relation, {
-                        source: 'time_range_summary',
-                        groupId,
-                        type: 'relation',
-                        timeRange: timeRangeMinutes
-                    })
-                }
+                databaseService.replaceMemories(
+                    `group:${groupId}:relations`,
+                    newRelations.slice(0, 10).map(relation => ({ content: relation, source: 'time_range_summary' }))
+                )
             }
 
             if (newUserInfos.size > 0) {
                 for (const [nickname, infos] of newUserInfos) {
-                    const key = `group:${groupId}:user:${nickname}`
-                    databaseService.clearMemories(key)
-                    for (const info of infos.slice(0, 3)) {
-                        databaseService.saveMemory(key, info, {
-                            source: 'time_range_summary',
-                            groupId,
-                            type: 'user_info',
-                            timeRange: timeRangeMinutes
-                        })
-                    }
+                    databaseService.replaceMemories(
+                        `group:${groupId}:user:${nickname}`,
+                        infos.slice(0, 3).map(info => ({ content: info, source: 'time_range_summary' }))
+                    )
                 }
             }
 
             // 记录本次总结时间
             this.lastSummarizeTime.set(groupId, now)
+            this._capTimeMap(this.lastSummarizeTime)
 
             logger.info(
                 `[MemoryManager] 群 ${groupId} 时间段总结完成: 消息${allMessages.length}条, 话题${newTopics.length}, 关系${newRelations.length}, 用户${newUserInfos.size}`

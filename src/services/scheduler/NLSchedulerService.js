@@ -17,30 +17,49 @@ const TASKS_FILE = path.join(__dirname, '../../../data/nl_scheduled_tasks.json')
 class NLSchedulerService {
     constructor() {
         this.initialized = false
+        this.initPromise = null
         this.tasks = new Map()
         this.checkInterval = null
     }
 
+    /**
+     * 初始化调度服务
+     * 用 in-flight Promise 去重：有多个不 await 的并发调用点，
+     * 若 initialized 在 await 之后置位会创建两个 setInterval，
+     * 前一个句柄被覆盖后无法清除，导致同一条定时提醒被发送两次
+     * @returns {Promise<void>}
+     */
     async init() {
         if (this.initialized) return
+        if (this.initPromise) return await this.initPromise
 
-        await this.loadTasks()
+        this.initPromise = (async () => {
+            try {
+                await this.loadTasks()
 
-        // 每30秒检查一次到期任务
-        this.checkInterval = setInterval(() => {
-            this.checkAndExecuteTasks().catch(err => {
-                logger.warn('[NLScheduler] 检查任务失败:', err.message)
-            })
-        }, 30 * 1000)
+                // 每30秒检查一次到期任务
+                this.checkInterval = setInterval(() => {
+                    this.checkAndExecuteTasks().catch(err => {
+                        logger.warn('[NLScheduler] 检查任务失败:', err.message)
+                    })
+                }, 30 * 1000)
+                this.checkInterval.unref?.()
 
-        // 首次检查延迟3秒
-        setTimeout(() => {
-            this.checkAndExecuteTasks().catch(err => {
-                logger.warn('[NLScheduler] 首次检查失败:', err.message)
-            })
-        }, 3000)
+                // 首次检查延迟3秒
+                const firstCheckTimer = setTimeout(() => {
+                    this.checkAndExecuteTasks().catch(err => {
+                        logger.warn('[NLScheduler] 首次检查失败:', err.message)
+                    })
+                }, 3000)
+                firstCheckTimer.unref?.()
 
-        this.initialized = true
+                this.initialized = true
+            } finally {
+                this.initPromise = null
+            }
+        })()
+
+        return await this.initPromise
     }
 
     stop() {
@@ -49,6 +68,7 @@ class NLSchedulerService {
             this.checkInterval = null
         }
         this.initialized = false
+        this.initPromise = null
         logger.info('[NLScheduler] 服务已停止')
     }
 

@@ -148,77 +148,120 @@ import {
     mcpServerRoutes,
     ChaiteResponse
 } from './routes/index.js'
+import { errorHandler } from './middleware/ApiResponse.js'
 import { nlSchedulerService } from './scheduler/NLSchedulerService.js'
 import { groupSummaryPushService } from './group/GroupSummaryPushService.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-const SIGNATURE_SECRET = 'chatai-signature-key-2026'
 let authKey = config.get('web.jwtSecret')
 if (!authKey) {
     authKey = crypto.randomUUID()
     config.set('web.jwtSecret', authKey)
 }
 
-class RequestSignatureValidator {
-    static generateSignature(method, path, timestamp, bodyHash = '', nonce = '') {
-        const signatureString = `${SIGNATURE_SECRET}|${method.toUpperCase()}|${path}|${timestamp}|${bodyHash}|${nonce}`
-        const hash = crypto.createHash('sha256')
-        hash.update(signatureString)
-        return hash.digest('hex')
-    }
-
-    static validate(req) {
-        const signature = req.headers['x-signature']
-        const timestamp = req.headers['x-timestamp']
-        const nonce = req.headers['x-nonce']
-        const bodyHash = req.headers['x-body-hash'] || ''
-
-        if (!signature || !timestamp || !nonce) {
-            chatLogger.warn(`[Auth] 缺少签名头: sig=${!!signature}, ts=${!!timestamp}, nonce=${!!nonce}`)
-            return { valid: false, error: 'Missing signature headers' }
-        }
-
-        const now = Date.now()
-        const requestTime = parseInt(timestamp, 10)
-        if (isNaN(requestTime) || Math.abs(now - requestTime) > 5 * 60 * 1000) {
-            chatLogger.warn(
-                `[Auth] 时间戳过期: now=${now}, request=${requestTime}, diff=${Math.abs(now - requestTime)}ms`
-            )
-            return { valid: false, error: 'Request timestamp expired' }
-        }
-
-        const fullPath = (req.originalUrl || req.path).split('?')[0]
-        const expectedSignature = this.generateSignature(req.method, fullPath, timestamp, bodyHash, nonce)
-
-        // 签名验证 - 使用时序安全比较防止时序攻击
-        const sigBuf = Buffer.from(signature)
-        const expBuf = Buffer.from(expectedSignature)
-        if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
-            chatLogger.warn(`[Auth] 签名不匹配:`)
-            chatLogger.warn(`  收到: ${signature}`)
-            chatLogger.warn(`  期望: ${expectedSignature}`)
-            chatLogger.warn(`  路径: ${fullPath}, 方法: ${req.method}`)
-            chatLogger.warn(`  bodyHash: ${bodyHash}, nonce: ${nonce}`)
-            return { valid: false, error: 'Invalid signature' }
-        }
-
-        return { valid: true }
+/**
+ * 解析来源字符串的 host 部分（hostname:port）
+ * @param {string} value - 完整 URL 或 Origin 头的值
+ * @returns {string|null} 小写 host，解析失败返回 null
+ */
+function parseOriginHost(value) {
+    if (!value || typeof value !== 'string') return null
+    try {
+        return new URL(value).host.toLowerCase()
+    } catch {
+        return null
     }
 }
 
+/**
+ * 解析来源字符串的 hostname（不含端口，IPv6 已去掉方括号）
+ * @param {string} value - 完整 URL 或 Origin 头的值
+ * @returns {string|null} 小写 hostname，解析失败返回 null
+ */
+function parseOriginHostname(value) {
+    if (!value || typeof value !== 'string') return null
+    try {
+        return new URL(value).hostname.toLowerCase().replace(/^\[|\]$/g, '')
+    } catch {
+        return null
+    }
+}
+
+/**
+ * 判断 hostname 是否指向本机回环地址
+ * @param {string} hostname - 已去掉端口与方括号的主机名
+ * @returns {boolean}
+ */
+function isLoopbackHostname(hostname) {
+    if (!hostname) return false
+    return hostname === 'localhost' || hostname === '::1' || /^127\./.test(hostname)
+}
+
 class FingerprintValidator {
-    constructor() {
+    /**
+     * @param {number} [maxSize=5000] - 绑定表容量上限，超出后按写入顺序淘汰最旧条目
+     * @param {number} [ttlMs=2592000000] - 单条绑定的存活时间，默认 30 天，与 JWT 有效期保持一致
+     */
+    constructor(maxSize = 5000, ttlMs = 30 * 24 * 60 * 60 * 1000) {
         this.bindings = new Map()
+        this.maxSize = maxSize
+        this.ttlMs = ttlMs
     }
+
+    /**
+     * 绑定 JWT 与客户端指纹
+     * @param {string} token - JWT
+     * @param {string} fingerprint - 客户端指纹
+     * @returns {void}
+     */
     bind(token, fingerprint) {
-        if (fingerprint) this.bindings.set(token, fingerprint)
+        if (!fingerprint) return
+        this.bindings.set(token, { fingerprint, expiry: Date.now() + this.ttlMs })
+        if (this.bindings.size > this.maxSize) this.evict()
     }
+
+    /**
+     * 清理过期绑定；若仍超出容量上限，按写入顺序淘汰最旧条目
+     * @returns {void}
+     */
+    evict() {
+        const now = Date.now()
+        for (const [token, data] of this.bindings) {
+            if (now > data.expiry) this.bindings.delete(token)
+        }
+        // Map 保持插入顺序，迭代器返回的首个键即最早写入的条目
+        while (this.bindings.size > this.maxSize) {
+            const oldest = this.bindings.keys().next().value
+            if (oldest === undefined) break
+            this.bindings.delete(oldest)
+        }
+    }
+
+    /**
+     * 校验 JWT 与客户端指纹是否匹配
+     * @param {string} token - JWT
+     * @param {string} fingerprint - 客户端指纹
+     * @returns {boolean} 无绑定记录时放行（绑定表为纯内存，服务重启后为空）
+     */
     validate(token, fingerprint) {
         const bound = this.bindings.get(token)
         if (!bound) return true
+        if (Date.now() > bound.expiry) {
+            this.bindings.delete(token)
+            return true
+        }
         if (!fingerprint) return false
-        return bound === fingerprint
+        return bound.fingerprint === fingerprint
+    }
+
+    /**
+     * 移除指定 JWT 的指纹绑定（登出时调用）
+     * @param {string} token - JWT
+     * @returns {void}
+     */
+    remove(token) {
+        this.bindings.delete(token)
     }
 }
 
@@ -238,15 +281,67 @@ class RequestIdValidator {
     }
 }
 
+/**
+ * 创建基于来源 IP 的简易限流中间件
+ *
+ * 记录表采用惰性清理：仅在条目数超过 maxEntries 时扫描剔除已过期条目，
+ * 避免常驻定时器。项目未启用 Express 的 trust proxy，
+ * 故 req.ip 取自 socket 真实地址，不受 X-Forwarded-For 伪造影响。
+ *
+ * @param {Object} [options] - 限流配置
+ * @param {number} [options.max=5] - 单个窗口内允许的最大请求数
+ * @param {number} [options.windowMs=60000] - 窗口时长（毫秒）
+ * @param {number} [options.maxEntries=1000] - 记录表容量上限
+ * @param {string} [options.message='请求过于频繁，请稍后再试'] - 触发限流时的提示
+ * @returns {Function} Express 中间件
+ */
+function createRateLimit({
+    max = 5,
+    windowMs = 60 * 1000,
+    maxEntries = 1000,
+    message = '请求过于频繁，请稍后再试'
+} = {}) {
+    const hits = new Map()
+    return (req, res, next) => {
+        const ip = req.ip || req.socket?.remoteAddress || 'unknown'
+        const now = Date.now()
+        const entry = hits.get(ip)
+
+        if (entry && now < entry.resetAt) {
+            if (entry.count >= max) {
+                res.set('Retry-After', Math.ceil((entry.resetAt - now) / 1000))
+                return res.status(429).json(ChaiteResponse.fail(null, message))
+            }
+            entry.count++
+        } else {
+            hits.set(ip, { count: 1, resetAt: now + windowMs })
+        }
+
+        if (hits.size > maxEntries) {
+            for (const [key, value] of hits) {
+                if (now > value.resetAt) hits.delete(key)
+            }
+        }
+        next()
+    }
+}
+
 class AuthHandler {
     constructor() {
         this.tokens = new Map()
     }
 
-    generateToken(timeout = 5 * 60, permanent = false) {
+    /**
+     * 生成登录 Token
+     * @param {number} [timeout=300] - 临时 Token 有效期（秒），permanent 为 true 时忽略
+     * @param {boolean} [permanent=false] - 是否生成永久 Token
+     * @param {boolean} [forceNew=false] - 永久 Token 已存在时是否强制重新生成
+     * @returns {string} Token
+     */
+    generateToken(timeout = 5 * 60, permanent = false, forceNew = false) {
         if (permanent) {
             let permanentToken = config.get('web.permanentAuthToken')
-            if (!permanentToken) {
+            if (!permanentToken || forceNew) {
                 permanentToken = crypto.randomBytes(32).toString('base64url')
                 config.set('web.permanentAuthToken', permanentToken)
                 chatLogger.info('[Auth] 已生成新的永久登录Token')
@@ -257,7 +352,8 @@ class AuthHandler {
         const token = crypto.randomBytes(32).toString('base64url')
         const expiry = Date.now() + timeout * 1000
         this.tokens.set(token, expiry)
-        setTimeout(() => this.tokens.delete(token), timeout * 1000)
+        // unref 使该定时器不阻止进程退出
+        setTimeout(() => this.tokens.delete(token), timeout * 1000).unref?.()
         return token
     }
 
@@ -299,6 +395,81 @@ class WebServer {
         this.setupRoutes()
     }
 
+    /**
+     * 判断跨域来源是否可信
+     *
+     * 放行范围（默认部署无需任何额外配置）：
+     * 1. 与请求 Host 相同的来源（浏览器对同源 POST/fetch 同样会带 Origin 头）
+     * 2. 本机回环地址 localhost / 127.x / ::1（任意端口，覆盖前端开发服务器）
+     * 3. web.publicUrl 与 web.loginLinks[].baseUrl 配置的对外地址
+     * 4. web.corsOrigins 中显式声明的来源
+     * 5. 启动时探测到的本机网卡地址（this.addresses）
+     *
+     * @param {import('express').Request} req - 当前请求
+     * @param {string} origin - 请求头中的 Origin
+     * @returns {boolean} 可信返回 true
+     */
+    isTrustedOrigin(req, origin) {
+        const originHost = parseOriginHost(origin)
+        const originHostname = parseOriginHostname(origin)
+        if (!originHost || !originHostname) return false
+
+        const requestHost = typeof req.headers.host === 'string' ? req.headers.host.toLowerCase() : ''
+        if (requestHost && originHost === requestHost) return true
+
+        if (isLoopbackHostname(originHostname)) return true
+
+        const allowedHosts = new Set()
+        const allowedHostnames = new Set()
+        /**
+         * 登记一个允许来源
+         * @param {string} value - 完整 URL 或裸 host
+         * @returns {void}
+         */
+        const addAllowed = value => {
+            const host = parseOriginHost(value)
+            if (host) {
+                allowedHosts.add(host)
+                const hostname = parseOriginHostname(value)
+                if (hostname) allowedHostnames.add(hostname)
+                return
+            }
+            // 允许直接填写 example.com 或 example.com:8080 这类裸 host
+            if (typeof value === 'string' && value.trim()) {
+                const bare = value.trim().toLowerCase()
+                allowedHosts.add(bare)
+                allowedHostnames.add(bare.replace(/:\d+$/, '').replace(/^\[|\]$/g, ''))
+            }
+        }
+
+        addAllowed(config.get('web.publicUrl'))
+        const loginLinks = config.get('web.loginLinks')
+        if (Array.isArray(loginLinks)) {
+            for (const link of loginLinks) addAllowed(link?.baseUrl)
+        }
+        const extraOrigins = config.get('web.corsOrigins')
+        if (Array.isArray(extraOrigins)) {
+            for (const item of extraOrigins) addAllowed(item)
+        }
+        if (allowedHosts.has(originHost)) return true
+
+        // 本机网卡地址：端口可能因反向代理而不同，故 host 与 hostname 都比对
+        const detected = [
+            ...(this.addresses?.local || []),
+            ...(this.addresses?.localIPv6 || []),
+            this.addresses?.public,
+            this.addresses?.publicIPv6
+        ]
+        for (const addr of detected) {
+            const host = parseOriginHost(addr)
+            if (host && host === originHost) return true
+            const hostname = parseOriginHostname(addr)
+            if (hostname && hostname === originHostname) return true
+        }
+
+        return allowedHostnames.has(originHostname)
+    }
+
     setupMiddleware() {
         const jsonParser = express.json({ limit: '50mb' })
         const urlencodedParser = express.urlencoded({ extended: true })
@@ -312,9 +483,26 @@ class WebServer {
         })
         this.app.use(cookieParser())
 
-        // CORS
+        // CORS：仅对可信来源下发跨域头。
+        // 原实现直接反射 req.headers.origin 且带 Allow-Credentials: true，
+        // 等价于允许任意站点携带用户 Cookie 调用本插件全部接口；
+        // 且 TRSS 模式下 botExpress.use(this.app) 会把该策略扩散到整个 Yunzai 服务。
         this.app.use((req, res, next) => {
-            res.header('Access-Control-Allow-Origin', req.headers.origin || '*')
+            const origin = req.headers.origin
+            // 无 Origin 头 = 同源导航或非浏览器客户端，本就不需要 CORS 头
+            if (!origin) {
+                if (req.method === 'OPTIONS') return res.sendStatus(204)
+                return next()
+            }
+
+            if (!this.isTrustedOrigin(req, origin)) {
+                // 不下发任何 CORS 头，由浏览器同源策略拦截；预检直接拒绝
+                if (req.method === 'OPTIONS') return res.sendStatus(403)
+                return next()
+            }
+
+            res.header('Access-Control-Allow-Origin', origin)
+            res.header('Vary', 'Origin')
             res.header('Access-Control-Allow-Credentials', 'true')
             res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS')
             res.header(
@@ -494,31 +682,35 @@ class WebServer {
         })
 
         // 生成临时登录Token - 公开接口，Token输出到控制台
-        this.router.get('/api/auth/token/generate', async (req, res) => {
-            try {
-                const token = authHandler.generateToken() // 5分钟有效
-                chatLogger.info('========================================')
-                chatLogger.info('[ChatAI] 管理面板登录 Token (5分钟有效):')
-                chatLogger.info(token)
-                chatLogger.info('========================================')
-                res.json(
-                    ChaiteResponse.ok({
-                        success: true,
-                        message: 'Token 已输出到 Yunzai 控制台',
-                        expiresIn: '5分钟'
-                    })
-                )
-            } catch (error) {
-                res.status(500).json(ChaiteResponse.fail(null, error.message))
+        this.router.get(
+            '/api/auth/token/generate',
+            createRateLimit({ max: 3, windowMs: 60 * 1000, message: 'Token 生成请求过于频繁，请稍后再试' }),
+            async (req, res) => {
+                try {
+                    const token = authHandler.generateToken() // 5分钟有效
+                    chatLogger.info('========================================')
+                    chatLogger.info('[ChatAI] 管理面板登录 Token (5分钟有效):')
+                    chatLogger.info(token)
+                    chatLogger.info('========================================')
+                    res.json(
+                        ChaiteResponse.ok({
+                            success: true,
+                            message: 'Token 已输出到 Yunzai 控制台',
+                            expiresIn: '5分钟'
+                        })
+                    )
+                } catch (error) {
+                    res.status(500).json(ChaiteResponse.fail(null, error.message))
+                }
             }
-        })
+        )
 
         // POST /api/auth/token/permanent - 生成永久Token
         this.router.post('/api/auth/token/permanent', auth, (req, res) => {
             try {
                 const forceNew = req.body?.forceNew === true
                 const hadToken = !!config.get('web.permanentAuthToken')
-                const token = authHandler.generateToken(0, true)
+                const token = authHandler.generateToken(0, true, forceNew)
                 res.json(ChaiteResponse.ok({ token, isNew: forceNew || !hadToken }))
             } catch (error) {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -549,7 +741,24 @@ class WebServer {
             }
         })
 
-        this.router.get('/api/health', systemRoutes)
+        // 健康检查：必须内联响应。
+        // 原写法 router.get('/api/health', systemRoutes) 把子 Router 当普通 handler，
+        // .get() 不会剥离路径前缀，systemRoutes 内注册的是 '/health'，永远匹配不上，
+        // 最终 next() 落到下方的 router.use('/api', auth, systemRoutes) 被鉴权拦截返回 401。
+        // 响应体与 systemRoutes 的 GET /health 保持一致，避免既有监控探针解析失败
+        this.router.get('/api/health', (req, res) => {
+            const memory = process.memoryUsage()
+            res.json({
+                status: 'healthy',
+                timestamp: Date.now(),
+                uptime: process.uptime(),
+                memoryUsage: {
+                    heapUsed: Math.round(memory.heapUsed / 1024 / 1024),
+                    heapTotal: Math.round(memory.heapTotal / 1024 / 1024),
+                    rss: Math.round(memory.rss / 1024 / 1024)
+                }
+            })
+        })
         this.router.use('/api/channels', auth, channelRoutes)
         this.router.use('/api/config', auth, configRoutes)
         this.router.use('/api/test-panel', auth, testPanelRoutes)
@@ -576,6 +785,11 @@ class WebServer {
         this.router.use('/api/preset', createPresetRoutes(auth))
         this.router.use('/api/presets', createPresetsConfigRoutes(auth))
         this.router.use('/api', auth, systemRoutes)
+        // 未命中的 /api 与 /mcp 请求必须返回 JSON 404，
+        // 否则会落进下方的 SPA 兜底，返回 200 + index.html，前端 JSON.parse 直接报错
+        this.router.use(['/api', '/mcp'], (req, res) => {
+            res.status(404).json(ChaiteResponse.fail(null, `接口不存在: ${req.method} ${req.originalUrl}`))
+        })
         this.router.get('*', (req, res) => {
             const webDir = path.join(__dirname, '../../resources/web')
             const reqPath = req.path.replace(/\/$/, '') || ''
@@ -596,6 +810,10 @@ class WebServer {
             }
         })
         this.app.use(mountPath, this.router)
+        // 全局错误兜底。ApiResponse.js 早已实现 errorHandler 但从未挂载，
+        // 导致同步抛错走 Express 默认处理器：返回带绝对路径的 HTML 堆栈（项目未设 NODE_ENV）。
+        // 限定在 mountPath 下，避免 TRSS 共享端口时干扰 Yunzai 的其它服务。
+        this.app.use(mountPath, errorHandler)
     }
 
     getLoginInfo(permanent = false) {

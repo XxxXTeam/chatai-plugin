@@ -15,6 +15,13 @@ const __dirname = path.dirname(__filename)
 const DATA_DIR = path.join(__dirname, '../../../data')
 const KNOWLEDGE_DIR = path.join(DATA_DIR, 'knowledge')
 
+/** 单个文档允许读入内存的内容上限(字节)，超出部分截断 */
+const MAX_DOC_CONTENT_BYTES = 2 * 1024 * 1024
+/** 内容缓存最多保留的文档数 */
+const CONTENT_CACHE_MAX_DOCS = 50
+/** 内容缓存总字节上限 */
+const CONTENT_CACHE_MAX_CHARS = 20 * 1024 * 1024
+
 /**
  * 知识库文档
  * @typedef {Object} KnowledgeDocument
@@ -31,8 +38,124 @@ const KNOWLEDGE_DIR = path.join(DATA_DIR, 'knowledge')
 class KnowledgeService {
     constructor() {
         this.initialized = false
-        this.documents = new Map()
+        this.documents = new Map() // 仅存元数据，内容按需从磁盘加载
         this.presetKnowledgeMap = new Map() // presetId -> Set<docId>
+        this.contentCache = new Map() // docId -> content（LRU，插入顺序即使用顺序）
+    }
+
+    /**
+     * 读取文档内容：优先命中 LRU 缓存，未命中时同步从磁盘加载
+     * 保持同步返回，以免改变 get() / getAll() / buildKnowledgePrompt() 等既有同步签名
+     * @param {Object} doc - 文档元数据
+     * @returns {string} 文档内容
+     */
+    readContent(doc) {
+        if (!doc) return ''
+        // 无 filePath 的旧格式文档，内容内联保存
+        if (!doc.filePath) return doc._inlineContent || ''
+
+        const cached = this.contentCache.get(doc.id)
+        if (cached !== undefined) {
+            // 命中后移到队尾，维持 LRU 顺序
+            this.contentCache.delete(doc.id)
+            this.contentCache.set(doc.id, cached)
+            return cached
+        }
+
+        const filePath = path.join(KNOWLEDGE_DIR, doc.filePath)
+        let content = ''
+        try {
+            const stat = fs.statSync(filePath)
+            if (stat.size > MAX_DOC_CONTENT_BYTES) {
+                logger.warn(
+                    `[KnowledgeService] 文档 ${doc.id} 体积 ${(stat.size / 1024 / 1024).toFixed(1)}MB 超过上限，仅读取前 ${MAX_DOC_CONTENT_BYTES} 字节`
+                )
+                const fd = fs.openSync(filePath, 'r')
+                try {
+                    const buf = Buffer.alloc(MAX_DOC_CONTENT_BYTES)
+                    const bytesRead = fs.readSync(fd, buf, 0, MAX_DOC_CONTENT_BYTES, 0)
+                    content = buf.subarray(0, bytesRead).toString('utf-8')
+                } finally {
+                    fs.closeSync(fd)
+                }
+            } else {
+                content = fs.readFileSync(filePath, 'utf-8')
+            }
+        } catch (err) {
+            logger.warn(`[KnowledgeService] 读取文档内容失败 ${doc.filePath}: ${err.message}`)
+            return ''
+        }
+
+        this._cacheContent(doc.id, content)
+        // 校正长度元数据：登记时用的是文件字节数，此处得到真实字符数
+        doc.contentLength = content.length
+        return content
+    }
+
+    /**
+     * 写入内容缓存并按 LRU 淘汰超额条目
+     * @param {string} docId - 文档ID
+     * @param {string} content - 文档内容
+     * @returns {void}
+     */
+    _cacheContent(docId, content) {
+        this.contentCache.delete(docId)
+        this.contentCache.set(docId, content)
+
+        let totalChars = 0
+        for (const value of this.contentCache.values()) {
+            totalChars += value.length
+        }
+
+        while (
+            this.contentCache.size > CONTENT_CACHE_MAX_DOCS ||
+            (totalChars > CONTENT_CACHE_MAX_CHARS && this.contentCache.size > 1)
+        ) {
+            const oldestKey = this.contentCache.keys().next().value
+            if (oldestKey === undefined) break
+            totalChars -= this.contentCache.get(oldestKey)?.length || 0
+            this.contentCache.delete(oldestKey)
+        }
+    }
+
+    /**
+     * 为文档挂载惰性 content 访问器
+     * 用 getter/setter 保持所有既有 `doc.content` 读写点不变，
+     * 同时让内容不再全量常驻内存
+     * @param {Object} doc - 文档元数据
+     * @returns {Object} 同一个文档对象
+     */
+    _defineLazyContent(doc) {
+        if (!doc || Object.getOwnPropertyDescriptor(doc, 'content')?.get) return doc
+
+        const inline = typeof doc.content === 'string' ? doc.content : ''
+        delete doc.content
+
+        Object.defineProperty(doc, '_inlineContent', {
+            value: inline,
+            writable: true,
+            enumerable: false,
+            configurable: true
+        })
+        Object.defineProperty(doc, 'content', {
+            get: () => this.readContent(doc),
+            set: value => {
+                const text = typeof value === 'string' ? value : ''
+                doc.contentLength = text.length
+                if (doc.filePath) {
+                    this._cacheContent(doc.id, text)
+                } else {
+                    doc._inlineContent = text
+                }
+            },
+            enumerable: true,
+            configurable: true
+        })
+
+        if (doc.contentLength === undefined) {
+            doc.contentLength = inline.length
+        }
+        return doc
     }
 
     async init() {
@@ -46,8 +169,7 @@ class KnowledgeService {
         await this.loadDocuments()
         this.initialized = true
 
-        // 统计信息
-        const docsWithContent = Array.from(this.documents.values()).filter(d => d.content && d.content.length > 0)
+        // 统计信息（读元数据，不触发内容加载）
         const linkedDocs = Array.from(this.documents.values()).filter(d => d.presetIds && d.presetIds.length > 0)
 
         logger.debug(`[KnowledgeService] 初始化完成: ${this.documents.size} 文档, ${linkedDocs.length} 关联预设`)
@@ -65,16 +187,16 @@ class KnowledgeService {
                 const brokenDocs = []
 
                 for (const doc of indexData.documents || []) {
-                    // 从文件读取实际内容（索引只保存元数据）
+                    // 索引只保存元数据，内容在首次访问时才从磁盘加载
                     if (doc.filePath) {
                         const filePath = path.join(KNOWLEDGE_DIR, doc.filePath)
                         if (fs.existsSync(filePath)) {
                             try {
-                                doc.content = fs.readFileSync(filePath, 'utf-8')
-                                logger.debug(`[KnowledgeService] 从文件加载内容: ${doc.filePath}`)
+                                // 用文件大小作为长度近似，避免为统计而读入全部内容
+                                doc.contentLength = doc.contentLength ?? fs.statSync(filePath).size
                             } catch (err) {
-                                logger.warn(`[KnowledgeService] 读取文件失败: ${doc.filePath}`, err.message)
-                                doc.content = ''
+                                logger.warn(`[KnowledgeService] 读取文件信息失败: ${doc.filePath}`, err.message)
+                                doc.contentLength = 0
                                 brokenDocs.push(doc)
                             }
                         } else {
@@ -87,6 +209,7 @@ class KnowledgeService {
                         doc.content = doc.content || ''
                     }
 
+                    this._defineLazyContent(doc)
                     this.documents.set(doc.id, doc)
 
                     // 构建预设-文档映射
@@ -158,22 +281,23 @@ class KnowledgeService {
                 if (this.documents.has(id)) continue
 
                 try {
-                    const content = fs.readFileSync(filePath, 'utf-8')
+                    // 只登记元数据，内容首次被访问时才读取
                     const doc = {
                         id,
                         name: file,
-                        content: content.trim(),
                         type: ext === '.md' ? 'markdown' : ext === '.json' ? 'json' : 'text',
                         tags: ['auto_imported'],
                         createdAt: stat.birthtime.getTime(),
                         updatedAt: stat.mtime.getTime(),
                         presetIds: [],
-                        filePath: file
+                        filePath: file,
+                        contentLength: stat.size
                     }
+                    this._defineLazyContent(doc)
                     this.documents.set(id, doc)
                     logger.info(`[KnowledgeService] 自动发现新文件: ${file}`)
                 } catch (err) {
-                    logger.warn(`[KnowledgeService] 读取文件失败: ${file}`, err.message)
+                    logger.warn(`[KnowledgeService] 登记文件失败: ${file}`, err.message)
                 }
             }
         } catch (err) {
@@ -199,7 +323,8 @@ class KnowledgeService {
                 presetIds: doc.presetIds,
                 filePath: doc.filePath,
                 // 不保存完整内容到索引（内容保存在单独文件中）
-                contentLength: doc.content?.length || 0
+                // 读元数据而非 doc.content，避免为写索引触发全部文档的磁盘加载
+                contentLength: doc.contentLength || 0
             }))
         }
 
@@ -249,17 +374,21 @@ class KnowledgeService {
     async create(data) {
         const id = data.id || `kb_${crypto.randomUUID()}`
         const now = Date.now()
+        const content = data.content || ''
 
         const doc = {
             id,
             name: data.name || '未命名文档',
-            content: data.content || '',
             type: data.type || 'text',
             tags: data.tags || [],
             createdAt: now,
             updatedAt: now,
-            presetIds: data.presetIds || []
+            presetIds: data.presetIds || [],
+            contentLength: content.length
         }
+        // 先挂载惰性访问器再赋值，使内容进入 LRU 缓存而非常驻文档对象
+        this._defineLazyContent(doc)
+        doc.content = content
 
         // 保存到文件（默认行为，确保持久化）
         if (data.saveToFile !== false) {
@@ -281,12 +410,15 @@ class KnowledgeService {
             const filePath = path.join(KNOWLEDGE_DIR, fileName)
 
             try {
-                fs.writeFileSync(filePath, doc.content, 'utf-8')
+                fs.writeFileSync(filePath, content, 'utf-8')
                 doc.filePath = fileName
+                // 内容已落盘，转入 LRU 缓存并释放内联副本，避免常驻
+                this._cacheContent(id, content)
+                doc._inlineContent = ''
                 logger.info(`[KnowledgeService] 创建文档: ${doc.name}`)
                 logger.info(`  - ID: ${id}`)
                 logger.info(`  - 文件: ${fileName}`)
-                logger.info(`  - 内容长度: ${doc.content.length}`)
+                logger.info(`  - 内容长度: ${doc.contentLength}`)
                 logger.info(`  - 关联预设: ${doc.presetIds.join(', ') || '无'}`)
             } catch (err) {
                 logger.error(`[KnowledgeService] 保存文件失败: ${filePath}`, err.message)
@@ -322,6 +454,7 @@ class KnowledgeService {
         }
 
         const oldPresetIds = doc.presetIds || []
+        this._defineLazyContent(doc)
 
         // 更新字段
         Object.assign(doc, {
@@ -332,6 +465,10 @@ class KnowledgeService {
 
         // 保存文件内容（确保持久化）
         if (data.content !== undefined) {
+            // 用入参原值写盘：doc.content 是惰性 getter，
+            // 在 filePath 刚被赋值时读它会取到旧文件内容甚至空字符串
+            const newContent = typeof data.content === 'string' ? data.content : ''
+
             // 如果没有文件路径，创建新文件
             if (!doc.filePath) {
                 const ext = doc.type === 'markdown' ? '.md' : doc.type === 'json' ? '.json' : '.txt'
@@ -341,7 +478,11 @@ class KnowledgeService {
             }
 
             const filePath = path.join(KNOWLEDGE_DIR, doc.filePath)
-            fs.writeFileSync(filePath, doc.content, 'utf-8')
+            fs.writeFileSync(filePath, newContent, 'utf-8')
+            // 内容已落盘，同步长度元数据与 LRU 缓存并释放内联副本
+            doc.contentLength = newContent.length
+            this._cacheContent(id, newContent)
+            doc._inlineContent = ''
             logger.debug(`[KnowledgeService] 已保存文档内容到: ${doc.filePath}`)
         }
 
@@ -387,6 +528,7 @@ class KnowledgeService {
         }
 
         this.documents.delete(id)
+        this.contentCache.delete(id)
         await this.saveIndex()
         return true
     }

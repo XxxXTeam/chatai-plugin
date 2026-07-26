@@ -12,6 +12,14 @@ const __dirname = path.dirname(__filename)
 const pluginRoot = path.join(__dirname, '../..')
 
 /**
+ * 空设备路径（跨平台）
+ * 不能用 `2>/dev/null || 2>nul` 串联：在 Linux 上前者失败后会执行后者，
+ * shell 会把 nul 当作普通文件创建，在仓库根目录留下垃圾文件。
+ * @type {string}
+ */
+const NULL_DEVICE = process.platform === 'win32' ? 'nul' : '/dev/null'
+
+/**
  * 执行 git 命令
  * @param {string} command - git 命令
  * @returns {string|null}
@@ -52,7 +60,7 @@ export function getGitVersion() {
     info.commitShort = info.commit?.substring(0, 7)
 
     // 获取最近的 tag
-    info.tag = execGit('git describe --tags --abbrev=0 2>/dev/null') || execGit('git describe --tags --abbrev=0 2>nul')
+    info.tag = execGit(`git describe --tags --abbrev=0 2>${NULL_DEVICE}`)
 
     // 获取 commit 数量（从最近 tag 或全部）
     if (info.tag) {

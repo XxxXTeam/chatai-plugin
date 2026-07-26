@@ -13,6 +13,80 @@ import { databaseService } from '../storage/DatabaseService.js'
 import { MessageApi } from '../../utils/messageParser.js'
 import { resolveClientTemperature } from './TemperatureResolver.js'
 
+/** 请求计数器条目上限，超出后清理已归零的残留键 */
+const REQUEST_COUNTER_MAX_SIZE = 5000
+/** 请求计数器自动递减间隔(ms) */
+const REQUEST_COUNTER_TTL = 5000
+
+/**
+ * 出错自动结清历史后回复给用户的提示文案。
+ * ChatService 与 ChatAgent 两条链路共用，保证用户在任一链路看到的措辞一致。
+ * @constant {string}
+ */
+export const AUTO_CLEAN_NOTICE = '历史对话已自动清理'
+
+/**
+ * 构建群聊环境说明片段，追加到 system prompt 尾部。
+ *
+ * 各调用链路对历史的加工方式不同，因此说明项由参数控制而非写死：
+ * 只有真正对历史做过发送者标注的链路才会声明标注格式，
+ * 避免向模型描述其输入中并不存在的结构。
+ *
+ * @param {Object} options - 构建选项
+ * @param {string|number} options.groupId - 群号
+ * @param {string} [options.groupName] - 群名称，为空则不输出该行
+ * @param {string} options.userLabel - 当前发送者的群名片或昵称
+ * @param {string|number} options.userUin - 当前发送者的QQ号
+ * @param {boolean} [options.labeledHistory=false] - 历史消息是否已带 `[用户名(QQ号)]:` 发送者标注
+ * @param {boolean} [options.mentionHint=true] - 是否说明 `[提及用户 ...]` 标记的含义
+ * @returns {string} 以两个换行开头、可直接拼接到 system prompt 的环境说明
+ */
+/**
+ * 构建对话总结提示词。
+ *
+ * 会话总结（summarizeConversation）与上下文压缩（_compressBySummarize）原本各写一份，
+ * 措辞与约束不一致，导致同一份历史在两条路径下被总结成不同风格。此处统一为一份。
+ *
+ * 总结结果会被原样写回历史当作 assistant 消息，因此提示词必须明确禁止任何开场白，
+ * 否则“好的，以下是总结：”一类前言会永久留在上下文里。
+ *
+ * @param {string} dialogText - 已格式化的对话文本，每行形如 `用户: xxx` / `助手: xxx`
+ * @param {number} maxChars - 总结正文的字数上限
+ * @returns {string} 完整提示词
+ */
+export function buildSummaryPrompt(dialogText, maxChars) {
+    return `你是对话总结助手。请用简洁的中文总结下面这段对话的要点，并单独标出尚未解决的事项。
+
+【对话记录】
+每行开头的“用户:”“助手:”“系统:”表示该条发言者。
+${dialogText}
+
+【输出要求】
+1. 用短条目列出要点，保留人名、时间、数字等关键信息。
+2. 末尾单独列出“未解决：”部分；确实没有待办时写“未解决：无”。
+3. 总结正文控制在 ${maxChars} 字以内。
+4. 只输出总结正文，不要写开场白、结束语或任何解释。`
+}
+
+export function buildGroupEnvironmentPrompt(options = {}) {
+    const { groupId, groupName = '', userLabel, userUin, labeledHistory = false, mentionHint = true } = options
+
+    const lines = ['[当前对话环境]', `群号: ${groupId}`]
+    if (groupName) lines.push(`群名: ${groupName}`)
+    lines.push(`${labeledHistory ? '当前发送消息的用户' : '当前用户'}: ${userLabel}(QQ:${userUin})`)
+
+    if (labeledHistory) {
+        lines.push('你正在群聊中与多位用户对话，历史消息可能来自不同的人。')
+        lines.push('每条用户消息都以 `[用户名(QQ号)]: ` 开头标注发送者，该前缀是系统附加的标记，不是用户说的话。')
+        lines.push('请依据该标记区分不同用户，本轮只回复上面标注的当前发送者，不要代替其他人发言。')
+    }
+    if (mentionHint) {
+        lines.push('消息中的 `[提及用户 QQ:xxx ...]` 是系统对 @ 的展开，附带被@者的QQ号、群名片、昵称等信息。')
+    }
+
+    return `\n\n${lines.join('\n')}`
+}
+
 /**
  * @class ContextManager
  * @classdesc 上下文管理器
@@ -147,8 +221,37 @@ export class ContextManager {
                 logger.debug('[ContextManager] 自动总结失败:', err.message)
             })
         }, intervalMs)
+        // 不阻止进程退出
+        this.autoSummarizeTimer.unref?.()
 
         logger.debug(`[ContextManager] 自动总结已启动, 间隔 ${cfg.intervalMinutes || 10} 分钟`)
+    }
+
+    /**
+     * 停止自动总结定时任务
+     * @returns {void}
+     */
+    stopAutoSummarize() {
+        if (this.autoSummarizeTimer) {
+            clearInterval(this.autoSummarizeTimer)
+            this.autoSummarizeTimer = null
+            logger.debug('[ContextManager] 自动总结已停止')
+        }
+    }
+
+    /**
+     * 销毁上下文管理器：停止定时任务并清空内存态
+     * 热重载时必须调用，否则旧实例的定时器会与新实例并发执行总结（删除+写入）
+     * @returns {void}
+     */
+    destroy() {
+        this.stopAutoSummarize()
+        this.requestCounters.clear()
+        this.messageQueues.clear()
+        this.processingFlags.clear()
+        this.groupContextCache.clear()
+        this.sessionStates.clear()
+        this.initialized = false
     }
 
     /**
@@ -238,15 +341,7 @@ export class ContextManager {
             if (!dialogText || dialogText.length < 50) return false
 
             const model = options.model || config.get('llm.defaultModel')
-            const prompt = `你是对话总结助手，请用简洁的中文总结以下对话要点，并标记未解决事项。
-
-【对话记录】
-${dialogText}
-
-【输出要求】
-1. 用条目列出要点，保持简短。
-2. 如果有未解决/待办，单独列出“未解决”部分，没有则写“未解决：无”.
-3. 总结长度控制在${options.maxTokens || 400}字内。`
+            const prompt = buildSummaryPrompt(dialogText, options.maxTokens || 400)
 
             const { LlmService } = await import('./LlmService.js')
             /* 从 conversationId 提取群ID（格式: group:${groupId}），使总结也能使用群独立渠道 */
@@ -265,22 +360,33 @@ ${dialogText}
             const summaryText = result.contents?.[0]?.text?.trim()
             if (!summaryText) return false
 
-            // 重置会话并保存总结
-            await historyManager.deleteConversation(conversationId)
-            await historyManager.saveHistory(
-                {
-                    role: 'assistant',
-                    content: [{ type: 'text', text: `【对话已总结】\n${summaryText}` }],
-                    timestamp: Date.now(),
-                    metadata: { summarized: true }
-                },
-                conversationId
+            // 先写入总结、确认落库后再裁剪旧消息
+            // 反过来（先删后写）一旦写入失败，整段历史将永久不可恢复
+            const summaryMessage = {
+                role: 'assistant',
+                content: [{ type: 'text', text: `【对话已总结】\n${summaryText}` }],
+                timestamp: Date.now(),
+                metadata: { summarized: true }
+            }
+            await historyManager.saveHistory(summaryMessage, conversationId)
+
+            // saveMessage 内含去重逻辑可能静默跳过写入，必须回读确认后才允许删除旧消息
+            const afterSave = await historyManager.getHistory(undefined, conversationId)
+            const summarySaved = afterSave?.some(
+                msg => msg.metadata?.summarized === true && msg.timestamp === summaryMessage.timestamp
             )
+            if (!summarySaved) {
+                logger.error(`[ContextManager] 总结未确认落库，已跳过历史裁剪以保护数据: ${conversationId}`)
+                return false
+            }
+
+            // 只保留最新一条，即刚写入的总结
+            await historyManager.trimHistory(conversationId, 1)
 
             logger.debug(`[ContextManager] 会话已总结并重置: ${conversationId}`)
             return true
         } catch (err) {
-            logger.debug('[ContextManager] 总结会话失败:', err.message)
+            logger.error(`[ContextManager] 总结会话失败 (${conversationId}):`, err.message)
             return false
         }
     }
@@ -294,13 +400,23 @@ ${dialogText}
         const count = (this.requestCounters.get(conversationId) || 0) + 1
         this.requestCounters.set(conversationId, count)
 
-        // 5秒后自动减少计数
-        setTimeout(() => {
-            const current = this.requestCounters.get(conversationId) || 0
-            if (current > 0) {
-                this.requestCounters.set(conversationId, current - 1)
+        // 容量保护：清掉已归零的残留键，避免 Map 随会话数无限增长
+        if (this.requestCounters.size > REQUEST_COUNTER_MAX_SIZE) {
+            for (const [key, value] of this.requestCounters) {
+                if (value <= 0) this.requestCounters.delete(key)
             }
-        }, 5000)
+        }
+
+        // 5秒后自动减少计数，归零时直接删除键
+        const timer = setTimeout(() => {
+            const current = this.requestCounters.get(conversationId) || 0
+            if (current > 1) {
+                this.requestCounters.set(conversationId, current - 1)
+            } else {
+                this.requestCounters.delete(conversationId)
+            }
+        }, REQUEST_COUNTER_TTL)
+        timer.unref?.()
 
         return count
     }
@@ -724,17 +840,20 @@ ${dialogText}
                     }
                 }
 
-                // 合并重要消息和最近消息
-                const newHistory = [...importantMessages, ...recentMessages]
+                // 保留最近 keepCount 条，并额外豁免早期的重要消息
+                // 这里只做「删除时排除」，不重写任何消息，因此不存在数据丢失风险
+                const keepTimestamps = importantMessages.map(msg => msg.timestamp).filter(t => Number.isFinite(t))
 
-                // 如果仍然超出限制，截断
-                if (newHistory.length > maxMessages) {
+                if (typeof databaseService.trimMessagesKeeping === 'function') {
+                    databaseService.trimMessagesKeeping(conversationId, keepCount, keepTimestamps)
+                    logger.debug(
+                        `[ContextManager] 智能清理: 保留${keepTimestamps.length}条重要+最近${recentMessages.length}条`
+                    )
+                } else {
+                    // 存储层不支持豁免裁剪时降级为普通截断，日志如实反映行为
                     await historyManager.trimHistory(conversationId, maxMessages)
+                    logger.debug(`[ContextManager] 智能清理降级为截断: 保留最近${maxMessages}条`)
                 }
-
-                logger.debug(
-                    `[ContextManager] 智能清理: 保留${importantMessages.length}条重要+${recentMessages.length}条最近`
-                )
                 return
             } catch (error) {
                 logger.error('[ContextManager] 智能清理失败，回退到截断模式', error)
@@ -1267,9 +1386,19 @@ ${dialogText}
 
         // 格式化聊天历史
         if (chats && chats.length > 0) {
-            systemPromptWithContext += `\n当你需要艾特(@)别人时，可以直接在回复中添加'@QQ'，其中QQ为你需要艾特(@)的人的QQ号，如'@123456'。以下是最近群内的聊天记录。请你仔细阅读这些记录，理解群内成员的对话内容和趋势，并以此为基础来生成你的回复。你的回复应该自然融入当前对话，就像一个真正的群成员一样：\n`
+            /* 原为 175 字一整句，三件事（@语法/阅读要求/回复风格）挤在一起，模型容易只抓住其中一条，故拆为分行条目 */
+            systemPromptWithContext +=
+                '\n需要@某人时，在回复中直接写 @对方QQ号，例如 @123456。' +
+                '\n你的回复要自然融入当前对话，像一个真正的群成员那样说话；不要复述或总结聊天记录，只说你这一条要发的内容。' +
+                '\n以下是最近的群内聊天记录，请仔细阅读，理解群成员在聊什么、话题往哪走，并据此组织你的回复：\n'
 
-            const formattedChats = await Promise.all(chats.map(chat => this.formatChatMessage(group, chat)))
+            // formatChatMessage 内含网络调用，用 allSettled 避免单条失败丢弃全部已格式化记录
+            const settled = await Promise.allSettled(chats.map(chat => this.formatChatMessage(group, chat)))
+            const failedCount = settled.filter(r => r.status === 'rejected').length
+            if (failedCount > 0) {
+                logger.debug(`[ContextManager] 群聊记录格式化失败 ${failedCount}/${settled.length} 条，已跳过`)
+            }
+            const formattedChats = settled.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value)
             systemPromptWithContext += formattedChats.join('\n')
         }
 
@@ -1617,7 +1746,7 @@ ${dialogText}
 
         try {
             const model = options.model || config.get('llm.defaultModel')
-            const prompt = `请用简洁的中文总结以下对话要点，保留关键信息和未解决事项。\n\n${dialogText.slice(0, 8000)}\n\n要求：条目列出要点，200字以内。`
+            const prompt = buildSummaryPrompt(dialogText.slice(0, 8000), 200)
 
             const { LlmService } = await import('./LlmService.js')
             const groupIdMatch = options.conversationId?.match?.(/^group:(\d+)/)

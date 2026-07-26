@@ -4,9 +4,313 @@
 
 import _logger from '../../core/utils/logger.js'
 import * as cheerio from 'cheerio'
+import fs from 'node:fs'
+import path from 'node:path'
+import net from 'node:net'
+import dns from 'node:dns/promises'
+import { fileURLToPath } from 'node:url'
 import { PLUGIN_DEVELOPERS } from '../../utils/common.js'
 
 const logger = _logger.tag('mcp-helper')
+
+/** 允许工具访问的网络协议白名单 */
+const ALLOWED_URL_PROTOCOLS = ['http:', 'https:']
+
+/** 无条件拒绝的主机名（本机回环别名） */
+const BLOCKED_HOSTNAMES = new Set(['localhost', 'localhost.localdomain', 'ip6-localhost', 'ip6-loopback'])
+
+/** 禁止随请求转发的敏感请求头前缀/名称（小写比较） */
+const BLOCKED_REQUEST_HEADERS = new Set(['authorization', 'cookie', 'set-cookie', 'host', 'content-length'])
+
+/** 禁止随请求转发的敏感请求头前缀 */
+const BLOCKED_REQUEST_HEADER_PREFIXES = ['proxy-', 'sec-', 'x-forwarded-']
+
+/** QQ Web API 单次请求超时（毫秒），覆盖 qqWebApi 下全部接口 */
+const QQ_WEB_API_TIMEOUT_MS = 15000
+
+/** QQ Web API 响应体大小上限（字节），这些接口的正常响应均在百 KB 量级 */
+const QQ_WEB_API_MAX_BYTES = 5 * 1024 * 1024
+
+/** 群荣誉页面（HTML）下载超时（毫秒） */
+const QQ_HONOR_PAGE_TIMEOUT_MS = 15000
+
+/**
+ * 群荣誉页面 HTML 大小上限（字节）
+ * 该响应随后交给 cheerio.load 同步解析，超大 HTML 会阻塞事件循环，故在下载阶段就截断
+ * @type {number}
+ */
+const QQ_HONOR_PAGE_MAX_BYTES = 2 * 1024 * 1024
+
+/** 群公告文本类接口超时（毫秒） */
+const NOTICE_API_TIMEOUT_MS = 15000
+
+/** 群公告文本类接口响应体大小上限（字节） */
+const NOTICE_API_MAX_BYTES = 5 * 1024 * 1024
+
+/** 群公告图片下载超时（毫秒） */
+const NOTICE_IMAGE_TIMEOUT_MS = 20000
+
+/**
+ * 群公告图片大小上限（字节）
+ * imageUrl 由模型参数提供，不设硬上限时单张超大图即可打满内存
+ * @type {number}
+ */
+const NOTICE_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+
+/**
+ * 带超时与响应体大小上限的 fetch
+ *
+ * 裸 `await fetch(url)` 有两个必然故障：对端黑洞时 Promise 永不落定，
+ * 调用它的工具 handler 与整次模型调用一起挂起、连接句柄泄漏；
+ * 对端返回超大响应时整体读入内存即 OOM。
+ * 大小校验不能只信 Content-Length —— 该头可缺失也可与实际不符，
+ * 故在流式读取过程中累计字节数，超限立即中止并释放连接。
+ *
+ * @param {string} url - 请求地址
+ * @param {RequestInit} [options] - fetch 选项；其中的 signal 会被本函数的超时信号覆盖
+ * @param {{ timeoutMs: number, maxBytes: number, label?: string }} limits - 超时与大小上限
+ * @returns {Promise<{ response: Response, buffer: Buffer }>} 响应对象与完整响应体
+ * @throws {Error} 超时、网络失败或响应体超限时抛出
+ */
+export async function fetchWithLimit(url, options = {}, limits) {
+    const { timeoutMs, maxBytes, label = 'fetch' } = limits
+    const response = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) })
+
+    const declared = Number(response.headers.get('content-length'))
+    if (Number.isFinite(declared) && declared > maxBytes) {
+        response.body?.cancel().catch(() => {})
+        throw new Error(`${label} 响应体过大: 声明 ${declared} 字节，上限 ${maxBytes} 字节`)
+    }
+
+    // 个别实现可能不提供可读流，退化为整体读取后再校验
+    if (!response.body) {
+        const buffer = Buffer.from(await response.arrayBuffer())
+        if (buffer.byteLength > maxBytes) {
+            throw new Error(`${label} 响应体过大: ${buffer.byteLength} 字节，上限 ${maxBytes} 字节`)
+        }
+        return { response, buffer }
+    }
+
+    const reader = response.body.getReader()
+    const chunks = []
+    let total = 0
+    try {
+        for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            total += value.byteLength
+            if (total > maxBytes) {
+                throw new Error(`${label} 响应体过大: 已读取 ${total} 字节，上限 ${maxBytes} 字节`)
+            }
+            chunks.push(Buffer.from(value))
+        }
+    } finally {
+        // 超限抛出时主动取消以释放连接；正常读完后 cancel 为空操作
+        reader.cancel().catch(() => {})
+    }
+    return { response, buffer: Buffer.concat(chunks) }
+}
+
+/**
+ * 插件根目录（本文件位于 <root>/src/mcp/tools/helpers.js，上溯三层）
+ * 不使用 process.cwd()，避免 Yunzai 启动目录变化导致沙箱边界漂移
+ * @type {string}
+ */
+export const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
+
+/**
+ * 判断 IPv4 地址是否属于内网/保留网段
+ * @param {string} ip - 点分十进制 IPv4
+ * @returns {boolean} 命中内网或保留段返回 true
+ */
+function isBlockedIPv4(ip) {
+    const parts = ip.split('.').map(Number)
+    if (parts.length !== 4 || parts.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return true
+    const [a, b] = parts
+    if (a === 0) return true // 0.0.0.0/8 本网络
+    if (a === 10) return true // 10.0.0.0/8 私有
+    if (a === 127) return true // 127.0.0.0/8 回环
+    if (a === 100 && b >= 64 && b <= 127) return true // 100.64.0.0/10 运营商级 NAT
+    if (a === 169 && b === 254) return true // 169.254.0.0/16 链路本地（含云元数据 169.254.169.254）
+    if (a === 172 && b >= 16 && b <= 31) return true // 172.16.0.0/12 私有
+    if (a === 192 && b === 168) return true // 192.168.0.0/16 私有
+    if (a >= 224) return true // 224.0.0.0/4 组播 + 240.0.0.0/4 保留
+    return false
+}
+
+/**
+ * 判断 IPv6 地址是否属于内网/保留段
+ * @param {string} ip - IPv6 字面量（可带方括号或 zone id）
+ * @returns {boolean} 命中内网或保留段返回 true
+ */
+function isBlockedIPv6(ip) {
+    const lower = ip.toLowerCase().replace(/^\[/, '').replace(/\]$/, '').split('%')[0]
+    if (lower === '::' || lower === '::1') return true
+
+    // IPv4 映射地址 ::ffff:a.b.c.d 按 IPv4 规则判断
+    const mapped = lower.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/)
+    if (mapped) return isBlockedIPv4(mapped[1])
+
+    const firstGroup = parseInt(lower.split(':')[0] || '0', 16)
+    if (!Number.isFinite(firstGroup)) return true
+    if ((firstGroup & 0xfe00) === 0xfc00) return true // fc00::/7 唯一本地地址
+    if ((firstGroup & 0xffc0) === 0xfe80) return true // fe80::/10 链路本地
+    return false
+}
+
+/**
+ * 判断 IP 字面量是否禁止访问
+ * @param {string} ip - IPv4 或 IPv6 字面量
+ * @returns {boolean} 禁止访问返回 true
+ */
+export function isBlockedIp(ip) {
+    const family = net.isIP(ip.replace(/^\[/, '').replace(/\]$/, ''))
+    if (family === 4) return isBlockedIPv4(ip)
+    if (family === 6) return isBlockedIPv6(ip)
+    return false
+}
+
+/**
+ * 校验 URL 是否允许由工具发起请求（协议白名单 + SSRF 内网阻断）
+ * 主机名会经 DNS 解析后逐个校验，防止通过域名指向内网地址
+ * @param {string} rawUrl - 待校验的 URL
+ * @returns {Promise<URL>} 校验通过的 URL 对象
+ * @throws {Error} 协议不被允许、指向内网或域名无法解析时抛出
+ */
+export async function assertSafeUrl(rawUrl) {
+    let parsed
+    try {
+        parsed = new URL(String(rawUrl))
+    } catch {
+        throw new Error(`无效的 URL: ${rawUrl}`)
+    }
+
+    if (!ALLOWED_URL_PROTOCOLS.includes(parsed.protocol)) {
+        throw new Error(`不允许的协议 ${parsed.protocol}，仅支持 http/https`)
+    }
+
+    const hostname = parsed.hostname.replace(/^\[/, '').replace(/\]$/, '')
+    if (!hostname) throw new Error('URL 缺少主机名')
+    if (BLOCKED_HOSTNAMES.has(hostname.toLowerCase())) {
+        throw new Error(`禁止访问本机地址: ${parsed.hostname}`)
+    }
+
+    if (net.isIP(hostname)) {
+        if (isBlockedIp(hostname)) {
+            throw new Error(`禁止访问内网或保留地址: ${hostname}`)
+        }
+        return parsed
+    }
+
+    let addresses
+    try {
+        addresses = await dns.lookup(hostname, { all: true })
+    } catch (err) {
+        throw new Error(`无法解析域名 ${hostname}: ${err.message}`)
+    }
+    if (!addresses?.length) throw new Error(`无法解析域名 ${hostname}`)
+    for (const item of addresses) {
+        if (isBlockedIp(item.address)) {
+            throw new Error(`域名 ${hostname} 指向内网地址 ${item.address}，已拒绝`)
+        }
+    }
+    return parsed
+}
+
+/**
+ * 过滤调用方传入的请求头，剔除可能导致凭据泄露的敏感项
+ * @param {Object} headers - 原始请求头对象
+ * @returns {Object} 过滤后的请求头
+ */
+export function sanitizeRequestHeaders(headers) {
+    const result = {}
+    if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return result
+    for (const [key, value] of Object.entries(headers)) {
+        if (typeof key !== 'string') continue
+        const lower = key.toLowerCase()
+        if (BLOCKED_REQUEST_HEADERS.has(lower)) continue
+        if (BLOCKED_REQUEST_HEADER_PREFIXES.some(prefix => lower.startsWith(prefix))) continue
+        if (typeof value !== 'string' && typeof value !== 'number') continue
+        result[key] = String(value)
+    }
+    return result
+}
+
+/**
+ * 将路径解析到插件沙箱内，越界即抛错
+ * 相对路径以插件根目录为基准；存在的路径会先经 realpath 解析符号链接再比对
+ * @param {string} targetPath - 目标路径
+ * @param {Object} [options] - 选项
+ * @param {string} [options.root] - 沙箱根目录，默认插件根目录
+ * @returns {string} 解析后的绝对路径
+ * @throws {Error} 路径越出沙箱时抛出
+ */
+export function resolveSandboxPath(targetPath, options = {}) {
+    const root = path.resolve(options.root || PLUGIN_ROOT)
+    if (typeof targetPath !== 'string' || targetPath.trim() === '') {
+        throw new Error('路径不能为空')
+    }
+    if (targetPath.includes('\0')) {
+        throw new Error('路径包含非法字符')
+    }
+
+    const resolved = path.resolve(root, targetPath)
+    const realRoot = realpathOrSelf(root)
+
+    // 对已存在的路径解析符号链接；不存在时回退到最近的已存在祖先目录
+    const probe = nearestExistingPath(resolved)
+    const realProbe = realpathOrSelf(probe)
+    const suffix = path.relative(probe, resolved)
+    const realResolved = suffix ? path.resolve(realProbe, suffix) : realProbe
+
+    if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path.sep)) {
+        throw new Error(`路径越出允许范围: ${targetPath}`)
+    }
+    return realResolved
+}
+
+/**
+ * 解析符号链接，失败时返回原路径
+ * @param {string} p - 路径
+ * @returns {string} realpath 结果或原路径
+ */
+function realpathOrSelf(p) {
+    try {
+        return fs.realpathSync(p)
+    } catch {
+        return p
+    }
+}
+
+/**
+ * 向上查找最近的已存在祖先路径
+ * @param {string} p - 绝对路径
+ * @returns {string} 已存在的路径（最坏情况返回根）
+ */
+function nearestExistingPath(p) {
+    let current = p
+    while (!fs.existsSync(current)) {
+        const parent = path.dirname(current)
+        if (parent === current) return current
+        current = parent
+    }
+    return current
+}
+
+/**
+ * 判断路径是否位于插件沙箱内（不抛错版本）
+ * @param {string} targetPath - 目标路径
+ * @param {Object} [options] - 传给 resolveSandboxPath 的选项
+ * @returns {boolean} 位于沙箱内返回 true
+ */
+export function isInsideSandbox(targetPath, options = {}) {
+    try {
+        resolveSandboxPath(targetPath, options)
+        return true
+    } catch {
+        return false
+    }
+}
 
 /**
  * icqq 群操作封装
@@ -227,12 +531,12 @@ export const groupNoticeApi = {
         const s = index ? index - 1 : 0
         const url = `https://web.qun.qq.com/cgi-bin/announce/get_t_list?bkn=${bot.bkn}&qid=${groupId}&ft=23&s=${s}&n=${n}`
 
-        const response = await fetch(url, {
-            headers: {
-                Cookie: bot.cookies['qun.qq.com']
-            }
-        })
-        const res = await response.json()
+        const { buffer } = await fetchWithLimit(
+            url,
+            { headers: { Cookie: bot.cookies['qun.qq.com'] } },
+            { timeoutMs: NOTICE_API_TIMEOUT_MS, maxBytes: NOTICE_API_MAX_BYTES, label: '获取群公告列表' }
+        )
+        const res = JSON.parse(buffer.toString('utf-8'))
 
         if (res.ec !== 0) {
             throw new Error(res.em || '获取群公告失败')
@@ -335,41 +639,58 @@ export const groupNoticeApi = {
         }
 
         const url = `https://web.qun.qq.com/cgi-bin/announce/add_qun_notice?bkn=${bot.bkn}`
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                Cookie: bot.cookies['qun.qq.com'],
-                'Content-Type': 'application/x-www-form-urlencoded'
+        const { buffer } = await fetchWithLimit(
+            url,
+            {
+                method: 'POST',
+                headers: {
+                    Cookie: bot.cookies['qun.qq.com'],
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: data.toString()
             },
-            body: data.toString()
-        })
+            { timeoutMs: NOTICE_API_TIMEOUT_MS, maxBytes: NOTICE_API_MAX_BYTES, label: '发送群公告' }
+        )
 
-        return await response.json()
+        return JSON.parse(buffer.toString('utf-8'))
     },
 
     /**
      * 上传公告图片
+     *
+     * imageUrl 来自模型给出的工具参数，下载阶段必须同时限制耗时与体积：
+     * 原实现直接 arrayBuffer() 读入整张图，一个超大文件即可耗尽内存
+     * @param {Object} bot - Bot 实例
+     * @param {string} imageUrl - 图片地址
+     * @returns {Promise<Object>} 上传接口返回的 JSON
      */
     async _uploadNoticeImage(bot, imageUrl) {
         // 下载图片
-        const imgResponse = await fetch(imageUrl)
-        const buffer = await imgResponse.arrayBuffer()
+        const { buffer: imageBuffer } = await fetchWithLimit(
+            imageUrl,
+            {},
+            { timeoutMs: NOTICE_IMAGE_TIMEOUT_MS, maxBytes: NOTICE_IMAGE_MAX_BYTES, label: '群公告图片下载' }
+        )
 
         const formData = new FormData()
         formData.append('bkn', bot.bkn)
         formData.append('source', 'troopNotice')
         formData.append('m', '0')
-        formData.append('pic_up', new Blob([buffer], { type: 'image/png' }), 'image.png')
+        formData.append('pic_up', new Blob([imageBuffer], { type: 'image/png' }), 'image.png')
 
-        const response = await fetch('https://web.qun.qq.com/cgi-bin/announce/upload_img', {
-            method: 'POST',
-            headers: {
-                Cookie: bot.cookies['qun.qq.com']
+        const { buffer } = await fetchWithLimit(
+            'https://web.qun.qq.com/cgi-bin/announce/upload_img',
+            {
+                method: 'POST',
+                headers: {
+                    Cookie: bot.cookies['qun.qq.com']
+                },
+                body: formData
             },
-            body: formData
-        })
+            { timeoutMs: NOTICE_API_TIMEOUT_MS, maxBytes: NOTICE_API_MAX_BYTES, label: '群公告图片上传' }
+        )
 
-        return await response.json()
+        return JSON.parse(buffer.toString('utf-8'))
     },
 
     /**
@@ -430,20 +751,24 @@ export const groupNoticeApi = {
     async _deleteNoticeWeb(bot, groupId, fid, text = '') {
         const url = `https://web.qun.qq.com/cgi-bin/announce/del_feed?bkn=${bot.bkn}`
 
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                Cookie: bot.cookies['qun.qq.com'],
-                'Content-Type': 'application/x-www-form-urlencoded'
+        const { buffer } = await fetchWithLimit(
+            url,
+            {
+                method: 'POST',
+                headers: {
+                    Cookie: bot.cookies['qun.qq.com'],
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: new URLSearchParams({
+                    bkn: bot.bkn,
+                    fid: fid,
+                    qid: groupId
+                }).toString()
             },
-            body: new URLSearchParams({
-                bkn: bot.bkn,
-                fid: fid,
-                qid: groupId
-            }).toString()
-        })
+            { timeoutMs: NOTICE_API_TIMEOUT_MS, maxBytes: NOTICE_API_MAX_BYTES, label: '删除群公告' }
+        )
 
-        const result = await response.json()
+        const result = JSON.parse(buffer.toString('utf-8'))
         return { ...result, text }
     }
 }
@@ -730,10 +1055,22 @@ export function validateParams(args, schema, ctx = null) {
             if (actualType !== 'number') {
                 invalid.push(`${key} 应为字符串类型`)
             }
-        } else if (expectedType === 'number' && actualType !== 'number') {
-            // 尝试解析数字
-            if (actualType === 'string' && isNaN(Number(value))) {
-                invalid.push(`${key} 应为数字类型`)
+        } else if (expectedType === 'number' || expectedType === 'integer') {
+            // number/integer 统一按数值解析，再做整数与范围校验
+            const num = actualType === 'number' ? value : Number(value)
+            if (actualType !== 'number' && actualType !== 'string') {
+                invalid.push(`${key} 应为${expectedType === 'integer' ? '整数' : '数字'}类型`)
+            } else if (!Number.isFinite(num)) {
+                invalid.push(`${key} 应为${expectedType === 'integer' ? '整数' : '数字'}类型`)
+            } else if (expectedType === 'integer' && !Number.isInteger(num)) {
+                invalid.push(`${key} 应为整数类型`)
+            } else {
+                if (typeof prop.minimum === 'number' && num < prop.minimum) {
+                    invalid.push(`${key} 不能小于 ${prop.minimum}`)
+                }
+                if (typeof prop.maximum === 'number' && num > prop.maximum) {
+                    invalid.push(`${key} 不能大于 ${prop.maximum}`)
+                }
             }
         } else if (expectedType === 'boolean' && actualType !== 'boolean') {
             // 允许字符串 'true'/'false'
@@ -1915,11 +2252,22 @@ export const qqWebApi = {
 
     /**
      * 通用请求方法
+     *
+     * qun.qq.com 侧网络抖动或被中间设备黑洞时，原实现的裸 fetch 会让调用方永久挂起，
+     * 故统一走 fetchWithLimit 施加超时与响应体上限
+     * @param {string} name - 接口名，仅用于日志
+     * @param {string} url - 请求地址
+     * @param {RequestInit} [options] - fetch 选项
+     * @returns {Promise<Object>} 解析后的 JSON；非 JSON 响应返回 { _raw, _parseError }
      */
     async _request(name, url, options = {}) {
         try {
-            const response = await fetch(url, options)
-            const text = await response.text()
+            const { buffer } = await fetchWithLimit(url, options, {
+                timeoutMs: QQ_WEB_API_TIMEOUT_MS,
+                maxBytes: QQ_WEB_API_MAX_BYTES,
+                label: `qqWebApi.${name}`
+            })
+            const text = buffer.toString('utf-8')
             try {
                 return JSON.parse(text)
             } catch {
@@ -1953,13 +2301,25 @@ export const qqWebApi = {
 
     /**
      * 获取群龙王
+     *
+     * 响应是 HTML 且随后交给 cheerio 同步解析，超时与体积上限缺一不可：
+     * 前者防止请求悬挂，后者防止超大 HTML 在 cheerio.load 处阻塞事件循环
+     * @param {Object} bot - Bot 实例
+     * @param {number|string} groupId - 群号
+     * @returns {Promise<Object|null>} 龙王信息，解析不到时为 null
      */
     async getDragonKing(bot, groupId) {
         const url = `https://qun.qq.com/interactive/honorlist?gc=${groupId}&type=1&_wv=3&_wwv=129`
-        const response = await fetch(url, {
-            headers: { Cookie: bot.cookies?.['qun.qq.com'] || '' }
-        })
-        const html = await response.text()
+        const { buffer } = await fetchWithLimit(
+            url,
+            { headers: { Cookie: bot.cookies?.['qun.qq.com'] || '' } },
+            {
+                timeoutMs: QQ_HONOR_PAGE_TIMEOUT_MS,
+                maxBytes: QQ_HONOR_PAGE_MAX_BYTES,
+                label: 'qqWebApi.getDragonKing'
+            }
+        )
+        const html = buffer.toString('utf-8')
 
         // 使用 cheerio 解析 HTML
         const $ = cheerio.load(html)
@@ -2106,23 +2466,34 @@ export const qqWebApi = {
 
 /**
  * 将 OneBot get_group_member_info 返回的 role 规范为 owner/admin/member
- * @param {string|number} role
- * @returns {'owner'|'admin'|'member'}
+ *
+ * 无法判定时返回 'unknown' 而非降级为 'member'：后者会让"目标是群主/管理员"的
+ * 保护判定静默落空，把踢人/禁言放行到高权限目标上，调用方应按 unknown 拒绝执行。
+ * 数字型 role 不做映射 —— 本仓库内没有任何可查证的数值语义定义，
+ * 猜错方向就会把群主判成普通成员，正是这里要防的绕过。
+ * @param {string|number} role - 协议端返回的原始 role
+ * @returns {'owner'|'admin'|'member'|'unknown'} 规范化角色，无法判定时为 unknown
  */
 export function normalizeMemberRole(role) {
-    if (role === undefined || role === null) return 'member'
+    if (role === undefined || role === null) return 'unknown'
     if (typeof role === 'string') {
         const r = role.trim().toLowerCase()
         if (r === 'administrator') return 'admin'
         if (r === 'owner' || r === 'admin' || r === 'member') return r
     }
-    return 'member'
+    /*
+     * 用 warn 而非 debug：返回 unknown 会让调用方按 fail-closed 拒绝执行，
+     * 表现为"禁言/踢人无故失败"。若某协议端确实用数值型 role，需要能从日志立刻看到，
+     * 再据实补映射（不能凭猜，猜反方向会把群主判成普通成员）。
+     */
+    logger.warn(`[helpers] normalizeMemberRole 无法识别的 role: ${typeof role} ${String(role)}`)
+    return 'unknown'
 }
 
 /**
  * 解析 OneBot get_group_member_info 响应
  * @param {Object} info - sendApi 返回值
- * @returns {{ role: 'owner'|'admin'|'member' }|null}
+ * @returns {{ role: 'owner'|'admin'|'member'|'unknown' }|null} 解析失败返回 null；role 不可判定时为 unknown
  */
 function parseOneBotGetGroupMemberInfo(info) {
     if (!info || info.status === 'failed') return null
@@ -2170,8 +2541,9 @@ async function getIcqqMemberRoleFromMemberMap(bot, groupId, userId) {
 
 /**
  * 将 icqq 解析出的角色写入 getBotPermission 结果对象
- * @param {object} result
- * @param {'owner'|'admin'|'member'} role
+ * @param {object} result - getBotPermission 的结果对象，就地修改
+ * @param {'owner'|'admin'|'member'|'unknown'} role - 规范化角色；unknown 会保留在 result 上，由调用方继续兜底
+ * @returns {void}
  */
 function applyRoleToBotPermissionResult(result, role) {
     result.inGroup = true
@@ -2201,14 +2573,15 @@ export async function getGroupMemberRoleFromBot(bot, groupId, userId) {
                     user_id: uid
                 })
                 const parsed = parseOneBotGetGroupMemberInfo(info)
-                if (parsed) return parsed.role
+                // role 无法判定时不能直接返回，继续走后面的兜底来源
+                if (parsed && parsed.role !== 'unknown') return parsed.role
             } catch (e) {
                 logger.debug(`[helpers] getGroupMemberRoleFromBot API: ${e.message}`)
             }
         }
 
         const icqqRole = await getIcqqMemberRoleFromMemberMap(bot, gid, uid)
-        if (icqqRole) return icqqRole
+        if (icqqRole && icqqRole !== 'unknown') return icqqRole
 
         const groupInfo = bot.gl?.get(gid)
         if (groupInfo?.owner_id != null && String(groupInfo.owner_id) === String(uid)) {
@@ -2219,7 +2592,10 @@ export async function getGroupMemberRoleFromBot(bot, groupId, userId) {
             try {
                 const group = bot.pickGroup(gid)
                 const memberInfo = group?.pickMember?.(uid)?.info
-                if (memberInfo?.role) return normalizeMemberRole(memberInfo.role)
+                if (memberInfo?.role) {
+                    const picked = normalizeMemberRole(memberInfo.role)
+                    if (picked !== 'unknown') return picked
+                }
                 const admins = group?.admin_list || []
                 if (admins.some(a => String(a) === String(uid))) return 'admin'
             } catch (e) {
@@ -2227,11 +2603,16 @@ export async function getGroupMemberRoleFromBot(bot, groupId, userId) {
             }
         }
 
-        return 'member'
+        /*
+         * 所有来源都没能定位到该成员时返回 unknown 而非 'member'。
+         * 返回 'member' 意味着"已确认目标是普通成员"，会让上层的群主/管理员保护判定
+         * 直接通过——查询失败与"确认是普通成员"必须区分开，由调用方 fail-closed。
+         */
+        return 'unknown'
     } catch (e) {
         logger.debug(`[helpers] getGroupMemberRoleFromBot: ${e.message}`)
     }
-    return 'member'
+    return 'unknown'
 }
 
 /**
@@ -2352,29 +2733,17 @@ export function isToolResultError(result) {
     if (result.success === false) return true
     // 有 error 字段
     if (result.error) return true
-    // content 中包含错误
-    if (Array.isArray(result.content)) {
-        const textContent = result.content.find(c => c.type === 'text')
-        if (textContent?.text) {
-            const errorPatterns = [
-                /失败/,
-                /错误/,
-                /无权限/,
-                /被禁用/,
-                /被拦截/,
-                /不存在/,
-                /无法/,
-                /拒绝/,
-                /Error:/i,
-                /Failed/i,
-                /Permission denied/i,
-                /Forbidden/i
-            ]
-            for (const pattern of errorPatterns) {
-                if (pattern.test(textContent.text)) return true
-            }
-        }
-    }
+    /*
+     * 这里曾按正文内容做中文关键词匹配（失败/错误/无法/拒绝/不存在…）来推断错误，
+     * 但工具正文本身就常合法地包含这些词——群聊记录里的"这个方法我试过了，无法解决"、
+     * 搜索结果标题"排查登录失败问题"、天气播报"拒绝寒潮来袭"都会被误判。
+     * 实测三条典型正常返回全部命中，而该判定会流向 formatResult 的 isError 标记、
+     * callTool 的缓存决策与成功率统计：正确结果被标成错误交给模型引发无谓重试、
+     * 成功结果不进缓存、统计数据失真。
+     *
+     * MCP 协议以 isError 标记错误，本项目工具统一返回 { success, error } 对象，
+     * 上面的结构化判定已足够覆盖，故不再对正文做启发式猜测。
+     */
     return false
 }
 

@@ -5,12 +5,73 @@
  * 注意：这是一个危险工具，需要在配置中显式允许
  */
 
-import { exec, spawn } from 'child_process'
+import { exec } from 'child_process'
 import { promisify } from 'util'
 import os from 'os'
-import path from 'path'
 
 const execAsync = promisify(exec)
+
+/** execute_command 默认超时（毫秒） */
+const DEFAULT_COMMAND_TIMEOUT_MS = 30000
+
+/** execute_command 超时上限（毫秒），防止长时间占用工具调用 */
+const MAX_COMMAND_TIMEOUT_MS = 300000
+
+/** execute_command 输出缓冲上限（字节） */
+const COMMAND_MAX_BUFFER = 1024 * 1024 * 10
+
+/** read_env 单次返回的变量数量上限 */
+const MAX_ENV_VARS = 50
+
+/**
+ * 危险命令黑名单
+ * 说明：这是尽力而为的兜底防护，真正的边界是 execute_command 的主人权限校验
+ */
+const DANGEROUS_COMMAND_PATTERNS = [
+    // rm 删除根目录：覆盖 -rf / -fr / -r -f / --recursive --force / rm / 等写法，以及 /*
+    /\brm\s+(?:-{1,2}[^\s]+\s+)*\/(?:\s|$|\*)/i,
+    // 任何显式关闭根目录保护的命令
+    /--no-preserve-root/i,
+    /\bmkfs(\.\w+)?\b/i,
+    /\bdd\s+if=/i,
+    />\s*\/dev\/(sd|nvme|hd|vd)/i,
+    /\bchmod\s+(-[^\s]+\s+)*777\s+\/(?:\s|$)/i,
+    /\bchown\s+(-[^\s]+\s+)*[^\s]+\s+\/(?:\s|$)/i,
+    // fork bomb :(){ :|:& };:  （原实现未转义元字符，实际从不命中）
+    /:\s*\(\s*\)\s*\{[^}]*\|[^}]*&[^}]*\}\s*;?\s*:/,
+    // 关机 / 重启（限定出现在命令起始位置，避免误伤普通文本中的同名单词）
+    /(^|[;&|]\s*)(sudo\s+)?(shutdown|reboot|halt|poweroff)\b/i,
+    /(^|[;&|]\s*)(sudo\s+)?init\s+0\b/i,
+    // Windows 格式化与强制删除
+    /\bformat\s+[a-z]:/i,
+    /\bdel\s+\/[fqs]\s+[a-z]:\\/i,
+    /\brd\s+\/s\s+\/q\s+[a-z]:\\/i
+]
+
+/**
+ * 敏感环境变量匹配规则（命中则不返回值）
+ */
+const SENSITIVE_ENV_PATTERNS = [
+    /pass/i, // PASSWORD / DB_PASS / PASSPHRASE
+    /secret/i,
+    /token/i,
+    /key/i,
+    /credential/i,
+    /auth/i,
+    /private/i,
+    /cert/i,
+    /salt/i,
+    /signature/i,
+    /session/i,
+    /cookie/i,
+    /webhook/i,
+    /license/i,
+    // 连接串类：DATABASE_URL / REDIS_URL / MONGO_URI / POSTGRES_DSN 等
+    /(database|db|redis|mongo|mongodb|postgres|postgresql|mysql|mariadb|mssql|clickhouse|elastic|amqp|rabbitmq|kafka|s3|oss)_?(url|uri|dsn|conn|connection)/i,
+    /connection_?string/i,
+    /\bdsn\b/i,
+    /npm_config/i
+]
 
 export const shellTools = [
     {
@@ -29,11 +90,9 @@ export const shellTools = [
                 },
                 timeout: {
                     type: 'number',
-                    description: '超时时间（毫秒），默认 30000'
-                },
-                shell: {
-                    type: 'string',
-                    description: '使用的 shell，默认系统shell'
+                    description: `超时时间（毫秒），默认 ${DEFAULT_COMMAND_TIMEOUT_MS}，上限 ${MAX_COMMAND_TIMEOUT_MS}`,
+                    minimum: 1,
+                    maximum: MAX_COMMAND_TIMEOUT_MS
                 }
             },
             required: ['command']
@@ -49,24 +108,15 @@ export const shellTools = [
                 }
             }
 
-            const { command, cwd, timeout = 30000 } = args
-            // 根据系统选择默认shell
-            const defaultShell = process.platform === 'win32' ? 'cmd.exe' : '/bin/bash'
-            const shell = args.shell || defaultShell
+            const { command, cwd } = args
+            const timeout = Math.min(
+                Math.max(Number(args.timeout) || DEFAULT_COMMAND_TIMEOUT_MS, 1),
+                MAX_COMMAND_TIMEOUT_MS
+            )
+            // 解释器固定为平台默认，不接受调用方指定，避免绕开命令黑名单
+            const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/bash'
 
-            // 危险命令黑名单
-            const dangerousPatterns = [
-                /rm\s+-rf\s+\/(?!\w)/i, // rm -rf /
-                /mkfs/i,
-                /dd\s+if=/i,
-                />\s*\/dev\/sd/i,
-                /chmod\s+777\s+\//i,
-                /:(){ :|:& };:/, // fork bomb
-                /format\s+[a-z]:/i, // Windows format
-                /del\s+\/[fqs]\s+[a-z]:\\/i // Windows del
-            ]
-
-            for (const pattern of dangerousPatterns) {
+            for (const pattern of DANGEROUS_COMMAND_PATTERNS) {
                 if (pattern.test(command)) {
                     return {
                         success: false,
@@ -81,7 +131,7 @@ export const shellTools = [
                     cwd: workDir,
                     timeout,
                     shell,
-                    maxBuffer: 1024 * 1024 * 10, // 10MB
+                    maxBuffer: COMMAND_MAX_BUFFER,
                     env: { ...process.env, LANG: 'en_US.UTF-8' }
                 })
 
@@ -214,19 +264,7 @@ export const shellTools = [
         handler: async args => {
             const { name, pattern } = args
 
-            // 敏感变量列表（不返回）
-            const sensitivePatterns = [
-                /password/i,
-                /secret/i,
-                /token/i,
-                /key/i,
-                /credential/i,
-                /auth/i,
-                /api_key/i,
-                /private/i
-            ]
-
-            const isSensitive = varName => sensitivePatterns.some(p => p.test(varName))
+            const isSensitive = varName => SENSITIVE_ENV_PATTERNS.some(p => p.test(varName))
 
             if (name) {
                 if (isSensitive(name)) {
@@ -248,78 +286,12 @@ export const shellTools = [
 
             return {
                 count: envVars.length,
-                variables: Object.fromEntries(envVars.slice(0, 50)) // 最多返回50个
-            }
-        }
-    },
-
-    {
-        name: 'list_directory',
-        description: '列出目录内容',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                path: {
-                    type: 'string',
-                    description: '目录路径，默认为当前目录'
-                },
-                showHidden: {
-                    type: 'boolean',
-                    description: '是否显示隐藏文件'
-                },
-                limit: {
-                    type: 'number',
-                    description: '最大返回数量，默认 50'
-                }
-            }
-        },
-        handler: async args => {
-            const fs = await import('fs/promises')
-            const targetPath = args.path || process.cwd()
-            const showHidden = args.showHidden ?? false
-            const limit = args.limit || 50
-
-            try {
-                const entries = await fs.readdir(targetPath, { withFileTypes: true })
-
-                let items = entries.filter(e => showHidden || !e.name.startsWith('.')).slice(0, limit)
-
-                const results = await Promise.all(
-                    items.map(async entry => {
-                        const fullPath = path.join(targetPath, entry.name)
-                        try {
-                            const stat = await fs.stat(fullPath)
-                            return {
-                                name: entry.name,
-                                type: entry.isDirectory() ? 'directory' : 'file',
-                                size: entry.isFile() ? formatBytes(stat.size) : null,
-                                modified: stat.mtime.toISOString()
-                            }
-                        } catch {
-                            return {
-                                name: entry.name,
-                                type: entry.isDirectory() ? 'directory' : 'file',
-                                error: 'stat failed'
-                            }
-                        }
-                    })
-                )
-
-                return {
-                    path: targetPath,
-                    total: entries.length,
-                    returned: results.length,
-                    items: results
-                }
-            } catch (error) {
-                return {
-                    success: false,
-                    path: targetPath,
-                    error: error.message
-                }
+                variables: Object.fromEntries(envVars.slice(0, MAX_ENV_VARS))
             }
         }
     }
+
+    // list_directory 已由 file.js 统一实现（带沙箱路径校验、递归与过滤），此处不再重复注册
 ]
 
 // 辅助函数

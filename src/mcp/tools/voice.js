@@ -9,6 +9,43 @@ import { chatLogger as logger } from '../../core/utils/logger.js'
 const VITS_API_URL = 'https://mikusfan-vits-uma-genshin-honkai.hf.space/api/generate'
 
 /**
+ * AI 声聊角色中文名到官方角色 ID 的映射
+ * 协议端只认 lucy-voice-* 形式的 ID，中文名必须先经此表转换
+ * @type {Record<string, string>}
+ */
+const AI_VOICE_CHARACTER_MAP = {
+    小新: 'lucy-voice-laibixiaoxin',
+    猴哥: 'lucy-voice-houge',
+    妲己: 'lucy-voice-daji',
+    四郎: 'lucy-voice-silang',
+    吕布: 'lucy-voice-lvbu',
+    霸道总裁: 'lucy-voice-lizeyan',
+    酥心御姐: 'lucy-voice-suxinjiejie',
+    元气少女: 'lucy-voice-xueling',
+    邻家小妹: 'lucy-voice-female1',
+    嘉然_元气: 'lucy-voice-xueling',
+    珈乐_温柔: 'lucy-voice-female2',
+    乃琳_温柔: 'lucy-voice-suxinjiejie',
+    贝拉_可爱: 'lucy-voice-female1',
+    阿梓_元气: 'lucy-voice-xueling'
+}
+
+/**
+ * 归一化 AI 语音角色标识
+ *
+ * 用户通常用中文角色名（"嘉然_元气"）而非音色 ID 表述，若只有 send_ai_voice 做转换，
+ * 私聊语音等同源工具就会对同一句话报错，形成难以理解的行为差异。
+ * 命中转换表则返回音色 ID，未命中原样返回（调用方可能直接传 ID）。
+ * @param {string} character - 角色名或音色 ID
+ * @returns {string} 音色 ID
+ */
+function resolveAiVoiceCharacter(character) {
+    if (typeof character !== 'string') return character
+    const key = character.trim()
+    return AI_VOICE_CHARACTER_MAP[key] || key
+}
+
+/**
  * 检测Bot适配器类型
  * @param {Object} bot - Bot实例
  * @returns {{ adapter: string, isNT: boolean, canAiVoice: boolean }}
@@ -270,31 +307,12 @@ export const voiceTools = [
                 if (!bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
-                // 角色名到ID的映射
-                const characterMap = {
-                    小新: 'lucy-voice-laibixiaoxin',
-                    猴哥: 'lucy-voice-houge',
-                    妲己: 'lucy-voice-daji',
-                    四郎: 'lucy-voice-silang',
-                    吕布: 'lucy-voice-lvbu',
-                    霸道总裁: 'lucy-voice-lizeyan',
-                    酥心御姐: 'lucy-voice-suxinjiejie',
-                    元气少女: 'lucy-voice-xueling',
-                    邻家小妹: 'lucy-voice-female1',
-                    嘉然_元气: 'lucy-voice-xueling',
-                    珈乐_温柔: 'lucy-voice-female2',
-                    乃琳_温柔: 'lucy-voice-suxinjiejie',
-                    贝拉_可爱: 'lucy-voice-female1',
-                    阿梓_元气: 'lucy-voice-xueling'
-                }
-
                 const { adapter, isNT, canAiVoice } = getAdapterInfo(ctx)
                 const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
 
-                // 转换角色ID
-                let character = args.character
-                if (characterMap[character]) {
-                    character = characterMap[character]
+                // 转换角色ID：后续所有适配器分支都必须使用转换后的 character，不能再用 args.character
+                const character = resolveAiVoiceCharacter(args.character)
+                if (character !== args.character) {
                     logger.info(`[send_ai_voice] 角色名转换: ${args.character} -> ${character}`)
                 }
 
@@ -394,7 +412,7 @@ export const voiceTools = [
                 if (adapter === 'napcat') {
                     try {
                         const result = await bot.sendApi('send_group_ai_record', {
-                            character: args.character,
+                            character,
                             group_id: groupId,
                             text: args.text
                         })
@@ -435,7 +453,7 @@ export const voiceTools = [
                 if (bot.sendApi) {
                     try {
                         const result = await bot.sendApi('send_group_ai_record', {
-                            character: args.character,
+                            character,
                             group_id: groupId,
                             text: args.text
                         })
@@ -471,7 +489,7 @@ export const voiceTools = [
                 // 备用方法
                 if (bot.sendGroupAiRecord) {
                     try {
-                        const result = await bot.sendGroupAiRecord(groupId, args.text, args.character)
+                        const result = await bot.sendGroupAiRecord(groupId, args.text, character)
                         if (result && (result.message_id || result === true || !result.error)) {
                             return {
                                 success: true,
@@ -1086,7 +1104,7 @@ export const voiceTools = [
                 if (adapter === 'napcat' || adapter === 'onebot') {
                     const result = await bot.sendApi('get_ai_record', {
                         group_id: groupId,
-                        character: args.character,
+                        character: resolveAiVoiceCharacter(args.character),
                         text: args.text
                     })
 
@@ -1109,7 +1127,7 @@ export const voiceTools = [
                             success: true,
                             adapter,
                             text: args.text,
-                            character: args.character,
+                            character: resolveAiVoiceCharacter(args.character),
                             file: fileData,
                             url: urlData
                         }
@@ -1165,7 +1183,7 @@ export const voiceTools = [
                     try {
                         const result = await bot.sendApi('send_private_ai_record', {
                             user_id: userId,
-                            character: args.character,
+                            character: resolveAiVoiceCharacter(args.character),
                             text: args.text
                         })
 
@@ -1189,7 +1207,7 @@ export const voiceTools = [
                 // 方式2: icqq - 先通过群聊生成AI语音，然后转发私聊
                 if (adapter === 'icqq' && typeof bot.sendOidbSvcTrpcTcp === 'function') {
                     // 需要一个群来生成AI语音
-                    const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
+                    let groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
                     if (!groupId) {
                         // 尝试获取bot所在的任意群
                         const groups = bot.gl || new Map()
@@ -1201,6 +1219,8 @@ export const voiceTools = [
                                 error: '私聊AI语音需要指定 group_id 来生成语音，或在群聊中使用'
                             }
                         }
+                        // 兜底取到的群号必须回写，否则后续协议包会带着 undefined 的群号发出
+                        groupId = parseInt(firstGroup)
                     }
 
                     try {
@@ -1239,7 +1259,7 @@ export const voiceTools = [
                 if (bot.sendApi) {
                     try {
                         const aiRecord = await bot.sendApi('get_ai_record', {
-                            character: args.character,
+                            character: resolveAiVoiceCharacter(args.character),
                             text: args.text,
                             group_id: args.group_id || e?.group_id
                         })

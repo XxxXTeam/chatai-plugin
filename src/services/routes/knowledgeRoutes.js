@@ -33,7 +33,16 @@ router.get('/search', async (req, res) => {
         const { knowledgeService } = await import('../storage/KnowledgeService.js')
         await knowledgeService.init()
         const { query, presetId, limit = 10 } = req.query
-        const results = await knowledgeService.search(query, { presetId, limit: parseInt(limit) })
+        // query 缺失时 KnowledgeService.search 内部的 query.toLowerCase() 会抛错，
+        // 校验方式与 memoryRoutes 的 POST /search 保持一致
+        if (!query || typeof query !== 'string' || !query.trim()) {
+            return res.status(400).json(ChaiteResponse.fail(null, 'query is required'))
+        }
+        // parseInt('abc') 为 NaN，绑定到 better-sqlite3 会抛 datatype mismatch；
+        // 空串同样要走默认值，否则 ?limit= 会被钳成 1
+        const parsedLimit = limit === '' ? NaN : Number(limit)
+        const safeLimit = Number.isFinite(parsedLimit) ? Math.min(100, Math.max(1, Math.trunc(parsedLimit))) : 10
+        const results = await knowledgeService.search(query, { presetId, limit: safeLimit })
         res.json(ChaiteResponse.ok(results))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))

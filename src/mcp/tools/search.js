@@ -4,6 +4,14 @@
  */
 
 /**
+ * 外部搜索/查询类 API 的请求超时（毫秒）
+ *
+ * Node 的 fetch 没有默认超时，外部站点被中间设备黑洞时 await 永不 resolve，
+ * 工具 handler 随之挂起，该次 LLM 调用会被无限期阻塞（表现为"机器人不回话了"）。
+ */
+const SEARCH_API_TIMEOUT_MS = 10000
+
+/**
  * HTML转Markdown工具函数
  * @param {string} html - HTML内容
  * @returns {string} Markdown内容
@@ -195,7 +203,8 @@ export const searchTools = [
                             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
-                    }
+                    },
+                    signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS)
                 })
 
                 if (!response.ok) {
@@ -336,7 +345,7 @@ export const searchTools = [
                 // 使用 DuckDuckGo Instant Answer API（免费无需API Key）
                 if (engine === 'duckduckgo') {
                     const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`
-                    const response = await fetch(url)
+                    const response = await fetch(url, { signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS) })
                     const data = await response.json()
 
                     const results = []
@@ -401,7 +410,8 @@ export const searchTools = [
                 const url = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(args.query)}`
 
                 const response = await fetch(url, {
-                    headers: { 'User-Agent': 'ChatBot/1.0' }
+                    headers: { 'User-Agent': 'ChatBot/1.0' },
+                    signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS)
                 })
 
                 if (!response.ok) {
@@ -507,7 +517,7 @@ export const searchTools = [
                 // 使用免费翻译 API
                 const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${args.from || 'auto'}|${targetLang}`
 
-                const response = await fetch(url)
+                const response = await fetch(url, { signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS) })
                 const data = await response.json()
 
                 if (data.responseStatus !== 200) {
@@ -546,7 +556,8 @@ export const searchTools = [
                 // 使用 wttr.in 免费天气 API
                 const url = `https://wttr.in/${city}?format=j1&lang=zh`
                 const response = await fetch(url, {
-                    headers: { 'User-Agent': 'curl/7.68.0' }
+                    headers: { 'User-Agent': 'curl/7.68.0' },
+                    signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS)
                 })
 
                 if (!response.ok) {
@@ -602,7 +613,7 @@ export const searchTools = [
                 const ip = args.ip || ''
                 const url = ip ? `http://ip-api.com/json/${ip}?lang=zh-CN` : 'http://ip-api.com/json/?lang=zh-CN'
 
-                const response = await fetch(url)
+                const response = await fetch(url, { signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS) })
                 const data = await response.json()
 
                 if (data.status !== 'success') {
@@ -642,7 +653,7 @@ export const searchTools = [
                 // 使用百度百科 OpenSearch API
                 const url = `https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?scope=103&format=json&appid=379020&bk_key=${encodeURIComponent(args.keyword)}&bk_length=600`
 
-                const response = await fetch(url)
+                const response = await fetch(url, { signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS) })
                 const data = await response.json()
 
                 if (!data.title) {
@@ -684,7 +695,7 @@ export const searchTools = [
                     url += `&c=${args.type}`
                 }
 
-                const response = await fetch(url)
+                const response = await fetch(url, { signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS) })
                 const data = await response.json()
 
                 return {
@@ -733,7 +744,7 @@ export const searchTools = [
                     return { success: false, error: '不支持的平台' }
                 }
 
-                const response = await fetch(url)
+                const response = await fetch(url, { signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS) })
                 const data = await response.json()
 
                 if (data.code !== 200) {
@@ -773,7 +784,7 @@ export const searchTools = [
                 const limit = args.limit || 10
                 const url = 'https://tenapi.cn/v2/douyinhot'
 
-                const response = await fetch(url)
+                const response = await fetch(url, { signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS) })
                 const data = await response.json()
 
                 if (data.code !== 200) {
@@ -816,7 +827,7 @@ export const searchTools = [
 
                 const url = `https://api.oioweb.cn/api/common/history?month=${month}&day=${day}`
 
-                const response = await fetch(url)
+                const response = await fetch(url, { signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS) })
                 const data = await response.json()
 
                 if (data.code !== 200) {
@@ -851,7 +862,7 @@ export const searchTools = [
             try {
                 const url = 'https://api.oioweb.cn/api/common/OneDuanzi'
 
-                const response = await fetch(url)
+                const response = await fetch(url, { signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS) })
                 const data = await response.json()
 
                 if (data.code !== 200) {
@@ -879,7 +890,7 @@ export const searchTools = [
             try {
                 const url = 'https://api.oioweb.cn/api/common/60s'
 
-                const response = await fetch(url)
+                const response = await fetch(url, { signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS) })
                 const data = await response.json()
 
                 if (data.code !== 200) {
@@ -913,7 +924,7 @@ export const searchTools = [
             try {
                 const url = `https://api.oioweb.cn/api/common/ShortUrl?url=${encodeURIComponent(args.url)}`
 
-                const response = await fetch(url)
+                const response = await fetch(url, { signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS) })
                 const data = await response.json()
 
                 if (data.code !== 200) {
@@ -947,7 +958,7 @@ export const searchTools = [
                     url += `?prov=${encodeURIComponent(args.province)}`
                 }
 
-                const response = await fetch(url)
+                const response = await fetch(url, { signal: AbortSignal.timeout(SEARCH_API_TIMEOUT_MS) })
                 const data = await response.json()
 
                 if (data.code !== 200) {

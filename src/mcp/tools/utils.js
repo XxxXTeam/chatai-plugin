@@ -5,6 +5,87 @@
 
 import crypto from 'node:crypto'
 
+/** calculate 允许出现的标识符（数学函数与常量） */
+const CALC_ALLOWED_IDENTIFIERS = new Set([
+    'sqrt',
+    'abs',
+    'ceil',
+    'floor',
+    'round',
+    'sin',
+    'cos',
+    'tan',
+    'log',
+    'log10',
+    'exp',
+    'pow',
+    'min',
+    'max',
+    'pi',
+    'e'
+])
+
+/** calculate 表达式最大长度 */
+const CALC_MAX_EXPRESSION_LENGTH = 500
+
+/**
+ * calculate 词法分析：数字 / 标识符 / 运算符 / 括号 / 逗号
+ * 使用 sticky 正则逐 token 匹配，任何无法匹配的字符都会被判为非法
+ */
+const CALC_TOKEN_PATTERN = /\s*(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|\.\d+|[A-Za-z_][A-Za-z0-9_]*|\*\*|[+\-*/%^(),])/y
+
+/** 随机数单次最多生成个数 */
+const MAX_RANDOM_COUNT = 100
+
+/** 随机数取样的最大尝试倍率，作为 while 自旋的熔断上限 */
+const MAX_RANDOM_ATTEMPT_FACTOR = 50
+
+/** 生成密码的长度上下限：length 会驱动同步 for 循环拼接字符串，必须夹取 */
+const MIN_PASSWORD_LENGTH = 4
+const MAX_PASSWORD_LENGTH = 128
+
+/**
+ * 对数学表达式做词法校验并归一化
+ * 相比字符白名单，词法校验能确保出现的每个标识符都在允许集合内，
+ * 不存在通过字母碎片拼出 constructor / prototype 之类属性名的可能
+ * @param {string} expression - 原始表达式
+ * @returns {{ok: boolean, error?: string, expr?: string}} 校验结果与归一化后的表达式
+ */
+function normalizeCalcExpression(expression) {
+    const raw = String(expression ?? '').trim()
+    if (!raw) return { ok: false, error: '表达式不能为空' }
+    if (raw.length > CALC_MAX_EXPRESSION_LENGTH) {
+        return { ok: false, error: `表达式过长，最多 ${CALC_MAX_EXPRESSION_LENGTH} 个字符` }
+    }
+
+    const tokens = []
+    CALC_TOKEN_PATTERN.lastIndex = 0
+    let cursor = 0
+    while (cursor < raw.length) {
+        CALC_TOKEN_PATTERN.lastIndex = cursor
+        const matched = CALC_TOKEN_PATTERN.exec(raw)
+        if (!matched) {
+            return { ok: false, error: `表达式包含非法字符: ${raw[cursor]}` }
+        }
+        const token = matched[1]
+        if (/^[A-Za-z_]/.test(token)) {
+            if (!CALC_ALLOWED_IDENTIFIERS.has(token.toLowerCase())) {
+                return { ok: false, error: `不支持的名称: ${token}` }
+            }
+            tokens.push(token.toLowerCase())
+        } else if (token === '^') {
+            // 数学语义下 ^ 表示幂运算，JS 中的 ^ 是按位异或，需要归一化
+            tokens.push('**')
+        } else {
+            tokens.push(token)
+        }
+        cursor = CALC_TOKEN_PATTERN.lastIndex
+    }
+
+    if (tokens.length === 0) return { ok: false, error: '表达式不能为空' }
+    return { ok: true, expr: tokens.join('') }
+}
+
 export const utilsTools = [
     {
         name: 'calculate',
@@ -18,39 +99,18 @@ export const utilsTools = [
         },
         handler: async args => {
             try {
-                // 安全的数学表达式计算
-                const expr = args.expression.replace(/\s+/g, '').replace(/[^0-9+\-*/().%^sqrtpilognabsceilfoor]/gi, '')
-
-                // 支持的数学函数
-                const mathFunctions = {
-                    sqrt: Math.sqrt,
-                    abs: Math.abs,
-                    ceil: Math.ceil,
-                    floor: Math.floor,
-                    round: Math.round,
-                    sin: Math.sin,
-                    cos: Math.cos,
-                    tan: Math.tan,
-                    log: Math.log,
-                    log10: Math.log10,
-                    exp: Math.exp,
-                    pow: Math.pow,
-                    pi: Math.PI,
-                    e: Math.E
+                // 词法校验：只放行数字、允许的数学标识符与运算符
+                const normalized = normalizeCalcExpression(args.expression)
+                if (!normalized.ok) {
+                    return { success: false, error: normalized.error }
                 }
 
-                // 替换函数名
-                let safeExpr = expr
-                for (const [name, fn] of Object.entries(mathFunctions)) {
-                    if (typeof fn === 'number') {
-                        safeExpr = safeExpr.replace(new RegExp(name, 'gi'), fn.toString())
-                    }
-                }
-
-                // 使用 Function 计算（仍需谨慎）
+                // 常量以形参注入，避免旧实现中 e/pi 的字符串全局替换破坏 ceil/exp 等函数名
                 const result = Function(
-                    `'use strict'; const {sqrt,abs,ceil,floor,round,sin,cos,tan,log,log10,exp,pow} = Math; return (${safeExpr})`
-                )()
+                    'pi',
+                    'e',
+                    `'use strict'; const {sqrt,abs,ceil,floor,round,sin,cos,tan,log,log10,exp,pow,min,max} = Math; return (${normalized.expr})`
+                )(Math.PI, Math.E)
 
                 if (typeof result !== 'number' || isNaN(result) || !isFinite(result)) {
                     return { success: false, error: '计算结果无效' }
@@ -81,9 +141,18 @@ export const utilsTools = [
             }
         },
         handler: async args => {
-            const min = args.min ?? 1
-            const max = args.max ?? 100
-            const count = Math.min(args.count || 1, 100)
+            /*
+             * min/max 必须校验有限性：Infinity 或 NaN 会让 range 失去意义，
+             * 使 `used.has(num)` 恒命中而 while 永不退出——这是同步循环，
+             * 外层 try/catch 与工具超时都救不了，整个 Yunzai 进程会被卡死。
+             */
+            const min = Math.trunc(Number(args.min ?? 1))
+            const max = Math.trunc(Number(args.max ?? 100))
+            if (!Number.isFinite(min) || !Number.isFinite(max)) {
+                return { success: false, error: 'min/max 必须为有限数值' }
+            }
+
+            const count = Math.min(Math.max(Math.trunc(Number(args.count) || 1), 1), MAX_RANDOM_COUNT)
             const unique = args.unique !== false
 
             if (min > max) {
@@ -98,7 +167,11 @@ export const utilsTools = [
             const results = []
             const used = new Set()
 
-            while (results.length < count) {
+            // 熔断：即便上面的守卫被绕过，也不允许无界自旋
+            let attempts = 0
+            const maxAttempts = count * MAX_RANDOM_ATTEMPT_FACTOR + MAX_RANDOM_COUNT
+            while (results.length < count && attempts < maxAttempts) {
+                attempts++
                 const num = Math.floor(Math.random() * range) + min
                 if (!unique || !used.has(num)) {
                     results.push(num)
@@ -761,7 +834,15 @@ export const utilsTools = [
             }
         },
         handler: async args => {
-            const length = args.length || 16
+            /*
+             * length 直接驱动下方的同步 for 循环字符串拼接。
+             * 传 1e8 会阻塞进程数十秒，传 Infinity（JSON 中的 1e999）则永不终止，
+             * 且 validateParams 只校验类型不校验范围，故必须在此夹取。
+             */
+            const length = Math.min(
+                Math.max(Math.trunc(Number(args.length) || 16), MIN_PASSWORD_LENGTH),
+                MAX_PASSWORD_LENGTH
+            )
             let chars = ''
 
             if (args.include_upper !== false) chars += 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'

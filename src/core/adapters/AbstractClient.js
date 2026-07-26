@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import config from '../../../config/config.js'
 import {
     BaseClientOptions,
     ChaiteContext,
@@ -889,9 +890,11 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
         }
         let lastError = null
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            const controller = new AbortController()
+            // 定时器必须在 finally 中清理：DNS 失败/ECONNREFUSED 会跳过成功分支，
+            // 使定时器残留到超时时长结束才被回收
+            const timeoutId = setTimeout(() => controller.abort(), URL_TO_BASE64_CONFIG.timeout)
             try {
-                const controller = new AbortController()
-                const timeoutId = setTimeout(() => controller.abort(), URL_TO_BASE64_CONFIG.timeout)
                 const isQQPic = url.includes('gchat.qpic.cn') || url.includes('c2cpicdw.qpic.cn')
                 const referer = isQQPic ? 'https://qzone.qq.com/' : new URL(url).origin + '/'
 
@@ -904,8 +907,6 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
                         Referer: referer
                     }
                 })
-
-                clearTimeout(timeoutId)
 
                 if (!response.ok) {
                     const err = new Error(`HTTP ${response.status}: ${response.statusText}`)
@@ -942,6 +943,8 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
                     logger.debug(`[urlToBase64] 第${attempt + 1}次获取失败，${retryDelay}ms后重试: ${fetchErr.message}`)
                     await new Promise(r => setTimeout(r, retryDelay))
                 }
+            } finally {
+                clearTimeout(timeoutId)
             }
         }
 
@@ -1171,21 +1174,76 @@ export async function preprocessImageUrls(histories) {
 }
 
 /**
- * @param {string} model - 模型名称
- * @returns {boolean}
+ * 从消息 content 中提取纯文本
+ * content 既可能是内容块数组，也可能是字符串（见 hasMeaningfulContent 的字符串分支），
+ * 直接对字符串调用 .filter 会抛 TypeError
+ * @param {Array|string|any} content - 消息内容
+ * @param {string} [separator='\n'] - 多个文本块的连接符
+ * @returns {string} 提取出的文本
  */
-export function needsBase64Preprocess(model) {
+export function extractText(content, separator = '\n') {
+    if (typeof content === 'string') return content
+    if (!Array.isArray(content)) return ''
+    return content
+        .filter(c => c?.type === 'text')
+        .map(c => c.text || '')
+        .join(separator)
+}
+
+/**
+ * 判断是否需要把图片转成 base64 后再随请求发送
+ *
+ * 优先采用渠道 imageConfig.requiresBase64 的显式声明；未声明时才按模型名推断。
+ * 单纯的模型名子串匹配在两个方向上都会出错：
+ * - 需要 base64 但模型名不含 gemini 的渠道（如 glm-4v、qwen-vl、聚合网关重命名后的模型）
+ *   会被判为不需要，实际发出 URL 导致图片识别失败；
+ * - 模型名恰好含 "gemini" 的纯文本模型会被无谓地转 base64，白白放大请求体。
+ * 因此渠道可用 imageConfig.requiresBase64 直接给出答案，推断仅作兜底。
+ *
+ * @param {string} model - 模型名称
+ * @param {{ requiresBase64?: boolean }} [imageConfig] - 渠道图片处理配置
+ * @returns {boolean} 是否需要 base64 预处理
+ */
+export function needsBase64Preprocess(model, imageConfig) {
+    if (typeof imageConfig?.requiresBase64 === 'boolean') {
+        return imageConfig.requiresBase64
+    }
     if (!model || typeof model !== 'string') return false
     const lowerModel = model.toLowerCase()
-    // Gemini 系列模型都需要 base64
+    // 兜底推断：Gemini 系列原生要求 base64
     return lowerModel.includes('gemini')
 }
 
 /**
  * 兼容旧函数名
+ * @param {string} model - 模型名称
+ * @param {{ requiresBase64?: boolean }} [imageConfig] - 渠道图片处理配置
+ * @returns {boolean} 是否需要 base64 预处理
  */
-export function needsImageBase64Preprocess(model) {
-    return needsBase64Preprocess(model)
+export function needsImageBase64Preprocess(model, imageConfig) {
+    return needsBase64Preprocess(model, imageConfig)
+}
+
+/**
+ * 解析本次请求实际使用的模型名
+ *
+ * 优先级：单次请求指定 > 全局 llm.defaultModel > 适配器兜底常量。
+ * 各适配器原先各自写死兜底模型，同一份 GeminiClient 里流式与非流式甚至给出了不同的默认值，
+ * 会让"没传 model"这条路径在不同入口打到不同模型上。
+ *
+ * @param {string|undefined} requestedModel - 单次请求指定的模型
+ * @param {string} adapterFallback - 该适配器的最终兜底模型
+ * @returns {string} 实际使用的模型名
+ */
+export function resolveModelName(requestedModel, adapterFallback) {
+    if (typeof requestedModel === 'string' && requestedModel.trim()) {
+        return requestedModel
+    }
+    const configuredDefault = config.get('llm.defaultModel')
+    if (typeof configuredDefault === 'string' && configuredDefault.trim()) {
+        return configuredDefault
+    }
+    return adapterFallback
 }
 
 /**
@@ -1262,6 +1320,21 @@ export class AbstractClient {
             this.context = context
             this.context.setClient(this)
         }
+    }
+
+    /**
+     * 解析渠道配置的请求超时（毫秒）
+     * 渠道 timeout 结构为 { connect, read }（见 ChannelManager 渠道归一化），
+     * 这里取 read 作为整体请求超时传给各家 SDK；未配置时返回 undefined 以沿用 SDK 默认值
+     * @returns {number|undefined} 超时毫秒数
+     */
+    resolveRequestTimeout() {
+        const timeout = this.options?.timeout
+        if (typeof timeout === 'number') {
+            return Number.isFinite(timeout) && timeout > 0 ? timeout : undefined
+        }
+        const read = timeout?.read
+        return Number.isFinite(read) && read > 0 ? read : undefined
     }
 
     /**
@@ -1401,7 +1474,7 @@ export class AbstractClient {
                 options.parentMessageId = tcMsgId
                 await this.historyManager.saveHistory(toolCallResultMessage, options.conversationId)
 
-                // 追踪工具调用轮次（用于决定是否禁用工具）
+                // 追踪工具调用轮次（总调用数已由 updateToolCallTracking 累加到 _totalToolCallCount）
                 if (!options._toolCallCount) options._toolCallCount = 0
                 options._toolCallCount++
 
@@ -1410,6 +1483,36 @@ export class AbstractClient {
                 const isGeminiModel = modelStr.toLowerCase().includes('gemini')
                 // 提高多轮工具调用限制，允许更复杂的工具调用链
                 const maxBeforeDisable = isGeminiModel ? 6 : 10
+
+                // 硬上限：toolChoice:none 只是请求模型别再调工具，模型不服从时
+                // parseXmlToolCalls 仍会从纯文本里解析出工具调用，递归将永不终止。
+                // 这里强制结束递归，避免栈溢出与每层一次的计费调用。
+                const maxTotalToolCalls =
+                    this.toolCallLimitConfig?.maxTotalToolCalls || DEFAULT_TOOL_CALL_LIMIT.maxTotalToolCalls
+                const maxRounds = maxBeforeDisable * 2
+                const totalToolCalls = options._totalToolCallCount || 0
+                if (totalToolCalls >= maxTotalToolCalls || options._toolCallCount >= maxRounds) {
+                    this.logger.warn(
+                        `[Tool] 达到工具调用硬上限（轮次 ${options._toolCallCount}/${maxRounds}，总调用 ${totalToolCalls}/${maxTotalToolCalls}），强制结束递归`
+                    )
+                    this.resetToolCallTracking(options)
+
+                    if (options.disableHistorySave) {
+                        await this.historyManager.deleteConversation(options.conversationId)
+                    }
+
+                    const finalContents = modelResponse.content?.filter(c => c.type === 'text' && c.text?.trim()) || []
+                    return {
+                        id: modelResponse.id,
+                        model: modelResponse.model || options.model,
+                        contents:
+                            finalContents.length > 0
+                                ? finalContents
+                                : [{ type: 'text', text: '工具调用次数已达上限，已根据现有结果结束本轮处理。' }],
+                        usage: modelResponse.usage,
+                        toolCallLogs: options._toolCallLogs || []
+                    }
+                }
 
                 // 连续调用超过阈值时禁用工具，防止无限循环
                 if (options._toolCallCount >= maxBeforeDisable) {

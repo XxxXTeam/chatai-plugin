@@ -6,144 +6,15 @@
 import { segment } from '../../utils/messageParser.js'
 import { chatLogger as logger } from '../../core/utils/logger.js'
 
-const activeReminders = new Map()
+/** 外部 API 请求超时（毫秒）：缺少超时会让 tool_call 永久挂起 */
+const API_TIMEOUT_MS = 10000
+
+/** random_choose 单次最多返回的结果数 */
+const MAX_RANDOM_CHOOSE_COUNT = 100
 
 export const extraTools = [
-    {
-        name: 'get_weather',
-        description: '查询指定城市的天气信息。用户问天气相关问题时必须调用此工具获取实时数据，不要编造天气信息。',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                city: {
-                    type: 'string',
-                    description: '城市名称（中文或英文），如：北京、Shanghai'
-                },
-                lang: {
-                    type: 'string',
-                    description: '返回语言，默认zh（中文）',
-                    enum: ['zh', 'en', 'ja']
-                }
-            },
-            required: ['city']
-        },
-        handler: async args => {
-            const { city, lang = 'zh' } = args
-            if (!city) return { error: '请提供城市名称' }
-
-            // 尝试多个天气API
-            const apis = [
-                {
-                    name: 'wttr.in',
-                    url: `https://wttr.in/${encodeURIComponent(city)}?format=j1&lang=${lang}`,
-                    parse: data => {
-                        if (!data.current_condition?.[0]) {
-                            throw new Error('无法获取该城市的天气信息')
-                        }
-                        const current = data.current_condition[0]
-                        const location = data.nearest_area?.[0]
-                        const forecast = data.weather?.slice(0, 3) || []
-                        return {
-                            success: true,
-                            location: {
-                                city: location?.areaName?.[0]?.value || city,
-                                region: location?.region?.[0]?.value || '',
-                                country: location?.country?.[0]?.value || ''
-                            },
-                            current: {
-                                temperature: `${current.temp_C}°C`,
-                                feels_like: `${current.FeelsLikeC}°C`,
-                                humidity: `${current.humidity}%`,
-                                weather: current.lang_zh?.[0]?.value || current.weatherDesc?.[0]?.value || '未知',
-                                wind: `${current.winddir16Point} ${current.windspeedKmph}km/h`,
-                                visibility: `${current.visibility}km`,
-                                uv_index: current.uvIndex
-                            },
-                            forecast: forecast.map(day => ({
-                                date: day.date,
-                                max_temp: `${day.maxtempC}°C`,
-                                min_temp: `${day.mintempC}°C`
-                            }))
-                        }
-                    }
-                },
-                {
-                    name: 'open-meteo',
-                    // 备用API：使用地理编码+天气查询
-                    url: `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=zh`,
-                    parse: async geoData => {
-                        if (!geoData.results?.[0]) {
-                            throw new Error('找不到该城市')
-                        }
-                        const { latitude, longitude, name, country } = geoData.results[0]
-                        const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&timezone=auto`
-                        const weatherResp = await fetch(weatherUrl, {
-                            signal: AbortSignal.timeout(10000),
-                            headers: { 'User-Agent': 'ChatBot/1.0' }
-                        })
-                        if (!weatherResp.ok) throw new Error('天气API请求失败')
-                        const weatherData = await weatherResp.json()
-                        const current = weatherData.current
-                        const weatherCodes = {
-                            0: '晴天',
-                            1: '基本晴朗',
-                            2: '多云',
-                            3: '阴天',
-                            45: '雾',
-                            48: '雾凇',
-                            51: '小毛毛雨',
-                            53: '毛毛雨',
-                            61: '小雨',
-                            63: '中雨',
-                            65: '大雨',
-                            71: '小雪',
-                            73: '中雪',
-                            75: '大雪',
-                            95: '雷暴',
-                            96: '冰雹雷暴'
-                        }
-                        return {
-                            success: true,
-                            location: { city: name, country },
-                            current: {
-                                temperature: `${current.temperature_2m}°C`,
-                                humidity: `${current.relative_humidity_2m}%`,
-                                weather: weatherCodes[current.weather_code] || '未知',
-                                wind: `${current.wind_speed_10m}km/h`
-                            }
-                        }
-                    }
-                }
-            ]
-
-            let lastError = null
-            for (const api of apis) {
-                try {
-                    const controller = new AbortController()
-                    const timeoutId = setTimeout(() => controller.abort(), 15000)
-
-                    const response = await fetch(api.url, {
-                        headers: { 'User-Agent': 'ChatBot/1.0' },
-                        signal: controller.signal
-                    })
-                    clearTimeout(timeoutId)
-
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}`)
-                    }
-
-                    const data = await response.json()
-                    const result = await api.parse(data)
-                    return result
-                } catch (error) {
-                    lastError = error
-                    // 继续尝试下一个API
-                }
-            }
-
-            return { error: `获取天气失败: ${lastError?.message || '所有API都不可用'}` }
-        }
-    },
+    // get_weather 已由 search.js 统一实现（加载顺序更靠前，实际执行的一直是该实现）。
+    // 此处原有的重复定义只会覆盖暴露给模型的 schema，造成 schema 与 handler 来自不同文件，故移除。
     {
         name: 'hitokoto',
         description: '获取一条随机的一言（名言、语录、台词等）',
@@ -165,7 +36,8 @@ export const extraTools = [
                 if (type) url += `&c=${type}`
 
                 const response = await fetch(url, {
-                    headers: { 'User-Agent': 'ChatBot/1.0' }
+                    headers: { 'User-Agent': 'ChatBot/1.0' },
+                    signal: AbortSignal.timeout(API_TIMEOUT_MS)
                 })
 
                 if (!response.ok) {
@@ -268,7 +140,9 @@ export const extraTools = [
                 },
                 count: {
                     type: 'integer',
-                    description: '选择数量，默认1'
+                    description: `选择数量，默认1，最大${MAX_RANDOM_CHOOSE_COUNT}`,
+                    minimum: 1,
+                    maximum: MAX_RANDOM_CHOOSE_COUNT
                 },
                 unique: {
                     type: 'boolean',
@@ -278,8 +152,11 @@ export const extraTools = [
             required: ['options']
         },
         handler: async args => {
-            const { options, count = 1, unique = true } = args
+            const { options, unique = true } = args
             if (!options?.length) return { error: '请提供至少一个选项' }
+
+            // 二次夹取：unique=false 时 count 会直接决定同步循环次数，无上限会冻死进程
+            const count = Math.min(Math.max(Math.floor(Number(args.count) || 1), 1), MAX_RANDOM_CHOOSE_COUNT)
             if (unique && count > options.length) {
                 return { error: `不重复选择时，选择数量(${count})不能超过选项数量(${options.length})` }
             }
@@ -306,61 +183,7 @@ export const extraTools = [
             }
         }
     },
-    {
-        name: 'countdown',
-        description: '计算距离指定日期还有多少时间',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                target_date: {
-                    type: 'string',
-                    description: '目标日期，格式 YYYY-MM-DD 或 YYYY-MM-DD HH:mm:ss'
-                },
-                event_name: {
-                    type: 'string',
-                    description: '事件名称（可选）'
-                }
-            },
-            required: ['target_date']
-        },
-        handler: async args => {
-            const { target_date, event_name } = args
-            if (!target_date) return { error: '请提供目标日期' }
-
-            const target = new Date(target_date)
-            const now = new Date()
-
-            if (isNaN(target.getTime())) return { error: '无效的日期格式' }
-
-            const diff = target.getTime() - now.getTime()
-            const isPast = diff < 0
-            const absDiff = Math.abs(diff)
-
-            const days = Math.floor(absDiff / (1000 * 60 * 60 * 24))
-            const hours = Math.floor((absDiff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
-            const minutes = Math.floor((absDiff % (1000 * 60 * 60)) / (1000 * 60))
-
-            const parts = []
-            if (days > 0) parts.push(`${days}天`)
-            if (hours > 0) parts.push(`${hours}小时`)
-            if (minutes > 0) parts.push(`${minutes}分钟`)
-            if (parts.length === 0) parts.push('不到1分钟')
-
-            const readable = parts.join('')
-            const prefix = isPast ? '已过去' : '还有'
-            const emoji = isPast ? '⏪' : '⏳'
-
-            return {
-                success: true,
-                target_date: target.toISOString(),
-                is_past: isPast,
-                days,
-                hours,
-                minutes,
-                text: `${emoji} ${event_name ? `距离「${event_name}」` : '距离目标日期'}${prefix} ${readable}`
-            }
-        }
-    },
+    // countdown 已由 utils.js 统一实现（加载顺序更靠前，实际执行的一直是该实现），移除重复定义
     {
         name: 'create_short_url',
         description: '将长链接转换为短链接',
@@ -384,7 +207,8 @@ export const extraTools = [
             try {
                 const apiUrl = `https://is.gd/create.php?format=json&url=${encodeURIComponent(url)}`
                 const response = await fetch(apiUrl, {
-                    headers: { 'User-Agent': 'ChatBot/1.0' }
+                    headers: { 'User-Agent': 'ChatBot/1.0' },
+                    signal: AbortSignal.timeout(API_TIMEOUT_MS)
                 })
 
                 if (!response.ok) return { error: `短链接服务请求失败: HTTP ${response.status}` }
@@ -417,7 +241,8 @@ export const extraTools = [
                 const url = ip ? `http://ip-api.com/json/${ip}?lang=zh-CN` : 'http://ip-api.com/json/?lang=zh-CN'
 
                 const response = await fetch(url, {
-                    headers: { 'User-Agent': 'ChatBot/1.0' }
+                    headers: { 'User-Agent': 'ChatBot/1.0' },
+                    signal: AbortSignal.timeout(API_TIMEOUT_MS)
                 })
 
                 if (!response.ok) return { error: `IP查询失败: HTTP ${response.status}` }
@@ -445,92 +270,9 @@ export const extraTools = [
             }
         }
     },
-    {
-        name: 'set_reminder',
-        description: '设置简单的定时提醒（内存版，重启会丢失）。复杂定时任务请使用 create_scheduled_task 工具',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                time: {
-                    type: 'string',
-                    description: "时间格式：'HH:mm' 或相对时间如 '30m'、'1h30m'、'10s'"
-                },
-                qq: {
-                    type: 'string',
-                    description: '提醒的用户QQ，不填则提醒发起者'
-                },
-                content: {
-                    type: 'string',
-                    description: '提醒内容'
-                }
-            },
-            required: ['content']
-        },
-        handler: async (args, ctx) => {
-            let { time, qq, content } = args
-            const e = ctx?.getEvent?.()
-            if (!e) return { error: '无法获取事件上下文' }
-
-            if (!qq) qq = String(e.user_id || e.sender?.user_id)
-            if (!time) return { error: '请提供时间' }
-            if (!content?.trim()) return { error: '提醒内容不能为空' }
-
-            try {
-                let delayMs
-                const now = new Date()
-
-                // HH:mm 格式
-                if (/^\d{1,2}:\d{1,2}(:\d{1,2})?$/.test(time)) {
-                    const [hour, minute, second = 0] = time.split(':').map(Number)
-                    let target = new Date()
-                    target.setHours(hour, minute, second, 0)
-                    if (target <= now) target.setDate(target.getDate() + 1)
-                    delayMs = target.getTime() - now.getTime()
-                } else {
-                    // 相对时间
-                    const h = time.match(/(\d+)\s*h/i)?.[1] || 0
-                    const m = time.match(/(\d+)\s*m/i)?.[1] || 0
-                    const s = time.match(/(\d+)\s*s/i)?.[1] || 0
-                    delayMs = Number(h) * 3600000 + Number(m) * 60000 + Number(s) * 1000
-                    if (delayMs <= 0) return { error: '时间格式无效' }
-                }
-
-                if (delayMs > 7 * 24 * 60 * 60 * 1000) {
-                    return { error: '提醒时间不能超过7天，超过请使用 create_scheduled_task' }
-                }
-
-                const targetDate = new Date(now.getTime() + delayMs)
-                const reminderId = `${qq}_${Date.now()}`
-
-                const timerId = setTimeout(async () => {
-                    try {
-                        await e.reply([segment.at(qq), ' ⏰ 提醒：', content])
-                        activeReminders.delete(reminderId)
-                    } catch (err) {
-                        logger.error(`[Reminder] 发送提醒失败:`, err)
-                    }
-                }, delayMs)
-
-                activeReminders.set(reminderId, { timerId, qq, content, targetTime: targetDate })
-
-                const timeStr = targetDate.toLocaleString('zh-CN', {
-                    hour12: false,
-                    month: '2-digit',
-                    day: '2-digit',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                })
-
-                return {
-                    success: true,
-                    message: `提醒已设置，将在 ${timeStr} 提醒`,
-                    reminder_id: reminderId
-                }
-            } catch (error) {
-                return { error: `设置提醒失败: ${error.message}` }
-            }
-        }
-    },
+    // set_reminder 已由 reminder.js 统一实现（支持每天/每周重复，功能更完整）。
+    // 此前两处同名注册导致模型看到 reminder.js 的 schema（required: time+message）
+    // 却执行本文件的 handler（required: content），该工具在任何调用下都会参数校验失败，故移除本文件的实现。
     {
         name: 'get_illustration',
         description: '获取动漫插画图片',
@@ -567,7 +309,8 @@ export const extraTools = [
                 }
 
                 const response = await fetch(`https://api.lolicon.app/setu/v2?${params}`, {
-                    headers: { 'User-Agent': 'Mozilla/5.0' }
+                    headers: { 'User-Agent': 'Mozilla/5.0' },
+                    signal: AbortSignal.timeout(API_TIMEOUT_MS)
                 })
 
                 if (!response.ok) return { error: `API请求失败: HTTP ${response.status}` }

@@ -35,6 +35,8 @@ try {
 class RenderService {
     constructor() {
         this.browser = null
+        this.browserLaunchPromise = null
+        this.exitHookRegistered = false
         this.defaultTheme = 'light'
         this.templateDir = path.join(__dirname, '../../resources/templates')
         this.useCanvas = !!canvasModule
@@ -394,22 +396,69 @@ class RenderService {
 
     /**
      * 获取或创建浏览器实例
+     * 使用 in-flight Promise 去重：判断与赋值之间隔着 await，
+     * 并发调用会各自启动一个 Chromium 并互相覆盖引用，导致进程永不回收
+     * @returns {Promise<Object>} puppeteer 浏览器实例
      */
     async getBrowser() {
-        if (!this.browser || !this.browser.isConnected()) {
-            this.browser = await puppeteer.launch({
-                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-                headless: true,
-                timeout: 30000
-            })
+        if (this.browser && this.browser.isConnected()) {
+            return this.browser
         }
-        return this.browser
+
+        // 已有启动中的请求则复用其结果
+        if (this.browserLaunchPromise) {
+            return await this.browserLaunchPromise
+        }
+
+        this.browserLaunchPromise = (async () => {
+            try {
+                const browser = await puppeteer.launch({
+                    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+                    headless: true,
+                    timeout: 30000
+                })
+                this.browser = browser
+                this.registerExitHook()
+                return browser
+            } finally {
+                this.browserLaunchPromise = null
+            }
+        })()
+
+        return await this.browserLaunchPromise
+    }
+
+    /**
+     * 注册进程退出钩子，确保 Chromium 子进程随主进程一起结束
+     * @returns {void}
+     */
+    registerExitHook() {
+        if (this.exitHookRegistered || typeof process === 'undefined') return
+        this.exitHookRegistered = true
+
+        // exit 事件内无法等待异步操作，只能同步终止子进程
+        process.once('exit', () => {
+            try {
+                const child = this.browser?.process?.()
+                if (child && !child.killed) {
+                    child.kill('SIGKILL')
+                }
+            } catch (e) {}
+        })
     }
 
     /**
      * 关闭浏览器实例
+     * @returns {Promise<void>}
      */
     async closeBrowser() {
+        // 若正在启动，先等待其完成，否则关闭后仍会冒出一个游离实例
+        if (this.browserLaunchPromise) {
+            try {
+                await this.browserLaunchPromise
+            } catch (e) {}
+        }
+
         if (this.browser) {
             try {
                 await this.browser.close()

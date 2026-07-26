@@ -16,6 +16,11 @@ const logger = chatLogger
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+/** 统计数据落盘节流间隔(ms) */
+const STATS_FLUSH_INTERVAL = 5000
+/** byUser / byGroup 等实体维度保留的最大条目数 */
+const STATS_MAX_ENTITY_KEYS = 2000
+
 class StatsService {
     constructor() {
         this.statsFile = path.join(__dirname, '../../../data/stats.json')
@@ -34,6 +39,12 @@ class StatsService {
             lastUpdate: Date.now()
         }
         this.loaded = false
+
+        // 落盘节流状态
+        this._dirty = false
+        this._flushTimer = null
+        this._writing = false
+        this._exitHookRegistered = false
 
         // 实时RPM跟踪（滑动窗口）
         this.requestTimestamps = [] // 请求时间戳数组
@@ -117,7 +128,9 @@ class StatsService {
     }
 
     /**
-     * 保存统计数据
+     * 保存统计数据（同步全量写盘，仅用于重置、退出等必须立即落盘的场景）
+     * 高频路径请改用 markDirty()
+     * @returns {void}
      */
     save() {
         try {
@@ -125,10 +138,93 @@ class StatsService {
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true })
             }
+            this._capEntityRecords()
             this.stats.lastUpdate = Date.now()
-            fs.writeFileSync(this.statsFile, JSON.stringify(this.stats, null, 2))
+            fs.writeFileSync(this.statsFile, JSON.stringify(this.stats))
+            this._dirty = false
         } catch (err) {
             console.error('[StatsService] 保存统计数据失败:', err.message)
+        }
+    }
+
+    /**
+     * 标记统计数据已变更，交由节流任务异步落盘
+     * 高频路径（每次 token 记录 / 工具调用）若直接同步全量写盘会阻塞事件循环
+     * @returns {void}
+     */
+    markDirty() {
+        this._dirty = true
+        this.registerExitHook()
+
+        if (this._flushTimer) return
+        this._flushTimer = setTimeout(() => {
+            this._flushTimer = null
+            this.flush().catch(err => logger.warn('[StatsService] 异步保存统计失败:', err.message))
+        }, STATS_FLUSH_INTERVAL)
+        this._flushTimer.unref?.()
+    }
+
+    /**
+     * 异步落盘（串行化，避免并发写入导致文件内容交错）
+     * @returns {Promise<void>}
+     */
+    async flush() {
+        if (!this._dirty || this._writing) return
+        this._writing = true
+        this._dirty = false
+
+        try {
+            this._capEntityRecords()
+            await fs.promises.mkdir(path.dirname(this.statsFile), { recursive: true })
+            this.stats.lastUpdate = Date.now()
+            await fs.promises.writeFile(this.statsFile, JSON.stringify(this.stats))
+        } catch (err) {
+            this._dirty = true // 写失败保留脏标记，下次继续尝试
+            logger.warn('[StatsService] 保存统计数据失败:', err.message)
+        } finally {
+            this._writing = false
+        }
+    }
+
+    /**
+     * 注册进程退出钩子，确保未落盘的统计不丢失
+     * @returns {void}
+     */
+    registerExitHook() {
+        if (this._exitHookRegistered || typeof process === 'undefined') return
+        this._exitHookRegistered = true
+
+        // exit 事件内无法等待异步操作，只能同步写
+        process.once('exit', () => {
+            if (this._dirty) this.save()
+        })
+    }
+
+    /**
+     * 限制按用户 / 群维度的统计条目数，防止随 QQ 号无限累积
+     * 超限时保留活跃度最高的条目
+     * @returns {void}
+     */
+    _capEntityRecords() {
+        this._capRecord(this.stats.messages?.byUser, v => v || 0)
+        this._capRecord(this.stats.messages?.byGroup, v => v || 0)
+        this._capRecord(this.stats.tokens?.byUser, v => (v?.input || 0) + (v?.output || 0))
+    }
+
+    /**
+     * 按权重裁剪统计对象的条目数
+     * @param {Object} record - 待裁剪的统计对象
+     * @param {Function} weightOf - 从条目值计算排序权重
+     * @returns {void}
+     */
+    _capRecord(record, weightOf) {
+        if (!record || typeof record !== 'object') return
+        const keys = Object.keys(record)
+        if (keys.length <= STATS_MAX_ENTITY_KEYS) return
+
+        keys.sort((a, b) => weightOf(record[b]) - weightOf(record[a]))
+        for (const key of keys.slice(STATS_MAX_ENTITY_KEYS)) {
+            delete record[key]
         }
     }
 
@@ -158,10 +254,7 @@ class StatsService {
         const hour = new Date().getHours()
         this.stats.messages.byHour[hour] = (this.stats.messages.byHour[hour] || 0) + 1
 
-        // 定期保存（每100条消息保存一次）
-        if (this.stats.messages.total % 100 === 0) {
-            this.save()
-        }
+        this.markDirty()
     }
 
     /**
@@ -308,7 +401,7 @@ class StatsService {
         tokenModelStats.cacheWriteTokens += cacheWriteTokens
         tokenModelStats.reasoningTokens += reasoningTokens
 
-        this.save()
+        this.markDirty()
     }
 
     /**
@@ -544,8 +637,7 @@ class StatsService {
         if (success) this.stats.tools.byTool[toolName].success++
         else this.stats.tools.byTool[toolName].failed++
 
-        // 保存统计数据
-        this.save()
+        this.markDirty()
     }
 
     /**

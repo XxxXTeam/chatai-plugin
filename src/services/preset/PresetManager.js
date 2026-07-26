@@ -25,6 +25,14 @@ const PRESETS_FILE = path.join(DATA_DIR, 'presets.json')
 const PERSONA_DIR = path.join(DATA_DIR, 'persona')
 
 /**
+ * 预设缺失或未配置系统提示词时使用的兜底人设。
+ * 全项目唯一来源，禁止在其他位置重复书写该文案。
+ * 命名刻意区别于 galgame/constants.js 的 DEFAULT_SYSTEM_PROMPT（Galgame 角色扮演提示词），二者用途无关。
+ * @constant {string}
+ */
+export const FALLBACK_SYSTEM_PROMPT = '你是一个有帮助的AI助手。'
+
+/**
  * 预设/人设配置结构
  * @typedef {Object} Preset
  * @property {string} id - 唯一标识
@@ -172,7 +180,7 @@ export class PresetManager {
             id: 'default',
             name: '默认预设',
             description: '通用助手预设',
-            systemPrompt: '你是一个有帮助的AI助手。',
+            systemPrompt: FALLBACK_SYSTEM_PROMPT,
             model: '',
             disableSystemPrompt: false, // 是否禁用系统提示词
             enableReasoning: false, // 是否启用深度思考
@@ -339,7 +347,7 @@ export class PresetManager {
         }
 
         const preset = this.get(id)
-        if (!preset) return '你是一个有帮助的AI助手。'
+        if (!preset) return FALLBACK_SYSTEM_PROMPT
 
         const parts = []
 
@@ -437,10 +445,10 @@ export class PresetManager {
      */
     getCleanPrompt(id, context = {}) {
         const preset = this.get(id)
-        if (!preset) return '你是一个有帮助的AI助手。'
+        if (!preset) return FALLBACK_SYSTEM_PROMPT
 
         // 只返回基础提示词，不包含累积的上下文
-        let prompt = preset.systemPrompt || '你是一个有帮助的AI助手。'
+        let prompt = preset.systemPrompt || FALLBACK_SYSTEM_PROMPT
         prompt = this.replaceVariables(prompt, context)
 
         return prompt

@@ -11,6 +11,7 @@ import { getScopeManager } from '../scope/ScopeManager.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import config from '../../../config/config.js'
 import { groupSummaryPushService } from '../group/GroupSummaryPushService.js'
+import { normalizeModelList } from './channelRoutes.js'
 
 const router = express.Router()
 
@@ -779,7 +780,11 @@ router.put('/config', groupAdminAuth, async (req, res) => {
             }
         })
 
-        await scopeManager.setGroupSettings(groupId, updateData)
+        // setGroupSettings 内部吞掉写库异常并返回 false，不检查返回值会让用户看到「保存成功」但配置丢失
+        const saved = await scopeManager.setGroupSettings(groupId, updateData)
+        if (!saved) {
+            return res.status(500).json(ChaiteResponse.fail(null, '群配置保存失败，请稍后重试'))
+        }
 
         // 如果更新了推送配置，重载推送服务调度
         if (updateData.summaryPushEnabled !== undefined) {
@@ -837,10 +842,13 @@ router.put('/blacklist', groupAdminAuth, async (req, res) => {
         const current = (await scopeManager.getGroupSettings(groupId)) || {}
         const currentSettings = current.settings || {}
 
-        await scopeManager.setGroupSettings(groupId, {
+        const saved = await scopeManager.setGroupSettings(groupId, {
             ...currentSettings,
             blacklist: blacklist.map(String)
         })
+        if (!saved) {
+            return res.status(500).json(ChaiteResponse.fail(null, '黑名单保存失败，请稍后重试'))
+        }
 
         chatLogger.info(`[GroupAdmin] 群 ${groupId} 黑名单已更新: ${blacklist.length} 人`)
 
@@ -872,10 +880,13 @@ router.post('/blacklist/add', groupAdminAuth, async (req, res) => {
 
         if (!blacklist.includes(String(userId))) {
             blacklist.push(String(userId))
-            await scopeManager.setGroupSettings(groupId, {
+            const saved = await scopeManager.setGroupSettings(groupId, {
                 ...currentSettings,
                 blacklist
             })
+            if (!saved) {
+                return res.status(500).json(ChaiteResponse.fail(null, '黑名单保存失败，请稍后重试'))
+            }
         }
 
         res.json(ChaiteResponse.ok({ success: true, blacklist }))
@@ -905,10 +916,13 @@ router.post('/blacklist/remove', groupAdminAuth, async (req, res) => {
         let blacklist = currentSettings.blacklist || []
 
         blacklist = blacklist.filter(id => id !== String(userId))
-        await scopeManager.setGroupSettings(groupId, {
+        const saved = await scopeManager.setGroupSettings(groupId, {
             ...currentSettings,
             blacklist
         })
+        if (!saved) {
+            return res.status(500).json(ChaiteResponse.fail(null, '黑名单保存失败，请稍后重试'))
+        }
 
         res.json(ChaiteResponse.ok({ success: true, blacklist }))
     } catch (error) {
@@ -954,10 +968,13 @@ router.put('/whitelist', groupAdminAuth, async (req, res) => {
         const current = (await scopeManager.getGroupSettings(groupId)) || {}
         const currentSettings = current.settings || {}
 
-        await scopeManager.setGroupSettings(groupId, {
+        const saved = await scopeManager.setGroupSettings(groupId, {
             ...currentSettings,
             whitelist: whitelist.map(String)
         })
+        if (!saved) {
+            return res.status(500).json(ChaiteResponse.fail(null, '白名单保存失败，请稍后重试'))
+        }
 
         chatLogger.info(`[GroupAdmin] 群 ${groupId} 白名单已更新: ${whitelist.length} 人`)
 
@@ -1058,13 +1075,9 @@ router.post('/models/fetch', groupAdminAuth, async (req, res) => {
             endpoints: modelsPath ? { models: modelsPath } : {},
             features: ['chat']
         })
-        let models = await client.listModels()
-        if ((!adapterType || adapterType === 'openai') && baseUrl.includes('api.openai.com')) {
-            models = models.filter(
-                id => id.includes('gpt') || id.includes('text-embedding') || id.includes('o1') || id.includes('o3')
-            )
-        }
-        return res.json(ChaiteResponse.ok(models.sort()))
+        const models = await client.listModels()
+        /* 与 /api/channels/fetch-models 共用同一套规范化逻辑，避免两个入口返回不同的模型集合 */
+        return res.json(ChaiteResponse.ok(normalizeModelList(models)))
     } catch (error) {
         chatLogger.error('[GroupAdmin] 获取模型失败:', error.message)
         res.status(500).json(ChaiteResponse.fail(null, `获取模型失败: ${error.message}`))

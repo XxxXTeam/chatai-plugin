@@ -9,6 +9,12 @@ const RISK_ORDER = { low: 0, medium: 1, high: 2 }
 const VALID_MODES = ['ask', 'auto', 'confirm_all', 'yolo']
 const SENSITIVE_KEY_RE = /(api[-_]?key|token|password|secret|authorization|cookie|key)/i
 
+/** 会话放行的有效期：超过后需重新审批，避免「允许本对话」变成永久授权 */
+const SESSION_BYPASS_TTL_MS = 2 * 60 * 60 * 1000
+
+/** 会话放行表的容量上限，key 随用户×群×会话×工具组合增长，需封顶 */
+const MAX_SESSION_BYPASS_ENTRIES = 2000
+
 const DEFAULT_LOW_RISK_TOOLS = new Set([
     'get_time',
     'get_date',
@@ -198,7 +204,15 @@ class ToolApprovalService {
 
     isSessionBypassed(options, toolKey, risk) {
         if (!this.canSessionBypass(risk)) return false
-        return this.sessionBypass.has(this.getBypassKey(options, toolKey))
+        const key = this.getBypassKey(options, toolKey)
+        const grantedAt = this.sessionBypass.get(key)
+        if (grantedAt === undefined) return false
+        // 授权过期即撤销，避免"允许本对话"变成永久授权
+        if (Date.now() - grantedAt > SESSION_BYPASS_TTL_MS) {
+            this.sessionBypass.delete(key)
+            return false
+        }
+        return true
     }
 
     addSessionBypass(options, items) {
@@ -206,6 +220,28 @@ class ToolApprovalService {
             if (this.canSessionBypass(item.risk)) {
                 this.sessionBypass.set(this.getBypassKey(options, item.identity || item.name), Date.now())
             }
+        }
+        this.evictExpiredBypass()
+    }
+
+    /**
+     * 清理过期的会话放行记录
+     *
+     * key 形如 `${conversationId}:${groupId}:${userId}:${toolKey}`，随用户×群×会话×工具
+     * 四维组合增长；原实现只有 set/has、没有任何删除路径，且存入的时间戳从未被读取——
+     * 说明本就设计了过期机制但未实现。这里补上按 TTL 驱逐与容量上限。
+     * @returns {void}
+     */
+    evictExpiredBypass() {
+        const now = Date.now()
+        for (const [key, grantedAt] of this.sessionBypass) {
+            if (now - grantedAt > SESSION_BYPASS_TTL_MS) this.sessionBypass.delete(key)
+        }
+        // Map 保持插入顺序，超出上限时淘汰最早写入的条目
+        while (this.sessionBypass.size > MAX_SESSION_BYPASS_ENTRIES) {
+            const oldest = this.sessionBypass.keys().next().value
+            if (oldest === undefined) break
+            this.sessionBypass.delete(oldest)
         }
     }
 

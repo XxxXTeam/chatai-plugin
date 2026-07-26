@@ -13,74 +13,78 @@ import {
     EventSubType,
     RelationSubType,
     TopicSubType,
-    MemorySource
+    MemorySource,
+    CategoryLabels,
+    SubTypeLabels,
+    getSubTypes
 } from './MemoryTypes.js'
 
 const logger = chatLogger
 
 /**
- * 记忆提取 Prompt 模板
+ * 允许 LLM 使用的分类，顺序即提示词中的呈现顺序。
+ * 不含 custom：该分类保留给手动录入与外部扩展，其子类型不受 isValidCategorySubType 约束，
+ * 一旦放开会让模型输出任意子类型都能通过校验。
+ * @constant {string[]}
  */
-const EXTRACTION_PROMPT = `你是一个记忆提取助手，负责从对话中提取用户的关键信息。
+const EXTRACTABLE_CATEGORIES = [
+    MemoryCategory.PROFILE,
+    MemoryCategory.PREFERENCE,
+    MemoryCategory.EVENT,
+    MemoryCategory.RELATION,
+    MemoryCategory.TOPIC
+]
 
-【任务】分析对话内容，提取用户个人信息并分类。
+/**
+ * 由 MemoryTypes.js 生成分类清单文本。
+ * 分类体系此前在提示词里另抄了一份，与 MemoryTypes.js 双份维护；
+ * 改为生成后，新增或删除子类型只需改 MemoryTypes.js，提示词与 isValidCategorySubType 的校验自动保持一致。
+ * @returns {string} 形如 `1. profile（基本信息）\n   - name: 姓名` 的清单
+ */
+function buildCategoryCatalog() {
+    return EXTRACTABLE_CATEGORIES.map((category, index) => {
+        const subTypes = getSubTypes(category)
+            .map(subType => `   - ${subType}: ${SubTypeLabels[subType] || subType}`)
+            .join('\n')
+        return `${index + 1}. ${category}（${CategoryLabels[category] || category}）\n${subTypes}`
+    }).join('\n\n')
+}
 
-【输出格式】每行一条记忆，格式：[分类:子类型] 内容
-分类和子类型必须使用以下英文标识：
+/**
+ * 记忆提取 Prompt 模板。
+ *
+ * 输出格式与 parseExtractionResult 的 `/^\[([a-z]+):([a-z]+)\]\s*(.+)$/i` 严格耦合：
+ * 方括号、冒号分隔与英文标识符不可改动，改动会让解析全部落空。
+ * @constant {string}
+ */
+const EXTRACTION_PROMPT = `你是一个记忆提取助手，负责从对话中提取关于“用户”的关键信息。
 
-1. profile（基本信息）
-   - name: 姓名/昵称
-   - age: 年龄
-   - gender: 性别
-   - location: 所在地
-   - occupation: 职业
-   - education: 学历/学校
-   - contact: 联系方式
+【任务】分析对话内容，提取用户的个人信息并分类。
 
-2. preference（偏好习惯）
-   - like: 喜欢的事物
-   - dislike: 讨厌的事物
-   - hobby: 爱好
-   - habit: 习惯
-   - food: 食物偏好
-   - style: 风格偏好
+【输出格式】每行一条记忆，严格写成：[分类:子类型] 内容
+分类与子类型必须原样使用下列英文标识，不要翻译、不要自造：
 
-3. event（重要事件）
-   - birthday: 生日
-   - anniversary: 纪念日
-   - plan: 计划/安排
-   - milestone: 里程碑
-   - schedule: 日程
-
-4. relation（人际关系）
-   - family: 家人
-   - friend: 朋友
-   - colleague: 同事
-   - partner: 伴侣
-   - pet: 宠物
-
-5. topic（话题兴趣）
-   - interest: 感兴趣的话题
-   - discussed: 讨论过的话题
-   - knowledge: 知识领域
+${buildCategoryCatalog()}
 
 【示例输出】
 [profile:name] 用户叫小明
-[profile:age] 25岁
-[preference:like] 喜欢打游戏
-[event:birthday] 生日是3月15日
+[profile:age] 用户25岁
+[preference:like] 用户喜欢打游戏
+[event:birthday] 用户的生日是3月15日
 [relation:friend] 小红是用户的朋友
-[topic:interest] 对AI技术感兴趣
+[topic:interest] 用户对AI技术感兴趣
 
 【对话内容】
+每行以“用户:”或“AI:”开头，标明该条是谁说的。
 {dialogText}
 
 【提取要求】
-- 只提取明确的信息，不要推测
-- 内容要简洁，一句话说明
-- 如果没有有价值的信息，只输出"无"
-- 不要输出重复的信息
-- 忽略无关的聊天内容
+- 只提取“用户:”说出口的明确信息；AI 的回答、建议、推测一律不提取
+- 每条一句话，写清主体是谁，避免只写“25岁”这样脱离主语的片段
+- 内容重复的只保留一条
+- 忽略与用户个人信息无关的闲聊
+- 每行必须以 [分类:子类型] 开头，不要加序号、不要用代码块包裹、不要写任何解释
+- 没有可提取的信息时，只输出一个字：无
 
 提取结果：`
 

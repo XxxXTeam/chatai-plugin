@@ -12,29 +12,89 @@ import { resolveClientTemperature } from '../llm/TemperatureResolver.js'
 
 const logger = chatLogger
 
+/**
+ * 允许的实体类型及其中文说明。
+ * 键集合必须与 _validateEntities 的 validTypes 保持一致，
+ * 此处作为唯一来源，校验列表由它生成，避免提示词与校验各写一份而漂移。
+ * @constant {Object<string, string>}
+ */
+const ENTITY_TYPES = {
+    person: '人物（用户、朋友、家人、同事等）',
+    thing: '物品（手机、书籍、游戏、食物等）',
+    place: '地点（城市、公司、学校、餐厅等）',
+    concept: '抽象概念（爱好、技能、目标、情感等）',
+    event: '事件（生日、会议、计划、纪念日等）'
+}
+
+/**
+ * 推荐的关系类型及其中文说明。
+ * 这是建议集合而非白名单：_validateRelationships 不校验 relation 取值，
+ * 模型给出集合外的关系类型同样会入库。
+ * @constant {Object<string, string>}
+ */
+const RELATION_TYPES = {
+    knows: '认识',
+    friend_of: '朋友',
+    family_of: '家人',
+    works_at: '工作于',
+    lives_in: '居住在',
+    likes: '喜欢',
+    dislikes: '不喜欢',
+    owns: '拥有',
+    attends: '参加',
+    born_on: '出生于',
+    created: '创作',
+    member_of: '成员'
+}
+
+/**
+ * 两个提取任务共用的 JSON 输出硬约束。
+ * _parseEntities / _parseRelationships 都只接受以 `{` 开头的整行并逐行 JSON.parse，
+ * 因此代码块包裹、JSON 数组、跨行缩进这三种常见输出形态会导致整批解析落空。
+ * @constant {string}
+ */
+const JSON_LINE_OUTPUT_RULES = `- 一行一个 JSON 对象，每个对象必须完整写在一行内，不要换行缩进
+- 不要用 \`\`\` 代码块包裹，不要把多个对象放进一个 JSON 数组
+- 除 JSON 之外不要输出任何文字，包括序号、标题和解释`
+
+/**
+ * 实体提取的 system 覆盖文案，与用户消息里的【约束】相互呼应，
+ * 在只读取 system 的模型上也能保住「逐行 JSON、无代码块」这一解析前提。
+ * @constant {string}
+ */
+const ENTITY_SYSTEM_OVERRIDE =
+    '你是一个精确的知识图谱实体提取器。逐行输出 JSON 对象，一行一个，不使用代码块，不输出任何解释文字。'
+
+/**
+ * 关系提取的 system 覆盖文案，约束同 ENTITY_SYSTEM_OVERRIDE。
+ * @constant {string}
+ */
+const RELATION_SYSTEM_OVERRIDE =
+    '你是一个精确的关系提取器。逐行输出 JSON 对象，一行一个，不使用代码块，不输出任何解释文字。'
+
 // 实体提取提示词
 const ENTITY_EXTRACTION_PROMPT = `你是知识图谱专家，负责从对话中提取结构化实体信息。
 
 【任务】
-从以下对话中提取实体信息。实体类型包括：
-1. person - 人物（用户、朋友、家人、同事等）
-2. thing - 物品（手机、书籍、游戏、食物等）
-3. place - 地点（城市、公司、学校、餐厅等）
-4. concept - 抽象概念（爱好、技能、目标、情感等）
-5. event - 事件（生日、会议、计划、纪念日等）
+从下面的对话中提取实体。type 只能取以下五个值之一，原样使用英文标识：
+${Object.entries(ENTITY_TYPES)
+    .map(([type, desc], index) => `${index + 1}. ${type} - ${desc}`)
+    .join('\n')}
 
 【输出格式】
-每行输出一个 JSON 对象，格式如下：
+每行一个 JSON 对象：
 {"name": "实体名称", "type": "实体类型", "properties": {"属性名": "属性值"}}
 
 【约束】
-- 只提取明确提到的实体，不要推测
-- 人名、地名必须完整准确
-- 属性只记录确定的事实
-- 如果没有发现任何实体，输出空行
-- 不要输出解释或分析文字
+- 只提取对话中明确出现的实体，不要推测、不要补全
+- name 写实体本身的名字即可，不要带书名号、引号或修饰语
+- 同一个实体只输出一次
+- properties 只写对话中确认过的事实；没有可写的就用 {}
+- 没有发现任何实体时，不要输出任何内容
+${JSON_LINE_OUTPUT_RULES}
 
 【对话内容】
+每行以“用户:”或“AI:”开头，标明该条是谁说的。
 {conversation}
 
 【提取结果】`
@@ -43,31 +103,26 @@ const ENTITY_EXTRACTION_PROMPT = `你是知识图谱专家，负责从对话中�
 const RELATION_EXTRACTION_PROMPT = `你是关系分析专家，从对话和已知实体中提取关系三元组。
 
 【已知实体】
+下面每行的格式为 “- 实体名 (类型)”，其中括号及括号内的类型只是标注，不属于实体名。
 {entities}
 
 【任务】
-提取实体之间的关系。常见关系类型：
-- knows（认识）
-- friend_of（朋友）
-- family_of（家人）
-- works_at（工作于）
-- lives_in（居住在）
-- likes（喜欢）
-- dislikes（不喜欢）
-- owns（拥有）
-- attends（参加）
-- born_on（出生于）
-- created（创作）
-- member_of（成员）
+提取上述实体之间的关系。优先使用以下关系类型，都不合适时可以自拟一个同样风格的英文小写标识：
+${Object.entries(RELATION_TYPES)
+    .map(([type, desc]) => `- ${type}（${desc}）`)
+    .join('\n')}
 
 【输出格式】
-每行输出一个关系，格式：
+每行一个 JSON 对象：
 {"from": "实体1名称", "relation": "关系类型", "to": "实体2名称", "properties": {"属性名": "值"}}
 
 【约束】
-- 只提取明确的关系，不要推测
-- from 和 to 必须是已知实体列表中的实体名称
-- 如果没有发现任何关系，输出空行
+- 只提取对话里明确成立的关系，不要推测
+- from 和 to 必须与【已知实体】中的实体名逐字一致，不要带上括号里的类型
+- 不在【已知实体】列表里的对象一律不要写进 from 或 to
+- 同一组关系只输出一次
+- 没有发现任何关系时，不要输出任何内容
+${JSON_LINE_OUTPUT_RULES}
 
 【对话内容】
 {conversation}
@@ -156,7 +211,7 @@ class KnowledgeGraphExtractor {
                     model,
                     maxToken: 1000,
                     ...(_temp !== undefined ? { temperature: _temp } : {}),
-                    systemOverride: '你是一个精确的知识图谱实体提取器。只输出 JSON 格式的实体，每行一个。'
+                    systemOverride: ENTITY_SYSTEM_OVERRIDE
                 }
             )
 
@@ -190,7 +245,7 @@ class KnowledgeGraphExtractor {
                     model,
                     maxToken: 800,
                     ...(_temp !== undefined ? { temperature: _temp } : {}),
-                    systemOverride: '你是一个精确的关系提取器。只输出 JSON 格式的关系，每行一个。'
+                    systemOverride: RELATION_SYSTEM_OVERRIDE
                 }
             )
 
@@ -390,9 +445,8 @@ class KnowledgeGraphExtractor {
             // 检查名称长度
             if (entity.name.length < 1 || entity.name.length > 100) continue
 
-            // 检查类型有效性
-            const validTypes = ['person', 'thing', 'place', 'concept', 'event']
-            if (!validTypes.includes(entity.type)) continue
+            // 检查类型有效性，白名单直接取自提示词中列出的类型，二者不会漂移
+            if (!Object.hasOwn(ENTITY_TYPES, entity.type)) continue
 
             // 去重
             const key = `${entity.type}:${entity.name}`

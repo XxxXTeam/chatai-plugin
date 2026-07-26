@@ -17,11 +17,38 @@ const safeLogger = {
     debug: (...args) => (global.logger ? global.logger.debug(...args) : console.debug(...args))
 }
 
+/**
+ * 安全解析 JSON，解析失败时返回兜底值而不是抛出
+ * 单条损坏记录不应中断整条读取链路
+ * @param {string} text - 待解析文本
+ * @param {any} [fallback=null] - 解析失败时的返回值
+ * @returns {any} 解析结果或兜底值
+ */
+export function safeParse(text, fallback = null) {
+    if (typeof text !== 'string' || !text) return fallback
+    try {
+        return JSON.parse(text)
+    } catch (err) {
+        safeLogger.warn(`[Database] JSON 解析失败，已使用兜底值: ${err.message}`)
+        return fallback
+    }
+}
+
 class DatabaseService {
     constructor() {
         this.db = null
         this.initialized = false
         this.dataDir = PLUGIN_DATA_DIR
+        this._exitHookRegistered = false
+    }
+
+    /**
+     * 转义 LIKE 模式中的特殊字符（配合 ESCAPE '\' 使用）
+     * @param {string} value - 原始值
+     * @returns {string} 转义后的值
+     */
+    escapeLikePattern(value) {
+        return String(value ?? '').replace(/[%_\[\]]/g, '\\$&')
     }
 
     init(dataDir = null) {
@@ -39,6 +66,8 @@ class DatabaseService {
 
         // Enable WAL mode for better concurrency
         this.db.pragma('journal_mode = WAL')
+        // 写锁竞争时等待而非立即抛 SQLITE_BUSY
+        this.db.pragma('busy_timeout = 5000')
         try {
             const walPath = dbPath + '-wal'
             if (fs.existsSync(walPath)) {
@@ -56,6 +85,35 @@ class DatabaseService {
 
         this.createTables()
         this.initialized = true
+        this.registerExitHook()
+    }
+
+    /**
+     * 注册进程退出钩子，确保数据库连接被关闭（触发 WAL 落盘）
+     * @returns {void}
+     */
+    registerExitHook() {
+        if (this._exitHookRegistered || typeof process === 'undefined') return
+        this._exitHookRegistered = true
+        process.once('exit', () => this.close())
+    }
+
+    /**
+     * 关闭数据库连接
+     * @returns {void}
+     */
+    close() {
+        if (!this.db) return
+        try {
+            if (this.db.open) {
+                this.db.close()
+            }
+        } catch (err) {
+            safeLogger.warn(`[Database] 关闭数据库失败: ${err.message}`)
+        } finally {
+            this.db = null
+            this.initialized = false
+        }
     }
 
     createTables() {
@@ -228,7 +286,7 @@ class DatabaseService {
             source: row.source,
             importance: row.importance,
             timestamp: row.timestamp,
-            metadata: row.metadata ? JSON.parse(row.metadata) : null
+            metadata: row.metadata ? safeParse(row.metadata, null) : null
         }))
     }
 
@@ -269,7 +327,7 @@ class DatabaseService {
                 source: row.source,
                 importance: row.importance,
                 timestamp: row.timestamp,
-                metadata: row.metadata ? JSON.parse(row.metadata) : null
+                metadata: row.metadata ? safeParse(row.metadata, null) : null
             }))
         } catch (err) {
             safeLogger.warn(`[DatabaseService] 搜索记忆失败: ${err.message}, query="${query.substring(0, 50)}..."`)
@@ -293,6 +351,41 @@ class DatabaseService {
         this.ensureInit()
         const stmt = this.db.prepare('DELETE FROM memories WHERE user_id = ?')
         return stmt.run(userId).changes
+    }
+
+    /**
+     * 事务内覆盖式替换某个 key 的全部记忆
+     * 「先 DELETE 全部再逐条 INSERT」若不在事务中，中途失败会永久丢失旧记忆
+     * @param {string} userId - 记忆归属 key（用户ID或 group:xxx 形式）
+     * @param {Array<{content: string, source?: string, importance?: number, metadata?: Object}>} entries - 新记忆列表
+     * @returns {number} 实际写入的条数
+     */
+    replaceMemories(userId, entries = []) {
+        this.ensureInit()
+
+        const items = (entries || []).filter(e => e && typeof e.content === 'string' && e.content.trim())
+        const deleteStmt = this.db.prepare('DELETE FROM memories WHERE user_id = ?')
+        const insertStmt = this.db.prepare(`
+            INSERT INTO memories (user_id, content, source, importance, timestamp, metadata)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `)
+
+        const runReplace = this.db.transaction(() => {
+            deleteStmt.run(userId)
+            for (const item of items) {
+                insertStmt.run(
+                    userId,
+                    item.content,
+                    item.source || 'manual',
+                    item.importance || 5,
+                    Date.now(),
+                    item.metadata ? JSON.stringify(item.metadata) : null
+                )
+            }
+        })
+        runReplace()
+
+        return items.length
     }
 
     /**
@@ -322,7 +415,7 @@ class DatabaseService {
             source: row.source,
             importance: row.importance,
             timestamp: row.timestamp,
-            metadata: row.metadata ? JSON.parse(row.metadata) : null
+            metadata: row.metadata ? safeParse(row.metadata, null) : null
         }))
     }
 
@@ -556,6 +649,40 @@ class DatabaseService {
     }
 
     /**
+     * 裁剪会话消息：保留最新 N 条，外加指定时间戳的消息
+     * 仅做删除排除，不重写任何消息，因此不存在数据丢失风险
+     * @param {string} conversationId - 会话ID
+     * @param {number} keepCount - 保留的最新消息条数
+     * @param {number[]} [keepTimestamps] - 需额外保留的消息时间戳
+     * @returns {number} 实际删除的消息条数
+     */
+    trimMessagesKeeping(conversationId, keepCount, keepTimestamps = []) {
+        this.ensureInit()
+
+        const countStmt = this.db.prepare('SELECT COUNT(*) as count FROM messages WHERE conversation_id = ?')
+        const { count } = countStmt.get(conversationId)
+        if (count <= keepCount) return 0
+
+        const uniqueTimestamps = [...new Set((keepTimestamps || []).filter(t => Number.isFinite(t)))]
+        const keepClause =
+            uniqueTimestamps.length > 0 ? ` AND timestamp NOT IN (${uniqueTimestamps.map(() => '?').join(', ')})` : ''
+
+        const deleteStmt = this.db.prepare(`
+            DELETE FROM messages
+            WHERE conversation_id = ?
+              AND id NOT IN (
+                SELECT id FROM messages
+                WHERE conversation_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+              )${keepClause}
+        `)
+
+        const result = deleteStmt.run(conversationId, conversationId, keepCount, ...uniqueTimestamps)
+        return result.changes || 0
+    }
+
+    /**
      * 获取所有会话列表
      * @returns {Array<{id: string, userId: string, messageCount: number, updatedAt: number, lastMessage: string}>}
      */
@@ -626,18 +753,30 @@ class DatabaseService {
 
     /**
      * 获取用户的所有会话
-     * @param {string} userIdPattern - 用户ID模式（支持前缀匹配）
+     * 会话ID格式见 ContextManager.getConversationId：
+     * `user:<uid>` / `group:<gid>` / `group:<gid>:user:<uid>` / `private:shared`
+     * 原实现用双侧 LIKE `%pattern%` 模糊匹配，会让 `123` 命中 `user:1234`、`group:123`，
+     * 导致记忆总结被写到错误的用户名下，故改为精确匹配 + 转义
+     * @param {string} userIdPattern - 用户ID或完整会话ID
+     * @returns {Array<{conversationId: string, messageCount: number, lastMessage: number}>}
      */
     listUserConversations(userIdPattern) {
         this.ensureInit()
+        const raw = String(userIdPattern ?? '')
+        if (!raw) return []
+        const escaped = this.escapeLikePattern(raw)
+
         const stmt = this.db.prepare(`
             SELECT conversation_id, COUNT(*) as message_count, MAX(timestamp) as last_message
             FROM messages
-            WHERE conversation_id LIKE ?
+            WHERE conversation_id = ?
+               OR conversation_id = ?
+               OR conversation_id LIKE ? ESCAPE '\\'
             GROUP BY conversation_id
             ORDER BY last_message DESC
         `)
-        return stmt.all(`%${userIdPattern}%`).map(row => ({
+        // 依次覆盖：完整会话ID（如 group:789）、私聊会话、群聊用户隔离会话
+        return stmt.all(raw, `user:${raw}`, `group:%:user:${escaped}`).map(row => ({
             conversationId: row.conversation_id,
             messageCount: row.message_count,
             lastMessage: row.last_message
@@ -848,15 +987,24 @@ class DatabaseService {
 
     /**
      * 清除用户数据
+     * 原实现用双侧 LIKE `%userId%`，`clearUserData('123')` 会连带删除
+     * `user:1234`、`group:123` 等他人会话，故改为精确匹配 + 转义
+     * @param {string} userId - 用户ID
+     * @returns {number} 删除的消息条数
      */
     clearUserData(userId) {
         this.ensureInit()
-        // 删除该用户的所有会话
+        const raw = String(userId ?? '')
+        if (!raw) return 0
+        const escaped = this.escapeLikePattern(raw)
+
+        // 仅命中该用户的私聊会话与群聊用户隔离会话
         const stmt = this.db.prepare(`
             DELETE FROM messages 
-            WHERE conversation_id LIKE ?
+            WHERE conversation_id = ?
+               OR conversation_id LIKE ? ESCAPE '\\'
         `)
-        stmt.run(`%${userId}%`)
+        return stmt.run(`user:${raw}`, `group:%:user:${escaped}`).changes || 0
     }
 
     /**

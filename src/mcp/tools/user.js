@@ -5,6 +5,31 @@
 
 import { icqqFriend, callOneBotApi } from './helpers.js'
 
+/** 好友列表默认与最大返回数量 */
+const DEFAULT_FRIEND_LIST_LIMIT = 50
+const MAX_FRIEND_LIST_LIMIT = 500
+
+/** 好友搜索默认与最大返回数量 */
+const DEFAULT_FRIEND_SEARCH_LIMIT = 10
+const MAX_FRIEND_SEARCH_LIMIT = 100
+
+/** 点赞默认与最大次数 */
+const DEFAULT_LIKE_TIMES = 10
+const MAX_LIKE_TIMES = 20
+
+/**
+ * 夹取列表类工具的 limit
+ * @param {*} value - 调用方传入的值
+ * @param {number} fallback - 默认值
+ * @param {number} max - 上限
+ * @returns {number} 位于 [1, max] 的整数
+ */
+function clampLimit(value, fallback, max) {
+    const num = Math.floor(Number(value))
+    if (!Number.isFinite(num) || num < 1) return fallback
+    return Math.min(num, max)
+}
+
 export const userTools = [
     {
         name: 'get_user_info',
@@ -20,6 +45,9 @@ export const userTools = [
             const bot = ctx.getBot()
             const { adapter } = ctx.getAdapter()
             const userId = parseInt(args.user_id)
+            if (!Number.isFinite(userId)) {
+                return { success: false, adapter, error: `无效的QQ号: ${args.user_id}` }
+            }
 
             // 尝试获取好友信息
             const friend = bot.fl?.get(userId)
@@ -78,12 +106,17 @@ export const userTools = [
         inputSchema: {
             type: 'object',
             properties: {
-                limit: { type: 'number', description: '返回的最大数量，默认50' }
+                limit: {
+                    type: 'integer',
+                    description: `返回的最大数量，默认${DEFAULT_FRIEND_LIST_LIMIT}，最大${MAX_FRIEND_LIST_LIMIT}`,
+                    minimum: 1,
+                    maximum: MAX_FRIEND_LIST_LIMIT
+                }
             }
         },
         handler: async (args, ctx) => {
             const bot = ctx.getBot()
-            const limit = args.limit || 50
+            const limit = clampLimit(args.limit, DEFAULT_FRIEND_LIST_LIMIT, MAX_FRIEND_LIST_LIMIT)
             const fl = bot.fl || new Map()
 
             const friends = []
@@ -93,7 +126,8 @@ export const userTools = [
                 friends.push({
                     user_id: uid,
                     nickname: friend.nickname,
-                    remark: friend.remark || ''
+                    remark: friend.remark || '',
+                    avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${uid}&s=100`
                 })
                 count++
             }
@@ -109,7 +143,12 @@ export const userTools = [
             type: 'object',
             properties: {
                 user_id: { type: 'string', description: '用户QQ号' },
-                times: { type: 'number', description: '点赞次数，默认10', minimum: 1, maximum: 20 }
+                times: {
+                    type: 'integer',
+                    description: `点赞次数，默认${DEFAULT_LIKE_TIMES}，最大${MAX_LIKE_TIMES}`,
+                    minimum: 1,
+                    maximum: MAX_LIKE_TIMES
+                }
             },
             required: ['user_id']
         },
@@ -118,15 +157,24 @@ export const userTools = [
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
                 const userId = parseInt(args.user_id)
-                const times = Math.min(Math.max(args.times || 10, 1), 20)
+                if (!Number.isFinite(userId)) {
+                    return { success: false, error: `无效的QQ号: ${args.user_id}` }
+                }
+                const times = clampLimit(args.times, DEFAULT_LIKE_TIMES, MAX_LIKE_TIMES)
 
                 if (adapter === 'icqq') {
                     await icqqFriend.thumbUp(bot, userId, times)
                     return { success: true, adapter, user_id: userId, times }
-                } else {
-                    await callOneBotApi(bot, 'send_like', { user_id: userId, times })
+                }
+
+                // 非 icqq 适配器：优先走 Bot 自带的 sendLike，再回退到 OneBot API
+                if (bot.sendLike) {
+                    await bot.sendLike(userId, times)
                     return { success: true, adapter, user_id: userId, times }
                 }
+
+                await callOneBotApi(bot, 'send_like', { user_id: userId, times })
+                return { success: true, adapter, user_id: userId, times }
             } catch (err) {
                 return { success: false, error: `点赞失败: ${err.message}` }
             }
@@ -215,7 +263,12 @@ export const userTools = [
             type: 'object',
             properties: {
                 keyword: { type: 'string', description: '搜索关键词' },
-                limit: { type: 'number', description: '返回数量限制，默认10' }
+                limit: {
+                    type: 'integer',
+                    description: `返回数量限制，默认${DEFAULT_FRIEND_SEARCH_LIMIT}，最大${MAX_FRIEND_SEARCH_LIMIT}`,
+                    minimum: 1,
+                    maximum: MAX_FRIEND_SEARCH_LIMIT
+                }
             },
             required: ['keyword']
         },
@@ -223,7 +276,7 @@ export const userTools = [
             try {
                 const bot = ctx.getBot()
                 const keyword = args.keyword.toLowerCase()
-                const limit = args.limit || 10
+                const limit = clampLimit(args.limit, DEFAULT_FRIEND_SEARCH_LIMIT, MAX_FRIEND_SEARCH_LIMIT)
                 const fl = bot.fl || new Map()
 
                 const matches = []
@@ -269,6 +322,9 @@ export const userTools = [
             try {
                 const bot = ctx.getBot()
                 const userId = parseInt(args.user_id)
+                if (!Number.isFinite(userId)) {
+                    return { success: false, error: `无效的QQ号: ${args.user_id}` }
+                }
                 const fl = bot.fl || new Map()
 
                 const isFriend = fl.has(userId)
@@ -332,8 +388,8 @@ export const userTools = [
                 const bot = ctx.getBot()
                 const userId = parseInt(args.user_id || e?.user_id)
 
-                if (!userId) {
-                    return { success: false, error: '需要提供 user_id' }
+                if (!Number.isFinite(userId) || userId <= 0) {
+                    return { success: false, error: `需要提供有效的 user_id（收到: ${args.user_id ?? '空'}）` }
                 }
 
                 // 尝试获取详细资料

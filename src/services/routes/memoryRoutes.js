@@ -205,10 +205,14 @@ router.get('/group/:groupId', async (req, res) => {
         const { groupId } = req.params
         const { userId, category, limit = 100 } = req.query
 
+        // parseInt('abc') 为 NaN，绑定到 better-sqlite3 会抛 datatype mismatch；
+        // 空串同样要走默认值，否则 ?limit= 会被钳成 1
+        const parsedLimit = limit === '' ? NaN : Number(limit)
+        const safeLimit = Number.isFinite(parsedLimit) ? Math.min(1000, Math.max(1, Math.trunc(parsedLimit))) : 100
         const memories = await memoryService.getMemoriesByGroup(groupId, {
             userId,
             category,
-            limit: parseInt(limit)
+            limit: safeLimit
         })
         res.json(ChaiteResponse.ok(memories))
     } catch (error) {
@@ -341,7 +345,14 @@ router.post('/', async (req, res) => {
     }
 })
 
-// GET /:userId - 获取用户记忆（兼容旧接口，放在最后）
+/*
+ * GET /:userId - 获取用户记忆（兼容旧接口，放在最后）
+ *
+ * 注意：本路由被上方的 GET /:id(\d+) 遮蔽，仅对**非纯数字** userId 可达（已实测）。
+ * QQ 号恒为纯数字，因此 GET /api/memory/<QQ号> 走的是「按主键查单条记忆」，
+ * 而非「查该用户的记忆列表」。要查用户记忆请使用无歧义的 GET /api/memory/user/:userId
+ * （前端 lib/api.ts 用的就是后者）。此处保留是为了不破坏非数字 userId 的旧调用方。
+ */
 router.get('/:userId', async (req, res) => {
     try {
         // 检查是否是数字ID（单条记忆查询）
@@ -370,7 +381,14 @@ router.delete('/:userId/:memoryId', async (req, res) => {
     }
 })
 
-// DELETE /:userId - 清空用户所有记忆（兼容旧接口）
+/*
+ * DELETE /:userId - 清空用户所有记忆（兼容旧接口）
+ *
+ * 注意：本路由被上方的 DELETE /:id(\d+) 遮蔽，仅对**非纯数字** userId 可达（已实测）。
+ * DELETE /api/memory/<QQ号> 实际执行的是「按主键删除单条记忆」——前端 lib/api.ts 的
+ * deleteMemory(memoryId) 正是依赖这一语义，故不能调整匹配顺序。
+ * 要清空某个用户的全部记忆，请使用 DELETE /api/memory/user/:userId。
+ */
 router.delete('/:userId', async (req, res) => {
     try {
         const count = await memoryService.clearUserMemories(req.params.userId)

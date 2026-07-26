@@ -88,47 +88,7 @@ export const botTools = [
         }
     },
 
-    {
-        name: 'get_friend_list',
-        description: '获取机器人好友列表',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                limit: { type: 'number', description: '返回数量限制，默认50' }
-            }
-        },
-        handler: async (args, ctx) => {
-            try {
-                const bot = ctx.getBot()
-                const limit = args.limit || 50
-
-                // 从 Bot 对象获取好友列表
-                const fl = bot.fl || new Map()
-                const friends = []
-                let count = 0
-
-                for (const [uid, friend] of fl) {
-                    if (count >= limit) break
-                    friends.push({
-                        user_id: uid,
-                        nickname: friend.nickname || '',
-                        remark: friend.remark || '',
-                        avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${uid}&s=100`
-                    })
-                    count++
-                }
-
-                return {
-                    success: true,
-                    total: fl.size,
-                    returned: friends.length,
-                    friends
-                }
-            } catch (err) {
-                return { success: false, error: `获取好友列表失败: ${err.message}` }
-            }
-        }
-    },
+    // get_friend_list 已由 user.js 统一实现（加载顺序更靠前，实际执行的一直是该实现），移除重复定义
 
     {
         name: 'get_stranger_info',
@@ -145,6 +105,9 @@ export const botTools = [
             try {
                 const bot = ctx.getBot()
                 const userId = parseInt(args.user_id)
+                if (!Number.isFinite(userId)) {
+                    return { success: false, error: `无效的QQ号: ${args.user_id}` }
+                }
 
                 // 尝试从好友列表获取
                 const friend = bot.fl?.get(userId)
@@ -168,10 +131,20 @@ export const botTools = [
                         no_cache: args.no_cache || false
                     })
                     const data = result?.data || result
+                    if (!data?.nickname) {
+                        // 协议端返回空内容时不能算成功，否则模型会把"查不到"当成"查到了"
+                        return {
+                            success: false,
+                            user_id: userId,
+                            is_friend: false,
+                            error: '协议端未返回该用户的信息，QQ号可能不存在',
+                            avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
+                        }
+                    }
                     return {
                         success: true,
                         user_id: userId,
-                        nickname: data?.nickname,
+                        nickname: data.nickname,
                         sex: data?.sex,
                         age: data?.age,
                         level: data?.level,
@@ -180,11 +153,11 @@ export const botTools = [
                     }
                 } catch (e) {
                     return {
-                        success: true,
+                        success: false,
                         user_id: userId,
                         is_friend: false,
-                        avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`,
-                        note: '仅获取到基本信息'
+                        error: `当前协议不支持获取陌生人信息: ${e.message}`,
+                        avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
                     }
                 }
             } catch (err) {
@@ -258,58 +231,7 @@ export const botTools = [
         }
     },
 
-    {
-        name: 'can_send_image',
-        description: '检查是否可以发送图片',
-        inputSchema: {
-            type: 'object',
-            properties: {}
-        },
-        handler: async (args, ctx) => {
-            try {
-                const bot = ctx.getBot()
-
-                try {
-                    const result = await callOneBotApi(bot, 'can_send_image', {})
-                    return {
-                        success: true,
-                        can_send: result?.data?.yes ?? result?.yes ?? true
-                    }
-                } catch (e) {
-                    // 默认支持
-                    return { success: true, can_send: true }
-                }
-            } catch (err) {
-                return { success: false, error: `检查失败: ${err.message}` }
-            }
-        }
-    },
-
-    {
-        name: 'can_send_record',
-        description: '检查是否可以发送语音',
-        inputSchema: {
-            type: 'object',
-            properties: {}
-        },
-        handler: async (args, ctx) => {
-            try {
-                const bot = ctx.getBot()
-
-                try {
-                    const result = await callOneBotApi(bot, 'can_send_record', {})
-                    return {
-                        success: true,
-                        can_send: result?.data?.yes ?? result?.yes ?? true
-                    }
-                } catch (e) {
-                    return { success: true, can_send: true }
-                }
-            } catch (err) {
-                return { success: false, error: `检查失败: ${err.message}` }
-            }
-        }
-    },
+    // can_send_image / can_send_record 已由 file.js 统一实现（加载顺序更靠前，实际执行的一直是该实现），移除重复定义
 
     {
         name: 'set_qq_avatar',
@@ -371,44 +293,8 @@ export const botTools = [
         }
     },
 
-    {
-        name: 'send_like',
-        description: '给好友点赞（超级会员可多次）',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                user_id: { type: 'string', description: '目标用户QQ号' },
-                times: { type: 'number', description: '点赞次数，默认1（超级会员最多10）' }
-            },
-            required: ['user_id']
-        },
-        handler: async (args, ctx) => {
-            try {
-                const bot = ctx.getBot()
-                const userId = parseInt(args.user_id)
-                const times = Math.min(args.times || 1, 10)
-
-                // 尝试 icqq API
-                if (bot.sendLike) {
-                    await bot.sendLike(userId, times)
-                    return { success: true, user_id: userId, times }
-                }
-
-                // 尝试 NapCat API
-                try {
-                    await callOneBotApi(bot, 'send_like', {
-                        user_id: userId,
-                        times
-                    })
-                    return { success: true, user_id: userId, times }
-                } catch (e) {
-                    return { success: false, error: '当前协议不支持点赞' }
-                }
-            } catch (err) {
-                return { success: false, error: `点赞失败: ${err.message}` }
-            }
-        }
-    },
+    // send_like 已由 user.js 统一实现（加载顺序更靠前，实际执行的一直是该实现），
+    // 其 bot.sendLike 回退分支已并入 user.js，移除重复定义
 
     {
         name: 'get_self_info',

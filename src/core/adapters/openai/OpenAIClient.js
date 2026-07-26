@@ -6,7 +6,8 @@ import {
     AbstractClient,
     preprocessImageUrls,
     needsImageBase64Preprocess,
-    parseXmlToolCalls
+    parseXmlToolCalls,
+    resolveModelName
 } from '../AbstractClient.js'
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
@@ -15,6 +16,12 @@ import { logService } from '../../../services/stats/LogService.js'
 import { requestTemplateService } from '../../../services/proxy/RequestTemplateService.js'
 import { statsService } from '../../../services/stats/StatsService.js'
 import { attachToolMetadata, mergeToolDefinitions, resolveToolChoice } from '../tooling.js'
+
+/**
+ * 未指定模型且全局默认模型也为空时的兜底模型
+ * @type {string}
+ */
+const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
 
 let ResponsesWSClassPromise = null
 const RESPONSES_EXTRA_PARAM_KEYS = [
@@ -340,6 +347,8 @@ function sanitizeToolWithMetadata(tool) {
  * 合并单次请求与客户端上的推理相关选项（单次请求优先）
  * @param {object} options
  * @param {object} [clientOpts]
+ * @returns {{ enableReasoning: boolean, reasoningEffort: string|undefined, thinkingVendorControl: string,
+ *   isThinkingModelFlag: boolean|undefined, supportsReasoningParams: boolean|undefined }}
  */
 function mergeOpenAIReasoningOptions(options, clientOpts) {
     const enableReasoning = options.enableReasoning ?? clientOpts?.enableReasoning ?? false
@@ -350,7 +359,37 @@ function mergeOpenAIReasoningOptions(options, clientOpts) {
             : undefined
     const thinkingVendorControl = options.thinkingVendorControl ?? clientOpts?.thinkingVendorControl ?? 'auto'
     const isThinkingModelFlag = options.isThinkingModel
-    return { enableReasoning, reasoningEffort, thinkingVendorControl, isThinkingModelFlag }
+    /*
+     * 端点是否接受 OpenAI 推理模型专有参数（developer 角色 / max_completion_tokens / reasoning_effort）。
+     * 由渠道 experimental.supportsReasoningParams 显式声明；未声明时留空，交由调用方按模型名兜底推断。
+     */
+    const supportsReasoningParams =
+        typeof options.supportsReasoningParams === 'boolean'
+            ? options.supportsReasoningParams
+            : typeof clientOpts?.experimental?.supportsReasoningParams === 'boolean'
+              ? clientOpts.experimental.supportsReasoningParams
+              : undefined
+    return { enableReasoning, reasoningEffort, thinkingVendorControl, isThinkingModelFlag, supportsReasoningParams }
+}
+
+/**
+ * 判断端点是否接受 OpenAI 推理模型专有参数
+ *
+ * 该结论决定系统提示走 developer 还是 system 角色、以及发 max_completion_tokens 还是 max_tokens。
+ * 原实现仅用 `model.includes('gemini')` 推断，会让"非 Gemini 的非推理模型 + 打开思考开关"
+ * 被强行发送 developer role 与 max_completion_tokens，许多 OpenAI 兼容网关会直接返回 400。
+ * 现在渠道可通过 experimental.supportsReasoningParams 直接声明，推断仅作兜底。
+ *
+ * @param {boolean|undefined} declared - 渠道显式声明值
+ * @param {string} model - 模型名称
+ * @returns {boolean} 是否接受推理模型专有参数
+ */
+function acceptsReasoningParams(declared, model) {
+    if (typeof declared === 'boolean') return declared
+    // 兜底推断：Gemini 兼容端点不接受这些参数
+    return !String(model || '')
+        .toLowerCase()
+        .includes('gemini')
 }
 
 /**
@@ -433,6 +472,11 @@ export class OpenAIClient extends AbstractClient {
         }
         if (this.baseUrl) {
             clientOptions.baseURL = this.baseUrl
+        }
+        // 接通渠道 timeout.read，未配置时沿用 SDK 默认值
+        const requestTimeout = this.resolveRequestTimeout()
+        if (requestTimeout) {
+            clientOptions.timeout = requestTimeout
         }
         if (channelProxy) {
             clientOptions.httpAgent = channelProxy
@@ -1386,9 +1430,14 @@ export class OpenAIClient extends AbstractClient {
         const channelProxy = proxyService.getChannelProxyAgent(this.baseUrl)
 
         // 构建请求头 - 支持JSON模板和占位符
-        const model = options.model || 'gpt-4o-mini'
-        const { enableReasoning, reasoningEffort, thinkingVendorControl, isThinkingModelFlag } =
-            mergeOpenAIReasoningOptions(options, this.options)
+        const model = resolveModelName(options.model, DEFAULT_OPENAI_MODEL)
+        const {
+            enableReasoning,
+            reasoningEffort,
+            thinkingVendorControl,
+            isThinkingModelFlag,
+            supportsReasoningParams
+        } = mergeOpenAIReasoningOptions(options, this.options)
         const templateContext = {
             apiKey,
             model,
@@ -1450,7 +1499,7 @@ export class OpenAIClient extends AbstractClient {
         const transferMode = imageConfig.transferMode || 'auto'
         const isGeminiModel = model.toLowerCase().includes('gemini')
         const shouldPreprocessToBase64 =
-            transferMode === 'base64' || (transferMode === 'auto' && needsImageBase64Preprocess(model))
+            transferMode === 'base64' || (transferMode === 'auto' && needsImageBase64Preprocess(model, imageConfig))
 
         if (shouldPreprocessToBase64) {
             logger.debug(`[OpenAI适配器] 图片转换模式: ${transferMode}, 执行base64预处理`)
@@ -1458,8 +1507,9 @@ export class OpenAIClient extends AbstractClient {
         } else {
             logger.debug(`[OpenAI适配器] 图片转换模式: ${transferMode}, 保持原始格式`)
         }
-        // Gemini模型不支持thinking model的特殊参数（developer角色、max_completion_tokens等）
-        const isThinkingModel = !isGeminiModel && (enableReasoning || isThinkingModelFlag)
+        // 是否可用推理模型专有参数（developer 角色、max_completion_tokens 等）：渠道显式声明优先
+        const isThinkingModel =
+            acceptsReasoningParams(supportsReasoningParams, model) && (enableReasoning || isThinkingModelFlag)
 
         if (options.systemOverride && (!systemPromptConfig || systemPromptConfig.target === 'messages')) {
             if (isThinkingModel) {
@@ -1632,7 +1682,8 @@ export class OpenAIClient extends AbstractClient {
                 for await (const chunk of response) {
                     chunkCount++
                     responseModel = chunk.model || responseModel
-                    const delta = chunk.choices[0]?.delta || {}
+                    // 中转站可能插入不含 choices 的帧，须对 choices 本身使用可选链
+                    const delta = chunk.choices?.[0]?.delta || {}
                     const content = delta.content || ''
                     const reasoningContent = delta.reasoning_content || ''
 
@@ -1647,7 +1698,7 @@ export class OpenAIClient extends AbstractClient {
                         }
                     }
 
-                    finishReason = chunk.choices[0]?.finish_reason || finishReason
+                    finishReason = chunk.choices?.[0]?.finish_reason || finishReason
                     if (chunk.usage) usage = chunk.usage
 
                     // 每50个chunk输出一次进度
@@ -1914,9 +1965,14 @@ export class OpenAIClient extends AbstractClient {
 
         const messages = []
         const systemPromptConfig = resolveSystemPromptConfig(options, this.options)
-        const model = options.model || 'gpt-4o-mini'
-        const { enableReasoning, reasoningEffort, thinkingVendorControl, isThinkingModelFlag } =
-            mergeOpenAIReasoningOptions(options, this.options)
+        const model = resolveModelName(options.model, DEFAULT_OPENAI_MODEL)
+        const {
+            enableReasoning,
+            reasoningEffort,
+            thinkingVendorControl,
+            isThinkingModelFlag,
+            supportsReasoningParams
+        } = mergeOpenAIReasoningOptions(options, this.options)
 
         /*
          * 图片预处理：根据渠道 imageConfig.transferMode 决定处理方式
@@ -1926,9 +1982,9 @@ export class OpenAIClient extends AbstractClient {
          */
         const streamImageConfig = this.options?.imageConfig || {}
         const streamTransferMode = streamImageConfig.transferMode || 'auto'
-        const isGeminiModel = model.toLowerCase().includes('gemini')
         const shouldPreprocessStream =
-            streamTransferMode === 'base64' || (streamTransferMode === 'auto' && needsImageBase64Preprocess(model))
+            streamTransferMode === 'base64' ||
+            (streamTransferMode === 'auto' && needsImageBase64Preprocess(model, streamImageConfig))
 
         if (shouldPreprocessStream) {
             logger.debug(`[OpenAI适配器][Stream] 图片转换模式: ${streamTransferMode}, 执行base64预处理`)
@@ -1936,8 +1992,9 @@ export class OpenAIClient extends AbstractClient {
         } else {
             logger.debug(`[OpenAI适配器][Stream] 图片转换模式: ${streamTransferMode}, 保持原始格式`)
         }
-        // Gemini模型不支持thinking model的特殊参数（developer角色、max_completion_tokens等）
-        const isThinkingModel = !isGeminiModel && (enableReasoning || isThinkingModelFlag)
+        // 是否可用推理模型专有参数（developer 角色、max_completion_tokens 等）：渠道显式声明优先
+        const isThinkingModel =
+            acceptsReasoningParams(supportsReasoningParams, model) && (enableReasoning || isThinkingModelFlag)
 
         if (options.systemOverride && (!systemPromptConfig || systemPromptConfig.target === 'messages')) {
             if (isThinkingModel) {

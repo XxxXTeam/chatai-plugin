@@ -230,6 +230,11 @@ export class McpClient {
                 this.handleData(data)
             })
 
+            // 同 connectStdio：无 error 监听时 stdin 的异步 EPIPE 会崩掉整个进程
+            this.process.stdin.on('error', error => {
+                logger.warn(`[MCP] npm server stdin error: ${error.message}`)
+            })
+
             // stderr 可能包含启动日志，区分错误和信息
             let stderrBuffer = ''
             this.process.stderr.on('data', data => {
@@ -306,6 +311,15 @@ export class McpClient {
         this.process.stdout.on('data', data => this.handleData(data))
         this.process.stderr.on('data', data => {
             logger.warn(`[MCP] Server stderr: ${data.toString()}`)
+        })
+        /*
+         * stdin 必须注册 error 监听：子进程存活但已关闭 stdin 时（MCP server 内部崩溃
+         * 却未退出的典型形态），write 会异步 emit EPIPE。EventEmitter 对无监听器的
+         * error 事件直接 throw，且它是异步事件，write 外层的 try/catch 捕获不到，
+         * 结果是一个外部 MCP server 异常就能崩掉整个 Yunzai 进程。
+         */
+        this.process.stdin.on('error', error => {
+            logger.warn(`[MCP] Server stdin error: ${error.message}`)
         })
 
         this.process.on('close', code => {
@@ -653,7 +667,10 @@ export class McpClient {
     }
 
     async request(method, params, timeout = this.timeouts.request) {
-        if (this.type === 'http') {
+        // streamable-http 与 http 在 connect() 中走同一分支（均不创建子进程），
+        // 此处若漏判会落到下方的 stdio 分支并抛 'Client not connected'，
+        // 而 inferServerType 会把 /mcp、/sse 结尾的 URL 判为 streamable-http，触发面很大
+        if (this.type === 'http' || this.type === 'streamable-http') {
             return await this.httpRequest(method, params, timeout)
         }
 
@@ -764,6 +781,13 @@ export class McpClient {
                     const prefix = index > 0 ? 'Retrying SSE notification to' : 'SSE notification to'
                     logger.debug(`[MCP] ${prefix}: ${url}, method: ${notification.method}`)
                 }
+                /*
+                 * 必须带超时：initialize() 会 await 本方法发送 initialized 通知，
+                 * 服务端不响应时整条链路（connect → _connectServer → loadServers →
+                 * mcpManager.init）都会永久挂起，而 init() 又被 callTool 兜底调用，
+                 * 会连带拖住工具调用。同文件 sendSSERequest 与 httpRequest 都已用
+                 * AbortController，此处是遗漏。
+                 */
                 response = await fetch(url, {
                     method: 'POST',
                     headers: {
@@ -771,7 +795,9 @@ export class McpClient {
                         Accept: 'application/json, text/event-stream',
                         ...configHeaders
                     },
-                    body: JSON.stringify(notification)
+                    body: JSON.stringify(notification),
+                    // `??` 只挡 null/undefined，配置写成 0 会让 AbortSignal 立即 abort，故用 ||
+                    signal: AbortSignal.timeout(this.timeouts.request || 30000)
                 })
             } catch (fetchError) {
                 lastError = new Error(`SSE POST failed: ${fetchError.message}`)
@@ -907,17 +933,26 @@ export class McpClient {
             return await responsePromise
         }
 
+        /*
+         * 解析与业务错误判定必须分开：
+         * 原实现把 `throw new Error(jsonResponse.error...)` 写在 try 内，会被自己的 catch
+         * 捕获并误判为"响应不是 JSON"，转而 await responsePromise；而此前的 cleanupPending()
+         * 已经 clearTimeout 并从 pendingRequests 删除了 resolve/reject —— 那个 Promise
+         * 再也没有任何路径能 settle，超时兜底也没了，调用方永久挂起。
+         */
+        let jsonResponse
         try {
-            const jsonResponse = JSON.parse(responseText)
-            cleanupPending()
-            if (jsonResponse.error) {
-                throw new Error(jsonResponse.error.message || JSON.stringify(jsonResponse.error))
-            }
-            return jsonResponse.result !== undefined ? jsonResponse.result : jsonResponse
-        } catch (e) {
+            jsonResponse = JSON.parse(responseText)
+        } catch {
             logger.debug(`[MCP] Response not JSON, waiting for SSE stream...`)
             return await responsePromise
         }
+
+        cleanupPending()
+        if (jsonResponse.error) {
+            throw new Error(jsonResponse.error.message || JSON.stringify(jsonResponse.error))
+        }
+        return jsonResponse.result !== undefined ? jsonResponse.result : jsonResponse
     }
 
     async httpRequest(method, params, timeout = this.timeouts.request) {

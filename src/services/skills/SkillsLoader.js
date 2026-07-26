@@ -303,6 +303,33 @@ class SkillsLoader {
         logger.debug(`[SkillsLoader] 重新加载完成: ${this.tools.size} 个工具`)
     }
 
+    /**
+     * 仅重新加载文档技能（SKILL.md 等），不触碰 MCP 与可执行工具
+     *
+     * 面板改写 SKILL.md 或导入技能包后走这条路径：比 reload() 轻得多，且会把
+     * loadedSkills 里的快照一并刷新——那里存的是 { ...doc } 副本，不刷新的话
+     * 已激活的技能仍会拿旧正文，改完看不出效果。
+     * @returns {{documents: number, loaded: number}} 重载后的文档数与仍处于激活状态的技能数
+     */
+    async reloadDocuments() {
+        await skillDocumentLoader.load()
+        this._syncExposedSkills()
+
+        for (const key of Array.from(this.loadedSkills.keys())) {
+            const doc = skillDocumentLoader.getDocumentByName(key)
+            if (!doc) {
+                // 文件被删除或技能被改名，对应的激活状态已无所指
+                this.loadedSkills.delete(key)
+                continue
+            }
+            this.loadedSkills.set(key, { ...doc, loadedAt: this.loadedSkills.get(key)?.loadedAt || Date.now() })
+        }
+
+        const documents = skillDocumentLoader.getDocuments().length
+        logger.debug(`[SkillsLoader] 文档技能重载完成: ${documents} 个`)
+        return { documents, loaded: this.loadedSkills.size }
+    }
+
     // ========== 工具获取方法 ==========
 
     /**

@@ -5,7 +5,21 @@
  */
 
 import { callOneBotApi, icqqFriend, icqqGroup } from './helpers.js'
+import { callOneBotApiStrict } from '../../utils/eventAdapter.js'
 import { chatLogger as logger } from '../../core/utils/logger.js'
+
+/** 单条说说最多携带的图片数（QQ 空间侧限制） */
+const MAX_MOOD_IMAGES = 9
+
+/** 单张图片下载的体积上限（字节）。图片 URL 由模型给出，必须设硬上限，避免超大响应整个读进内存 */
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+/**
+ * QQ 空间接口返回体的 JSONP 包装剥离正则
+ * @description s 标志不可省略：响应体含换行时 . 匹配不到换行会导致剥离失败，
+ *              JSON.parse 抛错后走到失败分支，出现“说说实际已发布却返回 success:false”的误判
+ */
+const JSONP_PAYLOAD_PATTERN = /^[^{]*({.*})[^}]*$/s
 
 /**
  * 从 p_skey 计算 g_tk（QQ空间鉴权令牌）
@@ -150,17 +164,16 @@ export const qzoneTools = [
                 params.append('format', 'json')
                 params.append('qzreferrer', `https://user.qzone.qq.com/${uin}`)
 
-                /* 处理图片上传 */
+                /* 处理图片上传：picInfos 提到块外，返回值需要用实际成功数而非请求数 */
+                const picInfos = []
+                const uploadErrors = []
                 if (image_urls.length > 0) {
-                    const picInfos = []
-                    for (let i = 0; i < Math.min(image_urls.length, 9); i++) {
+                    for (let i = 0; i < Math.min(image_urls.length, MAX_MOOD_IMAGES); i++) {
                         try {
-                            const uploadResult = await uploadQzoneImage(bot, cookies, gtk, uin, image_urls[i])
-                            if (uploadResult) {
-                                picInfos.push(uploadResult)
-                            }
+                            picInfos.push(await uploadQzoneImage(bot, cookies, gtk, uin, image_urls[i]))
                         } catch (err) {
                             logger.warn(`[QZone] 上传第${i + 1}张图片失败:`, err.message)
+                            uploadErrors.push(`第${i + 1}张: ${err.message}`)
                         }
                     }
 
@@ -199,7 +212,7 @@ export const qzoneTools = [
                 let data
                 try {
                     /* 响应可能是 JSONP 格式 */
-                    const jsonStr = text.replace(/^[^{]*({.*})[^}]*$/, '$1')
+                    const jsonStr = text.replace(JSONP_PAYLOAD_PATTERN, '$1')
                     data = JSON.parse(jsonStr)
                 } catch {
                     data = { message: text }
@@ -211,7 +224,10 @@ export const qzoneTools = [
                         message: '说说发布成功',
                         tid: data.tid || data.feedinfo?.tid,
                         content: content.substring(0, 50),
-                        image_count: image_urls.length
+                        /* 带图数量取上传成功数，请求数单独用 image_requested 暴露 */
+                        image_count: picInfos.length,
+                        image_requested: image_urls.length,
+                        ...(uploadErrors.length > 0 && { image_errors: uploadErrors })
                     }
                 }
 
@@ -278,7 +294,7 @@ export const qzoneTools = [
 
                 let data
                 try {
-                    const jsonStr = text.replace(/^[^{]*({.*})[^}]*$/s, '$1')
+                    const jsonStr = text.replace(JSONP_PAYLOAD_PATTERN, '$1')
                     data = JSON.parse(jsonStr)
                 } catch {
                     return { success: false, error: '解析响应失败' }
@@ -367,7 +383,7 @@ export const qzoneTools = [
                 const text = await response.text()
                 let data
                 try {
-                    const jsonStr = text.replace(/^[^{]*({.*})[^}]*$/s, '$1')
+                    const jsonStr = text.replace(JSONP_PAYLOAD_PATTERN, '$1')
                     data = JSON.parse(jsonStr)
                 } catch {
                     data = { message: text }
@@ -425,7 +441,7 @@ export const qzoneTools = [
                 const text = await response.text()
                 let data
                 try {
-                    const jsonStr = text.replace(/^[^{]*({.*})[^}]*$/s, '$1')
+                    const jsonStr = text.replace(JSONP_PAYLOAD_PATTERN, '$1')
                     data = JSON.parse(jsonStr)
                 } catch {
                     data = { message: text }
@@ -463,18 +479,24 @@ export const qzoneTools = [
                 const bot = ctx.getBot()
                 const { content } = args
 
+                /* 用严格版调用，回退层才会真正生效（宽松版不抛异常，第二层过去是死代码） */
+                const attemptErrors = []
                 try {
-                    await callOneBotApi(bot, 'set_self_longnick', { longNick: content })
+                    await callOneBotApiStrict(bot, 'set_self_longnick', { longNick: content })
                     return { success: true, message: '个性签名设置成功', content }
                 } catch (err) {
-                    /* 尝试备用参数名 */
-                    try {
-                        await callOneBotApi(bot, 'set_self_longnick', { long_nick: content })
-                        return { success: true, message: '个性签名设置成功', content }
-                    } catch {
-                        return { success: false, error: `当前协议不支持设置个性签名: ${err.message}` }
-                    }
+                    attemptErrors.push(`longNick: ${err.message}`)
                 }
+
+                /* 尝试备用参数名 */
+                try {
+                    await callOneBotApiStrict(bot, 'set_self_longnick', { long_nick: content })
+                    return { success: true, message: '个性签名设置成功', content }
+                } catch (err) {
+                    attemptErrors.push(`long_nick: ${err.message}`)
+                }
+
+                return { success: false, error: `设置个性签名失败: ${attemptErrors.join(' | ')}` }
             } catch (err) {
                 return { success: false, error: `设置签名失败: ${err.message}` }
             }
@@ -498,30 +520,40 @@ export const qzoneTools = [
             try {
                 const bot = ctx.getBot()
                 const userId = parseInt(args.user_id)
+                if (!Number.isInteger(userId) || userId <= 0) {
+                    return { success: false, error: `user_id 格式错误: ${args.user_id}` }
+                }
+
+                /* 三层回退，逐层记录失败原因；OneBot 层用严格版，否则后两层永远不会执行 */
+                const attemptErrors = []
 
                 /* 方式1：icqq 原生 poke */
                 if (bot.pickFriend) {
                     try {
                         await icqqFriend.poke(bot, userId)
                         return { success: true, message: '戳一戳成功', user_id: userId }
-                    } catch {
-                        /* icqq poke 失败，回退到 OneBot API */
+                    } catch (err) {
+                        attemptErrors.push(`icqq poke: ${err.message}`)
                     }
                 }
 
                 /* 方式2：NapCat friend_poke */
                 try {
-                    await callOneBotApi(bot, 'friend_poke', { user_id: userId })
+                    await callOneBotApiStrict(bot, 'friend_poke', { user_id: userId })
                     return { success: true, message: '戳一戳成功', user_id: userId }
-                } catch {
-                    /* 方式3：通用 send_poke */
-                    try {
-                        await callOneBotApi(bot, 'send_poke', { user_id: userId })
-                        return { success: true, message: '戳一戳成功', user_id: userId }
-                    } catch (err) {
-                        return { success: false, error: `当前协议不支持戳一戳: ${err.message}` }
-                    }
+                } catch (err) {
+                    attemptErrors.push(`friend_poke: ${err.message}`)
                 }
+
+                /* 方式3：通用 send_poke */
+                try {
+                    await callOneBotApiStrict(bot, 'send_poke', { user_id: userId })
+                    return { success: true, message: '戳一戳成功', user_id: userId }
+                } catch (err) {
+                    attemptErrors.push(`send_poke: ${err.message}`)
+                }
+
+                return { success: false, error: `戳一戳失败: ${attemptErrors.join(' | ')}` }
             } catch (err) {
                 return { success: false, error: `戳一戳失败: ${err.message}` }
             }
@@ -550,30 +582,43 @@ export const qzoneTools = [
                 const bot = ctx.getBot()
                 const groupId = parseInt(args.group_id)
                 const userId = parseInt(args.user_id)
+                if (!Number.isInteger(groupId) || groupId <= 0) {
+                    return { success: false, error: `group_id 格式错误: ${args.group_id}` }
+                }
+                if (!Number.isInteger(userId) || userId <= 0) {
+                    return { success: false, error: `user_id 格式错误: ${args.user_id}` }
+                }
+
+                /* 三层回退，逐层记录失败原因；OneBot 层用严格版，否则后两层永远不会执行 */
+                const attemptErrors = []
 
                 /* 方式1：icqq 原生 pokeMember */
                 if (bot.pickGroup) {
                     try {
                         await icqqGroup.pokeMember(bot, groupId, userId)
                         return { success: true, message: '群内戳一戳成功', group_id: groupId, user_id: userId }
-                    } catch {
-                        /* icqq pokeMember 失败，回退到 OneBot API */
+                    } catch (err) {
+                        attemptErrors.push(`icqq pokeMember: ${err.message}`)
                     }
                 }
 
                 /* 方式2：NapCat group_poke */
                 try {
-                    await callOneBotApi(bot, 'group_poke', { group_id: groupId, user_id: userId })
+                    await callOneBotApiStrict(bot, 'group_poke', { group_id: groupId, user_id: userId })
                     return { success: true, message: '群内戳一戳成功', group_id: groupId, user_id: userId }
-                } catch {
-                    /* 方式3：通用 send_poke */
-                    try {
-                        await callOneBotApi(bot, 'send_poke', { group_id: groupId, user_id: userId })
-                        return { success: true, message: '群内戳一戳成功', group_id: groupId, user_id: userId }
-                    } catch (err) {
-                        return { success: false, error: `当前协议不支持群内戳一戳: ${err.message}` }
-                    }
+                } catch (err) {
+                    attemptErrors.push(`group_poke: ${err.message}`)
                 }
+
+                /* 方式3：通用 send_poke */
+                try {
+                    await callOneBotApiStrict(bot, 'send_poke', { group_id: groupId, user_id: userId })
+                    return { success: true, message: '群内戳一戳成功', group_id: groupId, user_id: userId }
+                } catch (err) {
+                    attemptErrors.push(`send_poke: ${err.message}`)
+                }
+
+                return { success: false, error: `群内戳一戳失败: ${attemptErrors.join(' | ')}` }
             } catch (err) {
                 return { success: false, error: `群内戳一戳失败: ${err.message}` }
             }
@@ -625,7 +670,7 @@ export const qzoneTools = [
             try {
                 const bot = ctx.getBot()
 
-                await callOneBotApi(bot, 'create_collection', {
+                await callOneBotApiStrict(bot, 'create_collection', {
                     rawData: args.rawData,
                     brief: args.brief
                 })
@@ -675,13 +720,50 @@ export const qzoneTools = [
 ]
 
 /**
+ * 按体积上限读取响应体
+ * @description 先用 Content-Length 预检，再在流式读取过程中累计字节数，任一环节超限立即中断，
+ *              避免 arrayBuffer() 把来源不可控的超大响应整体读进内存
+ * @param {Response} response - fetch 响应对象
+ * @param {number} limit - 体积上限（字节）
+ * @returns {Promise<Buffer>} 响应体
+ * @throws {Error} 响应体超出上限
+ */
+async function readBodyWithLimit(response, limit) {
+    const declared = Number(response.headers.get('content-length'))
+    if (Number.isFinite(declared) && declared > limit) {
+        throw new Error(`图片体积 ${declared} 字节超出上限 ${limit} 字节`)
+    }
+
+    if (!response.body) {
+        const buffer = Buffer.from(await response.arrayBuffer())
+        if (buffer.length > limit) {
+            throw new Error(`图片体积 ${buffer.length} 字节超出上限 ${limit} 字节`)
+        }
+        return buffer
+    }
+
+    const chunks = []
+    let total = 0
+    for await (const chunk of response.body) {
+        total += chunk.length
+        if (total > limit) {
+            throw new Error(`图片体积超出上限 ${limit} 字节（读到 ${total} 字节后中断）`)
+        }
+        chunks.push(Buffer.from(chunk))
+    }
+
+    return Buffer.concat(chunks)
+}
+
+/**
  * 上传图片到QQ空间
  * @param {Object} bot - Bot 实例
  * @param {string} cookies - Cookie 字符串
  * @param {number} gtk - g_tk 令牌
  * @param {string} uin - QQ号
  * @param {string} imageUrl - 图片URL
- * @returns {Promise<Object|null>} 上传结果
+ * @returns {Promise<{url: string, bo: string, width: number, height: number, pre: string}>} 上传结果
+ * @throws {Error} 下载失败、体积超限、响应解析失败或协议端返回失败；调用方需据此统计实际成功数
  */
 async function uploadQzoneImage(bot, cookies, gtk, uin, imageUrl) {
     try {
@@ -691,6 +773,7 @@ async function uploadQzoneImage(bot, cookies, gtk, uin, imageUrl) {
             imageBuffer = Buffer.from(imageUrl.replace('base64://', ''), 'base64')
         } else if (imageUrl.startsWith('data:image')) {
             const base64Data = imageUrl.split(',')[1]
+            if (!base64Data) throw new Error('data:image URL 缺少 base64 数据段')
             imageBuffer = Buffer.from(base64Data, 'base64')
         } else {
             const isQQPic = imageUrl.includes('gchat.qpic.cn') || imageUrl.includes('c2cpicdw.qpic.cn')
@@ -703,7 +786,13 @@ async function uploadQzoneImage(bot, cookies, gtk, uin, imageUrl) {
                 }
             })
             if (!response.ok) throw new Error(`下载图片失败: HTTP ${response.status}`)
-            imageBuffer = Buffer.from(await response.arrayBuffer())
+            imageBuffer = await readBodyWithLimit(response, MAX_IMAGE_BYTES)
+        }
+
+        /* base64 / data URL 分支同样要卡上限 */
+        if (imageBuffer.length === 0) throw new Error('图片内容为空')
+        if (imageBuffer.length > MAX_IMAGE_BYTES) {
+            throw new Error(`图片体积 ${imageBuffer.length} 字节超出上限 ${MAX_IMAGE_BYTES} 字节`)
         }
 
         /* 构建 multipart 上传 */
@@ -743,11 +832,11 @@ async function uploadQzoneImage(bot, cookies, gtk, uin, imageUrl) {
         let data
         try {
             /* 响应可能包装在回调中 */
-            const jsonStr = text.replace(/^[^{]*({.*})[^}]*$/s, '$1')
+            const jsonStr = text.replace(JSONP_PAYLOAD_PATTERN, '$1')
             data = JSON.parse(jsonStr)
         } catch {
             logger.warn('[QZone] 解析上传响应失败:', text.substring(0, 200))
-            return null
+            throw new Error(`解析上传响应失败: ${text.substring(0, 100)}`)
         }
 
         if (data.ret === 0 && data.data?.url) {
@@ -760,10 +849,10 @@ async function uploadQzoneImage(bot, cookies, gtk, uin, imageUrl) {
             }
         }
 
-        logger.warn('[QZone] 图片上传失败:', data.msg || data.message)
-        return null
+        /* 失败必须抛出：返回 null 会让调用方无从区分“上传失败”与“上传成功但无返回” */
+        throw new Error(data.msg || data.message || `上传失败: ret=${data.ret}`)
     } catch (err) {
         logger.warn('[QZone] 上传图片异常:', err.message)
-        return null
+        throw err
     }
 }

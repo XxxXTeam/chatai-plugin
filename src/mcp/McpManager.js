@@ -11,7 +11,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import config from '../../config/config.js'
 import { McpClient } from './McpClient.js'
-import { builtinMcpServer, setBuiltinToolContext } from './BuiltinMcpServer.js'
+import { builtinMcpServer, setBuiltinToolContext, resolveDangerousTools } from './BuiltinMcpServer.js'
 import { getToolIdentity as getAdapterToolIdentity } from '../core/adapters/tooling.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -43,6 +43,35 @@ const MCP_SERVERS_FILE = path.join(__dirname, '../../data/mcp-servers.json')
  * // 连接外部MCP服务器
  * await mcpManager.addServer('my-server', { command: 'npx', args: ['-y', '@my/mcp-server'] })
  */
+/** 工具日志中单个字段序列化后保留的最大字符数 */
+const TOOL_LOG_MAX_CHARS = 2000
+
+/**
+ * 压缩工具调用日志中的大字段，只保留可读摘要
+ *
+ * 绘图、语音、文件读取类工具会返回 base64，直接留存会让 1000 条日志占用 GB 级内存。
+ * @param {*} value - 原始值（结果或入参）
+ * @param {number} [maxChars] - 保留的最大字符数
+ * @returns {*} 未超限时原样返回，超限时返回带长度提示的截断字符串
+ */
+function summarizeToolLogValue(value, maxChars = TOOL_LOG_MAX_CHARS) {
+    if (value === null || value === undefined) return value
+    if (typeof value === 'string') {
+        return value.length > maxChars ? `${value.slice(0, maxChars)}…（共 ${value.length} 字符，已截断）` : value
+    }
+    if (typeof value !== 'object') return value
+
+    let serialized
+    try {
+        serialized = JSON.stringify(value)
+    } catch {
+        return '[无法序列化的结果]'
+    }
+    if (serialized === undefined) return value
+    if (serialized.length <= maxChars) return value
+    return `${serialized.slice(0, maxChars)}…（共 ${serialized.length} 字符，已截断）`
+}
+
 export class McpManager {
     constructor() {
         /** @type {Map<string, Object>} 工具名称 -> 工具定义 */
@@ -149,7 +178,18 @@ export class McpManager {
 
         const mcpConfig = config.get('mcp')
         const externalEnabled = mcpConfig?.enabled
-        const tasks = [this.initBuiltinServer(), this.initCustomToolsServer()]
+
+        /*
+         * initCustomToolsServer 必须等 initBuiltinServer 完成后再执行：
+         * 它的第一行 builtinMcpServer.listTools() 是同步调用，若与内置服务器初始化并发，
+         * 会在后者首个 await 让出控制权的瞬间读到空的 modularTools，
+         * 于是 jsTools.length === 0 直接 return —— data/tools 下的自定义 JS 工具
+         * 永远不会注册进 this.tools，模型完全看不到它们（只留一条 debug 日志）。
+         */
+        await this.initBuiltinServer()
+
+        // 外部 MCP 服务器与自定义 JS 工具之间无依赖，可并行
+        const tasks = [this.initCustomToolsServer()]
         if (externalEnabled) {
             tasks.push(this.loadServersWithLog())
         }
@@ -813,8 +853,10 @@ export class McpManager {
             }
 
             // 过滤危险工具（如果不允许）
+            // 与调用拦截层同源：配置里的 dangerousTools 通常是空数组而非 undefined，
+            // `|| []` 救不回默认黑名单，会让危险工具照常暴露给模型，故同样取并集
             if (!builtinConfig.allowDangerous) {
-                const dangerous = builtinConfig.dangerousTools || []
+                const dangerous = resolveDangerousTools(builtinConfig)
                 tools = tools.filter(t => !dangerous.includes(t.name) && !dangerous.includes(t.identity))
             }
 
@@ -984,8 +1026,9 @@ export class McpManager {
         }
 
         // 危险工具拦截检查
+        // dangerousTools 取"内置默认黑名单 ∪ 用户配置"：配置中的空数组不得覆盖默认黑名单
         const builtinConfig = config.get('builtinTools') || {}
-        const dangerousTools = builtinConfig.dangerousTools || []
+        const dangerousTools = resolveDangerousTools(builtinConfig)
         const toolIdentity = getAdapterToolIdentity(this.withToolSourceMeta(tool))
         if ((dangerousTools.includes(name) || dangerousTools.includes(toolIdentity)) && !builtinConfig.allowDangerous) {
             logger.warn(`[MCP] 危险工具被拦截: ${name}`)
@@ -1220,6 +1263,16 @@ export class McpManager {
      * 添加工具调用日志
      */
     addToolLog(entry) {
+        /*
+         * 日志只保留结果摘要：原实现直接持有完整 result，而绘图/语音/文件类工具
+         * 会返回 base64，单条可达数 MB，1000 条上限下常驻内存可到 GB 级。
+         */
+        if (entry && entry.result !== undefined) {
+            entry.result = summarizeToolLogValue(entry.result)
+        }
+        if (entry && entry.arguments !== undefined) {
+            entry.arguments = summarizeToolLogValue(entry.arguments)
+        }
         this.toolLogs.unshift(entry)
         // 限制日志数量
         if (this.toolLogs.length > this.maxLogs) {
@@ -1239,11 +1292,25 @@ export class McpManager {
 
         if (searchQuery) {
             const query = searchQuery.toLowerCase()
+            /*
+             * userId 常态是 number（QQ 号），而 `?.` 只挡 null/undefined 不挡 number，
+             * 原写法在"按 QQ 号搜索日志"这一正常用法下必抛 TypeError；
+             * toolName 与 arguments 也一并做防御，避免个别日志字段缺失时整个查询失败。
+             */
+            const toText = value => {
+                if (value === null || value === undefined) return ''
+                if (typeof value === 'string') return value
+                try {
+                    return JSON.stringify(value) ?? ''
+                } catch {
+                    return ''
+                }
+            }
             logs = logs.filter(
                 l =>
-                    l.toolName.toLowerCase().includes(query) ||
-                    l.userId?.toLowerCase().includes(query) ||
-                    JSON.stringify(l.arguments).toLowerCase().includes(query)
+                    toText(l.toolName).toLowerCase().includes(query) ||
+                    toText(l.userId).toLowerCase().includes(query) ||
+                    toText(l.arguments).toLowerCase().includes(query)
             )
         }
 

@@ -9,7 +9,7 @@
  * - 作用域共享管理
  */
 
-import { databaseService } from './DatabaseService.js'
+import { databaseService, safeParse } from './DatabaseService.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import crypto from 'crypto'
 
@@ -65,31 +65,35 @@ class KnowledgeGraphService {
             return this.updateEntity(entityId, entity)
         }
 
-        const stmt = db.prepare(`
+        // 实体写入与历史记录必须原子提交，否则中途失败会留下无历史的孤立实体
+        const runCreate = db.transaction(() => {
+            db.prepare(
+                `
             INSERT INTO kg_entities (entity_id, entity_type, name, scope_id, properties, created_at, updated_at, version)
             VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-        `)
+        `
+            ).run(
+                entityId,
+                entity.type,
+                entity.name,
+                entity.scopeId,
+                entity.properties ? JSON.stringify(entity.properties) : null,
+                now,
+                now
+            )
 
-        stmt.run(
-            entityId,
-            entity.type,
-            entity.name,
-            entity.scopeId,
-            entity.properties ? JSON.stringify(entity.properties) : null,
-            now,
-            now
-        )
-
-        // 记录历史
-        this._saveEntityHistory(entityId, {
-            name: entity.name,
-            entityType: entity.type,
-            properties: entity.properties,
-            scopeId: entity.scopeId,
-            version: 1,
-            changeType: 'created',
-            changeReason: entity.changeReason || '新建实体'
+            // 记录历史
+            this._saveEntityHistory(entityId, {
+                name: entity.name,
+                entityType: entity.type,
+                properties: entity.properties,
+                scopeId: entity.scopeId,
+                version: 1,
+                changeType: 'created',
+                changeReason: entity.changeReason || '新建实体'
+            })
         })
+        runCreate()
 
         logger.debug(`[KnowledgeGraph] 创建实体: ${entity.name} (${entity.type})`)
         return this.getEntity(entityId)
@@ -142,19 +146,35 @@ class KnowledgeGraphService {
         const newVersion = existing.version + 1
         const now = Date.now()
 
-        // 保存旧版本到历史
-        this._saveEntityHistory(entityId, {
-            name: existing.name,
-            entityType: existing.entityType,
-            properties: existing.properties,
-            scopeId: existing.scopeId,
-            version: existing.version,
-            changeType: 'updated',
-            changeReason: updates.changeReason || '更新实体'
-        })
+        // 历史落库与实体更新必须原子提交，否则中途失败会导致版本号与历史不一致
+        const runUpdate = db.transaction(() => {
+            /*
+             * 保存旧版本到历史，但要避开一次重复写入：
+             *
+             * createEntity 已经以 changeType='created' 把 v1 写进历史，首次更新若再存一遍
+             * 旧版本，历史里就会出现两条同为 v1 的记录。kg_entity_history 的
+             * (entity_id, version) 只有普通索引、没有唯一约束，重复插入不会报错，
+             * 表现就是历史列表凭空多出一条一模一样的条目。
+             *
+             * 取舍：这里保留 create 写的那条（它标记了实体诞生，信息价值更高），
+             * 代价是首次更新传入的 changeReason 不会落库——后续每次更新的 reason
+             * 都照常记录在被替换的那个版本上。
+             */
+            if (!this.hasEntityVersion(entityId, existing.version)) {
+                this._saveEntityHistory(entityId, {
+                    name: existing.name,
+                    entityType: existing.entityType,
+                    properties: existing.properties,
+                    scopeId: existing.scopeId,
+                    version: existing.version,
+                    changeType: 'updated',
+                    changeReason: updates.changeReason || '更新实体'
+                })
+            }
 
-        // 更新实体
-        const stmt = db.prepare(`
+            // 更新实体
+            db.prepare(
+                `
             UPDATE kg_entities SET
                 name = COALESCE(?, name),
                 entity_type = COALESCE(?, entity_type),
@@ -162,16 +182,17 @@ class KnowledgeGraphService {
                 updated_at = ?,
                 version = ?
             WHERE entity_id = ?
-        `)
-
-        stmt.run(
-            updates.name || null,
-            updates.type || null,
-            updates.properties ? JSON.stringify(updates.properties) : null,
-            now,
-            newVersion,
-            entityId
-        )
+        `
+            ).run(
+                updates.name || null,
+                updates.type || null,
+                updates.properties ? JSON.stringify(updates.properties) : null,
+                now,
+                newVersion,
+                entityId
+            )
+        })
+        runUpdate()
 
         logger.debug(`[KnowledgeGraph] 更新实体: ${entityId} -> v${newVersion}`)
         return this.getEntity(entityId)
@@ -186,30 +207,53 @@ class KnowledgeGraphService {
 
         if (!existing) return false
 
-        // 保存删除历史
-        this._saveEntityHistory(entityId, {
-            name: existing.name,
-            entityType: existing.entityType,
-            properties: existing.properties,
-            scopeId: existing.scopeId,
-            version: existing.version,
-            changeType: 'deleted',
-            changeReason: reason
-        })
+        // 历史、关系、实体三步删除必须原子提交，
+        // 否则中途失败会留下指向已删实体的悬空关系
+        const runDelete = db.transaction(() => {
+            // 保存删除历史
+            this._saveEntityHistory(entityId, {
+                name: existing.name,
+                entityType: existing.entityType,
+                properties: existing.properties,
+                scopeId: existing.scopeId,
+                version: existing.version,
+                changeType: 'deleted',
+                changeReason: reason
+            })
 
-        // 删除关联的关系
-        const relStmt = db.prepare(`
+            // 删除关联的关系
+            db.prepare(
+                `
             DELETE FROM kg_relationships 
             WHERE from_entity_id = ? OR to_entity_id = ?
-        `)
-        relStmt.run(entityId, entityId)
+        `
+            ).run(entityId, entityId)
 
-        // 删除实体
-        const stmt = db.prepare('DELETE FROM kg_entities WHERE entity_id = ?')
-        stmt.run(entityId)
+            // 删除实体
+            db.prepare('DELETE FROM kg_entities WHERE entity_id = ?').run(entityId)
+        })
+        runDelete()
 
         logger.debug(`[KnowledgeGraph] 删除实体: ${entityId}`)
         return true
+    }
+
+    /**
+     * 判断实体的某个历史版本是否存在
+     *
+     * 回滚接口要把「版本不存在」判成 404、把数据库故障判成 500，而 rollbackEntity
+     * 两种情况都是抛 Error，无法从异常上区分。这里提供一次精确查询，让调用方在
+     * 执行回滚前先自行判定，不必去匹配异常消息文本。
+     * @param {string} entityId - 实体 ID
+     * @param {number} version - 目标版本号
+     * @returns {boolean} 该版本是否存在于历史表
+     */
+    hasEntityVersion(entityId, version) {
+        const db = this._getDb()
+        const row = db
+            .prepare('SELECT 1 AS ok FROM kg_entity_history WHERE entity_id = ? AND version = ? LIMIT 1')
+            .get(entityId, version)
+        return Boolean(row)
     }
 
     /**
@@ -230,7 +274,7 @@ class KnowledgeGraphService {
             version: row.version,
             name: row.name,
             entityType: row.entity_type,
-            properties: row.properties ? JSON.parse(row.properties) : null,
+            properties: row.properties ? safeParse(row.properties, null) : null,
             scopeId: row.scope_id,
             changedAt: row.changed_at,
             changeType: row.change_type,
@@ -256,7 +300,7 @@ class KnowledgeGraphService {
         return this.updateEntity(entityId, {
             name: history.name,
             type: history.entity_type,
-            properties: history.properties ? JSON.parse(history.properties) : null,
+            properties: history.properties ? safeParse(history.properties, null) : null,
             changeReason: `回滚到版本 ${targetVersion}`
         })
     }
@@ -610,7 +654,7 @@ class KnowledgeGraphService {
             sourceScopeId: row.source_scope_id,
             targetScopeId: row.target_scope_id,
             shareType: row.share_type,
-            entityTypes: row.entity_types ? JSON.parse(row.entity_types) : null,
+            entityTypes: row.entity_types ? safeParse(row.entity_types, null) : null,
             createdAt: row.created_at
         }
     }
@@ -627,7 +671,7 @@ class KnowledgeGraphService {
         return stmt.all(scopeId).map(row => ({
             sourceScopeId: row.source_scope_id,
             shareType: row.share_type,
-            entityTypes: row.entity_types ? JSON.parse(row.entity_types) : null
+            entityTypes: row.entity_types ? safeParse(row.entity_types, null) : null
         }))
     }
 
@@ -844,7 +888,7 @@ class KnowledgeGraphService {
             entityType: row.entity_type,
             name: row.name,
             scopeId: row.scope_id,
-            properties: row.properties ? JSON.parse(row.properties) : null,
+            properties: row.properties ? safeParse(row.properties, null) : null,
             createdAt: row.created_at,
             updatedAt: row.updated_at,
             version: row.version
@@ -858,7 +902,7 @@ class KnowledgeGraphService {
             fromEntityId: row.from_entity_id,
             toEntityId: row.to_entity_id,
             relationType: row.relation_type,
-            properties: row.properties ? JSON.parse(row.properties) : null,
+            properties: row.properties ? safeParse(row.properties, null) : null,
             scopeId: row.scope_id,
             createdAt: row.created_at,
             updatedAt: row.updated_at,

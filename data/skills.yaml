@@ -29,12 +29,16 @@ skills:
       path: 'data/tools'
       # 文件变更时自动重载
       autoReload: true
+      # 禁用的自定义工具列表
+      disabledTools: []
 
     # 外部 MCP 服务器工具配置
     mcp:
       enabled: true
       servers: []
       disabledServers: []
+      # 禁用的 MCP 工具列表（填工具名或 mcp__server__tool 形式的 identity）
+      disabledTools: []
 
   # 工具组配置
   groups:
@@ -316,6 +320,35 @@ skills:
     enabled: false  # 默认关闭，在管理面板中启用
     useSummary: true
     maxGroups: 3
+
+  # 文档技能配置 - 扫描本地 SKILL.md / *.skill.yaml / *.skill.json 并注入 system prompt
+  # 注意：文档技能不是可执行工具，只追加指令文本并约束可用工具集合
+  documents:
+    # 是否启用文档技能扫描
+    enabled: true
+    # 匹配模式:
+    # - 'auto': 按触发词/名称/描述与当前上下文匹配（默认）
+    # - 'all': 注入全部已扫描到的文档技能
+    # - 'explicit': 仅注入调用方显式指定的技能
+    mode: 'auto'
+    # 披露深度（与 mode 正交：mode 决定选哪些技能，disclosure 决定选中后注入多少内容）:
+    # - 'progressive': 只把技能元数据与附属文件清单写入系统提示词，正文由模型按需
+    #   调用 get_skill_info / read_skill_file 读取（默认，显著节省上下文）
+    # - 'full': 直接把 SKILL.md 全文注入系统提示词（旧行为）
+    disclosure: 'progressive'
+    # 扫描目录（相对于插件根目录；出于安全考虑，插件根目录之外的路径会被忽略）
+    paths:
+      - 'data/skills'
+      - '.cursor/skills'
+      - '.claude/skills'
+      - '.codex/skills'
+    # 目录递归最大深度
+    maxDepth: 6
+    # 单个技能文件最大字节数，超出则跳过
+    maxFileBytes: 65536
+    # 注入 system prompt 的最大字符数，超出则截断
+    maxPromptChars: 20000
+
   security:
     dangerousTools:
       # 群管理危险操作

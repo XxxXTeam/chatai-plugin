@@ -26,9 +26,19 @@ function sseResponse(res) {
     }
 }
 
-// POST /api/test-panel/batch-test - 批量测试渠道模型（SSE）
-router.post('/batch-test', async (req, res) => {
-    const { channelId, models, concurrency = 3, clearPrevious = true } = req.body
+/**
+ * 批量测试渠道模型，并通过 SSE 推送进度
+ *
+ * @param {import('express').Request} req - 请求对象，body 需含 channelId，可选 models / concurrency / clearPrevious
+ * @param {import('express').Response} res - 响应对象
+ * @returns {Promise<void>}
+ */
+async function runBatchTestSse(req, res) {
+    const { channelId, models, clearPrevious = true } = req.body || {}
+    // 解构默认值只在 undefined 时生效：concurrency 传 0、负数或 null 时，
+    // 下方内层 while (running < concurrency) 永不进入，modelIndex 永不推进，
+    // 外层 while 每 50ms 空转一次且永不退出，请求被永久挂起。此处统一钳制到 [1, 20]。
+    const concurrency = Math.min(20, Math.max(1, Number(req.body?.concurrency) || 3))
     const testId = `test_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 
     await channelManager.init()
@@ -38,8 +48,13 @@ router.post('/batch-test', async (req, res) => {
         return res.status(404).json(ApiResponse.fail(null, '渠道不存在'))
     }
 
-    const testModels = models && models.length > 0 ? models : channel.models || []
-    if (testModels.length === 0) {
+    // models 传成字符串时 models.length 同样 > 0，会把字符串按字符当成模型逐个测试
+    if (models !== undefined && models !== null && !Array.isArray(models)) {
+        return res.status(400).json(ApiResponse.fail(null, 'models 必须是数组'))
+    }
+
+    const testModels = Array.isArray(models) && models.length > 0 ? models : channel.models || []
+    if (!Array.isArray(testModels) || testModels.length === 0) {
         return res.status(400).json(ApiResponse.fail(null, '没有可测试的模型'))
     }
 
@@ -243,54 +258,87 @@ router.post('/batch-test', async (req, res) => {
 
     activeBatchTests.delete(testId)
     res.end()
+}
+
+// POST /api/test-panel/batch-test - 批量测试渠道模型（SSE）
+router.post('/batch-test', async (req, res) => {
+    try {
+        await runBatchTestSse(req, res)
+    } catch (error) {
+        chatLogger.error('[测试面板] 批量测试失败:', error)
+        // SSE 头一旦下发就不能再改状态码，只能收尾关闭连接
+        if (!res.headersSent) {
+            res.status(500).json(ApiResponse.fail(null, error.message))
+        } else if (!res.writableEnded) {
+            res.end()
+        }
+    }
 })
 
 // POST /api/test-panel/batch-test-stop - 停止批量测试
 router.post('/batch-test-stop', async (req, res) => {
-    const { testId } = req.body
+    try {
+        const { testId } = req.body || {}
 
-    if (testId) {
-        const testState = activeBatchTests.get(testId)
-        if (testState) {
-            testState.aborted = true
-            chatLogger.info(`[测试面板] 停止测试: ${testId}`)
-            res.json(ApiResponse.ok({ stopped: true, testId }))
+        if (testId) {
+            const testState = activeBatchTests.get(testId)
+            if (testState) {
+                testState.aborted = true
+                chatLogger.info(`[测试面板] 停止测试: ${testId}`)
+                res.json(ApiResponse.ok({ stopped: true, testId }))
+            } else {
+                res.json(ApiResponse.ok({ stopped: false, message: '测试任务不存在或已完成' }))
+            }
         } else {
-            res.json(ApiResponse.ok({ stopped: false, message: '测试任务不存在或已完成' }))
+            // 停止所有测试
+            let stoppedCount = 0
+            for (const [id, state] of activeBatchTests) {
+                state.aborted = true
+                stoppedCount++
+            }
+            chatLogger.info(`[测试面板] 停止所有测试: ${stoppedCount}个`)
+            res.json(ApiResponse.ok({ stopped: true, count: stoppedCount }))
         }
-    } else {
-        // 停止所有测试
-        let stoppedCount = 0
-        for (const [id, state] of activeBatchTests) {
-            state.aborted = true
-            stoppedCount++
-        }
-        chatLogger.info(`[测试面板] 停止所有测试: ${stoppedCount}个`)
-        res.json(ApiResponse.ok({ stopped: true, count: stoppedCount }))
+    } catch (error) {
+        chatLogger.error('[测试面板] 停止测试失败:', error)
+        res.status(500).json(ApiResponse.fail(null, error.message))
     }
 })
 
 // GET /api/test-panel/active-tests - 获取活跃测试列表
 router.get('/active-tests', async (req, res) => {
-    const tests = []
-    for (const [id, state] of activeBatchTests) {
-        tests.push({
-            id,
-            completed: state.completed,
-            total: state.total,
-            aborted: state.aborted
-        })
+    try {
+        const tests = []
+        for (const [id, state] of activeBatchTests) {
+            tests.push({
+                id,
+                completed: state.completed,
+                total: state.total,
+                aborted: state.aborted
+            })
+        }
+        res.json(ApiResponse.ok(tests))
+    } catch (error) {
+        chatLogger.error('[测试面板] 获取活跃测试失败:', error)
+        res.status(500).json(ApiResponse.fail(null, error.message))
     }
-    res.json(ApiResponse.ok(tests))
 })
 
 // POST /api/test-panel/quick-test - 快速测试单个模型（SSE，防止长耗时请求挂起）
 router.post('/quick-test', async (req, res) => {
-    const { channelId, model, message = '说一声你好' } = req.body
+    const { channelId, model, message = '说一声你好' } = req.body || {}
     const startTime = Date.now()
 
-    await channelManager.init()
-    const channel = channelManager.get(channelId)
+    // channel 需保留在 try 之外供下方 catch 使用，故初始化单独保护：
+    // 原写法把 await channelManager.init() 放在任何 try 外，抛错会变成 unhandledRejection
+    let channel
+    try {
+        await channelManager.init()
+        channel = channelManager.get(channelId)
+    } catch (error) {
+        chatLogger.error('[测试面板] 快速测试初始化失败:', error)
+        return res.status(500).json(ApiResponse.fail(null, error.message))
+    }
 
     if (!channel) {
         return res.status(404).json(ApiResponse.fail(null, '渠道不存在'))
@@ -374,22 +422,27 @@ router.post('/quick-test', async (req, res) => {
 
 // GET /api/test-panel/channel-models/:id - 获取渠道可测试模型列表
 router.get('/channel-models/:id', async (req, res) => {
-    await channelManager.init()
-    const channel = channelManager.get(req.params.id)
+    try {
+        await channelManager.init()
+        const channel = channelManager.get(req.params.id)
 
-    if (!channel) {
-        return res.status(404).json(ApiResponse.fail(null, '渠道不存在'))
+        if (!channel) {
+            return res.status(404).json(ApiResponse.fail(null, '渠道不存在'))
+        }
+
+        res.json(
+            ApiResponse.ok({
+                channelId: channel.id,
+                channelName: channel.name,
+                models: channel.models || [],
+                status: channel.status,
+                testedAt: channel.testedAt
+            })
+        )
+    } catch (error) {
+        chatLogger.error('[测试面板] 获取渠道模型失败:', error)
+        res.status(500).json(ApiResponse.fail(null, error.message))
     }
-
-    res.json(
-        ApiResponse.ok({
-            channelId: channel.id,
-            channelName: channel.name,
-            models: channel.models || [],
-            status: channel.status,
-            testedAt: channel.testedAt
-        })
-    )
 })
 
 export default router

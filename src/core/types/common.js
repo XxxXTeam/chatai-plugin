@@ -20,6 +20,14 @@ export const MultipleKeyStrategyChoice = {
  * @typedef {'random' | 'round-robin' | 'conversation-hash'} MultipleKeyStrategy
  */
 
+/**
+ * 渠道超时配置
+ * 由 ChannelManager 归一化写入，结构为毫秒数值
+ * @typedef {Object} ChannelTimeout
+ * @property {number} [connect] - 连接超时(ms)
+ * @property {number} [read] - 读取超时(ms)，即整体请求超时
+ */
+
 export class BaseClientOptions {
     /**
      * @param {Partial<BaseClientOptions>} [options]
@@ -56,6 +64,14 @@ export class BaseClientOptions {
             if (options.imageConfig) this.imageConfig = options.imageConfig
             if (options.channelId) this.channelId = options.channelId
             if (options.channelName) this.channelName = options.channelName
+            /**
+             * 渠道请求超时。本构造函数是白名单式逐字段复制，未登记的字段会在
+             * AbstractClient 构造时（BaseClientOptions.create）被丢弃，
+             * 故 timeout 必须在此显式透传，否则渠道的 timeout 配置永远到不了适配器。
+             * 取值可为毫秒数字或 { connect, read }，由 AbstractClient.resolveRequestTimeout 归一化。
+             * @type {ChannelTimeout | number | undefined}
+             */
+            if (options.timeout) this.timeout = options.timeout
             if (options.userAgent) this.userAgent = options.userAgent
             if (options.xff) this.xff = options.xff
             if (options.toolCallLimitConfig) this.toolCallLimitConfig = options.toolCallLimitConfig

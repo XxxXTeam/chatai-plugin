@@ -4,6 +4,10 @@
  */
 
 import { MessageApi } from '../../utils/messageParser.js'
+import { chatLogger as logger } from '../../core/utils/logger.js'
+
+/** 引用链最大递归深度上限，防止 max_depth 传入超大值导致大量协议端调用 */
+const MAX_REPLY_CHAIN_DEPTH = 10
 
 export const contextTools = [
     {
@@ -166,12 +170,19 @@ export const contextTools = [
 
                 const bot = e.bot || global.Bot
                 const includeChain = args.include_chain !== false
-                const maxDepth = args.max_depth || 3
+                const maxDepth = Math.min(Math.max(Number(args.max_depth) || 3, 1), MAX_REPLY_CHAIN_DEPTH)
 
                 /**
                  * 获取单条消息
+                 * @param {string|number} [messageId] - 消息 ID
+                 * @param {number} [seq] - 消息序号
+                 * @param {Object} [options] - 选项
+                 * @param {boolean} [options.allowEventReply=false] - 是否允许用 e.getReply() 兜底。
+                 *   e.getReply() 不接受 messageId、只能取当前事件的直接引用，
+                 *   在引用链递归中会反复返回第一层引用，因此仅顶层调用可以启用
+                 * @returns {Promise<Object|null>} 消息对象；全部途径失败时返回 null
                  */
-                const getMessage = async (messageId, seq) => {
+                const getMessage = async (messageId, seq, { allowEventReply = false } = {}) => {
                     const apiMsg = await MessageApi.getMsg(e, messageId || seq, { useSeq: !messageId, seq })
                     if (apiMsg) return apiMsg
                     if (bot?.getMsg && messageId) {
@@ -188,15 +199,22 @@ export const contextTools = [
                     if (e.group?.getChatHistory && seq) {
                         try {
                             const history = await e.group.getChatHistory(seq, 20)
+                            // 只接受 seq 精确命中的结果：原先的 history[history.length - 1] 兜底
+                            // 会把群里最近的一条无关消息当作"被引用的消息"返回
                             const found = history?.find?.(m => Number(m.seq) === Number(seq))
-                            if (found || history?.length) return found || history[history.length - 1]
+                            if (found) return found
                         } catch {}
                     }
-                    if (e.getReply && typeof e.getReply === 'function') {
+                    if (allowEventReply && typeof e.getReply === 'function') {
                         try {
-                            return await e.getReply()
+                            const eventReply = await e.getReply()
+                            if (eventReply) return eventReply
                         } catch {}
                     }
+                    logger.warn(
+                        '[get_reply_message] 所有获取途径均未取到引用消息:',
+                        `message_id=${messageId ?? 'null'}, seq=${seq ?? 'null'}, allowEventReply=${allowEventReply}`
+                    )
                     return null
                 }
 
@@ -247,7 +265,7 @@ export const contextTools = [
                 // 获取直接引用的消息
                 const messageId = e.source?.message_id || e.reply_id
                 const seq = e.source?.seq
-                const replyMsg = await getMessage(messageId, seq)
+                const replyMsg = await getMessage(messageId, seq, { allowEventReply: true })
 
                 if (!replyMsg) {
                     return {
@@ -274,6 +292,10 @@ export const contextTools = [
                 // 获取引用链
                 if (includeChain) {
                     const chain = []
+                    // 记录已收录的消息标识，引用关系成环或协议端返回同一条消息时立即停止，避免链中出现重复项
+                    const visited = new Set()
+                    const rootKey = String(replyInfo.message_id || messageId || '')
+                    if (rootKey) visited.add(rootKey)
                     let currentMsg = replyMsg
                     let depth = 0
 
@@ -285,6 +307,12 @@ export const contextTools = [
                         if (!nestedMsg) break
 
                         const nestedInfo = nestedMsg.data || nestedMsg
+                        const nestedKey = String(
+                            nestedInfo.message_id || nestedReply.message_id || nestedReply.seq || ''
+                        )
+                        if (nestedKey && visited.has(nestedKey)) break
+                        if (nestedKey) visited.add(nestedKey)
+
                         chain.push({
                             depth: depth + 1,
                             user_id: String(nestedInfo.user_id || nestedInfo.sender?.user_id || ''),
@@ -363,7 +391,7 @@ export const contextTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const { memoryManager } = await import('../../services/MemoryManager.js')
+                const { memoryManager } = await import('../../services/storage/MemoryManager.js')
                 await memoryManager.init()
 
                 const e = ctx.getEvent()

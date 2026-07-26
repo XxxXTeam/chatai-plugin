@@ -2,7 +2,7 @@ import { chatLogger } from '../../core/utils/logger.js'
 const logger = chatLogger
 import { LlmService } from '../llm/LlmService.js'
 import { channelManager } from '../llm/ChannelManager.js'
-import { contextManager } from '../llm/ContextManager.js'
+import { contextManager, buildGroupEnvironmentPrompt, AUTO_CLEAN_NOTICE } from '../llm/ContextManager.js'
 import { presetManager } from '../preset/PresetManager.js'
 import { memoryManager } from '../storage/MemoryManager.js'
 import { memoryService } from '../memory/MemoryService.js'
@@ -23,6 +23,33 @@ import { resolveTemperature, resolveClientTemperature } from '../llm/Temperature
 import { attachToolMetadata } from '../../core/adapters/tooling.js'
 import { applySkillToolConstraints, getSkillToolConstraints } from '../skills/SkillToolConstraints.js'
 import { resolveToolPermission } from '../tools/ToolPermission.js'
+/**
+ * 工具使用原则。
+ * 无论是否能从 skills.yaml 读到分组，这套判断标准都相同，
+ * 因此由两种模式共用，避免分组不可用时模型拿到一份被削弱的规则。
+ * @constant {string}
+ */
+const TOOL_USAGE_PRINCIPLES = `【工具使用原则】
+- 请求涉及实时数据（时间、天气、群信息、用户信息、新闻等）时，先调用工具取到数据，再基于数据回答，不要凭印象作答
+- 请求要求执行动作（发消息、禁言、踢人、发图、搜索等）时，直接调用对应工具
+- 能通过工具拿到更准确结果时，优先调用工具
+- 不确定答案时，先用搜索或相关工具查证
+- 只有纯闲聊、创作、情感交流这类不需要外部数据的场景，才直接回复`
+
+/**
+ * 记忆工具使用说明。
+ * 仅在对应工具确实已加载时注入，避免提示模型调用当前不存在的工具。
+ * @constant {string}
+ */
+const MEMORY_TOOL_GUIDE = `【记忆管理】
+- 用户透露个人信息（名字、生日、喜好、位置、职业等），或你判断某条信息值得长期记住时，调用 save_user_memory 保存
+- 用户明确说“记住”“别忘了”时，必须调用 save_user_memory
+- 回答涉及用户个人信息的问题前，先用 get_user_memories 或 search_user_memory 查询，不要凭空作答
+- 用户纠正此前说过的信息时，用 update_user_memory 更新对应记忆，而不是再存一条新的`
+
+/** 记忆相关工具名，用于判断是否需要注入 MEMORY_TOOL_GUIDE */
+const MEMORY_TOOL_NAMES = ['save_user_memory', 'get_user_memories', 'search_user_memory', 'update_user_memory']
+
 let _scopeManager = null
 async function ensureScopeManager() {
     if (!_scopeManager) {
@@ -568,9 +595,11 @@ export class ChatAgent {
                 .map(c => c.text)
                 .join('\n')
             if (textContent.length > 50) {
+                // message 可能为空（纯图片消息），此时不写入 recentTopics 而非写入 undefined
+                const topicText = typeof message === 'string' ? message.substring(0, 100) : ''
                 await contextManager.updateContext(conversationId, {
                     lastInteraction: Date.now(),
-                    recentTopics: [message?.substring(0, 100)]
+                    ...(topicText ? { recentTopics: [topicText] } : {})
                 })
             }
 
@@ -831,8 +860,10 @@ export class ChatAgent {
 ## 返回格式（JSON）：
 {"analysis": "意图分析", "tasks": [{"type": "tool", "priority": 1, "params": {"toolGroups": [索引]}}], "executionMode": "sequential"}
 
+**toolGroups 只能填上面「可用工具组」列表里方括号中的数字**，例如 [0] 或 [1,3]；不要填工具组名称，也不要照抄“索引”二字。
+
 仅纯闲聊问候(你好/谢谢/再见等)返回: {"analysis": "闲聊", "tasks": [{"type": "chat", "priority": 1, "params": {}}], "executionMode": "sequential"}
-只返回JSON。`
+只返回一个 JSON 对象，不要用代码块包裹，不要写任何解释。`
         return prompt
     }
 
@@ -976,17 +1007,22 @@ export class ChatAgent {
 
     /**
      * 添加群聊上下文
+     *
+     * 本链路不对历史做发送者标注（无 buildLabeledContext），因此 labeledHistory 传 false；
+     * 但用户消息同样经 parseUserMessage 展开过 @，故仍需说明 `[提及用户 ...]` 标记。
      */
     _addGroupContext(systemPrompt, groupId, event, userId) {
-        const userLabel = event?.sender?.card || event?.sender?.nickname || `用户${userId}`
-        const userUin = event?.user_id || userId
-        const groupName = event?.group_name || ''
-
-        systemPrompt += `\n\n[当前对话环境]
-群号: ${groupId}${groupName ? `\n群名: ${groupName}` : ''}
-当前用户: ${userLabel}(QQ:${userUin})`
-
-        return systemPrompt
+        return (
+            systemPrompt +
+            buildGroupEnvironmentPrompt({
+                groupId,
+                groupName: event?.group_name || event?.group?.name || '',
+                userLabel: event?.sender?.card || event?.sender?.nickname || `用户${userId}`,
+                userUin: event?.user_id || userId,
+                labeledHistory: false,
+                mentionHint: true
+            })
+        )
     }
 
     /**
@@ -1006,33 +1042,19 @@ export class ChatAgent {
         // 尝试从 skills.yaml 分组构建结构化提示
         const groupPrompt = this._buildSkillsGroupPrompt(availableNames)
 
-        if (groupPrompt) {
-            systemPrompt += `\n\n【可用技能】\n你拥有 ${tools.length} 个工具，按功能分组如下：\n${groupPrompt}
+        /* 能力清单随分组是否可用而变，其后的使用原则两种模式完全一致 */
+        const header = groupPrompt
+            ? `【可用技能】\n你拥有 ${tools.length} 个工具，按功能分组如下：\n${groupPrompt}`
+            : `【可用工具能力】\n你拥有 ${tools.length} 个工具可调用。`
 
-【工具使用原则】
-- 当用户请求涉及实时数据（时间、天气、群信息、用户信息、新闻等）时，必须先调用工具获取数据，再基于数据回答
-- 当用户请求执行操作（发消息、禁言、踢人、发图、搜索等）时，直接调用对应工具
-- 当可以通过工具获取更准确信息时，优先调用工具而非凭记忆回答
-- 当用户的问题你不确定答案时，尝试使用搜索或相关工具查找
-- 只有纯闲聊、创作、情感交流等无需外部数据的场景才直接回复
+        const sections = [header, TOOL_USAGE_PRINCIPLES]
 
-【记忆管理】
-- 当用户透露个人信息（名字、生日、喜好、位置、职业等）或者你认为需要保存相关信息的时候，使用 save_user_memory 工具保存
-- 当用户明确说"记住"或"别忘了"时，必须调用 save_user_memory 保存
-- 回答涉及用户个人信息的问题前，先用 get_user_memories 或 search_user_memory 查询
-- 当用户纠正之前的信息时，用 update_user_memory 更新对应记忆`
-        } else {
-            systemPrompt += `\n\n【可用工具能力】\n你拥有 ${tools.length} 个工具可调用。
-
-【工具使用原则】
-- 涉及实时信息、查询、操作时，优先调用工具获取数据后再回答
-- 不确定的问题，尝试使用工具搜索或查询
-- 只有纯闲聊或创作场景才直接回复
-
-【记忆管理】
-- 用户透露个人信息时，调用 save_user_memory 保存
-- 需要回忆用户信息时，调用 get_user_memories 或 search_user_memory 查询`
+        /* 记忆工具未加载时不注入其说明，否则会引导模型调用当前不存在的工具 */
+        if (MEMORY_TOOL_NAMES.some(name => availableNames.has(name))) {
+            sections.push(MEMORY_TOOL_GUIDE)
         }
+
+        systemPrompt += `\n\n${sections.join('\n\n')}`
 
         return systemPrompt
     }
@@ -1420,7 +1442,7 @@ export class ChatAgent {
 
             const autoCleanConfig = config.get('features.autoCleanOnError')
             if (autoCleanConfig?.notifyUser !== false && options.event?.reply) {
-                await options.event.reply('历史对话已自动清理', true)
+                await options.event.reply(AUTO_CLEAN_NOTICE, true)
             }
         } catch (clearErr) {
             logger.error('[ChatAgent] 自动清理失败:', clearErr.message)

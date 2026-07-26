@@ -2,7 +2,9 @@
  * Skills Agent 路由模块
  * 提供统一的技能/工具管理接口
  */
+import path from 'node:path'
 import express from 'express'
+import multer from 'multer'
 import { ChaiteResponse } from './shared.js'
 import {
     SkillsAgent,
@@ -22,9 +24,35 @@ import {
     toggleTool
 } from '../agent/SkillsAgent.js'
 import { skillsLoader } from '../skills/SkillsLoader.js'
+import { skillDocumentLoader, isEditableSkillFile } from '../skills/SkillDocumentLoader.js'
+import { importSkillPackage, SkillImportError, MAX_UPLOAD_BYTES } from '../skills/SkillPackageImporter.js'
 import config from '../../../config/config.js'
 
 const router = express.Router()
+
+/**
+ * 取当前生效的 SkillsLoader 实例
+ *
+ * 运行期用 global 上那个（已完成 init），单测或未初始化时回落到模块单例
+ * @returns {object} SkillsLoader 实例
+ */
+function getSkillsLoader() {
+    const loader = global.chatAiSkillsLoader
+    return loader?.initialized ? loader : skillsLoader
+}
+
+/**
+ * 重新加载文档技能并广播
+ * @param {string} reason - 触发原因，用于事件负载
+ * @returns {Promise<{documents: number, loaded: number}|null>} 重载结果
+ */
+async function reloadSkillDocuments(reason) {
+    const loader = getSkillsLoader()
+    if (typeof loader.reloadDocuments !== 'function') return null
+    const result = await loader.reloadDocuments()
+    broadcastSSE('skill-documents-reloaded', { reason, ...result, timestamp: Date.now() })
+    return result
+}
 
 // SSE 连接管理
 const sseClients = new Set()
@@ -161,7 +189,14 @@ router.get('/tools/by-source', async (req, res) => {
     }
 })
 
-// GET /documents - 获取 SKILL.md 文档技能
+/**
+ * GET /documents - 获取 SKILL.md 文档技能
+ *
+ * 返回 SkillDocumentLoader.buildDocument 已规范化的顶层字段。
+ * 其中 priority 与 autoActivate 的缺省语义（0 / true）由后端统一给出，
+ * 前端不得回退去读 metadata 原值，否则 frontmatter 未声明时会丢失默认值语义。
+ * @returns {ChaiteResponse} { count, documents }
+ */
 router.get('/documents', async (req, res) => {
     try {
         const documents = global.chatAiSkillsLoader?.getSkillDocuments?.() || skillsLoader.getSkillDocuments()
@@ -174,6 +209,17 @@ router.get('/documents', async (req, res) => {
                     triggers: document.triggers || [],
                     allowedTools: document.allowedTools || [],
                     disallowedTools: document.disallowedTools || [],
+                    capabilities: document.capabilities || [],
+                    priority: Number.isFinite(document.priority) ? document.priority : 0,
+                    autoActivate: document.autoActivate !== false,
+                    type: document.type,
+                    // 包形式技能（含 SKILL.md 的目录）会附带 references/ assets/ scripts/ 下的资源清单
+                    isPackage: document.isPackage === true,
+                    files: (document.files || []).map(file => ({
+                        path: file.path,
+                        dir: file.dir,
+                        size: file.size
+                    })),
                     path: document.relativePath,
                     directory: document.directory
                 }))
@@ -182,6 +228,199 @@ router.get('/documents', async (req, res) => {
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
+})
+
+// ========== 文档技能编辑 ==========
+
+/**
+ * GET /documents/:name/source - 读取技能定义文件的原始内容（含 frontmatter）
+ *
+ * name 只用于在已加载的文档表里查表，不参与任何路径拼接；实际读取路径来自扫描结果，
+ * 并在 SkillDocumentLoader 内再做一次 realpath 前缀校验。
+ * @returns {ChaiteResponse} { name, path, type, isPackage, content, size }
+ */
+router.get('/documents/:name/source', async (req, res) => {
+    try {
+        const source = skillDocumentLoader.readSkillSource(req.params.name)
+        if (!source) {
+            return res.status(404).json(ChaiteResponse.fail(null, `技能 ${req.params.name} 不存在或不可读取`))
+        }
+        res.json(
+            ChaiteResponse.ok({
+                name: source.name,
+                path: source.relativePath,
+                type: source.type,
+                isPackage: source.isPackage,
+                content: source.content,
+                size: source.size
+            })
+        )
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * PUT /documents/:name/source - 保存技能定义文件
+ *
+ * 写入前先解析内容（markdown 校验 frontmatter 是否为含 name 的合法 YAML，
+ * yaml/json 校验顶层是否为对象），语法不合法直接拒绝、不落盘；
+ * 写入后只重载文档技能，不动 MCP 与可执行工具。
+ * @returns {ChaiteResponse} { name, path, size, reloaded }
+ */
+router.put('/documents/:name/source', async (req, res) => {
+    try {
+        const { content } = req.body || {}
+        if (typeof content !== 'string') {
+            return res.status(400).json(ChaiteResponse.fail(null, 'content (string) is required'))
+        }
+
+        const result = skillDocumentLoader.writeSkillSource(req.params.name, content)
+        if (!result.ok) {
+            return res.status(result.status || 400).json(ChaiteResponse.fail(null, result.error))
+        }
+
+        await reloadSkillDocuments('document-saved')
+        broadcastSSE('skill-document-saved', { name: result.name, timestamp: Date.now() })
+        res.json(ChaiteResponse.ok({ name: result.name, path: result.relativePath, size: result.size }, '已保存'))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * GET /documents/:name/files - 读取技能包内附属文件内容
+ *
+ * 目标必须是扫描阶段收录的文件，readPackageFile 内含白名单 + realpath 双重校验
+ * @returns {ChaiteResponse} { path, content, size, editable }
+ */
+router.get('/documents/:name/files', async (req, res) => {
+    try {
+        const filePath = typeof req.query.path === 'string' ? req.query.path : ''
+        if (!filePath) {
+            return res.status(400).json(ChaiteResponse.fail(null, 'path is required'))
+        }
+
+        const file = skillDocumentLoader.readPackageFile(req.params.name, filePath)
+        if (!file) {
+            return res.status(404).json(ChaiteResponse.fail(null, '文件不存在或不可读取'))
+        }
+        res.json(
+            ChaiteResponse.ok({
+                path: file.path,
+                content: file.content,
+                size: file.size,
+                editable: isEditableSkillFile(file.path)
+            })
+        )
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/**
+ * PUT /documents/:name/files - 保存技能包内附属文件
+ *
+ * 仅允许改写纯文本类扩展名，scripts/ 下的脚本不在白名单内
+ * @returns {ChaiteResponse} { path, size }
+ */
+router.put('/documents/:name/files', async (req, res) => {
+    try {
+        const { path: filePath, content } = req.body || {}
+        if (typeof filePath !== 'string' || !filePath) {
+            return res.status(400).json(ChaiteResponse.fail(null, 'path (string) is required'))
+        }
+        if (typeof content !== 'string') {
+            return res.status(400).json(ChaiteResponse.fail(null, 'content (string) is required'))
+        }
+
+        const result = skillDocumentLoader.writePackageFile(req.params.name, filePath, content)
+        if (!result.ok) {
+            return res.status(result.status || 400).json(ChaiteResponse.fail(null, result.error))
+        }
+
+        await reloadSkillDocuments('package-file-saved')
+        broadcastSSE('skill-document-saved', { name: req.params.name, file: result.path, timestamp: Date.now() })
+        res.json(ChaiteResponse.ok({ path: result.path, size: result.size }, '已保存'))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+// ========== 技能包导入 ==========
+
+/**
+ * zip 上传中间件
+ * 内存存储 + 单文件 + 大小上限，避免大文件先落盘再校验
+ */
+const uploadSkillZip = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: MAX_UPLOAD_BYTES, files: 1, fields: 5 }
+}).single('file')
+
+/**
+ * POST /documents/import - 导入 skill 压缩包
+ *
+ * 全部解压防护集中在 SkillPackageImporter：Zip Slip 双重校验、符号链接条目拒绝、
+ * 条目数/单条目/总量三重限额、扩展名白名单、必须含 SKILL.md、目录名白名单。
+ * 同名时返回 409，需显式带 overwrite=true 才覆盖，覆盖前旧目录会挪到 temp/ 留档。
+ * @returns {ChaiteResponse} { name, directory, files, totalBytes, overwritten }
+ */
+router.post('/documents/import', (req, res) => {
+    uploadSkillZip(req, res, async uploadError => {
+        try {
+            if (uploadError) {
+                const message =
+                    uploadError.code === 'LIMIT_FILE_SIZE'
+                        ? `压缩包大小超出上限 ${MAX_UPLOAD_BYTES} 字节`
+                        : `上传失败: ${uploadError.message}`
+                return res.status(400).json(ChaiteResponse.fail(null, message))
+            }
+            if (!req.file?.buffer) {
+                return res.status(400).json(ChaiteResponse.fail(null, '请选择要上传的 zip 文件'))
+            }
+
+            const loader = getSkillsLoader()
+            const pluginRoot = skillDocumentLoader.pluginRoot || loader.pluginRoot
+            if (!pluginRoot) {
+                return res.status(500).json(ChaiteResponse.fail(null, 'Skills 未初始化'))
+            }
+
+            const result = importSkillPackage(req.file.buffer, {
+                importRoot: skillDocumentLoader.getImportRoot(),
+                tempRoot: path.join(pluginRoot, 'temp', 'skills-import'),
+                name: typeof req.body?.name === 'string' ? req.body.name : '',
+                originalName: req.file.originalname,
+                overwrite: req.body?.overwrite === 'true' || req.body?.overwrite === true,
+                existingNames: skillDocumentLoader.getDocuments().map(document => document.name)
+            })
+
+            await reloadSkillDocuments('package-imported')
+            broadcastSSE('skill-imported', {
+                name: result.name,
+                directory: result.directory,
+                timestamp: Date.now()
+            })
+
+            res.status(201).json(
+                ChaiteResponse.ok(
+                    {
+                        name: result.name,
+                        directory: result.directory,
+                        files: result.files,
+                        totalBytes: result.totalBytes,
+                        overwritten: result.overwritten
+                    },
+                    result.overwritten ? '已覆盖导入技能包' : '已导入技能包'
+                )
+            )
+        } catch (error) {
+            if (error instanceof SkillImportError) {
+                return res.status(error.status || 400).json(ChaiteResponse.fail(error.detail || null, error.message))
+            }
+            res.status(500).json(ChaiteResponse.fail(null, error.message))
+        }
+    })
 })
 
 // POST /execute - 执行技能

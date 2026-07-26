@@ -4,8 +4,27 @@
 
 import fs from 'fs'
 import path from 'path'
+import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
-import { icqqGroup, callOneBotApi } from './helpers.js'
+import { icqqGroup, callOneBotApi, resolveSandboxPath, PLUGIN_ROOT, assertSafeUrl } from './helpers.js'
+
+/** read_file 默认读取上限（字节） */
+const DEFAULT_READ_MAX_SIZE = 1024 * 1024
+
+/** read_file 读取硬上限（字节），调用方无法突破 */
+const READ_MAX_SIZE_CAP = 32 * 1024 * 1024
+
+/** 下载到本地的文件大小硬上限（字节） */
+const DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024
+
+/** 下载请求超时（毫秒） */
+const DOWNLOAD_TIMEOUT_MS = 60000
+
+/** list_directory 默认返回条目上限 */
+const DEFAULT_LIST_LIMIT = 200
+
+/** list_directory 返回条目硬上限 */
+const LIST_LIMIT_CAP = 2000
 
 const DANGEROUS_PATHS_WINDOWS = [
     'C:\\Windows',
@@ -56,12 +75,105 @@ function isPathDangerous(targetPath) {
     return false
 }
 
+/**
+ * 将路径解析到插件沙箱内并做危险目录二次检查
+ * 沙箱根为插件根目录；相对路径以插件根目录为基准，绝对路径必须落在沙箱内
+ * @param {string} targetPath - 目标路径
+ * @returns {string} 解析后的绝对路径
+ * @throws {Error} 越出沙箱或命中系统关键目录时抛出
+ */
 function getSafePath(targetPath) {
-    const resolved = path.resolve(targetPath)
+    // 沙箱根校验（含符号链接解析），越界直接抛错
+    const resolved = resolveSandboxPath(targetPath, { root: PLUGIN_ROOT })
+    // 保留原有系统目录黑名单作为额外一层防护
     if (isPathDangerous(resolved)) {
         throw new Error(`禁止操作系统关键目录: ${targetPath}`)
     }
     return resolved
+}
+
+/**
+ * 校验用于发送/上传的文件引用
+ * http(s) 链接直接放行；本地路径与 file:// 路径必须位于插件沙箱内
+ * @param {string} fileRef - 文件引用（URL、file:// 路径或本地路径）
+ * @returns {string} 规范化后的文件引用（本地路径会被替换为沙箱内绝对路径）
+ * @throws {Error} 本地路径越出沙箱时抛出
+ */
+function resolveOutboundFileRef(fileRef) {
+    if (typeof fileRef !== 'string' || fileRef.trim() === '') {
+        throw new Error('文件路径不能为空')
+    }
+    const ref = fileRef.trim()
+
+    if (/^https?:\/\//i.test(ref)) return ref
+    if (/^base64:\/\//i.test(ref) || ref.startsWith('data:')) return ref
+
+    if (/^file:\/\//i.test(ref)) {
+        // file://C:/x 与 file:///path/x 两种写法都需要还原成本地路径
+        let localPath = ref.slice('file://'.length)
+        if (/^\/[a-zA-Z]:/.test(localPath)) localPath = localPath.slice(1)
+        return `file://${getSafePath(decodeURIComponent(localPath))}`
+    }
+
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(ref)) {
+        throw new Error(`不支持的文件协议: ${ref.split('://')[0]}`)
+    }
+
+    return getSafePath(ref)
+}
+
+/**
+ * 规范化下载文件名：强制取基名并剔除非法字符
+ * 用于处理模型给出的 filename 与协议端返回的群文件名（二者均不可信）
+ * @param {string} rawName - 原始文件名
+ * @returns {string} 安全的纯文件名
+ */
+function sanitizeDownloadFilename(rawName) {
+    const base = path
+        // Windows 风格分隔符也要剥掉，避免 Linux 下 basename 不识别
+        .basename(String(rawName || '').replace(/\\/g, '/'))
+        // 控制字符与 Windows 非法文件名字符
+        // eslint-disable-next-line no-control-regex
+        .replace(/[\x00-\x1f<>:"|?*]/g, '')
+        .trim()
+    if (!base || base === '.' || base === '..') return 'downloaded_file'
+    return base
+}
+
+/**
+ * 将远程响应流式写入本地文件，并施加大小上限
+ * @param {Response} response - fetch 响应
+ * @param {string} fullPath - 目标文件绝对路径
+ * @returns {Promise<number>} 已写入字节数
+ * @throws {Error} 超过大小上限时抛出（并清理半成品文件）
+ */
+async function saveResponseToFile(response, fullPath) {
+    const declared = Number(response.headers.get('content-length'))
+    if (Number.isFinite(declared) && declared > DOWNLOAD_MAX_BYTES) {
+        throw new Error(`文件过大 (${declared} bytes)，超过上限 ${DOWNLOAD_MAX_BYTES} bytes`)
+    }
+    if (!response.body) {
+        throw new Error('响应体为空')
+    }
+
+    let written = 0
+    const limited = async function* () {
+        for await (const chunk of response.body) {
+            written += chunk.length
+            if (written > DOWNLOAD_MAX_BYTES) {
+                throw new Error(`文件过大，超过上限 ${DOWNLOAD_MAX_BYTES} bytes`)
+            }
+            yield chunk
+        }
+    }
+
+    try {
+        await pipeline(Readable.from(limited()), fs.createWriteStream(fullPath))
+    } catch (err) {
+        fs.rmSync(fullPath, { force: true })
+        throw err
+    }
+    return written
 }
 
 export const fileTools = [
@@ -173,13 +285,15 @@ export const fileTools = [
                 const bot = ctx.getBot()
                 const { adapter } = ctx.getAdapter()
                 const groupId = parseInt(args.group_id)
+                // 本地路径必须位于插件沙箱内，防止把任意系统文件上传外发
+                const fileRef = resolveOutboundFileRef(args.file_url)
 
                 if (adapter === 'icqq') {
-                    await icqqGroup.sendFile(bot, groupId, args.file_url, args.name)
+                    await icqqGroup.sendFile(bot, groupId, fileRef, args.name)
                 } else {
                     await callOneBotApi(bot, 'upload_group_file', {
                         group_id: groupId,
-                        file: args.file_url,
+                        file: fileRef,
                         name: args.name,
                         folder: args.folder_id || '/'
                     })
@@ -554,11 +668,13 @@ export const fileTools = [
             try {
                 const bot = ctx.getBot()
                 const userId = parseInt(args.user_id)
+                // 本地路径必须位于插件沙箱内，防止把任意系统文件上传外发
+                const fileRef = resolveOutboundFileRef(args.file_url)
 
                 // 尝试 icqq API
                 const friend = bot.pickFriend?.(userId)
                 if (friend?.sendFile) {
-                    await friend.sendFile(args.file_url, args.name)
+                    await friend.sendFile(fileRef, args.name)
                     return { success: true, user_id: userId, name: args.name }
                 }
 
@@ -566,7 +682,7 @@ export const fileTools = [
                 try {
                     await callOneBotApi(bot, 'upload_private_file', {
                         user_id: userId,
-                        file: args.file_url,
+                        file: fileRef,
                         name: args.name
                     })
                     return { success: true, user_id: userId, name: args.name }
@@ -674,11 +790,13 @@ export const fileTools = [
                 const bot = ctx.getBot()
                 const targetId = parseInt(args.target_id)
                 const fileName = args.name || args.file.split('/').pop() || 'file'
+                // 本地路径必须位于插件沙箱内，防止把任意系统文件发到群/私聊
+                const fileRef = resolveOutboundFileRef(args.file)
 
                 if (args.target_type === 'group') {
                     const group = bot.pickGroup?.(targetId)
                     if (group?.sendFile) {
-                        await group.sendFile(args.file, '/', fileName)
+                        await group.sendFile(fileRef, '/', fileName)
                         return {
                             success: true,
                             target: 'group',
@@ -690,7 +808,7 @@ export const fileTools = [
                     if (bot.sendApi) {
                         await bot.sendApi('upload_group_file', {
                             group_id: targetId,
-                            file: args.file,
+                            file: fileRef,
                             name: fileName,
                             folder: '/'
                         })
@@ -703,7 +821,7 @@ export const fileTools = [
                         }
                     }
                     if (bot.sendGroupMsg) {
-                        await bot.sendGroupMsg(targetId, [{ type: 'file', data: { file: args.file, name: fileName } }])
+                        await bot.sendGroupMsg(targetId, [{ type: 'file', data: { file: fileRef, name: fileName } }])
                         return {
                             success: true,
                             target: 'group',
@@ -715,7 +833,7 @@ export const fileTools = [
                 } else {
                     const friend = bot.pickFriend?.(targetId)
                     if (friend?.sendFile) {
-                        await friend.sendFile(args.file, fileName)
+                        await friend.sendFile(fileRef, fileName)
                         return {
                             success: true,
                             target: 'private',
@@ -725,7 +843,7 @@ export const fileTools = [
                         }
                     }
                     if (bot.sendApi) {
-                        await bot.sendApi('upload_private_file', { user_id: targetId, file: args.file, name: fileName })
+                        await bot.sendApi('upload_private_file', { user_id: targetId, file: fileRef, name: fileName })
                         return {
                             success: true,
                             target: 'private',
@@ -735,9 +853,7 @@ export const fileTools = [
                         }
                     }
                     if (bot.sendPrivateMsg) {
-                        await bot.sendPrivateMsg(targetId, [
-                            { type: 'file', data: { file: args.file, name: fileName } }
-                        ])
+                        await bot.sendPrivateMsg(targetId, [{ type: 'file', data: { file: fileRef, name: fileName } }])
                         return {
                             success: true,
                             target: 'private',
@@ -812,45 +928,7 @@ export const fileTools = [
         }
     },
 
-    {
-        name: 'get_record',
-        description: '获取语音文件信息',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                file: { type: 'string', description: '语音文件名或ID' },
-                out_format: {
-                    type: 'string',
-                    description: '输出格式: mp3/amr/wma/m4a/spx/ogg/wav/flac',
-                    default: 'mp3'
-                }
-            },
-            required: ['file']
-        },
-        handler: async (args, ctx) => {
-            try {
-                const bot = ctx.getBot()
-
-                if (bot.sendApi) {
-                    const result = await bot.sendApi('get_record', {
-                        file: args.file,
-                        out_format: args.out_format || 'mp3'
-                    })
-
-                    return {
-                        success: true,
-                        file: result?.data?.file || result?.file,
-                        url: result?.data?.url || result?.url,
-                        format: args.out_format || 'mp3'
-                    }
-                }
-
-                return { success: false, error: '当前协议不支持获取语音信息' }
-            } catch (err) {
-                return { success: false, error: `获取语音信息失败: ${err.message}` }
-            }
-        }
-    },
+    // get_record 已由 voice.js 统一实现（含 retcode 与空返回校验），此处不再重复注册
 
     {
         name: 'ocr_image',
@@ -990,13 +1068,17 @@ export const fileTools = [
 
     {
         name: 'read_file',
-        description: '读取本地文件内容。支持文本文件读取，返回文件内容。路径限制在工作目录内。',
+        description: '读取本地文件内容。支持文本文件读取，返回文件内容。路径限制在插件目录内，越界会被拒绝。',
         inputSchema: {
             type: 'object',
             properties: {
-                file_path: { type: 'string', description: '文件路径（相对于工作目录或绝对路径）' },
+                file_path: { type: 'string', description: '文件路径（相对于插件根目录，或插件目录内的绝对路径）' },
                 encoding: { type: 'string', description: '编码格式，默认utf8', default: 'utf8' },
-                max_size: { type: 'number', description: '最大读取字节数，默认1MB', default: 1048576 }
+                max_size: {
+                    type: 'number',
+                    description: `最大读取字节数，默认1MB，上限${READ_MAX_SIZE_CAP}`,
+                    default: DEFAULT_READ_MAX_SIZE
+                }
             },
             required: ['file_path']
         },
@@ -1004,7 +1086,8 @@ export const fileTools = [
             try {
                 const filePath = getSafePath(args.file_path)
                 const encoding = args.encoding || 'utf8'
-                const maxSize = args.max_size || 1048576
+                // max_size 由调用方指定，必须叠加硬上限，避免一次读入超大文件
+                const maxSize = Math.min(Number(args.max_size) || DEFAULT_READ_MAX_SIZE, READ_MAX_SIZE_CAP)
 
                 if (!fs.existsSync(filePath)) {
                     return { success: false, error: `文件不存在: ${args.file_path}` }
@@ -1035,11 +1118,11 @@ export const fileTools = [
 
     {
         name: 'write_file',
-        description: '写入内容到本地文件。可以创建新文件或覆盖/追加到现有文件。路径限制在工作目录内。',
+        description: '写入内容到本地文件。可以创建新文件或覆盖/追加到现有文件。路径限制在插件目录内，越界会被拒绝。',
         inputSchema: {
             type: 'object',
             properties: {
-                file_path: { type: 'string', description: '文件路径' },
+                file_path: { type: 'string', description: '文件路径（相对于插件根目录，或插件目录内的绝对路径）' },
                 content: { type: 'string', description: '要写入的内容' },
                 encoding: { type: 'string', description: '编码格式，默认utf8', default: 'utf8' },
                 append: { type: 'boolean', description: '是否追加模式，默认false覆盖写入', default: false },
@@ -1082,13 +1165,20 @@ export const fileTools = [
 
     {
         name: 'list_directory',
-        description: '列出目录中的文件和子目录。返回文件名、大小、类型等信息。',
+        description: '列出目录中的文件和子目录。返回文件名、大小、类型等信息。路径限制在插件目录内。',
         inputSchema: {
             type: 'object',
             properties: {
-                dir_path: { type: 'string', description: '目录路径，默认当前工作目录', default: '.' },
+                dir_path: { type: 'string', description: '目录路径，默认插件根目录', default: '.' },
                 recursive: { type: 'boolean', description: '是否递归列出子目录', default: false },
-                pattern: { type: 'string', description: '文件名过滤模式（如 *.txt）' }
+                pattern: { type: 'string', description: '文件名过滤模式（如 *.txt）' },
+                show_hidden: { type: 'boolean', description: '是否显示以 . 开头的隐藏文件，默认true', default: true },
+                limit: {
+                    type: 'integer',
+                    description: `每层最多返回的条目数，默认${DEFAULT_LIST_LIMIT}`,
+                    minimum: 1,
+                    maximum: LIST_LIMIT_CAP
+                }
             }
         },
         handler: async (args, ctx) => {
@@ -1096,6 +1186,8 @@ export const fileTools = [
                 const dirPath = getSafePath(args.dir_path || '.')
                 const recursive = args.recursive || false
                 const pattern = args.pattern
+                const showHidden = args.show_hidden !== false
+                const limit = Math.min(Math.max(Number(args.limit) || DEFAULT_LIST_LIMIT, 1), LIST_LIMIT_CAP)
 
                 if (!fs.existsSync(dirPath)) {
                     return { success: false, error: `目录不存在: ${args.dir_path}` }
@@ -1111,6 +1203,9 @@ export const fileTools = [
                     const entries = fs.readdirSync(dir, { withFileTypes: true })
 
                     for (const entry of entries) {
+                        if (items.length >= limit) break
+                        if (!showHidden && entry.name.startsWith('.')) continue
+
                         const fullPath = path.join(dir, entry.name)
                         const itemStats = fs.statSync(fullPath)
 
@@ -1163,9 +1258,13 @@ export const fileTools = [
         },
         handler: async (args, ctx) => {
             try {
+                const safeUrl = await assertSafeUrl(args.url)
                 const savePath = getSafePath(args.save_path)
-                let filename = args.filename || path.basename(new URL(args.url).pathname) || 'downloaded_file'
-                const fullPath = path.join(savePath, filename)
+                // filename 由模型控制，强制取基名并对拼接结果做二次沙箱校验，杜绝路径穿越
+                const filename = sanitizeDownloadFilename(
+                    args.filename || path.basename(safeUrl.pathname) || 'downloaded_file'
+                )
+                const fullPath = getSafePath(path.join(savePath, filename))
 
                 if (!args.overwrite && fs.existsSync(fullPath)) {
                     return { success: false, error: `文件已存在: ${fullPath}` }
@@ -1175,21 +1274,19 @@ export const fileTools = [
                     fs.mkdirSync(savePath, { recursive: true })
                 }
 
-                const response = await fetch(args.url)
+                const response = await fetch(safeUrl.href, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) })
                 if (!response.ok) {
                     return { success: false, error: `下载失败: HTTP ${response.status}` }
                 }
 
-                const arrayBuffer = await response.arrayBuffer()
-                fs.writeFileSync(fullPath, Buffer.from(arrayBuffer))
+                const size = await saveResponseToFile(response, fullPath)
 
-                const stats = fs.statSync(fullPath)
                 return {
                     success: true,
-                    url: args.url,
+                    url: safeUrl.href,
                     saved_path: fullPath,
                     filename,
-                    size: stats.size
+                    size
                 }
             } catch (err) {
                 return { success: false, error: `下载文件失败: ${err.message}` }
@@ -1239,26 +1336,30 @@ export const fileTools = [
                     return { success: false, error: '无法获取文件下载链接' }
                 }
 
+                const safeUrl = await assertSafeUrl(url)
+
                 if (!fs.existsSync(savePath)) {
                     fs.mkdirSync(savePath, { recursive: true })
                 }
 
-                const fullPath = path.join(savePath, args.filename || originalName)
-                const response = await fetch(url)
+                // originalName 可能来自协议端返回的群文件名（外部可控），与 args.filename 同样按不可信处理
+                const filename = sanitizeDownloadFilename(args.filename || originalName)
+                const fullPath = getSafePath(path.join(savePath, filename))
+
+                const response = await fetch(safeUrl.href, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) })
                 if (!response.ok) {
                     return { success: false, error: `下载失败: HTTP ${response.status}` }
                 }
 
-                const arrayBuffer = await response.arrayBuffer()
-                fs.writeFileSync(fullPath, Buffer.from(arrayBuffer))
+                const size = await saveResponseToFile(response, fullPath)
 
-                const stats = fs.statSync(fullPath)
                 return {
                     success: true,
                     group_id: groupId,
                     file_id: args.file_id,
                     saved_path: fullPath,
-                    size: stats.size
+                    filename,
+                    size
                 }
             } catch (err) {
                 return { success: false, error: `下载群文件失败: ${err.message}` }

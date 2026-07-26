@@ -9,6 +9,22 @@ import { hashContent, isSimilarContent as isSimilarContentUtil } from '../../uti
 
 const logger = chatLogger
 
+/**
+ * 包装注入到 system prompt 的用户记忆块。
+ *
+ * 结构化记忆（MemoryService）与平铺记忆（MemoryManager）两套系统各自组织正文，
+ * 但对外必须呈现同一个块标题与同一套使用说明，否则模型在两条链路下对记忆的处理方式会不一致。
+ *
+ * @param {string[]} lines - 已组织好的记忆正文行，空行会被剔除
+ * @returns {string} 可直接拼接到 system prompt 的记忆块；无有效内容时返回空串
+ */
+export function formatUserMemoryBlock(lines) {
+    const body = (Array.isArray(lines) ? lines : []).map(line => String(line || '').trim()).filter(Boolean)
+    if (body.length === 0) return ''
+
+    return `\n【用户记忆】\n以下是你此前记住的关于当前用户的信息。回答时可自然地用上，但不要主动罗列或复述这些内容，也不要当成用户刚说过的话。\n${body.join('\n')}\n`
+}
+
 class MemoryService {
     constructor() {
         this.initialized = false
@@ -721,11 +737,7 @@ class MemoryService {
             parts.push(`${label}：${contents}`)
         }
 
-        if (parts.length === 0) {
-            return ''
-        }
-
-        return '\n【用户记忆】\n' + parts.join('\n') + '\n'
+        return formatUserMemoryBlock(parts)
     }
 }
 

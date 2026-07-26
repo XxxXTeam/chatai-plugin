@@ -40,7 +40,7 @@ router.get('/recent', async (req, res) => {
 /* 占位符处理函数（logs 和 placeholders 路由共用） */
 async function handleGetPlaceholders(req, res) {
     try {
-        const { requestTemplateService } = await import('../tools/RequestTemplateService.js')
+        const { requestTemplateService } = await import('../proxy/RequestTemplateService.js')
         const placeholders = requestTemplateService.getAvailablePlaceholders()
         res.json(ChaiteResponse.ok(placeholders))
     } catch (error) {
@@ -49,7 +49,7 @@ async function handleGetPlaceholders(req, res) {
 }
 async function handlePreviewPlaceholders(req, res) {
     try {
-        const { requestTemplateService } = await import('../tools/RequestTemplateService.js')
+        const { requestTemplateService } = await import('../proxy/RequestTemplateService.js')
         const { template, context } = req.body
         const result = requestTemplateService.previewTemplate(template, context || {})
         res.json(ChaiteResponse.ok({ result }))

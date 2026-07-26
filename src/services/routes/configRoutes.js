@@ -2,7 +2,7 @@
  * 配置路由模块
  */
 import express from 'express'
-import config from '../../../config/config.js'
+import config, { FORBIDDEN_CONFIG_KEYS, isSafeConfigPath } from '../../../config/config.js'
 import { ChaiteResponse } from './shared.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import { groupSummaryPushService } from '../group/GroupSummaryPushService.js'
@@ -44,9 +44,20 @@ router.get('/', (req, res) => {
     }
 })
 
-// 深度合并对象的辅助函数
+/**
+ * 深度合并对象的辅助函数
+ *
+ * 会跳过 __proto__ / constructor / prototype 等键名：
+ * express.json() 底层的 JSON.parse 会把请求体中的 __proto__ 建为自有可枚举属性，
+ * 因此 Object.keys 能遍历到它，而 target[key] = ... 会命中原型 setter 造成全进程原型链污染。
+ *
+ * @param {Object} target - 目标对象，会被就地修改
+ * @param {Object} source - 数据来源
+ * @returns {Object} 合并后的 target
+ */
 function deepMerge(target, source) {
     for (const key of Object.keys(source)) {
+        if (FORBIDDEN_CONFIG_KEYS.has(key)) continue
         if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
             if (!target[key] || typeof target[key] !== 'object' || Array.isArray(target[key])) {
                 target[key] = {}
@@ -63,30 +74,29 @@ function deepMerge(target, source) {
 router.post('/', async (req, res) => {
     try {
         const updates = req.body
+        if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+            return res.status(400).json(ChaiteResponse.fail(null, '请求体必须是配置对象'))
+        }
         // 先在内存中合并所有更新，最后一次性保存
         for (const [key, value] of Object.entries(updates)) {
+            const keys = key.split('.')
+            // 顶层键与点分路径都要校验，否则 { "__proto__.x": 1 } / { "constructor.prototype.x": 1 } 可污染原型
+            if (!isSafeConfigPath(keys)) {
+                return res.status(400).json(ChaiteResponse.fail(null, `非法的配置项: ${key}`))
+            }
+            let assigned = value
             if (value && typeof value === 'object' && !Array.isArray(value)) {
                 // 深度合并对象
                 const existing = config.get(key) || {}
-                const merged = deepMerge({ ...existing }, value)
-                // 直接修改内存配置，不立即保存
-                const keys = key.split('.')
-                let obj = config.config
-                for (let i = 0; i < keys.length - 1; i++) {
-                    if (!obj[keys[i]]) obj[keys[i]] = {}
-                    obj = obj[keys[i]]
-                }
-                obj[keys[keys.length - 1]] = merged
-            } else {
-                // 直接修改内存配置，不立即保存
-                const keys = key.split('.')
-                let obj = config.config
-                for (let i = 0; i < keys.length - 1; i++) {
-                    if (!obj[keys[i]]) obj[keys[i]] = {}
-                    obj = obj[keys[i]]
-                }
-                obj[keys[keys.length - 1]] = value
+                assigned = deepMerge({ ...existing }, value)
             }
+            // 直接修改内存配置，不立即保存
+            let obj = config.config
+            for (let i = 0; i < keys.length - 1; i++) {
+                if (!obj[keys[i]]) obj[keys[i]] = {}
+                obj = obj[keys[i]]
+            }
+            obj[keys[keys.length - 1]] = assigned
         }
         // 所有更新完成后，一次性保存到文件
         config.save()

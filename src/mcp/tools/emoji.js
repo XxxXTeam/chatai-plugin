@@ -7,6 +7,17 @@ import path from 'path'
 import { chatLogger as logger } from '../../core/utils/logger.js'
 import { emojiThiefService } from '../../../apps/EmojiThief.js'
 import { segment } from '../../utils/messageParser.js'
+import { assertSafeUrl } from './helpers.js'
+
+/** 表情图片下载超时（毫秒） */
+const EMOJI_DOWNLOAD_TIMEOUT_MS = 15000
+
+/** 表情图片大小上限（字节）：timeout 只约束响应头等待，必须另设体积上限 */
+const EMOJI_MAX_BYTES = 10 * 1024 * 1024
+
+/** list_saved_emojis 默认与最大返回数量 */
+const DEFAULT_EMOJI_LIST_LIMIT = 20
+const MAX_EMOJI_LIST_LIMIT = 50
 
 async function listEmojiFiles(groupId) {
     await emojiThiefService.init()
@@ -34,13 +45,21 @@ async function saveImageAsEmoji(groupId, imageUrl) {
     const dbPath = path.join(emojiDir, 'md5.json')
     const md5Db = await emojiThiefService.readMd5Db(dbPath)
 
+    // 协议白名单 + 内网阻断，避免通过表情 URL 探测内网
+    const safeUrl = await assertSafeUrl(imageUrl)
+
     const { default: axios } = await import('axios')
-    const resp = await axios.get(imageUrl, {
+    const resp = await axios.get(safeUrl.href, {
         responseType: 'arraybuffer',
-        timeout: 15000,
+        timeout: EMOJI_DOWNLOAD_TIMEOUT_MS,
+        maxContentLength: EMOJI_MAX_BYTES,
+        maxBodyLength: EMOJI_MAX_BYTES,
         headers: { Referer: 'https://qq.com', 'User-Agent': 'Mozilla/5.0' }
     })
     const buffer = Buffer.from(resp.data)
+    if (buffer.length > EMOJI_MAX_BYTES) {
+        return { success: false, reason: 'too_large', size: buffer.length }
+    }
     const { default: crypto } = await import('crypto')
     const md5 = crypto.createHash('md5').update(buffer).digest('hex')
 
@@ -71,7 +90,7 @@ export const emojiTools = [
         description:
             '保存一张图片到群表情包库。当用户说"偷图"、"保存这个表情"、"存一下"等，或者你觉得某张图片适合当表情包时使用。需要提供图片URL。',
         category: 'emoji',
-        parameters: {
+        inputSchema: {
             type: 'object',
             properties: {
                 image_url: { type: 'string', description: '要保存的图片URL' },
@@ -91,6 +110,12 @@ export const emojiTools = [
                 }
                 if (result.reason === 'duplicate') return { success: false, message: '这张图已经存过了' }
                 if (result.reason === 'max_reached') return { success: false, message: `表情包已满(${result.count}张)` }
+                if (result.reason === 'too_large') {
+                    return {
+                        success: false,
+                        message: `图片过大(${result.size} bytes)，超过 ${EMOJI_MAX_BYTES} bytes 上限`
+                    }
+                }
                 return { success: false, message: '保存失败' }
             } catch (err) {
                 logger.warn('[EmojiTool] 保存表情失败:', err.message)
@@ -103,11 +128,15 @@ export const emojiTools = [
         description:
             '从群表情包库中选择并发送一个表情包。当场景适合发表情包、用户要求发表情、或者用户说"发个表情""之前那个图呢"时使用。可以指定描述来匹配，也可以随机发送。',
         category: 'emoji',
-        parameters: {
+        inputSchema: {
             type: 'object',
             properties: {
                 random: { type: 'boolean', description: '是否随机选择（默认true）' },
-                index: { type: 'number', description: '指定发送第几张（从0开始，需要先用list_saved_emojis查看）' }
+                index: {
+                    type: 'integer',
+                    description: '指定发送第几张（从0开始，需要先用list_saved_emojis查看）',
+                    minimum: 0
+                }
             }
         },
         handler: async (args, context) => {
@@ -119,9 +148,11 @@ export const emojiTools = [
                 const files = await listEmojiFiles(String(groupId))
                 if (files.length === 0) return { success: false, message: '群表情包库为空' }
 
+                // index 必须是合法整数下标，否则回退随机（非整数会让 files[index] 为 undefined 而抛错）
                 let selected
-                if (args.index !== undefined && args.index >= 0 && args.index < files.length) {
-                    selected = files[args.index]
+                const index = Number(args.index)
+                if (args.index !== undefined && Number.isInteger(index) && index >= 0 && index < files.length) {
+                    selected = files[index]
                 } else {
                     selected = files[Math.floor(Math.random() * files.length)]
                 }
@@ -148,10 +179,15 @@ export const emojiTools = [
         name: 'list_saved_emojis',
         description: '列出群表情包库中已保存的表情。当用户问"有什么表情""表情包列表"时使用。',
         category: 'emoji',
-        parameters: {
+        inputSchema: {
             type: 'object',
             properties: {
-                limit: { type: 'number', description: '最多返回数量（默认20）' }
+                limit: {
+                    type: 'integer',
+                    description: `最多返回数量（默认${DEFAULT_EMOJI_LIST_LIMIT}，最大${MAX_EMOJI_LIST_LIMIT}）`,
+                    minimum: 1,
+                    maximum: MAX_EMOJI_LIST_LIMIT
+                }
             }
         },
         handler: async (args, context) => {
@@ -160,7 +196,10 @@ export const emojiTools = [
 
             try {
                 const files = await listEmojiFiles(String(groupId))
-                const limit = Math.min(args.limit || 20, 50)
+                const limit = Math.min(
+                    Math.max(Number(args.limit) || DEFAULT_EMOJI_LIST_LIMIT, 1),
+                    MAX_EMOJI_LIST_LIMIT
+                )
                 const stats = await emojiThiefService.getGroupStats(String(groupId))
                 return {
                     success: true,

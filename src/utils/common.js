@@ -70,10 +70,31 @@ function padZero(num) {
     return num < 10 ? '0' + num : num.toString()
 }
 
-// 数据目录 - 使用正确的配置引用
-export const dataDir = path.resolve('./plugins/chatgpt-plugin', config.get('chaite.dataDir') || 'data')
-if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true })
+/**
+ * 插件根目录
+ * 由模块自身位置推导（本文件位于 <plugin>/src/utils/），不依赖进程工作目录，
+ * 也不写死插件目录名（本插件在不同发行版下目录名可能是 chatgpt-plugin 或 chatai-plugin）
+ * @type {string}
+ */
+export const pluginRoot = path.resolve(__dirname, '../..')
+
+/**
+ * 插件数据目录
+ * 相对路径基于插件根目录解析，配置为绝对路径时直接生效
+ * @type {string}
+ */
+export const dataDir = path.resolve(pluginRoot, config.get('chaite.dataDir') || 'data')
+
+/**
+ * 确保数据目录存在
+ * 目录创建不再作为模块加载副作用执行，避免只读文件系统下 import 即抛错
+ * @returns {string} 数据目录绝对路径
+ */
+export function ensureDataDir() {
+    if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true })
+    }
+    return dataDir
 }
 
 const safeLog = {

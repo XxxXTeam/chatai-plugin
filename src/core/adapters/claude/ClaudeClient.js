@@ -1,12 +1,24 @@
 import Anthropic from '@anthropic-ai/sdk'
 import crypto from 'node:crypto'
 import { chatLogger } from '../../utils/logger.js'
-import { AbstractClient, parseXmlToolCalls, preprocessImageUrls } from '../AbstractClient.js'
+import {
+    AbstractClient,
+    parseXmlToolCalls,
+    preprocessImageUrls,
+    extractText,
+    resolveModelName
+} from '../AbstractClient.js'
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
 import { resolveToolChoice } from '../tooling.js'
 
 const logger = chatLogger
+
+/**
+ * 未指定模型且全局默认模型也为空时的兜底模型
+ * @type {string}
+ */
+const DEFAULT_CLAUDE_MODEL = 'claude-3-5-sonnet-20241022'
 
 /**
  * @typedef {import('../../types').BaseClientOptions} BaseClientOptions
@@ -59,6 +71,11 @@ export class ClaudeClient extends AbstractClient {
         const baseURL = this.baseUrl ? this.baseUrl.replace(/\/v1\/?$/i, '') : undefined
         const baseUrlClean = baseURL?.replace(/\/+$/, '') || ''
         const clientOptions = { apiKey, baseURL }
+        // 接通渠道 timeout.read，未配置时沿用 SDK 默认值
+        const requestTimeout = this.resolveRequestTimeout()
+        if (requestTimeout) {
+            clientOptions.timeout = requestTimeout
+        }
         const entries = Object.entries(endpointMap).filter(([, endpointPath]) => endpointPath)
 
         if (baseUrlClean && entries.length > 0) {
@@ -101,7 +118,7 @@ export class ClaudeClient extends AbstractClient {
     async _sendMessage(histories, apiKey, options) {
         const client = new Anthropic(this.buildClaudeClientOptions(apiKey, this.getClaudeEndpointMap()))
 
-        const model = options.model || 'claude-3-5-sonnet-20241022'
+        const model = resolveModelName(options.model, DEFAULT_CLAUDE_MODEL)
 
         /*
          * 图片预处理：根据渠道 imageConfig.transferMode 决定处理方式
@@ -125,10 +142,7 @@ export class ClaudeClient extends AbstractClient {
         for (const history of histories) {
             if (history.role === 'system') {
                 // 系统消息变为系统参数
-                systemPrompt = history.content
-                    .filter(c => c.type === 'text')
-                    .map(c => c.text)
-                    .join('\n')
+                systemPrompt = extractText(history.content)
             } else {
                 const claudeMsg = converter(history)
                 if (Array.isArray(claudeMsg)) {
@@ -236,7 +250,7 @@ export class ClaudeClient extends AbstractClient {
         const apiKey = await import('../../utils/helpers.js').then(m => m.getKey(this.apiKey, this.multipleKeyStrategy))
         const client = new Anthropic(this.buildClaudeClientOptions(apiKey, this.getClaudeEndpointMap()))
 
-        const model = options.model || 'claude-3-5-sonnet-20241022'
+        const model = resolveModelName(options.model, DEFAULT_CLAUDE_MODEL)
 
         /*
          * 图片预处理：根据渠道 imageConfig.transferMode 决定处理方式
@@ -254,10 +268,7 @@ export class ClaudeClient extends AbstractClient {
         const messages = []
         for (const history of histories) {
             if (history.role === 'system') {
-                systemPrompt = history.content
-                    .filter(c => c.type === 'text')
-                    .map(c => c.text)
-                    .join('\n')
+                systemPrompt = extractText(history.content)
             } else {
                 const claudeMsg = converter(history)
                 if (Array.isArray(claudeMsg)) {

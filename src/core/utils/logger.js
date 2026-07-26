@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import yaml from 'yaml'
 
 const icons = {
@@ -85,11 +86,32 @@ const LEVEL_PRIORITY = {
 // 缓存日志级别（避免重复读取配置）
 let cachedLogLevel = null
 
-// 初始化时同步读取框架配置
+/*
+ * 记录初始化失败原因。
+ * 本模块在加载期执行，此时框架 logger 尚未就绪，无法直接输出；
+ * 原实现的空 catch 会让"日志级别静默回落默认值"完全无迹可循。
+ * 因此先暂存，待框架 logger 可用时由 getFrameworkLogLevel 补报一次。
+ */
+let logLevelInitError = null
+let logLevelInitErrorReported = false
+
+/**
+ * 框架日志级别配置文件路径
+ * Yunzai 将 bot.yaml 置于 <root>/config/config/ 下；用 path.join 拼接以兼容不同平台的分隔符
+ * @returns {string} bot.yaml 的绝对路径
+ */
+function getFrameworkConfigPath() {
+    return path.join(process.cwd(), 'config', 'config', 'bot.yaml')
+}
+
+/**
+ * 初始化时同步读取框架配置中的日志级别
+ * @returns {void}
+ */
 function initLogLevel() {
     if (cachedLogLevel !== null) return
+    const configPath = getFrameworkConfigPath()
     try {
-        const configPath = process.cwd() + '/config/config/bot.yaml'
         if (fs.existsSync(configPath)) {
             const content = fs.readFileSync(configPath, 'utf-8')
             const config = yaml.parse(content)
@@ -100,12 +122,26 @@ function initLogLevel() {
                 }
             }
         }
-    } catch {
-        // 忽略初始化错误
+    } catch (err) {
+        logLevelInitError = `读取 ${configPath} 失败: ${err.message}`
     }
 }
 initLogLevel()
+
+/**
+ * 获取框架当前的日志级别优先级
+ * @returns {number} LEVEL_PRIORITY 中的优先级数值，无法确定时返回 info 级
+ */
 function getFrameworkLogLevel() {
+    // 首次拿到可用的框架 logger 时补报初始化失败原因，避免级别回落无从排查
+    if (logLevelInitError && !logLevelInitErrorReported && typeof logger !== 'undefined' && logger?.debug) {
+        logLevelInitErrorReported = true
+        try {
+            logger.debug(`[ChatAI][日志] 框架日志级别读取失败，已回落默认级别 - ${logLevelInitError}`)
+        } catch {
+            /* 框架 logger 尚不可用，放弃补报 */
+        }
+    }
     if (cachedLogLevel !== null) {
         return cachedLogLevel
     }

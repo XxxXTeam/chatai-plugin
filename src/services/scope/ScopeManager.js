@@ -1961,6 +1961,8 @@ export class ScopeManager {
 
 // 创建单例
 let scopeManagerInstance = null
+/** 初始化中的 Promise，用于并发去重 */
+let scopeManagerInitPromise = null
 
 /**
  * 获取 ScopeManager 单例
@@ -1987,17 +1989,35 @@ export { scopeManagerInstance as scopeManager }
  * @returns {Promise<ScopeManager>}
  */
 export async function ensureScopeManager() {
-    if (!scopeManagerInstance) {
-        const { databaseService } = await import('../storage/DatabaseService.js')
-        if (!databaseService.initialized) {
-            await databaseService.init()
+    if (scopeManagerInstance?.initialized) {
+        return scopeManagerInstance
+    }
+
+    // 用 in-flight Promise 去重：三个 await 横跨「检查—赋值」，
+    // 并发调用会重复 new ScopeManager 并重复执行建表初始化
+    if (scopeManagerInitPromise) {
+        return await scopeManagerInitPromise
+    }
+
+    scopeManagerInitPromise = (async () => {
+        try {
+            if (!scopeManagerInstance) {
+                const { databaseService } = await import('../storage/DatabaseService.js')
+                if (!databaseService.initialized) {
+                    await databaseService.init()
+                }
+                scopeManagerInstance = new ScopeManager(databaseService)
+            }
+            if (!scopeManagerInstance.initialized) {
+                await scopeManagerInstance.init()
+            }
+            return scopeManagerInstance
+        } finally {
+            scopeManagerInitPromise = null
         }
-        scopeManagerInstance = new ScopeManager(databaseService)
-    }
-    if (!scopeManagerInstance.initialized) {
-        await scopeManagerInstance.init()
-    }
-    return scopeManagerInstance
+    })()
+
+    return await scopeManagerInitPromise
 }
 
 /**

@@ -4,6 +4,86 @@
  */
 
 import { segment } from '../../utils/messageParser.js'
+import { resolveSandboxPath, PLUGIN_ROOT, assertSafeUrl } from './helpers.js'
+
+/** download_image 请求超时（毫秒） */
+const DOWNLOAD_TIMEOUT_MS = 30000
+
+/** download_image 单文件读取上限（字节） */
+const DOWNLOAD_MAX_BYTES = 20 * 1024 * 1024
+
+/**
+ * 将本地媒体路径解析为沙箱内的 file:// 引用
+ * 防止模型通过 file 参数把 ~/.ssh/id_rsa 之类的任意文件发到群里
+ * @param {string} localPath - 本地文件路径
+ * @returns {string} file:// 形式的引用
+ * @throws {Error} 路径越出插件沙箱时抛出
+ */
+function toSandboxFileRef(localPath) {
+    const resolved = resolveSandboxPath(String(localPath).replace(/^file:\/\//i, ''), { root: PLUGIN_ROOT })
+    return `file://${resolved}`
+}
+
+/**
+ * 规范化对外发送的媒体引用
+ * http(s)/base64/data 直接放行；file:// 与裸本地路径必须位于插件沙箱内
+ * @param {string} ref - 媒体引用
+ * @returns {string} 规范化后的引用
+ * @throws {Error} 本地路径越出沙箱时抛出
+ */
+function resolveMediaRef(ref) {
+    const value = String(ref || '').trim()
+    if (!value) throw new Error('媒体路径不能为空')
+    if (/^https?:\/\//i.test(value)) return value
+    if (/^base64:\/\//i.test(value) || value.startsWith('data:')) return value
+    if (/^file:\/\//i.test(value)) return toSandboxFileRef(value)
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value)) {
+        throw new Error(`不支持的媒体协议: ${value.split('://')[0]}`)
+    }
+    return toSandboxFileRef(value)
+}
+
+/**
+ * 下载二进制内容并施加超时与大小上限
+ * @param {string} rawUrl - 目标 URL（会经过 SSRF 守卫校验）
+ * @param {Object} [options] - fetch 选项
+ * @returns {Promise<{buffer: Buffer, contentType: string, status: number, url: string}>} 下载结果
+ * @throws {Error} URL 不安全、请求失败或超出大小上限时抛出
+ */
+async function fetchBinaryWithLimit(rawUrl, options = {}) {
+    const safeUrl = await assertSafeUrl(rawUrl)
+    const response = await fetch(safeUrl.href, {
+        ...options,
+        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
+    })
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+    }
+
+    const declared = Number(response.headers.get('content-length'))
+    if (Number.isFinite(declared) && declared > DOWNLOAD_MAX_BYTES) {
+        throw new Error(`文件过大 (${declared} bytes)，超过上限 ${DOWNLOAD_MAX_BYTES} bytes`)
+    }
+
+    const chunks = []
+    let bytes = 0
+    if (response.body) {
+        for await (const chunk of response.body) {
+            bytes += chunk.length
+            if (bytes > DOWNLOAD_MAX_BYTES) {
+                throw new Error(`文件过大，超过上限 ${DOWNLOAD_MAX_BYTES} bytes`)
+            }
+            chunks.push(Buffer.from(chunk))
+        }
+    }
+
+    return {
+        buffer: Buffer.concat(chunks),
+        contentType: response.headers.get('content-type') || 'application/octet-stream',
+        status: response.status,
+        url: safeUrl.href
+    }
+}
 
 export const mediaTools = [
     {
@@ -47,14 +127,10 @@ export const mediaTools = [
 
                     if (args.to_base64) {
                         try {
-                            const response = await fetch(url)
-                            if (response.ok) {
-                                const buffer = await response.arrayBuffer()
-                                const contentType = response.headers.get('content-type') || 'image/jpeg'
-                                result.base64 = `data:${contentType};base64,${Buffer.from(buffer).toString('base64')}`
-                                result.mimeType = contentType
-                                result.size = buffer.byteLength
-                            }
+                            const downloaded = await fetchBinaryWithLimit(url)
+                            result.base64 = `data:${downloaded.contentType};base64,${downloaded.buffer.toString('base64')}`
+                            result.mimeType = downloaded.contentType
+                            result.size = downloaded.buffer.length
                         } catch (err) {
                             result.error = err.message
                         }
@@ -120,11 +196,15 @@ export const mediaTools = [
         },
         handler: async args => {
             try {
-                const response = await fetch(args.url, { method: 'HEAD' })
+                const safeUrl = await assertSafeUrl(args.url)
+                const response = await fetch(safeUrl.href, {
+                    method: 'HEAD',
+                    signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
+                })
 
                 return {
                     success: true,
-                    url: args.url,
+                    url: safeUrl.href,
                     contentType: response.headers.get('content-type'),
                     contentLength: response.headers.get('content-length'),
                     status: response.status
@@ -156,7 +236,8 @@ export const mediaTools = [
                 const msgParts = []
 
                 if (args.url) {
-                    msgParts.push(segment.image(args.url))
+                    // url 允许传本地路径，需限制在插件沙箱内，避免任意文件被发出去
+                    msgParts.push(segment.image(resolveMediaRef(args.url)))
                 } else if (args.base64) {
                     msgParts.push(segment.image(`base64://${args.base64.replace(/^data:[^;]+;base64,/, '')}`))
                 } else {
@@ -200,7 +281,7 @@ export const mediaTools = [
                 if (args.url) {
                     videoData = args.url
                 } else if (args.file) {
-                    videoData = `file://${args.file}`
+                    videoData = toSandboxFileRef(args.file)
                 } else {
                     return { success: false, error: '需要提供 url 或 file' }
                 }
@@ -562,15 +643,14 @@ export const mediaTools = [
                 if (args.url) {
                     imageData = args.url
                 } else if (args.file) {
-                    imageData = `file://${args.file}`
+                    imageData = toSandboxFileRef(args.file)
                 } else {
                     return { success: false, error: '需要提供 url 或 file' }
                 }
 
                 const flashSeg = {
-                    type: 'image',
-                    file: imageData,
-                    type: 'flash'
+                    type: 'flash',
+                    file: imageData
                 }
 
                 const result = await e.reply(flashSeg)
@@ -779,113 +859,23 @@ export const mediaTools = [
         },
         handler: async args => {
             try {
-                const response = await fetch(args.url)
-                if (!response.ok) {
-                    return { success: false, error: `下载失败: HTTP ${response.status}` }
-                }
-
-                const buffer = await response.arrayBuffer()
-                const contentType = response.headers.get('content-type') || 'image/jpeg'
-                const ext = contentType.split('/')[1]?.split(';')[0] || 'jpg'
-
-                // 返回 base64 格式，可直接用于发送
-                const base64 = Buffer.from(buffer).toString('base64')
+                const downloaded = await fetchBinaryWithLimit(args.url)
+                const base64 = downloaded.buffer.toString('base64')
 
                 return {
                     success: true,
-                    url: args.url,
-                    size: buffer.byteLength,
-                    mime_type: contentType,
+                    url: downloaded.url,
+                    size: downloaded.buffer.length,
+                    mime_type: downloaded.contentType,
                     base64: `base64://${base64}`,
-                    data_url: `data:${contentType};base64,${base64}`
+                    data_url: `data:${downloaded.contentType};base64,${base64}`
                 }
             } catch (err) {
                 return { success: false, error: `下载图片失败: ${err.message}` }
             }
         }
-    },
-
-    {
-        name: 'send_markdown',
-        description: '发送Markdown消息（需要协议端支持）',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                content: { type: 'string', description: 'Markdown内容' }
-            },
-            required: ['content']
-        },
-        handler: async (args, ctx) => {
-            try {
-                const e = ctx.getEvent()
-                if (!e) {
-                    return { success: false, error: '没有可用的会话上下文' }
-                }
-
-                // 尝试发送 markdown 消息段
-                const mdSeg = {
-                    type: 'markdown',
-                    content: args.content
-                }
-
-                const result = await e.reply(mdSeg)
-                return {
-                    success: true,
-                    message_id: result?.message_id
-                }
-            } catch (err) {
-                // 如果不支持，回退到普通文本
-                try {
-                    const result = await ctx.getEvent().reply(args.content)
-                    return {
-                        success: true,
-                        message_id: result?.message_id,
-                        note: '不支持Markdown，已降级为纯文本'
-                    }
-                } catch (e) {
-                    return { success: false, error: `发送Markdown失败: ${err.message}` }
-                }
-            }
-        }
-    },
-
-    {
-        name: 'send_button',
-        description: '发送按钮消息（需要协议端支持）',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                content: { type: 'string', description: '按钮配置JSON' }
-            },
-            required: ['content']
-        },
-        handler: async (args, ctx) => {
-            try {
-                const e = ctx.getEvent()
-                if (!e) {
-                    return { success: false, error: '没有可用的会话上下文' }
-                }
-
-                let buttonData
-                try {
-                    buttonData = typeof args.content === 'string' ? JSON.parse(args.content) : args.content
-                } catch (e) {
-                    return { success: false, error: '无效的按钮配置JSON' }
-                }
-
-                const buttonSeg = {
-                    type: 'button',
-                    data: buttonData
-                }
-
-                const result = await e.reply(buttonSeg)
-                return {
-                    success: true,
-                    message_id: result?.message_id
-                }
-            } catch (err) {
-                return { success: false, error: `发送按钮失败: ${err.message}` }
-            }
-        }
     }
+
+    // send_markdown / send_button 已由 message.js 统一实现（支持 group_id/user_id 定向发送），
+    // 此处不再重复注册：重复注册会导致暴露给模型的 schema 与实际执行的 handler 来自不同文件
 ]

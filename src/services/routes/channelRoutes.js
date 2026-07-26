@@ -10,6 +10,22 @@ import { ApiResponse } from './shared.js'
 
 const router = express.Router()
 
+/**
+ * 规范化上游返回的模型列表
+ *
+ * 原实现对 api.openai.com 额外做白名单过滤（仅保留含 gpt / text-embedding / o1 / o3 的条目），
+ * 会让 o4-mini、codex-*、dall-e-*、whisper-*、tts-*、sora-* 等模型在面板中不可选，
+ * 且 includes('o1') 会误伤任意含该子串的模型名；该接口还被图像生成页面复用来选取绘图模型，
+ * 任何按用途划定的白名单都会误伤，故仅做去重与排序，不再过滤。
+ *
+ * @param {string[]|any} models - 适配器 listModels 的返回值
+ * @returns {string[]} 去重并按字典序排序后的模型 ID 列表
+ */
+export function normalizeModelList(models) {
+    if (!Array.isArray(models)) return []
+    return [...new Set(models.filter(id => typeof id === 'string' && id.trim()))].sort()
+}
+
 function getAdapterClientClass(adapterType = 'openai') {
     switch (adapterType) {
         case 'gemini':
@@ -159,7 +175,7 @@ router.post('/test', async (req, res) => {
         openaiApiInterface,
         experimental,
         openaiResponses
-    } = req.body
+    } = req.body || {}
     const startTime = Date.now()
 
     let usedKeyIndex = -1
@@ -167,65 +183,66 @@ router.post('/test', async (req, res) => {
     let usedStrategy = ''
     let channelName = id || '临时测试'
 
-    if (id) {
-        const channel = channelManager.get(id)
-        if (channel) {
-            channelName = channel.name || id
-            adapterType = channel.adapterType
-            baseUrl = channel.baseUrl
-            chatPath = channel.chatPath // 获取渠道的自定义对话路径
-            responsePath = channel.responsePath || channel.endpoints?.responses || ''
-            endpoints = channel.endpoints || {}
-            apiInterface = channel.apiInterface || channel.openaiApiInterface || 'chat'
-            openaiApiInterface = apiInterface
-            experimental = channel.experimental || {}
-            openaiResponses = channel.openaiResponses || {}
-            models = channel.models
-            advanced = channel.advanced || advanced
+    try {
+        // 准备阶段同样置于 try 内：handler 是 async 函数，此处的同步抛错会变成 unhandledRejection 而非 500 响应
+        if (id) {
+            const channel = channelManager.get(id)
+            if (channel) {
+                channelName = channel.name || id
+                adapterType = channel.adapterType
+                baseUrl = channel.baseUrl
+                chatPath = channel.chatPath // 获取渠道的自定义对话路径
+                responsePath = channel.responsePath || channel.endpoints?.responses || ''
+                endpoints = channel.endpoints || {}
+                apiInterface = channel.apiInterface || channel.openaiApiInterface || 'chat'
+                openaiApiInterface = apiInterface
+                experimental = channel.experimental || {}
+                openaiResponses = channel.openaiResponses || {}
+                models = channel.models
+                advanced = channel.advanced || advanced
 
-            if (channel.apiKeys && channel.apiKeys.length > 0) {
-                const keyInfo = channelManager.getChannelKey(channel, { recordUsage: false })
-                apiKey = keyInfo.key
-                usedKeyIndex = keyInfo.keyIndex
-                usedKeyName = keyInfo.keyName
-                usedStrategy = keyInfo.strategy
-            } else {
-                apiKey = channel.apiKey
+                if (channel.apiKeys && channel.apiKeys.length > 0) {
+                    const keyInfo = channelManager.getChannelKey(channel, { recordUsage: false })
+                    apiKey = keyInfo.key
+                    usedKeyIndex = keyInfo.keyIndex
+                    usedKeyName = keyInfo.keyName
+                    usedStrategy = keyInfo.strategy
+                } else {
+                    apiKey = channel.apiKey
+                }
+            }
+        } else if (apiKeys && apiKeys.length > 0) {
+            usedStrategy = strategy || 'round-robin'
+            let idx = usedStrategy === 'random' ? Math.floor(Math.random() * apiKeys.length) : 0
+            const keyObj = apiKeys[idx]
+            apiKey = typeof keyObj === 'string' ? keyObj : keyObj.key
+            usedKeyIndex = idx
+            usedKeyName = typeof keyObj === 'object' ? keyObj.name : `Key#${idx + 1}`
+        }
+
+        if (!id && baseUrl) {
+            baseUrl = normalizeBaseUrl(baseUrl, adapterType)
+        }
+
+        const testMessage = '说一声你好'
+
+        // 获取渠道的完整配置（与实际对话一致）
+        let customHeaders = {}
+        let headersTemplate = ''
+        let requestBodyTemplate = ''
+        let imageConfig = {}
+        let systemPromptConfig = null
+        if (id) {
+            const channel = channelManager.get(id)
+            if (channel) {
+                customHeaders = channel.customHeaders || {}
+                headersTemplate = channel.headersTemplate || ''
+                requestBodyTemplate = channel.requestBodyTemplate || ''
+                imageConfig = channel.imageConfig || {}
+                systemPromptConfig = channel.systemPromptConfig || null
             }
         }
-    } else if (apiKeys && apiKeys.length > 0) {
-        usedStrategy = strategy || 'round-robin'
-        let idx = usedStrategy === 'random' ? Math.floor(Math.random() * apiKeys.length) : 0
-        const keyObj = apiKeys[idx]
-        apiKey = typeof keyObj === 'string' ? keyObj : keyObj.key
-        usedKeyIndex = idx
-        usedKeyName = typeof keyObj === 'object' ? keyObj.name : `Key#${idx + 1}`
-    }
 
-    if (!id && baseUrl) {
-        baseUrl = normalizeBaseUrl(baseUrl, adapterType)
-    }
-
-    const testMessage = '说一声你好'
-
-    // 获取渠道的完整配置（与实际对话一致）
-    let customHeaders = {}
-    let headersTemplate = ''
-    let requestBodyTemplate = ''
-    let imageConfig = {}
-    let systemPromptConfig = null
-    if (id) {
-        const channel = channelManager.get(id)
-        if (channel) {
-            customHeaders = channel.customHeaders || {}
-            headersTemplate = channel.headersTemplate || ''
-            requestBodyTemplate = channel.requestBodyTemplate || ''
-            imageConfig = channel.imageConfig || {}
-            systemPromptConfig = channel.systemPromptConfig || null
-        }
-    }
-
-    try {
         const channel = id ? channelManager.get(id) || {} : {}
         const client = await createChannelTestClient({
             adapterType,
@@ -250,10 +267,16 @@ router.post('/test', async (req, res) => {
             }
         })
 
+        /*
+         * 渠道未配置 models 时的健康检查兜底模型。
+         * 原先 openai 侧硬编码的模型已被上游下线，会让未配 models 的渠道恒返回假失败；
+         * 现改为读 llm.healthCheckModels，便于自建/中转网关按实际可用模型覆盖。
+         */
+        const configuredHealthModels = config.get('llm.healthCheckModels') || {}
         const defaultModels = {
-            openai: 'gpt-3.5-turbo',
-            gemini: 'gemini-2.5-flash',
-            claude: 'claude-3-5-sonnet-20241022'
+            openai: configuredHealthModels.openai || 'gpt-4o-mini',
+            gemini: configuredHealthModels.gemini || 'gemini-2.5-flash',
+            claude: configuredHealthModels.claude || 'claude-3-5-haiku-20241022'
         }
         const testModel = models && models.length > 0 ? models[0] : defaultModels[adapterType] || defaultModels.openai
         let actualTestModel = testModel
@@ -428,7 +451,9 @@ router.put('/:id/select-baseurl', async (req, res) => {
         }
 
         const baseUrls = channel.baseUrls || []
-        if (index < 0 || index >= baseUrls.length) {
+        // 必须先判整数：index 为 undefined 时两个比较都是 false，
+        // 会让 channel.baseUrl = baseUrls[undefined] = undefined 并 saveToConfig() 落盘
+        if (!Number.isInteger(index) || index < 0 || index >= baseUrls.length) {
             return res.status(400).json(ApiResponse.fail(null, 'Invalid baseUrl index'))
         }
 
@@ -450,14 +475,15 @@ router.put('/:id/select-baseurl', async (req, res) => {
 
 // POST /api/channels/fetch-models
 router.post('/fetch-models', async (req, res) => {
-    let { adapterType = 'openai', baseUrl, apiKey, modelsPath } = req.body
-
-    if (!baseUrl || !String(baseUrl).trim()) {
-        return res.status(400).json(ApiResponse.fail(null, '请提供 Base URL，避免误用默认官方地址'))
-    }
-    baseUrl = normalizeBaseUrl(baseUrl, adapterType)
+    let { adapterType = 'openai', baseUrl, apiKey, modelsPath } = req.body || {}
 
     try {
+        if (!baseUrl || !String(baseUrl).trim()) {
+            return res.status(400).json(ApiResponse.fail(null, '请提供 Base URL，避免误用默认官方地址'))
+        }
+        // normalizeBaseUrl 会构造 URL，非法输入时抛错，必须置于 try 内
+        baseUrl = normalizeBaseUrl(baseUrl, adapterType)
+
         chatLogger.debug(`[获取模型] 使用BaseURL: ${baseUrl}, 适配器: ${adapterType}`)
         const ClientClass = await getAdapterClientClass(adapterType)
         const client = new ClientClass({
@@ -468,23 +494,28 @@ router.post('/fetch-models', async (req, res) => {
             features: ['chat']
         })
 
-        let models = await client.listModels()
-        if (adapterType === 'openai' && baseUrl.includes('api.openai.com')) {
-            models = models.filter(
-                id => id.includes('gpt') || id.includes('text-embedding') || id.includes('o1') || id.includes('o3')
-            )
-        }
+        const models = await client.listModels()
 
-        res.json(ApiResponse.ok({ models: models.sort() }))
+        res.json(ApiResponse.ok({ models: normalizeModelList(models) }))
     } catch (error) {
         chatLogger.error('[获取模型] 错误:', error.message)
         res.status(500).json(ApiResponse.fail(null, `获取模型失败: ${error.message}`))
     }
 })
 
-// POST /api/channels/batch-test - Batch test multiple models (JSON response)
-router.post('/batch-test', async (req, res) => {
-    const { channelId, models, concurrency = 3 } = req.body
+/**
+ * 批量测试渠道下多个模型的可用性
+ *
+ * @param {import('express').Request} req - 请求对象，body 需含 channelId，可选 models / concurrency
+ * @param {import('express').Response} res - 响应对象
+ * @returns {Promise<void>}
+ */
+async function runBatchTest(req, res) {
+    const { channelId, models, concurrency } = req.body || {}
+
+    // 解构默认值只在 undefined 时生效：传 0、负数或 null 会让下方 i += concurrency 永不推进，
+    // 造成事件循环饥饿且不触发 OOM（进程假死）。此处统一钳制到 [1, 20]。
+    const batchSize = Math.min(20, Math.max(1, Number(concurrency) || 3))
 
     await channelManager.init()
     const channel = channelManager.get(channelId)
@@ -493,8 +524,13 @@ router.post('/batch-test', async (req, res) => {
         return res.status(404).json(ApiResponse.fail(null, 'Channel not found'))
     }
 
+    // models 传成字符串（如 "gpt-4"）时，下方 batch.map 会抛 TypeError
+    if (models !== undefined && models !== null && !Array.isArray(models)) {
+        return res.status(400).json(ApiResponse.fail(null, 'models 必须是数组'))
+    }
+
     const testModels = models || channel.models || []
-    if (testModels.length === 0) {
+    if (!Array.isArray(testModels) || testModels.length === 0) {
         return res.status(400).json(ApiResponse.fail(null, '没有可测试的模型'))
     }
 
@@ -574,8 +610,8 @@ router.post('/batch-test', async (req, res) => {
     }
 
     // 并发执行测试
-    for (let i = 0; i < testModels.length; i += concurrency) {
-        const batch = testModels.slice(i, i + concurrency)
+    for (let i = 0; i < testModels.length; i += batchSize) {
+        const batch = testModels.slice(i, i + batchSize)
         const batchResults = await Promise.all(batch.map(testSingleModel))
         results.push(...batchResults)
     }
@@ -591,25 +627,35 @@ router.post('/batch-test', async (req, res) => {
             results
         })
     )
+}
+
+// POST /api/channels/batch-test - Batch test multiple models (JSON response)
+router.post('/batch-test', async (req, res) => {
+    try {
+        await runBatchTest(req, res)
+    } catch (error) {
+        chatLogger.error('[批量测试] 错误:', error)
+        if (!res.headersSent) res.status(500).json(ApiResponse.fail(null, error.message))
+    }
 })
 
 // POST /api/channels/test-model - Test a single specific model
 router.post('/test-model', async (req, res) => {
-    const { channelId, model } = req.body
-
-    if (!channelId || !model) {
-        return res.status(400).json(ApiResponse.fail(null, 'channelId and model are required'))
-    }
-
-    await channelManager.init()
-    const channel = channelManager.get(channelId)
-
-    if (!channel) {
-        return res.status(404).json(ApiResponse.fail(null, 'Channel not found'))
-    }
-
     const startTime = Date.now()
+    // channelId / model 必须定义在 try 之外：下方 catch 块会引用 model 拼装失败响应
+    const { channelId, model } = req.body || {}
     try {
+        if (!channelId || !model) {
+            return res.status(400).json(ApiResponse.fail(null, 'channelId and model are required'))
+        }
+
+        await channelManager.init()
+        const channel = channelManager.get(channelId)
+
+        if (!channel) {
+            return res.status(404).json(ApiResponse.fail(null, 'Channel not found'))
+        }
+
         let apiKey = channel.apiKey
         let keyInfo = null
         if (channel.apiKeys && channel.apiKeys.length > 0) {

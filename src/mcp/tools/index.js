@@ -151,12 +151,17 @@ async function loadToolModules(forceReload = false) {
     }
 
     toolCategories = {}
-    const timestamp = now // 用于缓存破坏
+    /*
+     * 只有显式 forceReload 才做缓存破坏。
+     * 每次都拼时间戳会让 Node 的 ESM module map 不断新增条目，而该注册表没有清除 API、
+     * 也不会被 GC 回收——管理面板每点一次工具开关就以全新 URL 重新导入 24 个模块，
+     * 堆占用只增不减，只能靠重启进程释放。
+     */
+    const cacheBuster = forceReload ? `?t=${now}` : ''
 
     for (const [category, moduleInfo] of Object.entries(toolModules)) {
         try {
-            // 动态导入，添加时间戳避免缓存
-            const module = await import(`${moduleInfo.file}?t=${timestamp}`)
+            const module = await import(`${moduleInfo.file}${cacheBuster}`)
 
             let tools = []
             if (Array.isArray(moduleInfo.export)) {
@@ -204,13 +209,33 @@ export async function getAllTools(options = {}) {
     const { enabledCategories, disabledTools = [], forceReload = false } = options
     const categories = await loadToolModules(forceReload)
     const allTools = []
+    /** @type {Map<string, string>} 工具名 -> 首次注册它的类别 */
+    const seenNames = new Map()
+    /** @type {string[]} 重名告警明细 */
+    const duplicates = []
 
     for (const [category, config] of Object.entries(categories)) {
         if (enabledCategories && !enabledCategories.includes(category)) {
             continue
         }
         const tools = (config.tools || []).filter(tool => !disabledTools.includes(tool.name))
+        for (const tool of tools) {
+            if (!tool?.name) continue
+            if (seenNames.has(tool.name)) {
+                duplicates.push(`${tool.name} (${seenNames.get(tool.name)} / ${category})`)
+            } else {
+                seenNames.set(tool.name, category)
+            }
+        }
         allTools.push(...tools)
+    }
+
+    // 同名工具会让暴露给模型的 schema（Map.set 取最后一个）与实际执行的 handler
+    // （Array.find 取第一个）来自不同文件，是隐蔽且难以排查的故障源，必须显式告警
+    if (duplicates.length > 0) {
+        logger.warn(
+            `[BuiltinMCP] 检测到 ${duplicates.length} 个重名工具，schema 与 handler 可能来自不同模块: ${duplicates.join(', ')}`
+        )
     }
 
     return allTools

@@ -509,7 +509,34 @@ export default router
 /* ==================== 公开图片访问路由（无需认证） ==================== */
 
 const IMAGE_DIR = path.join(__dirname, '../../../data/images')
-const IMAGE_TOKEN_SECRET = 'chatai-image-view-2026'
+
+/**
+ * 图片访问 Token 的签名密钥（内存缓存）
+ *
+ * 原实现硬编码为字面量，密钥随开源仓库一并公开，任何人都能自签 Token 访问全部图片。
+ * 现改为首次使用时随机生成并持久化到配置。
+ * @type {string|null}
+ */
+let imageTokenSecret = null
+
+/**
+ * 获取图片 Token 签名密钥，不存在时随机生成并落盘
+ * @returns {string} 签名密钥
+ */
+function getImageTokenSecret() {
+    if (!imageTokenSecret) {
+        imageTokenSecret = config.get('web.imageTokenSecret')
+        if (!imageTokenSecret) {
+            imageTokenSecret = crypto.randomUUID()
+            try {
+                config.set('web.imageTokenSecret', imageTokenSecret)
+            } catch (error) {
+                chatLogger.debug('[ImageRoutes] 图片Token密钥保存失败，将使用内存密钥:', error.message)
+            }
+        }
+    }
+    return imageTokenSecret
+}
 
 /**
  * 生成图片访问 Token（HMAC 签名，防止路径遍历）
@@ -520,7 +547,7 @@ const IMAGE_TOKEN_SECRET = 'chatai-image-view-2026'
 export function generateImageToken(imageId, expireMs = 86400000) {
     const expires = Date.now() + expireMs
     const payload = `${imageId}|${expires}`
-    const hmac = crypto.createHmac('sha256', IMAGE_TOKEN_SECRET).update(payload).digest('hex').substring(0, 16)
+    const hmac = crypto.createHmac('sha256', getImageTokenSecret()).update(payload).digest('hex').substring(0, 16)
     return { token: `${hmac}.${expires}`, expires }
 }
 
@@ -531,15 +558,19 @@ export function generateImageToken(imageId, expireMs = 86400000) {
  * @returns {boolean}
  */
 function verifyImageToken(imageId, token) {
-    if (!token || !imageId) return false
+    if (!token || typeof token !== 'string' || !imageId) return false
     const parts = token.split('.')
     if (parts.length !== 2) return false
     const [hmacPart, expiresPart] = parts
-    const expires = parseInt(expiresPart)
+    const expires = parseInt(expiresPart, 10)
     if (isNaN(expires) || Date.now() > expires) return false
     const payload = `${imageId}|${expires}`
-    const expected = crypto.createHmac('sha256', IMAGE_TOKEN_SECRET).update(payload).digest('hex').substring(0, 16)
-    return hmacPart === expected
+    const expected = crypto.createHmac('sha256', getImageTokenSecret()).update(payload).digest('hex').substring(0, 16)
+    // 常量时间比较，避免依据响应耗时逐字节爆破签名
+    const actualBuf = Buffer.from(hmacPart)
+    const expectedBuf = Buffer.from(expected)
+    if (actualBuf.length !== expectedBuf.length) return false
+    return crypto.timingSafeEqual(actualBuf, expectedBuf)
 }
 
 /**
@@ -553,7 +584,9 @@ function findImageFile(imageId) {
     if (!fs.existsSync(IMAGE_DIR)) return null
 
     const files = fs.readdirSync(IMAGE_DIR)
-    const match = files.find(f => f.startsWith(imageId) && !f.includes('_thumb'))
+    // 必须精确匹配文件名主干：ImageService 以 `${id}.${ext}` 命名（缩略图为 `${id}_thumb.webp`），
+    // 原先的 startsWith 前缀匹配意味着构造单字符 id 即可命中并遍历下载任意图片
+    const match = files.find(f => !f.includes('_thumb') && path.parse(f).name === imageId)
     if (!match) return null
     return path.join(IMAGE_DIR, match)
 }
@@ -632,6 +665,19 @@ publicImageRouter.get('/view/:id', (req, res) => {
         res.setHeader('Content-Disposition', `inline; filename="image_${id.substring(0, 8)}${ext}"`)
 
         const stream = fs.createReadStream(filepath)
+        // 必须监听 'error'：异步 ENOENT 不会被外层同步 try/catch 捕获，
+        // 而 EventEmitter 在无 error 监听器时会直接 throw；项目无 uncaughtException 兜底，
+        // 叠加 ImageService 每小时清理过期图片（可能删掉正在下载的文件），足以终止整个进程。
+        stream.on('error', error => {
+            chatLogger.warn(`[ImageRoutes] 图片流读取失败 ${id}: ${error.message}`)
+            if (!res.headersSent) {
+                res.status(404).json({ error: '图片不存在或已过期' })
+            } else {
+                res.destroy(error)
+            }
+        })
+        // 客户端提前断开时释放文件句柄
+        res.on('close', () => stream.destroy())
         stream.pipe(res)
     } catch (error) {
         res.status(500).json({ error: error.message })

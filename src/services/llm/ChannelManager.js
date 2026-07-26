@@ -1246,7 +1246,7 @@ export class ChannelManager {
 
         try {
             if (channel.adapterType === 'openai') {
-                const { OpenAIClient } = await import('../core/adapters/index.js')
+                const { OpenAIClient } = await import('../../core/adapters/index.js')
                 const { key: apiKey } = this.getChannelKey(channel)
 
                 // 选择测试模型：优先使用指定模型，其次使用渠道配置的第一个模型，最后使用默认模型
@@ -1346,7 +1346,7 @@ export class ChannelManager {
                 }
             } else if (channel.adapterType === 'gemini') {
                 // Gemini 测试
-                const { GeminiClient } = await import('../core/adapters/index.js')
+                const { GeminiClient } = await import('../../core/adapters/index.js')
                 const currentBaseUrl = this.getCurrentBaseUrl(id) || channel.baseUrl
 
                 const client = new GeminiClient({
@@ -1407,7 +1407,7 @@ export class ChannelManager {
                 }
             } else if (channel.adapterType === 'claude') {
                 // Claude 测试
-                const { ClaudeClient } = await import('../core/adapters/index.js')
+                const { ClaudeClient } = await import('../../core/adapters/index.js')
                 const currentBaseUrl = this.getCurrentBaseUrl(id) || channel.baseUrl
 
                 const client = new ClaudeClient({
@@ -2251,9 +2251,10 @@ export class ChannelManager {
      * 尝试获取下一个可用的Key（同一渠道内切换）
      * @param {string} channelId
      * @param {number} currentKeyIndex - 当前失败的key索引
+     * @param {Set<number>} [excludeKeyIndexes] - 本次请求中已尝试过的key索引集合，避免在少数几个key之间来回循环重复计费
      * @returns {{ key: string, keyIndex: number, keyObj: Object } | null}
      */
-    getNextAvailableKey(channelId, currentKeyIndex) {
+    getNextAvailableKey(channelId, currentKeyIndex, excludeKeyIndexes = null) {
         const channel = this.channels.get(channelId)
         if (!channel || !channel.apiKeys || channel.apiKeys.length <= 1) {
             return null
@@ -2263,6 +2264,7 @@ export class ChannelManager {
             .map((k, i) => ({ key: k, index: i }))
             .filter(({ key, index }) => {
                 if (index === currentKeyIndex) return false // 排除当前失败的key
+                if (excludeKeyIndexes && excludeKeyIndexes.has(index)) return false // 排除本次请求已试过的key
                 if (typeof key === 'string') return true
                 return key.enabled !== false && (key.errorCount || 0) < 10
             })

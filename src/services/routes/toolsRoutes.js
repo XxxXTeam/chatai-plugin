@@ -8,12 +8,46 @@ import { fileURLToPath } from 'node:url'
 import config from '../../../config/config.js'
 import { ChaiteResponse } from './shared.js'
 import { mcpManager } from '../../mcp/McpManager.js'
-import { builtinMcpServer } from '../../mcp/BuiltinMcpServer.js'
+import { builtinMcpServer, resolveDangerousTools } from '../../mcp/BuiltinMcpServer.js'
 import { getToolIdentity } from '../../core/adapters/tooling.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const jsToolsDir = path.join(__dirname, '../../../data/tools')
+
+/**
+ * 解析 JS 工具文件路径，并拒绝一切越界名称
+ *
+ * Express 会对路由参数做百分号解码（%2f → /），原实现直接 path.join(jsToolsDir, name)
+ * 可写入插件目录外的任意 .js 文件；由于写入后紧跟 mcpManager.reloadJsTools() 会 import 该文件，
+ * 等价于远程代码执行。此处先 basename 剥离目录片段，再做字符白名单与 resolve 前缀双重校验。
+ *
+ * @param {string} rawName - 路由参数或请求体中的工具名，可带或不带 .js 后缀
+ * @returns {{ toolName: string, filename: string, filePath: string } | null} 名称非法时返回 null
+ */
+function resolveJsToolPath(rawName) {
+    if (typeof rawName !== 'string') return null
+    const trimmed = rawName.trim()
+    if (!trimmed) return null
+
+    // 含路径分隔符或上跳片段的输入一律拒绝：直接 basename 虽然也能压平到目录内，
+    // 但会把 `../../apps/chat` 静默写成 `data/tools/chat.js`，行为出人意料
+    if (/[/\\]/.test(trimmed) || trimmed.includes('..')) return null
+
+    const base = path.basename(trimmed)
+    if (!base || base === '.' || base === '..') return null
+
+    const filename = base.endsWith('.js') ? base : `${base}.js`
+    // 仅允许字母、数字、下划线、连字符与点，顺带挡掉会破坏代码模板的引号
+    if (!/^[\w.-]+\.js$/.test(filename)) return null
+
+    const rootDir = path.resolve(jsToolsDir)
+    const filePath = path.resolve(rootDir, filename)
+    // 前缀兜底校验，防御 basename 之外的意外情况
+    if (filePath !== rootDir && !filePath.startsWith(rootDir + path.sep)) return null
+
+    return { toolName: filename.slice(0, -3), filename, filePath }
+}
 
 const router = express.Router()
 
@@ -347,8 +381,9 @@ router.get('/js', async (req, res) => {
 
 router.get('/js/:name', async (req, res) => {
     try {
-        const filename = req.params.name.endsWith('.js') ? req.params.name : `${req.params.name}.js`
-        const filePath = path.join(jsToolsDir, filename)
+        const resolved = resolveJsToolPath(req.params.name)
+        if (!resolved) return res.status(400).json(ChaiteResponse.fail(null, '非法的工具名'))
+        const { filename, filePath } = resolved
 
         if (!fs.existsSync(filePath)) {
             return res.status(404).json(ChaiteResponse.fail(null, 'Tool file not found'))
@@ -376,8 +411,9 @@ router.put('/js/:name', async (req, res) => {
         const { source } = req.body
         if (!source) return res.status(400).json(ChaiteResponse.fail(null, 'source is required'))
 
-        const filename = req.params.name.endsWith('.js') ? req.params.name : `${req.params.name}.js`
-        const filePath = path.join(jsToolsDir, filename)
+        const resolved = resolveJsToolPath(req.params.name)
+        if (!resolved) return res.status(400).json(ChaiteResponse.fail(null, '非法的工具名'))
+        const { filePath } = resolved
 
         fs.writeFileSync(filePath, source, 'utf-8')
         await mcpManager.reloadJsTools()
@@ -393,8 +429,9 @@ router.post('/js', async (req, res) => {
         const { name, source } = req.body
         if (!name) return res.status(400).json(ChaiteResponse.fail(null, 'name is required'))
 
-        const filename = name.endsWith('.js') ? name : `${name}.js`
-        const filePath = path.join(jsToolsDir, filename)
+        const resolved = resolveJsToolPath(name)
+        if (!resolved) return res.status(400).json(ChaiteResponse.fail(null, '非法的工具名'))
+        const { toolName, filename, filePath } = resolved
 
         if (fs.existsSync(filePath)) {
             return res.status(409).json(ChaiteResponse.fail(null, 'Tool file already exists'))
@@ -403,10 +440,10 @@ router.post('/js', async (req, res) => {
         const defaultSource =
             source ||
             `/**
- * ${name} - 自定义工具
+ * ${toolName} - 自定义工具
  */
 export default {
-    name: '${name}',
+    name: '${toolName}',
     description: '自定义工具描述',
     inputSchema: {
         type: 'object',
@@ -436,8 +473,9 @@ export default {
 
 router.delete('/js/:name', async (req, res) => {
     try {
-        const filename = req.params.name.endsWith('.js') ? req.params.name : `${req.params.name}.js`
-        const filePath = path.join(jsToolsDir, filename)
+        const resolved = resolveJsToolPath(req.params.name)
+        if (!resolved) return res.status(400).json(ChaiteResponse.fail(null, '非法的工具名'))
+        const { filePath } = resolved
 
         if (!fs.existsSync(filePath)) {
             return res.status(404).json(ChaiteResponse.fail(null, 'Tool file not found'))
@@ -610,7 +648,9 @@ router.get('/stats', async (req, res) => {
 router.get('/dangerous', async (req, res) => {
     try {
         const builtinConfig = config.get('builtinTools') || {}
-        const dangerousTools = builtinConfig.dangerousTools || []
+        // 与实际拦截行为保持一致：拦截层取"内置默认黑名单 ∪ 用户配置"，
+        // 此处若只读用户配置，配置为空数组时面板会显示"没有危险工具"，与真实行为矛盾
+        const dangerousTools = resolveDangerousTools(builtinConfig)
         const allowDangerous = builtinConfig.allowDangerous || false
 
         // 获取所有工具并标记危险状态
@@ -673,17 +713,28 @@ router.post('/dangerous/toggle', async (req, res) => {
         }
 
         const builtinConfig = config.get('builtinTools') || {}
-        let dangerousTools = builtinConfig.dangerousTools || []
+        const dangerousTools = Array.isArray(builtinConfig.dangerousTools) ? [...builtinConfig.dangerousTools] : []
+        const excluded = Array.isArray(builtinConfig.dangerousToolsExcluded)
+            ? [...builtinConfig.dangerousToolsExcluded]
+            : []
 
+        /*
+         * 拦截端取 (内置默认 ∪ 用户新增) - 用户豁免，所以这里必须同时维护两个清单：
+         * 只从 dangerousTools 里删除是不够的——若该工具属于内置默认黑名单，
+         * 下次读取时会被并集重新加回来，表现为「取消了但仍被拦截」。
+         */
+        let nextDangerous = dangerousTools
+        let nextExcluded = excluded
         if (isDangerous) {
-            if (!dangerousTools.includes(toolName)) {
-                dangerousTools.push(toolName)
-            }
+            if (!nextDangerous.includes(toolName)) nextDangerous.push(toolName)
+            nextExcluded = nextExcluded.filter(t => t !== toolName)
         } else {
-            dangerousTools = dangerousTools.filter(t => t !== toolName)
+            nextDangerous = nextDangerous.filter(t => t !== toolName)
+            if (!nextExcluded.includes(toolName)) nextExcluded.push(toolName)
         }
 
-        builtinConfig.dangerousTools = dangerousTools
+        builtinConfig.dangerousTools = nextDangerous
+        builtinConfig.dangerousToolsExcluded = nextExcluded
         config.set('builtinTools', builtinConfig)
 
         res.json(
@@ -691,7 +742,9 @@ router.post('/dangerous/toggle', async (req, res) => {
                 success: true,
                 toolName,
                 isDangerous,
-                dangerousTools
+                // 回传最终生效的名单，避免前端按原始配置渲染而与实际拦截行为不符
+                dangerousTools: resolveDangerousTools(builtinConfig),
+                dangerousToolsExcluded: nextExcluded
             })
         )
     } catch (error) {

@@ -268,13 +268,16 @@ export class ToolGroupManager {
   "executionMode": "sequential"
 }
 
+**toolGroups 只能填上面「可用工具组」列表里方括号中的数字**，例如 [0] 或 [1,3]。
+下面示例中的“XX工具组索引”是占位说明，实际输出时必须替换成真实数字，绝不能原样照抄，也不能写成工具组名称字符串。
+
 ## 示例：
 
 用户："帮我查群成员，然后画一张他们的合照"
 {"analysis":"先查群成员，再绘图","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[群管理工具组索引]}},{"type":"draw","priority":2,"params":{"drawPrompt":"group photo of people"},"dependsOn":1}],"executionMode":"sequential"}
 
 用户："查天气和时间"
-{"analysis":"并行查询","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[天气工具组]}},{"type":"tool","priority":1,"params":{"toolGroups":[时间工具组]}}],"executionMode":"parallel"}
+{"analysis":"并行查询","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[天气工具组索引]}},{"type":"tool","priority":1,"params":{"toolGroups":[时间工具组索引]}}],"executionMode":"parallel"}
 
 用户："现在几点了"
 {"analysis":"查询当前时间","tasks":[{"type":"tool","priority":1,"params":{"toolGroups":[基础工具组索引]}}],"executionMode":"sequential"}
@@ -288,7 +291,7 @@ export class ToolGroupManager {
 用户："你好"
 {"analysis":"纯问候闲聊","tasks":[{"type":"chat","priority":1,"params":{}}],"executionMode":"sequential"}
 
-只返回JSON。`
+只返回一个 JSON 对象，不要用代码块包裹，不要写任何解释。`
         return prompt
     }
 

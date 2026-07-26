@@ -1,13 +1,26 @@
 import { FunctionCallingMode, GoogleGenerativeAI, HarmBlockThreshold, HarmCategory } from '@google/generative-ai'
 import crypto from 'node:crypto'
 import { chatLogger } from '../../utils/logger.js'
-import { AbstractClient, preprocessImageUrls, parseXmlToolCalls } from '../AbstractClient.js'
+import {
+    AbstractClient,
+    preprocessImageUrls,
+    parseXmlToolCalls,
+    extractText,
+    resolveModelName
+} from '../AbstractClient.js'
 import { getFromChaiteConverter, getFromChaiteToolConverter, getIntoChaiteConverter } from '../../utils/converter.js'
 import './converter.js'
 import { statsService } from '../../../services/stats/StatsService.js'
 import { resolveToolChoice } from '../tooling.js'
 
 const logger = chatLogger
+
+/**
+ * 未指定模型且全局默认模型也为空时的兜底模型
+ * 原先流式路径写死 gemini-1.5-flash、非流式写死 gemini-2.5-flash，同一适配器给出两种默认值
+ * @type {string}
+ */
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
 
 /**
  * @typedef {import('../../types').BaseClientOptions} BaseClientOptions
@@ -68,6 +81,21 @@ export class GeminiClient extends AbstractClient {
     }
 
     /**
+     * 构建 Gemini SDK 的 RequestOptions
+     * 合并自定义 baseUrl 与渠道配置的请求超时（SDK 的 RequestOptions.timeout 单位为毫秒）
+     * @param {string} [baseUrl] - 自定义 baseUrl
+     * @returns {{baseUrl?: string, timeout?: number}|undefined} 请求选项，均未配置时为 undefined
+     */
+    buildGeminiRequestOptions(baseUrl) {
+        const requestTimeout = this.resolveRequestTimeout()
+        if (!baseUrl && !requestTimeout) return undefined
+        return {
+            ...(baseUrl ? { baseUrl } : {}),
+            ...(requestTimeout ? { timeout: requestTimeout } : {})
+        }
+    }
+
+    /**
      * 发送消息到Gemini
      * @param {IMessage[]} histories
      * @param {string} apiKey
@@ -89,8 +117,8 @@ export class GeminiClient extends AbstractClient {
             logger.debug(`[Gemini适配器] 使用自定义对话端点: ${baseUrl}`)
         }
 
-        const requestOptions = baseUrl ? { baseUrl: baseUrl } : undefined
-        const model = options.model || 'gemini-2.5-flash'
+        const requestOptions = this.buildGeminiRequestOptions(baseUrl)
+        const model = resolveModelName(options.model, DEFAULT_GEMINI_MODEL)
 
         /*
          * 图片预处理：根据渠道 imageConfig.transferMode 决定处理方式
@@ -109,10 +137,7 @@ export class GeminiClient extends AbstractClient {
         for (const history of preprocessedHistories) {
             if (history.role === 'system') {
                 // 系统消息变为系统指令
-                systemInstruction = history.content
-                    .filter(c => c.type === 'text')
-                    .map(c => c.text)
-                    .join('\n')
+                systemInstruction = extractText(history.content)
             } else {
                 const geminiContent = converter(history)
                 if (Array.isArray(geminiContent)) {
@@ -257,9 +282,9 @@ export class GeminiClient extends AbstractClient {
             logger.debug(`[Gemini适配器] 流式使用自定义对话端点: ${baseUrl}`)
         }
 
-        const requestOptions = baseUrl ? { baseUrl: baseUrl } : undefined
+        const requestOptions = this.buildGeminiRequestOptions(baseUrl)
         const genAI = new GoogleGenerativeAI(apiKey, requestOptions)
-        const model = options.model || 'gemini-1.5-flash'
+        const model = resolveModelName(options.model, DEFAULT_GEMINI_MODEL)
 
         /*
          * 图片预处理：根据渠道 imageConfig.transferMode 决定处理方式
@@ -275,10 +300,7 @@ export class GeminiClient extends AbstractClient {
         const contents = []
         for (const history of preprocessedHistories) {
             if (history.role === 'system') {
-                systemInstruction = history.content
-                    .filter(c => c.type === 'text')
-                    .map(c => c.text)
-                    .join('\n')
+                systemInstruction = extractText(history.content)
             } else {
                 const geminiContent = converter(history)
                 if (Array.isArray(geminiContent)) {
@@ -343,26 +365,45 @@ export class GeminiClient extends AbstractClient {
 
         async function* generator() {
             const toolCalls = []
-            for await (const chunk of result.stream) {
-                const text = chunk.text()
-                if (text) {
-                    yield { type: 'text', text }
+            try {
+                for await (const chunk of result.stream) {
+                    // SDK 的 text() 在内容被安全策略阻断时会主动抛错，
+                    // 不隔离会连带丢弃本轮已收集的 toolCalls
+                    let text = ''
+                    try {
+                        text = chunk.text()
+                    } catch (err) {
+                        logger.warn(`[Gemini适配器] 流式分块文本解析失败: ${err.message}`)
+                    }
+                    if (text) {
+                        yield { type: 'text', text }
+                    }
+
+                    let functionCalls = []
+                    try {
+                        functionCalls = chunk.functionCalls?.() || []
+                    } catch (err) {
+                        logger.warn(`[Gemini适配器] 流式分块工具调用解析失败: ${err.message}`)
+                    }
+                    for (const functionCall of functionCalls) {
+                        toolCalls.push({
+                            id: crypto.randomUUID(),
+                            type: 'function',
+                            function: {
+                                name: functionCall.name,
+                                arguments:
+                                    typeof functionCall.args === 'string'
+                                        ? functionCall.args
+                                        : JSON.stringify(functionCall.args || {})
+                            }
+                        })
+                    }
                 }
-                const functionCalls = chunk.functionCalls?.() || []
-                for (const functionCall of functionCalls) {
-                    toolCalls.push({
-                        id: crypto.randomUUID(),
-                        type: 'function',
-                        function: {
-                            name: functionCall.name,
-                            arguments:
-                                typeof functionCall.args === 'string'
-                                    ? functionCall.args
-                                    : JSON.stringify(functionCall.args || {})
-                        }
-                    })
-                }
+            } catch (err) {
+                logger.error(`[Gemini适配器] 流式响应中断: ${err.message}`)
             }
+
+            // 无论流是否正常结束，都要吐出已收集到的工具调用
             if (toolCalls.length > 0) {
                 yield { type: 'tool_calls', toolCalls }
             }
@@ -392,7 +433,7 @@ export class GeminiClient extends AbstractClient {
         }
 
         const genAI = new GoogleGenerativeAI(apiKey)
-        const requestOptions = baseUrl ? { baseUrl: baseUrl } : undefined
+        const requestOptions = this.buildGeminiRequestOptions(baseUrl)
         const model = options.model || 'text-embedding-004'
 
         const embeddingModel = genAI.getGenerativeModel({ model }, requestOptions)

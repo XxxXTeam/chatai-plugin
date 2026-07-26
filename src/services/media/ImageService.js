@@ -3,6 +3,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
+import config from '../../../config/config.js'
 import { redisClient } from '../../core/cache/RedisClient.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -10,15 +11,53 @@ const __dirname = path.dirname(__filename)
 
 const urlValidationCache = new Map()
 const URL_CACHE_TTL = 5 * 60 * 1000 // 5分钟
+const URL_CACHE_MAX_SIZE = 1000 // 缓存条目上限，防止一次性图片URL无限累积
+
+/**
+ * 写入URL校验缓存（带过期清理与容量上限）
+ * @param {string} cacheKey - 缓存键
+ * @param {Object} result - 校验结果
+ * @returns {void}
+ */
+function setUrlValidationCache(cacheKey, result) {
+    const now = Date.now()
+
+    // 惰性清理过期条目
+    for (const [key, entry] of urlValidationCache) {
+        if (now - entry.time >= URL_CACHE_TTL) {
+            urlValidationCache.delete(key)
+        }
+    }
+
+    // 仍然超限则按插入顺序淘汰最旧条目
+    while (urlValidationCache.size >= URL_CACHE_MAX_SIZE) {
+        const oldestKey = urlValidationCache.keys().next().value
+        if (oldestKey === undefined) break
+        urlValidationCache.delete(oldestKey)
+    }
+
+    urlValidationCache.set(cacheKey, { result, time: now })
+}
 
 /**
  * 图片服务 - 处理图片上传和加工
  */
 export class ImageService {
     constructor() {
-        this.storagePath = path.join(__dirname, '../../../data/images')
-        this.maxSize = 10 * 1024 * 1024 // 10MB
-        this.allowedFormats = ['jpg', 'jpeg', 'png', 'gif', 'webp']
+        const imagesConfig = config.get('images') || {}
+        /*
+         * 相对路径基于插件根目录解析（本文件位于 <plugin>/src/services/media/），
+         * 不依赖进程工作目录；配置为绝对路径时 path.resolve 直接采用该绝对路径。
+         * 配置缺失或非法时回落到与原硬编码一致的默认值。
+         */
+        const pluginRoot = path.resolve(__dirname, '../../..')
+        this.storagePath = path.resolve(pluginRoot, imagesConfig.storagePath || './data/images')
+        this.maxSize =
+            Number.isFinite(imagesConfig.maxSize) && imagesConfig.maxSize > 0 ? imagesConfig.maxSize : 10 * 1024 * 1024
+        this.allowedFormats =
+            Array.isArray(imagesConfig.allowedFormats) && imagesConfig.allowedFormats.length > 0
+                ? imagesConfig.allowedFormats.map(fmt => String(fmt).toLowerCase())
+                : ['jpg', 'jpeg', 'png', 'gif', 'webp']
         this.maxAgeMs = 24 * 60 * 60 * 1000 // 24小时后清理
         this.maxStorageMB = 500 // 最大存储500MB
         this.cleanupInterval = null
@@ -328,7 +367,7 @@ export class ImageService {
 
                 if (!getResponse.ok && getResponse.status !== 206) {
                     const result = { valid: false, error: `HTTP ${getResponse.status}` }
-                    urlValidationCache.set(cacheKey, { result, time: Date.now() })
+                    setUrlValidationCache(cacheKey, result)
                     return result
                 }
             }
@@ -346,14 +385,14 @@ export class ImageService {
                 error: isImage ? undefined : '非图片类型'
             }
 
-            urlValidationCache.set(cacheKey, { result, time: Date.now() })
+            setUrlValidationCache(cacheKey, result)
             return result
         } catch (err) {
             const result = {
                 valid: false,
                 error: err.name === 'AbortError' ? '请求超时' : err.message
             }
-            urlValidationCache.set(cacheKey, { result, time: Date.now() })
+            setUrlValidationCache(cacheKey, result)
             return result
         }
     }
@@ -936,7 +975,7 @@ export class ImageService {
             throw new Error('Image not found')
         }
 
-        const filePath = path.join(this.uploadDir, image.filename)
+        const filePath = path.join(this.storagePath, image.filename)
 
         try {
             const { createWorker } = await import('tesseract.js')

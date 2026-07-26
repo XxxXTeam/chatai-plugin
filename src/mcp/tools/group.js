@@ -171,18 +171,24 @@ export const groupTools = [
             const memberObj = group.pickMember(userId)
             const member = memberObj.info || {}
 
+            // 记录补全成员信息时的失败原因，避免把"拉取失败"误报成"用户不在群内"
+            let memberFetchError = null
             if (!member.user_id) {
                 try {
                     const memberMap = await group.getMemberMap()
                     const memberData = memberMap.get(userId)
                     if (memberData) Object.assign(member, memberData)
-                } catch (e) {}
+                } catch (fetchErr) {
+                    memberFetchError = fetchErr.message
+                }
             }
 
             if (!member.nickname && !member.card) {
                 return {
                     success: false,
-                    error: '该用户可能不在此群内',
+                    error: memberFetchError
+                        ? `获取群成员信息失败，无法确认该用户是否在群内: ${memberFetchError}`
+                        : '该用户可能不在此群内',
                     avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
                 }
             }
@@ -261,11 +267,19 @@ export const groupTools = [
                     return { success: false, error: '机器人不在此群内' }
                 }
 
-                // 获取成员列表
+                // 获取成员列表：拉取失败必须显式报错，否则空列表会被理解为"该群没有管理员和群主"
                 let memberList = []
                 try {
                     memberList = await getGroupMemberList({ bot, event: e, groupId })
-                } catch (e) {}
+                } catch (listErr) {
+                    return { success: false, group_id: groupId, error: `获取成员列表失败: ${listErr.message}` }
+                }
+
+                // getGroupMemberList 内部会吞掉异常并返回空数组；机器人既然在群内，成员列表至少包含自身，
+                // 因此空列表只可能是拉取失败，而非"群里没有成员"
+                if (memberList.length === 0) {
+                    return { success: false, group_id: groupId, error: '获取成员列表失败：协议端未返回任何群成员' }
+                }
 
                 // 筛选管理员
                 const admins = memberList
@@ -327,7 +341,7 @@ export const groupTools = [
                 let memberList = []
                 try {
                     memberList = await getGroupMemberList({ bot, event: e, groupId })
-                } catch (e) {
+                } catch (listErr) {
                     return { success: false, error: '获取成员列表失败' }
                 }
 
@@ -468,13 +482,36 @@ export const groupTools = [
                     return { success: false, error: '机器人不在此群内' }
                 }
 
-                // 获取成员信息
-                const group = bot.pickGroup(groupId)
+                // 获取成员信息：本工具的唯一职责就是判断用户在不在群内，
+                // 拉取失败必须显式报错，绝不能静默降级成 is_in_group: false
                 let memberInfo = null
                 try {
-                    const memberMap = await group.getMemberMap()
-                    memberInfo = memberMap.get(userId)
-                } catch (e) {}
+                    const group = bot.pickGroup?.(groupId)
+                    if (group?.getMemberMap) {
+                        const memberMap = await group.getMemberMap()
+                        if (!memberMap || typeof memberMap.get !== 'function') {
+                            throw new Error('协议端返回的成员表格式不受支持')
+                        }
+                        if (memberMap.size === 0) {
+                            throw new Error('协议端返回的成员表为空')
+                        }
+                        memberInfo = memberMap.get(userId) || null
+                    } else {
+                        // 适配器未提供 getMemberMap（部分 OneBot 实现），回退到统一的成员列表获取
+                        const memberList = await getGroupMemberList({ bot, event: e, groupId })
+                        if (memberList.length === 0) {
+                            throw new Error('协议端未返回任何群成员')
+                        }
+                        memberInfo = memberList.find(m => Number(m.user_id ?? m.uid) === userId) || null
+                    }
+                } catch (memberErr) {
+                    return {
+                        success: false,
+                        user_id: userId,
+                        group_id: groupId,
+                        error: `获取群成员列表失败，无法判断用户是否在群内: ${memberErr.message}`
+                    }
+                }
 
                 const isInGroup = !!memberInfo
 

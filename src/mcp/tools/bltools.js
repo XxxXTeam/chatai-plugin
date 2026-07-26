@@ -1,7 +1,77 @@
 import crypto from 'crypto'
+import fs from 'fs'
+import path from 'path'
 import config from '../../../config/config.js'
 import { segment } from '../../utils/messageParser.js'
 import { chatLogger as logger } from '../../core/utils/logger.js'
+import { pluginRoot } from '../../utils/common.js'
+import { fetchWithLimit } from './helpers.js'
+
+/** 外部媒体下载超时（毫秒），覆盖图片与视频下载 */
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 60000
+
+/** 上传到第三方临时存储的超时（毫秒） */
+const MEDIA_UPLOAD_TIMEOUT_MS = 120000
+
+/**
+ * 图片下载大小上限（字节）
+ * 下载内容还要转成 base64（体积再放大约 1.33 倍）随请求发给模型，故上限取得比视频保守得多
+ * @type {number}
+ */
+const IMAGE_DOWNLOAD_MAX_BYTES = 10 * 1024 * 1024
+
+/**
+ * 视频下载大小上限（字节）
+ * 整个视频先读入内存再包成 Blob 上传，无上限时单个大视频即可打满进程内存
+ * @type {number}
+ */
+const VIDEO_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
+
+/** 第三方上传接口响应体大小上限（字节），其正常响应只是一小段 JSON */
+const UPLOAD_RESPONSE_MAX_BYTES = 1024 * 1024
+
+/**
+ * 临时产物目录
+ * 位于插件自身 data 目录下，与其余插件数据同址；
+ * 原实现是依赖进程工作目录的相对路径，且写死了另一个插件的目录名，
+ * 会在 Yunzai 根目录下生成无人回收的孤儿目录
+ * @type {string}
+ */
+const TEMP_DIR = path.join(pluginRoot, 'data', 'temp')
+
+/** 临时文件保留时长（毫秒），超期由下一次生成时兜底回收 */
+const TEMP_FILE_TTL = 10 * 60 * 1000
+
+/** 单个临时文件在发送完成后的延迟删除时间（毫秒），留出协议端读取文件的时间 */
+const TEMP_FILE_DELETE_DELAY = 60 * 1000
+
+/**
+ * 确保临时目录存在，并回收超期的历史临时文件
+ * setTimeout 延迟删除会在进程重启或异常退出时丢失，此处提供兜底回收
+ * @returns {string} 临时目录绝对路径
+ */
+function prepareTempDir() {
+    if (!fs.existsSync(TEMP_DIR)) {
+        fs.mkdirSync(TEMP_DIR, { recursive: true })
+        return TEMP_DIR
+    }
+    const now = Date.now()
+    try {
+        for (const name of fs.readdirSync(TEMP_DIR)) {
+            const filePath = path.join(TEMP_DIR, name)
+            try {
+                if (now - fs.statSync(filePath).mtimeMs > TEMP_FILE_TTL) {
+                    fs.unlinkSync(filePath)
+                }
+            } catch {
+                /* 单个文件回收失败不影响本次生成 */
+            }
+        }
+    } catch (err) {
+        logger.debug(`[临时目录] 回收历史文件失败: ${err.message}`)
+    }
+    return TEMP_DIR
+}
 
 export const bltoolsTools = [
     {
@@ -629,9 +699,17 @@ export const bltoolsTools = [
                 const config = (await import('../../../config/config.js')).default
 
                 // 下载图片并转base64
-                const imageRes = await fetch(image_url)
-                const arrayBuffer = await imageRes.arrayBuffer()
-                const base64 = Buffer.from(arrayBuffer).toString('base64')
+                // image_url 由模型给出，且下载内容会转 base64 随请求外发，必须限制耗时与体积
+                const { response: imageRes, buffer: imageBuffer } = await fetchWithLimit(
+                    image_url,
+                    {},
+                    {
+                        timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS,
+                        maxBytes: IMAGE_DOWNLOAD_MAX_BYTES,
+                        label: 'ai_image_edit 图片下载'
+                    }
+                )
+                const base64 = imageBuffer.toString('base64')
                 const mimeType = imageRes.headers.get('content-type') || 'image/png'
                 const dataUrl = `data:${mimeType};base64,${base64}`
 
@@ -989,26 +1067,41 @@ export const bltoolsTools = [
                 if (!videoUrl.endsWith('.mp4') && videoUrl.includes('qq.com')) {
                     // 下载QQ视频并上传到智谱临时存储
                     try {
-                        const videoRes = await fetch(videoUrl, {
-                            headers: {
-                                Referer: 'https://www.qq.com/',
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                        // 整个视频会被读入内存，必须限制耗时与体积；超限时走下面的 catch 回退到原始 URL
+                        const { buffer } = await fetchWithLimit(
+                            videoUrl,
+                            {
+                                headers: {
+                                    Referer: 'https://www.qq.com/',
+                                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                                }
+                            },
+                            {
+                                timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS,
+                                maxBytes: VIDEO_DOWNLOAD_MAX_BYTES,
+                                label: 'video_analysis 视频下载'
                             }
-                        })
-                        const arrayBuffer = await videoRes.arrayBuffer()
-                        const buffer = Buffer.from(arrayBuffer)
+                        )
 
                         const formData = new FormData()
                         const blob = new Blob([buffer], { type: 'video/mp4' })
                         formData.append('file', blob, `video_${Date.now()}.mp4`)
 
                         const keyInfo = channelManager.getChannelKey(selectedChannel)
-                        const uploadRes = await fetch('https://www.bigmodel.cn/api/biz/file/uploadTemporaryImage', {
-                            method: 'POST',
-                            body: formData,
-                            headers: { authorization: `Bearer ${keyInfo.key}` }
-                        })
-                        const uploadResult = await uploadRes.json()
+                        const { buffer: uploadBuffer } = await fetchWithLimit(
+                            'https://www.bigmodel.cn/api/biz/file/uploadTemporaryImage',
+                            {
+                                method: 'POST',
+                                body: formData,
+                                headers: { authorization: `Bearer ${keyInfo.key}` }
+                            },
+                            {
+                                timeoutMs: MEDIA_UPLOAD_TIMEOUT_MS,
+                                maxBytes: UPLOAD_RESPONSE_MAX_BYTES,
+                                label: 'video_analysis 视频上传'
+                            }
+                        )
+                        const uploadResult = JSON.parse(uploadBuffer.toString('utf-8'))
                         if (uploadResult.url) {
                             publicVideoUrl = uploadResult.url
                         }
@@ -1095,6 +1188,14 @@ export const bltoolsTools = [
                 return { error: '思维导图描述不能为空' }
             }
 
+            /*
+             * browser 必须声明在 try 之外：catch 是独立块作用域，看不见 try 内的 const，
+             * 否则清理分支会抛 ReferenceError 并使 Chromium 主进程与渲染子进程全部残留。
+             */
+            let browser = null
+            /* 提升到 try 外：e.reply 抛错时 finally 仍需拿到路径注册清理，否则临时文件永久残留 */
+            let outputPath = null
+
             try {
                 // 动态导入依赖
                 const { LlmService } = await import('../../services/llm/LlmService.js')
@@ -1103,8 +1204,6 @@ export const bltoolsTools = [
                 const { createRequire } = await import('module')
                 const require = createRequire(import.meta.url)
                 const puppeteer = require('puppeteer')
-                const fs = await import('fs')
-                const path = await import('path')
 
                 // 获取默认模型和渠道配置
                 await channelManager.init()
@@ -1181,7 +1280,7 @@ export const bltoolsTools = [
 
                 // 使用Puppeteer渲染
                 const nodeVersion = process.version.slice(1).split('.')[0]
-                const browser = await puppeteer.launch({
+                browser = await puppeteer.launch({
                     headless: parseInt(nodeVersion) >= 16 ? 'new' : true,
                     args: ['--no-sandbox', '--disable-setuid-sandbox']
                 })
@@ -1219,11 +1318,7 @@ export const bltoolsTools = [
                 await page.waitForFunction('document.querySelector("#markmap").children.length > 0', { timeout: 10000 })
 
                 // 保存截图
-                const outputDir = './data/chatai-plugin/temp'
-                if (!fs.existsSync(outputDir)) {
-                    fs.mkdirSync(outputDir, { recursive: true })
-                }
-                const outputPath = path.join(outputDir, `mindmap_${Date.now()}.png`)
+                outputPath = path.join(prepareTempDir(), `mindmap_${Date.now()}.png`)
                 await page.screenshot({ path: outputPath, fullPage: true, type: 'png' })
 
                 await browser.close()
@@ -1232,23 +1327,35 @@ export const bltoolsTools = [
                 // 发送图片
                 await e.reply(segment.image(outputPath))
 
-                // 清理临时文件（延迟删除）
-                setTimeout(() => {
-                    try {
-                        fs.unlinkSync(outputPath)
-                    } catch {}
-                }, 60000)
-
                 return {
                     success: true,
                     message: '思维导图已生成并发送'
                 }
             } catch (error) {
-                if (browser)
+                return { error: `思维导图生成失败: ${error.message}` }
+            } finally {
+                // 兜底回收：成功路径已提前 close 并置空，此处只处理异常路径残留的实例
+                if (browser) {
                     try {
                         await browser.close()
                     } catch {}
-                return { error: `思维导图生成失败: ${error.message}` }
+                    browser = null
+                }
+                /*
+                 * 延迟删除临时文件：放在 finally 保证 e.reply 抛错时也会注册。
+                 * 延迟是为了留出协议端读取文件的时间；若本次 setTimeout 因进程退出丢失，
+                 * 下一次生成时 prepareTempDir 会按 TTL 兜底回收。
+                 */
+                if (outputPath) {
+                    const staleFile = outputPath
+                    setTimeout(() => {
+                        try {
+                            fs.unlinkSync(staleFile)
+                        } catch {
+                            /* 已被回收或占用中，交由 TTL 兜底 */
+                        }
+                    }, TEMP_FILE_DELETE_DELAY).unref?.()
+                }
             }
         }
     }

@@ -12,8 +12,14 @@ import { chatLogger } from '../../core/utils/logger.js'
 
 const logger = chatLogger
 
-// 默认配置
-const DEFAULT_CONFIG = {
+/**
+ * 默认配置
+ *
+ * 该对象是 skills.yaml 缺省时的唯一事实来源，必须与 data/skills.yaml 的默认值保持一致，
+ * 其他模块（如 SkillsAgent）需要兜底值时应引用此处而非各自硬编码。
+ * @type {{ skills: object }}
+ */
+export const DEFAULT_CONFIG = {
     skills: {
         enabled: true,
         mode: 'hybrid',
@@ -46,22 +52,51 @@ const DEFAULT_CONFIG = {
             cacheTTL: 60000
         },
         dispatch: {
-            enabled: true,
+            // 与 data/skills.yaml 一致：默认关闭，由管理面板显式启用
+            enabled: false,
             useSummary: true,
             maxGroups: 3
         },
         documents: {
             enabled: true,
+            // 技能选择策略：auto=按上下文匹配触发词/名称/描述；all=全部注入；explicit=仅注入显式指定的
             mode: 'auto',
+            /*
+             * 披露深度（与 mode 正交：mode 决定选哪些技能，disclosure 决定选中后注入多少内容）
+             * - progressive：只把技能元数据与附属文件清单写入系统提示词，正文由模型按需
+             *   调用 get_skill_info / read_skill_file 读取，显著节省上下文
+             * - full：直接注入 SKILL.md 全文（旧行为）
+             */
+            disclosure: 'progressive',
             paths: ['data/skills', '.cursor/skills', '.claude/skills', '.codex/skills'],
             maxDepth: 6,
             maxFileBytes: 65536,
             maxPromptChars: 20000
         },
         security: {
-            dangerousTools: ['kick_member', 'mute_member', 'recall_message', 'set_group_admin', 'write_file'],
+            // 危险工具名单需与 data/skills.yaml 的 security.dangerousTools 保持一致，
+            // 否则 skills.yaml 缺失 security 节点时会退化成更宽松的默认值，形成安全缺口
+            dangerousTools: [
+                // 群管理危险操作
+                'kick_member',
+                'mute_member',
+                'recall_message',
+                'set_group_admin',
+                'set_group_whole_ban',
+                'delete_friend',
+                'set_group_leave',
+                // 文件系统危险操作
+                'write_file',
+                'delete_file',
+                'move_file',
+                'delete_group_file',
+                'delete_group_folder',
+                // 系统命令
+                'execute_command'
+            ],
             allowDangerous: false,
-            dangerousRequiredPermission: 'admin'
+            // 取更严格的一方：危险工具默认仅主人可执行
+            dangerousRequiredPermission: 'master'
         }
     }
 }
@@ -470,9 +505,13 @@ ${yamlContent}`
 
     /**
      * 获取危险工具所需权限
+     * @returns {string} 权限标识，缺省时回退到 DEFAULT_CONFIG 中更严格的 'master'
      */
     getDangerousRequiredPermission() {
-        return this.config?.skills?.security?.dangerousRequiredPermission || 'admin'
+        return (
+            this.config?.skills?.security?.dangerousRequiredPermission ||
+            DEFAULT_CONFIG.skills.security.dangerousRequiredPermission
+        )
     }
 
     // ========== 配置修改方法 ==========

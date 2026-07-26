@@ -11,6 +11,7 @@ import { toolFilterService } from '../tools/ToolFilterService.js'
 import { setBuiltinToolContext, getBuiltinToolContext, builtinMcpServer } from '../../mcp/BuiltinMcpServer.js'
 import { getToolIdentity } from '../../core/adapters/tooling.js'
 import { resolveToolPermission } from '../tools/ToolPermission.js'
+import { DEFAULT_CONFIG as SKILLS_DEFAULT_CONFIG } from '../skills/SkillsConfig.js'
 
 /**
  * @class SkillsAgent
@@ -427,6 +428,9 @@ export class SkillsAgent {
 
     /**
      * 获取执行配置（从 skills.yaml）
+     *
+     * Skills 模块未初始化时回退到 SkillsConfig 的 DEFAULT_CONFIG，
+     * 避免在此处重复维护一份易漂移的默认值
      * @returns {{ timeout: number, maxParallel: number, retryOnError: boolean, maxRetries: number, cacheResults: boolean, cacheTTL: number }}
      */
     _getExecutionConfig() {
@@ -436,14 +440,7 @@ export class SkillsAgent {
                 return cfg.getExecutionConfig()
             }
         } catch {}
-        return {
-            timeout: 30000,
-            maxParallel: 5,
-            retryOnError: false,
-            maxRetries: 2,
-            cacheResults: true,
-            cacheTTL: 60000
-        }
+        return { ...SKILLS_DEFAULT_CONFIG.skills.execution }
     }
 
     /**

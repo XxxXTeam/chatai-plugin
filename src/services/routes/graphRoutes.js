@@ -4,6 +4,27 @@
 import express from 'express'
 import { ChaiteResponse } from './shared.js'
 
+/**
+ * 把查询参数安全地转换为区间内的整数
+ *
+ * 解构默认值只在参数缺失时生效，`?limit=abc` 仍会让 parseInt 返回 NaN；
+ * NaN 一路传到 better-sqlite3 的参数绑定会抛 "datatype mismatch"，
+ * 表现为接口 500 而非参数校验失败。
+ *
+ * @param {*} value - 原始查询参数
+ * @param {number} fallback - 无法解析为有限数时使用的默认值
+ * @param {number} max - 允许的最大值
+ * @param {number} [min=1] - 允许的最小值
+ * @returns {number} 落在 [min, max] 内的整数
+ */
+function toBoundedInt(value, fallback, max, min = 1) {
+    // 空串要走默认值：Number('') 为 0，否则 ?limit= 会被钳成 min 而非 fallback
+    if (value === undefined || value === null || value === '') return fallback
+    const parsed = Number(value)
+    if (!Number.isFinite(parsed)) return fallback
+    return Math.min(max, Math.max(min, Math.trunc(parsed)))
+}
+
 const router = express.Router()
 
 // GET /entities - 获取实体列表
@@ -17,8 +38,8 @@ router.get('/entities', async (req, res) => {
         }
         const entities = knowledgeGraphService.listEntities(scopeId, {
             type,
-            limit: parseInt(limit),
-            offset: parseInt(offset)
+            limit: toBoundedInt(limit, 100, 1000),
+            offset: toBoundedInt(offset, 0, 1000000, 0)
         })
         res.json(ChaiteResponse.ok(entities))
     } catch (error) {
@@ -35,7 +56,7 @@ router.get('/entities/search', async (req, res) => {
         const scopes = scopeIds ? scopeIds.split(',') : []
         const entities = knowledgeGraphService.searchEntities(query || '', scopes, {
             type,
-            limit: parseInt(limit)
+            limit: toBoundedInt(limit, 20, 1000)
         })
         res.json(ChaiteResponse.ok(entities))
     } catch (error) {
@@ -107,8 +128,45 @@ router.get('/entities/:entityId/history', async (req, res) => {
         const { knowledgeGraphService } = await import('../storage/KnowledgeGraphService.js')
         await knowledgeGraphService.init()
         const { limit = 10 } = req.query
-        const history = knowledgeGraphService.getEntityHistory(req.params.entityId, parseInt(limit))
+        const history = knowledgeGraphService.getEntityHistory(req.params.entityId, toBoundedInt(limit, 10, 500))
         res.json(ChaiteResponse.ok(history))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
+/*
+ * POST /entities/:entityId/rollback - 回滚实体到指定历史版本
+ *
+ * KnowledgeGraphService.rollbackEntity 早就实现了，但一直没有路由暴露它，
+ * 面板侧只能看历史不能回滚。这里补上。
+ *
+ * 状态码语义：实体不存在、版本不存在都是 404，其余失败是 500。rollbackEntity 内部
+ * 还会调 updateEntity，数据库故障同样以 Error 抛出，若把 catch 一律当 404 会把故障
+ * 误报成「版本不存在」。因此两项 404 条件都在路由层显式查过再执行回滚，
+ * catch 只留给真正的意外。
+ */
+router.post('/entities/:entityId/rollback', async (req, res) => {
+    try {
+        const { knowledgeGraphService } = await import('../storage/KnowledgeGraphService.js')
+        await knowledgeGraphService.init()
+
+        const { entityId } = req.params
+        const { targetVersion } = req.body || {}
+        const version = Number(targetVersion)
+        if (!Number.isInteger(version) || version < 1) {
+            return res.status(400).json(ChaiteResponse.fail(null, 'targetVersion 必须为不小于 1 的整数'))
+        }
+
+        if (!knowledgeGraphService.getEntity(entityId)) {
+            return res.status(404).json(ChaiteResponse.fail(null, `实体不存在: ${entityId}`))
+        }
+        if (!knowledgeGraphService.hasEntityVersion(entityId, version)) {
+            return res.status(404).json(ChaiteResponse.fail(null, `未找到版本 ${version}`))
+        }
+
+        const entity = knowledgeGraphService.rollbackEntity(entityId, version)
+        res.json(ChaiteResponse.ok(entity))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
@@ -176,7 +234,7 @@ router.get('/subgraph', async (req, res) => {
             return res.status(400).json(ChaiteResponse.fail(null, 'entityId is required'))
         }
         const scopes = scopeIds ? scopeIds.split(',') : []
-        const subgraph = knowledgeGraphService.querySubgraph(entityId, parseInt(depth), scopes)
+        const subgraph = knowledgeGraphService.querySubgraph(entityId, toBoundedInt(depth, 2, 10), scopes)
         res.json(ChaiteResponse.ok(subgraph))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -193,7 +251,7 @@ router.get('/path', async (req, res) => {
             return res.status(400).json(ChaiteResponse.fail(null, 'fromEntityId and toEntityId are required'))
         }
         const relTypes = relationTypes ? relationTypes.split(',') : []
-        const path = knowledgeGraphService.pathQuery(fromEntityId, toEntityId, parseInt(maxDepth), relTypes)
+        const path = knowledgeGraphService.pathQuery(fromEntityId, toEntityId, toBoundedInt(maxDepth, 5, 10), relTypes)
         res.json(ChaiteResponse.ok(path))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -210,7 +268,7 @@ router.get('/context', async (req, res) => {
             return res.status(400).json(ChaiteResponse.fail(null, 'userId is required'))
         }
         const context = knowledgeGraphService.getKnowledgeContext(userId, groupId, {
-            maxEntities: parseInt(maxEntities)
+            maxEntities: toBoundedInt(maxEntities, 15, 200)
         })
         res.json(ChaiteResponse.ok({ context }))
     } catch (error) {

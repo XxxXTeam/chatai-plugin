@@ -7,6 +7,15 @@
 import { qqWebApi, getGroupMemberList, requireGroupId } from './helpers.js'
 import { formatTimeToBeiJing } from '../../utils/common.js'
 
+/** 群星级星星渲染数量上限（官方当前为 LV1-LV5），防止外部 API 返回异常等级时生成巨型字符串 */
+const MAX_GROUP_LEVEL_STARS = 10
+
+/** get_lucky_list 单次拉取数量上限，该值会直接进入远端 API 请求体 */
+const MAX_LUCKY_LIST_LIMIT = 100
+
+/** 成员时间范围查询的天数上限（约 10 年） */
+const MAX_QUERY_DAYS = 3650
+
 export const groupStatsTools = [
     {
         name: 'get_group_level',
@@ -49,12 +58,18 @@ export const groupStatsTools = [
                         }
                     }
 
+                    // level 取自外部 API：负数会让 repeat 抛 RangeError，超大值会生成巨型字符串
+                    const numericLevel = Number(level)
+                    const starCount = Number.isFinite(numericLevel)
+                        ? Math.min(Math.max(Math.floor(numericLevel), 0), MAX_GROUP_LEVEL_STARS)
+                        : 0
+
                     return {
                         success: true,
                         group_id: groupId,
                         level: level,
                         level_name: `LV${level}`,
-                        level_stars: '⭐'.repeat(level),
+                        level_stars: '⭐'.repeat(starCount),
                         group_name: info.group_name || '',
                         group_uin: info.group_uin || groupId,
                         group_owner: info.group_owner,
@@ -297,7 +312,8 @@ export const groupStatsTools = [
             try {
                 const bot = ctx.getBot()
                 const groupId = requireGroupId(args, ctx)
-                const limit = args.limit || 20
+                // limit 会直接进入远端 API 请求体，必须钳制上下界
+                const limit = Math.min(Math.max(Math.floor(Number(args.limit)) || 20, 1), MAX_LUCKY_LIST_LIMIT)
 
                 if (!bot.cookies?.['qun.qq.com']) {
                     return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
@@ -506,8 +522,11 @@ export const groupStatsTools = [
             try {
                 const bot = ctx.getBot()
                 const groupId = requireGroupId(args, ctx)
-                const days = args.days ?? 30
-                const limit = args.limit || 50
+                // days 不钳制时，负数会让 threshold 退化为 0 且绕过 days === 0 分支，
+                // 过滤条件变成 lastSpeakTime < 0（恒为 false）→ 得出"群里没有不活跃成员"的错误结论
+                const rawDays = Number(args.days ?? 30)
+                const days = Number.isFinite(rawDays) ? Math.min(Math.max(Math.floor(rawDays), 0), MAX_QUERY_DAYS) : 30
+                const limit = Math.max(Math.floor(Number(args.limit)) || 50, 1)
 
                 const memberList = await getGroupMemberList({ bot, groupId })
 
@@ -575,8 +594,11 @@ export const groupStatsTools = [
             try {
                 const bot = ctx.getBot()
                 const groupId = requireGroupId(args, ctx)
-                const days = args.days || 7
-                const limit = args.limit || 50
+                // days 为 0/负数/非数字时回落到默认 7 天：负数会让 threshold 变成未来时间点，
+                // 过滤后恒为空 → 得出"最近没有新成员入群"的错误结论
+                const rawDays = Number(args.days)
+                const days = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(Math.floor(rawDays), MAX_QUERY_DAYS) : 7
+                const limit = Math.max(Math.floor(Number(args.limit)) || 50, 1)
 
                 const memberList = await getGroupMemberList({ bot, groupId })
 
@@ -679,8 +701,12 @@ export const groupStatsTools = [
                 const bot = ctx.getBot()
                 const groupId = requireGroupId(args, ctx)
 
-                const groupInfo = bot.gl?.get(groupId)
-                if (!groupInfo) {
+                // bot.gl 只有 icqq 系适配器提供；OneBot 适配器没有该属性，
+                // 直接拿它做前置守卫会对任何群都误报"机器人不在此群内"，
+                // 因此仅在 gl 可用时才据其判断，否则交给下面的成员列表拉取兜底
+                const hasGroupList = typeof bot.gl?.get === 'function'
+                const groupInfo = hasGroupList ? bot.gl.get(groupId) : null
+                if (hasGroupList && !groupInfo) {
                     return { success: false, error: '机器人不在此群内' }
                 }
 
@@ -713,8 +739,8 @@ export const groupStatsTools = [
                 return {
                     success: true,
                     group_id: groupId,
-                    group_name: groupInfo.group_name,
-                    max_member_count: groupInfo.max_member_count,
+                    group_name: groupInfo?.group_name || '',
+                    max_member_count: groupInfo?.max_member_count,
                     stats,
                     _tip: 'owner是群主(只有1个)，admin是管理员，member是普通成员。male/female/unknown_sex是性别统计'
                 }
@@ -751,8 +777,10 @@ export const groupStatsTools = [
                 const excludeAdmin = args.exclude_admin === true
                 const roleFilter = args.role_filter || 'all'
 
-                const groupInfo = bot.gl?.get(groupId)
-                if (!groupInfo) {
+                // 与 get_group_stat 同理：无 bot.gl 的适配器不做前置拦截，交给成员列表拉取兜底
+                const hasGroupList = typeof bot.gl?.get === 'function'
+                const groupInfo = hasGroupList ? bot.gl.get(groupId) : null
+                if (hasGroupList && !groupInfo) {
                     return { success: false, error: '机器人不在此群内' }
                 }
 
@@ -803,7 +831,7 @@ export const groupStatsTools = [
                 return {
                     success: true,
                     group_id: groupId,
-                    group_name: groupInfo.group_name,
+                    group_name: groupInfo?.group_name || '',
                     total_members: memberList.length,
                     filtered_count: filteredList.length,
                     selected_count: selected.length,
