@@ -381,34 +381,36 @@ class UsageStats {
 
         try {
             const stats = await redisClient.hgetall(statsKey)
-            return {
-                date: today,
-                totalCalls: parseInt(stats?.totalCalls || '0'),
-                successCalls: parseInt(stats?.successCalls || '0'),
-                failedCalls: parseInt(stats?.failedCalls || '0'),
-                totalInputTokens: parseInt(stats?.totalInputTokens || '0'),
-                totalOutputTokens: parseInt(stats?.totalOutputTokens || '0'),
-                totalCacheReadTokens: parseInt(stats?.totalCacheReadTokens || '0'),
-                totalCacheWriteTokens: parseInt(stats?.totalCacheWriteTokens || '0'),
-                totalCacheReadCount: parseInt(stats?.totalCacheReadCount || '0'),
-                totalCacheWriteCount: parseInt(stats?.totalCacheWriteCount || '0'),
-                totalReasoningTokens: parseInt(stats?.totalReasoningTokens || '0'),
-                totalDuration: parseInt(stats?.totalDuration || '0'),
-                avgDuration:
-                    stats?.totalCalls > 0
-                        ? Math.round(parseInt(stats?.totalDuration || '0') / parseInt(stats?.totalCalls || '1'))
-                        : 0,
-                successRate:
-                    stats?.totalCalls > 0
-                        ? Math.round((parseInt(stats?.successCalls || '0') / parseInt(stats?.totalCalls || '1')) * 100)
-                        : 0
+            if (stats && Object.keys(stats).length > 0) {
+                const totalCalls = parseInt(stats.totalCalls || '0')
+                const successCalls = parseInt(stats.successCalls || '0')
+                const totalDuration = parseInt(stats.totalDuration || '0')
+                return {
+                    date: today,
+                    totalCalls,
+                    successCalls,
+                    failedCalls: parseInt(stats.failedCalls || '0'),
+                    totalInputTokens: parseInt(stats.totalInputTokens || '0'),
+                    totalOutputTokens: parseInt(stats.totalOutputTokens || '0'),
+                    totalCacheReadTokens: parseInt(stats.totalCacheReadTokens || '0'),
+                    totalCacheWriteTokens: parseInt(stats.totalCacheWriteTokens || '0'),
+                    totalCacheReadCount: parseInt(stats.totalCacheReadCount || '0'),
+                    totalCacheWriteCount: parseInt(stats.totalCacheWriteCount || '0'),
+                    totalReasoningTokens: parseInt(stats.totalReasoningTokens || '0'),
+                    totalDuration,
+                    avgDuration: totalCalls > 0 ? Math.round(totalDuration / totalCalls) : 0,
+                    successRate: totalCalls > 0 ? Math.round((successCalls / totalCalls) * 100) : 0
+                }
             }
-        } catch {
-            // 从内存计算
-            const today = new Date().setHours(0, 0, 0, 0)
-            const todayRecords = this.recentStats.filter(r => r.timestamp >= today)
-            return this.calculateStats(todayRecords, new Date().toISOString().split('T')[0])
+        } catch (error) {
+            logger.debug('[UsageStats] 读取每日汇总失败，改用调用记录统计:', error.message)
         }
+
+        const startTime = Date.parse(`${today}T00:00:00.000Z`)
+        const recentRecords = await this.getRecent(MAX_RECORDS, { startTime })
+        const todayRecords =
+            recentRecords.length > 0 ? recentRecords : this.recentStats.filter(r => r.timestamp >= startTime)
+        return { date: today, ...this.calculateStats(todayRecords, today) }
     }
 
     /**

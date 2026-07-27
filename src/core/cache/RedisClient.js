@@ -18,6 +18,14 @@ class RedisClient {
     }
 
     async init() {
+        if (this.client) {
+            if (this.client.status === 'ready') {
+                this.isConnected = true
+                this.degraded = false
+            }
+            return
+        }
+
         const redisConfig = config.get('redis')
         if (!redisConfig || !redisConfig.enabled) {
             logger.info('[Redis] Redis is disabled')
@@ -86,13 +94,23 @@ class RedisClient {
         logger.error(`[Redis] Error: ${err?.message || err}${extra}`)
     }
 
+    /**
+     * 以 ioredis 的实时状态为准，避免热重载后旧事件回调覆盖共享实例状态。
+     * @returns {boolean} Redis 是否可读写
+     */
+    _isReady() {
+        const ready = this.client?.status === 'ready'
+        this.isConnected = ready
+        return ready
+    }
+
     async get(key) {
-        if (!this.isConnected) return null
+        if (!this._isReady()) return null
         return await this.client.get(key)
     }
 
     async set(key, value, ttl = null) {
-        if (!this.isConnected) return
+        if (!this._isReady()) return
         if (ttl) {
             await this.client.set(key, value, 'EX', ttl)
         } else {
@@ -101,67 +119,67 @@ class RedisClient {
     }
 
     async del(key) {
-        if (!this.isConnected) return
+        if (!this._isReady()) return
         await this.client.del(key)
     }
 
     async keys(pattern) {
-        if (!this.isConnected) return []
+        if (!this._isReady()) return []
         return await this.client.keys(pattern)
     }
 
     async lpush(key, ...values) {
-        if (!this.isConnected) return 0
+        if (!this._isReady()) return 0
         return await this.client.lpush(key, ...values)
     }
 
     async lrange(key, start, stop) {
-        if (!this.isConnected) return []
+        if (!this._isReady()) return []
         return await this.client.lrange(key, start, stop)
     }
 
     async ltrim(key, start, stop) {
-        if (!this.isConnected) return
+        if (!this._isReady()) return
         return await this.client.ltrim(key, start, stop)
     }
 
     async hset(key, field, value) {
-        if (!this.isConnected) return
+        if (!this._isReady()) return
         return await this.client.hset(key, field, value)
     }
 
     async hget(key, field) {
-        if (!this.isConnected) return null
+        if (!this._isReady()) return null
         return await this.client.hget(key, field)
     }
 
     async hgetall(key) {
-        if (!this.isConnected) return {}
+        if (!this._isReady()) return {}
         return await this.client.hgetall(key)
     }
 
     async hincrby(key, field, increment) {
-        if (!this.isConnected) return 0
+        if (!this._isReady()) return 0
         return await this.client.hincrby(key, field, increment)
     }
 
     async expire(key, seconds) {
-        if (!this.isConnected) return 0
+        if (!this._isReady()) return 0
         return await this.client.expire(key, seconds)
     }
 
     async incr(key) {
-        if (!this.isConnected) return 0
+        if (!this._isReady()) return 0
         return await this.client.incr(key)
     }
 
     async llen(key) {
-        if (!this.isConnected) return 0
+        if (!this._isReady()) return 0
         return await this.client.llen(key)
     }
 
     async exists(key) {
-        if (!this.isConnected) return 0
+        if (!this._isReady()) return 0
         return await this.client.exists(key)
     }
 
@@ -172,6 +190,7 @@ class RedisClient {
         } catch (err) {
             logger.debug('[Redis] 关闭连接失败:', err?.message || err)
         } finally {
+            this.client = null
             this.isConnected = false
         }
     }
