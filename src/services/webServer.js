@@ -681,6 +681,10 @@ class WebServer {
             res.json(ChaiteResponse.ok({ authenticated: true }))
         })
 
+        this.router.get('/api/state', auth, (req, res) => {
+            res.json(ChaiteResponse.ok({ authenticated: true }))
+        })
+
         // 生成临时登录Token - 公开接口，Token输出到控制台
         this.router.get(
             '/api/auth/token/generate',
