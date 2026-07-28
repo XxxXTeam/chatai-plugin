@@ -209,6 +209,21 @@ router.post('/relationships', async (req, res) => {
     }
 })
 
+// PUT /relationships/:relationshipId - 更新关系
+router.put('/relationships/:relationshipId', async (req, res) => {
+    try {
+        const { knowledgeGraphService } = await import('../storage/KnowledgeGraphService.js')
+        await knowledgeGraphService.init()
+        const relationship = knowledgeGraphService.updateRelationship(req.params.relationshipId, req.body)
+        if (!relationship) {
+            return res.status(404).json(ChaiteResponse.fail(null, '关系不存在'))
+        }
+        res.json(ChaiteResponse.ok(relationship))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
 // DELETE /relationships/:relationshipId - 删除关系
 router.delete('/relationships/:relationshipId', async (req, res) => {
     try {

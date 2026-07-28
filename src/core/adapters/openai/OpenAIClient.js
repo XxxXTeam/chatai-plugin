@@ -156,6 +156,18 @@ async function loadResponsesWSClass() {
 function validateAndCleanMessages(messages) {
     if (!messages || !Array.isArray(messages)) return messages
 
+    const normalizedMessages = messages.map(message => {
+        if (message?.role !== 'assistant' || !Array.isArray(message.tool_calls)) return message
+
+        const seenIds = new Set()
+        const toolCalls = message.tool_calls.filter(toolCall => {
+            if (!toolCall?.id || seenIds.has(toolCall.id)) return false
+            seenIds.add(toolCall.id)
+            return true
+        })
+        return toolCalls.length === message.tool_calls.length ? message : { ...message, tool_calls: toolCalls }
+    })
+
     const cleaned = []
     let lastAssistantIndex = -1
     let pendingToolMessages = []
@@ -183,8 +195,8 @@ function validateAndCleanMessages(messages) {
         matchedToolCallIds.clear()
     }
 
-    for (let i = 0; i < messages.length; i++) {
-        const msg = messages[i]
+    for (let i = 0; i < normalizedMessages.length; i++) {
+        const msg = normalizedMessages[i]
 
         if (msg.role === 'assistant') {
             fixIncompleteToolCalls()

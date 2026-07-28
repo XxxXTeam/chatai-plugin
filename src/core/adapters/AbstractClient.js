@@ -1395,14 +1395,17 @@ export class AbstractClient {
 
             if (modelResponse.toolCalls && modelResponse.toolCalls.length > 0) {
                 const executableToolCalls = this.resolveExecutableToolCalls(modelResponse.toolCalls, options)
+                const uniqueToolCalls = this.deduplicateToolCalls(executableToolCalls)
 
-                if (executableToolCalls.length === 0) {
+                if (uniqueToolCalls.length === 0) {
                     modelResponse.toolCalls = undefined
-                } else if (executableToolCalls.length < modelResponse.toolCalls.length) {
-                    this.logger.info(
-                        `[Tool] 过滤无效工具调用: ${modelResponse.toolCalls.length} -> ${executableToolCalls.length}`
-                    )
-                    modelResponse.toolCalls = executableToolCalls
+                } else {
+                    if (uniqueToolCalls.length < modelResponse.toolCalls.length) {
+                        this.logger.info(
+                            `[Tool] 保存前过滤无效或重复工具调用: ${modelResponse.toolCalls.length} -> ${uniqueToolCalls.length}`
+                        )
+                    }
+                    modelResponse.toolCalls = uniqueToolCalls
                 }
             }
 
@@ -2226,7 +2229,6 @@ export class AbstractClient {
     async executeSingleToolCall(toolCall) {
         const fcName = toolCall.function?.name || toolCall.name || 'unknown_tool'
         let fcArgs = toolCall.function?.arguments || toolCall.arguments
-
         // 解析参数
         if (typeof fcArgs === 'string') {
             try {

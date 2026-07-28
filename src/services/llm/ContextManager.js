@@ -132,7 +132,7 @@ export class ContextManager {
      * @returns {Promise<Function>} 释放锁的函数
      */
     async acquireLock(key, timeout = 60000) {
-        const maxLockDuration = 90000 // 锁最长持有时间 90秒
+        const maxLockDuration = Math.max(90000, timeout + 60000)
         const startTime = Date.now()
 
         // 等待现有锁释放

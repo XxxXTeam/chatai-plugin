@@ -488,7 +488,7 @@ class Config {
                  */
                 timeouts: {
                     connect: 30000, // 连接超时
-                    request: 600000, // 请求超时：10 分钟（image_create 等长耗时工具）
+                    request: 1800000, // 请求超时：30 分钟（image_create 等长耗时工具）
                     sseConnect: 15000, // SSE 连接超时
                     sseEndpoint: 2000, // SSE endpoint 等待超时
                     startup: 5000, // 进程启动超时

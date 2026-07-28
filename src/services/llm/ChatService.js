@@ -17,6 +17,12 @@ import { presetManager } from '../preset/PresetManager.js'
 import { memoryManager } from '../storage/MemoryManager.js'
 import { getScopeManager } from '../scope/ScopeManager.js'
 import { databaseService } from '../storage/DatabaseService.js'
+import {
+    applyPersonalTagChanges,
+    buildPersonalTagContext,
+    parsePersonalTagChanges,
+    parsePersonalTagDefinitions
+} from '../storage/PersonalTagService.js'
 import { statsService } from '../stats/StatsService.js'
 import { enforceMaxCharacters } from '../../utils/common.js'
 import { resolveConfiguredToolChoice } from '../tools/ToolChoiceService.js'
@@ -75,6 +81,12 @@ export class ChatService {
      * @throws {Error} 当 userId 未提供或模型未配置时抛出错误
      */
     async sendMessage(options) {
+        const fullUserId = String(options.userId || '')
+        const pureUserId = fullUserId.includes('_') ? fullUserId.split('_').pop() : fullUserId
+        const groupId = options.groupId || options.event?.group_id || options.event?.data?.group_id || null
+        const conversationId = groupId ? `group:${groupId}` : contextManager.getConversationId(pureUserId, null)
+        const releaseLock = await contextManager.acquireLock(`chat:${conversationId}`, 1800000)
+
         try {
             return await this._sendMessageImpl(options)
         } catch (error) {
@@ -83,9 +95,6 @@ export class ChatService {
 
             if (autoCleanEnabled) {
                 try {
-                    const fullUserId = String(options.userId)
-                    const pureUserId = fullUserId.includes('_') ? fullUserId.split('_').pop() : fullUserId
-                    const groupId = options.event?.group_id ? String(options.event.group_id) : null
                     const historyManager = (await import('../../core/utils/history.js')).default
                     const currentConversationId = contextManager.getConversationId(pureUserId, groupId)
                     const legacyConversationId = groupId ? `group:${groupId}:user:${pureUserId}` : `user:${pureUserId}`
@@ -115,6 +124,8 @@ export class ChatService {
                 logger.warn('[ChatService] 错误时自动结清功能已禁用，错误信息:', error.message)
             }
             throw error
+        } finally {
+            releaseLock()
         }
     }
 
@@ -667,6 +678,7 @@ export class ChatService {
             )
         }
         let systemPrompt = defaultPrompt
+        let personalTagDefinitions = new Map()
 
         // skipPersona 模式：跳过人设获取，使用空的 systemPrompt（用于总结等场景）
         if (skipPersona) {
@@ -920,6 +932,13 @@ export class ChatService {
         const resolveChannelPrompt = targetChannel => resolveChannelSystemPrompt(baseSystemPrompt, targetChannel)
         const channelPromptState = resolveChannelPrompt(channel)
         systemPrompt = channelPromptState.systemPrompt
+        personalTagDefinitions = parsePersonalTagDefinitions(systemPrompt)
+        if (!skipPersona && personalTagDefinitions.size > 0) {
+            const personalTagContext = buildPersonalTagContext(cleanUserId)
+            if (personalTagContext && !systemPrompt.includes(personalTagContext.trim())) {
+                systemPrompt += personalTagContext
+            }
+        }
         if (!shouldDisableSystemPrompt && systemPrompt && systemPrompt.trim()) {
             messages.push({ role: 'system', content: [{ type: 'text', text: systemPrompt }] })
         } else if (shouldDisableSystemPrompt) {
@@ -1657,12 +1676,26 @@ export class ChatService {
                 finalUsage = response?.usage || {}
                 allToolLogs = response?.toolCallLogs || []
                 if (finalResponse.length > 0) {
-                    finalResponse = finalResponse.filter(c => {
-                        if (c.type === 'text' && c.text) {
-                            return !this.isPureToolCallJson(c.text)
-                        }
-                        return true
-                    })
+                    const personalTagChanges = []
+                    finalResponse = finalResponse
+                        .filter(c => {
+                            if (c.type === 'text' && c.text) {
+                                return !this.isPureToolCallJson(c.text)
+                            }
+                            return true
+                        })
+                        .map(content => {
+                            if (content.type !== 'text' || !content.text || personalTagDefinitions.size === 0) {
+                                return content
+                            }
+                            const parsed = parsePersonalTagChanges(content.text, personalTagDefinitions)
+                            personalTagChanges.push(...parsed.changes)
+                            return { ...content, text: parsed.text }
+                        })
+                    if (personalTagChanges.length > 0) {
+                        const tagState = await applyPersonalTagChanges(cleanUserId, personalTagChanges)
+                        logger.debug(`[ChatService] 已更新用户动态标签: ${JSON.stringify(tagState)}`)
+                    }
                 }
 
                 // 记录实际使用的模型和渠道切换信息

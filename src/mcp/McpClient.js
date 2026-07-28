@@ -3,8 +3,37 @@ import crypto from 'node:crypto'
 import { EventSource } from 'eventsource'
 import { chatLogger } from '../core/utils/logger.js'
 import config from '../../config/config.js'
+import { proxyService } from '../services/proxy/ProxyService.js'
 
 const logger = chatLogger
+
+/**
+ * 获取 MCP 使用的代理 URL。
+ * @returns {string|null} 代理地址
+ */
+function getMcpProxyUrl() {
+    const profile = proxyService.getProfileForScope('api')
+    return profile ? proxyService.buildProxyUrl(profile) : null
+}
+
+/**
+ * 为本地 MCP 子进程构建代理环境变量。
+ * @param {NodeJS.ProcessEnv} env - 原始环境变量
+ * @returns {NodeJS.ProcessEnv} 合并后的环境变量
+ */
+function withMcpProxyEnv(env) {
+    const proxyUrl = getMcpProxyUrl()
+    if (!proxyUrl) return env
+    return {
+        ...env,
+        HTTP_PROXY: proxyUrl,
+        HTTPS_PROXY: proxyUrl,
+        ALL_PROXY: proxyUrl,
+        http_proxy: proxyUrl,
+        https_proxy: proxyUrl,
+        all_proxy: proxyUrl
+    }
+}
 
 /** 从全局配置读取 MCP 超时配置 */
 function getConfigTimeouts() {
@@ -12,7 +41,7 @@ function getConfigTimeouts() {
     const timeouts = mcpConfig.timeouts || {}
     return {
         connect: timeouts.connect || 30000,
-        request: timeouts.request || 30000,
+        request: timeouts.request || 1800000,
         sseConnect: timeouts.sseConnect || 15000,
         sseEndpoint: timeouts.sseEndpoint || 2000,
         startup: timeouts.startup || 5000,
@@ -201,13 +230,13 @@ export class McpClient {
         logger.debug(`[MCP] Starting npm server: ${displayCmd}`)
 
         // 合并环境变量，支持 NODE_OPTIONS 等
-        const mergedEnv = {
+        const mergedEnv = withMcpProxyEnv({
             ...process.env,
             ...env,
             // 确保 npm 包可以正确输出
             FORCE_COLOR: '0',
             NO_COLOR: '1'
-        }
+        })
 
         try {
             this.process = spawn('npx', npxArgs, {
@@ -304,7 +333,7 @@ export class McpClient {
         logger.debug(`[MCP] Spawning server: ${command} ${args ? args.join(' ') : ''}`)
 
         this.process = spawn(command, args || [], {
-            env: { ...process.env, ...env },
+            env: withMcpProxyEnv({ ...process.env, ...env }),
             stdio: ['pipe', 'pipe', 'pipe']
         })
 
@@ -352,17 +381,18 @@ export class McpClient {
         this.sseBaseUrl = url.replace(/\/(sse|mcp|message)\/?$/, '')
         logger.debug(`[MCP] Connecting to SSE endpoint: ${url}`)
 
-        // 使用自定义 fetch 传递 headers
-        const eventSourceOptions =
-            Object.keys(headers).length > 0
-                ? {
-                      fetch: (input, init) =>
-                          fetch(input, {
-                              ...init,
-                              headers: { ...init?.headers, ...headers }
-                          })
-                  }
-                : {}
+        // 使用 node-fetch 以支持现有 ProxyService 的 HTTP Agent。
+        const eventSourceOptions = {
+            fetch: async (input, init) => {
+                const targetUrl = String(input)
+                const nodeFetch = (await import('node-fetch')).default
+                return nodeFetch(targetUrl, {
+                    ...init,
+                    ...proxyService.getFetchOptions(targetUrl, 'api'),
+                    headers: { ...init?.headers, ...headers }
+                })
+            }
+        }
 
         this.eventSource = new EventSource(url, eventSourceOptions)
 
@@ -458,7 +488,9 @@ export class McpClient {
             }
 
             logger.debug(`[MCP] Streamable HTTP initializing session to ${this.httpUrl}`)
-            const response = await fetch(this.httpUrl, {
+            const nodeFetch = (await import('node-fetch')).default
+            const response = await nodeFetch(this.httpUrl, {
+                ...proxyService.getFetchOptions(this.httpUrl, 'api'),
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -775,6 +807,7 @@ export class McpClient {
         let responseText = ''
         let lastError = null
 
+        const nodeFetch = (await import('node-fetch')).default
         for (const [index, url] of messageUrls.entries()) {
             try {
                 if (notification.method !== 'ping') {
@@ -788,7 +821,8 @@ export class McpClient {
                  * 会连带拖住工具调用。同文件 sendSSERequest 与 httpRequest 都已用
                  * AbortController，此处是遗漏。
                  */
-                response = await fetch(url, {
+                response = await nodeFetch(url, {
+                    ...proxyService.getFetchOptions(url, 'api'),
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -870,12 +904,14 @@ export class McpClient {
         let responseText = ''
         let lastError = null
 
+        const nodeFetch = (await import('node-fetch')).default
         for (const [index, url] of messageUrls.entries()) {
             try {
                 if (index > 0 && request.method !== 'ping') {
                     logger.debug(`[MCP] Retrying SSE POST to: ${url}, id: ${request.id}, method: ${request.method}`)
                 }
-                response = await fetch(url, {
+                response = await nodeFetch(url, {
+                    ...proxyService.getFetchOptions(url, 'api'),
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -978,7 +1014,9 @@ export class McpClient {
                 headers['Mcp-Session-Id'] = this.httpSessionId
             }
 
-            const response = await fetch(this.httpUrl, {
+            const nodeFetch = (await import('node-fetch')).default
+            const response = await nodeFetch(this.httpUrl, {
+                ...proxyService.getFetchOptions(this.httpUrl, 'api'),
                 method: 'POST',
                 headers,
                 body: JSON.stringify(requestBody),

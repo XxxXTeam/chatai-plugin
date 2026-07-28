@@ -472,50 +472,26 @@ class DatabaseService {
      */
     saveMessage(conversationId, message) {
         this.ensureInit()
-        // 去重：检查是否已存在相同 ID 的消息
+        // 消息 ID 是历史记录的唯一业务标识，按解析后的 JSON 精确比较，避免 LIKE 通配符误匹配。
         if (message.id) {
-            const existing = this.db
+            const rows = this.db
                 .prepare(
                     `
-                SELECT id FROM messages 
-                WHERE conversation_id = ? AND content LIKE ?
-                LIMIT 1
+                SELECT content FROM messages
+                WHERE conversation_id = ?
+                ORDER BY id DESC
             `
                 )
-                .get(conversationId, `%"id":"${message.id}"%`)
+                .all(conversationId)
 
-            if (existing) {
-                // 消息已存在，跳过保存
-                return
-            }
-        }
-
-        // 内容去重：检查最近5条消息是否有相同内容（防止重复触发）
-        const contentHash = this.hashContent(message.content, message.role)
-        const recentDuplicate = this.db
-            .prepare(
-                `
-            SELECT id FROM messages 
-            WHERE conversation_id = ? 
-            ORDER BY timestamp DESC 
-            LIMIT 5
-        `
-            )
-            .all(conversationId)
-
-        for (const recent of recentDuplicate) {
-            const recentMsg = this.db.prepare(`SELECT content, role FROM messages WHERE id = ?`).get(recent.id)
-            if (recentMsg) {
+            const existing = rows.some(row => {
                 try {
-                    const parsed = JSON.parse(recentMsg.content)
-                    if (this.hashContent(parsed.content, recentMsg.role) === contentHash) {
-                        // 最近已有相同内容，跳过保存
-                        return
-                    }
-                } catch (e) {
-                    // 解析失败，继续
+                    return JSON.parse(row.content)?.id === message.id
+                } catch {
+                    return false
                 }
-            }
+            })
+            if (existing) return
         }
 
         const stmt = this.db.prepare(`
@@ -523,7 +499,6 @@ class DatabaseService {
             VALUES (?, ?, ?, ?, ?)
         `)
 
-        // Store the full message object to preserve id, toolCalls, etc.
         const fullMessage = {
             id: message.id,
             parentId: message.parentId,
@@ -558,7 +533,7 @@ class DatabaseService {
         let query = `
             SELECT * FROM messages 
             WHERE conversation_id = ? 
-            ORDER BY timestamp ASC
+            ORDER BY timestamp ASC, id ASC
         `
 
         // If limit is provided, we want the *last* N messages, but still in ASC order
@@ -568,9 +543,9 @@ class DatabaseService {
                 SELECT * FROM (
                     SELECT * FROM messages 
                     WHERE conversation_id = ? 
-                    ORDER BY timestamp DESC 
+                    ORDER BY timestamp DESC, id DESC
                     LIMIT ?
-                ) ORDER BY timestamp ASC
+                ) ORDER BY timestamp ASC, id ASC
             `
             const stmt = this.db.prepare(query)
             const rows = stmt.all(conversationId, limit)

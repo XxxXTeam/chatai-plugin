@@ -44,7 +44,7 @@ export const DEFAULT_CONFIG = {
         },
         groups: [],
         execution: {
-            timeout: 30000,
+            timeout: 1800000,
             maxParallel: 5,
             retryOnError: false,
             maxRetries: 2,

@@ -82,6 +82,7 @@ router.delete('/clear-all', async (req, res) => {
         const result = db.prepare('DELETE FROM structured_memories').run()
         // 也清空旧表（兼容）
         const oldResult = db.prepare('DELETE FROM memories').run()
+        db.prepare("DELETE FROM kv_store WHERE key LIKE 'personal-tags:%'").run()
 
         res.json(
             ChaiteResponse.ok({
@@ -186,6 +187,8 @@ router.delete('/user/:userId', async (req, res) => {
         const { hard = false } = req.query
 
         const count = await memoryService.clearUserMemories(userId, hard === 'true')
+        const { databaseService } = await import('../storage/DatabaseService.js')
+        databaseService.deleteKV(`personal-tags:${userId}`)
         res.json(
             ChaiteResponse.ok({
                 success: true,

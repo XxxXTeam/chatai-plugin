@@ -303,7 +303,7 @@ skills:
   # 工具执行配置
   execution:
     # 单个工具超时时间（毫秒）
-    timeout: 30000
+    timeout: 1800000
     # 最大并行执行数
     maxParallel: 5
     # 错误时是否重试
