@@ -561,27 +561,67 @@ export class MemoryManager {
         try {
             // 获取最近有对话的用户
             const conversations = databaseService.getConversations()
+            // 私聊按用户去重；共享群必须按「群 + 持久化发送者」去重，不能把群 ID 当用户 ID。
             const processedUsers = new Set()
             const minPollInterval = (config.get('memory.minPollInterval') || 30) * 60 * 1000 // 默认30分钟
             const now = Date.now()
 
             for (const conv of conversations) {
-                const userId = conv.userId
-                if (processedUsers.has(userId)) continue
-                processedUsers.add(userId)
+                const sharedGroupConversation = typeof conv.id === 'string' && /^group:[^:]+$/.test(conv.id)
+                const targets = []
 
-                // 检查用户上次处理时间（确保不会过于频繁）
-                const lastPoll = this.lastPollTime.get(userId) || 0
-                if (now - lastPoll < minPollInterval) continue
+                if (sharedGroupConversation) {
+                    const groupId = conv.id.slice('group:'.length)
+                    const senderIds = new Set()
+                    const history = databaseService.getMessages(conv.id, 1000)
 
-                // 检查对话是否有新消息（距离上次轮询后是否有新对话）
-                const convTime = conv.updatedAt || conv.timestamp || 0
-                if (convTime <= lastPoll) continue
+                    // 只信任落库时保存的 sender.user_id。旧记录没有 sender 时无法确认归属，必须跳过。
+                    for (let index = history.length - 1; index >= 0; index--) {
+                        const message = history[index]
+                        if (message.role !== 'user') continue
+                        const senderId = message.sender?.user_id
+                        if (senderId === null || senderId === undefined || String(senderId) === '') continue
+                        senderIds.add(String(senderId))
+                    }
 
-                // 分析该用户的最近对话
-                await this.analyzeUserConversations(userId)
-                this.lastPollTime.set(userId, now)
-                this._capTimeMap(this.lastPollTime)
+                    if (senderIds.size === 0) {
+                        logger.debug(`[MemoryManager] 共享群会话缺少可确认 sender，跳过自动记忆总结: ${conv.id}`)
+                        continue
+                    }
+
+                    for (const userId of senderIds) {
+                        targets.push({
+                            userId,
+                            pollKey: `group:${groupId}:user:${userId}`,
+                            options: { groupId }
+                        })
+                    }
+                } else {
+                    const userId = String(conv.userId ?? '')
+                    if (!userId) continue
+                    targets.push({ userId, pollKey: userId, options: undefined })
+                }
+
+                for (const target of targets) {
+                    if (processedUsers.has(target.pollKey)) continue
+                    processedUsers.add(target.pollKey)
+
+                    // 检查用户上次处理时间（确保不会过于频繁）
+                    const lastPoll = this.lastPollTime.get(target.pollKey) || 0
+                    if (now - lastPoll < minPollInterval) continue
+
+                    // 检查对话是否有新消息（距离上次轮询后是否有新对话）
+                    const convTime = conv.updatedAt || conv.timestamp || 0
+                    if (convTime <= lastPoll) continue
+
+                    // 共享群携带精确 groupId，使 listUserConversations 只读取当前群并按 sender 归属轮次。
+                    await this.analyzeUserConversations(target.userId, target.options)
+                    this.lastPollTime.set(target.pollKey, now)
+                    this._capTimeMap(this.lastPollTime)
+
+                    // 避免一次处理太多用户
+                    if (processedUsers.size >= 100) break
+                }
 
                 // 避免一次处理太多用户，限制单次轮询最多处理10个用户
                 if (processedUsers.size >= 100) {
@@ -602,15 +642,40 @@ export class MemoryManager {
      * 分析用户最近的对话，提取并总结记忆
      * @param {string} userId
      */
-    async analyzeUserConversations(userId) {
+    async analyzeUserConversations(userId, options = {}) {
         try {
-            const isGroupConversation = userId.includes('group:') || userId.includes(':')
+            const analysisOptions = { groupId: undefined, ...options }
+            const groupId = analysisOptions.groupId
+            const memoryUserId = this.getScopedMemoryUserId(userId, groupId)
 
-            const conversations = databaseService.listUserConversations(userId)
-            if (conversations.length === 0) return
-            const recentConv = conversations[0]
-            const messages = databaseService.getMessages(recentConv.conversationId, 30)
-            if (messages.length < 3) return
+            const conversations = databaseService.listUserConversations(userId, {
+                ...(groupId !== undefined ? { groupId } : {})
+            })
+            if (conversations.length === 0) {
+                return { success: false, error: '没有找到可总结的对话记录', reason: 'no_conversation' }
+            }
+
+            let recentConv = null
+            let messages = []
+            for (const conversation of conversations) {
+                const userMessages = databaseService.getMessagesForUser(conversation.conversationId, userId, 30)
+                if (
+                    userMessages.filter(message => message.role === 'user' || message.role === 'assistant').length >= 2
+                ) {
+                    recentConv = conversation
+                    messages = userMessages
+                    break
+                }
+            }
+            if (!recentConv) {
+                return {
+                    success: false,
+                    error: '对话记录缺少可确认归属的用户消息，无法安全总结',
+                    reason: 'insufficient_attributed_messages'
+                }
+            }
+
+            const isGroupConversation = recentConv.conversationId.startsWith('group:')
             const dialogText = messages
                 .filter(m => m.role === 'user' || m.role === 'assistant')
                 .map(m => {
@@ -626,10 +691,12 @@ export class MemoryManager {
                 })
                 .join('\n')
 
-            if (dialogText.length < 50) return
+            if (dialogText.length < 50) {
+                return { success: false, error: '可总结的对话内容不足', reason: 'insufficient_content' }
+            }
 
             // 获取现有记忆用于合并总结
-            const existingMemories = databaseService.getMemories(userId, 50)
+            const existingMemories = databaseService.getMemories(memoryUserId, 50)
             const existingMemoryList = existingMemories.map(m => `- ${m.content}`).join('\n')
 
             const botName = global.Bot?.nickname || config.get('basic.botName') || '助手'
@@ -676,7 +743,10 @@ ${dialogText}
 
             const startTime2 = Date.now()
             const memoryModel2 = config.get('memory.model')
-            const client = await LlmService.getChatClient({ model: memoryModel2 || undefined })
+            const client = await LlmService.getChatClient({
+                model: memoryModel2 || undefined,
+                ...(groupId !== null && groupId !== undefined && groupId !== '' ? { groupId: String(groupId) } : {})
+            })
             const channelInfo2 = client._channelInfo || {}
             const model2 = channelInfo2.model || config.get('llm.defaultModel')
             const _temp2 = resolveClientTemperature(client, 0.3)
@@ -712,18 +782,31 @@ ${dialogText}
                 /* 统计失败不影响主流程 */
             }
 
-            if (!responseText || responseText === '无' || responseText.length < 5) return
+            if (!responseText || responseText === '无' || responseText.length < 5) {
+                return { success: false, error: '总结模型未返回有效记忆', reason: 'empty_summary' }
+            }
 
             // 解析新记忆列表
             const newMemories = this._parseMemoryResponse(responseText)
 
-            if (newMemories.length > 0) {
-                // 覆盖式替换：清除旧记忆，保存新记忆
-                await this.replaceUserMemories(userId, newMemories, 'poll_summary')
-                logger.debug(`[MemoryManager] 覆盖式总结完成 [${userId}]: ${newMemories.length}条记忆`)
+            if (newMemories.length === 0) {
+                return { success: false, error: '总结结果没有可保存的记忆条目', reason: 'invalid_summary' }
+            }
+
+            // 覆盖式替换：清除旧记忆，保存新记忆
+            const replaced = await this.replaceUserMemories(userId, newMemories, 'poll_summary', { groupId })
+            if (!replaced) {
+                return { success: false, error: '写入总结结果失败', reason: 'replace_failed' }
+            }
+            logger.debug(`[MemoryManager] 覆盖式总结完成 [${userId}]: ${newMemories.length}条记忆`)
+            return {
+                success: true,
+                conversationId: recentConv.conversationId,
+                memoryCount: newMemories.length
             }
         } catch (error) {
             logger.debug(`[MemoryManager] 分析用户 ${userId} 对话失败:`, error.message)
+            return { success: false, error: error.message, reason: 'exception' }
         }
     }
 
@@ -761,20 +844,34 @@ ${dialogText}
     }
 
     /**
+     * 生成旧版 memories 表使用的作用域键。
+     * 群内记忆沿用历史固定前缀，QQBot OpenID 与频道标识按原值保留。
+     * @param {string|number} userId - 用户标识
+     * @param {string|number|null|undefined} groupId - 群或频道标识
+     * @returns {string} memories 表中的用户键
+     */
+    getScopedMemoryUserId(userId, groupId = undefined) {
+        const normalizedUserId = String(userId ?? '')
+        if (groupId === undefined || groupId === null || groupId === '') return normalizedUserId
+        return `group:${String(groupId)}:user:${normalizedUserId}`
+    }
+
+    /**
      * 覆盖式替换用户记忆
      * @param {string} userId
      * @param {string[]} memories - 新记忆列表
      * @param {string} source - 来源标记
      */
-    async replaceUserMemories(userId, memories, source = 'summary') {
+    async replaceUserMemories(userId, memories, source = 'summary', options = {}) {
         try {
             await this.init()
+            const storageUserId = this.getScopedMemoryUserId(userId, options?.groupId)
 
             // 清除旧记忆与写入新记忆在同一事务内完成，
             // 否则中途失败会导致旧记忆已删、新记忆未写，用户记忆永久丢失
             const replacedAt = Date.now()
             const written = databaseService.replaceMemories(
-                userId,
+                storageUserId,
                 (memories || []).map(content => ({
                     content,
                     source,
@@ -783,7 +880,7 @@ ${dialogText}
                 }))
             )
 
-            logger.debug(`[MemoryManager] 替换记忆 [${userId}]: ${written}条`)
+            logger.debug(`[MemoryManager] 替换记忆 [${storageUserId}]: ${written}条`)
             return true
         } catch (error) {
             logger.error(`[MemoryManager] 替换记忆失败 [${userId}]:`, error.message)
@@ -797,10 +894,11 @@ ${dialogText}
      * @param {string} userMessage
      * @param {string} assistantResponse
      */
-    async extractMemoryFromConversation(userId, userMessage, assistantResponse) {
+    async extractMemoryFromConversation(userId, userMessage, assistantResponse, options = {}) {
         if (!config.get('memory.enabled')) return
 
         try {
+            const storageUserId = this.getScopedMemoryUserId(userId, options?.groupId)
             // 判断是否包含值得记忆的信息
             const importantPatterns = [
                 /我(是|叫|住在|喜欢|讨厌|今年|的生日|工作)/,
@@ -814,7 +912,7 @@ ${dialogText}
             if (!shouldExtract) return null
 
             // 获取现有记忆用于合并
-            const existingMemories = databaseService.getMemories(userId, 20)
+            const existingMemories = databaseService.getMemories(storageUserId, 20)
             const existingMemoryList = existingMemories.map(m => `- ${m.content}`).join('\n')
 
             const botName = global.Bot?.nickname || config.get('basic.botName') || '助手'
@@ -841,7 +939,12 @@ ${existingMemoryList || '暂无'}
 
             const startTime3 = Date.now()
             const memoryModel3 = config.get('memory.model')
-            const client = await LlmService.getChatClient({ model: memoryModel3 || undefined })
+            const client = await LlmService.getChatClient({
+                model: memoryModel3 || undefined,
+                ...(options?.groupId !== undefined && options?.groupId !== null && options?.groupId !== ''
+                    ? { groupId: String(options.groupId) }
+                    : {})
+            })
             const channelInfo3 = client._channelInfo || {}
             const model3 = channelInfo3.model || config.get('llm.defaultModel')
             const _temp3 = resolveClientTemperature(client, 0.3)
@@ -881,7 +984,7 @@ ${existingMemoryList || '暂无'}
             // 解析并覆盖替换记忆
             const newMemories = this._parseMemoryResponse(responseText)
             if (newMemories.length > 0) {
-                await this.replaceUserMemories(userId, newMemories, 'auto_extract')
+                await this.replaceUserMemories(userId, newMemories, 'auto_extract', options)
                 logger.debug(`[MemoryManager] 自动提取并合并记忆: ${newMemories.length}条`)
                 return newMemories.join('; ')
             }
@@ -906,7 +1009,9 @@ ${existingMemoryList || '暂无'}
 
         await this.init()
         const { groupId, includeProfile } = options
-        const pureUserId = userId?.includes('_') ? userId.split('_').pop() : userId
+        // QQBot/OpenID 与频道标识可以合法包含下划线；不能再把最后一段猜成 QQ 号。
+        // 调用方传入的 userId 已是存储键，必须原样读取。
+        const pureUserId = String(userId ?? '')
         let allMemories = []
 
         // 1. 获取用户基础记忆
@@ -946,8 +1051,8 @@ ${existingMemoryList || '暂无'}
         }
 
         // 4. 兼容旧格式的组合ID
-        if (userId?.includes('_')) {
-            const combinedMemories = databaseService.getMemories(userId, 5)
+        if (String(userId ?? '').includes('_')) {
+            const combinedMemories = databaseService.getMemories(String(userId), 5)
             for (const cm of combinedMemories) {
                 if (!allMemories.find(m => m.id === cm.id)) {
                     allMemories.push(cm)
@@ -993,8 +1098,9 @@ ${existingMemoryList || '暂无'}
             await this.init()
 
             // 检查记忆数量上限
+            const storageUserId = this.getScopedMemoryUserId(userId, options?.groupId)
             const maxMemories = config.get('memory.maxMemories') || 100
-            const existingMemories = databaseService.getMemories(userId, maxMemories + 10)
+            const existingMemories = databaseService.getMemories(storageUserId, maxMemories + 10)
 
             // 如果超过上限，删除最旧的记忆
             if (existingMemories.length >= maxMemories) {
@@ -1007,13 +1113,13 @@ ${existingMemoryList || '暂无'}
                 logger.debug(`[MemoryManager] 清理旧记忆 ${memoriesToDelete.length} 条，用户 ${userId}`)
             }
 
-            const id = databaseService.saveMemory(userId, content, {
+            const id = databaseService.saveMemory(storageUserId, content, {
                 source: options.source || 'manual',
                 importance: options.importance || 5,
                 metadata: options.metadata || options
             })
 
-            logger.debug(`[MemoryManager] 保存记忆: userId=${userId}, id=${id}`)
+            logger.debug(`[MemoryManager] 保存记忆: userId=${storageUserId}, id=${id}`)
             return { id, content, timestamp: Date.now() }
         } catch (error) {
             logger.error(`[MemoryManager] 保存记忆失败:`, error.message)
@@ -1125,9 +1231,10 @@ ${existingMemoryList || '暂无'}
     /**
      * 手动触发用户记忆总结（立即执行覆盖式总结）
      * @param {string} userId - 用户ID
+     * @param {{groupId?: string|null}} [options] - 会话作用域
      * @returns {Object} 总结结果
      */
-    async summarizeUserMemory(userId) {
+    async summarizeUserMemory(userId, options = {}) {
         if (!config.get('memory.enabled')) {
             return { success: false, error: '记忆功能未启用' }
         }
@@ -1136,13 +1243,24 @@ ${existingMemoryList || '暂无'}
             await this.init()
 
             // 获取现有记忆数量
-            const beforeCount = databaseService.getMemories(userId, 100).length
+            const storageUserId = this.getScopedMemoryUserId(userId, options?.groupId)
+            const beforeCount = databaseService.getMemories(storageUserId, 100).length
 
             // 执行覆盖式总结
-            await this.analyzeUserConversations(userId)
+            const summaryResult = await this.analyzeUserConversations(userId, options)
+            if (!summaryResult?.success) {
+                return {
+                    success: false,
+                    userId,
+                    beforeCount,
+                    afterCount: beforeCount,
+                    error: summaryResult?.error || '没有可总结的对话记录',
+                    reason: summaryResult?.reason || 'summary_failed'
+                }
+            }
 
             // 获取总结后的记忆
-            const afterMemories = databaseService.getMemories(userId, 100)
+            const afterMemories = databaseService.getMemories(storageUserId, 100)
 
             return {
                 success: true,

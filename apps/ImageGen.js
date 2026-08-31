@@ -518,7 +518,7 @@ export class ImageGen extends plugin {
         }
 
         /* 使用合并转发发送，避免预设列表过长被截断 */
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
         const botInfo = {
             user_id: bot.uin || bot.self_id || e.self_id || 10000,
             nickname: bot.nickname || bot.info?.nickname || 'Bot'
@@ -1894,7 +1894,7 @@ export class ImageGen extends plugin {
      */
     async uploadToQQImageBed(e, imageUrl) {
         try {
-            const bot = e.bot || Bot
+            const bot = e.bot || globalThis.Bot
             const groupId = e.group_id
             const buffer = await this._getImageBuffer(imageUrl)
             if (!buffer || buffer.length === 0) return null
@@ -2038,7 +2038,7 @@ export class ImageGen extends plugin {
             const zipPath = path.join(tmpDir, zipName)
             fs.writeFileSync(zipPath, zipBuffer)
 
-            const bot = e.bot || Bot
+            const bot = e.bot || globalThis.Bot
             const groupId = e.group_id
 
             /* ICQQ: group.sendFile / friend.sendFile */
@@ -2244,7 +2244,7 @@ export class ImageGen extends plugin {
             }
 
             const { cols, rows } = splitGrid
-            const bot = e.bot || Bot
+            const bot = e.bot || globalThis.Bot
             // 使用统一的Bot信息获取
             const botInfo = {
                 user_id: bot.uin || bot.self_id || e.self_id || 10000,
@@ -2381,7 +2381,7 @@ export class ImageGen extends plugin {
     }
     async getAllImages(e) {
         const urls = []
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
 
         // 提取图片URL（优先级：url > file > path）
         const extractImgUrl = m => {

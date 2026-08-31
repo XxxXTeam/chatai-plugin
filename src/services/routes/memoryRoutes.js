@@ -171,9 +171,13 @@ router.post('/user/:userId', async (req, res) => {
 router.post('/user/:userId/summarize', async (req, res) => {
     try {
         const { userId } = req.params
-        const { useLLM = false } = req.body
+        const { useLLM = true, groupId, model } = req.body || {}
 
-        const result = await memorySummarizer.summarizeUserMemories(userId, { useLLM })
+        const result = await memorySummarizer.summarizeUserMemories(userId, {
+            useLLM,
+            ...(groupId !== undefined ? { groupId } : {}),
+            ...(model ? { model } : {})
+        })
         res.json(ChaiteResponse.ok(result))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))

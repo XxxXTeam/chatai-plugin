@@ -3,7 +3,7 @@
  * 包含天气、一言、骰子、倒计时、提醒、短链接、IP查询等实用功能
  */
 
-import { segment } from '../../utils/messageParser.js'
+import { StandardBotApi, StandardMessage as segment } from '../../core/platform/index.js'
 import { chatLogger as logger } from '../../core/utils/logger.js'
 
 /** 外部 API 请求超时（毫秒）：缺少超时会让 tool_call 永久挂起 */
@@ -328,7 +328,7 @@ export const extraTools = [
                     if (!imageUrl) continue
 
                     try {
-                        await e.reply(segment.image(imageUrl))
+                        await StandardBotApi.fromContext(ctx).reply(segment.image(imageUrl))
                         results.push({ pid: img.pid, title: img.title, author: img.author })
                     } catch (err) {
                         logger.warn(`[Illustration] 发送图片失败:`, err.message)

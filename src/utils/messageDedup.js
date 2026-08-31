@@ -49,7 +49,7 @@ export function checkDuplicateToolSend(ctx, toolName, signature) {
     const e = ctx?.getEvent?.() || {}
     let bot = ctx?.getBot?.() || e?.bot
     try {
-        if (!bot && typeof Bot !== 'undefined') bot = Bot
+        if (!bot && globalThis.Bot) bot = globalThis.Bot
     } catch {
         bot = null
     }
@@ -82,7 +82,7 @@ export function markToolSendCommitted(ctx, toolName, signature) {
     const e = ctx?.getEvent?.() || {}
     let bot = ctx?.getBot?.() || e?.bot
     try {
-        if (!bot && typeof Bot !== 'undefined') bot = Bot
+        if (!bot && globalThis.Bot) bot = globalThis.Bot
     } catch {
         bot = null
     }
@@ -303,14 +303,14 @@ export function isMessageProcessed(e) {
 export function getBotIds() {
     const selfIds = new Set()
     try {
-        if (Bot?.uin) selfIds.add(String(Bot.uin))
-        if (Bot?.self_id) selfIds.add(String(Bot.self_id))
-        if (Bot?.bots && typeof Bot.bots[Symbol.iterator] === 'function') {
-            for (const [id] of Bot.bots) {
+        if (globalThis.Bot?.uin) selfIds.add(String(globalThis.Bot.uin))
+        if (globalThis.Bot?.self_id) selfIds.add(String(globalThis.Bot.self_id))
+        if (globalThis.Bot?.bots && typeof globalThis.Bot.bots[Symbol.iterator] === 'function') {
+            for (const [id] of globalThis.Bot.bots) {
                 selfIds.add(String(id))
             }
-        } else if (Bot?.bots && typeof Bot.bots === 'object') {
-            for (const id of Object.keys(Bot.bots)) {
+        } else if (globalThis.Bot?.bots && typeof globalThis.Bot.bots === 'object') {
+            for (const id of Object.keys(globalThis.Bot.bots)) {
                 selfIds.add(String(id))
             }
         }
@@ -337,7 +337,7 @@ export function isSelfMessage(e) {
             return false
         }
 
-        const bot = e?.bot || Bot
+        const bot = e?.bot || globalThis.Bot
         const selfIds = new Set()
 
         // 主要ID
@@ -346,13 +346,13 @@ export function isSelfMessage(e) {
         if (bot?.self_id) selfIds.add(String(bot.self_id))
 
         // TRSS多账号
-        if (Bot?.uin) selfIds.add(String(Bot.uin))
-        if (Bot?.bots && typeof Bot.bots[Symbol.iterator] === 'function') {
-            for (const [id] of Bot.bots) {
+        if (globalThis.Bot?.uin) selfIds.add(String(globalThis.Bot.uin))
+        if (globalThis.Bot?.bots && typeof globalThis.Bot.bots[Symbol.iterator] === 'function') {
+            for (const [id] of globalThis.Bot.bots) {
                 selfIds.add(String(id))
             }
-        } else if (Bot?.bots && typeof Bot.bots === 'object') {
-            for (const id of Object.keys(Bot.bots)) {
+        } else if (globalThis.Bot?.bots && typeof globalThis.Bot.bots === 'object') {
+            for (const id of Object.keys(globalThis.Bot.bots)) {
                 selfIds.add(String(id))
             }
         }

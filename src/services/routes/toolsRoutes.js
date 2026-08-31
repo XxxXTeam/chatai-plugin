@@ -2,51 +2,98 @@
  * 工具路由模块 - MCP工具、自定义工具、JS工具
  */
 import express from 'express'
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import config from '../../../config/config.js'
 import { ChaiteResponse } from './shared.js'
 import { mcpManager } from '../../mcp/McpManager.js'
 import { builtinMcpServer, resolveDangerousTools } from '../../mcp/BuiltinMcpServer.js'
 import { getToolIdentity } from '../../core/adapters/tooling.js'
+import { customToolService, CustomToolValidationError } from '../tools/CustomToolService.js'
+import { chatLogger } from '../../core/utils/logger.js'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-const jsToolsDir = path.join(__dirname, '../../../data/tools')
+const defaultToolRouteServices = Object.freeze({ config, mcpManager, builtinMcpServer, customToolService })
+let toolRouteServices = { ...defaultToolRouteServices }
 
 /**
- * 解析 JS 工具文件路径，并拒绝一切越界名称
- *
- * Express 会对路由参数做百分号解码（%2f → /），原实现直接 path.join(jsToolsDir, name)
- * 可写入插件目录外的任意 .js 文件；由于写入后紧跟 mcpManager.reloadJsTools() 会 import 该文件，
- * 等价于远程代码执行。此处先 basename 剥离目录片段，再做字符白名单与 resolve 前缀双重校验。
- *
- * @param {string} rawName - 路由参数或请求体中的工具名，可带或不带 .js 后缀
- * @returns {{ toolName: string, filename: string, filePath: string } | null} 名称非法时返回 null
+ * 注入工具路由依赖，仅供隔离测试使用。
+ * @param {Partial<typeof defaultToolRouteServices>} overrides - 测试替身
+ * @returns {() => void} 恢复默认依赖的函数
  */
-function resolveJsToolPath(rawName) {
-    if (typeof rawName !== 'string') return null
-    const trimmed = rawName.trim()
-    if (!trimmed) return null
+export function setToolsRouteServicesForTest(overrides = {}) {
+    toolRouteServices = { ...defaultToolRouteServices, ...overrides }
+    return () => {
+        toolRouteServices = { ...defaultToolRouteServices }
+    }
+}
 
-    // 含路径分隔符或上跳片段的输入一律拒绝：直接 basename 虽然也能压平到目录内，
-    // 但会把 `../../apps/chat` 静默写成 `data/tools/chat.js`，行为出人意料
-    if (/[/\\]/.test(trimmed) || trimmed.includes('..')) return null
+/**
+ * 标记旧接口并提供真实配置接口位置，同时保持既有响应体结构。
+ * @param {import('express').Response} res - Express 响应
+ * @param {string} replacement - 替代接口
+ */
+function markDeprecated(res, replacement) {
+    res.setHeader('Deprecation', 'true')
+    res.setHeader('Link', `<${replacement}>; rel="successor-version"`)
+}
 
-    const base = path.basename(trimmed)
-    if (!base || base === '.' || base === '..') return null
+/**
+ * 返回内置、配置型自定义与 JS 工具的完整名称集合。
+ * @returns {Promise<string[]>} 工具名列表
+ */
+async function getManagedToolNames() {
+    const manager = toolRouteServices.mcpManager
+    const server = toolRouteServices.builtinMcpServer
+    await manager.init()
+    await server.init()
+    const names = new Set()
+    for (const category of server.getToolCategories?.() || []) {
+        for (const tool of category.tools || []) {
+            if (typeof tool?.name === 'string' && tool.name) names.add(tool.name)
+        }
+    }
+    for (const name of server.jsTools?.keys?.() || []) names.add(name)
+    for (const tool of server.getCustomTools?.() || []) {
+        if (typeof tool?.name === 'string' && tool.name) names.add(tool.name)
+    }
+    return Array.from(names)
+}
 
-    const filename = base.endsWith('.js') ? base : `${base}.js`
-    // 仅允许字母、数字、下划线、连字符与点，顺带挡掉会破坏代码模板的引号
-    if (!/^[\w.-]+\.js$/.test(filename)) return null
+/**
+ * 原子更新真实 disabledTools 配置；刷新失败时恢复原值和注册表。
+ * @param {string[]} disabledTools - 新禁用列表
+ * @returns {Promise<void>}
+ */
+async function replaceDisabledTools(disabledTools) {
+    const routeConfig = toolRouteServices.config
+    const previous = routeConfig.get('builtinTools.disabledTools') || []
+    await routeConfig.set('builtinTools.disabledTools', disabledTools)
+    try {
+        await toolRouteServices.mcpManager.refreshBuiltinTools()
+    } catch (error) {
+        await routeConfig.set('builtinTools.disabledTools', previous)
+        try {
+            await toolRouteServices.mcpManager.refreshBuiltinTools()
+        } catch (restoreError) {
+            chatLogger.error('[Tools API] 恢复 disabledTools 注册表失败', restoreError)
+        }
+        throw error
+    }
+}
 
-    const rootDir = path.resolve(jsToolsDir)
-    const filePath = path.resolve(rootDir, filename)
-    // 前缀兜底校验，防御 basename 之外的意外情况
-    if (filePath !== rootDir && !filePath.startsWith(rootDir + path.sep)) return null
-
-    return { toolName: filename.slice(0, -3), filename, filePath }
+/**
+ * 把自定义源码服务的稳定错误转换为 HTTP 语义。
+ * @param {import('express').Response} res - Express 响应
+ * @param {*} error - 捕获到的错误
+ * @returns {import('express').Response} 已发送响应
+ */
+function sendCustomToolError(res, error) {
+    if (error instanceof CustomToolValidationError) {
+        const conflictCodes = new Set(['CUSTOM_TOOL_EXISTS', 'CUSTOM_TOOL_NAME_CONFLICT'])
+        const missingCodes = new Set(['CUSTOM_TOOL_NOT_FOUND', 'CUSTOM_TOOL_UPDATE_TARGET_INVALID'])
+        const status = conflictCodes.has(error.code) ? 409 : missingCodes.has(error.code) ? 404 : 400
+        return res.status(status).json(ChaiteResponse.fail({ code: error.code }, error.message))
+    }
+    chatLogger.error('[Tools API] JS 工具操作失败', error)
+    return res.status(500).json(ChaiteResponse.fail(null, 'JS 工具操作失败'))
 }
 
 const router = express.Router()
@@ -54,23 +101,25 @@ const router = express.Router()
 // GET /list - 获取所有工具列表
 router.get('/list', async (req, res) => {
     try {
-        await mcpManager.init()
+        const manager = toolRouteServices.mcpManager
+        await manager.init()
         // 不应用配置过滤，返回全部工具（前端需要显示禁用状态）
-        const tools = mcpManager.getTools({ applyConfig: false, includeDuplicateNames: true }).map(tool => ({
+        const tools = manager.getTools({ applyConfig: false, includeDuplicateNames: true }).map(tool => ({
             ...tool,
             identity: getToolIdentity(tool)
         }))
         res.json(ChaiteResponse.ok(tools))
     } catch (error) {
-        res.json(ChaiteResponse.ok([]))
+        chatLogger.error('[Tools API] 获取工具列表失败', error)
+        res.status(500).json(ChaiteResponse.fail(null, '获取工具列表失败'))
     }
 })
 
 // GET /builtin - 获取内置工具
 router.get('/builtin', async (req, res) => {
     try {
-        await mcpManager.init()
-        const tools = builtinMcpServer.listTools()
+        await toolRouteServices.mcpManager.init()
+        const tools = toolRouteServices.builtinMcpServer.listTools()
         res.json(ChaiteResponse.ok(tools))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -80,7 +129,7 @@ router.get('/builtin', async (req, res) => {
 // GET /builtin/config - 获取内置工具配置
 router.get('/builtin/config', async (req, res) => {
     try {
-        const builtinConfig = config.get('builtinTools') || {}
+        const builtinConfig = toolRouteServices.config.get('builtinTools') || {}
         res.json(
             ChaiteResponse.ok({
                 enabled: builtinConfig.enabled !== false,
@@ -122,8 +171,9 @@ router.put('/builtin/config', async (req, res) => {
             approvalBypassTools,
             approvalAllowSessionBypass,
             approvalSessionBypassMaxRisk
-        } = req.body
-        const currentConfig = config.get('builtinTools') || {}
+        } = req.body || {}
+        const routeConfig = toolRouteServices.config
+        const currentConfig = routeConfig.get('builtinTools') || {}
 
         const newConfig = {
             ...currentConfig,
@@ -153,10 +203,19 @@ router.put('/builtin/config', async (req, res) => {
                     : currentConfig.approvalSessionBypassMaxRisk
         }
 
-        config.set('builtinTools', newConfig)
+        await routeConfig.set('builtinTools', newConfig)
 
-        // 重新加载内置工具
-        await builtinMcpServer.loadModularTools()
+        try {
+            await toolRouteServices.mcpManager.refreshBuiltinTools()
+        } catch (error) {
+            await routeConfig.set('builtinTools', currentConfig)
+            try {
+                await toolRouteServices.mcpManager.refreshBuiltinTools()
+            } catch (restoreError) {
+                chatLogger.error('[Tools API] 恢复内置工具配置失败', restoreError)
+            }
+            throw error
+        }
 
         res.json(ChaiteResponse.ok({ success: true, config: newConfig }))
     } catch (error) {
@@ -167,9 +226,9 @@ router.put('/builtin/config', async (req, res) => {
 // GET /builtin/list - 获取内置工具列表
 router.get('/builtin/list', async (req, res) => {
     try {
-        await mcpManager.init()
-        await builtinMcpServer.init()
-        const tools = builtinMcpServer.listTools()
+        await toolRouteServices.mcpManager.init()
+        await toolRouteServices.builtinMcpServer.init()
+        const tools = toolRouteServices.builtinMcpServer.listTools()
         res.json(ChaiteResponse.ok(tools))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -179,9 +238,9 @@ router.get('/builtin/list', async (req, res) => {
 // GET /builtin/categories - 获取内置工具类别
 router.get('/builtin/categories', async (req, res) => {
     try {
-        await mcpManager.init()
-        await builtinMcpServer.init()
-        const categories = builtinMcpServer.getToolCategories() || []
+        await toolRouteServices.mcpManager.init()
+        await toolRouteServices.builtinMcpServer.init()
+        const categories = toolRouteServices.builtinMcpServer.getToolCategories() || []
         res.json(ChaiteResponse.ok(categories))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -191,9 +250,11 @@ router.get('/builtin/categories', async (req, res) => {
 // POST /builtin/category/toggle - 切换工具类别启用状态
 router.post('/builtin/category/toggle', async (req, res) => {
     try {
-        await builtinMcpServer.init()
         const { category, enabled } = req.body
-        const result = await builtinMcpServer.toggleCategory(category, enabled)
+        if (typeof category !== 'string' || !category.trim() || typeof enabled !== 'boolean') {
+            return res.status(400).json(ChaiteResponse.fail(null, 'category 和 enabled(boolean) 为必填项'))
+        }
+        const result = await toolRouteServices.mcpManager.toggleCategory(category.trim(), enabled)
         res.json(ChaiteResponse.ok(result))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -203,9 +264,11 @@ router.post('/builtin/category/toggle', async (req, res) => {
 // POST /builtin/tool/toggle - 切换单个工具启用状态
 router.post('/builtin/tool/toggle', async (req, res) => {
     try {
-        await builtinMcpServer.init()
         const { toolName, enabled } = req.body
-        const result = await builtinMcpServer.toggleTool(toolName, enabled)
+        if (typeof toolName !== 'string' || !toolName.trim() || typeof enabled !== 'boolean') {
+            return res.status(400).json(ChaiteResponse.fail(null, 'toolName 和 enabled(boolean) 为必填项'))
+        }
+        const result = await toolRouteServices.mcpManager.toggleTool(toolName.trim(), enabled)
         res.json(ChaiteResponse.ok(result))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -215,8 +278,7 @@ router.post('/builtin/tool/toggle', async (req, res) => {
 // POST /builtin/refresh - 刷新内置工具
 router.post('/builtin/refresh', async (req, res) => {
     try {
-        await builtinMcpServer.loadModularTools()
-        const tools = builtinMcpServer.listTools()
+        const tools = await toolRouteServices.mcpManager.refreshBuiltinTools()
         res.json(ChaiteResponse.ok({ success: true, count: tools.length }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -226,7 +288,10 @@ router.post('/builtin/refresh', async (req, res) => {
 // GET /enabled - 获取启用的工具
 router.get('/enabled', async (req, res) => {
     try {
-        const enabledTools = config.get('tools.enabled') || []
+        markDeprecated(res, '/api/tools/builtin/config')
+        const names = await getManagedToolNames()
+        const disabled = new Set(toolRouteServices.config.get('builtinTools.disabledTools') || [])
+        const enabledTools = names.filter(name => !disabled.has(name))
         res.json(ChaiteResponse.ok(enabledTools))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -237,8 +302,26 @@ router.get('/enabled', async (req, res) => {
 router.put('/enabled', async (req, res) => {
     try {
         const { tools } = req.body
-        config.set('tools.enabled', tools || [])
-        res.json(ChaiteResponse.ok({ success: true }))
+        if (!Array.isArray(tools) || tools.some(name => typeof name !== 'string' || !name.trim())) {
+            return res.status(400).json(ChaiteResponse.fail(null, 'tools 必须为工具名字符串数组'))
+        }
+        markDeprecated(res, '/api/tools/builtin/config')
+        const managedNames = await getManagedToolNames()
+        const managed = new Set(managedNames)
+        const enabled = new Set(tools.map(name => name.trim()))
+        const currentDisabled = toolRouteServices.config.get('builtinTools.disabledTools') || []
+        const preserved = currentDisabled.filter(name => !managed.has(name))
+        const disabledTools = [...preserved, ...managedNames.filter(name => !enabled.has(name))]
+        await replaceDisabledTools(disabledTools)
+        res.json(
+            ChaiteResponse.ok({
+                success: true,
+                deprecated: true,
+                replacement: '/api/tools/builtin/config',
+                enabled: managedNames.filter(name => enabled.has(name)),
+                disabledTools
+            })
+        )
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
@@ -249,17 +332,19 @@ router.post('/toggle/:name', async (req, res) => {
     try {
         const { name } = req.params
         const { enabled } = req.body
-        const enabledTools = config.get('tools.enabled') || []
-
-        if (enabled && !enabledTools.includes(name)) {
-            enabledTools.push(name)
-        } else if (!enabled) {
-            const idx = enabledTools.indexOf(name)
-            if (idx > -1) enabledTools.splice(idx, 1)
+        if (typeof enabled !== 'boolean') {
+            return res.status(400).json(ChaiteResponse.fail(null, 'enabled(boolean) 为必填项'))
         }
-
-        config.set('tools.enabled', enabledTools)
-        res.json(ChaiteResponse.ok({ success: true, enabled: enabledTools.includes(name) }))
+        markDeprecated(res, '/api/tools/builtin/tool/toggle')
+        const result = await toolRouteServices.mcpManager.toggleTool(name, enabled)
+        res.json(
+            ChaiteResponse.ok({
+                ...result,
+                deprecated: true,
+                replacement: '/api/tools/builtin/tool/toggle',
+                enabled
+            })
+        )
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
@@ -268,111 +353,53 @@ router.post('/toggle/:name', async (req, res) => {
 // ==================== 自定义工具 ====================
 router.get('/custom', async (req, res) => {
     try {
-        const customTools = config.get('customTools') || []
+        const customTools = await toolRouteServices.customToolService.listConfiguredTools()
         res.json(ChaiteResponse.ok(customTools))
     } catch (error) {
-        res.status(500).json(ChaiteResponse.fail(null, error.message))
+        sendCustomToolError(res, error)
     }
 })
 
 router.post('/custom', async (req, res) => {
     try {
-        const { name, description, parameters, handler } = req.body
-        if (!name) return res.status(400).json(ChaiteResponse.fail(null, 'name is required'))
-
-        const customTools = config.get('customTools') || []
-        if (customTools.some(t => t.name === name)) {
-            return res.status(409).json(ChaiteResponse.fail(null, 'Tool already exists'))
-        }
-
-        const newTool = {
-            name,
-            description: description || '',
-            parameters: parameters || { type: 'object', properties: {}, required: [] },
-            handler: handler || 'function',
-            custom: true,
-            createdAt: Date.now()
-        }
-
-        customTools.push(newTool)
-        config.set('customTools', customTools)
-        await mcpManager.refreshBuiltinTools()
+        const newTool = await toolRouteServices.customToolService.createConfiguredTool(req.body || {})
+        await toolRouteServices.mcpManager.refreshBuiltinTools()
 
         res.status(201).json(ChaiteResponse.ok(newTool))
     } catch (error) {
-        res.status(500).json(ChaiteResponse.fail(null, error.message))
+        sendCustomToolError(res, error)
     }
 })
 
 router.put('/custom/:name', async (req, res) => {
     try {
-        const customTools = config.get('customTools') || []
-        const toolIndex = customTools.findIndex(t => t.name === req.params.name)
+        const updatedTool = await toolRouteServices.customToolService.updateConfiguredTool(
+            req.params.name,
+            req.body || {}
+        )
+        await toolRouteServices.mcpManager.refreshBuiltinTools()
 
-        if (toolIndex === -1) {
-            return res.status(404).json(ChaiteResponse.fail(null, 'Tool not found'))
-        }
-
-        const { description, parameters, handler } = req.body
-        if (description) customTools[toolIndex].description = description
-        if (parameters) customTools[toolIndex].parameters = parameters
-        if (handler) customTools[toolIndex].handler = handler
-        customTools[toolIndex].updatedAt = Date.now()
-
-        config.set('customTools', customTools)
-        await mcpManager.refreshBuiltinTools()
-
-        res.json(ChaiteResponse.ok(customTools[toolIndex]))
+        res.json(ChaiteResponse.ok(updatedTool))
     } catch (error) {
-        res.status(500).json(ChaiteResponse.fail(null, error.message))
+        sendCustomToolError(res, error)
     }
 })
 
 router.delete('/custom/:name', async (req, res) => {
     try {
-        const customTools = config.get('customTools') || []
-        const filteredTools = customTools.filter(t => t.name !== req.params.name)
+        const result = await toolRouteServices.customToolService.deleteConfiguredTool(req.params.name)
+        await toolRouteServices.mcpManager.refreshBuiltinTools()
 
-        if (filteredTools.length === customTools.length) {
-            return res.status(404).json(ChaiteResponse.fail(null, 'Tool not found'))
-        }
-
-        config.set('customTools', filteredTools)
-        await mcpManager.refreshBuiltinTools()
-
-        res.json(ChaiteResponse.ok({ success: true }))
+        res.json(ChaiteResponse.ok(result))
     } catch (error) {
-        res.status(500).json(ChaiteResponse.fail(null, error.message))
+        sendCustomToolError(res, error)
     }
 })
 
 // ==================== JS工具 ====================
 router.get('/js', async (req, res) => {
     try {
-        if (!fs.existsSync(jsToolsDir)) {
-            fs.mkdirSync(jsToolsDir, { recursive: true })
-        }
-
-        await mcpManager.init()
-        const jsTools = []
-
-        for (const [toolName, tool] of builtinMcpServer.jsTools || new Map()) {
-            const filename = tool.__filename || `${toolName}.js`
-            const filePath = tool.__filepath || path.join(jsToolsDir, filename)
-            let stat = { size: 0, mtime: new Date() }
-            try {
-                stat = fs.statSync(filePath)
-            } catch {}
-
-            jsTools.push({
-                name: toolName,
-                filename,
-                description: tool.description || tool.function?.description || '',
-                size: stat.size,
-                modifiedAt: stat.mtime.getTime()
-            })
-        }
-
+        const jsTools = await toolRouteServices.customToolService.listSources()
         res.json(ChaiteResponse.ok(jsTools))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -381,28 +408,19 @@ router.get('/js', async (req, res) => {
 
 router.get('/js/:name', async (req, res) => {
     try {
-        const resolved = resolveJsToolPath(req.params.name)
-        if (!resolved) return res.status(400).json(ChaiteResponse.fail(null, '非法的工具名'))
-        const { filename, filePath } = resolved
-
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json(ChaiteResponse.fail(null, 'Tool file not found'))
-        }
-
-        const source = fs.readFileSync(filePath, 'utf-8')
-        const stat = fs.statSync(filePath)
+        const result = await toolRouteServices.customToolService.readSource(req.params.name)
 
         res.json(
             ChaiteResponse.ok({
-                name: req.params.name,
-                filename,
-                source,
-                size: stat.size,
-                modifiedAt: stat.mtime.getTime()
+                name: result.name,
+                filename: result.filename,
+                source: result.source,
+                size: result.size,
+                modifiedAt: result.modifiedAt
             })
         )
     } catch (error) {
-        res.status(500).json(ChaiteResponse.fail(null, error.message))
+        sendCustomToolError(res, error)
     }
 })
 
@@ -410,17 +428,12 @@ router.put('/js/:name', async (req, res) => {
     try {
         const { source } = req.body
         if (!source) return res.status(400).json(ChaiteResponse.fail(null, 'source is required'))
-
-        const resolved = resolveJsToolPath(req.params.name)
-        if (!resolved) return res.status(400).json(ChaiteResponse.fail(null, '非法的工具名'))
-        const { filePath } = resolved
-
-        fs.writeFileSync(filePath, source, 'utf-8')
-        await mcpManager.reloadJsTools()
-
-        res.json(ChaiteResponse.ok({ success: true, message: '工具已保存并热重载' }))
+        const result = await toolRouteServices.customToolService.saveSource(req.params.name, source, {
+            overwrite: true
+        })
+        res.json(ChaiteResponse.ok({ ...result, message: '工具已保存并热重载' }))
     } catch (error) {
-        res.status(500).json(ChaiteResponse.fail(null, error.message))
+        sendCustomToolError(res, error)
     }
 })
 
@@ -429,13 +442,7 @@ router.post('/js', async (req, res) => {
         const { name, source } = req.body
         if (!name) return res.status(400).json(ChaiteResponse.fail(null, 'name is required'))
 
-        const resolved = resolveJsToolPath(name)
-        if (!resolved) return res.status(400).json(ChaiteResponse.fail(null, '非法的工具名'))
-        const { toolName, filename, filePath } = resolved
-
-        if (fs.existsSync(filePath)) {
-            return res.status(409).json(ChaiteResponse.fail(null, 'Tool file already exists'))
-        }
+        const { name: toolName } = toolRouteServices.customToolService.resolveSourcePath(name)
 
         const defaultSource =
             source ||
@@ -458,42 +465,28 @@ export default {
 }
 `
 
-        if (!fs.existsSync(jsToolsDir)) {
-            fs.mkdirSync(jsToolsDir, { recursive: true })
-        }
-
-        fs.writeFileSync(filePath, defaultSource, 'utf-8')
-        await mcpManager.reloadJsTools()
-
-        res.status(201).json(ChaiteResponse.ok({ success: true, filename }))
+        const result = await toolRouteServices.customToolService.saveSource(toolName, defaultSource, {
+            overwrite: false
+        })
+        res.status(201).json(ChaiteResponse.ok(result))
     } catch (error) {
-        res.status(500).json(ChaiteResponse.fail(null, error.message))
+        sendCustomToolError(res, error)
     }
 })
 
 router.delete('/js/:name', async (req, res) => {
     try {
-        const resolved = resolveJsToolPath(req.params.name)
-        if (!resolved) return res.status(400).json(ChaiteResponse.fail(null, '非法的工具名'))
-        const { filePath } = resolved
-
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json(ChaiteResponse.fail(null, 'Tool file not found'))
-        }
-
-        fs.unlinkSync(filePath)
-        await mcpManager.reloadJsTools()
-
-        res.json(ChaiteResponse.ok({ success: true }))
+        const result = await toolRouteServices.customToolService.deleteSource(req.params.name)
+        res.json(ChaiteResponse.ok(result))
     } catch (error) {
-        res.status(500).json(ChaiteResponse.fail(null, error.message))
+        sendCustomToolError(res, error)
     }
 })
 
 // POST /js/reload - 重载JS工具
 router.post('/js/reload', async (req, res) => {
     try {
-        await mcpManager.reloadJsTools()
+        await toolRouteServices.mcpManager.reloadJsTools()
         res.json(ChaiteResponse.ok({ success: true, message: 'JS工具已重载' }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -503,7 +496,7 @@ router.post('/js/reload', async (req, res) => {
 // POST /refresh - 刷新工具列表
 router.post('/refresh', async (req, res) => {
     try {
-        await mcpManager.refreshBuiltinTools()
+        await toolRouteServices.mcpManager.refreshBuiltinTools()
         res.json(ChaiteResponse.ok({ success: true }))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -530,9 +523,14 @@ router.post('/test', async (req, res) => {
             return res.end()
         }
 
-        await mcpManager.init()
+        await toolRouteServices.mcpManager.init()
         let callName = toolName
-        const callOptions = {}
+        // 管理面板请求已通过 WebServer 鉴权；测试自定义工具时显式使用管理上下文，
+        // 不能依赖上一条聊天事件残留的主人状态，也不能因无事件上下文被误拒绝。
+        const callOptions = {
+            userPermission: 'master',
+            context: { isMaster: true, isAdminTest: true, bot: global.Bot || null }
+        }
         const identityMatch = typeof toolName === 'string' ? toolName.match(/^mcp:([^:]+):(.+)$/) : null
         if (identityMatch) {
             callOptions.serverName = identityMatch[1]
@@ -542,7 +540,7 @@ router.post('/test', async (req, res) => {
         sendEvent('start', { toolName: callName })
 
         const startTime = Date.now()
-        const result = await mcpManager.callTool(callName, args || {}, callOptions)
+        const result = await toolRouteServices.mcpManager.callTool(callName, args || {}, callOptions)
         const duration = Date.now() - startTime
 
         sendEvent('result', {
@@ -595,8 +593,8 @@ router.delete('/logs', async (req, res) => {
 // POST /builtin/enable-all - 一键启用所有工具
 router.post('/builtin/enable-all', async (req, res) => {
     try {
-        await mcpManager.init()
-        const result = await mcpManager.enableAllTools()
+        await toolRouteServices.mcpManager.init()
+        const result = await toolRouteServices.mcpManager.enableAllTools()
         res.json(ChaiteResponse.ok(result))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -606,8 +604,8 @@ router.post('/builtin/enable-all', async (req, res) => {
 // POST /builtin/disable-all - 一键禁用所有工具
 router.post('/builtin/disable-all', async (req, res) => {
     try {
-        await mcpManager.init()
-        const result = await mcpManager.disableAllTools()
+        await toolRouteServices.mcpManager.init()
+        const result = await toolRouteServices.mcpManager.disableAllTools()
         res.json(ChaiteResponse.ok(result))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -618,7 +616,7 @@ router.post('/builtin/disable-all', async (req, res) => {
 router.post('/reload-all', async (req, res) => {
     try {
         // 使用 reinit 完全重新初始化，确保所有工具（包括内置工具和JS工具）都被正确重载
-        const result = await mcpManager.reinit()
+        const result = await toolRouteServices.mcpManager.reinit()
         res.json(
             ChaiteResponse.ok({
                 success: true,
@@ -634,8 +632,8 @@ router.post('/reload-all', async (req, res) => {
 // GET /stats - 获取工具统计信息
 router.get('/stats', async (req, res) => {
     try {
-        await mcpManager.init()
-        const stats = mcpManager.getToolStats()
+        await toolRouteServices.mcpManager.init()
+        const stats = toolRouteServices.mcpManager.getToolStats()
         res.json(ChaiteResponse.ok(stats))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -654,8 +652,8 @@ router.get('/dangerous', async (req, res) => {
         const allowDangerous = builtinConfig.allowDangerous || false
 
         // 获取所有工具并标记危险状态
-        await mcpManager.init()
-        const allTools = mcpManager.getTools({ applyConfig: false })
+        await toolRouteServices.mcpManager.init()
+        const allTools = toolRouteServices.mcpManager.getTools({ applyConfig: false })
         const toolsWithDangerStatus = allTools.map(t => ({
             name: t.name,
             identity: getToolIdentity(t),
@@ -690,7 +688,7 @@ router.put('/dangerous', async (req, res) => {
         }
 
         config.set('builtinTools', builtinConfig)
-        await mcpManager.refreshBuiltinTools()
+        await toolRouteServices.mcpManager.refreshBuiltinTools()
 
         res.json(
             ChaiteResponse.ok({
@@ -800,7 +798,8 @@ router.put('/event-probability', async (req, res) => {
 // GET /watcher/status - 获取文件监听器状态
 router.get('/watcher/status', async (req, res) => {
     try {
-        const status = builtinMcpServer.getWatcherStatus ? builtinMcpServer.getWatcherStatus() : { enabled: false }
+        const builtin = toolRouteServices.builtinMcpServer
+        const status = builtin.getWatcherStatus ? builtin.getWatcherStatus() : { enabled: false }
         res.json(ChaiteResponse.ok(status))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -811,12 +810,13 @@ router.get('/watcher/status', async (req, res) => {
 router.post('/watcher/toggle', async (req, res) => {
     try {
         const { enabled } = req.body
+        const builtin = toolRouteServices.builtinMcpServer
         if (enabled) {
-            builtinMcpServer.startFileWatcher && (await builtinMcpServer.startFileWatcher())
+            builtin.startFileWatcher && (await builtin.startFileWatcher())
         } else {
-            builtinMcpServer.stopFileWatcher && builtinMcpServer.stopFileWatcher()
+            builtin.stopFileWatcher && builtin.stopFileWatcher()
         }
-        const status = builtinMcpServer.getWatcherStatus ? builtinMcpServer.getWatcherStatus() : { enabled }
+        const status = builtin.getWatcherStatus ? builtin.getWatcherStatus() : { enabled }
         res.json(ChaiteResponse.ok(status))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))

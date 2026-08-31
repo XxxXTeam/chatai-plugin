@@ -4,34 +4,31 @@
  */
 
 import {
-    getGroupMemberList,
     filterMembers,
     randomSelectMembers,
     findMemberByName,
     formatMemberInfo,
     batchSendMessages,
     getMasterList,
-    detectProtocol,
-    normalizeSegment,
-    normalizeSegments,
-    compatSegment,
-    sendForwardMsgEnhanced,
-    sendCardMessage,
     parseCardData,
     buildLinkCard,
     buildBigImageCard
 } from './helpers.js'
 import { recordSentMessage, checkDuplicateToolSend, markToolSendCommitted } from '../../utils/messageDedup.js'
-import { chatLogger as logger } from '../../core/utils/logger.js'
 import {
-    ForwardMessageParser,
-    IcqqMessageUtils,
-    ProtobufUtils,
-    NapCatMessageUtils,
-    MsgRecordExtractor,
-    MessageApi,
-    segment
-} from '../../utils/messageParser.js'
+    normalizeStandardMessage,
+    StandardBotApi,
+    StandardMessage as segment,
+    StandardRawApi
+} from '../../core/platform/index.js'
+import { ForwardMessageParser, IcqqMessageUtils, ProtobufUtils, MsgRecordExtractor } from '../../utils/messageParser.js'
+
+const MAX_DEEP_PARSE_DEPTH = 10
+
+function clampDeepParseDepth(value, fallback = 5) {
+    const depth = Math.floor(Number(value))
+    return Number.isFinite(depth) ? Math.min(Math.max(depth, 1), MAX_DEEP_PARSE_DEPTH) : fallback
+}
 
 function parseProtocolBody(data, encoding = 'auto') {
     if (Buffer.isBuffer(data)) return data
@@ -89,122 +86,45 @@ function getPacketBuildOptions(args) {
     return build
 }
 
-async function sendToolMessage(bot, { groupId, userId, message, event }) {
-    if (!bot && event?.reply) return await event.reply(message)
-    if (groupId) {
-        const gid = parseInt(groupId)
-        if (typeof bot?.sendApi === 'function') return await bot.sendApi('send_group_msg', { group_id: gid, message })
-        if (typeof bot?.sendGroupMsg === 'function') return await bot.sendGroupMsg(gid, message)
-        const group = bot?.pickGroup?.(gid)
-        if (typeof group?.sendMsg === 'function') return await group.sendMsg(message)
-    }
-    if (userId) {
-        const uid = parseInt(userId)
-        if (typeof bot?.sendApi === 'function') return await bot.sendApi('send_private_msg', { user_id: uid, message })
-        if (typeof bot?.sendPrivateMsg === 'function') return await bot.sendPrivateMsg(uid, message)
-        const friend = bot?.pickFriend?.(uid) || bot?.pickUser?.(uid)
-        if (typeof friend?.sendMsg === 'function') return await friend.sendMsg(message)
-    }
-    if (event?.reply) return await event.reply(message)
-    throw new Error('无法确定发送目标或当前协议端不支持发送消息')
-}
-
 async function handleProtocolPacket(args, ctx) {
-    const e = ctx.getEvent?.()
-    const bot = e?.bot || ctx.getBot?.() || global.Bot
-    if (!bot) return { success: false, error: '无法获取Bot实例' }
-
-    const result = await sendProtocolPacket(bot, args)
-    return {
-        ...result,
-        available_methods: {
-            sendOidbSvcTrpcTcp: typeof bot.sendOidbSvcTrpcTcp === 'function',
-            sendOidb: typeof bot.sendOidb === 'function',
-            sendUni: typeof bot.sendUni === 'function',
-            writeUni: typeof bot.writeUni === 'function',
-            sendPacket: typeof bot.sendPacket === 'function',
-            sendMergeUni: typeof bot.sendMergeUni === 'function',
-            sendApi: typeof bot.sendApi === 'function'
-        }
-    }
-}
-
-async function sendProtocolPacket(bot, args) {
     const cmd = args.cmd || args.pb_type || args.action
     const method = args.method || (Array.isArray(args.packets) ? 'send_merge_uni' : 'auto')
-    const timeout = Number(args.timeout ?? 6)
-    const extra = args.extra && typeof args.extra === 'object' ? args.extra : undefined
-    const isOidbCmd = typeof cmd === 'string' && /^(OidbSvc|oidb_)/i.test(cmd)
-    const isTrpcOidbCmd = typeof cmd === 'string' && /^OidbSvcTrpcTcp\./i.test(cmd)
     let body = parseProtocolBody(args.body ?? args.pb_data ?? args.data ?? '', args.body_encoding || 'auto')
     body = encodeProtocolBody(body, args.encode_json !== false)
-
-    const sendAndReturn = async (usedMethod, fn) => {
-        const response = await fn()
-        return {
-            success: true,
-            method: usedMethod,
-            cmd,
-            response: formatProtocolResponse(response, args.decode_response !== false)
-        }
-    }
-
-    if (
-        (method === 'auto' || method === 'send_oidb_svc_trpc_tcp') &&
-        typeof bot.sendOidbSvcTrpcTcp === 'function' &&
-        (isTrpcOidbCmd || method === 'send_oidb_svc_trpc_tcp')
-    ) {
-        return await sendAndReturn('sendOidbSvcTrpcTcp', () => bot.sendOidbSvcTrpcTcp(cmd, body, extra))
-    }
-    if (
-        (method === 'auto' || method === 'send_oidb') &&
-        typeof bot.sendOidb === 'function' &&
-        (isOidbCmd || method === 'send_oidb')
-    ) {
-        return await sendAndReturn('sendOidb', () => bot.sendOidb(cmd, body, timeout, extra))
-    }
-    if ((method === 'auto' || method === 'send_uni') && typeof bot.sendUni === 'function' && cmd) {
-        return await sendAndReturn('sendUni', () => bot.sendUni(cmd, toPacketBuffer(body), timeout, extra))
-    }
-    if ((method === 'write_uni' || method === 'write') && typeof bot.writeUni === 'function' && cmd) {
-        await bot.writeUni(cmd, toPacketBuffer(body), args.seq === undefined ? -1 : Number(args.seq), extra)
-        return { success: true, method: 'writeUni', cmd, response: null, note: '已发送，不等待响应' }
-    }
-    if (method === 'send_packet' && typeof bot.sendPacket === 'function') {
-        return await sendAndReturn('sendPacket', () =>
-            bot.sendPacket(
-                toPacketBuffer(body),
-                timeout,
-                args.seq === undefined ? -1 : Number(args.seq),
-                getPacketBuildOptions(args)
+    const packets = (
+        Array.isArray(args.packets) ? args.packets : [{ cmd, body, needResp: args.need_response !== false }]
+    ).map(packet => ({
+        cmd: packet.cmd || cmd,
+        body: toPacketBuffer(
+            parseProtocolBody(
+                packet.body ?? packet.pb_data ?? body,
+                packet.body_encoding || args.body_encoding || 'auto'
             )
-        )
+        ),
+        seq: packet.seq,
+        needResp: packet.needResp ?? packet.need_response ?? true
+    }))
+    const rawApi = StandardRawApi.fromContext(ctx)
+    const result = await rawApi.send({
+        method,
+        cmd,
+        body: toPacketBuffer(body),
+        timeout: args.timeout,
+        extra: args.extra && typeof args.extra === 'object' ? args.extra : undefined,
+        seq: args.seq,
+        build: getPacketBuildOptions(args),
+        packets,
+        action: args.action,
+        params: args.params || { cmd, pb_type: cmd, pb_data: args.pb_data }
+    })
+    return {
+        success: true,
+        method: result.method,
+        cmd,
+        response: formatProtocolResponse(result.response, args.decode_response !== false),
+        ...(result.note ? { note: result.note } : {}),
+        available_methods: rawApi.capabilities()
     }
-    if ((method === 'send_merge_uni' || method === 'merge') && typeof bot.sendMergeUni === 'function') {
-        const packets = Array.isArray(args.packets)
-            ? args.packets
-            : [{ cmd, body, needResp: args.need_response !== false }]
-        const list = packets.map(packet => ({
-            cmd: packet.cmd || cmd,
-            body: toPacketBuffer(
-                parseProtocolBody(
-                    packet.body ?? packet.pb_data ?? body,
-                    packet.body_encoding || args.body_encoding || 'auto'
-                )
-            ),
-            seq: packet.seq,
-            needResp: packet.needResp ?? packet.need_response ?? true
-        }))
-        return await sendAndReturn('sendMergeUni', () => bot.sendMergeUni(list, timeout, extra))
-    }
-    if ((method === 'send_api' || method === 'onebot') && typeof bot.sendApi === 'function') {
-        const action = args.action || 'send_pb_msg'
-        return await sendAndReturn('sendApi', () =>
-            bot.sendApi(action, args.params || { cmd, pb_type: cmd, pb_data: args.pb_data })
-        )
-    }
-
-    throw new Error('当前 Bot 不支持指定的协议包发送方法')
 }
 
 export const messageTools = [
@@ -223,11 +143,11 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot?.() || global.Bot
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
-                const botId = bot.uin || bot.self_id
+                const botId = api.getBotInfo().user_id
                 const masters = await getMasterList(botId)
                 if (masters.length === 0) {
                     return { success: false, error: '未配置主人QQ，请在Yunzai配置中设置masterQQ' }
@@ -249,21 +169,10 @@ export const messageTools = [
 
                 if (args.all_masters) {
                     for (let i = 0; i < masters.length; i++) {
-                        const masterId = parseInt(masters[i])
+                        const masterId = api.targetId(masters[i])
                         try {
-                            const friend = bot.pickFriend(masterId)
-                            const result = await friend.sendMsg(msgParts.length === 1 ? msgParts[0] : msgParts)
-                            const msgId = result?.message_id
-                            const sendFailed = !msgId || (Array.isArray(msgId) && msgId.length === 0)
-                            if (sendFailed) {
-                                results.push({
-                                    master_id: masterId,
-                                    success: false,
-                                    error: '发送失败，可能需要添加好友或被风控'
-                                })
-                            } else {
-                                results.push({ master_id: masterId, success: true, message_id: msgId })
-                            }
+                            const sent = await api.sendPrivate(masterId, msgParts.length === 1 ? msgParts[0] : msgParts)
+                            results.push({ master_id: masterId, success: true, message_id: sent.message_id })
                         } catch (err) {
                             results.push({ master_id: masterId, success: false, error: err.message })
                         }
@@ -281,24 +190,11 @@ export const messageTools = [
                     if (idx >= masters.length) {
                         return { success: false, error: `主人索引超出范围，当前共有 ${masters.length} 个主人` }
                     }
-                    const masterId = parseInt(masters[idx])
-                    const friend = bot.pickFriend(masterId)
-                    const result = await friend.sendMsg(msgParts.length === 1 ? msgParts[0] : msgParts)
-
-                    // 检查发送结果
-                    const msgId = result?.message_id
-                    const sendFailed = !msgId || (Array.isArray(msgId) && msgId.length === 0)
-
-                    if (sendFailed) {
-                        return {
-                            success: false,
-                            master_id: masterId,
-                            error: '消息发送失败，可能需要先添加主人为好友，或账号被风控'
-                        }
-                    }
+                    const masterId = api.targetId(masters[idx])
+                    const sent = await api.sendPrivate(masterId, msgParts.length === 1 ? msgParts[0] : msgParts)
 
                     if (args.message) recordSentMessage(args.message)
-                    return { success: true, master_id: masterId, message_id: msgId }
+                    return { success: true, master_id: masterId, message_id: sent.message_id }
                 }
             } catch (err) {
                 return { success: false, error: `发送给主人失败: ${err.message}` }
@@ -317,22 +213,22 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot?.() || global.Bot
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
-                const botId = bot.uin || bot.self_id
+                const botId = api.getBotInfo().user_id
 
                 // 调试模式：返回所有可能的配置源
                 if (args.debug) {
+                    const isMaster = typeof ctx.isMaster === 'function' ? ctx.isMaster() : ctx.isMaster === true
+                    if (!isMaster) return { success: false, permissionDenied: true, error: '仅主人可查看调试信息' }
                     const debugInfo = {
-                        botId,
-                        'global.cfg exists': !!global.cfg,
-                        'global.cfg.master': global.cfg?.master,
-                        'global.cfg.masterQQ': global.cfg?.masterQQ,
-                        'global.Bot.config': global.Bot?.config,
-                        'global.Bot.master': global.Bot?.master
+                        bot_id: botId,
+                        adapter: api.adapterType,
+                        has_global_cfg: Boolean(global.cfg),
+                        has_master_settings: Boolean(global.cfg?.master || global.cfg?.masterQQ || global.Bot?.master)
                     }
                     return { success: true, debug: debugInfo }
                 }
@@ -345,28 +241,17 @@ export const messageTools = [
                 // 获取主人详细信息
                 const masterInfos = []
                 for (let i = 0; i < masters.length; i++) {
-                    const masterId = parseInt(masters[i])
+                    const masterId = api.targetId(masters[i])
                     let info = { index: i, user_id: masterId }
 
                     try {
-                        // 尝试获取好友信息
-                        if (bot.fl?.get) {
-                            const friendInfo = bot.fl.get(masterId)
-                            if (friendInfo) {
-                                info.nickname = friendInfo.nickname || friendInfo.nick
-                                info.remark = friendInfo.remark
-                                info.is_friend = true
-                            }
-                        }
-                        // 尝试通过 pickFriend 获取
-                        if (!info.nickname && bot.pickFriend) {
-                            const friend = bot.pickFriend(masterId)
-                            if (friend?.info) {
-                                const fInfo = (await friend.getInfo?.()) || friend.info
-                                info.nickname = fInfo?.nickname || fInfo?.nick
-                                info.is_friend = true
-                            }
-                        }
+                        const [profile, friendState] = await Promise.all([
+                            api.getUserInfo(masterId),
+                            api.getFriendState(masterId)
+                        ])
+                        info.nickname = profile?.nickname || profile?.nick
+                        info.remark = friendState.friend?.remark
+                        info.is_friend = friendState.isFriend
                     } catch {}
 
                     masterInfos.push(info)
@@ -403,39 +288,11 @@ export const messageTools = [
                 if (dedupResult.isDuplicate) {
                     return { success: false, error: `检测到重复发送(${dedupResult.count}次)，已跳过`, skipped: true }
                 }
-                const e = ctx.getEvent()
-                // 检查是否为有效的 ICQQ/OICQ Bot 实例
-                const isValidBot = b => {
-                    if (!b?.uin || !b?.pickFriend || !b?.pickGroup) return false
-                    const uin = b.uin
-                    if (uin === 'stdin' || (typeof uin === 'string' && !/^\d+$/.test(uin))) return false
-                    if (!b.gl) return false
-                    return true
-                }
-
-                let bot = null
-                // 优先从 e.bot 获取
-                if (isValidBot(e?.bot)) {
-                    bot = e.bot
-                }
-                // 尝试从 Bot 对象中查找有效的 bot
-                if (!bot && global.Bot) {
-                    // TRSS-Yunzai: Bot 是一个对象，key 是 uin
-                    for (const key of Object.keys(global.Bot)) {
-                        // 排除 stdin 和非数字 key
-                        if (key === 'stdin' || !/^\d+$/.test(key)) continue
-                        const b = global.Bot[key]
-                        if (isValidBot(b)) {
-                            bot = b
-                            break
-                        }
-                    }
-                }
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取有效的Bot实例，请确保有账号在线' }
                 }
-
-                const userId = parseInt(args.user_id)
+                const userId = api.targetId(args.user_id)
 
                 const msgParts = []
                 if (args.message) msgParts.push(args.message)
@@ -447,118 +304,14 @@ export const messageTools = [
 
                 const msgContent = msgParts.length === 1 ? msgParts[0] : msgParts
 
-                // 检查是否为好友
-                let isFriend = false
-                try {
-                    if (bot.fl?.has) {
-                        isFriend = bot.fl.has(userId)
-                    } else if (bot.fl?.get) {
-                        isFriend = !!bot.fl.get(userId)
-                    } else if (bot.getFriendList) {
-                        const friendList = await bot.getFriendList()
-                        isFriend = friendList?.some?.(f => f.user_id === userId || f.uin === userId)
-                    }
-                } catch {}
-
-                // 如果是好友，直接发送私聊
-                if (isFriend) {
-                    const friend = bot.pickFriend(userId)
-                    const result = await friend.sendMsg(msgContent)
-                    if (args.message) recordSentMessage(args.message)
-                    return { success: true, message_id: result.message_id, user_id: userId, method: 'friend' }
-                }
-
-                // 非好友，尝试通过群临时会话发送
-                let groupId = parseInt(args.group_id) || e?.group_id || 0
-                if (!groupId) {
-                    try {
-                        // 获取bot的群列表
-                        let groupList = []
-                        if (bot.gl?.keys) {
-                            groupList = Array.from(bot.gl.keys())
-                        } else if (bot.gl?.forEach) {
-                            bot.gl.forEach((_, gid) => groupList.push(gid))
-                        } else if (bot.getGroupList) {
-                            const list = await bot.getGroupList()
-                            groupList = list?.map?.(g => g.group_id || g.gid) || []
-                        }
-
-                        // 遍历群，查找目标用户所在的群
-                        for (const gid of groupList) {
-                            try {
-                                const group = bot.pickGroup?.(gid)
-                                if (!group) continue
-
-                                let memberExists = false
-                                if (group.getMemberMap) {
-                                    try {
-                                        const memberMap = await group.getMemberMap()
-                                        memberExists = memberMap?.has?.(userId) || memberMap?.has?.(String(userId))
-                                    } catch (memberMapErr) {
-                                        logger.debug(`[MCP Tool] 获取群 ${gid} 成员列表失败: ${memberMapErr.message}`)
-                                    }
-                                }
-                                if (!memberExists && group.pickMember) {
-                                    const member = group.pickMember(userId)
-                                    if (member?.info) {
-                                        memberExists = true
-                                    }
-                                }
-
-                                if (memberExists) {
-                                    groupId = gid
-                                    break
-                                }
-                            } catch (memberSearchErr) {
-                                logger.debug(`[MCP Tool] 检查群 ${gid} 成员失败: ${memberSearchErr.message}`)
-                            }
-                        }
-                    } catch (searchErr) {
-                        logger.debug(`[MCP Tool] 搜索共同群失败: ${searchErr.message}`)
-                    }
-                }
-
-                // 如果还是没有群号，返回错误
-                if (!groupId) {
-                    return {
-                        success: false,
-                        error: '目标用户不是好友，且无法找到共同群用于发送临时消息。请添加好友或提供group_id参数',
-                        is_friend: false
-                    }
-                }
-
-                // 通过群临时会话发送
-                const group = bot.pickGroup?.(groupId)
-                if (!group) {
-                    return { success: false, error: '无法获取群对象' }
-                }
-
-                if (group.getMemberMap) {
-                    try {
-                        const memberMap = await group.getMemberMap()
-                        const exists = memberMap?.has?.(userId) || memberMap?.has?.(String(userId))
-                        if (!exists) {
-                            return { success: false, error: '目标用户不在该群内，无法发送临时消息' }
-                        }
-                    } catch (memberMapErr) {
-                        logger.debug(`[MCP Tool] 发送临时消息前获取成员列表失败: ${memberMapErr.message}`)
-                    }
-                }
-
-                const member = group.pickMember?.(userId)
-                if (!member) {
-                    return { success: false, error: '无法获取群成员对象，可能该用户不在群内' }
-                }
-
-                const result = await member.sendMsg(msgContent)
+                const sent = await api.sendPrivateWithGroupFallback(userId, msgContent, args.group_id)
                 if (args.message) recordSentMessage(args.message)
                 return {
                     success: true,
-                    message_id: result?.message_id,
+                    message_id: sent.message_id,
                     user_id: userId,
-                    group_id: groupId,
-                    method: 'temp',
-                    note: '已通过群临时会话发送（自动搜索共同群）'
+                    group_id: sent.group_id,
+                    method: sent.method
                 }
             } catch (err) {
                 return { success: false, error: `发送私聊消息失败: ${err.message}` }
@@ -587,9 +340,8 @@ export const messageTools = [
                     return { success: false, error: `检测到重复发送(${dedupResult.count}次)，已跳过`, skipped: true }
                 }
 
-                const bot = ctx.getBot()
-                const groupId = parseInt(args.group_id)
-                const group = bot.pickGroup(groupId)
+                const api = StandardBotApi.fromContext(ctx)
+                const groupId = api.targetId(args.group_id)
 
                 const msgParts = []
                 if (args.at_user) {
@@ -602,10 +354,9 @@ export const messageTools = [
                     return { success: false, error: '消息内容不能为空' }
                 }
 
-                const result = await group.sendMsg(msgParts.length === 1 ? msgParts[0] : msgParts)
-                // 记录发送消息指纹，防止回显被重复处理
+                const sent = await api.sendGroup(groupId, msgParts.length === 1 ? msgParts[0] : msgParts)
                 if (args.message) recordSentMessage(args.message)
-                return { success: true, message_id: result.message_id, group_id: groupId }
+                return { success: true, message_id: sent.message_id, group_id: groupId }
             } catch (err) {
                 return { success: false, error: `发送群消息失败: ${err.message}` }
             }
@@ -644,12 +395,11 @@ export const messageTools = [
                 }
                 msgParts.push(args.message)
 
-                const result = await e.reply(msgParts, args.quote || false)
-                // 记录发送消息指纹，防止回显被重复处理
+                const sent = await new StandardBotApi({ event: e }).reply(msgParts, args.quote || false)
                 if (args.message) recordSentMessage(args.message)
                 return {
                     success: true,
-                    message_id: result?.message_id,
+                    message_id: sent.message_id,
                     is_group: !!e.group_id
                 }
             } catch (err) {
@@ -695,7 +445,7 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
@@ -724,7 +474,7 @@ export const messageTools = [
                     let memberList = null
                     const ensureMembers = async () => {
                         if (!memberList) {
-                            memberList = await getGroupMemberList({ bot, event: e })
+                            memberList = await api.getMemberList(e.group_id)
                         }
                         return memberList
                     }
@@ -830,6 +580,7 @@ export const messageTools = [
                 if (atMode === 'together') {
                     const msgParts = buildTogetherParts()
                     results = await batchSendMessages({
+                        api,
                         event: e,
                         messages: msgParts,
                         count: sendCount,
@@ -838,6 +589,7 @@ export const messageTools = [
                 } else if (resolved.length === 1) {
                     const msgParts = buildSingleAtParts(ids[0])
                     results = await batchSendMessages({
+                        api,
                         event: e,
                         messages: msgParts,
                         count: sendCount,
@@ -848,11 +600,11 @@ export const messageTools = [
                         for (let i = 0; i < resolved.length; i++) {
                             const msgParts = buildSingleAtParts(ids[i])
                             try {
-                                const result = await e.reply(msgParts)
+                                const result = await api.reply(msgParts)
                                 results.push({
                                     index: results.length + 1,
                                     success: true,
-                                    message_id: result?.message_id,
+                                    message_id: result.message_id,
                                     round: round + 1,
                                     at_target: ids[i]
                                 })
@@ -917,7 +669,7 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 if (!e || !e.group_id) {
                     return { success: false, error: '此功能仅在群聊中有效' }
                 }
@@ -928,8 +680,8 @@ export const messageTools = [
                     return { success: false, error: `检测到重复发送(${roleDedup.count}次)，已跳过`, skipped: true }
                 }
 
-                const botId = bot.uin || bot.self_id
-                const memberList = await getGroupMemberList({ bot, event: e })
+                const botId = api.getBotInfo().user_id
+                const memberList = await api.getMemberList(e.group_id)
 
                 if (memberList.length === 0) {
                     return { success: false, error: '获取群成员列表失败' }
@@ -975,13 +727,12 @@ export const messageTools = [
                     if (args.message) msgParts.push(args.message)
 
                     try {
-                        const result = await e.reply(msgParts)
-                        // 记录发送消息指纹
+                        const result = await api.reply(msgParts)
                         if (args.message) recordSentMessage(args.message)
                         allResults.push({
                             index: s + 1,
                             success: true,
-                            message_id: result?.message_id,
+                            message_id: result.message_id,
                             selected: selected.map(formatMemberInfo)
                         })
                     } catch (err) {
@@ -1030,7 +781,7 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 if (!e || !e.group_id) {
                     return { success: false, error: '此功能仅在群聊中有效' }
                 }
@@ -1041,8 +792,8 @@ export const messageTools = [
                     return { success: false, error: `检测到重复发送(${raDedup.count}次)，已跳过`, skipped: true }
                 }
 
-                const botId = bot.uin || bot.self_id
-                const memberList = await getGroupMemberList({ bot, event: e })
+                const botId = api.getBotInfo().user_id
+                const memberList = await api.getMemberList(e.group_id)
 
                 if (memberList.length === 0) {
                     return { success: false, error: '获取群成员列表失败' }
@@ -1073,12 +824,11 @@ export const messageTools = [
                 }
                 if (args.message) msgParts.push(args.message)
 
-                const result = await e.reply(msgParts)
-                // 记录发送消息指纹
+                const result = await api.reply(msgParts)
                 if (args.message) recordSentMessage(args.message)
                 return {
                     success: true,
-                    message_id: result?.message_id,
+                    message_id: result.message_id,
                     selected_count: selected.length,
                     selected_members: selected.map(formatMemberInfo)
                 }
@@ -1097,67 +847,39 @@ export const messageTools = [
                 group_id: { type: 'string', description: '群号（群聊时）' },
                 user_id: { type: 'string', description: '用户QQ号（私聊时）' },
                 message_id: { type: 'string', description: '从指定 message_id 往前获取，icqq 会自动解析群/私聊目标' },
-                seq: { type: 'number', description: '群消息 seq，默认0表示最新消息往前' },
+                seq: {
+                    type: 'string',
+                    description: '群消息 seq；QQBot 传事件 message_id（其余协议可传数字字符串）'
+                },
                 time: { type: 'number', description: '私聊时间戳，默认0表示最新消息往前' },
                 count: { type: 'number', description: '获取数量，默认20，icqq 非 NT 通常最多20' }
             }
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot?.() || ctx.getEvent?.()?.bot || global.Bot
+                const api = StandardBotApi.fromContext(ctx)
                 const e = ctx.getEvent?.()
-                if (!bot) return { success: false, error: '无法获取Bot实例' }
+                if (!api.bot) return { success: false, error: '无法获取Bot实例' }
                 const count = Math.min(Math.max(Number(args.count || 20), 1), 50)
-
                 let history = []
-                let isGroup = false
-                let source = 'unknown'
+                const isGroup = Boolean(args.group_id || (!args.user_id && e?.group_id))
+                let source = 'standard.history'
                 let targetId = null
 
-                if (args.message_id && typeof bot.getMsg === 'function') {
-                    const msg = await bot.getMsg(args.message_id)
+                if (args.message_id) {
+                    const msg = await api.getMessage(args.message_id, {
+                        groupId: args.group_id || e?.group_id,
+                        userId: args.user_id || e?.user_id
+                    })
                     history = msg ? [msg.data || msg] : []
-                    source = 'bot.getMsg'
-                } else if (args.message_id && typeof bot.sendApi === 'function') {
-                    const result = await bot.sendApi('get_msg', { message_id: args.message_id })
-                    const msg = result?.data || result
-                    history = msg ? [msg] : []
-                    source = 'sendApi.get_msg'
                 } else if (args.group_id || e?.group_id) {
-                    targetId = parseInt(args.group_id || e.group_id)
-                    isGroup = true
-                    if (bot.pickGroup) {
-                        const group = bot.pickGroup(targetId)
-                        if (typeof group?.getChatHistory === 'function') {
-                            history = (await group.getChatHistory(Number(args.seq || 0), count)) || []
-                            source = 'group.getChatHistory'
-                        }
-                    }
-                    if (!history.length && typeof bot.sendApi === 'function') {
-                        const result = await bot.sendApi('get_group_msg_history', {
-                            group_id: targetId,
-                            message_seq: args.seq,
-                            count
-                        })
-                        history = result?.data?.messages || result?.data || result?.messages || []
-                        source = 'sendApi.get_group_msg_history'
-                    }
+                    targetId = api.targetId(args.group_id || e.group_id)
+                    const sequence = api.historySequence(args.seq ?? e?.seq ?? e?.message_seq ?? e?.message_id, 0)
+                    history = await api.getHistory({ groupId: targetId, sequence, count })
                 } else if (args.user_id || e?.user_id) {
-                    targetId = parseInt(args.user_id || e.user_id)
-                    const user = bot.pickUser?.(targetId) || bot.pickFriend?.(targetId)
-                    if (typeof user?.getChatHistory === 'function') {
-                        history = (await user.getChatHistory(Number(args.time || 0), count)) || []
-                        source = 'user.getChatHistory'
-                    }
-                    if (!history.length && typeof bot.sendApi === 'function') {
-                        const result = await bot.sendApi('get_private_msg_history', {
-                            user_id: targetId,
-                            time: args.time,
-                            count
-                        })
-                        history = result?.data?.messages || result?.data || result?.messages || []
-                        source = 'sendApi.get_private_msg_history'
-                    }
+                    targetId = api.targetId(args.user_id || e.user_id)
+                    const sequence = api.historySequence(args.time, 0)
+                    history = await api.getHistory({ userId: targetId, sequence, count })
                 } else {
                     return { success: false, error: '需要指定 group_id、user_id 或提供会话上下文' }
                 }
@@ -1201,18 +923,18 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const e = ctx.getEvent()
+                const result = await api.recall({
+                    messageId: args.message_id,
+                    groupId: e?.group_id,
+                    userId: e?.group_id ? null : e?.user_id
+                })
 
-                if (bot.deleteMsg) {
-                    await bot.deleteMsg(args.message_id)
-                } else if (e?.group_id) {
-                    const group = bot.pickGroup(e.group_id)
-                    await group.recallMsg(args.message_id)
-                } else {
-                    return { success: false, error: '无法撤回消息' }
-                }
-
+                const recalled = Array.isArray(result)
+                    ? result.length > 0 && result.every(item => item !== false)
+                    : result !== false
+                if (!recalled) return { success: false, error: '协议端返回撤回失败' }
                 return { success: true, message_id: args.message_id }
             } catch (err) {
                 return { success: false, error: `撤回失败: ${err.message}` }
@@ -1237,37 +959,30 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent?.()
-                const bot = ctx.getBot?.() || e?.bot || global.Bot
+                const api = StandardBotApi.fromContext(ctx)
 
-                if (!bot) {
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
                 const parseResult = await ForwardMessageParser.parse(e, args.id, {
                     extractProto: args.extract_proto || false,
                     extractSerialized: args.extract_serialized || false,
-                    maxDepth: args.max_depth || 5
+                    maxDepth: clampDeepParseDepth(args.max_depth, 5)
                 })
 
                 if (!parseResult.success) {
                     // 回退到传统方式
-                    let forwardContent = null
-                    if (bot.getForwardMsg) {
-                        forwardContent = await bot.getForwardMsg(args.id)
-                    } else if (bot.get_forward_msg) {
-                        forwardContent = await bot.get_forward_msg(args.id)
-                    } else if (bot.sendApi) {
-                        const apiResult = await bot.sendApi('get_forward_msg', { id: args.id })
-                        forwardContent = apiResult?.data || apiResult
-                    }
+                    const messages = await api.getForwardMessage(args.id, {
+                        ...(e?.group_id ? { groupId: e.group_id } : e?.user_id ? { userId: e.user_id } : {})
+                    })
 
-                    if (!forwardContent) {
+                    if (!messages.length) {
                         return {
                             success: false,
                             error: '获取转发内容失败',
                             parse_errors: parseResult.errors
                         }
                     }
-                    const messages = forwardContent.messages || forwardContent.message || []
                     const parsed = messages.map((msg, idx) => ({
                         index: idx,
                         sender: {
@@ -1361,13 +1076,13 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent?.()
-                const bot = ctx.getBot?.() || e?.bot || global.Bot
+                const api = StandardBotApi.fromContext(ctx)
 
-                if (!bot) {
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
-                const maxDepth = args.max_depth || 50
+                const maxDepth = clampDeepParseDepth(args.max_depth, 5)
                 const includeImages = args.include_images !== false
                 const flatten = args.flatten || false
 
@@ -1391,15 +1106,15 @@ export const messageTools = [
                             const forwardId = segData.id || segData.res_id
                             if (forwardId) {
                                 try {
-                                    let forwardContent = null
-                                    if (bot.getForwardMsg) {
-                                        forwardContent = await bot.getForwardMsg(forwardId)
-                                    } else if (bot.get_forward_msg) {
-                                        forwardContent = await bot.get_forward_msg(forwardId)
-                                    }
+                                    const messages = await api.getForwardMessage(forwardId, {
+                                        ...(e?.group_id
+                                            ? { groupId: e.group_id }
+                                            : e?.user_id
+                                              ? { userId: e.user_id }
+                                              : {})
+                                    })
 
-                                    if (forwardContent) {
-                                        const messages = forwardContent.messages || forwardContent.message || []
+                                    if (messages.length) {
                                         const innerResults = []
 
                                         for (const msg of messages) {
@@ -1432,12 +1147,13 @@ export const messageTools = [
                             const replyId = segData.id || segData.message_id
                             if (replyId) {
                                 try {
-                                    let replyMsg = null
-                                    if (bot.getMsg) {
-                                        replyMsg = await bot.getMsg(replyId)
-                                    } else if (bot.get_msg) {
-                                        replyMsg = await bot.get_msg(replyId)
-                                    }
+                                    const replyMsg = await api.getMessage(replyId, {
+                                        ...(e?.group_id
+                                            ? { groupId: e.group_id }
+                                            : e?.user_id
+                                              ? { userId: e.user_id }
+                                              : {})
+                                    })
 
                                     if (replyMsg) {
                                         const msgContent = replyMsg.message || replyMsg.content || []
@@ -1467,7 +1183,7 @@ export const messageTools = [
                         else if (segType === 'text') {
                             const text = segData.text || (typeof segData === 'string' ? segData : '')
                             if (text.trim()) {
-                                results.push({ type: 'text', text: text.trim() })
+                                results.push(segment.text(text.trim()))
                             }
                         }
                         // 处理@
@@ -1566,8 +1282,8 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || ctx.getBot?.() || global.Bot
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
@@ -1580,16 +1296,16 @@ export const messageTools = [
                 let targetUserId = null
 
                 if (args.group_id) {
-                    targetGroupId = parseInt(args.group_id)
+                    targetGroupId = api.targetId(args.group_id)
                 } else if (args.user_id) {
-                    targetUserId = parseInt(args.user_id)
+                    targetUserId = api.targetId(args.user_id)
                 } else if (args.to_master) {
-                    const botId = bot.uin || bot.self_id
+                    const botId = api.getBotInfo().user_id
                     const masters = await getMasterList(botId)
                     if (masters.length === 0) {
                         return { success: false, error: '未配置主人QQ，无法发送给主人' }
                     }
-                    targetUserId = parseInt(masters[0])
+                    targetUserId = api.targetId(masters[0])
                 } else if (e) {
                     if (e.group_id) {
                         targetGroupId = e.group_id
@@ -1604,16 +1320,13 @@ export const messageTools = [
                     return { success: false, error: '无法确定发送目标' }
                 }
 
-                // 使用增强版发送函数
-                const result = await sendForwardMsgEnhanced({
-                    bot,
-                    event: e,
+                const result = await api.sendForward({
                     groupId: targetGroupId,
                     userId: targetUserId,
-                    messages: args.messages.map(msg => ({
+                    nodes: args.messages.map(msg => ({
                         user_id: msg.user_id || msg.uin,
                         nickname: msg.nickname || msg.name,
-                        content: msg.message || msg.content,
+                        message: msg.message || msg.content,
                         time: msg.time
                     })),
                     display: {
@@ -1649,9 +1362,9 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || ctx.getBot?.() || global.Bot
+                const api = StandardBotApi.fromContext(ctx)
 
-                if (!bot && !e) {
+                if (!api.bot && !e) {
                     return { success: false, error: '没有可用的会话上下文或Bot实例' }
                 }
 
@@ -1766,18 +1479,8 @@ export const messageTools = [
                 if (typeof jsonData !== 'string') {
                     jsonData = JSON.stringify(jsonData)
                 }
-                const isIcqq = !!(bot?.pickGroup || bot?.pickFriend || bot?.gl || bot?.fl)
-                const isNapCat = bot?.version?.app_name?.toLowerCase?.()?.includes?.('napcat')
-                const jsonSeg =
-                    isIcqq && !isNapCat ? { type: 'json', data: jsonData } : { type: 'json', data: { data: jsonData } }
+                const jsonSeg = segment.json(jsonData)
 
-                let result = null
-                let lastError = null
-
-                const targetGroupId = args.group_id ? parseInt(args.group_id) : e?.group_id
-                const targetUserId = args.user_id ? parseInt(args.user_id) : !targetGroupId ? e?.user_id : null
-
-                // 如果需要作为转发消息发送
                 if (args.as_forward) {
                     const senderInfo = replyMsg.sender || {}
                     const nickname =
@@ -1785,84 +1488,29 @@ export const messageTools = [
                         senderInfo.nickname ||
                         senderInfo.card ||
                         String(senderInfo.user_id || '10000')
-                    const userId = String(senderInfo.user_id || '10000')
-
-                    const node = {
-                        type: 'node',
-                        data: {
-                            user_id: userId,
-                            nickname: nickname,
-                            content: [jsonSeg]
-                        }
-                    }
-
-                    if (bot.sendApi) {
-                        try {
-                            const apiName = targetGroupId ? 'send_group_forward_msg' : 'send_private_forward_msg'
-                            const params = targetGroupId
-                                ? { group_id: targetGroupId, messages: [node] }
-                                : { user_id: targetUserId, messages: [node] }
-                            result = await bot.sendApi(apiName, params)
-                        } catch (err) {
-                            lastError = err.message
-                        }
-                    }
-                } else {
-                    // 直接发送卡片
-                    if (bot?.sendApi) {
-                        try {
-                            if (targetGroupId) {
-                                result = await bot.sendApi('send_group_msg', {
-                                    group_id: targetGroupId,
-                                    message: [jsonSeg]
-                                })
-                            } else if (targetUserId) {
-                                result = await bot.sendApi('send_private_msg', {
-                                    user_id: targetUserId,
-                                    message: [jsonSeg]
-                                })
+                    const forwardResult = await api.sendForward({
+                        groupId: args.group_id,
+                        userId: args.user_id,
+                        nodes: [
+                            {
+                                user_id: String(senderInfo.user_id || '10000'),
+                                nickname,
+                                message: [jsonSeg]
                             }
-                        } catch (err) {
-                            lastError = err.message
-                        }
-                    }
-
-                    // icqq 方式
-                    if (!result && (bot?.pickGroup || bot?.pickFriend)) {
-                        try {
-                            if (targetGroupId && bot.pickGroup) {
-                                result = await bot.pickGroup(targetGroupId)?.sendMsg(jsonSeg)
-                            } else if (targetUserId && bot.pickFriend) {
-                                result = await bot.pickFriend(targetUserId)?.sendMsg(jsonSeg)
-                            }
-                        } catch (err) {
-                            lastError = err.message
-                        }
-                    }
-
-                    // e.reply
-                    if (!result && e?.reply) {
-                        try {
-                            result = await e.reply(jsonSeg)
-                        } catch (err) {
-                            lastError = err.message
-                        }
-                    }
-                }
-
-                if (result) {
+                        ]
+                    })
                     return {
-                        success: true,
-                        message_id: result?.message_id || result?.data?.message_id,
+                        ...forwardResult,
                         card_source: cardSource,
-                        as_forward: !!args.as_forward
+                        as_forward: true
                     }
                 }
 
+                const directResult = await api.send({ groupId: args.group_id, userId: args.user_id, message: jsonSeg })
                 return {
-                    success: false,
-                    error: `发送卡片失败: ${lastError || '未知错误'}`,
-                    note: '可能是协议端不支持发送此类型的卡片'
+                    ...directResult,
+                    card_source: cardSource,
+                    as_forward: false
                 }
             } catch (err) {
                 return { success: false, error: `重发引用卡片失败: ${err.message}` }
@@ -1882,30 +1530,9 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent?.()
-                const bot = ctx.getBot?.() || e?.bot || global.Bot
-                const groupId = e?.group_id || e?.group?.group_id
-
-                if (!bot) {
-                    return { success: false, error: '无法获取Bot实例' }
-                }
-
-                if (bot.markMsgAsRead) {
-                    await bot.markMsgAsRead(args.message_id)
-                    return { success: true }
-                }
-
-                if (bot.mark_msg_as_read) {
-                    await bot.mark_msg_as_read(args.message_id)
-                    return { success: true }
-                }
-
-                if (bot.sendApi) {
-                    await bot.sendApi('mark_msg_as_read', { message_id: args.message_id })
-                    return { success: true }
-                }
-
-                return { success: false, error: '当前环境不支持标记已读' }
+                const api = StandardBotApi.fromContext(ctx)
+                await api.callAction('mark_msg_as_read', { message_id: args.message_id }, { strict: true })
+                return { success: true }
             } catch (err) {
                 return { success: false, error: `标记已读失败: ${err.message}` }
             }
@@ -1924,49 +1551,15 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent?.()
-                const bot = ctx.getBot?.() || e?.bot || global.Bot
-                const groupId = parseInt(args.group_id)
-
-                if (!bot) {
-                    return { success: false, error: '无法获取Bot实例' }
-                }
-
-                // 尝试 NapCat API
-                if (bot.sendApi) {
-                    const result = await bot.sendApi('get_essence_msg_list', { group_id: groupId })
-                    const messages = result?.data || result || []
-
-                    return {
-                        success: true,
-                        group_id: groupId,
-                        count: messages.length,
-                        messages: messages.map(msg => ({
-                            sender_id: msg.sender_id,
-                            sender_nick: msg.sender_nick,
-                            sender_time: msg.sender_time,
-                            operator_id: msg.operator_id,
-                            operator_nick: msg.operator_nick,
-                            operator_time: msg.operator_time,
-                            message_id: msg.message_id,
-                            content: msg.content
-                        }))
-                    }
-                }
-
-                // icqq 方式
-                const group = bot.pickGroup?.(groupId)
-                if (group?.getEssence) {
-                    const messages = await group.getEssence()
-                    return {
-                        success: true,
-                        group_id: groupId,
-                        count: messages?.length || 0,
-                        messages: messages || []
-                    }
-                }
-
-                return { success: false, error: '当前协议不支持获取精华消息' }
+                const api = StandardBotApi.fromContext(ctx)
+                const groupId = api.targetId(args.group_id)
+                const result = await api.callGroupOrAction({
+                    groupId,
+                    method: 'getEssence',
+                    action: 'get_essence_msg_list'
+                })
+                const messages = result?.data || result || []
+                return { success: true, group_id: groupId, count: messages.length, messages }
             } catch (err) {
                 return { success: false, error: `获取精华消息失败: ${err.message}` }
             }
@@ -1986,100 +1579,20 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent?.()
-                const bot = ctx.getBot?.() || e?.bot || global.Bot
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = args.group_id || e?.group_id || e?.group?.group_id
-                const adapterInfo = ctx.getAdapter?.() || { adapter: 'unknown' }
-
-                if (!bot) {
-                    return { success: false, error: '无法获取Bot实例' }
-                }
-
-                // icqq 优先走群方法
-                if (groupId && bot.pickGroup) {
-                    const group = bot.pickGroup(parseInt(groupId))
-                    const support = {
+                if (groupId) {
+                    await api.callGroupOrAction({
                         groupId,
-                        adapter: adapterInfo.adapter,
-                        hasSetEssence: typeof group?.setEssence === 'function',
-                        hasSetEssenceMsg: typeof group?.setEssenceMsg === 'function',
-                        hasSetEssenceMessage: typeof group?.setEssenceMessage === 'function',
-                        hasBotSetEssenceMsg: typeof bot?.setEssenceMsg === 'function',
-                        hasBotSetEssenceMessage: typeof bot?.setEssenceMessage === 'function'
-                    }
-                    if (group?.setEssence) {
-                        await group.setEssence(args.message_id)
-                        return { success: true, message_id: args.message_id, group_id: groupId }
-                    }
-                    if (group?.setEssenceMsg) {
-                        await group.setEssenceMsg(args.message_id)
-                        return { success: true, message_id: args.message_id, group_id: groupId }
-                    }
-                    if (group?.setEssenceMessage) {
-                        await group.setEssenceMessage(args.message_id)
-                        return {
-                            success: true,
-                            message_id: args.message_id,
-                            group_id: groupId,
-                            via: 'group.setEssenceMessage'
-                        }
-                    }
-                    // 尝试通用 OneBot API
-                    if (bot.sendApi) {
-                        const res = await bot.sendApi('set_essence_msg', {
-                            message_id: args.message_id,
-                            group_id: groupId
-                        })
-                        if (res === null || res === undefined || res?.status === 'failed') {
-                            // 继续 fallback
-                        } else {
-                            return { success: true, message_id: args.message_id, group_id: groupId, via: 'sendApi' }
-                        }
-                    }
-                    // 尝试 bot 级别 icqq 接口
-                    if (bot.setEssenceMsg) {
-                        await bot.setEssenceMsg(args.message_id)
-                        return {
-                            success: true,
-                            message_id: args.message_id,
-                            group_id: groupId,
-                            via: 'bot.setEssenceMsg'
-                        }
-                    }
-                    if (bot.setEssenceMessage) {
-                        await bot.setEssenceMessage(args.message_id)
-                        return {
-                            success: true,
-                            message_id: args.message_id,
-                            group_id: groupId,
-                            via: 'bot.setEssenceMessage'
-                        }
-                    }
-                    return {
-                        success: false,
-                        error: '当前协议不支持设置精华消息',
-                        debug: support
-                    }
+                        method: 'setEssence',
+                        args: [args.message_id],
+                        action: 'set_essence_msg',
+                        params: { message_id: args.message_id }
+                    })
+                } else {
+                    await api.callAction('set_essence_msg', { message_id: args.message_id }, { strict: true })
                 }
-
-                if (bot.sendApi) {
-                    await bot.sendApi('set_essence_msg', { message_id: args.message_id, group_id: groupId })
-                    return { success: true, message_id: args.message_id, group_id: groupId }
-                }
-
-                if (bot.setEssenceMsg) {
-                    await bot.setEssenceMsg(args.message_id)
-                    return { success: true, message_id: args.message_id }
-                }
-
-                return {
-                    success: false,
-                    error: '当前协议不支持设置精华消息',
-                    debug: {
-                        adapter: adapterInfo.adapter,
-                        groupId: groupId || null,
-                        hasBotSetEssenceMsg: typeof bot?.setEssenceMsg === 'function'
-                    }
-                }
+                return { success: true, message_id: args.message_id, group_id: groupId || null }
             } catch (err) {
                 return { success: false, error: `设置精华消息失败: ${err.message}` }
             }
@@ -2098,24 +1611,9 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent?.()
-                const bot = ctx.getBot?.() || e?.bot || global.Bot
-
-                if (!bot) {
-                    return { success: false, error: '无法获取Bot实例' }
-                }
-
-                if (bot.sendApi) {
-                    await bot.sendApi('delete_essence_msg', { message_id: args.message_id })
-                    return { success: true, message_id: args.message_id }
-                }
-
-                if (bot.deleteEssenceMsg) {
-                    await bot.deleteEssenceMsg(args.message_id)
-                    return { success: true, message_id: args.message_id }
-                }
-
-                return { success: false, error: '当前协议不支持移除精华消息' }
+                const api = StandardBotApi.fromContext(ctx)
+                await api.callAction('delete_essence_msg', { message_id: args.message_id }, { strict: true })
+                return { success: true, message_id: args.message_id }
             } catch (err) {
                 return { success: false, error: `移除精华消息失败: ${err.message}` }
             }
@@ -2141,14 +1639,14 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
+                const api = StandardBotApi.fromContext(ctx)
 
-                if (!bot) {
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
                 let userId = args.user_id
-                const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id || null
+                const groupId = args.group_id ? api.targetId(args.group_id) : e?.group_id || null
 
                 // 处理特殊值: sender
                 if (userId === 'sender') {
@@ -2163,8 +1661,8 @@ export const messageTools = [
                         return { success: false, error: '随机戳一戳仅在群聊中有效' }
                     }
 
-                    const botId = bot.uin || bot.self_id
-                    const memberList = await getGroupMemberList({ bot, event: e })
+                    const botId = api.getBotInfo().user_id
+                    const memberList = await api.getMemberList(groupId)
 
                     if (memberList.length === 0) {
                         return { success: false, error: '获取群成员列表失败' }
@@ -2187,94 +1685,13 @@ export const messageTools = [
                     userId = selected.user_id || selected.uid
                 }
 
-                userId = parseInt(userId)
-
-                // 群聊戳一戳
+                userId = api.targetId(userId)
                 if (groupId) {
-                    // 方式1: icqq - group.pokeMember (优先)
-                    if (bot.pickGroup) {
-                        const group = bot.pickGroup(groupId)
-                        if (typeof group?.pokeMember === 'function') {
-                            await group.pokeMember(userId)
-                            return { success: true, user_id: userId, group_id: groupId, type: 'group' }
-                        }
-                        // 方式2: icqq - pickMember().poke()
-                        if (group?.pickMember) {
-                            const member = group.pickMember(userId)
-                            if (typeof member?.poke === 'function') {
-                                await member.poke()
-                                return { success: true, user_id: userId, group_id: groupId, type: 'group' }
-                            }
-                        }
-                    }
-
-                    // 方式3: NapCat - send_group_poke (推荐)
-                    if (bot.sendApi) {
-                        try {
-                            const result = await bot.sendApi('send_group_poke', { group_id: groupId, user_id: userId })
-                            if (result?.status === 'ok' || result?.retcode === 0 || !result?.error) {
-                                return { success: true, user_id: userId, group_id: groupId, type: 'group' }
-                            }
-                        } catch {}
-                        // 方式4: NapCat/go-cqhttp - group_poke
-                        try {
-                            const result = await bot.sendApi('group_poke', { group_id: groupId, user_id: userId })
-                            if (result?.status === 'ok' || result?.retcode === 0 || !result?.error) {
-                                return { success: true, user_id: userId, group_id: groupId, type: 'group' }
-                            }
-                        } catch {}
-                    }
-
-                    // 方式5: go-cqhttp / OneBot 直接方法
-                    if (typeof bot.sendGroupPoke === 'function') {
-                        await bot.sendGroupPoke(groupId, userId)
-                        return { success: true, user_id: userId, group_id: groupId, type: 'group' }
-                    }
-                    if (typeof bot.send_group_poke === 'function') {
-                        await bot.send_group_poke(groupId, userId)
-                        return { success: true, user_id: userId, group_id: groupId, type: 'group' }
-                    }
-
-                    return { success: false, error: '当前协议不支持群聊戳一戳' }
+                    await api.pokeMember(groupId, userId)
+                    return { success: true, user_id: userId, group_id: groupId, type: 'group' }
                 }
-
-                // 私聊戳一戳
-                // 方式1: icqq - friend.poke()
-                if (bot.pickFriend) {
-                    const friend = bot.pickFriend(userId)
-                    if (typeof friend?.poke === 'function') {
-                        await friend.poke()
-                        return { success: true, user_id: userId, type: 'private' }
-                    }
-                }
-
-                // 方式2: NapCat - send_friend_poke / friend_poke
-                if (bot.sendApi) {
-                    try {
-                        const result = await bot.sendApi('send_friend_poke', { user_id: userId })
-                        if (result?.status === 'ok' || result?.retcode === 0 || !result?.error) {
-                            return { success: true, user_id: userId, type: 'private' }
-                        }
-                    } catch {}
-                    try {
-                        const result = await bot.sendApi('friend_poke', { user_id: userId })
-                        if (result?.status === 'ok' || result?.retcode === 0 || !result?.error) {
-                            return { success: true, user_id: userId, type: 'private' }
-                        }
-                    } catch {}
-                }
-
-                // 方式3: go-cqhttp 直接方法
-                if (typeof bot.sendFriendPoke === 'function') {
-                    await bot.sendFriendPoke(userId)
-                    return { success: true, user_id: userId, type: 'private' }
-                }
-                if (typeof bot.send_friend_poke === 'function') {
-                    await bot.send_friend_poke(userId)
-                    return { success: true, user_id: userId, type: 'private' }
-                }
-
-                return { success: false, error: '当前协议不支持私聊戳一戳' }
+                await api.pokeUser(userId)
+                return { success: true, user_id: userId, type: 'private' }
             } catch (err) {
                 return { success: false, error: `戳一戳失败: ${err.message}` }
             }
@@ -2300,9 +1717,9 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
+                const api = StandardBotApi.fromContext(ctx)
 
-                if (!bot) {
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
@@ -2313,135 +1730,18 @@ export const messageTools = [
 
                 const emojiId = String(args.emoji_id)
                 const isSet = args.set !== false
-
-                // 方式1: NapCat - set_msg_emoji_like (推荐)
-                if (bot.sendApi) {
-                    try {
-                        const result = await bot.sendApi('set_msg_emoji_like', {
-                            message_id: messageId,
-                            emoji_id: emojiId,
-                            set: isSet
-                        })
-                        if (result?.status === 'ok' || result?.retcode === 0 || !result?.error) {
-                            return {
-                                success: true,
-                                message_id: messageId,
-                                emoji_id: emojiId,
-                                action: isSet ? 'add' : 'remove'
-                            }
-                        }
-                    } catch {}
-
-                    // 方式2: NapCat 变体 - send_msg_emoji_like
-                    try {
-                        const result = await bot.sendApi('send_msg_emoji_like', {
-                            message_id: messageId,
-                            emoji_id: emojiId
-                        })
-                        if (result?.status === 'ok' || result?.retcode === 0 || !result?.error) {
-                            return {
-                                success: true,
-                                message_id: messageId,
-                                emoji_id: emojiId,
-                                action: 'add'
-                            }
-                        }
-                    } catch {}
-
-                    // 方式3: LLOneBot/Lagrange 变体
-                    try {
-                        const result = await bot.sendApi('set_message_emoji_like', {
-                            message_id: messageId,
-                            emoji_id: parseInt(emojiId)
-                        })
-                        if (result?.status === 'ok' || result?.retcode === 0 || !result?.error) {
-                            return {
-                                success: true,
-                                message_id: messageId,
-                                emoji_id: emojiId,
-                                action: isSet ? 'add' : 'remove'
-                            }
-                        }
-                    } catch {}
-                }
-
-                // 方式4: OneBot 直接方法
-                if (typeof bot.setMsgEmojiLike === 'function') {
-                    await bot.setMsgEmojiLike(messageId, emojiId, isSet)
-                    return {
-                        success: true,
-                        message_id: messageId,
-                        emoji_id: emojiId,
-                        action: isSet ? 'add' : 'remove'
-                    }
-                }
-
-                if (typeof bot.set_msg_emoji_like === 'function') {
-                    await bot.set_msg_emoji_like(messageId, emojiId, isSet)
-                    return {
-                        success: true,
-                        message_id: messageId,
-                        emoji_id: emojiId,
-                        action: isSet ? 'add' : 'remove'
-                    }
-                }
-
-                // 方式5: icqq - group.setReaction(seq, emoji_id, emoji_type)
-                // icqq 1.5.8+ 支持
-                // emoji_type: 1=QQ经典表情, 2=emoji表情, 3=超级表情
-                if (e?.group_id && bot.pickGroup) {
-                    try {
-                        const group = bot.pickGroup(e.group_id)
-                        if (typeof group?.setReaction === 'function') {
-                            // icqq 使用 seq 而非 message_id
-                            const seq = e?.seq || e?.source?.seq || parseInt(messageId) || 0
-                            const emojiIdNum = parseInt(emojiId)
-                            // 判断表情类型：大于200的是Unicode emoji，否则是QQ经典表情
-                            const emojiType = emojiIdNum > 200 ? 2 : 1
-
-                            if (isSet) {
-                                await group.setReaction(seq, emojiIdNum, emojiType)
-                            } else {
-                                // 取消回应可能需要不同的API或参数
-                                await group.setReaction(seq, emojiIdNum, emojiType)
-                            }
-                            return {
-                                success: true,
-                                message_id: messageId,
-                                emoji_id: emojiId,
-                                emoji_type: emojiType,
-                                action: isSet ? 'add' : 'remove',
-                                method: 'icqq'
-                            }
-                        }
-                    } catch (icqqErr) {
-                        // icqq 可能不支持或版本过低
-                        logger.debug(`[set_msg_emoji_like] icqq setReaction 失败: ${icqqErr.message}`)
-                    }
-                }
-
-                // 方式6: 尝试通过 pickGroup 获取 group 并直接调用
-                if (e?.group_id && bot.gl?.get?.(e.group_id)) {
-                    try {
-                        const group = bot.pickGroup(e.group_id)
-                        // 某些 icqq 变体使用 sendReaction
-                        if (typeof group?.sendReaction === 'function') {
-                            await group.sendReaction(messageId, parseInt(emojiId))
-                            return {
-                                success: true,
-                                message_id: messageId,
-                                emoji_id: emojiId,
-                                action: 'add',
-                                method: 'icqq-sendReaction'
-                            }
-                        }
-                    } catch {}
-                }
-
+                await api.setReaction({
+                    messageId,
+                    emojiId,
+                    isSet,
+                    groupId: e?.group_id,
+                    sequence: e?.seq || e?.source?.seq
+                })
                 return {
-                    success: false,
-                    error: '当前协议不支持表情回应',
-                    note: '表情回应功能需要 NapCat / LLOneBot / Lagrange / icqq 1.5.8+ 等支持该API的协议端'
+                    success: true,
+                    message_id: messageId,
+                    emoji_id: emojiId,
+                    action: isSet ? 'add' : 'remove'
                 }
             } catch (err) {
                 return { success: false, error: `表情回应失败: ${err.message}` }
@@ -2458,7 +1758,7 @@ export const messageTools = [
                 message_id: { type: 'string', description: '消息ID；icqq 可传完整 message_id 或 seq/time' },
                 group_id: { type: 'string', description: '群号；配合 seq 获取群消息' },
                 user_id: { type: 'string', description: '用户QQ号；配合 time 获取私聊消息' },
-                seq: { type: 'number', description: 'icqq 群消息 seq' },
+                seq: { type: 'string', description: '群消息 seq；QQBot 传 message_id' },
                 time: { type: 'number', description: 'icqq 私聊消息时间戳' },
                 count: { type: 'number', description: '历史记录回退查找条数，默认20' },
                 include_raw: { type: 'boolean', description: '是否返回原始消息对象' }
@@ -2467,80 +1767,43 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent?.()
-                const bot = e?.bot || ctx.getBot?.() || global.Bot
-                if (!bot) return { success: false, error: '无法获取Bot实例' }
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) return { success: false, error: '无法获取Bot实例' }
 
                 const messageId = args.message_id || e?.message_id
-                const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
-                const userId = args.user_id ? parseInt(args.user_id) : e?.user_id
-                const seq = args.seq ?? (messageId && /^\d+$/.test(String(messageId)) ? Number(messageId) : undefined)
+                const groupId = args.group_id ? api.targetId(args.group_id) : e?.group_id
+                const userId = args.user_id ? api.targetId(args.user_id) : e?.user_id
+                const seq =
+                    args.seq ??
+                    (messageId && /^\d+$/.test(String(messageId))
+                        ? api.isQQBot
+                            ? String(messageId)
+                            : Number(messageId)
+                        : undefined)
                 const time = args.time ?? undefined
                 const count = Math.min(Math.max(Number(args.count || 20), 1), 50)
                 let msg = null
-                let source = 'unknown'
+                let source = 'standard.getMessage'
 
                 if (messageId) {
-                    try {
-                        msg = await MessageApi.getMsg(
-                            e || { bot, group_id: groupId, user_id: userId, isGroup: !!groupId },
-                            messageId
-                        )
-                        if (msg) source = msg._source || 'MessageApi.getMsg'
-                    } catch {}
-                }
-                if (!msg && messageId && typeof bot.getMsg === 'function') {
-                    try {
-                        msg = await bot.getMsg(messageId)
-                        source = 'bot.getMsg'
-                    } catch {}
-                }
-                if (!msg && messageId && typeof bot.sendApi === 'function') {
-                    try {
-                        const result = await bot.sendApi('get_msg', { message_id: messageId })
-                        msg = result?.data || result
-                        source = 'sendApi.get_msg'
-                    } catch {}
-                }
-                if (!msg && groupId && bot.pickGroup) {
-                    try {
-                        const group = bot.pickGroup(parseInt(groupId))
-                        if (seq !== undefined && typeof group?.getChatHistory === 'function') {
-                            const history = await group.getChatHistory(Number(seq), count)
-                            msg =
-                                history?.find?.(m => Number(m.seq) === Number(seq)) ||
-                                history?.[history.length - 1] ||
-                                history?.[0]
-                            source = 'group.getChatHistory'
-                        } else if (typeof group?.getChatHistory === 'function') {
-                            const history = await group.getChatHistory(0, count)
-                            msg = history?.[history.length - 1] || history?.[0]
-                            source = 'group.getChatHistory.latest'
-                        }
-                    } catch {}
-                }
-                if (!msg && userId && bot.pickUser) {
-                    try {
-                        const user = bot.pickUser(parseInt(userId))
-                        if (typeof user?.getChatHistory === 'function') {
-                            const history = await user.getChatHistory(time || 0, count)
-                            msg = time
-                                ? history?.find?.(m => Number(m.time) === Number(time)) || history?.[0]
-                                : history?.[0]
-                            source = 'user.getChatHistory'
-                        }
-                    } catch {}
-                }
-                if (!msg && userId && bot.pickFriend) {
-                    try {
-                        const friend = bot.pickFriend(parseInt(userId))
-                        if (typeof friend?.getChatHistory === 'function') {
-                            const history = await friend.getChatHistory(time || 0, count)
-                            msg = time
-                                ? history?.find?.(m => Number(m.time) === Number(time)) || history?.[0]
-                                : history?.[0]
-                            source = 'friend.getChatHistory'
-                        }
-                    } catch {}
+                    msg = await api.getMessage(messageId, { groupId, userId })
+                } else if (groupId) {
+                    const sequence = api.historySequence(seq ?? e?.seq ?? e?.message_seq ?? e?.message_id, 0)
+                    const history = await api.getHistory({ groupId, sequence, count })
+                    msg = seq
+                        ? history.find(item => {
+                              const messageSequence = item.seq || item.message_seq || item.message_id
+                              return api.sameHistorySequence(messageSequence, sequence)
+                          }) || history.at(-1)
+                        : history.at(-1)
+                    source = 'standard.groupHistory'
+                } else if (userId) {
+                    const sequence = api.historySequence(time, 0)
+                    const history = await api.getHistory({ userId, sequence, count })
+                    msg = time
+                        ? history.find(item => api.sameHistorySequence(item.time, sequence)) || history[0]
+                        : history[0]
+                    source = 'standard.privateHistory'
                 }
 
                 if (!msg) return { success: false, error: '获取消息失败或消息不存在' }
@@ -2596,9 +1859,8 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent()
-                const bot = e?.bot || ctx.getBot?.() || global.Bot
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
@@ -2606,25 +1868,17 @@ export const messageTools = [
                     return { success: false, error: '消息段数组不能为空' }
                 }
 
-                // 规范化消息段格式
-                const segments = args.segments.map(seg => {
-                    if (!seg.data) {
-                        const { type, ...rest } = seg
-                        return { type, data: rest }
-                    }
-                    return seg
-                })
+                const segments = normalizeStandardMessage(args.segments)
 
-                const result = await sendToolMessage(bot, {
-                    groupId: args.group_id || e?.group_id,
-                    userId: args.user_id || (!args.group_id ? e?.user_id : null),
-                    message: segments,
-                    event: e
+                const result = await api.send({
+                    groupId: args.group_id,
+                    userId: args.user_id,
+                    message: segments
                 })
 
                 return {
-                    success: !!result,
-                    message_id: result?.message_id || result?.data?.message_id,
+                    success: true,
+                    message_id: result.message_id,
                     segment_count: segments.length
                 }
             } catch (err) {
@@ -2659,9 +1913,8 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent()
-                const bot = e?.bot || ctx.getBot?.() || global.Bot
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
@@ -2723,14 +1976,10 @@ export const messageTools = [
                         return { success: false, error: '不支持的模板类型' }
                 }
 
-                // 使用统一的卡片发送函数
-                const result = await sendCardMessage({
-                    bot,
-                    event: e,
-                    groupId: args.group_id ? parseInt(args.group_id) : null,
-                    userId: args.user_id ? parseInt(args.user_id) : null,
-                    type: cardType,
-                    data: cardData
+                const result = await api.send({
+                    groupId: args.group_id ? api.targetId(args.group_id) : null,
+                    userId: args.user_id ? api.targetId(args.user_id) : null,
+                    message: cardType === 'json' ? segment.json(cardData) : segment.xml(cardData)
                 })
 
                 // 解析卡片信息
@@ -2761,38 +2010,17 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent()
-                const bot = e?.bot || ctx.getBot?.() || global.Bot
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
-                const mdSeg = { type: 'markdown', data: { content: args.content } }
-
-                let result
-                if (args.group_id) {
-                    const groupId = parseInt(args.group_id)
-                    if (bot.sendApi) {
-                        result = await bot.sendApi('send_group_msg', { group_id: groupId, message: [mdSeg] })
-                    } else if (bot.pickGroup) {
-                        result = await bot.pickGroup(groupId)?.sendMsg(mdSeg)
-                    }
-                } else if (args.user_id) {
-                    const userId = parseInt(args.user_id)
-                    if (bot.sendApi) {
-                        result = await bot.sendApi('send_private_msg', { user_id: userId, message: [mdSeg] })
-                    } else if (bot.pickFriend) {
-                        result = await bot.pickFriend(userId)?.sendMsg(mdSeg)
-                    }
-                } else if (e) {
-                    result = await e.reply(mdSeg)
-                } else {
-                    return { success: false, error: '需要指定 group_id 或 user_id' }
-                }
+                const mdSeg = segment.markdown(args.content)
+                const result = await api.send({ groupId: args.group_id, userId: args.user_id, message: mdSeg })
 
                 return {
                     success: true,
-                    message_id: result?.message_id || result?.data?.message_id
+                    message_id: result.message_id
                 }
             } catch (err) {
                 return { success: false, error: `发送Markdown失败: ${err.message}` }
@@ -2830,55 +2058,29 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent()
-                const bot = e?.bot || ctx.getBot?.() || global.Bot
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
                 const message = []
-                if (args.content) {
-                    message.push({ type: 'text', data: { text: args.content } })
-                }
-                message.push({
-                    type: 'keyboard',
-                    data: {
-                        content: {
-                            rows: [
-                                {
-                                    buttons: args.buttons.map((btn, i) => ({
-                                        id: String(i),
-                                        render_data: { label: btn.text, visited_label: btn.text },
-                                        action: {
-                                            type: btn.type === 'link' ? 0 : btn.type === 'callback' ? 1 : 2,
-                                            data: btn.data || btn.text,
-                                            permission: { type: 2 }
-                                        }
-                                    }))
-                                }
-                            ]
-                        }
-                    }
-                })
+                if (args.content) message.push(segment.text(args.content))
 
-                let result
-                if (args.group_id) {
-                    if (bot.sendApi) {
-                        result = await bot.sendApi('send_group_msg', { group_id: parseInt(args.group_id), message })
-                    }
-                } else if (args.user_id) {
-                    if (bot.sendApi) {
-                        result = await bot.sendApi('send_private_msg', { user_id: parseInt(args.user_id), message })
-                    }
-                } else if (e) {
-                    result = await e.reply(message)
-                } else {
-                    return { success: false, error: '需要指定 group_id 或 user_id' }
-                }
+                const buttonRow = args.buttons.map(button => ({
+                    text: button.text,
+                    ...(button.type === 'link'
+                        ? { link: button.data || button.text }
+                        : button.type === 'callback'
+                          ? { callback: button.data || button.text }
+                          : { input: button.data || button.text, send: true })
+                }))
+                message.push(segment.button(buttonRow))
+
+                const result = await api.send({ groupId: args.group_id, userId: args.user_id, message })
 
                 return {
                     success: true,
-                    message_id: result?.message_id || result?.data?.message_id,
+                    message_id: result.message_id,
                     button_count: args.buttons.length
                 }
             } catch (err) {
@@ -2903,17 +2105,13 @@ export const messageTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent()
-                const bot = e?.bot || ctx.getBot?.() || global.Bot
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
-                if (!bot.sendApi) {
-                    return { success: false, error: '当前协议不支持 sendApi，此功能需要 NapCat/OneBot 协议端' }
-                }
-
-                const result = await bot.sendApi(args.action, args.params || {})
+                api.requireCapability('onebot_action')
+                const result = await api.callAction(args.action, args.params || {}, { strict: true })
 
                 return {
                     success: true,
@@ -2960,56 +2158,27 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || ctx.getBot?.() || global.Bot
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
-                if (!bot.sendApi) {
-                    return { success: false, error: '当前协议不支持长消息发送' }
-                }
-
-                // 构建消息节点
-                const botInfo = bot.info || {}
-                const botId = bot.uin || bot.self_id || '10000'
-                const botName = botInfo.nickname || 'Bot'
-
-                const nodes = args.messages.map(msg => ({
-                    type: 'node',
-                    data: {
-                        user_id: String(botId),
-                        nickname: botName,
-                        content: typeof msg === 'string' ? [{ type: 'text', data: { text: msg } }] : msg
-                    }
+                const botInfo = api.getBotInfo()
+                const nodes = args.messages.map(message => ({
+                    user_id: String(botInfo.user_id || '10000'),
+                    nickname: botInfo.nickname || 'Bot',
+                    message
                 }))
-
-                let result
-                if (args.group_id) {
-                    result = await bot.sendApi('send_group_forward_msg', {
-                        group_id: parseInt(args.group_id),
-                        messages: nodes
-                    })
-                } else if (args.user_id) {
-                    result = await bot.sendApi('send_private_forward_msg', {
-                        user_id: parseInt(args.user_id),
-                        messages: nodes
-                    })
-                } else if (e) {
-                    const isGroup = !!e.group_id
-                    const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
-                    const targetId = isGroup ? e.group_id : e.user_id
-                    result = await bot.sendApi(apiName, {
-                        [isGroup ? 'group_id' : 'user_id']: targetId,
-                        messages: nodes
-                    })
-                } else {
-                    return { success: false, error: '需要指定 group_id 或 user_id' }
-                }
+                const result = await api.sendForward({
+                    groupId: args.group_id || (!args.user_id ? e?.group_id : null),
+                    userId: args.user_id || (!args.group_id ? e?.user_id : null),
+                    nodes
+                })
 
                 return {
                     success: true,
-                    message_id: result?.message_id || result?.data?.message_id,
-                    res_id: result?.res_id || result?.data?.res_id,
+                    message_id: result.message_id,
+                    res_id: result.result?.res_id || result.result?.data?.res_id,
                     message_count: args.messages.length
                 }
             } catch (err) {
@@ -3032,17 +2201,17 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = args.group_id || e?.group_id
 
-                if (!bot || !bot.sendApi) {
-                    return { success: false, error: '当前协议不支持获取表情回应' }
-                }
-
-                const result = await bot.sendApi('get_group_msg_history', {
-                    group_id: parseInt(groupId),
-                    message_id: args.message_id
-                })
+                const result = await api.callAction(
+                    'get_group_msg_history',
+                    {
+                        group_id: api.targetId(groupId),
+                        message_id: args.message_id
+                    },
+                    { strict: true }
+                )
 
                 return {
                     success: true,
@@ -3079,16 +2248,16 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || ctx.getBot?.() || global.Bot
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
                 const content = args.content || ''
                 const mode = args.mode || 'forward'
                 const chunkSize = args.chunk_size || 2000
-                const botInfo = bot.info || {}
-                const botId = bot.uin || bot.self_id || '10000'
+                const botInfo = api.getBotInfo()
+                const botId = botInfo.user_id || '10000'
                 const senderName = args.sender_name || botInfo.nickname || 'Bot'
 
                 // 分割长消息
@@ -3097,58 +2266,34 @@ export const messageTools = [
                     chunks.push(content.slice(i, i + chunkSize))
                 }
 
-                const targetGroupId = args.group_id ? parseInt(args.group_id) : e?.group_id
-                const targetUserId = args.user_id ? parseInt(args.user_id) : !targetGroupId ? e?.user_id : null
-                const isGroup = !!targetGroupId
-
+                const hasExplicitGroup = Boolean(args.group_id)
+                const hasExplicitUser = Boolean(args.user_id)
+                const targetGroupId = hasExplicitGroup
+                    ? api.targetId(args.group_id)
+                    : hasExplicitUser
+                      ? null
+                      : e?.group_id
+                const targetUserId = hasExplicitUser
+                    ? api.targetId(args.user_id)
+                    : hasExplicitGroup || targetGroupId
+                      ? null
+                      : e?.user_id
                 // 根据模式选择发送方式
                 const actualMode = mode === 'auto' ? (content.length > 3000 ? 'forward' : 'direct') : mode
 
                 if (actualMode === 'direct') {
-                    // 直接分段发送
                     const results = []
                     for (let i = 0; i < chunks.length; i++) {
                         try {
-                            let result
-                            if (isGroup) {
-                                if (bot.sendApi) {
-                                    result = await bot.sendApi('send_group_msg', {
-                                        group_id: targetGroupId,
-                                        message: [
-                                            {
-                                                type: 'text',
-                                                data: { text: `[${i + 1}/${chunks.length}]\n${chunks[i]}` }
-                                            }
-                                        ]
-                                    })
-                                } else if (bot.pickGroup) {
-                                    result = await bot
-                                        .pickGroup(targetGroupId)
-                                        ?.sendMsg(`[${i + 1}/${chunks.length}]\n${chunks[i]}`)
-                                }
-                            } else if (targetUserId) {
-                                if (bot.sendApi) {
-                                    result = await bot.sendApi('send_private_msg', {
-                                        user_id: targetUserId,
-                                        message: [
-                                            {
-                                                type: 'text',
-                                                data: { text: `[${i + 1}/${chunks.length}]\n${chunks[i]}` }
-                                            }
-                                        ]
-                                    })
-                                } else if (bot.pickFriend) {
-                                    result = await bot
-                                        .pickFriend(targetUserId)
-                                        ?.sendMsg(`[${i + 1}/${chunks.length}]\n${chunks[i]}`)
-                                }
-                            } else if (e?.reply) {
-                                result = await e.reply(`[${i + 1}/${chunks.length}]\n${chunks[i]}`)
-                            }
+                            const sent = await api.send({
+                                groupId: targetGroupId,
+                                userId: targetUserId,
+                                message: chunks.length > 1 ? `[${i + 1}/${chunks.length}]\n${chunks[i]}` : chunks[i]
+                            })
                             results.push({
                                 index: i + 1,
                                 success: true,
-                                message_id: result?.message_id || result?.data?.message_id
+                                message_id: sent.message_id
                             })
 
                             // 分段发送间隔
@@ -3166,55 +2311,22 @@ export const messageTools = [
                         chunk_count: chunks.length,
                         results
                     }
-                } else {
-                    // 合并转发模式
-                    const nodes = chunks.map((chunk, i) => ({
-                        type: 'node',
-                        data: {
-                            user_id: String(botId),
-                            nickname: senderName,
-                            content: [
-                                {
-                                    type: 'text',
-                                    data: { text: chunks.length > 1 ? `[${i + 1}/${chunks.length}]\n${chunk}` : chunk }
-                                }
-                            ]
-                        }
-                    }))
-
-                    let result
-                    if (bot.sendApi) {
-                        const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
-                        const params = {
-                            [isGroup ? 'group_id' : 'user_id']: isGroup ? targetGroupId : targetUserId,
-                            messages: nodes
-                        }
-                        if (args.prompt) params.prompt = args.prompt
-                        if (args.summary) params.summary = args.summary
-
-                        result = await bot.sendApi(apiName, params)
-                    } else if (bot.pickGroup || bot.pickFriend) {
-                        // icqq fallback
-                        const target = isGroup ? bot.pickGroup(targetGroupId) : bot.pickFriend(targetUserId)
-                        if (target?.makeForwardMsg && target?.sendMsg) {
-                            const icqqNodes = chunks.map((chunk, i) => ({
-                                user_id: parseInt(botId) || 10000,
-                                nickname: senderName,
-                                message: chunks.length > 1 ? `[${i + 1}/${chunks.length}]\n${chunk}` : chunk
-                            }))
-                            const forwardMsg = await target.makeForwardMsg(icqqNodes)
-                            result = await target.sendMsg(forwardMsg)
-                        }
-                    }
-
-                    return {
-                        success: !!result,
-                        mode: 'forward',
-                        chunk_count: chunks.length,
-                        total_length: content.length,
-                        message_id: result?.message_id || result?.data?.message_id,
-                        res_id: result?.res_id || result?.data?.res_id
-                    }
+                }
+                const result = await api.sendForward({
+                    groupId: targetGroupId,
+                    userId: targetUserId,
+                    nodes: chunks.map((chunk, index) => ({
+                        user_id: String(botId),
+                        nickname: senderName,
+                        message: chunks.length > 1 ? `[${index + 1}/${chunks.length}]\n${chunk}` : chunk
+                    })),
+                    display: { prompt: args.prompt, summary: args.summary }
+                })
+                return {
+                    ...result,
+                    mode: 'forward',
+                    chunk_count: chunks.length,
+                    total_length: content.length
                 }
             } catch (err) {
                 return { success: false, error: `发送长消息失败: ${err.message}` }
@@ -3286,7 +2398,7 @@ export const messageTools = [
                         }
                     }
                 },
-                params: { type: 'object', description: 'send_api/onebot 模式下透传给 bot.sendApi 的参数' },
+                params: { type: 'object', description: 'send_api/onebot 模式下透传给标准低层动作边界的参数' },
                 action: { type: 'string', description: 'send_api/onebot 模式下调用的 API 名称，默认 send_pb_msg' },
                 group_id: { type: 'string', description: 'OneBot 扩展 API 的目标群号' },
                 user_id: { type: 'string', description: 'OneBot 扩展 API 的目标用户 QQ 号' }
@@ -3378,39 +2490,24 @@ export const messageTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || ctx.getBot?.() || global.Bot
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
-                const targetGroupId = args.group_id ? parseInt(args.group_id) : e?.group_id
-                const targetUserId = args.user_id ? parseInt(args.user_id) : !targetGroupId ? e?.user_id : null
-                const isGroup = !!targetGroupId
+                const hasExplicitGroup = Boolean(args.group_id)
+                const hasExplicitUser = Boolean(args.user_id)
+                const targetGroupId = hasExplicitGroup
+                    ? api.targetId(args.group_id)
+                    : hasExplicitUser
+                      ? null
+                      : e?.group_id
+                const targetUserId = hasExplicitUser
+                    ? api.targetId(args.user_id)
+                    : hasExplicitGroup || targetGroupId
+                      ? null
+                      : e?.user_id
                 const interval = args.interval || 300
-
-                // 获取发送函数
-                let sendFn = null
-                if (isGroup) {
-                    if (bot.sendApi) {
-                        sendFn = async msg => bot.sendApi('send_group_msg', { group_id: targetGroupId, message: msg })
-                    } else if (bot.pickGroup) {
-                        const group = bot.pickGroup(targetGroupId)
-                        sendFn = async msg => group?.sendMsg(msg)
-                    }
-                } else if (targetUserId) {
-                    if (bot.sendApi) {
-                        sendFn = async msg => bot.sendApi('send_private_msg', { user_id: targetUserId, message: msg })
-                    } else if (bot.pickFriend) {
-                        const friend = bot.pickFriend(targetUserId)
-                        sendFn = async msg => friend?.sendMsg(msg)
-                    }
-                } else if (e?.reply) {
-                    sendFn = async msg => e.reply(msg)
-                }
-
-                if (!sendFn) {
-                    return { success: false, error: '无法确定发送目标' }
-                }
                 const results = []
                 for (let i = 0; i < args.messages.length; i++) {
                     const msg = args.messages[i]
@@ -3418,21 +2515,18 @@ export const messageTools = [
                         // 处理消息格式
                         let message = msg
                         if (typeof msg === 'string') {
-                            message = [{ type: 'text', data: { text: msg } }]
+                            message = [segment.text(msg)]
                         } else if (msg.message) {
-                            message =
-                                typeof msg.message === 'string'
-                                    ? [{ type: 'text', data: { text: msg.message } }]
-                                    : msg.message
+                            message = typeof msg.message === 'string' ? [segment.text(msg.message)] : msg.message
                         } else if (!Array.isArray(msg)) {
                             message = [msg]
                         }
 
-                        const result = await sendFn(message)
+                        const sent = await api.send({ groupId: targetGroupId, userId: targetUserId, message })
                         results.push({
                             index: i,
                             success: true,
-                            message_id: result?.message_id || result?.data?.message_id
+                            message_id: sent.message_id
                         })
 
                         // 发送间隔
@@ -3480,57 +2574,28 @@ export const messageTools = [
                         }
                     }
                 },
-                format: {
-                    type: 'string',
-                    description: '输出格式: onebot(OneBot/NapCat格式), icqq(icqq格式)',
-                    enum: ['onebot', 'icqq']
-                }
+                format: { type: 'string', description: '兼容旧参数；输出始终为 standard' }
             },
             required: ['messages']
         },
         handler: async (args, ctx) => {
             try {
-                const format = args.format || 'onebot'
-                const botInfo = ctx.getBot?.()?.info || {}
-                const defaultUserId = ctx.getBot?.()?.uin || '10000'
-                const defaultNickname = botInfo.nickname || 'Bot'
-
-                if (format === 'icqq') {
-                    // icqq 格式
-                    const nodes = args.messages.map(msg => ({
-                        user_id: parseInt(msg.user_id) || parseInt(defaultUserId) || 10000,
-                        nickname: msg.nickname || defaultNickname,
-                        message: msg.message || '',
-                        ...(msg.time ? { time: msg.time } : {})
-                    }))
-
-                    return {
-                        success: true,
-                        format: 'icqq',
-                        nodes,
-                        forward_msg: { type: 'node', data: nodes }
-                    }
-                } else {
-                    // OneBot/NapCat 格式
-                    const nodes = args.messages.map(msg => ({
-                        type: 'node',
-                        data: {
-                            user_id: String(msg.user_id || defaultUserId),
-                            nickname: msg.nickname || defaultNickname,
-                            content:
-                                typeof msg.message === 'string'
-                                    ? [{ type: 'text', data: { text: msg.message } }]
-                                    : msg.message || [],
-                            ...(msg.time ? { time: msg.time } : {})
-                        }
-                    }))
-
-                    return {
-                        success: true,
-                        format: 'onebot',
-                        nodes,
-                        node_count: nodes.length
-                    }
+                const api = StandardBotApi.fromContext(ctx)
+                const botInfo = api.getBotInfo()
+                const nodes = args.messages.map(msg =>
+                    segment.nodeItem(
+                        msg.user_id || botInfo.user_id || '10000',
+                        msg.nickname || botInfo.nickname || 'Bot',
+                        msg.message || '',
+                        msg.time
+                    )
+                )
+                return {
+                    success: true,
+                    format: 'standard',
+                    nodes,
+                    forward_msg: segment.node(nodes),
+                    node_count: nodes.length
                 }
             } catch (err) {
                 return { success: false, error: `构造转发节点失败: ${err.message}` }
@@ -3590,139 +2655,6 @@ function parseForwardContent(content) {
 }
 
 /**
- * 解析富文本消息内容为消息段数组
- * 支持混合格式：文本、[图片:url]、[表情:id]、[@qq]、[语音:url]等
- * @param {string|Array|Object} content - 消息内容
- * @returns {Array} 消息段数组
- */
-function parseRichContent(content) {
-    // 如果已经是数组，直接返回
-    if (Array.isArray(content)) {
-        return content.map(seg => {
-            // 确保格式正确
-            if (typeof seg === 'string') {
-                return { type: 'text', data: { text: seg } }
-            }
-            // 统一为 NC/OneBot 格式
-            if (seg.type && !seg.data) {
-                const { type, ...rest } = seg
-                return { type, data: rest }
-            }
-            return seg
-        })
-    }
-
-    // 如果是对象（单个消息段）
-    if (typeof content === 'object' && content !== null) {
-        if (content.type) {
-            if (!content.data) {
-                const { type, ...rest } = content
-                return [{ type, data: rest }]
-            }
-            return [content]
-        }
-        return [{ type: 'text', data: { text: JSON.stringify(content) } }]
-    }
-
-    // 字符串：解析特殊标记
-    if (typeof content !== 'string') {
-        return [{ type: 'text', data: { text: String(content || '') } }]
-    }
-
-    const segments = []
-    let remaining = content
-
-    // 解析 [类型:参数] 格式的标记
-    const patterns = [
-        // [图片:url] 或 [image:url]
-        { regex: /\[(?:图片|image):([^\]]+)\]/gi, handler: m => ({ type: 'image', data: { file: m[1], url: m[1] } }) },
-        // [表情:id] 或 [face:id]
-        { regex: /\[(?:表情|face):(\d+)\]/gi, handler: m => ({ type: 'face', data: { id: parseInt(m[1]) } }) },
-        // [@qq] 或 [at:qq]
-        { regex: /\[@(\d+|all)\]/gi, handler: m => ({ type: 'at', data: { qq: m[1] } }) },
-        { regex: /\[at:(\d+|all)\]/gi, handler: m => ({ type: 'at', data: { qq: m[1] } }) },
-        // [语音:url] 或 [record:url]
-        { regex: /\[(?:语音|record):([^\]]+)\]/gi, handler: m => ({ type: 'record', data: { file: m[1] } }) },
-        // [视频:url] 或 [video:url]
-        { regex: /\[(?:视频|video):([^\]]+)\]/gi, handler: m => ({ type: 'video', data: { file: m[1] } }) },
-        // [商城表情:id,key] 或 [mface:pkg_id,emoji_id]
-        {
-            regex: /\[(?:商城表情|mface):([^,\]]+),([^\]]+)\]/gi,
-            handler: m => ({ type: 'mface', data: { emoji_package_id: m[1], emoji_id: m[2] } })
-        },
-        // [markdown:content]
-        { regex: /\[markdown:([^\]]+)\]/gi, handler: m => ({ type: 'markdown', data: { content: m[1] } }) }
-    ]
-
-    // 收集所有匹配
-    const matches = []
-    for (const { regex, handler } of patterns) {
-        let match
-        const re = new RegExp(regex.source, regex.flags)
-        while ((match = re.exec(content)) !== null) {
-            matches.push({
-                start: match.index,
-                end: match.index + match[0].length,
-                segment: handler(match)
-            })
-        }
-    }
-
-    // 按位置排序
-    matches.sort((a, b) => a.start - b.start)
-
-    // 如果没有匹配，返回纯文本
-    if (matches.length === 0) {
-        return [{ type: 'text', data: { text: content } }]
-    }
-
-    // 构建消息段数组
-    let lastEnd = 0
-    for (const m of matches) {
-        // 添加之前的文本
-        if (m.start > lastEnd) {
-            const text = content.substring(lastEnd, m.start)
-            if (text) segments.push({ type: 'text', data: { text } })
-        }
-        // 添加特殊消息段
-        segments.push(m.segment)
-        lastEnd = m.end
-    }
-    // 添加剩余文本
-    if (lastEnd < content.length) {
-        const text = content.substring(lastEnd)
-        if (text) segments.push({ type: 'text', data: { text } })
-    }
-
-    return segments
-}
-
-/**
- * 构建合并转发节点（支持富文本）
- * @param {Array} messages - 消息列表
- * @returns {Array} 节点数组
- */
-function buildForwardNodes(messages) {
-    return messages.map(msg => {
-        const userId = String(msg.user_id || msg.uin || '10000')
-        const nickname = msg.nickname || msg.name || userId
-        const content = msg.message || msg.content || ''
-
-        // 解析富文本内容
-        const parsedContent = parseRichContent(content)
-
-        return {
-            type: 'node',
-            data: {
-                user_id: userId,
-                nickname: nickname,
-                content: parsedContent
-            }
-        }
-    })
-}
-
-/**
  * 转发消息完整数据提取工具
  * 用于从转发消息中提取 pb/pbelem/msgrecord 等底层数据
  */
@@ -3746,9 +2678,9 @@ export const forwardDataTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
+                const api = StandardBotApi.fromContext(ctx)
 
-                if (!bot) {
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
@@ -3756,7 +2688,7 @@ export const forwardDataTools = [
                 const parseResult = await ForwardMessageParser.parse(e, args.id, {
                     extractProto: args.include_proto !== false,
                     extractSerialized: args.include_serialized !== false,
-                    maxDepth: args.max_depth || 10
+                    maxDepth: clampDeepParseDepth(args.max_depth, 10)
                 })
 
                 if (!parseResult.success) {
@@ -3887,7 +2819,7 @@ export const forwardDataTools = [
             },
             required: ['serialized']
         },
-        handler: async (args, ctx) => {
+        handler: async args => {
             try {
                 const buffer = Buffer.from(args.serialized, 'base64')
 
@@ -3981,9 +2913,9 @@ export const forwardDataTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
+                const api = StandardBotApi.fromContext(ctx)
 
-                if (!bot) {
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
@@ -3991,15 +2923,11 @@ export const forwardDataTools = [
                 let source = 'unknown'
 
                 if (args.message_id) {
-                    // 通过消息ID获取
-                    if (bot.getMsg) {
-                        msgData = await bot.getMsg(args.message_id)
-                        source = 'bot.getMsg'
-                    } else if (bot.sendApi) {
-                        const result = await bot.sendApi('get_msg', { message_id: args.message_id })
-                        msgData = result?.data || result
-                        source = 'sendApi.get_msg'
-                    }
+                    msgData = await api.getMessage(args.message_id, {
+                        groupId: e?.group_id,
+                        userId: e?.user_id
+                    })
+                    source = 'standard.getMessage'
                 } else if (e) {
                     // 从当前事件提取
                     msgData = e

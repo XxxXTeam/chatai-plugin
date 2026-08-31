@@ -7,15 +7,23 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { detectFramework as getBotFramework, isMaster as checkIsMaster } from '../utils/platformAdapter.js'
+import {
+    detectStandardAdapter,
+    StandardBotApi,
+    StandardFileApi,
+    StandardMessage,
+    StandardRawApi
+} from '../core/platform/index.js'
 import config from '../../config/config.js'
+import { getConfiguredCustomTools } from '../services/tools/CustomToolService.js'
+import { MCP_TOOL_METADATA_FIELDS, copyMcpDefinitionMetadata } from './McpProtocol.js'
 import {
     validateParams,
     paramError,
     getBotPermission,
     getGroupMemberRoleFromBot,
     isToolResultError,
-    permissionDeniedError,
-    toolDisabledError
+    permissionDeniedError
 } from './tools/helpers.js'
 
 // 懒加载统计服务
@@ -78,7 +86,13 @@ export const DEFAULT_DANGEROUS_TOOLS = [
     'move_file',
     'copy_file',
     'create_directory',
-    'execute_command'
+    'execute_command',
+    'reload_skills',
+    'unload_skill',
+    'create_custom_tool',
+    'update_custom_tool',
+    'invoke_custom_tool',
+    'delete_custom_tool'
 ]
 
 /**
@@ -111,33 +125,14 @@ export function resolveDangerousTools(builtinConfig = {}) {
 /**
  * 检测Bot适配器类型
  * @param {Object} bot - Bot实例
- * @returns {{ adapter: 'icqq'|'napcat'|'onebot'|'unknown', isNT: boolean, canAiVoice: boolean }}
+ * @returns {{ adapter: 'qqbot'|'icqq'|'napcat'|'onebot'|'go-cqhttp'|'lagrange'|'standard'|'unknown', isNT: boolean, canAiVoice: boolean }}
  */
-function detectAdapter(bot) {
+export function detectAdapter(bot) {
     if (!bot) return { adapter: 'unknown', isNT: false, canAiVoice: false }
-    const hasIcqqFeatures = !!(bot.pickGroup && bot.pickFriend && bot.fl && bot.gl)
-    const hasNT = typeof bot.sendOidbSvcTrpcTcp === 'function'
-
-    if (hasIcqqFeatures) {
-        logger.debug(`[detectAdapter] icqq检测: hasIcqqFeatures=${hasIcqqFeatures}, hasNT=${hasNT}`)
-        return { adapter: 'icqq', isNT: hasNT, canAiVoice: hasNT }
-    }
-
-    // OneBot/NapCat 检测
-    if (bot.sendApi) {
-        const isNapCat = !!(
-            bot.adapter?.name?.toLowerCase?.()?.includes?.('napcat') ||
-            bot.config?.protocol === 'napcat' ||
-            bot.version?.app_name?.toLowerCase?.()?.includes?.('napcat')
-        )
-        if (isNapCat) {
-            return { adapter: 'napcat', isNT: true, canAiVoice: true }
-        }
-        // 其他OneBot实现可能也支持AI声聊
-        return { adapter: 'onebot', isNT: false, canAiVoice: false }
-    }
-
-    return { adapter: 'unknown', isNT: false, canAiVoice: false }
+    const adapter = detectStandardAdapter(bot)
+    const capabilities = new StandardRawApi(new StandardBotApi({ bot })).capabilities()
+    const isNT = capabilities.sendOidbSvcTrpcTcp
+    return { adapter, isNT, canAiVoice: isNT || adapter === 'napcat' }
 }
 
 const adapterCache = new Map()
@@ -154,9 +149,19 @@ class ToolContext {
         this._isMaster = false
     }
 
-    setContext(ctx) {
-        if (ctx.bot) this.bot = ctx.bot
-        if (ctx.event) this.event = ctx.event
+    setContext(ctx = {}) {
+        if (ctx === null || typeof ctx !== 'object') ctx = { event: null, bot: null }
+        const hasBot = Object.prototype.hasOwnProperty.call(ctx, 'bot')
+        const hasEvent = Object.prototype.hasOwnProperty.call(ctx, 'event')
+        if (hasBot) {
+            this.bot = ctx.bot || null
+        } else if (hasEvent) {
+            this.bot = ctx.event?.bot || null
+        } else {
+            this.bot = null
+        }
+        // 每次设置都替换完整请求上下文；缺失 event 不能保留上一请求的事件。
+        this.event = hasEvent ? ctx.event || null : null
         if (ctx.adapterInfo) {
             this._adapterInfo = ctx.adapterInfo
         } else if (ctx.adapter) {
@@ -182,19 +187,30 @@ class ToolContext {
         if (this.bot) return this.bot
 
         const framework = getBotFramework()
-        if (framework === 'trss' && botId && Bot.bots?.get) {
-            return Bot.bots.get(botId) || Bot
+        const botRegistry = global.Bot || null
+        if (framework === 'trss' && botId && botRegistry?.bots?.get) {
+            return botRegistry.bots.get(botId) || botRegistry
         }
-        return Bot
+        return botRegistry
     }
 
     getEvent() {
         return this.event
     }
 
+    /** @returns {StandardBotApi} 当前会话的标准平台接口 */
+    getApi() {
+        return new StandardBotApi({ bot: this.getBot(), event: this.event, adapter: this.getAdapter() })
+    }
+
+    /** @returns {typeof StandardMessage} Yunzai 标准消息段工厂 */
+    get message() {
+        return StandardMessage
+    }
+
     /**
      * 获取当前Bot的适配器信息
-     * @returns {{ adapter: 'icqq'|'napcat'|'onebot'|'unknown', isNT: boolean, canAiVoice: boolean }}
+     * @returns {{ adapter: 'qqbot'|'icqq'|'napcat'|'onebot'|'standard'|'unknown', isNT: boolean, canAiVoice: boolean }}
      */
     getAdapter() {
         if (this._adapterInfo) return this._adapterInfo
@@ -216,6 +232,10 @@ class ToolContext {
     }
     isIcqq() {
         return this.getAdapter().adapter === 'icqq'
+    }
+
+    isQQBot() {
+        return this.getAdapter().adapter === 'qqbot'
     }
     isNapCat() {
         return this.getAdapter().adapter === 'napcat'
@@ -343,6 +363,12 @@ export class BuiltinMcpServer {
         this.initPromise = null
         this.fileWatchers = [] // 文件监听器列表
         this.watcherEnabled = false
+        /** @type {NodeJS.Timeout|null} fs.watch 不可用时的轮询计时器 */
+        this.pollingWatcherTimer = null
+        /** @type {Map<string, {path:string,name:string}>} 轮询监听目录 */
+        this.pollingWatchDirs = new Map()
+        /** @type {Map<string, string>} 目录文件快照 */
+        this.pollingWatchSnapshots = new Map()
         this.reloadDebounceTimer = null
     }
 
@@ -655,11 +681,61 @@ export class BuiltinMcpServer {
     }
 
     /**
+     * 计算工具目录快照。文件名、大小和 mtime 任一变化都会触发重载。
+     * @param {string} directory - 工具目录
+     * @returns {string} 稳定快照
+     */
+    getToolDirectorySnapshot(directory) {
+        try {
+            if (!fs.existsSync(directory)) return 'missing'
+            return fs
+                .readdirSync(directory, { withFileTypes: true })
+                .filter(entry => entry.isFile() && entry.name.endsWith('.js'))
+                .map(entry => {
+                    const stat = fs.statSync(path.join(directory, entry.name))
+                    return `${entry.name}:${stat.size}:${stat.mtimeMs}`
+                })
+                .sort()
+                .join('|')
+        } catch (error) {
+            return `error:${error.code || error.message}`
+        }
+    }
+
+    /**
+     * 启动低频目录轮询兜底。计时器 unref，不阻止进程退出。
+     * @param {Array<{path:string,name:string}>} watchDirs - 需要轮询的目录
+     * @param {(dirName:string,filename:string) => Promise<void>} handleFileChange - 统一变更处理器
+     * @returns {void}
+     */
+    startPollingWatcher(watchDirs, handleFileChange) {
+        for (const dir of watchDirs) {
+            if (!dir?.path || this.pollingWatchDirs.has(dir.path)) continue
+            this.pollingWatchDirs.set(dir.path, dir)
+            this.pollingWatchSnapshots.set(dir.path, this.getToolDirectorySnapshot(dir.path))
+            logger.warn(`[BuiltinMCP] ${dir.name} 改用目录轮询监听: ${dir.path}`)
+        }
+        if (this.pollingWatchDirs.size === 0 || this.pollingWatcherTimer) return
+
+        this.pollingWatcherTimer = setInterval(() => {
+            for (const dir of this.pollingWatchDirs.values()) {
+                const previous = this.pollingWatchSnapshots.get(dir.path)
+                const current = this.getToolDirectorySnapshot(dir.path)
+                if (current === previous) continue
+                this.pollingWatchSnapshots.set(dir.path, current)
+                void handleFileChange(dir.name, 'poll-change.js')
+            }
+        }, 2000)
+        this.pollingWatcherTimer.unref?.()
+        this.watcherEnabled = true
+    }
+
+    /**
      * 启动文件监听器，自动检测工具文件变化并热重载
      * 同时监听内置工具目录和自定义JS工具目录
      */
     async startFileWatcher() {
-        if (this.fileWatchers.length > 0) {
+        if (this.fileWatchers.length > 0 || this.pollingWatcherTimer) {
             logger.debug('[BuiltinMCP] 文件监听器已在运行')
             return
         }
@@ -684,8 +760,16 @@ export class BuiltinMcpServer {
                 try {
                     // 动态导入 mcpManager 避免循环依赖
                     const { mcpManager } = await import('./McpManager.js')
-                    await mcpManager.reinit()
-                    logger.info(`[BuiltinMCP] 完全重载完成`)
+                    if (dirName === 'JS工具目录') {
+                        await mcpManager.reloadJsTools()
+                        const loader = global.chatAiSkillsLoader
+                        if (loader?.initialized && typeof loader.loadAll === 'function') {
+                            await loader.loadAll()
+                        }
+                    } else {
+                        await mcpManager.refreshBuiltinTools()
+                    }
+                    logger.info(`[BuiltinMCP] 工具重载完成`)
                 } catch (err) {
                     logger.error('[BuiltinMCP] 完全重载失败:', err.message)
                 }
@@ -721,7 +805,8 @@ export class BuiltinMcpServer {
                         logger.debug(`[BuiltinMCP] 关闭出错的监听器失败: ${closeErr.message}`)
                     }
                     this.fileWatchers = this.fileWatchers.filter(item => item.watcher !== watcher)
-                    this.watcherEnabled = this.fileWatchers.length > 0
+                    this.startPollingWatcher([dir], handleFileChange)
+                    this.watcherEnabled = this.fileWatchers.length > 0 || Boolean(this.pollingWatcherTimer)
                 })
 
                 this.fileWatchers.push({ watcher, path: dir.path, name: dir.name })
@@ -730,7 +815,13 @@ export class BuiltinMcpServer {
 
             this.watcherEnabled = this.fileWatchers.length > 0
         } catch (err) {
-            logger.error('[BuiltinMCP] 启动文件监听器失败:', err.message)
+            const watchedPaths = new Set(this.fileWatchers.map(item => item.path))
+            this.startPollingWatcher(
+                watchDirs.filter(dir => !watchedPaths.has(dir.path)),
+                handleFileChange
+            )
+            this.watcherEnabled = this.fileWatchers.length > 0 || Boolean(this.pollingWatcherTimer)
+            logger.warn(`[BuiltinMCP] fs.watch 启动失败，已启用轮询兜底: ${err.message}`)
         }
     }
 
@@ -748,9 +839,15 @@ export class BuiltinMcpServer {
                 }
             }
             this.fileWatchers = []
-            this.watcherEnabled = false
             logger.debug('[BuiltinMCP] 所有文件监听器已停止')
         }
+        if (this.pollingWatcherTimer) {
+            clearInterval(this.pollingWatcherTimer)
+            this.pollingWatcherTimer = null
+        }
+        this.pollingWatchDirs.clear()
+        this.pollingWatchSnapshots.clear()
+        this.watcherEnabled = false
         if (this.reloadDebounceTimer) {
             clearTimeout(this.reloadDebounceTimer)
             this.reloadDebounceTimer = null
@@ -764,8 +861,12 @@ export class BuiltinMcpServer {
     getWatcherStatus() {
         return {
             enabled: this.watcherEnabled,
-            watchPaths: this.fileWatchers.map(w => ({ path: w.path, name: w.name })),
-            watchCount: this.fileWatchers.length,
+            watchPaths: [
+                ...this.fileWatchers.map(w => ({ path: w.path, name: w.name, mode: 'native' })),
+                ...Array.from(this.pollingWatchDirs.values(), dir => ({ ...dir, mode: 'polling' }))
+            ],
+            watchCount: this.fileWatchers.length + this.pollingWatchDirs.size,
+            pollingFallback: Boolean(this.pollingWatcherTimer),
             jsToolsCount: this.jsTools.size,
             modularToolsCount: this.modularTools.length
         }
@@ -775,13 +876,14 @@ export class BuiltinMcpServer {
      * 获取自定义工具列表
      */
     getCustomTools() {
-        const customTools = config.get('customTools') || []
+        const customTools = getConfiguredCustomTools()
         return customTools.map(t => ({
             name: t.name,
             description: t.description,
             inputSchema: t.parameters || { type: 'object', properties: {} },
             isCustom: true,
-            handler: t.handler
+            handler: t.handler,
+            ...copyMcpDefinitionMetadata(t, MCP_TOOL_METADATA_FIELDS)
         }))
     }
 
@@ -809,7 +911,8 @@ export class BuiltinMcpServer {
                 source: 'builtin',
                 ...(t.dangerous !== undefined ? { dangerous: t.dangerous } : {}),
                 ...(t.requireMaster !== undefined ? { requireMaster: t.requireMaster } : {}),
-                ...(t.requiredPermission !== undefined ? { requiredPermission: t.requiredPermission } : {})
+                ...(t.requiredPermission !== undefined ? { requiredPermission: t.requiredPermission } : {}),
+                ...copyMcpDefinitionMetadata(t, MCP_TOOL_METADATA_FIELDS)
             }))
         }
         const customTools = this.getCustomTools()
@@ -818,7 +921,8 @@ export class BuiltinMcpServer {
                 name: ct.name,
                 description: ct.description,
                 inputSchema: ct.inputSchema,
-                isCustom: true
+                isCustom: true,
+                ...copyMcpDefinitionMetadata(ct, MCP_TOOL_METADATA_FIELDS)
             })
         }
         for (const [name, tool] of this.jsTools) {
@@ -826,9 +930,17 @@ export class BuiltinMcpServer {
             tools.push({
                 name: name,
                 description: tool.function?.description || tool.description || '',
-                inputSchema: tool.function?.parameters || tool.parameters || { type: 'object', properties: {} },
+                inputSchema: tool.inputSchema ||
+                    tool.function?.parameters ||
+                    tool.parameters || { type: 'object', properties: {} },
                 isCustom: true,
-                isJsTool: true
+                isJsTool: true,
+                dangerous: tool.dangerous === true,
+                requireMaster: tool.requireMaster === true,
+                requiredPermission: tool.requiredPermission,
+                requirePermission: tool.requirePermission,
+                permissionRequired: tool.permissionRequired,
+                ...copyMcpDefinitionMetadata(tool, MCP_TOOL_METADATA_FIELDS)
             })
         }
 
@@ -921,12 +1033,19 @@ export class BuiltinMcpServer {
         const userId = event?.user_id?.toString()
         const groupId = event?.group_id?.toString()
         const conversationId = userId ? contextManager.getConversationId(userId, groupId) : null
+        const platformApi = StandardBotApi.fromContext(ctx)
 
         return {
             Redis: redisClient,
             config: config,
             logger: logger,
             Bot: ctx?.getBot?.() || global.Bot,
+            platform: {
+                api: platformApi,
+                message: StandardMessage,
+                files: new StandardFileApi(platformApi),
+                raw: new StandardRawApi(platformApi)
+            },
 
             // 当前会话上下文
             context: {
@@ -934,6 +1053,8 @@ export class BuiltinMcpServer {
                 groupId,
                 conversationId,
                 event,
+                getApi: () => platformApi,
+                message: StandardMessage,
                 isGroup: !!groupId,
                 isPrivate: !groupId && !!userId
             },
@@ -1010,15 +1131,11 @@ export class BuiltinMcpServer {
             },
             utils: {
                 sendGroupMsg: async (groupId, msg) => {
-                    const bot = ctx?.getBot?.() || global.Bot
-                    if (!bot) throw new Error('Bot not available')
-                    return bot.pickGroup(parseInt(groupId)).sendMsg(msg)
+                    return (await StandardBotApi.fromContext(ctx).sendGroup(groupId, msg)).result
                 },
                 // 发送私聊消息
                 sendPrivateMsg: async (userId, msg) => {
-                    const bot = ctx?.getBot?.() || global.Bot
-                    if (!bot) throw new Error('Bot not available')
-                    return bot.pickFriend(parseInt(userId)).sendMsg(msg)
+                    return (await StandardBotApi.fromContext(ctx).sendPrivate(userId, msg)).result
                 },
                 // HTTP 请求（默认带超时，自定义工具可通过 options.signal 自行接管）
                 http: {
@@ -1116,9 +1233,49 @@ export class BuiltinMcpServer {
      * @param {Object} args - 工具参数
      * @param {Object} requestContext - 请求级上下文
      */
-    async callTool(name, args, requestContext = null) {
+    async callTool(name, args, requestContext = null, callOptions = {}) {
         // 创建请求级上下文包装器，优先使用传入的上下文
         const ctx = this.createRequestContext(requestContext)
+
+        const startTime = Date.now()
+        const event = ctx.getEvent?.()
+        const userId = event?.user_id?.toString()
+        const groupId = event?.group_id?.toString() || args?.group_id?.toString()
+
+        const recordStats = async (result, error = null) => {
+            if (callOptions.skipStats === true) return
+            try {
+                const statsService = await getStatsService()
+                if (statsService) {
+                    await statsService.recordToolCallFull({
+                        toolName: name,
+                        request: args,
+                        response: result,
+                        success: !error && !result?.isError && result?.success !== false,
+                        error,
+                        duration: Date.now() - startTime,
+                        timestamp: startTime,
+                        attemptId: callOptions.attemptId,
+                        userId,
+                        groupId,
+                        source: 'builtin_mcp'
+                    })
+                }
+            } catch (statsError) {
+                logger.debug('[BuiltinMCP] 记录统计失败:', statsError.message)
+            }
+        }
+
+        const recordAndReturn = async (result, errorMessage) => {
+            const error = errorMessage ? new Error(errorMessage) : null
+            await recordStats(result, error)
+            return result
+        }
+        const formatRecordAndReturn = async (result, errorMessage) => {
+            const formatted = this.formatResult(result)
+            await recordStats(formatted, errorMessage ? new Error(errorMessage) : null)
+            return formatted
+        }
 
         // 检查危险工具拦截
         // 兼容多种配置路径（面板/手动配置），并提供默认值
@@ -1153,37 +1310,56 @@ export class BuiltinMcpServer {
                 []
             ) || []
 
+        const runtimeTool =
+            this.jsTools.get(name) ||
+            this.modularTools.find(tool => tool.name === name) ||
+            this.getCustomTools().find(tool => tool.name === name)
+        const runtimeRequiresMaster = runtimeTool?.requireMaster === true
+        const runtimeIsMaster = (typeof ctx.isMaster === 'function' ? ctx.isMaster() : ctx.isMaster) === true
+
         // 检查是否是被禁用的工具
         if (disabledTools.includes(name)) {
             logger.warn(`[BuiltinMCP] 工具 ${name} 已被禁用，拒绝执行`)
-            return {
-                content: [{ type: 'text', text: `工具 "${name}" 已被管理员禁用，无法执行` }],
-                isError: true
-            }
+            return await recordAndReturn(
+                {
+                    content: [{ type: 'text', text: `工具 "${name}" 已被管理员禁用，无法执行` }],
+                    isError: true,
+                    toolDisabled: true
+                },
+                '工具已被管理员禁用'
+            )
+        }
+
+        if (runtimeRequiresMaster && !runtimeIsMaster) {
+            logger.warn(`[BuiltinMCP] 主人专用工具 ${name} 被非主人调用`)
+            return await recordAndReturn(
+                {
+                    content: [{ type: 'text', text: `工具 "${name}" 仅允许主人调用` }],
+                    isError: true,
+                    permissionDenied: true
+                },
+                '工具仅允许主人调用'
+            )
         }
 
         // 检查是否是危险工具且未允许危险操作
-        if (dangerousTools.includes(name) && !allowDangerous) {
+        if ((dangerousTools.includes(name) || runtimeTool?.dangerous === true) && !allowDangerous) {
             logger.warn(`[BuiltinMCP] 危险工具 ${name} 被拦截，需要在设置中开启"允许危险操作"`)
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: `危险工具 "${name}" 已被拦截。此工具可能执行踢人、禁言、撤回等危险操作。如需使用，请在管理面板的"工具管理-高级设置"中开启"允许危险操作"选项。`
-                    }
-                ],
-                isError: true,
-                toolDisabled: true
-            }
+            return await recordAndReturn(
+                {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `危险工具 "${name}" 已被拦截。此工具可能执行踢人、禁言、撤回等危险操作。如需使用，请在管理面板的"工具管理-高级设置"中开启"允许危险操作"选项。`
+                        }
+                    ],
+                    isError: true,
+                    toolDisabled: true
+                },
+                '危险工具未启用'
+            )
         }
 
-        // 记录开始时间用于统计
-        const startTime = Date.now()
-
-        // 获取用户信息用于统计
-        const event = ctx.getEvent?.()
-        const userId = event?.user_id?.toString()
-        const groupId = event?.group_id?.toString() || args?.group_id?.toString()
         const adminRequiredTools = [
             'kick_member',
             'mute_member',
@@ -1209,13 +1385,19 @@ export class BuiltinMcpServer {
                 }
                 if (ownerRequiredTools.includes(name) && !botPerm.isOwner) {
                     logger.warn(`[BuiltinMCP] 工具 ${name} 需要群主权限，当前Bot权限: ${botPerm.role}`)
-                    return this.formatResult(permissionDeniedError(name, '群主', botPerm.role || 'member'))
+                    return await formatRecordAndReturn(
+                        permissionDeniedError(name, '群主', botPerm.role || 'member'),
+                        'Bot 不具备群主权限'
+                    )
                 }
 
                 // 检查是否需要管理员权限
                 if (adminRequiredTools.includes(name) && !botPerm.isAdmin) {
                     logger.warn(`[BuiltinMCP] 工具 ${name} 需要管理员权限，当前Bot权限: ${botPerm.role}`)
-                    return this.formatResult(permissionDeniedError(name, '管理员', botPerm.role || 'member'))
+                    return await formatRecordAndReturn(
+                        permissionDeniedError(name, '管理员', botPerm.role || 'member'),
+                        'Bot 不具备管理员权限'
+                    )
                 }
 
                 // 检查目标用户权限（踢人/禁言不能对权限相同或更高的人操作）
@@ -1236,30 +1418,39 @@ export class BuiltinMcpServer {
                         if (targetPerm === 'unknown') {
                             // 查不到目标身份时不能按"普通成员"处理，否则群主/管理员保护会被直接绕过
                             logger.warn(`[BuiltinMCP] 无法确认目标(${targetId})在群${groupId}的身份，已拒绝 ${name}`)
-                            return this.formatResult({
-                                success: false,
-                                error: `无法确认目标用户(${targetId})的群内身份，出于安全考虑拒绝执行此操作（该用户可能不在群内，或协议端未返回成员信息）`,
-                                isError: true,
-                                permissionDenied: true
-                            })
+                            return await formatRecordAndReturn(
+                                {
+                                    success: false,
+                                    error: `无法确认目标用户(${targetId})的群内身份，出于安全考虑拒绝执行此操作（该用户可能不在群内，或协议端未返回成员信息）`,
+                                    isError: true,
+                                    permissionDenied: true
+                                },
+                                '无法确认目标用户群内身份'
+                            )
                         }
                         if (targetPerm === 'owner') {
                             logger.warn(`[BuiltinMCP] 不能对群主(${targetId})执行 ${name}`)
-                            return this.formatResult({
-                                success: false,
-                                error: `无法对群主(${targetId})执行此操作，群主权限最高`,
-                                isError: true,
-                                permissionDenied: true
-                            })
+                            return await formatRecordAndReturn(
+                                {
+                                    success: false,
+                                    error: `无法对群主(${targetId})执行此操作，群主权限最高`,
+                                    isError: true,
+                                    permissionDenied: true
+                                },
+                                '不能对群主执行此操作'
+                            )
                         }
                         if (targetPerm === 'admin' && !botPerm.isOwner) {
                             logger.warn(`[BuiltinMCP] 管理员不能对其他管理员(${targetId})执行 ${name}`)
-                            return this.formatResult({
-                                success: false,
-                                error: `管理员无法对其他管理员(${targetId})执行此操作，只有群主可以`,
-                                isError: true,
-                                permissionDenied: true
-                            })
+                            return await formatRecordAndReturn(
+                                {
+                                    success: false,
+                                    error: `管理员无法对其他管理员(${targetId})执行此操作，只有群主可以`,
+                                    isError: true,
+                                    permissionDenied: true
+                                },
+                                '管理员不能对其他管理员执行此操作'
+                            )
                         }
                     }
                 }
@@ -1270,34 +1461,15 @@ export class BuiltinMcpServer {
                  * 原实现只记一条 debug 就继续往下执行，等于在"查不到权限"时无条件放行。
                  */
                 logger.warn(`[BuiltinMCP] 工具 ${name} 的Bot权限检查失败，已拒绝执行: ${e.message}`)
-                return this.formatResult({
-                    success: false,
-                    error: `无法确认Bot在群${groupId}的权限（${e.message}），出于安全考虑拒绝执行"${name}"`,
-                    isError: true,
-                    permissionDenied: true
-                })
-            }
-        }
-
-        // 统计记录辅助函数
-        const recordStats = async (result, error = null) => {
-            try {
-                const statsService = await getStatsService()
-                if (statsService) {
-                    await statsService.recordToolCallFull({
-                        toolName: name,
-                        request: args,
-                        response: error ? { error: error.message } : result,
-                        success: !error && !result?.isError,
-                        error: error,
-                        duration: Date.now() - startTime,
-                        userId,
-                        groupId,
-                        source: 'builtin_mcp'
-                    })
-                }
-            } catch (e) {
-                logger.debug('[BuiltinMCP] 记录统计失败:', e.message)
+                return await formatRecordAndReturn(
+                    {
+                        success: false,
+                        error: `无法确认Bot在群${groupId}的权限（${e.message}），出于安全考虑拒绝执行"${name}"`,
+                        isError: true,
+                        permissionDenied: true
+                    },
+                    `Bot 权限检查失败: ${e.message}`
+                )
             }
         }
 
@@ -1320,15 +1492,22 @@ export class BuiltinMcpServer {
             try {
                 // 设置上下文供工具使用
                 const { asyncLocalStorage } = await import('../core/utils/helpers.js')
+                const platformApi = StandardBotApi.fromContext(ctx)
                 const chaiteContext = {
                     getEvent: () => ctx.getEvent?.(),
                     getBot: () => ctx.getBot?.(),
                     getAdapter: () => ctx.getAdapter?.() || detectAdapter(ctx.getBot?.()),
                     isIcqq: () => ctx.isIcqq?.() || chaiteContext.getAdapter().adapter === 'icqq',
+                    isQQBot: () => ctx.isQQBot?.() || chaiteContext.getAdapter().adapter === 'qqbot',
                     isNapCat: () => ctx.isNapCat?.() || chaiteContext.getAdapter().adapter === 'napcat',
                     isNT: () => ctx.isNT?.() || chaiteContext.getAdapter().isNT,
+                    isMaster: () => (typeof ctx.isMaster === 'function' ? ctx.isMaster() : ctx.isMaster === true),
+                    getApi: () => platformApi,
+                    message: StandardMessage,
                     event: ctx.getEvent?.(),
-                    bot: ctx.getBot?.()
+                    bot: ctx.getBot?.(),
+                    inputResponses: ctx.inputResponses,
+                    requestState: ctx.requestState
                 }
 
                 // 在 asyncLocalStorage 中运行，以便工具可以获取上下文
@@ -1418,15 +1597,25 @@ export class BuiltinMcpServer {
 
     /**
      * 创建请求级上下文包装器
-     * @param {Object} requestContext - 传入的请求上下文 {event, bot}
+     * @param {Object} requestContext - 传入的请求上下文 {event, bot, inputResponses, requestState}
      * @returns {Object} 上下文包装器
      */
-    createRequestContext(requestContext) {
+    createRequestContext(requestContext = undefined) {
         // Bot权限缓存（避免重复查询）
         let _botPermissionCache = null
 
+        /*
+         * null 是调用方明确声明的“无请求上下文”，不能回退到全局 toolContext。
+         * 全局上下文可能还保留上一条聊天事件，继续使用会把用户、群和权限串到本次调用。
+         * 未传参数（undefined）仍保留旧调用方依赖的全局上下文兼容行为。
+         */
+        if (requestContext === null) {
+            requestContext = { event: null, bot: global.Bot || null, isMaster: false }
+        }
+
         // 如果直接传入了 isMaster（如管理面板测试），创建简化上下文
         if (requestContext && requestContext.isMaster !== undefined && !requestContext.event) {
+            const contextBot = requestContext.bot || global.Bot
             const adapterInfo =
                 requestContext.adapterInfo ||
                 (requestContext.adapter
@@ -1437,19 +1626,24 @@ export class BuiltinMcpServer {
                       }
                     : null)
             return {
-                getBot: () => global.Bot,
+                getBot: () => contextBot,
                 getEvent: () => null,
+                getApi: () => new StandardBotApi({ bot: contextBot, adapter: adapterInfo }),
+                message: StandardMessage,
                 getAdapter: () => adapterInfo || { adapter: 'unknown', isNT: false, canAiVoice: false },
                 isIcqq: () => adapterInfo?.adapter === 'icqq',
+                isQQBot: () => adapterInfo?.adapter === 'qqbot',
                 isNapCat: () => adapterInfo?.adapter === 'napcat',
                 isNT: () => adapterInfo?.isNT || false,
-                bot: global.Bot,
+                bot: contextBot,
                 event: null,
                 isMaster: requestContext.isMaster,
+                inputResponses: requestContext.inputResponses,
+                requestState: requestContext.requestState,
                 isAdminTest: requestContext.isAdminTest || false,
                 getBotPermission: async groupId => {
                     if (!groupId) return { role: 'unknown', isAdmin: false, isOwner: false, inGroup: false }
-                    return await getBotPermission(global.Bot, groupId)
+                    return await getBotPermission(contextBot, groupId)
                 },
                 registerCallback: (id, cb) => toolContext.registerCallback(id, cb),
                 executeCallback: (id, data) => toolContext.executeCallback(id, data)
@@ -1460,10 +1654,11 @@ export class BuiltinMcpServer {
                 if (requestContext.bot) return requestContext.bot
                 if (requestContext.event?.bot) return requestContext.event.bot
                 const framework = getBotFramework()
-                if (framework === 'trss' && botId && Bot.bots?.get) {
-                    return Bot.bots.get(botId) || Bot
+                const botRegistry = global.Bot || null
+                if (framework === 'trss' && botId && botRegistry?.bots?.get) {
+                    return botRegistry.bots.get(botId) || botRegistry
                 }
-                return Bot
+                return botRegistry
             }
             let _adapterInfo =
                 requestContext.adapterInfo ||
@@ -1505,13 +1700,18 @@ export class BuiltinMcpServer {
             return {
                 getBot,
                 getEvent: () => requestContext.event,
+                getApi: () => new StandardBotApi({ bot: getBot(), event: requestContext.event, adapter: getAdapter() }),
+                message: StandardMessage,
                 getAdapter,
                 isIcqq: () => getAdapter().adapter === 'icqq',
+                isQQBot: () => getAdapter().adapter === 'qqbot',
                 isNapCat: () => getAdapter().adapter === 'napcat',
                 isNT: () => getAdapter().isNT,
                 bot: getBot(),
                 event: requestContext.event,
                 isMaster: isMasterUser,
+                inputResponses: requestContext.inputResponses,
+                requestState: requestContext.requestState,
                 groupId,
                 userId,
                 getBotPermission: getBotPerm,

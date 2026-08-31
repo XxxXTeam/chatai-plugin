@@ -191,7 +191,7 @@ export class ToolGroupManager {
         const { includeDisabled = false, includeMcp = true } = options
         const summary = []
 
-        for (const [index, group] of this.groups) {
+        for (const group of this.groups.values()) {
             if (!includeDisabled && !group.enabled) continue
             if (!includeMcp && group.source === 'mcp') continue
             if (group.requiredPermission && this.hasPermissionContext(options)) {
@@ -580,7 +580,7 @@ export class ToolGroupManager {
     getAllGroupIndexes(options = {}) {
         const { includeMcp = true } = options
         return Array.from(this.groups.entries())
-            .filter(([_, g]) => {
+            .filter(([, g]) => {
                 if (!g.enabled) return false
                 if (!includeMcp && g.source === 'mcp') return false
                 if (g.requiredPermission && this.hasPermissionContext(options)) {
@@ -589,7 +589,7 @@ export class ToolGroupManager {
                 }
                 return true
             })
-            .map(([idx, _]) => idx)
+            .map(([idx]) => idx)
     }
 
     canUseGroupIndex(index, options = {}) {

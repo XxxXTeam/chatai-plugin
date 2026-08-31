@@ -3,8 +3,8 @@
  * 对话上下文、群聊上下文等
  */
 
-import { MessageApi } from '../../utils/messageParser.js'
 import { chatLogger as logger } from '../../core/utils/logger.js'
+import { StandardBotApi } from '../../core/platform/index.js'
 
 /** 引用链最大递归深度上限，防止 max_depth 传入超大值导致大量协议端调用 */
 const MAX_REPLY_CHAIN_DEPTH = 10
@@ -24,7 +24,7 @@ export const contextTools = [
                     return { success: false, error: '没有可用的会话上下文' }
                 }
 
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
 
                 return {
                     success: true,
@@ -36,7 +36,7 @@ export const contextTools = [
                         card: e.sender?.card || '',
                         role: e.sender?.role || 'member'
                     },
-                    bot_id: bot?.uin || e.self_id,
+                    bot_id: api.getBotInfo().user_id || e.self_id,
                     message_id: e.message_id,
                     time: e.time
                 }
@@ -168,7 +168,7 @@ export const contextTools = [
                     }
                 }
 
-                const bot = e.bot || global.Bot
+                const api = StandardBotApi.fromContext(ctx)
                 const includeChain = args.include_chain !== false
                 const maxDepth = Math.min(Math.max(Number(args.max_depth) || 3, 1), MAX_REPLY_CHAIN_DEPTH)
 
@@ -183,25 +183,23 @@ export const contextTools = [
                  * @returns {Promise<Object|null>} 消息对象；全部途径失败时返回 null
                  */
                 const getMessage = async (messageId, seq, { allowEventReply = false } = {}) => {
-                    const apiMsg = await MessageApi.getMsg(e, messageId || seq, { useSeq: !messageId, seq })
-                    if (apiMsg) return apiMsg
-                    if (bot?.getMsg && messageId) {
+                    if (messageId) {
                         try {
-                            return await bot.getMsg(messageId)
+                            const message = await api.getMessage(messageId, { groupId: e.group_id, userId: e.user_id })
+                            if (message) return message
                         } catch {}
                     }
-                    if (bot?.sendApi && messageId) {
+                    if (e.group_id && seq) {
                         try {
-                            const result = await bot.sendApi('get_msg', { message_id: messageId })
-                            if (result) return result?.data || result
-                        } catch {}
-                    }
-                    if (e.group?.getChatHistory && seq) {
-                        try {
-                            const history = await e.group.getChatHistory(seq, 20)
+                            const history = await api.getHistory({ groupId: e.group_id, sequence: seq, count: 20 })
                             // 只接受 seq 精确命中的结果：原先的 history[history.length - 1] 兜底
                             // 会把群里最近的一条无关消息当作"被引用的消息"返回
-                            const found = history?.find?.(m => Number(m.seq) === Number(seq))
+                            const found = history?.find?.(m => {
+                                const messageSequence = m.seq || m.message_seq || m.message_id
+                                return api.isQQBot
+                                    ? String(messageSequence) === String(seq)
+                                    : Number(messageSequence) === Number(seq)
+                            })
                             if (found) return found
                         } catch {}
                     }
@@ -353,7 +351,7 @@ export const contextTools = [
                     return { success: false, error: '没有可用的会话上下文' }
                 }
 
-                const botUin = e.bot?.uin || e.self_id
+                const botUin = StandardBotApi.fromContext(ctx).getBotInfo().user_id || e.self_id
                 const atList = []
                 for (const seg of e.message || []) {
                     if (seg.type === 'at') {

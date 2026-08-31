@@ -14,6 +14,7 @@ import {
 } from '../src/utils/eventAdapter.js'
 import { galgameService } from '../src/services/galgame/GalgameService.js'
 import { getAIResponse } from '../src/utils/common.js'
+import { StandardBotApi } from '../src/core/platform/index.js'
 
 const EMOJI_MAP = {
     // 经典QQ表情 (0-200)
@@ -199,9 +200,13 @@ function registerReactionListener() {
     setTimeout(() => {
         try {
             // 遍历所有 Bot 实例
-            const bots = Bot?.uin ? [Bot] : Bot?.bots ? Object.values(Bot.bots) : []
-            if (bots.length === 0 && global.Bot) {
-                bots.push(global.Bot)
+            const bots = globalThis.Bot?.uin
+                ? [globalThis.Bot]
+                : globalThis.Bot?.bots
+                  ? Object.values(globalThis.Bot.bots)
+                  : []
+            if (bots.length === 0 && globalThis.Bot) {
+                bots.push(globalThis.Bot)
             }
 
             for (const bot of bots) {
@@ -265,7 +270,7 @@ async function handleNapCatReactionEvent(e, bot) {
         }
 
         const botIds = getBotIds()
-        const selfId = e.self_id || bot?.uin || Bot?.uin
+        const selfId = e.self_id || bot?.uin || globalThis.Bot?.uin
 
         // 机器人自己的回应不处理
         if (userId === selfId || botIds.has(String(userId))) {
@@ -321,7 +326,7 @@ async function handleReactionEvent(e, bot) {
         }
 
         const botIds = getBotIds()
-        const selfId = e.self_id || bot?.uin || Bot?.uin
+        const selfId = e.self_id || bot?.uin || globalThis.Bot?.uin
 
         // 机器人自己的回应不处理
         if (userId === selfId || botIds.has(String(userId))) {
@@ -432,13 +437,21 @@ async function checkIfTargetBot(e, selfId, botIds, bot, targetId, messageId, gro
                 } catch {}
             }
 
-            const seq = Number(e.source?.seq || e.seq || 0)
+            const api = new StandardBotApi({ event: e, bot })
+            const rawSequence = e.source?.seq || e.source?.message_id || e.seq
+            const seq = api.isQQBot ? rawSequence : Number(rawSequence || 0)
             if (seq && bot?.pickGroup) {
                 try {
-                    const group = bot.pickGroup(parseInt(groupId))
+                    const group = bot.pickGroup(api.targetId(groupId))
                     if (group?.getChatHistory) {
                         const history = await group.getChatHistory(seq, 1)
-                        const msg = history?.find?.(item => Number(item.seq) === seq) || history?.[0]
+                        const msg =
+                            history?.find?.(item => {
+                                const messageSequence = item.seq || item.message_seq || item.message_id
+                                return api.isQQBot
+                                    ? String(messageSequence) === String(seq)
+                                    : Number(messageSequence) === Number(seq)
+                            }) || history?.[0]
                         if (msg) {
                             const senderId = msg.sender?.user_id || msg.user_id
                             return senderId === selfId || botIds.has(String(senderId))

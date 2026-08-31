@@ -3,7 +3,7 @@
  * 获取群信息、成员列表等
  */
 
-import { groupNoticeApi, getGroupMemberList } from './helpers.js'
+import { StandardBotApi } from '../../core/platform/index.js'
 
 export const groupTools = [
     {
@@ -17,45 +17,30 @@ export const groupTools = [
             required: ['group_id']
         },
         handler: async (args, ctx) => {
-            const bot = ctx.getBot()
-            const groupId = parseInt(args.group_id)
-
-            const groupInfo = bot.gl?.get(groupId)
-            if (groupInfo) {
-                return {
-                    success: true,
-                    group_id: groupId,
-                    group_name: groupInfo.group_name,
-                    member_count: groupInfo.member_count,
-                    max_member_count: groupInfo.max_member_count,
-                    owner_id: groupInfo.owner_id,
-                    admin_flag: groupInfo.admin_flag,
-                    avatar_url: `https://p.qlogo.cn/gh/${groupId}/${groupId}/640`,
-                    bot_in_group: true
-                }
-            }
-
+            const api = StandardBotApi.fromContext(ctx)
+            const groupId = api.targetId(args.group_id)
             try {
-                const group = bot.pickGroup(groupId)
-                const info = group.info || {}
+                const info = (await api.getGroupInfo(groupId)) || {}
                 if (info.group_name || info.member_count) {
                     return {
                         success: true,
                         group_id: groupId,
                         group_name: info.group_name || '未知',
                         member_count: info.member_count || null,
-                        avatar_url: `https://p.qlogo.cn/gh/${groupId}/${groupId}/640`,
-                        bot_in_group: false,
-                        note: '机器人不在此群内，信息可能不完整'
+                        max_member_count: info.max_member_count,
+                        owner_id: info.owner_id,
+                        admin_flag: info.admin_flag,
+                        avatar_url: api.groupAvatarUrl(groupId),
+                        bot_in_group: true
                     }
                 }
-            } catch (e) {}
+            } catch {}
 
             return {
                 success: false,
                 group_id: groupId,
                 error: '无法获取群信息',
-                avatar_url: `https://p.qlogo.cn/gh/${groupId}/${groupId}/640`
+                avatar_url: api.groupAvatarUrl(groupId)
             }
         }
     },
@@ -70,23 +55,19 @@ export const groupTools = [
             }
         },
         handler: async (args, ctx) => {
-            const bot = ctx.getBot()
+            const api = StandardBotApi.fromContext(ctx)
             const limit = args.limit || 50
-            const gl = bot.gl || new Map()
-
-            const groups = []
-            let count = 0
-            for (const [gid, group] of gl) {
-                if (count >= limit) break
-                groups.push({
-                    group_id: gid,
+            const allGroups = await api.getGroupList()
+            const groups = allGroups.slice(0, limit).map(group => {
+                const groupId = group.group_id ?? group.id
+                return {
+                    group_id: groupId,
                     group_name: group.group_name,
                     member_count: group.member_count
-                })
-                count++
-            }
+                }
+            })
 
-            return { success: true, total: gl.size, returned: groups.length, groups }
+            return { success: true, total: allGroups.length, returned: groups.length, groups }
         }
     },
 
@@ -102,23 +83,14 @@ export const groupTools = [
             required: ['group_id']
         },
         handler: async (args, ctx) => {
-            const bot = ctx.getBot()
-            const groupId = parseInt(args.group_id)
+            const api = StandardBotApi.fromContext(ctx)
+            const groupId = api.targetId(args.group_id)
             const limit = args.limit || 100
 
-            const groupInfo = bot.gl?.get(groupId)
-            if (!groupInfo) {
-                return {
-                    success: false,
-                    group_id: groupId,
-                    error: '机器人不在此群内',
-                    members: []
-                }
-            }
-
             let memberList = []
+            let groupInfo = {}
             try {
-                memberList = await getGroupMemberList({ bot, event: ctx.getEvent?.(), groupId })
+                ;[memberList, groupInfo] = await Promise.all([api.getMemberList(groupId), api.getGroupInfo(groupId)])
             } catch (e) {
                 return { success: false, error: `获取成员列表失败: ${e.message}`, members: [] }
             }
@@ -154,33 +126,15 @@ export const groupTools = [
             required: ['group_id', 'user_id']
         },
         handler: async (args, ctx) => {
-            const bot = ctx.getBot()
-            const groupId = parseInt(args.group_id)
-            const userId = parseInt(args.user_id)
-
-            const groupInfo = bot.gl?.get(groupId)
-            if (!groupInfo) {
-                return {
-                    success: false,
-                    error: '机器人不在此群内',
-                    avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
-                }
-            }
-
-            const group = bot.pickGroup(groupId)
-            const memberObj = group.pickMember(userId)
-            const member = memberObj.info || {}
-
-            // 记录补全成员信息时的失败原因，避免把"拉取失败"误报成"用户不在群内"
+            const api = StandardBotApi.fromContext(ctx)
+            const groupId = api.targetId(args.group_id)
+            const userId = api.targetId(args.user_id)
+            let member = {}
             let memberFetchError = null
-            if (!member.user_id) {
-                try {
-                    const memberMap = await group.getMemberMap()
-                    const memberData = memberMap.get(userId)
-                    if (memberData) Object.assign(member, memberData)
-                } catch (fetchErr) {
-                    memberFetchError = fetchErr.message
-                }
+            try {
+                member = (await api.getMemberInfo(groupId, userId)) || {}
+            } catch (error) {
+                memberFetchError = error.message
             }
 
             if (!member.nickname && !member.card) {
@@ -189,7 +143,7 @@ export const groupTools = [
                     error: memberFetchError
                         ? `获取群成员信息失败，无法确认该用户是否在群内: ${memberFetchError}`
                         : '该用户可能不在此群内',
-                    avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
+                    avatar_url: api.userAvatarUrl(userId)
                 }
             }
 
@@ -203,7 +157,7 @@ export const groupTools = [
                 title: member.title || '',
                 level: member.level,
                 join_time: member.join_time,
-                avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
+                avatar_url: api.userAvatarUrl(userId)
             }
         }
     },
@@ -218,14 +172,14 @@ export const groupTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
 
                 if (!e?.group_id) {
                     return { success: false, error: '当前不在群聊中' }
                 }
 
                 const groupId = e.group_id
-                const groupInfo = bot.gl?.get(groupId) || {}
+                const groupInfo = (await api.getGroupInfo(groupId)) || {}
 
                 return {
                     success: true,
@@ -235,7 +189,7 @@ export const groupTools = [
                     max_member_count: groupInfo.max_member_count,
                     owner_id: groupInfo.owner_id,
                     is_admin: groupInfo.admin_flag,
-                    avatar_url: `https://p.qlogo.cn/gh/${groupId}/${groupId}/640`
+                    avatar_url: api.groupAvatarUrl(groupId)
                 }
             } catch (err) {
                 return { success: false, error: `获取群信息失败: ${err.message}` }
@@ -255,22 +209,19 @@ export const groupTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = ctx.getBot()
-                const groupId = parseInt(args.group_id || e?.group_id)
+                const api = StandardBotApi.fromContext(ctx)
+                const groupId = api.targetId(args.group_id || e?.group_id)
 
                 if (!groupId) {
                     return { success: false, error: '需要群号参数或在群聊中使用' }
                 }
 
-                const groupInfo = bot.gl?.get(groupId)
-                if (!groupInfo) {
-                    return { success: false, error: '机器人不在此群内' }
-                }
+                const groupInfo = await api.getGroupInfo(groupId)
 
                 // 获取成员列表：拉取失败必须显式报错，否则空列表会被理解为"该群没有管理员和群主"
                 let memberList = []
                 try {
-                    memberList = await getGroupMemberList({ bot, event: e, groupId })
+                    memberList = await api.getMemberList(groupId)
                 } catch (listErr) {
                     return { success: false, group_id: groupId, error: `获取成员列表失败: ${listErr.message}` }
                 }
@@ -290,9 +241,9 @@ export const groupTools = [
                         card: m.card || '',
                         role: m.role,
                         title: m.title || '',
-                        avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${m.user_id || m.uid}&s=100`
+                        avatar_url: api.userAvatarUrl(m.user_id || m.uid, 100)
                     }))
-                    .sort((a, b) => (a.role === 'owner' ? -1 : 1)) // 群主排前面
+                    .sort(a => (a.role === 'owner' ? -1 : 1)) // 群主排前面
 
                 return {
                     success: true,
@@ -323,8 +274,8 @@ export const groupTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = ctx.getBot()
-                const groupId = parseInt(args.group_id || e?.group_id)
+                const api = StandardBotApi.fromContext(ctx)
+                const groupId = api.targetId(args.group_id || e?.group_id)
                 const keyword = args.keyword.toLowerCase()
                 const limit = args.limit || 10
 
@@ -332,16 +283,13 @@ export const groupTools = [
                     return { success: false, error: '需要群号参数或在群聊中使用' }
                 }
 
-                const groupInfo = bot.gl?.get(groupId)
-                if (!groupInfo) {
-                    return { success: false, error: '机器人不在此群内' }
-                }
+                await api.getGroupInfo(groupId)
 
                 // 获取成员列表
                 let memberList = []
                 try {
-                    memberList = await getGroupMemberList({ bot, event: e, groupId })
-                } catch (listErr) {
+                    memberList = await api.getMemberList(groupId)
+                } catch {
                     return { success: false, error: '获取成员列表失败' }
                 }
 
@@ -363,7 +311,7 @@ export const groupTools = [
                             card: m.card || '',
                             role: m.role || 'member',
                             match_type: matchType,
-                            avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${m.user_id || m.uid}&s=100`
+                            avatar_url: api.userAvatarUrl(m.user_id || m.uid, 100)
                         })
                         if (matches.length >= limit) break
                     }
@@ -396,8 +344,8 @@ export const groupTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = ctx.getBot()
-                const groupId = parseInt(args.group_id || e?.group_id)
+                const api = StandardBotApi.fromContext(ctx)
+                const groupId = api.targetId(args.group_id || e?.group_id)
                 const limit = args.limit || 10
 
                 if (!groupId) {
@@ -407,7 +355,7 @@ export const groupTools = [
                 // 获取指定序号的公告
                 if (args.index) {
                     try {
-                        const notice = await groupNoticeApi.getNoticeList(bot, groupId, args.index)
+                        const notice = await api.getGroupNotices(groupId, args.index)
                         if (notice?.fid) {
                             return {
                                 success: true,
@@ -427,7 +375,7 @@ export const groupTools = [
 
                 // 获取公告列表
                 try {
-                    const notices = await groupNoticeApi.getNoticeList(bot, groupId)
+                    const notices = await api.getGroupNotices(groupId)
 
                     const formattedNotices = (Array.isArray(notices) ? notices : []).slice(0, limit).map((n, idx) => ({
                         index: idx + 1,
@@ -469,41 +417,23 @@ export const groupTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = ctx.getBot()
-                const userId = parseInt(args.user_id)
-                const groupId = parseInt(args.group_id || e?.group_id)
+                const api = StandardBotApi.fromContext(ctx)
+                const userId = api.targetId(args.user_id)
+                const groupId = api.targetId(args.group_id || e?.group_id)
 
                 if (!groupId) {
                     return { success: false, error: '需要群号参数或在群聊中使用' }
                 }
 
-                const groupInfo = bot.gl?.get(groupId)
-                if (!groupInfo) {
-                    return { success: false, error: '机器人不在此群内' }
-                }
+                const groupInfo = await api.getGroupInfo(groupId)
 
                 // 获取成员信息：本工具的唯一职责就是判断用户在不在群内，
                 // 拉取失败必须显式报错，绝不能静默降级成 is_in_group: false
                 let memberInfo = null
                 try {
-                    const group = bot.pickGroup?.(groupId)
-                    if (group?.getMemberMap) {
-                        const memberMap = await group.getMemberMap()
-                        if (!memberMap || typeof memberMap.get !== 'function') {
-                            throw new Error('协议端返回的成员表格式不受支持')
-                        }
-                        if (memberMap.size === 0) {
-                            throw new Error('协议端返回的成员表为空')
-                        }
-                        memberInfo = memberMap.get(userId) || null
-                    } else {
-                        // 适配器未提供 getMemberMap（部分 OneBot 实现），回退到统一的成员列表获取
-                        const memberList = await getGroupMemberList({ bot, event: e, groupId })
-                        if (memberList.length === 0) {
-                            throw new Error('协议端未返回任何群成员')
-                        }
-                        memberInfo = memberList.find(m => Number(m.user_id ?? m.uid) === userId) || null
-                    }
+                    const memberList = await api.getMemberList(groupId)
+                    if (memberList.length === 0) throw new Error('协议端未返回任何群成员')
+                    memberInfo = memberList.find(m => String(m.user_id ?? m.uid) === String(userId)) || null
                 } catch (memberErr) {
                     return {
                         success: false,
@@ -529,7 +459,7 @@ export const groupTools = [
                               title: memberInfo.title || ''
                           }
                         : null,
-                    avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
+                    avatar_url: api.userAvatarUrl(userId)
                 }
             } catch (err) {
                 return { success: false, error: `检查失败: ${err.message}` }
@@ -550,13 +480,14 @@ export const groupTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const keyword = args.keyword.toLowerCase()
                 const limit = args.limit || 10
-                const gl = bot.gl || new Map()
+                const groups = await api.getGroupList()
 
                 const matches = []
-                for (const [gid, group] of gl) {
+                for (const group of groups) {
+                    const gid = group.group_id ?? group.id
                     const groupName = (group.group_name || '').toLowerCase()
                     const groupIdStr = String(gid)
 
@@ -566,7 +497,7 @@ export const groupTools = [
                             group_name: group.group_name,
                             member_count: group.member_count,
                             match_type: groupIdStr.includes(args.keyword) ? 'group_id' : 'group_name',
-                            avatar_url: `https://p.qlogo.cn/gh/${gid}/${gid}/100`
+                            avatar_url: api.groupAvatarUrl(gid, 100)
                         })
                         if (matches.length >= limit) break
                     }

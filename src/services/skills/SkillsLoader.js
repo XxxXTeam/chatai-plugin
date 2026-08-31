@@ -365,14 +365,34 @@ class SkillsLoader {
      * 获取当前请求命中的 SKILL.md 文档技能
      */
     getMatchingSkillDocuments(options = {}) {
-        return skillDocumentLoader.getMatchingDocuments(options)
+        const matched = skillDocumentLoader.getMatchingDocuments(options)
+        const merged = new Map(matched.map(document => [document.name, document]))
+        for (const document of this.loadedSkills.values()) {
+            merged.set(document.name, { ...document })
+        }
+        return Array.from(merged.values())
     }
 
     /**
      * 获取可注入 system prompt 的 SKILL.md 指令
      */
     getSkillDocumentInstructions(options = {}) {
-        return skillDocumentLoader.buildInstructions(options)
+        const discovery = skillDocumentLoader.buildInstructions({
+            ...options,
+            disclosure: 'progressive'
+        })
+
+        const activeDocuments = this.getMatchingSkillDocuments(options)
+        if (activeDocuments.length === 0) return discovery
+
+        const active = skillDocumentLoader.buildInstructions({
+            ...options,
+            mode: 'explicit',
+            selectedNames: activeDocuments.map(document => document.name),
+            disclosure: 'full'
+        })
+        if (!active) return discovery
+        return [discovery, '【已激活 Agent Skills 完整指令】', active].filter(Boolean).join('\n\n')
     }
 
     /**
@@ -605,7 +625,9 @@ class SkillsLoader {
             autoActivate: doc.autoActivate !== false,
             priority: doc.priority || 0,
             type: doc.type || 'markdown',
-            triggers: doc.triggers || []
+            triggers: doc.triggers || [],
+            standardCompliant: doc.standardCompliant === true,
+            compatibilityWarnings: doc.compatibilityWarnings || []
         }))
     }
 
@@ -618,16 +640,16 @@ class SkillsLoader {
         if (!name) return false
         const key = String(name).trim()
 
-        if (this.loadedSkills.has(key)) return true
-
         const doc = skillDocumentLoader.getDocumentByName(key)
         if (!doc) return false
 
+        const existing = this.loadedSkills.get(key)
         this.loadedSkills.set(key, {
             ...doc,
-            loadedAt: Date.now()
+            loadedAt: existing?.loadedAt || Date.now(),
+            activationSource: 'manual'
         })
-        logger.debug(`[SkillsLoader] 技能已加载: ${key}`)
+        logger.debug(`[SkillsLoader] 技能已显式加载: ${key}`)
         return true
     }
 
@@ -666,15 +688,10 @@ class SkillsLoader {
      * 初始化时自动加载 autoActivate 的技能
      */
     autoLoadSkills() {
-        const documents = skillDocumentLoader.getDocuments()
-        for (const doc of documents) {
-            if (doc.autoActivate !== false) {
-                this.loadedSkills.set(doc.name, { ...doc, loadedAt: Date.now() })
-            }
-        }
-        if (this.loadedSkills.size > 0) {
-            logger.debug(`[SkillsLoader] 自动加载 ${this.loadedSkills.size} 个技能`)
-        }
+        // autoActivate 控制自动匹配资格，不再把所有技能永久写入 loadedSkills。
+        // 显式 load_skill 才进入 loadedSkills；自动技能由当前消息确定匹配。
+        const autoCount = skillDocumentLoader.getDocuments().filter(doc => doc.autoActivate !== false).length
+        logger.debug(`[SkillsLoader] 可自动匹配技能: ${autoCount} 个，显式加载: ${this.loadedSkills.size} 个`)
     }
 }
 

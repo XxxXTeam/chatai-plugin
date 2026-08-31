@@ -11,6 +11,7 @@ import config from '../../../config/config.js'
 import historyManager from '../../core/utils/history.js'
 import { databaseService } from '../storage/DatabaseService.js'
 import { MessageApi } from '../../utils/messageParser.js'
+import { StandardBotApi } from '../../core/platform/index.js'
 import { resolveClientTemperature } from './TemperatureResolver.js'
 
 /** 请求计数器条目上限，超出后清理已归零的残留键 */
@@ -24,6 +25,20 @@ const REQUEST_COUNTER_TTL = 5000
  * @constant {string}
  */
 export const AUTO_CLEAN_NOTICE = '历史对话已自动清理'
+
+/**
+ * 从标准会话 ID 中提取群标识。
+ * 群标识可能是数字群号、QQBot OpenID，或 `qg_<guild>-<channel>` 频道标识；
+ * 以冒号作为会话结构分隔符，不限制群标识字符集。
+ *
+ * @param {string} conversationId - 会话 ID
+ * @returns {string|null} 群标识；非群会话或格式无效时返回 null
+ */
+export function extractConversationGroupId(conversationId) {
+    if (typeof conversationId !== 'string') return null
+    const match = /^group:([^:]+)/.exec(conversationId)
+    return match?.[1] || null
+}
 
 /**
  * 构建群聊环境说明片段，追加到 system prompt 尾部。
@@ -344,9 +359,9 @@ export class ContextManager {
             const prompt = buildSummaryPrompt(dialogText, options.maxTokens || 400)
 
             const { LlmService } = await import('./LlmService.js')
-            /* 从 conversationId 提取群ID（格式: group:${groupId}），使总结也能使用群独立渠道 */
-            const groupIdMatch = conversationId?.match?.(/^group:(\d+)/)
-            const client = await LlmService.getChatClient({ model, groupId: groupIdMatch?.[1] || undefined })
+            /* 从 conversationId 提取群ID，使数字群号、QQBot OpenID 和频道会话都能使用群独立渠道 */
+            const groupId = extractConversationGroupId(conversationId)
+            const client = await LlmService.getChatClient({ model, groupId: groupId || undefined })
             const _temp = resolveClientTemperature(client, 0.2)
             const result = await client.sendMessage(
                 { role: 'user', content: [{ type: 'text', text: prompt }] },
@@ -1034,9 +1049,11 @@ export class ContextManager {
         // 获取群信息
         try {
             const bot = global.Bot
-            if (bot?.pickGroup) {
-                const group = bot.pickGroup(parseInt(groupId))
-                const info = await group.getInfo?.()
+            if (bot) {
+                const api = new StandardBotApi({ bot })
+                const group = api.group(groupId)
+                const info =
+                    typeof group.getInfo === 'function' ? await group.getInfo() : await api.getGroupInfo(groupId, false)
                 if (info) {
                     parts.push(`群名: ${info.group_name || groupId}`)
                     if (info.member_count) {
@@ -1070,6 +1087,11 @@ export class ContextManager {
         }
 
         const { formatMessages = false } = options
+        // QQBot 没有按 offset 拉取历史的协议；其 group.getChatHistory(seq)
+        // 实际上把 seq 当作 message_id 查本地缓存。必须使用群对象携带的
+        // 最新消息 ID 作为锚点，并且全程保留 OpenID 字符串，不能 Number()。
+        const historyApi = new StandardBotApi({ bot: group.bot || globalThis.Bot })
+        const isQQBot = historyApi.isQQBot
         const allowedMessageTypes = ['text', 'at', 'image', 'video', 'bface', 'forward', 'json', 'reply']
         const seenMessageIds = new Set()
 
@@ -1092,22 +1114,32 @@ export class ContextManager {
                 })
             }
 
-            // 获取初始消息
-            let initialChats = await group.getChatHistory(0, 20)
+            // 获取初始消息。QQBot 缓存查询不接受 0；没有当前消息锚点时安全返回空列表。
+            const initialSequence = isQQBot
+                ? group.message_id || group.messageId || group.seq || group.message_seq || group._raw_message_id
+                : 0
+            if (isQQBot && !initialSequence) return []
+            let initialChats = await group.getChatHistory(initialSequence, 20)
             if (!initialChats || initialChats.length === 0) {
                 return []
             }
 
             let chats = processChats(initialChats)
-            let seq = Number(initialChats[0]?.seq || initialChats[0]?.message_seq || 0)
+            const initialRawSequence =
+                initialChats[0]?.seq || initialChats[0]?.message_seq || initialChats[0]?.message_id
+            let seq = isQQBot ? initialRawSequence || initialSequence : Number(initialRawSequence || 0) || 0
 
             // 继续获取更多消息直到达到数量
             while (chats.length < num && seq) {
                 try {
                     const chatHistory = await group.getChatHistory(seq, 20)
-                    const newSeq = Number(chatHistory[0]?.seq || chatHistory[0]?.message_seq || 0)
+                    if (!chatHistory || chatHistory.length === 0) {
+                        break
+                    }
+                    const rawNewSeq = chatHistory[0]?.seq || chatHistory[0]?.message_seq || chatHistory[0]?.message_id
+                    const newSeq = isQQBot ? rawNewSeq || '' : Number(rawNewSeq || 0) || 0
 
-                    if (!chatHistory || chatHistory.length === 0 || seq === newSeq) {
+                    if (String(seq) === String(newSeq)) {
                         break
                     }
 
@@ -1146,6 +1178,7 @@ export class ContextManager {
         const sender = chat.sender || {}
         const chatTime = chat.time || Math.floor(Date.now() / 1000)
         const senderId = sender.user_id
+        const isQQBot = new StandardBotApi({ bot: group?.bot || globalThis.Bot }).isQQBot
 
         // 获取成员信息
         let senderName = sender.card || sender.nickname || senderId || '未知用户'
@@ -1157,12 +1190,7 @@ export class ContextManager {
                 senderName = memberInfo.card || memberInfo.nickname || senderName
             }
         } catch {
-            try {
-                memberInfo = (await group.pickMember(Number(senderId)))?.info
-                if (memberInfo) {
-                    senderName = memberInfo.card || memberInfo.nickname || senderName
-                }
-            } catch {}
+            // 目标标识必须保持事件原值；将 QQBot OpenID 强转数字会变成 NaN，且可能误命中其他成员。
         }
 
         const senderRole = roleMap[sender.role] || '普通成员'
@@ -1185,9 +1213,15 @@ export class ContextManager {
             const replySeq = replyPart.seq || replyPart.data?.seq
             if (replySeq) {
                 try {
-                    const originalMsgArray = await group.getChatHistory(Number(replySeq), 1)
+                    const lookupSequence = isQQBot ? replySeq : Number(replySeq)
+                    const originalMsgArray = await group.getChatHistory(lookupSequence, 1)
                     const originalMsg =
-                        originalMsgArray?.find?.(msg => Number(msg.seq) === Number(replySeq)) || originalMsgArray?.[0]
+                        originalMsgArray?.find?.(msg => {
+                            const messageSequence = msg.seq || msg.message_seq || msg.message_id
+                            return isQQBot
+                                ? String(messageSequence) === String(replySeq)
+                                : Number(messageSequence) === Number(replySeq)
+                        }) || originalMsgArray?.[0]
                     if (originalMsg?.sender) {
                         const originalSenderId = originalMsg.sender.user_id
                         let originalSenderName =
@@ -1337,7 +1371,12 @@ export class ContextManager {
         let systemPromptWithContext = ''
 
         const bot = global.Bot
-        const group = bot?.pickGroup?.(parseInt(groupId))
+        let group
+        try {
+            group = bot ? new StandardBotApi({ bot }).group(groupId) : null
+        } catch {
+            return ''
+        }
         if (!group) return ''
 
         // 构建头部信息
@@ -1428,6 +1467,7 @@ export class ContextManager {
         }
 
         const bot = e.bot || global.Bot
+        const isQQBot = new StandardBotApi({ bot: e.group?.bot || bot }).isQQBot
         const getMessage = async (messageId, seq) => {
             const apiMsg = await MessageApi.getMsg(e, messageId || seq, { useSeq: !messageId, seq })
             if (apiMsg) return apiMsg.data || apiMsg
@@ -1449,8 +1489,14 @@ export class ContextManager {
             }
             if (e.group?.getChatHistory && seq) {
                 try {
-                    const history = await e.group.getChatHistory(Number(seq), 20)
-                    const found = history?.find?.(m => Number(m.seq) === Number(seq))
+                    const lookupSequence = isQQBot ? seq : Number(seq)
+                    const history = await e.group.getChatHistory(lookupSequence, 20)
+                    const found = history?.find?.(m => {
+                        const messageSequence = m.seq || m.message_seq || m.message_id
+                        return isQQBot
+                            ? String(messageSequence) === String(seq)
+                            : Number(messageSequence) === Number(seq)
+                    })
                     if (found || history?.length) return found || history[history.length - 1]
                 } catch (err) {
                     logger.debug(`[ContextManager] group.getChatHistory失败: ${err.message}`)
@@ -1749,10 +1795,10 @@ export class ContextManager {
             const prompt = buildSummaryPrompt(dialogText.slice(0, 8000), 200)
 
             const { LlmService } = await import('./LlmService.js')
-            const groupIdMatch = options.conversationId?.match?.(/^group:(\d+)/)
+            const groupId = extractConversationGroupId(options.conversationId)
             const client = await LlmService.getChatClient({
                 model,
-                groupId: groupIdMatch?.[1] || undefined
+                groupId: groupId || undefined
             })
             const _temp2 = resolveClientTemperature(client, 0.2)
             const result = await client.sendMessage(

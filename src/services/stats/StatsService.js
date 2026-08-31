@@ -652,6 +652,9 @@ class StatsService {
             success = true,
             error,
             duration = 0,
+            timestamp,
+            attemptId,
+            startOrder,
             userId,
             groupId,
             source = 'mcp'
@@ -670,6 +673,9 @@ class StatsService {
                 error: error?.message || error,
                 errorStack: error?.stack,
                 duration,
+                timestamp,
+                attemptId,
+                startOrder,
                 userId,
                 groupId,
                 source

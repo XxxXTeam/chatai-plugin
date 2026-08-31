@@ -1,12 +1,18 @@
 import { PLUGIN_DEVELOPERS } from './common.js'
 import { chatLogger as logger } from '../core/utils/logger.js'
+import {
+    detectStandardAdapter,
+    normalizeStandardSegment,
+    StandardBotApi,
+    StandardMessage
+} from '../core/platform/index.js'
 
 /**
  * 检测框架类型
  * @returns {'trss'|'miao'}
  */
 export function detectFramework() {
-    if (typeof Bot !== 'undefined' && Bot.bots) {
+    if (globalThis.Bot?.bots) {
         return 'trss'
     }
     return 'miao'
@@ -17,49 +23,25 @@ export function detectFramework() {
  * @param {Object} e - 事件对象或bot对象
  * @returns {string} 适配器类型: 'icqq' | 'napcat' | 'go-cqhttp' | 'lagrange' | 'onebot' | 'unknown'
  */
+/** @deprecated 请使用 detectStandardAdapter。 */
 export function detectAdapter(e) {
-    const bot = e?.bot || e || Bot
-
-    // 检查适配器名称
-    if (bot?.adapter?.name) {
-        const name = bot.adapter.name.toLowerCase()
-        if (name.includes('icqq')) return 'icqq'
-        if (name.includes('napcat') || name.includes('nc')) return 'napcat'
-        if (name.includes('gocq') || name.includes('go-cqhttp')) return 'go-cqhttp'
-        if (name.includes('lagrange')) return 'lagrange'
-        if (name.includes('onebot')) return 'onebot'
-    }
-
-    // 通过版本信息检测
-    if (bot?.version?.app_name) {
-        const appName = bot.version.app_name.toLowerCase()
-        if (appName.includes('napcat')) return 'napcat'
-        if (appName.includes('go-cqhttp') || appName.includes('gocq')) return 'go-cqhttp'
-        if (appName.includes('lagrange')) return 'lagrange'
-    }
-    if (typeof bot?.pickGroup === 'function' && bot?.gml) {
-        return 'icqq'
-    }
-    if (typeof bot?.getMsg === 'function') {
-        return 'onebot'
-    }
-    return 'unknown'
+    return detectStandardAdapter(e?.bot || e || globalThis.Bot)
 }
 /**
  * 获取Bot信息
  * @param {Object} e - 事件对象
  * @returns {Object} Bot信息
  */
+/** @deprecated 请使用 StandardBotApi.getBotInfo。 */
 export function getBotInfo(e) {
-    const bot = e?.bot || Bot
-    const platform = detectAdapter(e)
-
+    const api = new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot })
+    const info = api.getBotInfo()
     return {
-        platform,
-        uin: bot?.uin || bot?.self_id || e?.self_id,
-        nickname: bot?.nickname || bot?.info?.nickname || 'Bot',
-        version: bot?.version || {},
-        adapter: bot?.adapter?.name || platform
+        platform: detectStandardAdapter(api.bot),
+        uin: info.user_id,
+        nickname: info.nickname || 'Bot',
+        version: info.version || {},
+        adapter: info.adapter
     }
 }
 
@@ -70,179 +52,9 @@ export function getBotInfo(e) {
  * @param {string|number} [groupId] - 群ID (可选)
  * @returns {Promise<Object>} 用户信息
  */
+/** @deprecated 请使用 StandardBotApi.getUserInfo。 */
 export async function getUserInfo(e, userId, groupId = null) {
-    const bot = e?.bot || Bot
-    const platform = detectAdapter(e)
-    const userIdStr = String(userId)
-
-    // 生成头像URL
-    const avatarUrl = `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
-
-    const defaultInfo = {
-        user_id: userId,
-        nickname: String(userId),
-        card: '',
-        sex: 'unknown',
-        age: 0,
-        area: '',
-        level: 0,
-        role: 'member',
-        title: '',
-        avatar: avatarUrl
-    }
-
-    // 尝试从事件中获取用户信息
-    if (e?.sender && String(e.sender.user_id) === userIdStr) {
-        return {
-            ...defaultInfo,
-            nickname: e.sender.nickname || e.sender.card || defaultInfo.nickname,
-            card: e.sender.card || '',
-            role: e.sender.role || 'member',
-            avatar: e.sender.avatar || avatarUrl
-        }
-    }
-
-    // 尝试从Bot缓存获取
-    try {
-        const userInfo = bot?.fl?.get?.(userId) || bot?.gl?.get?.(groupId)?.get?.(userId)
-        if (userInfo) {
-            return {
-                ...defaultInfo,
-                nickname: userInfo.nickname || userInfo.card || defaultInfo.nickname,
-                card: userInfo.card || '',
-                avatar: userInfo.avatar || avatarUrl
-            }
-        }
-    } catch {}
-
-    // 普通QQ用户，转为数字ID
-    const numericUserId = parseInt(userId)
-
-    try {
-        switch (platform) {
-            case 'icqq': {
-                if (groupId) {
-                    // 获取群成员信息
-                    const group = bot.pickGroup(parseInt(groupId))
-                    const member = group.pickMember(numericUserId)
-                    const info = (await member.getInfo?.()) || member.info || member
-                    return {
-                        ...defaultInfo,
-                        nickname: info.nickname || info.card || defaultInfo.nickname,
-                        card: info.card || '',
-                        sex: info.sex || 'unknown',
-                        age: info.age || 0,
-                        area: info.area || '',
-                        level: info.level || 0,
-                        role: info.role || 'member',
-                        title: info.title || '',
-                        join_time: info.join_time,
-                        last_sent_time: info.last_sent_time,
-                        shutup_time: info.shutup_time
-                    }
-                } else {
-                    // 获取好友/陌生人信息
-                    let info = null
-                    try {
-                        const friend = bot.pickFriend(userId)
-                        info = (await friend.getInfo?.()) || friend.info || friend
-                    } catch {
-                        // 尝试获取陌生人信息
-                        try {
-                            info = await bot.getStrangerInfo?.(userId)
-                        } catch {}
-                    }
-                    if (info) {
-                        return {
-                            ...defaultInfo,
-                            nickname: info.nickname || defaultInfo.nickname,
-                            sex: info.sex || 'unknown',
-                            age: info.age || 0
-                        }
-                    }
-                }
-                break
-            }
-
-            case 'napcat':
-            case 'onebot':
-            case 'go-cqhttp':
-            case 'lagrange': {
-                if (groupId) {
-                    // OneBot: get_group_member_info
-                    const info =
-                        (await bot.getGroupMemberInfo?.(parseInt(groupId), userId, true)) ||
-                        (await bot.get_group_member_info?.({
-                            group_id: parseInt(groupId),
-                            user_id: userId,
-                            no_cache: true
-                        }))
-                    if (info) {
-                        return {
-                            ...defaultInfo,
-                            nickname: info.nickname || defaultInfo.nickname,
-                            card: info.card || '',
-                            sex: info.sex || 'unknown',
-                            age: info.age || 0,
-                            area: info.area || '',
-                            level: String(info.level || 0),
-                            role: info.role || 'member',
-                            title: info.title || '',
-                            join_time: info.join_time,
-                            last_sent_time: info.last_sent_time,
-                            shutup_timestamp: info.shut_up_timestamp
-                        }
-                    }
-                } else {
-                    // OneBot: get_stranger_info
-                    const info =
-                        (await bot.getStrangerInfo?.(userId, true)) ||
-                        (await bot.get_stranger_info?.({ user_id: userId, no_cache: true }))
-                    if (info) {
-                        return {
-                            ...defaultInfo,
-                            nickname: info.nickname || defaultInfo.nickname,
-                            sex: info.sex || 'unknown',
-                            age: info.age || 0
-                        }
-                    }
-                }
-                break
-            }
-
-            case 'trss': {
-                // TRSS 适配
-                if (groupId) {
-                    const info = await bot.getGroupMemberInfo?.(parseInt(groupId), userId)
-                    if (info) {
-                        return { ...defaultInfo, ...info }
-                    }
-                } else {
-                    const info = await bot.getStrangerInfo?.(userId)
-                    if (info) {
-                        return { ...defaultInfo, ...info }
-                    }
-                }
-                break
-            }
-        }
-    } catch (err) {
-        logger.debug(`[PlatformAdapter] 获取用户信息失败: ${err.message}`)
-    }
-
-    // 尝试从事件中获取
-    if (e?.sender && String(e.sender.user_id) === String(userId)) {
-        return {
-            ...defaultInfo,
-            nickname: e.sender.nickname || e.sender.card || defaultInfo.nickname,
-            card: e.sender.card || '',
-            sex: e.sender.sex || 'unknown',
-            age: e.sender.age || 0,
-            role: e.sender.role || 'member'
-        }
-    }
-
-    return defaultInfo
+    return await new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot }).getUserInfo(userId, groupId)
 }
 
 /**
@@ -251,67 +63,9 @@ export async function getUserInfo(e, userId, groupId = null) {
  * @param {string|number} groupId - 群ID
  * @returns {Promise<Object>} 群信息
  */
+/** @deprecated 请使用 StandardBotApi.getGroupInfo。 */
 export async function getGroupInfo(e, groupId) {
-    const bot = e?.bot || Bot
-    const platform = detectAdapter(e)
-    groupId = parseInt(groupId)
-
-    const defaultInfo = {
-        group_id: groupId,
-        group_name: String(groupId),
-        member_count: 0,
-        max_member_count: 0
-    }
-
-    try {
-        switch (platform) {
-            case 'icqq': {
-                const group = bot.pickGroup(groupId)
-                const info = (await group.getInfo?.()) || group.info || group
-                return {
-                    ...defaultInfo,
-                    group_name: info.group_name || info.name || defaultInfo.group_name,
-                    member_count: info.member_count || 0,
-                    max_member_count: info.max_member_count || 0,
-                    owner_id: info.owner_id,
-                    admin_flag: info.admin_flag,
-                    create_time: info.create_time,
-                    level: info.level,
-                    grade: info.grade
-                }
-            }
-
-            case 'napcat':
-            case 'onebot':
-            case 'go-cqhttp':
-            case 'lagrange': {
-                const info =
-                    (await bot.getGroupInfo?.(groupId, true)) ||
-                    (await bot.get_group_info?.({ group_id: groupId, no_cache: true }))
-                if (info) {
-                    return {
-                        ...defaultInfo,
-                        group_name: info.group_name || defaultInfo.group_name,
-                        member_count: info.member_count || 0,
-                        max_member_count: info.max_member_count || 0
-                    }
-                }
-                break
-            }
-
-            case 'trss': {
-                const info = await bot.getGroupInfo?.(groupId)
-                if (info) {
-                    return { ...defaultInfo, ...info }
-                }
-                break
-            }
-        }
-    } catch (err) {
-        logger.debug(`[PlatformAdapter] 获取群信息失败: ${err.message}`)
-    }
-
-    return defaultInfo
+    return await new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot }).getGroupInfo(groupId)
 }
 
 /**
@@ -320,40 +74,9 @@ export async function getGroupInfo(e, groupId) {
  * @param {string|number} groupId - 群ID
  * @returns {Promise<Array>} 成员列表
  */
+/** @deprecated 请使用 StandardBotApi.getMemberList。 */
 export async function getGroupMemberList(e, groupId) {
-    const bot = e?.bot || Bot
-    const platform = detectAdapter(e)
-    groupId = parseInt(groupId)
-
-    try {
-        switch (platform) {
-            case 'icqq': {
-                const group = bot.pickGroup(groupId)
-                // icqq 返回 Map
-                const memberMap = (await group.getMemberMap?.()) || group.member_map || new Map()
-                return Array.from(memberMap.values())
-            }
-
-            case 'napcat':
-            case 'onebot':
-            case 'go-cqhttp':
-            case 'lagrange': {
-                const list =
-                    (await bot.getGroupMemberList?.(groupId, true)) ||
-                    (await bot.get_group_member_list?.({ group_id: groupId, no_cache: true }))
-                return list || []
-            }
-
-            case 'trss': {
-                const list = await bot.getGroupMemberList?.(groupId)
-                return list || []
-            }
-        }
-    } catch (err) {
-        logger.debug(`[PlatformAdapter] 获取群成员列表失败: ${err.message}`)
-    }
-
-    return []
+    return await new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot }).getMemberList(groupId)
 }
 
 /**
@@ -363,67 +86,12 @@ export async function getGroupMemberList(e, groupId) {
  * @param {string|number} [groupId] - 群ID (可选)
  * @returns {Promise<Object|null>} 消息对象
  */
+/** @deprecated 请使用 StandardBotApi.getMessage。 */
 export async function getMessage(e, messageId, groupId = null) {
-    const bot = e?.bot || Bot
-    const platform = detectAdapter(e)
-
-    try {
-        switch (platform) {
-            case 'icqq': {
-                try {
-                    if (typeof bot?.getMsg === 'function' && String(messageId).length > 8) {
-                        const msg = await bot.getMsg(messageId)
-                        if (msg) return msg
-                    }
-                } catch {}
-                const gid = groupId || e?.group_id
-                if (gid) {
-                    const group = bot.pickGroup?.(parseInt(gid)) || e?.group
-                    const seq = parseInt(messageId)
-                    try {
-                        if (typeof group?.getMsg === 'function') {
-                            const msg = await group.getMsg(seq)
-                            if (msg) return msg
-                        }
-                    } catch {}
-                    if (typeof group?.getChatHistory === 'function') {
-                        const history = await group.getChatHistory(Number.isNaN(seq) ? 0 : seq, 20)
-                        return (
-                            history?.find?.(msg => Number(msg.seq) === seq) ||
-                            history?.[history.length - 1] ||
-                            history?.[0] ||
-                            null
-                        )
-                    }
-                } else if (e?.user_id) {
-                    const user =
-                        bot.pickUser?.(parseInt(e.user_id)) || bot.pickFriend?.(parseInt(e.user_id)) || e.friend
-                    if (typeof user?.getChatHistory === 'function') {
-                        const time = parseInt(messageId)
-                        const history = await user.getChatHistory(Number.isNaN(time) ? 0 : time, 20)
-                        return history?.find?.(msg => Number(msg.time) === time) || history?.[0] || null
-                    }
-                }
-                break
-            }
-
-            case 'napcat':
-            case 'onebot':
-            case 'go-cqhttp':
-            case 'lagrange': {
-                const msg = (await bot.getMsg?.(messageId)) || (await bot.get_msg?.({ message_id: messageId }))
-                return msg || null
-            }
-
-            case 'trss': {
-                return (await bot.getMsg?.(messageId)) || null
-            }
-        }
-    } catch (err) {
-        logger.debug(`[PlatformAdapter] 获取消息失败: ${err.message}`)
-    }
-
-    return null
+    return await new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot }).getMessage(messageId, {
+        groupId: groupId || e?.group_id,
+        userId: groupId || e?.group_id ? null : e?.user_id
+    })
 }
 
 /**
@@ -433,53 +101,12 @@ export async function getMessage(e, messageId, groupId = null) {
  * @param {string|number} [groupId] - 群ID (可选)
  * @returns {Promise<boolean>} 是否成功
  */
+/** @deprecated 请使用 StandardBotApi.pokeMember/pokeUser。 */
 export async function sendPoke(e, userId, groupId = null) {
-    const bot = e?.bot || Bot
-    const platform = detectAdapter(e)
-    userId = parseInt(userId)
-
-    try {
-        switch (platform) {
-            case 'icqq': {
-                if (groupId) {
-                    const group = bot.pickGroup(parseInt(groupId))
-                    // icqq: pokeMember 或 pickMember().poke()
-                    if (typeof group.pokeMember === 'function') {
-                        await group.pokeMember(userId)
-                        return true
-                    } else if (group.pickMember) {
-                        await group.pickMember(userId).poke?.()
-                        return true
-                    }
-                } else {
-                    const friend = bot.pickFriend(userId)
-                    await friend.poke?.()
-                    return true
-                }
-                break
-            }
-
-            case 'napcat':
-            case 'onebot':
-            case 'go-cqhttp': {
-                // OneBot 扩展 API
-                if (groupId) {
-                    ;(await bot.sendGroupPoke?.(parseInt(groupId), userId)) ||
-                        (await bot.send_group_poke?.({ group_id: parseInt(groupId), user_id: userId })) ||
-                        (await bot.group_poke?.({ group_id: parseInt(groupId), user_id: userId }))
-                } else {
-                    ;(await bot.sendFriendPoke?.(userId)) ||
-                        (await bot.send_friend_poke?.({ user_id: userId })) ||
-                        (await bot.friend_poke?.({ user_id: userId }))
-                }
-                return true
-            }
-        }
-    } catch (err) {
-        logger.debug(`[PlatformAdapter] 发送戳一戳失败: ${err.message}`)
-    }
-
-    return false
+    const api = new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot })
+    if (groupId || e?.group_id) await api.pokeMember(groupId || e.group_id, userId)
+    else await api.pokeUser(userId)
+    return true
 }
 
 /**
@@ -489,30 +116,12 @@ export async function sendPoke(e, userId, groupId = null) {
  * @param {number} [size=640] - 头像尺寸
  * @returns {string} 头像URL
  */
+/** @deprecated 请使用 StandardBotApi.userAvatarUrl。 */
 export function getAvatarUrl(eOrUserId, userIdOrSize = 640, size = 640) {
-    // 兼容两种调用方式：getAvatarUrl(userId, size) 和 getAvatarUrl(e, userId, size)
-    let e = null
-    let userId
-    let avatarSize = size
-
-    if (typeof eOrUserId === 'object' && eOrUserId !== null && !Array.isArray(eOrUserId)) {
-        // 新方式：getAvatarUrl(e, userId, size)
-        e = eOrUserId
-        userId = userIdOrSize
-        avatarSize = size
-    } else {
-        // 旧方式：getAvatarUrl(userId, size)
-        userId = eOrUserId
-        avatarSize = typeof userIdOrSize === 'number' ? userIdOrSize : 640
-    }
-
-    // 普通QQ头像接口
-    const numericId = parseInt(userId)
-    if (!isNaN(numericId)) {
-        return `https://q1.qlogo.cn/g?b=qq&nk=${numericId}&s=${avatarSize}`
-    }
-
-    return ''
+    const event = typeof eOrUserId === 'object' ? eOrUserId : null
+    const userId = event ? userIdOrSize : eOrUserId
+    const avatarSize = event ? size : userIdOrSize
+    return new StandardBotApi({ event, bot: event?.bot || globalThis.Bot }).userAvatarUrl(userId, avatarSize)
 }
 
 /**
@@ -521,9 +130,9 @@ export function getAvatarUrl(eOrUserId, userIdOrSize = 640, size = 640) {
  * @param {number} [size=640] - 头像尺寸
  * @returns {string} 群头像URL
  */
+/** @deprecated 请使用 StandardBotApi.groupAvatarUrl。 */
 export function getGroupAvatarUrl(groupId, size = 640) {
-    groupId = parseInt(groupId)
-    return `https://p.qlogo.cn/gh/${groupId}/${groupId}/${size}`
+    return new StandardBotApi({ bot: globalThis.Bot }).groupAvatarUrl(groupId, size)
 }
 
 /**
@@ -532,19 +141,9 @@ export function getGroupAvatarUrl(groupId, size = 640) {
  * @param {Object} segment - 消息段
  * @returns {Object} 统一格式的消息段
  */
+/** @deprecated 请使用 normalizeStandardSegment。 */
 export function normalizeSegment(segment) {
-    if (!segment) return null
-
-    // NC/OneBot 格式: { type: 'xxx', data: { ... } }
-    if (segment.data && typeof segment.data === 'object') {
-        return {
-            type: segment.type,
-            ...segment.data
-        }
-    }
-
-    // icqq 格式: { type: 'xxx', ... }
-    return segment
+    return normalizeStandardSegment(segment)
 }
 
 /**
@@ -554,19 +153,9 @@ export function normalizeSegment(segment) {
  * @param {string} [targetPlatform] - 目标平台
  * @returns {Object} 消息段
  */
-export function buildSegment(type, data, targetPlatform = 'icqq') {
-    switch (targetPlatform) {
-        case 'napcat':
-        case 'onebot':
-        case 'go-cqhttp':
-            // OneBot 格式
-            return { type, data }
-
-        case 'icqq':
-        default:
-            // icqq 格式
-            return { type, ...data }
-    }
+/** @deprecated 请使用 StandardMessage.custom。 */
+export function buildSegment(type, data) {
+    return StandardMessage.custom(type, data)
 }
 
 /**
@@ -575,51 +164,14 @@ export function buildSegment(type, data, targetPlatform = 'icqq') {
  * @param {string|number} messageId - 消息ID
  * @returns {Promise<boolean>} 是否成功
  */
+/** @deprecated 请使用 StandardBotApi.recall。 */
 export async function deleteMessage(e, messageId) {
-    const bot = e?.bot || Bot
-    const platform = detectAdapter(e)
-
-    try {
-        switch (platform) {
-            case 'icqq': {
-                if (typeof bot?.deleteMsg === 'function') {
-                    try {
-                        await bot.deleteMsg(messageId)
-                        return true
-                    } catch {}
-                }
-                if (e?.group_id) {
-                    const group = bot.pickGroup?.(parseInt(e.group_id)) || e.group
-                    await group?.recallMsg?.(messageId)
-                    return true
-                }
-                if (e?.user_id) {
-                    const user =
-                        bot.pickUser?.(parseInt(e.user_id)) || bot.pickFriend?.(parseInt(e.user_id)) || e.friend
-                    await user?.recallMsg?.(messageId)
-                    return true
-                }
-                return false
-            }
-
-            case 'napcat':
-            case 'onebot':
-            case 'go-cqhttp':
-            case 'lagrange': {
-                ;(await bot.deleteMsg?.(messageId)) || (await bot.delete_msg?.({ message_id: messageId }))
-                return true
-            }
-
-            case 'trss': {
-                await bot.deleteMsg?.(messageId)
-                return true
-            }
-        }
-    } catch (err) {
-        logger.debug(`[PlatformAdapter] 撤回消息失败: ${err.message}`)
-    }
-
-    return false
+    await new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot }).recall({
+        messageId,
+        groupId: e?.group_id,
+        userId: e?.group_id ? null : e?.user_id
+    })
+    return true
 }
 
 /**
@@ -627,48 +179,21 @@ export async function deleteMessage(e, messageId) {
  * @param {Object} e - 事件对象
  * @param {string|number} groupId - 群ID
  * @param {number} [count=20] - 获取数量
- * @param {number} [messageSeq=0] - 起始消息序号
+ * @param {string|number} [messageSeq=0] - 起始消息序号或 QQBot message_id
  * @returns {Promise<Array>} 消息列表
  */
+/** @deprecated 请使用 StandardBotApi.getHistory。 */
 export async function getGroupChatHistory(e, groupId, count = 20, messageSeq = 0) {
-    const bot = e?.bot || Bot
-    const platform = detectAdapter(e)
-    groupId = parseInt(groupId)
-
-    try {
-        switch (platform) {
-            case 'icqq': {
-                const group = bot.pickGroup(groupId)
-                if (group.getChatHistory) {
-                    return await group.getChatHistory(messageSeq, count)
-                }
-                break
-            }
-
-            case 'napcat':
-            case 'onebot':
-            case 'go-cqhttp':
-            case 'lagrange': {
-                // OneBot 扩展 API
-                const history =
-                    (await bot.getGroupMsgHistory?.(groupId, count, messageSeq)) ||
-                    (await bot.get_group_msg_history?.({ group_id: groupId, count, message_seq: messageSeq }))
-                return history?.messages || history || []
-            }
-
-            case 'trss': {
-                const group = bot.pickGroup?.(groupId)
-                if (group?.getChatHistory) {
-                    return await group.getChatHistory(messageSeq, count)
-                }
-                break
-            }
-        }
-    } catch (err) {
-        logger.debug(`[PlatformAdapter] 获取群聊历史失败: ${err.message}`)
-    }
-
-    return []
+    const api = new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot })
+    const sequence = api.isQQBot
+        ? messageSeq || e?.message_id || e?.seq || e?.source?.message_id || e?.source?.seq
+        : messageSeq
+    if (api.isQQBot && !sequence) return []
+    return await api.getHistory({
+        groupId,
+        count,
+        sequence
+    })
 }
 
 /**
@@ -678,38 +203,9 @@ export async function getGroupChatHistory(e, groupId, count = 20, messageSeq = 0
  * @param {string|Array} message - 消息内容
  * @returns {Promise<Object|null>} 发送结果
  */
+/** @deprecated 请使用 StandardBotApi.sendGroup。 */
 export async function sendGroupMessage(e, groupId, message) {
-    const bot = e?.bot || Bot
-    const platform = detectAdapter(e)
-    groupId = parseInt(groupId)
-
-    try {
-        switch (platform) {
-            case 'icqq': {
-                const group = bot.pickGroup(groupId)
-                return await group.sendMsg(message)
-            }
-
-            case 'napcat':
-            case 'onebot':
-            case 'go-cqhttp':
-            case 'lagrange': {
-                return (
-                    (await bot.sendGroupMsg?.(groupId, message)) ||
-                    (await bot.send_group_msg?.({ group_id: groupId, message }))
-                )
-            }
-
-            case 'trss': {
-                const group = bot.pickGroup?.(groupId)
-                return await group?.sendMsg?.(message)
-            }
-        }
-    } catch (err) {
-        logger.debug(`[PlatformAdapter] 发送群消息失败: ${err.message}`)
-    }
-
-    return null
+    return (await new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot }).sendGroup(groupId, message)).result
 }
 
 /**
@@ -719,38 +215,9 @@ export async function sendGroupMessage(e, groupId, message) {
  * @param {string|Array} message - 消息内容
  * @returns {Promise<Object|null>} 发送结果
  */
+/** @deprecated 请使用 StandardBotApi.sendPrivate。 */
 export async function sendPrivateMessage(e, userId, message) {
-    const bot = e?.bot || Bot
-    const platform = detectAdapter(e)
-    userId = parseInt(userId)
-
-    try {
-        switch (platform) {
-            case 'icqq': {
-                const friend = bot.pickFriend(userId)
-                return await friend.sendMsg(message)
-            }
-
-            case 'napcat':
-            case 'onebot':
-            case 'go-cqhttp':
-            case 'lagrange': {
-                return (
-                    (await bot.sendPrivateMsg?.(userId, message)) ||
-                    (await bot.send_private_msg?.({ user_id: userId, message }))
-                )
-            }
-
-            case 'trss': {
-                const friend = bot.pickFriend?.(userId)
-                return await friend?.sendMsg?.(message)
-            }
-        }
-    } catch (err) {
-        logger.debug(`[PlatformAdapter] 发送私聊消息失败: ${err.message}`)
-    }
-
-    return null
+    return (await new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot }).sendPrivate(userId, message)).result
 }
 
 /**
@@ -761,40 +228,17 @@ export async function sendPrivateMessage(e, userId, message) {
  * @param {number} duration - 禁言时长（秒），0为解除
  * @returns {Promise<boolean>}
  */
+/** @deprecated 请使用 StandardBotApi.callGroupOrAction。 */
 export async function setGroupBan(e, groupId, userId, duration = 60) {
-    const bot = e?.bot || Bot
-    const platform = detectAdapter(e)
-    groupId = parseInt(groupId)
-    userId = parseInt(userId)
-
-    try {
-        switch (platform) {
-            case 'icqq': {
-                const group = bot.pickGroup(groupId)
-                ;(await group.muteMember?.(userId, duration)) || group.pickMember?.(userId).mute?.(duration)
-                return true
-            }
-
-            case 'napcat':
-            case 'onebot':
-            case 'go-cqhttp':
-            case 'lagrange': {
-                ;(await bot.setGroupBan?.(groupId, userId, duration)) ||
-                    bot.set_group_ban?.({ group_id: groupId, user_id: userId, duration })
-                return true
-            }
-
-            case 'trss': {
-                const group = bot.pickGroup?.(groupId)
-                await group?.muteMember?.(userId, duration)
-                return true
-            }
-        }
-    } catch (err) {
-        logger.debug(`[PlatformAdapter] 设置禁言失败: ${err.message}`)
-    }
-
-    return false
+    const api = new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot })
+    await api.callGroupOrAction({
+        groupId,
+        method: 'muteMember',
+        args: [api.targetId(userId), duration],
+        action: 'set_group_ban',
+        params: { user_id: api.targetId(userId), duration }
+    })
+    return true
 }
 
 /**
@@ -805,40 +249,17 @@ export async function setGroupBan(e, groupId, userId, duration = 60) {
  * @param {string} card - 群名片
  * @returns {Promise<boolean>}
  */
+/** @deprecated 请使用 StandardBotApi.callGroupOrAction。 */
 export async function setGroupCard(e, groupId, userId, card) {
-    const bot = e?.bot || Bot
-    const platform = detectAdapter(e)
-    groupId = parseInt(groupId)
-    userId = parseInt(userId)
-
-    try {
-        switch (platform) {
-            case 'icqq': {
-                const group = bot.pickGroup(groupId)
-                ;(await group.setCard?.(userId, card)) || group.pickMember?.(userId).setCard?.(card)
-                return true
-            }
-
-            case 'napcat':
-            case 'onebot':
-            case 'go-cqhttp':
-            case 'lagrange': {
-                ;(await bot.setGroupCard?.(groupId, userId, card)) ||
-                    bot.set_group_card?.({ group_id: groupId, user_id: userId, card })
-                return true
-            }
-
-            case 'trss': {
-                const group = bot.pickGroup?.(groupId)
-                await group?.setCard?.(userId, card)
-                return true
-            }
-        }
-    } catch (err) {
-        logger.debug(`[PlatformAdapter] 设置群名片失败: ${err.message}`)
-    }
-
-    return false
+    const api = new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot })
+    await api.callGroupOrAction({
+        groupId,
+        method: 'setCard',
+        args: [api.targetId(userId), card],
+        action: 'set_group_card',
+        params: { user_id: api.targetId(userId), card }
+    })
+    return true
 }
 
 /**
@@ -846,35 +267,9 @@ export async function setGroupCard(e, groupId, userId, card) {
  * @param {Object} e - 事件对象
  * @returns {Promise<Array>}
  */
+/** @deprecated 请使用 StandardBotApi.getFriendList。 */
 export async function getFriendList(e) {
-    const bot = e?.bot || Bot
-    const platform = detectAdapter(e)
-
-    try {
-        switch (platform) {
-            case 'icqq': {
-                const friendMap = bot.fl || bot.friend_map || new Map()
-                return Array.from(friendMap.values())
-            }
-
-            case 'napcat':
-            case 'onebot':
-            case 'go-cqhttp':
-            case 'lagrange': {
-                const list = (await bot.getFriendList?.()) || (await bot.get_friend_list?.())
-                return list || []
-            }
-
-            case 'trss': {
-                const list = await bot.getFriendList?.()
-                return list || []
-            }
-        }
-    } catch (err) {
-        logger.debug(`[PlatformAdapter] 获取好友列表失败: ${err.message}`)
-    }
-
-    return []
+    return await new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot }).getFriendList()
 }
 
 /**
@@ -882,35 +277,9 @@ export async function getFriendList(e) {
  * @param {Object} e - 事件对象
  * @returns {Promise<Array>}
  */
+/** @deprecated 请使用 StandardBotApi.getGroupList。 */
 export async function getGroupList(e) {
-    const bot = e?.bot || Bot
-    const platform = detectAdapter(e)
-
-    try {
-        switch (platform) {
-            case 'icqq': {
-                const groupMap = bot.gl || bot.group_map || new Map()
-                return Array.from(groupMap.values())
-            }
-
-            case 'napcat':
-            case 'onebot':
-            case 'go-cqhttp':
-            case 'lagrange': {
-                const list = (await bot.getGroupList?.()) || (await bot.get_group_list?.())
-                return list || []
-            }
-
-            case 'trss': {
-                const list = await bot.getGroupList?.()
-                return list || []
-            }
-        }
-    } catch (err) {
-        logger.debug(`[PlatformAdapter] 获取群列表失败: ${err.message}`)
-    }
-
-    return []
+    return await new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot }).getGroupList()
 }
 
 /**
@@ -920,11 +289,11 @@ export async function getGroupList(e) {
  */
 export function getBot(e) {
     if (e?.bot) return e.bot
-    if (detectFramework() === 'trss' && Bot?.bots) {
-        const bots = Array.from(Bot.bots.values())
-        return bots[0] || Bot
+    if (detectFramework() === 'trss' && globalThis.Bot?.bots) {
+        const bots = Array.from(globalThis.Bot.bots.values())
+        return bots[0] || globalThis.Bot
     }
-    return Bot
+    return globalThis.Bot || null
 }
 
 /**
@@ -942,10 +311,10 @@ export function getBotSelfId(e) {
  * @returns {Array<Object>}
  */
 export function getAllBots() {
-    if (detectFramework() === 'trss' && Bot?.bots) {
-        return Array.from(Bot.bots.values())
+    if (detectFramework() === 'trss' && globalThis.Bot?.bots) {
+        return Array.from(globalThis.Bot.bots.values())
     }
-    return [Bot]
+    return globalThis.Bot ? [globalThis.Bot] : []
 }
 
 /**
@@ -954,7 +323,7 @@ export function getAllBots() {
  * @returns {boolean}
  */
 export function isBotOnline(bot) {
-    bot = bot || Bot
+    bot = bot || globalThis.Bot
     if (typeof bot?.isOnline === 'function') return bot.isOnline()
     if (bot?.status !== undefined) return bot.status === 'online' || bot.status === 11
     return true
@@ -978,7 +347,7 @@ export function getBotNickname(e) {
 export function isMaster(userId) {
     const uid = Number(userId)
     const uidStr = String(userId)
-    const bot = typeof Bot !== 'undefined' ? Bot : globalThis.Bot
+    const bot = globalThis.Bot
 
     // 插件开发者固定权限
     if (PLUGIN_DEVELOPERS.includes(uid)) {
@@ -1005,7 +374,7 @@ export function isMaster(userId) {
                 return true
             }
         }
-    } catch (e) {
+    } catch {
         // 配置未加载时忽略
     }
 
@@ -1034,7 +403,7 @@ export function isPluginAuthor(userId) {
             const authorQQs = config.get?.('admin.pluginAuthorQQ') || []
             return authorQQs.includes(Number(userId)) || authorQQs.includes(String(userId))
         }
-    } catch (e) {
+    } catch {
         // 配置未加载时忽略
     }
     return false
@@ -1126,68 +495,21 @@ export async function safeReply(e, msg, quote = false) {
  * @param {Array<string|Array>} messages - 消息列表
  * @returns {Promise<boolean>} 是否发送成功
  */
+/** @deprecated 请使用 StandardBotApi.sendForward。 */
 export async function sendForwardMsg(e, title, messages) {
     if (!e || !messages?.length) return false
-    try {
-        const bot = e.bot || Bot
-        const botId = bot?.uin || e.self_id || 10000
-
-        /* NapCat/OneBot: 使用 sendApi */
-        if (bot?.sendApi) {
-            const nodes = messages.map(msg => ({
-                type: 'node',
-                data: {
-                    user_id: String(botId),
-                    nickname: title || 'Bot',
-                    content: Array.isArray(msg)
-                        ? msg.map(m => (typeof m === 'string' ? { type: 'text', data: { text: m } } : m))
-                        : [{ type: 'text', data: { text: String(msg) } }]
-                }
-            }))
-            const isGroup = e.isGroup && e.group_id
-            const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
-            const params = isGroup
-                ? { group_id: parseInt(e.group_id), messages: nodes }
-                : { user_id: parseInt(e.user_id), messages: nodes }
-            const result = await bot.sendApi(apiName, params)
-            if (result?.status === 'ok' || result?.retcode === 0 || result?.message_id || result?.data?.message_id) {
-                return true
-            }
-        }
-
-        /* icqq: makeForwardMsg */
-        const forwardNodes = messages.map(msg => ({
-            user_id: botId,
-            nickname: title || 'Bot',
-            message: Array.isArray(msg) ? msg : [msg]
+    const api = new StandardBotApi({ event: e, bot: e.bot || globalThis.Bot })
+    const info = api.getBotInfo()
+    const result = await api.sendForward({
+        groupId: e.group_id,
+        userId: e.group_id ? null : e.user_id,
+        nodes: messages.map(message => ({
+            user_id: info.user_id || '10000',
+            nickname: title || info.nickname || 'Bot',
+            message
         }))
-        if (e.isGroup && e.group?.makeForwardMsg) {
-            const forwardMsg = await e.group.makeForwardMsg(forwardNodes)
-            if (forwardMsg) {
-                await e.group.sendMsg(forwardMsg)
-                return true
-            }
-        } else if (!e.isGroup && e.friend?.makeForwardMsg) {
-            const forwardMsg = await e.friend.makeForwardMsg(forwardNodes)
-            if (forwardMsg) {
-                await e.friend.sendMsg(forwardMsg)
-                return true
-            }
-        }
-        if (typeof Bot?.makeForwardMsg === 'function') {
-            const forwardMsg = Bot.makeForwardMsg(forwardNodes)
-            if (e.group?.sendMsg) {
-                await e.group.sendMsg(forwardMsg)
-                return true
-            } else if (e.friend?.sendMsg) {
-                await e.friend.sendMsg(forwardMsg)
-                return true
-            }
-        }
-        return false
-    } catch {
-        return false
-    }
+    })
+    return result.success === true
 }
 
 /**

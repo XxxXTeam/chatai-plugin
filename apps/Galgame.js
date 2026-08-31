@@ -77,9 +77,13 @@ function registerGalgameReactionListener() {
 
     setTimeout(() => {
         try {
-            const bots = Bot?.uin ? [Bot] : Bot?.bots ? Object.values(Bot.bots) : []
-            if (bots.length === 0 && global.Bot) {
-                bots.push(global.Bot)
+            const bots = globalThis.Bot?.uin
+                ? [globalThis.Bot]
+                : globalThis.Bot?.bots
+                  ? Object.values(globalThis.Bot.bots)
+                  : []
+            if (bots.length === 0 && globalThis.Bot) {
+                bots.push(globalThis.Bot)
             }
 
             for (const bot of bots) {
@@ -128,7 +132,7 @@ async function handleGalgameReaction(e, bot) {
         }
 
         const botIds = getBotIds()
-        const selfId = e.self_id || bot?.uin || Bot?.uin
+        const selfId = e.self_id || bot?.uin || globalThis.Bot?.uin
 
         // 忽略机器人自己的表情
         if (userId === selfId || botIds.has(String(userId))) {
@@ -347,7 +351,7 @@ async function handleGalgameReaction(e, bot) {
 async function sendGalgameResponse(bot, groupId, userId, characterId, result) {
     const hasOptions = result.options && result.options.length > 0
     const hasEvent = result.event && result.eventOptions && result.eventOptions.length > 0
-    const botId = bot?.uin || Bot?.uin || 10000
+    const botId = bot?.uin || globalThis.Bot?.uin || 10000
     let headerInfo = ''
     if (result.scene) {
         headerInfo += `📍 ${result.scene.name}`
@@ -904,7 +908,7 @@ export class Galgame extends plugin {
                 return
             }
 
-            const bot = e.bot || Bot
+            const bot = e.bot || globalThis.Bot
             const pendingEvent = galgameService.findUserPendingEvent(groupId, userId)
             if (pendingEvent && pendingEvent.type === 'event') {
                 await this.handleEventWithCustomInput(bot, groupId, userId, gameSession, pendingEvent, message)
@@ -988,7 +992,7 @@ export class Galgame extends plugin {
 
             // 无历史记录 - 检查是否有自定义提示词
             const hasCustomPrompt = character?.system_prompt
-            const bot = e.bot || Bot
+            const bot = e.bot || globalThis.Bot
 
             if (hasCustomPrompt) {
                 // 有自定义提示词 - 请求AI生成欢迎词
@@ -1077,7 +1081,7 @@ export class Galgame extends plugin {
         const e = this.e
         const userId = String(e.user_id)
         const groupId = e.group_id ? String(e.group_id) : null
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
 
         try {
             await this.reply('✅ 正在生成开场剧情...')
@@ -1123,7 +1127,7 @@ export class Galgame extends plugin {
         const e = this.e
         const userId = String(e.user_id)
         const groupId = e.group_id ? String(e.group_id) : null
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
 
         try {
             await this.reply('🔄 正在重新随机...')
@@ -1256,7 +1260,7 @@ export class Galgame extends plugin {
             const tempDir = os.tmpdir()
             const tempFilePath = path.join(tempDir, filename)
             fs.writeFileSync(tempFilePath, jsonContent, 'utf8')
-            const bot = e.bot || Bot
+            const bot = e.bot || globalThis.Bot
             let fileSent = false
 
             if (groupId && bot?.pickGroup) {
@@ -1342,7 +1346,7 @@ export class Galgame extends plugin {
                 const fileInfo = e.file || e.message.find(m => m.type === 'file')
                 if (fileInfo) {
                     // 尝试下载文件内容
-                    const bot = e.bot || Bot
+                    const bot = e.bot || globalThis.Bot
                     let fileUrl = fileInfo.url
 
                     // 如果没有直接URL，尝试获取
@@ -1383,7 +1387,7 @@ export class Galgame extends plugin {
             await galgameService.setUserGameState(groupId, userId, result.characterId, true)
 
             // 开始新对话
-            const bot = e.bot || Bot
+            const bot = e.bot || globalThis.Bot
             const aiResult = await galgameService.sendMessage({
                 userId,
                 groupId,
@@ -1473,7 +1477,7 @@ export class Galgame extends plugin {
         const e = this.e
         const userId = String(e.user_id)
         const groupId = e.group_id ? String(e.group_id) : null
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
 
         try {
             const gameSession = galgameService.getUserGameSession(groupId, userId)
@@ -1701,15 +1705,15 @@ ${urlText}
             // 临时私聊失败，尝试普通私聊
             if (!sendSuccess) {
                 try {
-                    if (Bot.pickFriend) {
-                        const friend = Bot.pickFriend(userId)
+                    if (globalThis.Bot?.pickFriend) {
+                        const friend = globalThis.Bot.pickFriend(userId)
                         if (friend?.sendMsg) {
                             await friend.sendMsg(editMsg)
                             sendSuccess = true
                             await this.reply('📝 编辑链接已私聊发送，请查看私聊消息')
                         }
-                    } else if (Bot.pickUser) {
-                        const user = Bot.pickUser(userId)
+                    } else if (globalThis.Bot?.pickUser) {
+                        const user = globalThis.Bot.pickUser(userId)
                         if (user?.sendMsg) {
                             await user.sendMsg(editMsg)
                             sendSuccess = true
@@ -2039,7 +2043,7 @@ ${urlText}
                 return true
             }
 
-            const bot = e.bot || Bot
+            const bot = e.bot || globalThis.Bot
 
             // 根据好感度选择日常事件类型
             const status = await galgameService.getStatus(userId, gameSession.characterId, groupId)
@@ -2119,7 +2123,7 @@ ${urlText}
                 return true
             }
 
-            const bot = e.bot || Bot
+            const bot = e.bot || globalThis.Bot
 
             // 随机选择探索地点和活动
             const location = EXPLORE_EVENTS.locations[Math.floor(Math.random() * EXPLORE_EVENTS.locations.length)]
@@ -2262,7 +2266,7 @@ ${urlText}
                 return true
             }
 
-            const bot = e.bot || Bot
+            const bot = e.bot || globalThis.Bot
             const status = await galgameService.getStatus(userId, gameSession.characterId, groupId)
 
             const result = await galgameService.sendMessage({
@@ -2313,7 +2317,7 @@ ${urlText}
                 return true
             }
 
-            const bot = e.bot || Bot
+            const bot = e.bot || globalThis.Bot
             const jobs = ['咖啡店帮工', '图书馆整理', '便利店收银', '家教', '发传单', '跑腿送货']
             const randomJob = jobs[Math.floor(Math.random() * jobs.length)]
 

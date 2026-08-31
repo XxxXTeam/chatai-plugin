@@ -16,3 +16,5 @@ yarn.lock
 *.bundle.js
 *.md
 .github/
+docs/webs/
+temp/

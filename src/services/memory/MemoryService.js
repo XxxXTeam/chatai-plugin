@@ -320,6 +320,84 @@ class MemoryService {
         return deleteTransaction(ids)
     }
 
+    /**
+     * 在单个数据库事务中用总结结果替换同一用户、作用域和分类的旧记忆。
+     * 任一删除或写入失败都会整体回滚，避免出现旧记忆已删而新记忆只写入一部分的状态。
+     *
+     * @param {Object} options - 替换选项
+     * @param {string} options.userId - 用户 ID
+     * @param {string|null} options.groupId - 群作用域，null 表示全局/私聊作用域
+     * @param {string} options.category - 记忆分类
+     * @param {Array<number|string>} options.oldIds - 待替换的旧记忆 ID
+     * @param {string[]} options.contents - 新记忆内容
+     * @param {number} [options.confidence=0.85] - 新记忆可信度
+     * @param {string} [options.source='summary'] - 新记忆来源
+     * @returns {Promise<Object[]>} 完整的新记忆对象
+     */
+    async replaceCategoryMemories(options) {
+        await this.ensureInit()
+        const {
+            userId,
+            groupId = null,
+            category,
+            oldIds = [],
+            contents = [],
+            confidence = 0.85,
+            source = 'summary'
+        } = options || {}
+
+        if (!userId || !isValidCategory(category)) {
+            throw new Error('userId and valid category are required')
+        }
+
+        const normalizedContents = [...new Set(contents.map(content => String(content || '').trim()).filter(Boolean))]
+        if (normalizedContents.length === 0) {
+            throw new Error('summarized contents cannot be empty')
+        }
+
+        const db = databaseService.db
+        const now = Date.now()
+        const replaceTransaction = db.transaction(() => {
+            if (oldIds.length > 0) {
+                const deleteStmt =
+                    groupId === null
+                        ? db.prepare(
+                              'DELETE FROM structured_memories WHERE id = ? AND user_id = ? AND category = ? AND group_id IS NULL'
+                          )
+                        : db.prepare(
+                              'DELETE FROM structured_memories WHERE id = ? AND user_id = ? AND category = ? AND group_id = ?'
+                          )
+                let deletedCount = 0
+                for (const id of oldIds) {
+                    const deleted =
+                        groupId === null
+                            ? deleteStmt.run(id, userId, category)
+                            : deleteStmt.run(id, userId, category, groupId)
+                    deletedCount += deleted.changes || 0
+                }
+                if (deletedCount !== oldIds.length) {
+                    throw new Error(
+                        `memory replacement scope mismatch: expected ${oldIds.length}, deleted ${deletedCount}`
+                    )
+                }
+            }
+
+            const insertStmt = db.prepare(`
+                INSERT INTO structured_memories
+                (user_id, group_id, category, sub_type, content, confidence, source, metadata, created_at, updated_at)
+                VALUES (?, ?, ?, NULL, ?, ?, ?, NULL, ?, ?)
+            `)
+            return normalizedContents.map(
+                content =>
+                    insertStmt.run(userId, groupId, category, content, confidence, source, now, now).lastInsertRowid
+            )
+        })
+
+        const insertedIds = replaceTransaction()
+        const rows = await Promise.all(insertedIds.map(id => this.getMemoryById(id)))
+        return rows.filter(Boolean)
+    }
+
     // ==================== 查询方法 ====================
 
     /**
@@ -614,15 +692,21 @@ class MemoryService {
     /**
      * 合并重复记忆
      */
-    async mergeMemories(userId) {
+    async mergeMemories(userId, options = {}) {
         await this.ensureInit()
 
-        const memories = await this.getMemoriesByUser(userId, { limit: 1000 })
-        const merged = new Map() // key: category+content_hash -> memory
+        const hasGroupId = Object.prototype.hasOwnProperty.call(options, 'groupId')
+        const groupId = hasGroupId ? options.groupId : undefined
+        const memories = await this.getMemoriesByUser(userId, { groupId, limit: 1000 })
+        const merged = new Map() // key: group_id+category+content_hash -> memory
         const toDelete = []
 
         for (const memory of memories) {
-            const key = `${memory.category}:${this.hashContent(memory.content)}`
+            // 未限定 groupId 时会遍历该用户全部作用域；作用域必须参与键计算，
+            // 否则两个群中相同文字的记忆会被错误地互相删除。
+            const scopeKey =
+                memory.groupId === null || memory.groupId === undefined ? 'global' : `group:${memory.groupId}`
+            const key = `${scopeKey}:${memory.category}:${this.hashContent(memory.content)}`
 
             if (merged.has(key)) {
                 const existing = merged.get(key)

@@ -4,6 +4,7 @@
  */
 
 import config from '../../../config/config.js'
+import { StandardBotApi } from '../../core/platform/index.js'
 
 /* 懒加载 ImageGen 实例和预设管理器 */
 let _imageGenInstance = null
@@ -109,9 +110,11 @@ export const imageGenTools = [
 
                 if (auto_send && e) {
                     const recallDelay = imageGen.getRecallDelay(60)
-                    await e.reply(genType === 'img2img' ? '正在处理图片，请稍候...' : '正在生成图片，请稍候...', true, {
-                        recallMsg: recallDelay
-                    })
+                    await StandardBotApi.fromContext(ctx).reply(
+                        genType === 'img2img' ? '正在处理图片，请稍候...' : '正在生成图片，请稍候...',
+                        true,
+                        { recallMsg: recallDelay }
+                    )
                 }
 
                 const result = await imageGen.generateImage({
@@ -193,7 +196,9 @@ export const imageGenTools = [
 
                 if (auto_send && e) {
                     const recallDelay = imageGen.getRecallDelay(60)
-                    await e.reply('正在生成视频，这可能需要几分钟，请耐心等待...', true, { recallMsg: recallDelay })
+                    await StandardBotApi.fromContext(ctx).reply('正在生成视频，这可能需要几分钟，请耐心等待...', true, {
+                        recallMsg: recallDelay
+                    })
                 }
 
                 const imageUrls = image_url ? [image_url] : []
@@ -340,9 +345,11 @@ export const imageGenTools = [
 
                 if (auto_send && e) {
                     const recallDelay = imageGen.getRecallDelay(60)
-                    await e.reply(`正在生成${keyword}效果，请稍候...${hasSplit ? '（完成后将自动切割）' : ''}`, true, {
-                        recallMsg: recallDelay
-                    })
+                    await StandardBotApi.fromContext(ctx).reply(
+                        `正在生成${keyword}效果，请稍候...${hasSplit ? '（完成后将自动切割）' : ''}`,
+                        true,
+                        { recallMsg: recallDelay }
+                    )
                 }
 
                 /* 直接调用绘图模块生成图片 */

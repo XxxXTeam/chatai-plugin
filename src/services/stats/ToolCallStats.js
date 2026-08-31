@@ -5,6 +5,7 @@
 
 import { redisClient } from '../../core/cache/RedisClient.js'
 import { chatLogger } from '../../core/utils/logger.js'
+import { sanitizeToolResultForLog } from '../../core/utils/toolResult.js'
 
 const logger = chatLogger
 
@@ -35,6 +36,7 @@ class ToolCallStats {
         // 内存缓存记录
         this.records = []
         this.maxRecords = MAX_RECORDS
+        this.recordSequence = 0
         // 汇总统计
         this.summary = {
             total: 0,
@@ -61,6 +63,11 @@ class ToolCallStats {
                     }
                 })
                 .filter(Boolean)
+
+            this.recordSequence = this.records.reduce(
+                (max, record) => Math.max(max, Number(record.sequence || record.startOrder || 0)),
+                this.records.length
+            )
 
             // 从 Redis 加载汇总统计
             const summaryData = await redisClient.get(TOOL_STATS_KEY)
@@ -94,16 +101,23 @@ class ToolCallStats {
             error = null,
             errorStack = null,
             duration = 0,
+            timestamp = Date.now(),
+            attemptId = null,
+            startOrder = null,
             userId = null,
             groupId = null,
             source = 'mcp'
         } = options
 
-        const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+        const sequence = ++this.recordSequence
+        const id = `${Date.now()}-${sequence}-${Math.random().toString(36).slice(2, 11)}`
 
         const record = {
             id,
-            timestamp: Date.now(),
+            attemptId,
+            startOrder: Number.isFinite(startOrder) ? startOrder : sequence,
+            sequence,
+            timestamp,
             toolName,
             request: this.sanitizeRequest(request),
             response: this.sanitizeResponse(response),
@@ -172,24 +186,10 @@ class ToolCallStats {
      * 清理响应数据
      */
     sanitizeResponse(response) {
-        if (!response) return null
+        if (response === null || response === undefined) return null
 
         try {
-            const sanitized = { ...response }
-
-            // 限制大文本字段
-            for (const [key, value] of Object.entries(sanitized)) {
-                if (typeof value === 'string' && value.length > 2000) {
-                    sanitized[key] = value.substring(0, 2000) + '...[truncated]'
-                }
-                if (Array.isArray(value) && value.length > 50) {
-                    sanitized[key] = value.slice(0, 50)
-                    sanitized[`${key}_truncated`] = true
-                    sanitized[`${key}_total`] = value.length
-                }
-            }
-
-            return sanitized
+            return sanitizeToolResultForLog(response)
         } catch {
             return { _raw: String(response).substring(0, 1000) }
         }
@@ -239,7 +239,9 @@ class ToolCallStats {
     async getRecords(filter = {}, limit = 100) {
         await this.init()
 
-        let results = [...this.records]
+        let results = [...this.records].sort(
+            (a, b) => b.timestamp - a.timestamp || (b.startOrder || b.sequence || 0) - (a.startOrder || a.sequence || 0)
+        )
 
         // 应用过滤器
         if (filter.toolName) {

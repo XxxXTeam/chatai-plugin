@@ -549,7 +549,7 @@ router.get('/system/server-mode', async (req, res) => {
                 sharePortEnabled: sharePortConfig,
                 currentMode: webServer?.sharedPort ? 'shared' : 'standalone',
                 port: webServer?.port,
-                canRestart: typeof Bot?.restart === 'function'
+                canRestart: typeof globalThis.Bot?.restart === 'function'
             })
         )
     } catch (error) {
@@ -593,8 +593,8 @@ router.post('/system/restart', async (req, res) => {
             try {
                 if (type === 'full') {
                     // 完整重启Bot
-                    if (typeof Bot?.restart === 'function') {
-                        await Bot.restart()
+                    if (typeof globalThis.Bot?.restart === 'function') {
+                        await globalThis.Bot.restart()
                     } else {
                         process.exit(0)
                     }

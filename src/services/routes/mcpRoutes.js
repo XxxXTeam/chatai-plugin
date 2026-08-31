@@ -5,44 +5,6 @@ import express from 'express'
 import { ChaiteResponse } from './shared.js'
 import { mcpManager } from '../../mcp/McpManager.js'
 
-function inferServerType(config) {
-    if (config.url) return 'sse'
-    if (config.package) return 'npm'
-    if (config.command) return 'stdio'
-    return undefined
-}
-
-function normalizeNpxServerConfig(serverConfig) {
-    if (!serverConfig || typeof serverConfig !== 'object') return serverConfig
-
-    const config = { ...serverConfig }
-    config.type = (config.type || inferServerType(config) || 'stdio').toLowerCase()
-
-    const command = String(config.command || '').toLowerCase()
-    const isNpxCommand = command === 'npx' || command === 'npx.cmd'
-    if (!isNpxCommand || (config.type && config.type !== 'stdio')) {
-        return config
-    }
-
-    const args = Array.isArray(config.args) ? [...config.args] : []
-    while (args[0] === '-y' || args[0] === '--yes' || args[0] === '--prefer-offline') {
-        args.shift()
-    }
-
-    const pkg = args.shift()
-    if (!pkg || String(pkg).startsWith('-')) {
-        return config
-    }
-
-    const { command: _command, ...rest } = config
-    return {
-        ...rest,
-        type: 'npm',
-        package: pkg,
-        args
-    }
-}
-
 const router = express.Router()
 
 // GET /servers - 获取所有MCP服务器
@@ -76,7 +38,7 @@ router.post('/servers', async (req, res) => {
         }
 
         // 验证配置
-        const serverConfig = normalizeNpxServerConfig(config || {})
+        const serverConfig = mcpManager.normalizeServerConfig(config || {})
         const type = serverConfig.type
 
         // 根据类型验证必需字段
@@ -127,7 +89,7 @@ router.put('/servers/:name', async (req, res) => {
         }
 
         // 使用 McpManager 更新服务器
-        const result = await mcpManager.updateServer(req.params.name, normalizeNpxServerConfig(newConfig))
+        const result = await mcpManager.updateServer(req.params.name, mcpManager.normalizeServerConfig(newConfig))
         res.json(ChaiteResponse.ok(result))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -199,7 +161,7 @@ router.post('/import', async (req, res) => {
         for (const [name, serverConfig] of Object.entries(mcpServers)) {
             try {
                 // 转换配置格式（兼容 Claude Desktop 格式）
-                const config = normalizeNpxServerConfig(serverConfig)
+                const config = mcpManager.normalizeServerConfig(serverConfig)
 
                 await mcpManager.addServer(name, config)
                 success++
@@ -233,6 +195,16 @@ router.get('/resources', async (req, res) => {
     }
 })
 
+// GET /resources/templates - 获取 MCP 资源模板
+router.get('/resources/templates', async (req, res) => {
+    try {
+        await mcpManager.init()
+        res.json(ChaiteResponse.ok(mcpManager.getResourceTemplates()))
+    } catch (error) {
+        res.status(500).json(ChaiteResponse.fail(null, error.message))
+    }
+})
+
 // POST /resources/read - 读取MCP资源
 router.post('/resources/read', async (req, res) => {
     try {
@@ -241,7 +213,7 @@ router.post('/resources/read', async (req, res) => {
             return res.status(400).json(ChaiteResponse.fail(null, 'serverName and uri are required'))
         }
         await mcpManager.init()
-        const content = await mcpManager.readResource(serverName, uri)
+        const content = await mcpManager.readResource(uri, serverName)
         res.json(ChaiteResponse.ok(content))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -252,7 +224,7 @@ router.post('/resources/read', async (req, res) => {
 router.get('/prompts', async (req, res) => {
     try {
         await mcpManager.init()
-        const prompts = await mcpManager.listPrompts()
+        const prompts = mcpManager.getPrompts()
         res.json(ChaiteResponse.ok(prompts))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
@@ -267,7 +239,7 @@ router.post('/prompts/get', async (req, res) => {
             return res.status(400).json(ChaiteResponse.fail(null, 'serverName and name are required'))
         }
         await mcpManager.init()
-        const prompt = await mcpManager.getPrompt(serverName, name, args)
+        const prompt = await mcpManager.getPrompt(name, args, serverName)
         res.json(ChaiteResponse.ok(prompt))
     } catch (error) {
         res.status(500).json(ChaiteResponse.fail(null, error.message))

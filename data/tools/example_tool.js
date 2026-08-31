@@ -23,14 +23,19 @@ export default {
   async run(args, context) {
     const { name, greeting = '你好' } = args
     
-    // 获取当前事件和机器人
+    // 业务动作统一通过标准平台接口；本示例只读取当前事件资料
     const e = context.getEvent()
-    const bot = context.getBot()
+    const api = context.getApi()
+    const message = context.message
     
     // 可以获取发送者信息
     const senderId = e?.sender?.user_id || e?.user_id
     const senderName = e?.sender?.nickname || '用户'
     
+    // api 与 message 可用于标准发送，例如：await api.reply(message.text('处理完成'))
+    void api
+    void message
+
     // 返回结果给 AI
     return {
       success: true,

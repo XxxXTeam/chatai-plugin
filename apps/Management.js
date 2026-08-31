@@ -317,7 +317,7 @@ export class AIManagement extends plugin {
         const userId = this.e.user_id
         try {
             // 尝试发送合并转发
-            const bot = this.e.bot || Bot
+            const bot = this.e.bot || globalThis.Bot
             // 优先判断是否为好友，否则使用临时消息
             let target = null
             if (bot?.pickFriend) {
@@ -445,7 +445,7 @@ export class AIManagement extends plugin {
      */
     async makeForwardMsg(messages) {
         try {
-            const bot = this.e.bot || Bot
+            const bot = this.e.bot || globalThis.Bot
             if (bot?.makeForwardMsg) {
                 return await bot.makeForwardMsg(messages)
             }

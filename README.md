@@ -5,7 +5,7 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-XxxXTeam%2Fchatai--plugin-blue?logo=github)](https://github.com/XxxXTeam/chatai-plugin)
 [![Version](https://img.shields.io/badge/version-1.0.0-blue?logo=semantic-release)](https://github.com/XxxXTeam/chatai-plugin/releases)
-[![Node](https://img.shields.io/badge/node-%3E%3D18-green?logo=node.js)](https://nodejs.org/)
+[![Node](https://img.shields.io/badge/node-%3E%3D20.18.1-green?logo=node.js)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-yellow?logo=opensourceinitiative)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?logo=github)](https://github.com/XxxXTeam/chatai-plugin/pulls)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-purple?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iMiI+PHBhdGggZD0iTTEyIDJhMTAgMTAgMCAxIDAgMCAyMCAxMCAxMCAwIDAgMCAwLTIweiIvPjwvc3ZnPg==)](https://modelcontextprotocol.io/)
@@ -87,7 +87,7 @@
 
 | 依赖 | 版本要求 | 说明 |
 |------|----------|------|
-| Node.js | >= 18 | 推荐使用 LTS 版本 |
+| Node.js | >= 20.18.1 | 推荐使用 LTS 版本 |
 | pnpm | >= 8.0 | 推荐使用 pnpm 作为包管理器 |
 | Yunzai-Bot | V3 | 支持 [Miao-Yunzai](https://github.com/yoimiya-kokomi/Miao-Yunzai) / [TRSS-Yunzai](https://github.com/TimeRainStarSky/Yunzai) |
 | Redis | 可选 | 用于缓存和会话存储 |

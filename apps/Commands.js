@@ -17,6 +17,7 @@ import { generateGroupAdminLoginCode } from '../src/services/routes/groupAdminRo
 import { getWebServer } from '../src/services/webServer.js'
 import { STOP_WORDS } from '../src/utils/common.js'
 import { contextManager } from '../src/services/llm/ContextManager.js'
+import { StandardBotApi } from '../src/core/platform/index.js'
 
 // Debug模式状态管理（运行时内存，重启后重置）
 const debugSessions = new Map() // key: groupId或`private_${userId}`, value: boolean
@@ -267,12 +268,13 @@ export class AICommands extends plugin {
 
             const userId = e.user_id || e.sender?.user_id || 'unknown'
             const groupId = e.group_id || null
-            const fullUserId = groupId ? `${groupId}_${userId}` : String(userId)
 
             await this.reply('🔄 正在整理记忆...', true)
 
             // 执行覆盖式总结
-            const result = await memoryManager.summarizeUserMemory(fullUserId)
+            const result = await memoryManager.summarizeUserMemory(String(userId), {
+                ...(groupId ? { groupId: String(groupId) } : {})
+            })
 
             if (!result.success) {
                 await this.reply(`❌ 记忆整理失败: ${result.error}`, true)
@@ -678,7 +680,7 @@ export class AICommands extends plugin {
 
             // 尝试私聊/临时消息发送（更安全），失败则不发送到群
             let sendSuccess = false
-            const bot = e.bot || global.Bot
+            const bot = e.bot || globalThis.Bot
             try {
                 // 优先判断是否为好友
                 if (bot?.pickFriend) {
@@ -1415,7 +1417,7 @@ ${dialogText}${truncatedNote}`
             const configuredMinMessages = Number(config.get('features.userPortrait.minMessages')) || 10
             const requiredMessages = 21
 
-            const userIdStr = String(userId).includes('_') ? String(userId).split('_').pop() : String(userId)
+            const userIdStr = String(userId)
             const conversationId = contextManager.getConversationId(userIdStr, groupId ? String(groupId) : null)
             const configuredMaxMessages =
                 Number(config.get('features.groupSummary.maxMessages') || config.get('memory.maxMemories')) || 100
@@ -1820,9 +1822,7 @@ ${userMessages
 
             if (!userMessages || userMessages.length < configuredMinMessages) {
                 await contextManager.init()
-                const targetUserIdStr = String(targetUserId).includes('_')
-                    ? String(targetUserId).split('_').pop()
-                    : String(targetUserId)
+                const targetUserIdStr = String(targetUserId)
                 const conversationId = contextManager.getConversationId(targetUserIdStr, String(e.group_id))
                 const isolation = config.get('context.isolation') || {}
                 const groupUserIsolation = isolation.groupUserIsolation ?? false
@@ -2159,12 +2159,20 @@ ${rawChatHistory}`
  */
 async function getMemberInfo(e, userId) {
     try {
-        const group = e.group || e.bot?.pickGroup?.(e.group_id)
+        const api = StandardBotApi.fromContext({ event: e, bot: e?.bot || globalThis.Bot })
+        let group = e.group
+        if (!group) {
+            try {
+                group = api.group(e.group_id)
+            } catch {
+                group = null
+            }
+        }
         if (!group) return null
 
         // 尝试多种方式获取成员信息
         try {
-            const member = group.pickMember?.(userId)
+            const member = group.pickMember?.(api.targetId(userId))
             if (member?.getInfo) {
                 return await member.getInfo(true)
             }
@@ -2177,7 +2185,8 @@ async function getMemberInfo(e, userId) {
         try {
             const memberMap = await group.getMemberMap?.()
             if (memberMap) {
-                return memberMap.get(Number(userId)) || memberMap.get(String(userId))
+                const targetId = api.targetId(userId)
+                return memberMap.get(targetId) || memberMap.get(String(userId))
             }
         } catch {}
 
@@ -2194,14 +2203,24 @@ async function getMemberInfo(e, userId) {
  * @returns {Promise<Array>}
  */
 async function getGroupChatHistory(e, num) {
-    const group = e.group || e.bot?.pickGroup?.(e.group_id)
+    const api = StandardBotApi.fromContext({ event: e, bot: e?.bot || globalThis.Bot })
+    let group = e.group
+    if (!group) {
+        try {
+            group = api.group(e.group_id)
+        } catch {
+            group = null
+        }
+    }
     if (!group || typeof group.getChatHistory !== 'function') {
         return []
     }
 
     try {
         let allChats = []
-        let seq = Number(e.seq) || 0
+        const initialSequence = e?.seq ?? e?.message_id ?? 0
+        const isQQBot = api.isQQBot
+        let seq = isQQBot ? initialSequence : Number(initialSequence) || 0
         let totalScanned = 0
         const maxScanLimit = Math.min(num * 10, 5000)
 
@@ -2210,10 +2229,12 @@ async function getGroupChatHistory(e, num) {
 
             if (!chatHistory || chatHistory.length === 0) break
 
+            const hadPreviousPage = totalScanned > 0
             totalScanned += chatHistory.length
 
-            const oldestSeq = Number(chatHistory[0]?.seq) || 0
-            if (seq && oldestSeq && seq === oldestSeq) break
+            const oldestRaw = chatHistory[0]?.seq ?? chatHistory[0]?.message_id
+            const oldestSeq = isQQBot ? (oldestRaw ?? '') : Number(oldestRaw) || 0
+            const repeatedSequence = seq && oldestSeq && String(seq) === String(oldestSeq)
             if (oldestSeq) seq = oldestSeq
 
             const filteredChats = chatHistory.filter(chat => {
@@ -2225,7 +2246,7 @@ async function getGroupChatHistory(e, num) {
                 allChats.unshift(...filteredChats.reverse())
             }
 
-            if (!oldestSeq) break
+            if (!oldestSeq || (repeatedSequence && hadPreviousPage)) break
         }
 
         return allChats.slice(-num)
@@ -2243,14 +2264,24 @@ async function getGroupChatHistory(e, num) {
  * @returns {Promise<Array>}
  */
 async function getUserTextHistory(e, userId, num) {
-    const group = e.group || e.bot?.pickGroup?.(e.group_id)
+    const api = StandardBotApi.fromContext({ event: e, bot: e?.bot || globalThis.Bot })
+    let group = e.group
+    if (!group) {
+        try {
+            group = api.group(e.group_id)
+        } catch {
+            group = null
+        }
+    }
     if (!group || typeof group.getChatHistory !== 'function') {
         return []
     }
 
     try {
         let userChats = []
-        let seq = Number(e.seq) || 0
+        const initialSequence = e?.seq ?? e?.message_id ?? 0
+        const isQQBot = api.isQQBot
+        let seq = isQQBot ? initialSequence : Number(initialSequence) || 0
         let totalScanned = 0
         const maxScanLimit = 3000
 
@@ -2259,10 +2290,12 @@ async function getUserTextHistory(e, userId, num) {
 
             if (!chatHistory || chatHistory.length === 0) break
 
+            const hadPreviousPage = totalScanned > 0
             totalScanned += chatHistory.length
 
-            const oldestSeq = Number(chatHistory[0]?.seq) || 0
-            if (seq && oldestSeq && seq === oldestSeq) break
+            const oldestRaw = chatHistory[0]?.seq ?? chatHistory[0]?.message_id
+            const oldestSeq = isQQBot ? (oldestRaw ?? '') : Number(oldestRaw) || 0
+            const repeatedSequence = seq && oldestSeq && String(seq) === String(oldestSeq)
             if (oldestSeq) seq = oldestSeq
 
             const filteredChats = chatHistory.filter(chat => {
@@ -2276,7 +2309,7 @@ async function getUserTextHistory(e, userId, num) {
                 userChats.unshift(...filteredChats.reverse())
             }
 
-            if (!oldestSeq) break
+            if (!oldestSeq || (repeatedSequence && hadPreviousPage)) break
         }
 
         return userChats.slice(-num)

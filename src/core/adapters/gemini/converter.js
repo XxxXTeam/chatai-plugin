@@ -5,6 +5,7 @@ import {
     registerIntoChaiteConverter
 } from '../../utils/converter.js'
 import { toGeminiTool } from '../tooling.js'
+import { mcpContentBlockToText } from '../../utils/toolResult.js'
 
 function parseFunctionArgs(args) {
     if (args === undefined || args === null) return {}
@@ -146,16 +147,28 @@ registerFromChaiteConverter('gemini', source => {
                 .map(tcr => {
                     let responseContent = tcr.content || ''
 
-                    // 尝试解析 JSON，使 Gemini 获得结构化数据
                     if (typeof responseContent === 'string' && responseContent.startsWith('{')) {
                         try {
-                            const parsed = JSON.parse(responseContent)
-                            // 如果是格式化的工具结果，直接使用内容部分或整个对象
-                            responseContent = parsed
-                        } catch (e) {
-                            // 解析失败则保留原样
+                            responseContent = JSON.parse(responseContent)
+                        } catch {
+                            // 保留兼容文本。
                         }
                     }
+
+                    const response =
+                        responseContent && typeof responseContent === 'object'
+                            ? { ...responseContent }
+                            : { content: responseContent }
+                    if (Array.isArray(tcr.mcpContent)) {
+                        response.mcpContent = tcr.mcpContent.map(block => ({
+                            type: block?.type || 'unknown',
+                            text: mcpContentBlockToText(block)
+                        }))
+                    }
+                    if (tcr.structuredContent !== undefined) {
+                        response.structuredContent = tcr.structuredContent
+                    }
+                    if (tcr.isError === true) response.isError = true
 
                     return {
                         role: 'function',
@@ -163,10 +176,7 @@ registerFromChaiteConverter('gemini', source => {
                             {
                                 functionResponse: {
                                     name: tcr.name,
-                                    response:
-                                        typeof responseContent === 'object'
-                                            ? responseContent
-                                            : { content: responseContent }
+                                    response
                                 }
                             }
                         ]

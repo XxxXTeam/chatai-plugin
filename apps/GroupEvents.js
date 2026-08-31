@@ -602,8 +602,12 @@ function registerEventListeners() {
 
     setTimeout(() => {
         try {
-            const bots = Bot?.uin ? [Bot] : Bot?.bots ? Object.values(Bot.bots) : []
-            if (bots.length === 0 && global.Bot) bots.push(global.Bot)
+            const bots = globalThis.Bot?.uin
+                ? [globalThis.Bot]
+                : globalThis.Bot?.bots
+                  ? Object.values(globalThis.Bot.bots)
+                  : []
+            if (bots.length === 0 && globalThis.Bot) bots.push(globalThis.Bot)
 
             for (const bot of bots) {
                 if (!bot || bot._groupEventListenersAdded) continue

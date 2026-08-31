@@ -4,6 +4,7 @@ import { chatLogger as logger } from '../../core/utils/logger.js'
 import { getToolDefinitionName, getToolIdentity } from '../../core/adapters/tooling.js'
 import { toolFilterService } from './ToolFilterService.js'
 import { resolveToolPermission } from './ToolPermission.js'
+import { StandardBotApi } from '../../core/platform/index.js'
 
 const RISK_ORDER = { low: 0, medium: 1, high: 2 }
 const VALID_MODES = ['ask', 'auto', 'confirm_all', 'yolo']
@@ -121,15 +122,20 @@ class ToolApprovalService {
     normalizeToolCall(toolCall) {
         const name = toolCall.function?.name || toolCall.name || 'unknown_tool'
         let args = toolCall.function?.arguments ?? toolCall.arguments ?? {}
+        let argsParseError = null
         if (typeof args === 'string') {
             try {
                 args = JSON.parse(args)
-            } catch {
-                args = {}
+            } catch (error) {
+                argsParseError = `arguments 不是合法 JSON: ${error.message}`
+                args = { _raw: toolCall.function?.arguments ?? toolCall.arguments }
             }
         }
-        if (!args || typeof args !== 'object' || Array.isArray(args)) args = {}
-        return { id: toolCall.id || crypto.randomUUID(), name, args, raw: toolCall }
+        if (!args || typeof args !== 'object' || Array.isArray(args)) {
+            argsParseError = argsParseError || 'arguments 必须是 JSON 对象'
+            args = { _raw: args }
+        }
+        return { id: toolCall.id || crypto.randomUUID(), name, args, argsParseError, raw: toolCall }
     }
 
     classifyRisk(toolName, tool = null) {
@@ -170,16 +176,26 @@ class ToolApprovalService {
             content: message,
             metadata: { approval: true }
         })
+        let args = toolCall?.function?.arguments ?? toolCall?.arguments ?? {}
+        if (typeof args === 'string') {
+            try {
+                args = JSON.parse(args)
+            } catch {
+                args = { _raw: args }
+            }
+        }
         return {
             toolResult: {
                 tool_call_id: toolCall.id || crypto.randomUUID(),
                 content,
                 type: 'tool',
-                name
+                name,
+                mcpContent: [{ type: 'text', text: message }],
+                isError
             },
             log: {
                 name,
-                args: {},
+                args,
                 result: message,
                 duration: 0,
                 isError
@@ -286,7 +302,7 @@ class ToolApprovalService {
             logger.warn('[ToolApproval] 无可用 event.reply，拒绝需要确认的工具调用')
             return false
         }
-        await event.reply(message, true)
+        await new StandardBotApi({ event }).reply(message, true)
         return true
     }
 
@@ -330,6 +346,12 @@ class ToolApprovalService {
         for (const toolCall of toolCalls || []) {
             const normalized = this.normalizeToolCall(toolCall)
             const normalizedIdentity = getToolIdentity(toolCall) || normalized.name
+            if (normalized.argsParseError) {
+                blockedResults.push(
+                    this.createToolResult(toolCall, normalized.name, `工具未执行：${normalized.argsParseError}`)
+                )
+                continue
+            }
             if (
                 normalized.name === 'unknown_tool' ||
                 (availableToolNames.size > 0 &&

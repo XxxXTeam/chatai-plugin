@@ -3,8 +3,7 @@
  * 禁言、踢人、设置群名片等管理功能
  */
 
-import { icqqGroup, groupNoticeApi, qqWebApi, getGroupMemberList, requireGroupId } from './helpers.js'
-import { callOneBotApiStrict } from '../../utils/eventAdapter.js'
+import { StandardBotApi } from '../../core/platform/index.js'
 
 /** 批量操作单次允许处理的最大条目数，超出直接拒绝，避免长时间阻塞与请求超时 */
 const MAX_BATCH_ENTRIES = 50
@@ -25,13 +24,14 @@ function sleep(ms) {
 }
 
 /**
- * 解析并校验 QQ 号 / 群号（两者均为正整数）
+ * 解析并校验用户/群目标 ID。
  * @param {string|number} value - 原始值
- * @returns {number|null} 合法的正整数；非法时为 null
+ * @param {StandardBotApi} api - 标准 Bot API
+ * @returns {string|number|null} 合法目标 ID；非法时为 null
  */
-function parseUin(value) {
-    const uin = parseInt(value)
-    return Number.isInteger(uin) && uin > 0 ? uin : null
+function parseTargetId(value, api) {
+    if (value === null || value === undefined || value === '') return null
+    return api.targetId(value)
 }
 
 /**
@@ -48,15 +48,16 @@ function parseMuteDuration(value) {
 
 /**
  * 取得并校验群号
- * @description requireGroupId 内部只做 parseInt，非法值会得到 NaN 且不报错，这里补上校验
+ * @description 从显式参数或当前事件获取群目标，并由标准接口保留协议端要求的 ID 类型。
  * @param {Object} args - 工具入参
  * @param {Object} ctx - 工具上下文
- * @returns {number} 合法群号
+ * @returns {string|number} 合法群目标
  * @throws {Error} 缺少群号或群号格式错误
  */
 function resolveGroupId(args, ctx) {
-    const groupId = requireGroupId(args, ctx)
-    if (!Number.isInteger(groupId) || groupId <= 0) throw new Error('群号 group_id 格式错误')
+    const api = StandardBotApi.fromContext(ctx)
+    const groupId = parseTargetId(args.group_id ?? ctx.getEvent?.()?.group_id, api)
+    if (groupId === null) throw new Error('缺少群号 group_id')
     return groupId
 }
 
@@ -124,8 +125,8 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const { adapter } = ctx.getAdapter()
+                const api = StandardBotApi.fromContext(ctx)
+                const adapter = api.adapterType
                 const groupId = resolveGroupId(args, ctx)
 
                 // 批量禁言模式
@@ -141,7 +142,7 @@ export const adminTools = [
 
                     for (const [userId, duration] of entries) {
                         try {
-                            const uid = parseUin(userId)
+                            const uid = parseTargetId(userId, api)
                             if (uid === null) {
                                 results.push({ user_id: userId, success: false, error: 'QQ号格式错误' })
                                 continue
@@ -157,15 +158,13 @@ export const adminTools = [
                                 continue
                             }
 
-                            if (adapter === 'icqq') {
-                                await icqqGroup.muteMember(bot, groupId, uid, dur)
-                            } else {
-                                await callOneBotApiStrict(bot, 'set_group_ban', {
-                                    group_id: groupId,
-                                    user_id: uid,
-                                    duration: dur
-                                })
-                            }
+                            await api.callGroupOrAction({
+                                groupId,
+                                method: 'muteMember',
+                                args: [uid, dur],
+                                action: 'set_group_ban',
+                                params: { user_id: uid, duration: dur }
+                            })
                             results.push({
                                 user_id: userId,
                                 duration: dur,
@@ -193,7 +192,7 @@ export const adminTools = [
                     return { success: false, error: '请提供 user_id（单个禁言）或 mutes（批量禁言）' }
                 }
 
-                const userId = parseUin(args.user_id)
+                const userId = parseTargetId(args.user_id, api)
                 if (userId === null) {
                     return { success: false, error: `user_id 格式错误: ${args.user_id}` }
                 }
@@ -203,15 +202,13 @@ export const adminTools = [
                     return { success: false, error: `duration 格式错误: ${args.duration}` }
                 }
 
-                if (adapter === 'icqq') {
-                    await icqqGroup.muteMember(bot, groupId, userId, duration)
-                } else {
-                    await callOneBotApiStrict(bot, 'set_group_ban', {
-                        group_id: groupId,
-                        user_id: userId,
-                        duration
-                    })
-                }
+                await api.callGroupOrAction({
+                    groupId,
+                    method: 'muteMember',
+                    args: [userId, duration],
+                    action: 'set_group_ban',
+                    params: { user_id: userId, duration }
+                })
 
                 return {
                     success: true,
@@ -245,8 +242,8 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const { adapter } = ctx.getAdapter()
+                const api = StandardBotApi.fromContext(ctx)
+                const adapter = api.adapterType
                 const groupId = resolveGroupId(args, ctx)
                 const rejectAdd = args.reject_add || false
 
@@ -262,21 +259,13 @@ export const adminTools = [
 
                     for (const userId of args.user_ids) {
                         try {
-                            const uid = parseUin(userId)
+                            const uid = parseTargetId(userId, api)
                             if (uid === null) {
                                 results.push({ user_id: userId, success: false, error: 'QQ号格式错误' })
                                 continue
                             }
 
-                            if (adapter === 'icqq') {
-                                await icqqGroup.kickMember(bot, groupId, uid, rejectAdd)
-                            } else {
-                                await callOneBotApiStrict(bot, 'set_group_kick', {
-                                    group_id: groupId,
-                                    user_id: uid,
-                                    reject_add_request: rejectAdd
-                                })
-                            }
+                            await api.kickMember(groupId, uid, rejectAdd)
                             results.push({ user_id: userId, success: true })
                         } catch (err) {
                             results.push({ user_id: userId, success: false, error: err.message })
@@ -300,20 +289,12 @@ export const adminTools = [
                     return { success: false, error: '请提供 user_id（单个踢人）或 user_ids（批量踢人）' }
                 }
 
-                const userId = parseUin(args.user_id)
+                const userId = parseTargetId(args.user_id, api)
                 if (userId === null) {
                     return { success: false, error: `user_id 格式错误: ${args.user_id}` }
                 }
 
-                if (adapter === 'icqq') {
-                    await icqqGroup.kickMember(bot, groupId, userId, rejectAdd)
-                } else {
-                    await callOneBotApiStrict(bot, 'set_group_kick', {
-                        group_id: groupId,
-                        user_id: userId,
-                        reject_add_request: rejectAdd
-                    })
-                }
+                await api.kickMember(groupId, userId, rejectAdd)
 
                 return { success: true, adapter, group_id: groupId, user_id: userId }
             } catch (err) {
@@ -341,8 +322,8 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const { adapter } = ctx.getAdapter()
+                const api = StandardBotApi.fromContext(ctx)
+                const adapter = api.adapterType
                 const groupId = resolveGroupId(args, ctx)
 
                 // 批量设置模式
@@ -359,21 +340,19 @@ export const adminTools = [
                     for (const [userId, card] of entries) {
                         const normalizedCard = card || ''
                         try {
-                            const uid = parseUin(userId)
+                            const uid = parseTargetId(userId, api)
                             if (uid === null) {
                                 results.push({ user_id: userId, success: false, error: 'QQ号格式错误' })
                                 continue
                             }
 
-                            if (adapter === 'icqq') {
-                                await icqqGroup.setCard(bot, groupId, uid, normalizedCard)
-                            } else {
-                                await callOneBotApiStrict(bot, 'set_group_card', {
-                                    group_id: groupId,
-                                    user_id: uid,
-                                    card: normalizedCard
-                                })
-                            }
+                            await api.callGroupOrAction({
+                                groupId,
+                                method: 'setCard',
+                                args: [uid, normalizedCard],
+                                action: 'set_group_card',
+                                params: { user_id: uid, card: normalizedCard }
+                            })
                             results.push({ user_id: userId, card: normalizedCard, success: true })
                         } catch (err) {
                             results.push({ user_id: userId, success: false, error: err.message })
@@ -397,7 +376,7 @@ export const adminTools = [
                     return { success: false, error: '请提供 user_id（单个设置）或 cards（批量设置）' }
                 }
 
-                const userId = parseUin(args.user_id)
+                const userId = parseTargetId(args.user_id, api)
                 if (userId === null) {
                     return { success: false, error: `user_id 格式错误: ${args.user_id}` }
                 }
@@ -405,15 +384,13 @@ export const adminTools = [
                 /* 归一化后的 card 必须贯穿 icqq 分支、OneBot 分支与返回值，否则不传 card 时两端行为不一致 */
                 const card = args.card ?? ''
 
-                if (adapter === 'icqq') {
-                    await icqqGroup.setCard(bot, groupId, userId, card)
-                } else {
-                    await callOneBotApiStrict(bot, 'set_group_card', {
-                        group_id: groupId,
-                        user_id: userId,
-                        card
-                    })
-                }
+                await api.callGroupOrAction({
+                    groupId,
+                    method: 'setCard',
+                    args: [userId, card],
+                    action: 'set_group_card',
+                    params: { user_id: userId, card }
+                })
 
                 return { success: true, adapter, group_id: groupId, user_id: userId, card }
             } catch (err) {
@@ -435,18 +412,17 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const { adapter } = ctx.getAdapter()
+                const api = StandardBotApi.fromContext(ctx)
+                const adapter = api.adapterType
                 const groupId = resolveGroupId(args, ctx)
 
-                if (adapter === 'icqq') {
-                    await icqqGroup.muteAll(bot, groupId, args.enable)
-                } else {
-                    await callOneBotApiStrict(bot, 'set_group_whole_ban', {
-                        group_id: groupId,
-                        enable: args.enable
-                    })
-                }
+                await api.callGroupOrAction({
+                    groupId,
+                    method: 'muteAll',
+                    args: [args.enable],
+                    action: 'set_group_whole_ban',
+                    params: { enable: args.enable }
+                })
 
                 return {
                     success: true,
@@ -479,8 +455,8 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const { adapter } = ctx.getAdapter()
+                const api = StandardBotApi.fromContext(ctx)
+                const adapter = api.adapterType
                 const groupId = resolveGroupId(args, ctx)
                 const enable = args.enable
 
@@ -496,21 +472,19 @@ export const adminTools = [
 
                     for (const userId of args.user_ids) {
                         try {
-                            const uid = parseUin(userId)
+                            const uid = parseTargetId(userId, api)
                             if (uid === null) {
                                 results.push({ user_id: userId, success: false, error: 'QQ号格式错误' })
                                 continue
                             }
 
-                            if (adapter === 'icqq') {
-                                await icqqGroup.setAdmin(bot, groupId, uid, enable)
-                            } else {
-                                await callOneBotApiStrict(bot, 'set_group_admin', {
-                                    group_id: groupId,
-                                    user_id: uid,
-                                    enable
-                                })
-                            }
+                            await api.callGroupOrAction({
+                                groupId,
+                                method: 'setAdmin',
+                                args: [uid, enable],
+                                action: 'set_group_admin',
+                                params: { user_id: uid, enable }
+                            })
                             results.push({
                                 user_id: userId,
                                 action: enable ? '设为管理员' : '取消管理员',
@@ -538,20 +512,18 @@ export const adminTools = [
                     return { success: false, error: '请提供 user_id（单个设置）或 user_ids（批量设置）' }
                 }
 
-                const userId = parseUin(args.user_id)
+                const userId = parseTargetId(args.user_id, api)
                 if (userId === null) {
                     return { success: false, error: `user_id 格式错误: ${args.user_id}` }
                 }
 
-                if (adapter === 'icqq') {
-                    await icqqGroup.setAdmin(bot, groupId, userId, enable)
-                } else {
-                    await callOneBotApiStrict(bot, 'set_group_admin', {
-                        group_id: groupId,
-                        user_id: userId,
-                        enable
-                    })
-                }
+                await api.callGroupOrAction({
+                    groupId,
+                    method: 'setAdmin',
+                    args: [userId, enable],
+                    action: 'set_group_admin',
+                    params: { user_id: userId, enable }
+                })
 
                 return {
                     success: true,
@@ -579,15 +551,17 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const { adapter } = ctx.getAdapter()
+                const api = StandardBotApi.fromContext(ctx)
+                const adapter = api.adapterType
                 const groupId = resolveGroupId(args, ctx)
 
-                if (adapter === 'icqq') {
-                    await icqqGroup.setName(bot, groupId, args.name)
-                } else {
-                    await callOneBotApiStrict(bot, 'set_group_name', { group_id: groupId, group_name: args.name })
-                }
+                await api.callGroupOrAction({
+                    groupId,
+                    method: 'setName',
+                    args: [args.name],
+                    action: 'set_group_name',
+                    params: { group_name: args.name }
+                })
 
                 return { success: true, adapter, group_id: groupId, name: args.name }
             } catch (err) {
@@ -616,8 +590,8 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const { adapter } = ctx.getAdapter()
+                const api = StandardBotApi.fromContext(ctx)
+                const adapter = api.adapterType
                 const groupId = resolveGroupId(args, ctx)
 
                 /* -1 表示永久；非法值必须报错，不能静默透传到协议端 */
@@ -642,22 +616,19 @@ export const adminTools = [
 
                     for (const [userId, title] of entries) {
                         try {
-                            const uid = parseUin(userId)
+                            const uid = parseTargetId(userId, api)
                             if (uid === null) {
                                 results.push({ user_id: userId, success: false, error: 'QQ号格式错误' })
                                 continue
                             }
 
-                            if (adapter === 'icqq') {
-                                await icqqGroup.setTitle(bot, groupId, uid, title || '', duration)
-                            } else {
-                                await callOneBotApiStrict(bot, 'set_group_special_title', {
-                                    group_id: groupId,
-                                    user_id: uid,
-                                    special_title: title || '',
-                                    duration
-                                })
-                            }
+                            await api.callGroupOrAction({
+                                groupId,
+                                method: 'setTitle',
+                                args: [uid, title || '', duration],
+                                action: 'set_group_special_title',
+                                params: { user_id: uid, special_title: title || '', duration }
+                            })
                             results.push({ user_id: userId, title: title || '', success: true })
                         } catch (err) {
                             results.push({ user_id: userId, success: false, error: err.message })
@@ -680,21 +651,18 @@ export const adminTools = [
                     return { success: false, error: '请提供 user_id（单个设置）或 titles（批量设置）' }
                 }
 
-                const userId = parseUin(args.user_id)
+                const userId = parseTargetId(args.user_id, api)
                 if (userId === null) {
                     return { success: false, error: `user_id 格式错误: ${args.user_id}` }
                 }
 
-                if (adapter === 'icqq') {
-                    await icqqGroup.setTitle(bot, groupId, userId, args.title || '', duration)
-                } else {
-                    await callOneBotApiStrict(bot, 'set_group_special_title', {
-                        group_id: groupId,
-                        user_id: userId,
-                        special_title: args.title || '',
-                        duration
-                    })
-                }
+                await api.callGroupOrAction({
+                    groupId,
+                    method: 'setTitle',
+                    args: [userId, args.title || '', duration],
+                    action: 'set_group_special_title',
+                    params: { user_id: userId, special_title: args.title || '', duration }
+                })
 
                 return {
                     success: true,
@@ -725,13 +693,13 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const groupId = parseUin(args.group_id)
+                const api = StandardBotApi.fromContext(ctx)
+                const groupId = parseTargetId(args.group_id, api)
                 if (groupId === null) {
                     return { success: false, error: `group_id 格式错误: ${args.group_id}` }
                 }
 
-                const result = await groupNoticeApi.sendNotice(bot, groupId, args.content, {
+                const result = await api.sendGroupNotice(groupId, args.content, {
                     image: args.image,
                     pinned: args.pinned || false,
                     confirmRequired: args.confirm_required !== false
@@ -764,8 +732,8 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const groupId = parseUin(args.group_id)
+                const api = StandardBotApi.fromContext(ctx)
+                const groupId = parseTargetId(args.group_id, api)
                 if (groupId === null) {
                     return { success: false, error: `group_id 格式错误: ${args.group_id}` }
                 }
@@ -775,7 +743,7 @@ export const adminTools = [
                 }
 
                 const fidOrIndex = args.notice_id || args.index
-                const result = await groupNoticeApi.deleteNotice(bot, groupId, fidOrIndex)
+                const result = await api.deleteGroupNotice(groupId, fidOrIndex)
 
                 /* 同 send_group_notice：白名单式判定；取 text 一并改为可选链，避免非对象返回时抛 TypeError */
                 const judged = judgeNoticeResult(result)
@@ -808,26 +776,14 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const approve = args.approve !== false
-
-                // icqq 方式
-                if (bot.setGroupAddRequest) {
-                    await bot.setGroupAddRequest(args.flag, approve, args.reason || '')
-                    return { success: true, flag: args.flag, approved: approve }
-                }
-
-                // NapCat/go-cqhttp 方式
-                if (bot.sendApi) {
-                    await bot.sendApi('set_group_add_request', {
-                        flag: args.flag,
-                        approve,
-                        reason: args.reason || ''
-                    })
-                    return { success: true, flag: args.flag, approved: approve }
-                }
-
-                return { success: false, error: '当前协议不支持处理加群申请' }
+                await api.callAction(
+                    'set_group_add_request',
+                    { flag: args.flag, approve, reason: args.reason || '' },
+                    { strict: true }
+                )
+                return { success: true, flag: args.flag, approved: approve }
             } catch (err) {
                 return { success: false, error: `处理加群申请失败: ${err.message}` }
             }
@@ -848,26 +804,14 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const approve = args.approve !== false
-
-                // icqq 方式
-                if (bot.setFriendAddRequest) {
-                    await bot.setFriendAddRequest(args.flag, approve, args.remark || '')
-                    return { success: true, flag: args.flag, approved: approve }
-                }
-
-                // NapCat/go-cqhttp 方式
-                if (bot.sendApi) {
-                    await bot.sendApi('set_friend_add_request', {
-                        flag: args.flag,
-                        approve,
-                        remark: args.remark || ''
-                    })
-                    return { success: true, flag: args.flag, approved: approve }
-                }
-
-                return { success: false, error: '当前协议不支持处理好友申请' }
+                await api.callAction(
+                    'set_friend_add_request',
+                    { flag: args.flag, approve, remark: args.remark || '' },
+                    { strict: true }
+                )
+                return { success: true, flag: args.flag, approved: approve }
             } catch (err) {
                 return { success: false, error: `处理好友申请失败: ${err.message}` }
             }
@@ -886,60 +830,30 @@ export const adminTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = ctx.getBot()
-                const groupId = parseInt(args.group_id || e?.group_id)
+                const api = StandardBotApi.fromContext(ctx)
+                const groupId = parseTargetId(args.group_id || e?.group_id, api)
 
                 if (!groupId) {
                     return { success: false, error: '需要群号参数或在群聊中使用' }
                 }
 
-                // NapCat API
-                if (bot.sendApi) {
-                    try {
-                        const result = await bot.sendApi('get_group_shut_list', { group_id: groupId })
-                        const list = result?.data || result || []
+                const actionResult = await api.callAction('get_group_shut_list', { group_id: groupId })
+                const list = actionResult?.data || actionResult
+                const now = Math.floor(Date.now() / 1000)
+                const source = Array.isArray(list) ? list : await api.getMemberList(groupId)
+                const mutedMembers = source
+                    .filter(member => (member.shut_up_timestamp || member.shutup_time || member.mute_time || 0) > now)
+                    .map(member => {
+                        const muteTime = member.shut_up_timestamp || member.shutup_time || member.mute_time
                         return {
-                            success: true,
-                            group_id: groupId,
-                            count: list.length,
-                            muted_members: list.map(m => ({
-                                user_id: m.user_id || m.uin,
-                                nickname: m.nickname || m.nick || '',
-                                mute_time: m.shut_up_timestamp || m.mute_time,
-                                remaining: m.remaining_time
-                            }))
+                            user_id: member.user_id || member.uin || member.uid,
+                            nickname: member.nickname || member.nick || '',
+                            card: member.card || '',
+                            mute_time: muteTime,
+                            remaining: member.remaining_time ?? muteTime - now
                         }
-                    } catch (e) {}
-                }
-
-                // icqq 方式 - 通过成员列表筛选
-                const group = bot.pickGroup?.(groupId)
-                if (group?.getMemberMap) {
-                    const memberMap = await group.getMemberMap()
-                    const mutedMembers = []
-                    const now = Math.floor(Date.now() / 1000)
-
-                    for (const [uid, member] of memberMap) {
-                        if (member.shutup_time && member.shutup_time > now) {
-                            mutedMembers.push({
-                                user_id: uid,
-                                nickname: member.nickname || member.nick || '',
-                                card: member.card || '',
-                                mute_time: member.shutup_time,
-                                remaining: member.shutup_time - now
-                            })
-                        }
-                    }
-
-                    return {
-                        success: true,
-                        group_id: groupId,
-                        count: mutedMembers.length,
-                        muted_members: mutedMembers
-                    }
-                }
-
-                return { success: false, error: '当前协议不支持获取禁言列表' }
+                    })
+                return { success: true, group_id: groupId, count: mutedMembers.length, muted_members: mutedMembers }
             } catch (err) {
                 return { success: false, error: `获取禁言列表失败: ${err.message}` }
             }
@@ -964,29 +878,20 @@ export const adminTools = [
                     return { success: false, error: '需要确认退群操作' }
                 }
 
-                const bot = ctx.getBot()
-                const groupId = parseUin(args.group_id)
+                const api = StandardBotApi.fromContext(ctx)
+                const groupId = parseTargetId(args.group_id, api)
                 if (groupId === null) {
                     return { success: false, error: `group_id 格式错误: ${args.group_id}` }
                 }
 
-                // icqq 方式
-                const group = bot.pickGroup?.(groupId)
-                if (group?.quit) {
-                    await group.quit(args.is_dismiss || false)
-                    return { success: true, group_id: groupId, action: args.is_dismiss ? 'dismiss' : 'leave' }
-                }
-
-                // NapCat/go-cqhttp 方式
-                if (bot.sendApi) {
-                    await bot.sendApi('set_group_leave', {
-                        group_id: groupId,
-                        is_dismiss: args.is_dismiss || false
-                    })
-                    return { success: true, group_id: groupId, action: args.is_dismiss ? 'dismiss' : 'leave' }
-                }
-
-                return { success: false, error: '当前协议不支持退群操作' }
+                await api.callGroupOrAction({
+                    groupId,
+                    method: 'quit',
+                    args: [args.is_dismiss || false],
+                    action: 'set_group_leave',
+                    params: { is_dismiss: args.is_dismiss || false }
+                })
+                return { success: true, group_id: groupId, action: args.is_dismiss ? 'dismiss' : 'leave' }
             } catch (err) {
                 return { success: false, error: `退群失败: ${err.message}` }
             }
@@ -1010,26 +915,18 @@ export const adminTools = [
                     return { success: false, error: '需要确认删除好友操作' }
                 }
 
-                const bot = ctx.getBot()
-                const userId = parseUin(args.user_id)
+                const api = StandardBotApi.fromContext(ctx)
+                const userId = parseTargetId(args.user_id, api)
                 if (userId === null) {
                     return { success: false, error: `user_id 格式错误: ${args.user_id}` }
                 }
 
-                // icqq 方式
-                const friend = bot.pickFriend?.(userId)
-                if (friend?.delete) {
-                    await friend.delete()
-                    return { success: true, user_id: userId }
-                }
-
-                // NapCat/go-cqhttp 方式
-                if (bot.sendApi) {
-                    await bot.sendApi('delete_friend', { user_id: userId })
-                    return { success: true, user_id: userId }
-                }
-
-                return { success: false, error: '当前协议不支持删除好友' }
+                await api.callFriendOrAction({
+                    userId,
+                    method: 'delete',
+                    action: 'delete_friend'
+                })
+                return { success: true, user_id: userId }
             } catch (err) {
                 return { success: false, error: `删除好友失败: ${err.message}` }
             }
@@ -1049,29 +946,20 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const groupId = parseUin(args.group_id)
+                const api = StandardBotApi.fromContext(ctx)
+                const groupId = parseTargetId(args.group_id, api)
                 if (groupId === null) {
                     return { success: false, error: `group_id 格式错误: ${args.group_id}` }
                 }
 
-                // icqq 方式
-                const group = bot.pickGroup?.(groupId)
-                if (group?.setAvatar) {
-                    await group.setAvatar(args.file)
-                    return { success: true, group_id: groupId }
-                }
-
-                // NapCat/go-cqhttp 方式
-                if (bot.sendApi) {
-                    await bot.sendApi('set_group_portrait', {
-                        group_id: groupId,
-                        file: args.file
-                    })
-                    return { success: true, group_id: groupId }
-                }
-
-                return { success: false, error: '当前协议不支持设置群头像' }
+                await api.callGroupOrAction({
+                    groupId,
+                    method: 'setAvatar',
+                    args: [args.file],
+                    action: 'set_group_portrait',
+                    params: { file: args.file }
+                })
+                return { success: true, group_id: groupId }
             } catch (err) {
                 return { success: false, error: `设置群头像失败: ${err.message}` }
             }
@@ -1090,27 +978,22 @@ export const adminTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = ctx.getBot()
-                const groupId = parseInt(args.group_id || e?.group_id)
+                const api = StandardBotApi.fromContext(ctx)
+                const groupId = parseTargetId(args.group_id || e?.group_id, api)
 
                 if (!groupId) {
                     return { success: false, error: '需要群号参数或在群聊中使用' }
                 }
 
-                // NapCat/go-cqhttp API
-                if (bot.sendApi) {
-                    const result = await bot.sendApi('get_group_at_all_remain', { group_id: groupId })
-                    const data = result?.data || result
-                    return {
-                        success: true,
-                        group_id: groupId,
-                        can_at_all: data?.can_at_all ?? true,
-                        remain_at_all_count_for_group: data?.remain_at_all_count_for_group,
-                        remain_at_all_count_for_uin: data?.remain_at_all_count_for_uin
-                    }
+                const result = await api.callAction('get_group_at_all_remain', { group_id: groupId }, { strict: true })
+                const data = result?.data || result
+                return {
+                    success: true,
+                    group_id: groupId,
+                    can_at_all: data?.can_at_all ?? true,
+                    remain_at_all_count_for_group: data?.remain_at_all_count_for_group,
+                    remain_at_all_count_for_uin: data?.remain_at_all_count_for_uin
                 }
-
-                return { success: false, error: '当前协议不支持获取@全体剩余次数' }
             } catch (err) {
                 return { success: false, error: `获取@全体剩余次数失败: ${err.message}` }
             }
@@ -1131,8 +1014,8 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const groupId = parseUin(args.group_id)
+                const api = StandardBotApi.fromContext(ctx)
+                const groupId = parseTargetId(args.group_id, api)
                 if (groupId === null) {
                     return { success: false, error: `group_id 格式错误: ${args.group_id}` }
                 }
@@ -1142,17 +1025,12 @@ export const adminTools = [
                     return { success: false, error: `duration 格式错误: ${args.duration}` }
                 }
 
-                // NapCat/go-cqhttp API
-                if (bot.sendApi) {
-                    await bot.sendApi('set_group_anonymous_ban', {
-                        group_id: groupId,
-                        anonymous_flag: args.anonymous_flag,
-                        duration
-                    })
-                    return { success: true, group_id: groupId, duration }
-                }
-
-                return { success: false, error: '当前协议不支持禁言匿名成员' }
+                await api.callAction(
+                    'set_group_anonymous_ban',
+                    { group_id: groupId, anonymous_flag: args.anonymous_flag, duration },
+                    { strict: true }
+                )
+                return { success: true, group_id: groupId, duration }
             } catch (err) {
                 return { success: false, error: `禁言匿名成员失败: ${err.message}` }
             }
@@ -1172,29 +1050,20 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const groupId = parseUin(args.group_id)
+                const api = StandardBotApi.fromContext(ctx)
+                const groupId = parseTargetId(args.group_id, api)
                 if (groupId === null) {
                     return { success: false, error: `group_id 格式错误: ${args.group_id}` }
                 }
 
-                // icqq 方式
-                const group = bot.pickGroup?.(groupId)
-                if (group?.setAnonymous) {
-                    await group.setAnonymous(args.enable)
-                    return { success: true, group_id: groupId, enabled: args.enable }
-                }
-
-                // NapCat/go-cqhttp API
-                if (bot.sendApi) {
-                    await bot.sendApi('set_group_anonymous', {
-                        group_id: groupId,
-                        enable: args.enable
-                    })
-                    return { success: true, group_id: groupId, enabled: args.enable }
-                }
-
-                return { success: false, error: '当前协议不支持设置匿名功能' }
+                await api.callGroupOrAction({
+                    groupId,
+                    method: 'setAnonymous',
+                    args: [args.enable],
+                    action: 'set_group_anonymous',
+                    params: { enable: args.enable }
+                })
+                return { success: true, group_id: groupId, enabled: args.enable }
             } catch (err) {
                 return { success: false, error: `设置匿名功能失败: ${err.message}` }
             }
@@ -1210,20 +1079,14 @@ export const adminTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-
-                // NapCat/go-cqhttp API
-                if (bot.sendApi) {
-                    const result = await bot.sendApi('get_group_system_msg', {})
-                    const data = result?.data || result
-                    return {
-                        success: true,
-                        invited_requests: data?.invited_requests || [],
-                        join_requests: data?.join_requests || []
-                    }
+                const api = StandardBotApi.fromContext(ctx)
+                const result = await api.callAction('get_group_system_msg', {}, { strict: true })
+                const data = result?.data || result
+                return {
+                    success: true,
+                    invited_requests: data?.invited_requests || [],
+                    join_requests: data?.join_requests || []
                 }
-
-                return { success: false, error: '当前协议不支持获取群系统消息' }
             } catch (err) {
                 return { success: false, error: `获取群系统消息失败: ${err.message}` }
             }

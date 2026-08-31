@@ -317,7 +317,7 @@ export class Chat extends plugin {
         if (!groupCfg.enabled) return { triggered: false }
 
         // @触发（兼容不设置 e.atBot 的适配器：额外检查消息中的 at 段）
-        const botId = e.self_id || e.bot?.uin || Bot?.uin
+        const botId = e.self_id || e.bot?.uin || globalThis.Bot?.uin
         const isAtBot =
             e.atBot ||
             (botId &&
@@ -491,7 +491,7 @@ export class Chat extends plugin {
     cleanAtBot(text) {
         if (!text) return ''
         const e = this.e
-        const botId = e.self_id || e.bot?.uin || Bot?.uin
+        const botId = e.self_id || e.bot?.uin || globalThis.Bot?.uin
         if (!botId) return text
 
         let result = text
@@ -590,8 +590,8 @@ export class Chat extends plugin {
         } catch {}
 
         // 设置工具上下文
-        setToolContext({ event: e, bot: e.bot || Bot })
-        mcpManager.setToolContext({ event: e, bot: e.bot || Bot })
+        setToolContext({ event: e, bot: e.bot || globalThis.Bot })
+        mcpManager.setToolContext({ event: e, bot: e.bot || globalThis.Bot })
 
         // 处理图片
         const images = parsedMessage.content?.filter(c => c.type === 'image' || c.type === 'image_url') || []
@@ -942,7 +942,7 @@ export class Chat extends plugin {
         const e = this.e
         if (!e?.group?.getMemberMap) {
             // 尝试通过bot获取
-            const bot = e?.bot || Bot
+            const bot = e?.bot || globalThis.Bot
             const group = bot?.pickGroup?.(e.group_id)
             if (group?.getMemberMap) {
                 try {
@@ -982,7 +982,7 @@ export class Chat extends plugin {
         } else if (e?.group?._memberMap instanceof Map) {
             memberMap = e.group._memberMap
         } else {
-            const bot = e?.bot || Bot
+            const bot = e?.bot || globalThis.Bot
             const group = bot?.pickGroup?.(e.group_id)
             if (group?.gml instanceof Map) {
                 memberMap = group.gml
@@ -1059,7 +1059,7 @@ export class Chat extends plugin {
             try {
                 const currentConfig = config.get('basic.autoRecall')
                 if (!currentConfig || currentConfig.enabled !== true) return
-                const bot = e?.bot || Bot
+                const bot = e?.bot || globalThis.Bot
                 if (typeof bot?.deleteMsg === 'function') {
                     await bot.deleteMsg(messageId)
                 } else if (typeof bot?.recallMsg === 'function') {

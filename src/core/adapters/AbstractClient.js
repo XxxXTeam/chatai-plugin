@@ -12,6 +12,7 @@ import { asyncLocalStorage, extractClassName, getKey } from '../utils/index.js'
 import { logService } from '../../services/stats/LogService.js'
 import { toolApprovalService } from '../../services/tools/ToolApprovalService.js'
 import { attachToolMetadata, getToolDefinitionName, getToolIdentity } from './tooling.js'
+import { normalizeToolExecutionResult, sanitizeToolResultForLog } from '../utils/toolResult.js'
 
 /**
  * 生成工具调用ID
@@ -1394,19 +1395,18 @@ export class AbstractClient {
             }
 
             if (modelResponse.toolCalls && modelResponse.toolCalls.length > 0) {
-                const executableToolCalls = this.resolveExecutableToolCalls(modelResponse.toolCalls, options)
-                const uniqueToolCalls = this.deduplicateToolCalls(executableToolCalls)
-
-                if (uniqueToolCalls.length === 0) {
-                    modelResponse.toolCalls = undefined
-                } else {
-                    if (uniqueToolCalls.length < modelResponse.toolCalls.length) {
-                        this.logger.info(
-                            `[Tool] 保存前过滤无效或重复工具调用: ${modelResponse.toolCalls.length} -> ${uniqueToolCalls.length}`
-                        )
-                    }
-                    modelResponse.toolCalls = uniqueToolCalls
+                // 可执行调用附加来源身份；unknown/歧义调用必须原样保留到 executeToolCalls，
+                // 由其生成同 tool_call_id 的错误结果供模型自纠，不能在历史保存前吞掉。
+                const resolvedOrOriginal = modelResponse.toolCalls.map(
+                    toolCall => this.resolveExecutableToolCall(toolCall, options) || toolCall
+                )
+                const uniqueToolCalls = this.deduplicateToolCalls(resolvedOrOriginal)
+                if (uniqueToolCalls.length < modelResponse.toolCalls.length) {
+                    this.logger.info(
+                        `[Tool] 保存前仅去除确定性重复调用: ${modelResponse.toolCalls.length} -> ${uniqueToolCalls.length}`
+                    )
                 }
+                modelResponse.toolCalls = uniqueToolCalls
             }
 
             // 保存模型响应
@@ -2019,7 +2019,7 @@ export class AbstractClient {
     resolveExecutableToolCall(toolCall, options = {}) {
         const name = toolCall?.function?.name || toolCall?.name
         if (!name) {
-            this.logger.warn('[Tool] 忽略无效工具调用: unknown_tool')
+            this.logger.warn('[Tool] 拒绝无效工具调用: unknown_tool')
             return null
         }
 
@@ -2038,7 +2038,7 @@ export class AbstractClient {
             return attachToolMetadata(toolCall, availableIdentityMatch)
         }
         if (hasExplicitExposedTools && hasExplicitToolCallIdentity) {
-            this.logger.warn(`[Tool] 忽略未暴露工具调用: ${name}`)
+            this.logger.warn(`[Tool] 拒绝未暴露工具调用: ${name}`)
             return null
         }
 
@@ -2060,7 +2060,7 @@ export class AbstractClient {
         }
 
         if (hasExplicitExposedTools) {
-            this.logger.warn(`[Tool] 忽略未暴露工具调用: ${name}`)
+            this.logger.warn(`[Tool] 拒绝未暴露工具调用: ${name}`)
             return null
         }
 
@@ -2073,7 +2073,7 @@ export class AbstractClient {
             return null
         }
 
-        this.logger.warn(`[Tool] 忽略无效工具调用: ${name}`)
+        this.logger.warn(`[Tool] 拒绝无效工具调用: ${name}`)
         return null
     }
 
@@ -2091,6 +2091,49 @@ export class AbstractClient {
      * @param {SendMessageOption} options
      * @returns {Promise<{toolCallResults: Array, toolCallLogs: Array}>}
      */
+    /**
+     * 记录在进入 McpManager 前被拒绝的模型工具尝试。
+     * @param {Object} toolCall - 原始工具调用
+     * @param {string} reason - 拒绝原因
+     * @param {Object} options - 当前请求选项
+     * @param {Object} [argsOverride] - 已解析参数
+     */
+    async recordRejectedToolAttempt(toolCall, reason, options = {}, argsOverride = undefined) {
+        const name = toolCall?.function?.name || toolCall?.name || 'unknown_tool'
+        let args = argsOverride
+        if (args === undefined) {
+            args = toolCall?.function?.arguments ?? toolCall?.arguments ?? {}
+            if (typeof args === 'string') {
+                try {
+                    args = JSON.parse(args)
+                } catch {
+                    args = { _raw: args }
+                }
+            }
+        }
+        try {
+            const { statsService } = await import('../../services/stats/StatsService.js')
+            await statsService.recordToolCallFull({
+                toolName: name,
+                request: args,
+                response: {
+                    content: [{ type: 'text', text: reason }],
+                    isError: true
+                },
+                success: false,
+                error: reason,
+                duration: 0,
+                timestamp: Date.now(),
+                attemptId: toolCall?.id,
+                userId: options.userId || options.event?.user_id,
+                groupId: options.groupId || options.event?.group_id,
+                source: 'client_preflight'
+            })
+        } catch (error) {
+            this.logger.debug?.(`[Tool] 记录前置拒绝失败: ${error.message}`)
+        }
+    }
+
     async executeToolCalls(toolCalls, options) {
         const validToolCalls = []
         const toolCallResults = []
@@ -2116,7 +2159,9 @@ export class AbstractClient {
                     content: reason
                 }),
                 type: 'tool',
-                name: displayName
+                name: displayName,
+                mcpContent: [{ type: 'text', text: reason }],
+                isError: true
             })
             toolCallLogs.push({
                 name: displayName,
@@ -2125,6 +2170,7 @@ export class AbstractClient {
                 duration: 0,
                 isError: true
             })
+            await this.recordRejectedToolAttempt(toolCall, reason, options)
         }
 
         if (validToolCalls.length === 0) {
@@ -2137,6 +2183,15 @@ export class AbstractClient {
         })
         toolCallResults.push(...preflight.blockedResults.map(item => item.toolResult))
         toolCallLogs.push(...preflight.blockedResults.map(item => item.log))
+        for (const blocked of preflight.blockedResults) {
+            const sourceCall = validToolCalls.find(item => item?.id && item.id === blocked.toolResult?.tool_call_id)
+            await this.recordRejectedToolAttempt(
+                sourceCall || { id: blocked.toolResult?.tool_call_id, name: blocked.log?.name },
+                blocked.log?.result || '工具未执行',
+                options,
+                blocked.log?.args || {}
+            )
+        }
         const approvedToolCalls = preflight.approvedToolCalls || []
 
         if (approvedToolCalls.length === 0) {
@@ -2171,7 +2226,7 @@ export class AbstractClient {
             this.logger.debug(`[Tool] 并行执行: ${parallelNames}`)
 
             const results = await Promise.allSettled(
-                parallelCalls.map(toolCall => this.executeSingleToolCall(toolCall))
+                parallelCalls.map(toolCall => this.executeSingleToolCall(toolCall, options))
             )
 
             for (let i = 0; i < results.length; i++) {
@@ -2204,7 +2259,7 @@ export class AbstractClient {
             this.logger.debug(`[Tool] 串行执行(保序): ${seqNames}`)
 
             for (const toolCall of sequentialCalls) {
-                const { toolResult, log } = await this.executeSingleToolCall(toolCall)
+                const { toolResult, log } = await this.executeSingleToolCall(toolCall, options)
                 toolCallResults.push(toolResult)
                 toolCallLogs.push(log)
                 if (sequentialCalls.length > 1) {
@@ -2226,129 +2281,148 @@ export class AbstractClient {
      * @param {Object} toolCall - 工具调用对象
      * @returns {Promise<{toolResult: Object, log: Object}>}
      */
-    async executeSingleToolCall(toolCall) {
-        const fcName = toolCall.function?.name || toolCall.name || 'unknown_tool'
-        let fcArgs = toolCall.function?.arguments || toolCall.arguments
-        // 解析参数
-        if (typeof fcArgs === 'string') {
+    async executeSingleToolCall(toolCall, options = {}) {
+        const toolName = toolCall.function?.name || toolCall.name || 'unknown_tool'
+        const startedAt = Date.now()
+        let toolArgs = toolCall.function?.arguments ?? toolCall.arguments ?? {}
+
+        if (typeof toolArgs === 'string') {
             try {
-                fcArgs = JSON.parse(fcArgs)
-            } catch (e) {
-                fcArgs = {}
-            }
-        }
-
-        const toolIdentity = getToolIdentity(toolCall)
-        let tool = toolIdentity ? this.tools.find(t => getToolIdentity(t) === toolIdentity) : null
-        if (!tool) {
-            const nameMatches = this.getToolMatchesByName(this.tools, fcName)
-            tool = nameMatches.length === 1 ? nameMatches[0] : null
-        }
-        const startTime = Date.now()
-
-        if (tool) {
-            let result
-            let isError = false
-
-            try {
-                result = await tool.run(fcArgs, this.context)
-
-                // 如果返回的是字符串且看起来像 JSON，尝试解析它以检查是否有 status
-                if (typeof result === 'string' && result.startsWith('{')) {
-                    try {
-                        const parsed = JSON.parse(result)
-                        if (parsed.status) {
-                            // 已经是格式化的结果
-                            const duration = Date.now() - startTime
-                            return {
-                                toolResult: {
-                                    tool_call_id: toolCall.id,
-                                    content: result,
-                                    type: 'tool',
-                                    name: fcName
-                                },
-                                log: {
-                                    name: fcName,
-                                    args: fcArgs,
-                                    result: result.length > 500 ? result.substring(0, 500) + '...' : result,
-                                    duration,
-                                    isError: parsed.status === 'error'
-                                }
-                            }
-                        }
-                    } catch (e) {}
-                }
-
-                // 包装为标准格式
-                const formattedResult = {
-                    status: 'success',
-                    tool: fcName,
-                    content: result,
-                    metadata: { duration: Date.now() - startTime }
-                }
-                const resultStr = JSON.stringify(formattedResult)
-
+                toolArgs = JSON.parse(toolArgs)
+            } catch (error) {
+                const reason = `arguments 不是合法 JSON: ${error.message}`
+                await this.recordRejectedToolAttempt(toolCall, reason, options, { _raw: toolArgs })
+                const normalized = normalizeToolExecutionResult(
+                    {
+                        content: [{ type: 'text', text: reason }],
+                        isError: true
+                    },
+                    { toolName, duration: Date.now() - startedAt }
+                )
                 return {
                     toolResult: {
-                        tool_call_id: toolCall.id,
-                        content: resultStr,
+                        tool_call_id: toolCall.id || crypto.randomUUID(),
+                        content: normalized.providerContent,
                         type: 'tool',
-                        name: fcName
+                        name: toolName,
+                        mcpContent: normalized.mcpContent,
+                        structuredContent: normalized.structuredContent,
+                        isError: true
                     },
                     log: {
-                        name: fcName,
-                        args: fcArgs,
-                        result: resultStr.length > 500 ? resultStr.substring(0, 500) + '...' : resultStr,
-                        duration: Date.now() - startTime,
-                        isError: false
-                    }
-                }
-            } catch (err) {
-                const duration = Date.now() - startTime
-                const errorResult = JSON.stringify({
-                    status: 'error',
-                    tool: fcName,
-                    content: err.message,
-                    metadata: { duration }
-                })
-                return {
-                    toolResult: {
-                        tool_call_id: toolCall.id,
-                        content: errorResult,
-                        type: 'tool',
-                        name: fcName
-                    },
-                    log: {
-                        name: fcName,
-                        args: fcArgs,
-                        result: errorResult,
-                        duration,
+                        name: toolName,
+                        args: { _raw: toolCall.function?.arguments ?? toolCall.arguments },
+                        result: sanitizeToolResultForLog(normalized),
+                        duration: Date.now() - startedAt,
                         isError: true
                     }
                 }
             }
-        } else {
-            const duration = Date.now() - startTime
-            const notFoundResult = JSON.stringify({
-                status: 'error',
-                tool: fcName,
-                content: `工具 "${fcName}" 不存在或未启用`,
-                metadata: { duration }
-            })
+        }
+
+        if (!toolArgs || typeof toolArgs !== 'object' || Array.isArray(toolArgs)) {
+            const reason = 'arguments 必须是 JSON 对象'
+            await this.recordRejectedToolAttempt(toolCall, reason, options, { _raw: toolArgs })
+            const normalized = normalizeToolExecutionResult(
+                {
+                    content: [{ type: 'text', text: reason }],
+                    isError: true
+                },
+                { toolName, duration: Date.now() - startedAt }
+            )
             return {
                 toolResult: {
-                    tool_call_id: toolCall.id,
-                    content: notFoundResult,
+                    tool_call_id: toolCall.id || crypto.randomUUID(),
+                    content: normalized.providerContent,
                     type: 'tool',
-                    name: fcName
+                    name: toolName,
+                    mcpContent: normalized.mcpContent,
+                    structuredContent: normalized.structuredContent,
+                    isError: true
                 },
                 log: {
-                    name: fcName,
-                    args: fcArgs,
-                    result: '工具不存在',
-                    duration,
+                    name: toolName,
+                    args: { _raw: toolArgs },
+                    result: sanitizeToolResultForLog(normalized),
+                    duration: Date.now() - startedAt,
                     isError: true
                 }
+            }
+        }
+
+        const toolIdentity = getToolIdentity(toolCall)
+        let tool = toolIdentity ? this.tools.find(item => getToolIdentity(item) === toolIdentity) : null
+        if (!tool) {
+            const matches = this.getToolMatchesByName(this.tools, toolName)
+            tool = matches.length === 1 ? matches[0] : null
+        }
+
+        if (!tool) {
+            const reason = `工具 "${toolName}" 不存在或未启用`
+            // 正常 executeToolCalls 会在更早处记录未知工具；此分支只覆盖直接调用。
+            const normalized = normalizeToolExecutionResult(
+                {
+                    content: [{ type: 'text', text: reason }],
+                    isError: true
+                },
+                { toolName, duration: Date.now() - startedAt }
+            )
+            return {
+                toolResult: {
+                    tool_call_id: toolCall.id || crypto.randomUUID(),
+                    content: normalized.providerContent,
+                    type: 'tool',
+                    name: toolName,
+                    mcpContent: normalized.mcpContent,
+                    structuredContent: normalized.structuredContent,
+                    isError: true
+                },
+                log: {
+                    name: toolName,
+                    args: toolArgs,
+                    result: reason,
+                    duration: Date.now() - startedAt,
+                    isError: true
+                }
+            }
+        }
+
+        let rawResult
+        try {
+            rawResult = await tool.run(toolArgs, this.context)
+        } catch (error) {
+            rawResult = {
+                content: [{ type: 'text', text: error.message }],
+                isError: true
+            }
+        }
+
+        const normalized = normalizeToolExecutionResult(rawResult, {
+            toolName,
+            duration: Date.now() - startedAt
+        })
+        return {
+            toolResult: {
+                tool_call_id: toolCall.id || crypto.randomUUID(),
+                content: normalized.providerContent,
+                type: 'tool',
+                name: toolName,
+                mcpContent: normalized.mcpContent,
+                ...(normalized.structuredContent !== undefined
+                    ? { structuredContent: normalized.structuredContent }
+                    : {}),
+                isError: normalized.isError
+            },
+            log: {
+                name: toolName,
+                args: toolArgs,
+                result: sanitizeToolResultForLog({
+                    content: normalized.mcpContent,
+                    structuredContent: normalized.structuredContent,
+                    isError: normalized.isError
+                }),
+                duration: Date.now() - startedAt,
+                isError: normalized.isError
             }
         }
     }

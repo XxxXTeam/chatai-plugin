@@ -2,6 +2,7 @@
  * 基础工具
  * 包含时间获取、工具列表等基础功能
  */
+import { StandardBotApi } from '../../core/platform/index.js'
 
 export const basicTools = [
     {
@@ -110,7 +111,7 @@ export const basicTools = [
         },
         handler: async (args, ctx) => {
             const e = ctx?.getEvent?.()
-            const bot = ctx?.getBot?.()
+            const botInfo = StandardBotApi.fromContext(ctx).getBotInfo()
 
             return {
                 success: true,
@@ -123,9 +124,9 @@ export const basicTools = [
                     total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + 'MB'
                 },
                 bot: {
-                    id: bot?.uin || bot?.self_id,
-                    friends: bot?.fl?.size || 0,
-                    groups: bot?.gl?.size || 0
+                    id: botInfo.user_id,
+                    friends: botInfo.friend_count,
+                    groups: botInfo.group_count
                 },
                 context: {
                     is_group: !!e?.group_id,
@@ -233,40 +234,6 @@ export const basicTools = [
             try {
                 const date = args.date ? new Date(args.date) : new Date()
 
-                // 简单农历计算（仅供参考，精确农历需要专门的库）
-                const lunarMonths = ['正', '二', '三', '四', '五', '六', '七', '八', '九', '十', '冬', '腊']
-                const lunarDays = [
-                    '初一',
-                    '初二',
-                    '初三',
-                    '初四',
-                    '初五',
-                    '初六',
-                    '初七',
-                    '初八',
-                    '初九',
-                    '初十',
-                    '十一',
-                    '十二',
-                    '十三',
-                    '十四',
-                    '十五',
-                    '十六',
-                    '十七',
-                    '十八',
-                    '十九',
-                    '二十',
-                    '廿一',
-                    '廿二',
-                    '廿三',
-                    '廿四',
-                    '廿五',
-                    '廿六',
-                    '廿七',
-                    '廿八',
-                    '廿九',
-                    '三十'
-                ]
                 const animals = ['鼠', '牛', '虎', '兔', '龙', '蛇', '马', '羊', '猴', '鸡', '狗', '猪']
                 const stems = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸']
                 const branches = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥']

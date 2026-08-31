@@ -83,12 +83,8 @@ async function getPublicAddresses(port) {
     } catch {}
     return result
 }
-
-// 快速获取所有地址（本地+公网并行，总超时2秒）
 async function getServerAddressesFast(port) {
     const addresses = { local: [], localIPv6: [], public: null, publicIPv6: null }
-
-    // 本地地址（同步获取，很快）
     try {
         const interfaces = os.networkInterfaces()
         for (const name of Object.keys(interfaces)) {
@@ -105,8 +101,6 @@ async function getServerAddressesFast(port) {
     } catch {
         addresses.local = [`http://127.0.0.1:${port}`]
     }
-
-    // 公网地址（并行获取，总超时2秒）
     try {
         const publicPromise = Promise.all([
             fetchPublicIp('https://api.ipify.org', isIPv4Address, 1500),
@@ -230,7 +224,6 @@ class FingerprintValidator {
         for (const [token, data] of this.bindings) {
             if (now > data.expiry) this.bindings.delete(token)
         }
-        // Map 保持插入顺序，迭代器返回的首个键即最早写入的条目
         while (this.bindings.size > this.maxSize) {
             const oldest = this.bindings.keys().next().value
             if (oldest === undefined) break
@@ -352,22 +345,17 @@ class AuthHandler {
         const token = crypto.randomBytes(32).toString('base64url')
         const expiry = Date.now() + timeout * 1000
         this.tokens.set(token, expiry)
-        // unref 使该定时器不阻止进程退出
         setTimeout(() => this.tokens.delete(token), timeout * 1000).unref?.()
         return token
     }
 
     validateToken(token, consume = true) {
         if (!token) return false
-
-        // 检查永久Token
         const permanentToken = config.get('web.permanentAuthToken')
         if (permanentToken && token === permanentToken) {
             chatLogger.debug('[Auth] 永久Token验证成功')
             return true
         }
-
-        // 检查临时Token
         const expiry = this.tokens.get(token)
         if (expiry && Date.now() < expiry) {
             if (consume) this.tokens.delete(token)
@@ -434,7 +422,6 @@ class WebServer {
                 if (hostname) allowedHostnames.add(hostname)
                 return
             }
-            // 允许直接填写 example.com 或 example.com:8080 这类裸 host
             if (typeof value === 'string' && value.trim()) {
                 const bare = value.trim().toLowerCase()
                 allowedHosts.add(bare)
@@ -452,8 +439,6 @@ class WebServer {
             for (const item of extraOrigins) addAllowed(item)
         }
         if (allowedHosts.has(originHost)) return true
-
-        // 本机网卡地址：端口可能因反向代理而不同，故 host 与 hostname 都比对
         const detected = [
             ...(this.addresses?.local || []),
             ...(this.addresses?.localIPv6 || []),
@@ -482,21 +467,14 @@ class WebServer {
             urlencodedParser(req, res, next)
         })
         this.app.use(cookieParser())
-
-        // CORS：仅对可信来源下发跨域头。
-        // 原实现直接反射 req.headers.origin 且带 Allow-Credentials: true，
-        // 等价于允许任意站点携带用户 Cookie 调用本插件全部接口；
-        // 且 TRSS 模式下 botExpress.use(this.app) 会把该策略扩散到整个 Yunzai 服务。
         this.app.use((req, res, next) => {
             const origin = req.headers.origin
-            // 无 Origin 头 = 同源导航或非浏览器客户端，本就不需要 CORS 头
             if (!origin) {
                 if (req.method === 'OPTIONS') return res.sendStatus(204)
                 return next()
             }
 
             if (!this.isTrustedOrigin(req, origin)) {
-                // 不下发任何 CORS 头，由浏览器同源策略拦截；预检直接拒绝
                 if (req.method === 'OPTIONS') return res.sendStatus(403)
                 return next()
             }
@@ -514,7 +492,16 @@ class WebServer {
         })
         const webDir = path.join(__dirname, '../../resources/web')
         if (fs.existsSync(webDir)) {
-            this.router.use(express.static(webDir))
+            this.router.use(
+                express.static(webDir, {
+                    setHeaders: (res, filePath) => {
+                        const extension = path.extname(filePath).toLowerCase()
+                        if (extension === '.html' || extension === '.txt') {
+                            res.setHeader('Cache-Control', 'no-store')
+                        }
+                    }
+                })
+            )
         }
     }
 
@@ -605,8 +592,6 @@ class WebServer {
                 const { token, password, fingerprint } = req.body
                 const clientFingerprint = fingerprint || req.headers['x-client-fingerprint']
                 const authToken = token || password
-
-                // 验证Token（临时或永久）
                 if (!authToken || !authHandler.validateToken(authToken)) {
                     return res.status(401).json(ChaiteResponse.fail(null, 'Token 无效或已过期'))
                 }
@@ -684,8 +669,6 @@ class WebServer {
         this.router.get('/api/state', auth, (req, res) => {
             res.json(ChaiteResponse.ok({ authenticated: true }))
         })
-
-        // 生成临时登录Token - 公开接口，Token输出到控制台
         this.router.get(
             '/api/auth/token/generate',
             createRateLimit({ max: 3, windowMs: 60 * 1000, message: 'Token 生成请求过于频繁，请稍后再试' }),
@@ -693,7 +676,7 @@ class WebServer {
                 try {
                     const token = authHandler.generateToken() // 5分钟有效
                     chatLogger.info('========================================')
-                    chatLogger.info('[ChatAI] 管理面板登录 Token (5分钟有效):')
+                    chatLogger.info('[ChatAI] 管理面板登录 Token :')
                     chatLogger.info(token)
                     chatLogger.info('========================================')
                     res.json(
@@ -708,8 +691,6 @@ class WebServer {
                 }
             }
         )
-
-        // POST /api/auth/token/permanent - 生成永久Token
         this.router.post('/api/auth/token/permanent', auth, (req, res) => {
             try {
                 const forceNew = req.body?.forceNew === true
@@ -720,8 +701,6 @@ class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // DELETE /api/auth/token/permanent - 撤销永久Token
         this.router.delete('/api/auth/token/permanent', auth, (req, res) => {
             try {
                 config.set('web.permanentAuthToken', null)
@@ -731,8 +710,6 @@ class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // GET /api/auth/token/status - 获取Token状态
         this.router.get('/api/auth/token/status', auth, (req, res) => {
             try {
                 res.json(
@@ -744,12 +721,6 @@ class WebServer {
                 res.status(500).json(ChaiteResponse.fail(null, error.message))
             }
         })
-
-        // 健康检查：必须内联响应。
-        // 原写法 router.get('/api/health', systemRoutes) 把子 Router 当普通 handler，
-        // .get() 不会剥离路径前缀，systemRoutes 内注册的是 '/health'，永远匹配不上，
-        // 最终 next() 落到下方的 router.use('/api', auth, systemRoutes) 被鉴权拦截返回 401。
-        // 响应体与 systemRoutes 的 GET /health 保持一致，避免既有监控探针解析失败
         this.router.get('/api/health', (req, res) => {
             const memory = process.memoryUsage()
             res.json({
@@ -776,21 +747,18 @@ class WebServer {
         this.router.use('/api/placeholders', auth, placeholdersRouter)
         this.router.use('/api/memory', auth, memoryRoutes)
         this.router.use('/api/graph', auth, graphRoutes)
-        this.router.use('/api/images', publicImageRouter) // 公开图片访问，无需认证
+        this.router.use('/api/images', publicImageRouter)
         this.router.use('/api/stats', auth, statsRoutes)
-        this.router.use('/mcp', mcpServerRoutes) // MCP Server 暴露端点，使用独立 apiKey 鉴权
+        this.router.use('/mcp', mcpServerRoutes)
         this.router.use('/api/group-admin', groupAdminRoutes)
         this.router.use('/api/skills', auth, skillsRoutes)
-        // 游戏编辑路由必须在通用/api路由之前注册，避免被auth中间件拦截
-        this.router.use('/api/game-edit', createGameEditRoutes()) // 无需认证，使用UUID访问
+        this.router.use('/api/game-edit', createGameEditRoutes())
         this.router.use('/api/game', createGameRoutes(auth))
         this.router.use('/api/conversations', createConversationRoutes(auth))
         this.router.use('/api/context', createContextRoutes(auth))
         this.router.use('/api/preset', createPresetRoutes(auth))
         this.router.use('/api/presets', createPresetsConfigRoutes(auth))
         this.router.use('/api', auth, systemRoutes)
-        // 未命中的 /api 与 /mcp 请求必须返回 JSON 404，
-        // 否则会落进下方的 SPA 兜底，返回 200 + index.html，前端 JSON.parse 直接报错
         this.router.use(['/api', '/mcp'], (req, res) => {
             res.status(404).json(ChaiteResponse.fail(null, `接口不存在: ${req.method} ${req.originalUrl}`))
         })
@@ -814,9 +782,6 @@ class WebServer {
             }
         })
         this.app.use(mountPath, this.router)
-        // 全局错误兜底。ApiResponse.js 早已实现 errorHandler 但从未挂载，
-        // 导致同步抛错走 Express 默认处理器：返回带绝对路径的 HTML 堆栈（项目未设 NODE_ENV）。
-        // 限定在 mountPath 下，避免 TRSS 共享端口时干扰 Yunzai 的其它服务。
         this.app.use(mountPath, errorHandler)
     }
 
@@ -873,17 +838,11 @@ class WebServer {
         } else {
             await this.startWithOwnPort()
         }
-
-        // 并行获取本地和公网地址（总超时2秒）
         this.addresses = await getServerAddressesFast(this.port)
         this.printStartupBanner()
-
-        // 异步启动自然语言定时任务服务
         nlSchedulerService.init().catch(err => {
             chatLogger.warn('[WebServer] 定时任务服务启动失败:', err.message)
         })
-
-        // 异步启动群聊总结定时推送服务
         groupSummaryPushService.init().catch(err => {
             chatLogger.warn('[WebServer] 群聊总结推送服务启动失败:', err.message)
         })
@@ -897,20 +856,12 @@ class WebServer {
     async startWithSharedPort() {
         const botExpress = global.Bot.express
         const botServer = global.Bot.server
-
-        // 获取TRSS服务器端口
         const address = botServer.address()
         this.port = address?.port || config.get('web.port') || 3000
         this.server = botServer
         this.sharedPort = true
-
-        // 使用固定的挂载路径 /chatai
         const mountPath = this.mountPath
-
-        // 将整个应用挂载到TRSS的express
         botExpress.use(this.app)
-
-        // 添加quiet和skip_auth路径（/chatai下的所有路径）
         const quietPaths = [mountPath]
         if (Array.isArray(botExpress.quiet)) {
             botExpress.quiet.push(...quietPaths)

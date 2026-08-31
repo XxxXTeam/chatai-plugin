@@ -207,7 +207,6 @@ class ToolFilterService {
         if (!tools || tools.length === 0) return []
 
         const toolConfig = this.getPresetToolConfig(presetId)
-        const { groupId, userId } = options
         const userPermission = resolveToolPermission(options)
 
         let filteredTools = [...tools]
@@ -383,7 +382,7 @@ class ToolFilterService {
      * @returns {{valid: boolean, reason?: string}}
      */
     validateToolCall(toolName, args, context = {}) {
-        const { groupId, userId } = context
+        const { userId } = context
 
         // 特殊工具参数验证
         switch (toolName) {

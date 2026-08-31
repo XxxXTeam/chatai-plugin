@@ -6,7 +6,7 @@ import fsp from 'fs/promises'
 import path from 'path'
 import { chatLogger as logger } from '../../core/utils/logger.js'
 import { emojiThiefService } from '../../../apps/EmojiThief.js'
-import { segment } from '../../utils/messageParser.js'
+import { StandardBotApi } from '../../core/platform/index.js'
 import { assertSafeUrl } from './helpers.js'
 
 /** 表情图片下载超时（毫秒） */
@@ -158,18 +158,8 @@ export const emojiTools = [
                 }
 
                 const emojiMsg = emojiThiefService.buildEmojiMessage(selected.path)
-                if (e?.reply) {
-                    await e.reply(emojiMsg)
-                    return { success: true, message: `已发送表情 ${selected.name}`, sent: true }
-                }
-                if (e?.bot) {
-                    const group = e.bot.pickGroup?.(groupId) || e.bot
-                    if (group.sendMsg) {
-                        await group.sendMsg([emojiMsg])
-                        return { success: true, message: `已发送表情 ${selected.name}`, sent: true }
-                    }
-                }
-                return { success: true, message: `表情文件: ${selected.name}`, filePath: selected.path, sent: false }
+                await StandardBotApi.fromContext(ctx).sendGroup(groupId, emojiMsg)
+                return { success: true, message: `已发送表情 ${selected.name}`, sent: true }
             } catch (err) {
                 return { success: false, error: err.message }
             }

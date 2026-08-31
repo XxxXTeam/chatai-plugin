@@ -1,10 +1,23 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import YAML from 'yaml'
 import { chatLogger } from '../../core/utils/logger.js'
 
 const logger = chatLogger
-const IGNORED_DIRS = new Set(['.git', '.hg', '.svn', 'node_modules', '.next', 'dist', 'build', 'coverage'])
+const IGNORED_DIRS = new Set([
+    '.git',
+    '.hg',
+    '.svn',
+    'node_modules',
+    '.next',
+    'dist',
+    'build',
+    'coverage',
+    'skills-backups',
+    'skills-import'
+])
 
 // 目录内被识别为“文件夹型 skill 定义”的固定文件名
 const FOLDER_SKILL_FILES = new Set(['skill.yaml', 'skill.yml', 'skill.json'])
@@ -22,6 +35,42 @@ const MAX_PACKAGE_DEPTH = 3
 // 单个扫描根允许访问的目录总数上限，防止 documents.paths 指向超大目录树时耗尽 IO
 const MAX_SCAN_DIRECTORIES = 1000
 
+/** MIME 类型只在服务端判定，前端不得按扩展名重复推断。 */
+const TEXT_MIME_TYPES = new Map([
+    ['.md', 'text/markdown'],
+    ['.markdown', 'text/markdown'],
+    ['.txt', 'text/plain'],
+    ['.yaml', 'application/yaml'],
+    ['.yml', 'application/yaml'],
+    ['.json', 'application/json'],
+    ['.csv', 'text/csv'],
+    ['.tsv', 'text/tab-separated-values'],
+    ['.js', 'text/javascript'],
+    ['.mjs', 'text/javascript'],
+    ['.cjs', 'text/javascript'],
+    ['.ts', 'text/typescript'],
+    ['.py', 'text/x-python'],
+    ['.sh', 'text/x-shellscript'],
+    ['.bash', 'text/x-shellscript'],
+    ['.zsh', 'text/x-shellscript'],
+    ['.ps1', 'text/plain'],
+    ['.bat', 'text/plain'],
+    ['.cmd', 'text/plain'],
+    ['.rb', 'text/x-ruby'],
+    ['.pl', 'text/x-perl'],
+    ['.lua', 'text/x-lua']
+])
+
+const BINARY_MIME_TYPES = new Map([
+    ['.png', 'image/png'],
+    ['.jpg', 'image/jpeg'],
+    ['.jpeg', 'image/jpeg'],
+    ['.gif', 'image/gif'],
+    ['.webp', 'image/webp'],
+    ['.pdf', 'application/pdf'],
+    ['.zip', 'application/zip']
+])
+
 /*
  * 面板允许改写的附属文件扩展名白名单。
  *
@@ -31,26 +80,136 @@ const MAX_SCAN_DIRECTORIES = 1000
  */
 const EDITABLE_FILE_EXTENSIONS = new Set(['.md', '.markdown', '.txt', '.yaml', '.yml', '.json'])
 
+// 面板可管理的附属目录；scripts 只允许读取，不允许通过管理接口创建、改写或删除
+const MANAGED_PACKAGE_DIRS = new Set(['references', 'assets'])
+
+// Agent Skills 标准技能名：小写字母、数字、单连字符，最长 64 字符
+const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
 /**
  * 判断附属文件是否允许通过面板改写
  * @param {string} relativePath - 相对包根目录的文件路径
  * @returns {boolean} 是否允许写入
  */
 export function isEditableSkillFile(relativePath) {
-    return EDITABLE_FILE_EXTENSIONS.has(path.extname(String(relativePath || '')).toLowerCase())
+    const normalized = String(relativePath || '')
+        .replace(/\\/g, '/')
+        .toLowerCase()
+    const [directory] = normalized.split('/')
+    return MANAGED_PACKAGE_DIRS.has(directory) && EDITABLE_FILE_EXTENSIONS.has(path.extname(normalized))
 }
 
 /**
- * 校验待写入的 skill 定义内容能否被正常解析
- *
- * frontmatter 一旦有 YAML 语法错误，parseSkillMarkdown 只会打一条 warn 并返回空元数据，
- * 于是技能名回退成目录名、description/triggers 全部丢失 —— 表现为技能「改名」或从匹配
- * 逻辑里消失，而文件本身看起来还在。写入前先解析一遍，把这种损坏挡在落盘之前。
- * @param {'markdown'|'yaml'|'json'} type - 定义文件类型
- * @param {string} content - 待写入的完整文件内容
- * @returns {{valid: boolean, error?: string, metadata?: object}} 校验结果，valid 为 true 时带回解析出的元数据
+ * 校验并规范化可由管理面板操作的附属文件路径。
+ * @param {string} relativePath - 相对技能包根目录的路径
+ * @returns {{ok:true,path:string,segments:string[]}|{ok:false,error:string}} 校验结果
  */
-export function validateSkillSource(type, content) {
+export function normalizeManagedPackagePath(relativePath, options = {}) {
+    if (typeof relativePath !== 'string' || !relativePath.trim()) {
+        return { ok: false, error: '缺少文件路径' }
+    }
+
+    const raw = relativePath.trim().replace(/\\/g, '/')
+    if (raw.includes('\0') || raw.startsWith('/') || /^[a-zA-Z]:\//.test(raw)) {
+        return { ok: false, error: '文件路径必须是技能包内的相对路径' }
+    }
+
+    const segments = raw.split('/')
+    if (segments.length < 2 || segments.some(segment => !segment || segment === '.' || segment === '..')) {
+        return { ok: false, error: '文件路径包含空目录或路径穿越片段' }
+    }
+    if (!MANAGED_PACKAGE_DIRS.has(segments[0])) {
+        return { ok: false, error: '仅允许管理 references/ 或 assets/ 下的附属文件' }
+    }
+    if (segments.length - 1 > MAX_PACKAGE_DEPTH + 1) {
+        return { ok: false, error: `附属文件目录层级不能超过 ${MAX_PACKAGE_DEPTH + 1} 层` }
+    }
+    if (options.requireEditable !== false && !isEditableSkillFile(raw)) {
+        return { ok: false, error: `文件类型不支持管理: ${raw}` }
+    }
+
+    return { ok: true, path: segments.join('/'), segments }
+}
+
+/**
+ * 解析官方 allowed-tools 空格分隔字符串。
+ * 项目扩展键 allowedTools / allowed_tools 继续由 toStringList 处理。
+ * @param {*} value - allowed-tools 值
+ * @returns {string[]} 工具名列表
+ */
+function parseStandardAllowedTools(value) {
+    if (typeof value !== 'string') return toStringList(value)
+    return value
+        .split(/\s+/)
+        .map(name => name.trim())
+        .filter(Boolean)
+}
+
+/**
+ * 校验 Agent Skills 官方 frontmatter 约束。
+ * 旧技能仍可加载；调用方可用 strictStandard 在新建场景执行严格拒绝。
+ * @param {Object} metadata - frontmatter
+ * @param {{directoryName?: string}} [options] - 校验选项
+ * @returns {{standardCompliant:boolean, errors:string[], warnings:string[]}} 结果
+ */
+export function validateAgentSkillMetadata(metadata, options = {}) {
+    /** @type {string[]} */
+    const errors = []
+    /** @type {string[]} */
+    const warnings = []
+    const name = typeof metadata?.name === 'string' ? metadata.name.trim() : ''
+    const description = typeof metadata?.description === 'string' ? metadata.description.trim() : ''
+
+    if (!name) {
+        errors.push('name 必须是非空字符串')
+    } else {
+        if (name.length > 64) errors.push('name 长度必须为 1-64')
+        if (!SKILL_NAME_PATTERN.test(name)) {
+            errors.push('name 只能包含小写字母、数字和单连字符，且不能首尾或连续使用连字符')
+        }
+        if (options.directoryName && name !== options.directoryName) {
+            errors.push(`name 必须与父目录同名（当前目录: ${options.directoryName}）`)
+        }
+    }
+
+    if (!description) {
+        errors.push('description 必须是非空字符串')
+    } else if (description.length > 1024) {
+        errors.push('description 长度必须为 1-1024')
+    }
+
+    for (const key of ['license', 'compatibility']) {
+        if (metadata?.[key] !== undefined && typeof metadata[key] !== 'string') {
+            errors.push(`${key} 必须是字符串`)
+        }
+    }
+
+    if (metadata?.metadata !== undefined) {
+        if (!metadata.metadata || typeof metadata.metadata !== 'object' || Array.isArray(metadata.metadata)) {
+            errors.push('metadata 必须是字符串键值映射')
+        } else if (Object.values(metadata.metadata).some(value => typeof value !== 'string')) {
+            errors.push('metadata 的所有值必须是字符串')
+        }
+    }
+
+    if (metadata?.['allowed-tools'] !== undefined && typeof metadata['allowed-tools'] !== 'string') {
+        errors.push('allowed-tools 必须是空格分隔字符串')
+    }
+
+    if (errors.length > 0) {
+        warnings.push(...errors.map(error => `旧格式兼容加载: ${error}`))
+    }
+    return { standardCompliant: errors.length === 0, errors, warnings }
+}
+
+/**
+ * 校验技能源文件；旧格式默认兼容，新建场景可启用 strictStandard。
+ * @param {string} type - markdown/yaml/json
+ * @param {string} content - 文件内容
+ * @param {{directoryName?:string, strictStandard?:boolean}} [options] - 校验选项
+ * @returns {Object} 校验结果
+ */
+export function validateSkillSource(type, content, options = {}) {
     if (typeof content !== 'string') {
         return { valid: false, error: '内容必须是字符串' }
     }
@@ -75,7 +234,24 @@ export function validateSkillSource(type, content) {
         if (typeof metadata.name !== 'string' || !metadata.name.trim()) {
             return { valid: false, error: 'frontmatter 缺少有效的 name 字段' }
         }
-        return { valid: true, metadata }
+
+        const standard = validateAgentSkillMetadata(metadata, {
+            directoryName: options.directoryName
+        })
+        if (options.strictStandard === true && !standard.standardCompliant) {
+            return {
+                valid: false,
+                error: `Agent Skills frontmatter 不符合规范: ${standard.errors.join('; ')}`,
+                metadata,
+                ...standard
+            }
+        }
+        return {
+            valid: true,
+            metadata,
+            body: content.slice(match[0].length),
+            ...standard
+        }
     }
 
     let metadata
@@ -87,7 +263,37 @@ export function validateSkillSource(type, content) {
     if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
         return { valid: false, error: 'skill 定义顶层必须是键值对象' }
     }
-    return { valid: true, metadata }
+
+    const standard = validateAgentSkillMetadata(metadata, {
+        directoryName: options.directoryName
+    })
+    if (options.strictStandard === true && !standard.standardCompliant) {
+        return {
+            valid: false,
+            error: `Agent Skills 定义不符合规范: ${standard.errors.join('; ')}`,
+            metadata,
+            ...standard
+        }
+    }
+    const body =
+        typeof metadata.instructions === 'string'
+            ? metadata.instructions
+            : typeof metadata.body === 'string'
+              ? metadata.body
+              : ''
+    return { valid: true, metadata, body, ...standard }
+}
+
+/**
+ * 将结构化字段序列化为标准 SKILL.md。
+ * @param {object} metadata - Agent Skills frontmatter
+ * @param {string} body - 技能正文
+ * @returns {string} 完整 SKILL.md 内容
+ */
+export function serializeSkillMarkdown(metadata, body) {
+    const frontmatter = YAML.stringify(metadata, { lineWidth: 0 }).trimEnd()
+    const normalizedBody = typeof body === 'string' ? body.trim() : ''
+    return `---\n${frontmatter}\n---\n${normalizedBody ? `\n${normalizedBody}\n` : ''}`
 }
 
 /**
@@ -120,27 +326,364 @@ function isPackageSkill(filePath) {
 }
 
 /**
+ * 判断目标路径是否位于根目录内。
+ * @param {string} root - 已解析的根目录
+ * @param {string} target - 已解析的目标路径
+ * @returns {boolean} 目标是否等于根目录或位于根目录内
+ */
+export function isPathWithin(root, target) {
+    const relative = path.relative(root, target)
+    return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+}
+
+/**
+ * 提取用于检测文件系统对象替换或原地改写的稳定身份字段。
+ * @param {fs.Stats} stat - 文件状态
+ * @returns {{dev:number,ino:number,size:number,mtimeMs:number,ctimeMs:number}} 身份字段
+ */
+function toFileIdentity(stat) {
+    return {
+        dev: stat.dev,
+        ino: stat.ino,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        ctimeMs: stat.ctimeMs
+    }
+}
+
+/**
+ * 比较两个文件系统身份。
+ * @param {object} current - 当前身份
+ * @param {object} expected - 期望身份
+ * @returns {boolean} 是否一致
+ */
+function sameFileIdentity(current, expected) {
+    if (!expected) return true
+    return (
+        current.dev === expected.dev &&
+        current.ino === expected.ino &&
+        current.size === expected.size &&
+        current.mtimeMs === expected.mtimeMs &&
+        current.ctimeMs === expected.ctimeMs
+    )
+}
+
+/**
+ * 判断完整文件内容是否为可安全展示的 UTF-8 文本。
+ * @param {Buffer} buffer - 文件完整字节
+ * @returns {boolean} 是否为 UTF-8 文本
+ */
+function isReadableUtf8Text(buffer) {
+    try {
+        const content = new TextDecoder('utf-8', { fatal: true }).decode(buffer)
+        for (let index = 0; index < content.length; index++) {
+            const code = content.charCodeAt(index)
+            if (code === 0 || (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0c && code !== 0x0d)) {
+                return false
+            }
+        }
+        return true
+    } catch {
+        return false
+    }
+}
+
+/**
+ * 根据文件签名、服务端扩展名映射和文本检测结果确定 MIME。
+ * @param {string} fileName - 文件名
+ * @param {Buffer} prefix - 文件开头字节
+ * @param {boolean} textReadable - 是否已确认是可读 UTF-8 文本
+ * @returns {string} MIME 类型
+ */
+function detectPackageFileMimeType(fileName, prefix, textReadable) {
+    if (
+        prefix.length >= 8 &&
+        prefix.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    ) {
+        return 'image/png'
+    }
+    if (prefix.length >= 5 && prefix.subarray(0, 5).toString('ascii') === '%PDF-') return 'application/pdf'
+    if (prefix.length >= 3 && prefix[0] === 0xff && prefix[1] === 0xd8 && prefix[2] === 0xff) return 'image/jpeg'
+    if (prefix.length >= 6) {
+        const signature = prefix.subarray(0, 6).toString('ascii')
+        if (signature === 'GIF87a' || signature === 'GIF89a') return 'image/gif'
+    }
+    if (
+        prefix.length >= 12 &&
+        prefix.subarray(0, 4).toString('ascii') === 'RIFF' &&
+        prefix.subarray(8, 12).toString('ascii') === 'WEBP'
+    ) {
+        return 'image/webp'
+    }
+    if (prefix.length >= 4 && prefix[0] === 0x50 && prefix[1] === 0x4b && [0x03, 0x05, 0x07].includes(prefix[2])) {
+        return 'application/zip'
+    }
+
+    const extension = path.extname(fileName).toLowerCase()
+    if (BINARY_MIME_TYPES.has(extension)) return BINARY_MIME_TYPES.get(extension)
+    if (textReadable) return TEXT_MIME_TYPES.get(extension) || 'text/plain'
+    return 'application/octet-stream'
+}
+
+/**
+ * 以 O_NOFOLLOW 打开并检查普通文件，同时生成服务端能力清单。
+ * @param {string} targetPath - 文件路径
+ * @param {string} realPackageRoot - 包根真实路径
+ * @param {number} maxTextBytes - 文本读取上限
+ * @returns {{size:number,identity:object,textReadable:boolean,mimeType:string}|null} 能力信息
+ */
+function inspectPackageFile(targetPath, realPackageRoot, maxTextBytes) {
+    let descriptor = null
+    try {
+        const initialStat = fs.lstatSync(targetPath)
+        if (initialStat.isSymbolicLink() || !initialStat.isFile()) return null
+
+        descriptor = fs.openSync(targetPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0))
+        const stat = fs.fstatSync(descriptor)
+        if (!stat.isFile()) return null
+
+        let realPath = ''
+        try {
+            realPath = fs.realpathSync(`/proc/self/fd/${descriptor}`)
+        } catch {
+            realPath = fs.realpathSync(targetPath)
+        }
+        if (!isPathWithin(realPackageRoot, realPath)) return null
+
+        const canInspectText = stat.size <= maxTextBytes
+        const inspectBytes = canInspectText ? stat.size : Math.min(stat.size, 512)
+        const bytes = Buffer.alloc(inspectBytes)
+        if (inspectBytes > 0) fs.readSync(descriptor, bytes, 0, inspectBytes, 0)
+        let textReadable = canInspectText && isReadableUtf8Text(bytes)
+        const mimeType = detectPackageFileMimeType(
+            targetPath,
+            bytes.subarray(0, Math.min(bytes.length, 512)),
+            textReadable
+        )
+        if (mimeType.startsWith('image/') || mimeType === 'application/pdf' || mimeType === 'application/zip') {
+            textReadable = false
+        }
+
+        return {
+            size: stat.size,
+            identity: toFileIdentity(stat),
+            textReadable,
+            mimeType
+        }
+    } catch {
+        return null
+    } finally {
+        if (descriptor !== null) {
+            try {
+                fs.closeSync(descriptor)
+            } catch {}
+        }
+    }
+}
+
+/**
+ * 找到路径本身或最近的既有祖先，并解析其真实路径。
+ *
+ * 对尚未创建的扫描根不能只做字符串前缀检查：其既有父目录可能是指向插件外部的符号链接。
+ * @param {string} targetPath - 待检查路径
+ * @returns {{path:string,realPath:string}|null} 最近既有路径及其真实路径
+ */
+function findNearestExistingAncestor(targetPath) {
+    let current = path.resolve(targetPath)
+    while (true) {
+        try {
+            fs.lstatSync(current)
+            return { path: current, realPath: fs.realpathSync(current) }
+        } catch (error) {
+            if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') return null
+        }
+
+        const parent = path.dirname(current)
+        if (parent === current) return null
+        current = parent
+    }
+}
+
+/**
+ * 在受信根目录内创建并解析一个普通目录。
+ * @param {string} rootPath - 受信根目录
+ * @param {string} targetPath - 要创建或复用的目录
+ * @returns {string} 目标目录真实路径
+ * @throws {Error} 路径越界、祖先符号链接逃逸或目标不是普通目录时抛出
+ */
+export function ensureDirectoryWithinRoot(rootPath, targetPath) {
+    const lexicalRoot = path.resolve(rootPath)
+    const lexicalTarget = path.resolve(targetPath)
+    const realRoot = fs.realpathSync(lexicalRoot)
+    if (!isPathWithin(lexicalRoot, lexicalTarget) && !isPathWithin(realRoot, lexicalTarget)) {
+        throw new Error('目标目录不在受信根目录内')
+    }
+
+    const ancestor = findNearestExistingAncestor(lexicalTarget)
+    if (!ancestor || !isPathWithin(realRoot, ancestor.realPath)) {
+        throw new Error('目标目录的既有祖先真实路径位于受信根目录外')
+    }
+
+    fs.mkdirSync(lexicalTarget, { recursive: true, mode: 0o700 })
+    const targetStat = fs.lstatSync(lexicalTarget)
+    if (targetStat.isSymbolicLink() || !targetStat.isDirectory()) {
+        throw new Error('目标目录必须是普通目录，且不能是符号链接')
+    }
+    const realTarget = fs.realpathSync(lexicalTarget)
+    if (!isPathWithin(realRoot, realTarget)) {
+        throw new Error('目标目录真实路径位于受信根目录外')
+    }
+    return realTarget
+}
+
+/**
+ * 通过不跟随最终符号链接的文件描述符读取普通文本文件。
+ * @param {string} targetPath - 目标文件
+ * @param {number} maxBytes - 最大字节数
+ * @param {(realPath:string) => boolean} isAllowed - 对已打开文件真实路径的边界检查
+ * @returns {{content:string,size:number,realPath:string,identity:object}|null} 读取结果
+ */
+function readRegularTextFile(targetPath, maxBytes, isAllowed) {
+    let descriptor = null
+    try {
+        const resolvedTarget = path.resolve(targetPath)
+        const initialStat = fs.lstatSync(resolvedTarget)
+        if (initialStat.isSymbolicLink() || !initialStat.isFile()) return null
+
+        const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0)
+        descriptor = fs.openSync(resolvedTarget, flags)
+        const stat = fs.fstatSync(descriptor)
+        if (!stat.isFile() || stat.size > maxBytes) return null
+
+        let realPath = ''
+        try {
+            realPath = fs.realpathSync(`/proc/self/fd/${descriptor}`)
+        } catch {
+            realPath = fs.realpathSync(resolvedTarget)
+        }
+        if (!isAllowed(realPath)) return null
+
+        return {
+            content: fs.readFileSync(descriptor, 'utf8'),
+            size: stat.size,
+            realPath,
+            identity: toFileIdentity(stat)
+        }
+    } catch {
+        return null
+    } finally {
+        if (descriptor !== null) {
+            try {
+                fs.closeSync(descriptor)
+            } catch {}
+        }
+    }
+}
+
+/**
+ * 选择每个包目录唯一、明确的定义入口，并忽略已选包的资源目录内嵌套定义。
+ * @param {string[]} files - 扫描命中的定义文件
+ * @returns {string[]} 可安全加载的定义文件
+ */
+function selectSkillDefinitionFiles(files) {
+    const flatFiles = []
+    const packageFilesByDirectory = new Map()
+
+    for (const filePath of files) {
+        if (!isPackageSkill(filePath)) {
+            flatFiles.push(filePath)
+            continue
+        }
+        const directory = path.dirname(filePath)
+        if (!packageFilesByDirectory.has(directory)) packageFilesByDirectory.set(directory, [])
+        packageFilesByDirectory.get(directory).push(filePath)
+    }
+
+    const selected = [...flatFiles]
+    for (const [directory, entries] of packageFilesByDirectory) {
+        const ordered = entries.slice().sort((a, b) => path.basename(a).localeCompare(path.basename(b)))
+        const standardEntry = ordered.find(filePath => path.basename(filePath) === 'SKILL.md')
+        if (standardEntry) {
+            selected.push(standardEntry)
+            if (ordered.length > 1) {
+                logger.warn(
+                    `[SkillDocumentLoader] 技能包 ${directory} 含多个定义入口，仅加载明确主入口 SKILL.md: ${ordered
+                        .map(filePath => path.basename(filePath))
+                        .join(', ')}`
+                )
+            }
+            continue
+        }
+        if (ordered.length === 1) {
+            selected.push(ordered[0])
+            continue
+        }
+        logger.error(
+            `[SkillDocumentLoader] 技能包 ${directory} 含多个旧格式定义入口且没有 SKILL.md，已全部跳过: ${ordered
+                .map(filePath => path.basename(filePath))
+                .join(', ')}`
+        )
+    }
+
+    const accepted = []
+    const packageRoots = []
+    for (const filePath of selected.sort(
+        (a, b) => a.split(path.sep).length - b.split(path.sep).length || a.localeCompare(b)
+    )) {
+        const nestedInResources = packageRoots.some(packageRoot => {
+            const relative = path.relative(packageRoot, filePath)
+            if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+                return false
+            }
+            return SKILL_PACKAGE_DIRS.includes(relative.split(path.sep)[0])
+        })
+        if (nestedInResources) {
+            logger.warn(`[SkillDocumentLoader] 忽略技能包资源目录内的嵌套定义: ${filePath}`)
+            continue
+        }
+        accepted.push(filePath)
+        if (isPackageSkill(filePath)) packageRoots.push(path.dirname(filePath))
+    }
+    return accepted
+}
+
+/**
  * 收集 skill 包内的附属文件清单（references/ assets/ scripts/）
  *
  * 只遍历包根下这三个固定子目录，不会扫描包根本身的其他内容，因此不存在越界风险。
  * 返回的是相对包根的路径，供 LLM 通过 read_skill_file 工具按需读取。
  * @param {string} packageRoot - 包根目录绝对路径
- * @returns {Array<{path: string, size: number, dir: string}>} 附属文件清单
+ * @param {number} maxTextBytes - 文本读取上限
+ * @returns {Array<{path:string,size:number,dir:string,textReadable:boolean,editable:boolean,downloadable:boolean,mimeType:string,identity:object}>} 附属文件清单
  */
-function collectPackageFiles(packageRoot) {
+function collectPackageFiles(packageRoot, maxTextBytes) {
     const files = []
+    let realPackageRoot = ''
+    try {
+        realPackageRoot = fs.realpathSync(packageRoot)
+    } catch {
+        return files
+    }
 
     for (const subDir of SKILL_PACKAGE_DIRS) {
         const dirPath = path.join(packageRoot, subDir)
         let dirStat = null
         try {
-            dirStat = fs.statSync(dirPath)
+            dirStat = fs.lstatSync(dirPath)
         } catch {
             continue
         }
-        if (!dirStat.isDirectory()) continue
+        if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) continue
 
-        const stack = [{ dir: dirPath, depth: 0 }]
+        let realDirectory = ''
+        try {
+            realDirectory = fs.realpathSync(dirPath)
+        } catch {
+            continue
+        }
+        if (!isPathWithin(realPackageRoot, realDirectory)) continue
+
+        const stack = [{ dir: realDirectory, depth: 0 }]
         while (stack.length > 0 && files.length < MAX_PACKAGE_FILES) {
             const current = stack.pop()
             let entries = []
@@ -156,25 +699,64 @@ function collectPackageFiles(packageRoot) {
                 const fullPath = path.join(current.dir, entry.name)
 
                 if (entry.isFile()) {
-                    let size = 0
-                    try {
-                        size = fs.statSync(fullPath).size
-                    } catch {
-                        continue
-                    }
+                    const inspected = inspectPackageFile(fullPath, realPackageRoot, maxTextBytes)
+                    if (!inspected) continue
+                    const relativePath = path.relative(packageRoot, fullPath).replace(/\\/g, '/')
                     files.push({
-                        path: path.relative(packageRoot, fullPath).replace(/\\/g, '/'),
-                        size,
-                        dir: subDir
+                        path: relativePath,
+                        size: inspected.size,
+                        dir: subDir,
+                        textReadable: inspected.textReadable,
+                        editable: inspected.textReadable && isEditableSkillFile(relativePath),
+                        downloadable: true,
+                        mimeType: inspected.mimeType,
+                        identity: inspected.identity
                     })
                 } else if (entry.isDirectory() && !IGNORED_DIRS.has(entry.name) && current.depth < MAX_PACKAGE_DEPTH) {
-                    stack.push({ dir: fullPath, depth: current.depth + 1 })
+                    try {
+                        const stat = fs.lstatSync(fullPath)
+                        const realDirectoryPath = fs.realpathSync(fullPath)
+                        if (stat.isSymbolicLink() || !stat.isDirectory()) continue
+                        if (!isPathWithin(realPackageRoot, realDirectoryPath)) continue
+                        stack.push({ dir: realDirectoryPath, depth: current.depth + 1 })
+                    } catch {}
                 }
             }
         }
     }
 
     return files
+}
+
+/**
+ * 统计技能包目录内会随目录整体移动的普通文件数，不跟随符号链接。
+ * @param {string} packageRoot - 技能包根目录
+ * @returns {number} 文件总数
+ */
+function countPackageTreeFiles(packageRoot) {
+    let count = 0
+    const stack = [packageRoot]
+    let visitedDirectories = 0
+
+    while (stack.length > 0 && visitedDirectories < MAX_SCAN_DIRECTORIES) {
+        const current = stack.pop()
+        if (!current) continue
+        visitedDirectories++
+
+        let entries = []
+        try {
+            entries = fs.readdirSync(current, { withFileTypes: true })
+        } catch {
+            continue
+        }
+        for (const entry of entries) {
+            if (entry.isSymbolicLink()) continue
+            if (entry.isFile()) count++
+            else if (entry.isDirectory()) stack.push(path.join(current, entry.name))
+        }
+    }
+
+    return count
 }
 
 /**
@@ -275,6 +857,27 @@ function normalizeDocumentOptions(options = {}, config = {}) {
     }
 }
 
+/**
+ * 从 description 中提取可复现的显式触发短语。
+ * @param {string} description - 技能说明
+ * @returns {string[]} 触发短语
+ */
+function getDescriptionTriggerTerms(description) {
+    const text = String(description || '')
+    /** @type {string[]} */
+    const terms = []
+    const quoted = /["“”']([^"“”']{2,})["“”']/g
+    let match
+    while ((match = quoted.exec(text))) terms.push(match[1])
+    terms.push(
+        ...text
+            .split(/[。！？.!?；;\n]/)
+            .map(value => value.trim())
+            .filter(value => value.length >= 2 && value.length <= 64)
+    )
+    return Array.from(new Set(terms))
+}
+
 function matchesDocument(document, normalizedOptions) {
     const { selectedNames, mode, contextText } = normalizedOptions
     if (selectedNames && (selectedNames.has(document.name) || selectedNames.has(document.relativePath))) {
@@ -282,13 +885,22 @@ function matchesDocument(document, normalizedOptions) {
     }
     if (mode === 'explicit') return false
     if (mode === 'all') return !selectedNames
-    if (!contextText) return false
+    if (document.autoActivate === false || !contextText) return false
 
-    const terms = [document.name, document.description, document.relativePath, ...toStringList(document.triggers)]
+    const directTerms = [
+        document.name,
+        document.relativePath,
+        ...toStringList(document.triggers),
+        ...getDescriptionTriggerTerms(document.description)
+    ]
         .map(normalizeSearchText)
         .filter(Boolean)
 
-    return terms.some(term => contextText.includes(term))
+    if (directTerms.some(term => contextText.includes(term))) return true
+
+    const description = normalizeSearchText(document.description)
+    const compactContext = contextText.trim()
+    return compactContext.length >= 4 && compactContext.length <= 64 && description.includes(compactContext)
 }
 
 class SkillDocumentLoader {
@@ -314,27 +926,45 @@ class SkillDocumentLoader {
             return
         }
 
-        const paths = Array.isArray(config.paths) ? config.paths : []
         const maxDepth = Number.isFinite(config.maxDepth) ? config.maxDepth : 6
         const maxFileBytes = Number.isFinite(config.maxFileBytes) ? config.maxFileBytes : 65536
         const seenFiles = new Set()
+        const discoveredFiles = []
 
-        for (const configuredPath of paths) {
-            const root = resolvePath(this.pluginRoot, configuredPath)
-            if (!root || !fs.existsSync(root)) continue
+        for (const root of this.getScanRoots()) {
+            if (!fs.existsSync(root)) continue
 
-            for (const filePath of this.findSkillFiles(root, maxDepth)) {
-                let realPath = filePath
+            let rootFiles = []
+            try {
+                rootFiles = this.findSkillFiles(root, maxDepth)
+            } catch (error) {
+                logger.warn(`[SkillDocumentLoader] 扫描根在读取期间不可用: ${root}, ${error.message}`)
+                continue
+            }
+
+            for (const filePath of rootFiles) {
+                let realPath = ''
                 try {
+                    const stat = fs.lstatSync(filePath)
+                    if (stat.isSymbolicLink() || !stat.isFile()) continue
                     realPath = fs.realpathSync(filePath)
-                } catch {}
+                } catch {
+                    continue
+                }
+                if (!this.isWithinScanRoots(realPath)) {
+                    logger.warn(`[SkillDocumentLoader] 忽略真实路径位于扫描根之外的定义文件: ${filePath}`)
+                    continue
+                }
                 if (seenFiles.has(realPath)) continue
                 seenFiles.add(realPath)
+                discoveredFiles.push(realPath)
+            }
+        }
 
-                const document = this.readSkillFile(filePath, maxFileBytes)
-                if (document) {
-                    this.documents.push(document)
-                }
+        for (const filePath of selectSkillDefinitionFiles(discoveredFiles)) {
+            const document = this.readSkillFile(filePath, maxFileBytes)
+            if (document) {
+                this.documents.push(document)
             }
         }
 
@@ -411,15 +1041,14 @@ class SkillDocumentLoader {
      */
     readSkillMarkdown(filePath, maxFileBytes) {
         try {
-            const stat = fs.statSync(filePath)
-            if (stat.size > maxFileBytes) {
+            const file = readRegularTextFile(filePath, maxFileBytes, realPath => this.isWithinScanRoots(realPath))
+            if (!file) {
                 logger.warn(`[SkillDocumentLoader] 跳过过大的 SKILL.md: ${filePath}`)
                 return null
             }
 
-            const content = fs.readFileSync(filePath, 'utf-8')
-            const { metadata, body } = parseSkillMarkdown(content)
-            return this.buildDocument(filePath, metadata, body.trim(), 'markdown')
+            const { metadata, body } = parseSkillMarkdown(file.content)
+            return this.buildDocument(file.realPath, metadata, body.trim(), 'markdown', file.identity)
         } catch (error) {
             logger.warn(`[SkillDocumentLoader] 读取 SKILL.md 失败: ${filePath}, ${error.message}`)
             return null
@@ -435,14 +1064,14 @@ class SkillDocumentLoader {
      */
     readSkillYamlJson(filePath, maxFileBytes, type) {
         try {
-            const stat = fs.statSync(filePath)
-            if (stat.size > maxFileBytes) {
+            const file = readRegularTextFile(filePath, maxFileBytes, realPath => this.isWithinScanRoots(realPath))
+            if (!file) {
                 logger.warn(`[SkillDocumentLoader] 跳过过大的 skill 定义: ${filePath}`)
                 return null
             }
 
-            const content = fs.readFileSync(filePath, 'utf-8')
-            const resolvedType = type || classifySkillFile(path.basename(filePath)) || 'yaml'
+            const content = file.content
+            const resolvedType = type || classifySkillFile(path.basename(file.realPath)) || 'yaml'
             let metadata
             if (resolvedType === 'json') {
                 metadata = JSON.parse(content)
@@ -462,7 +1091,7 @@ class SkillDocumentLoader {
                       ? metadata.body.trim()
                       : ''
 
-            return this.buildDocument(filePath, metadata, body, resolvedType)
+            return this.buildDocument(file.realPath, metadata, body, resolvedType, file.identity)
         } catch (error) {
             logger.warn(`[SkillDocumentLoader] 读取 skill 定义失败: ${filePath}, ${error.message}`)
             return null
@@ -475,14 +1104,20 @@ class SkillDocumentLoader {
      * @param {object} metadata - 解析出的元数据对象
      * @param {string} body - 技能正文/指令
      * @param {'markdown'|'yaml'|'json'} type - 来源文件类型
+     * @param {object} [loadedDefinitionIdentity] - 与已读取内容对应的文件身份
      * @returns {object} 规范化 skill 文档
      */
-    buildDocument(filePath, metadata, body, type) {
+    buildDocument(filePath, metadata, body, type, loadedDefinitionIdentity = undefined) {
         const directory = path.dirname(filePath)
-        // 包形式的技能（SKILL.md / skill.yaml 等固定名），其所在目录即包根，
-        // 附属资源（references/ assets/ scripts/）作为清单随文档一并记录，供按需读取
         const isPackage = isPackageSkill(filePath)
-        const files = isPackage ? collectPackageFiles(directory) : []
+        let definitionIdentity = null
+        let directoryIdentity = null
+        try {
+            definitionIdentity = loadedDefinitionIdentity || toFileIdentity(fs.lstatSync(filePath))
+            directoryIdentity = toFileIdentity(fs.lstatSync(directory))
+        } catch {}
+        const files = isPackage ? collectPackageFiles(directory, this.getMaxFileBytes()) : []
+        const packageFileCount = isPackage ? countPackageTreeFiles(directory) : 1
         const name =
             typeof metadata.name === 'string' && metadata.name.trim()
                 ? metadata.name.trim()
@@ -498,7 +1133,7 @@ class SkillDocumentLoader {
         const allowedTools = [
             ...toStringList(metadata.allowedTools),
             ...toStringList(metadata.allowed_tools),
-            ...toStringList(metadata['allowed-tools'])
+            ...parseStandardAllowedTools(metadata['allowed-tools'])
         ]
         const disallowedTools = [
             ...toStringList(metadata.disallowedTools),
@@ -508,30 +1143,53 @@ class SkillDocumentLoader {
         const capabilities = toStringList(metadata.capabilities)
         const priority = Number.isFinite(metadata.priority) ? metadata.priority : 0
         const autoActivate = metadata.autoActivate !== false
+        const standard = validateAgentSkillMetadata(metadata, {
+            directoryName: isPackage ? path.basename(directory) : undefined
+        })
 
         return {
             name,
             description,
             triggers,
-            allowedTools,
-            disallowedTools,
+            allowedTools: Array.from(new Set(allowedTools)),
+            disallowedTools: Array.from(new Set(disallowedTools)),
             capabilities,
             priority,
             autoActivate,
+            license: typeof metadata.license === 'string' ? metadata.license : '',
+            compatibility: typeof metadata.compatibility === 'string' ? metadata.compatibility : '',
+            standardMetadata:
+                metadata.metadata && typeof metadata.metadata === 'object' && !Array.isArray(metadata.metadata)
+                    ? { ...metadata.metadata }
+                    : {},
+            standardCompliant: standard.standardCompliant,
+            compatibilityWarnings: standard.warnings,
             type,
             metadata,
             body,
             isPackage,
             files,
+            packageFileCount,
             path: filePath,
             relativePath: relativeToPlugin(this.pluginRoot, filePath),
             directory,
+            definitionIdentity,
+            directoryIdentity,
             loadedAt: Date.now()
         }
     }
 
     getDocuments() {
-        return this.documents.map(document => ({ ...document }))
+        return this.documents.map(document => {
+            const { definitionIdentity, directoryIdentity, ...publicDocument } = document
+            return {
+                ...publicDocument,
+                files: (publicDocument.files || []).map(file => {
+                    const { identity, ...publicFile } = file
+                    return publicFile
+                })
+            }
+        })
     }
 
     /**
@@ -542,50 +1200,146 @@ class SkillDocumentLoader {
     getDocumentByName(name) {
         if (!name) return null
         const key = String(name).trim()
-        const found = this.documents.find(doc => doc.name === key || doc.relativePath === key)
-        return found ? { ...found } : null
+        const byPath = this.documents.find(doc => doc.relativePath === key)
+        if (byPath) return { ...byPath }
+
+        const matches = this.documents.filter(doc => doc.name === key)
+        if (matches.length > 1) {
+            logger.error(`[SkillDocumentLoader] 技能名称 ${key} 对应多个定义文件，拒绝按名称解析`)
+            return null
+        }
+        return matches.length === 1 ? { ...matches[0] } : null
     }
 
     /**
-     * 读取 skill 包内的附属文件（references/ assets/ scripts/ 下的内容）
-     *
-     * 安全上采取双重校验，两道都通过才允许读取：
-     * 1. 白名单——目标必须是扫描阶段由 collectPackageFiles 收录的文件，杜绝任意路径拼接；
-     * 2. 真实路径前缀——用 fs.realpathSync 解析后仍须位于包根内，防止白名单条目本身是
-     *    指向包外的符号链接。
+     * 返回不含文件系统身份信息的附属文件能力。
+     * @param {object} entry - 内部扫描条目
+     * @returns {object} 可对外返回的能力清单
+     * @private
+     */
+    _toPublicPackageFile(entry) {
+        return {
+            path: entry.path,
+            dir: entry.dir,
+            size: entry.size,
+            textReadable: entry.textReadable === true,
+            editable: entry.editable === true,
+            downloadable: entry.downloadable === true,
+            mimeType: entry.mimeType || 'application/octet-stream'
+        }
+    }
+
+    /**
+     * 从扫描白名单中解析并以 O_NOFOLLOW 打开附属文件。
      * @param {string} skillName - 技能名称或相对路径
      * @param {string} relativePath - 相对包根目录的文件路径
-     * @param {number} [maxBytes] - 最大读取字节数，缺省取配置的 maxFileBytes
-     * @returns {{content: string, path: string, size: number}|null} 文件内容；技能不存在、
-     *          非包形式、文件未收录、路径越界或超出大小上限时返回 null
+     * @returns {{ok:true,descriptor:number,entry:object,path:string}|{ok:false,status:number,errorCode:string,error:string}} 打开结果
+     * @private
      */
-    readPackageFile(skillName, relativePath, maxBytes) {
+    _openCollectedPackageFile(skillName, relativePath) {
         const document = this.getDocumentByName(skillName)
-        if (!document || !document.isPackage) return null
-        if (!relativePath || typeof relativePath !== 'string') return null
+        if (!document || !document.isPackage) {
+            return {
+                ok: false,
+                status: 404,
+                errorCode: 'SKILL_PACKAGE_NOT_FOUND',
+                error: `技能 ${skillName} 不存在或不是包形式`
+            }
+        }
+        if (!relativePath || typeof relativePath !== 'string') {
+            return { ok: false, status: 400, errorCode: 'SKILL_FILE_PATH_REQUIRED', error: '文件路径不能为空' }
+        }
 
         const normalized = relativePath.trim().replace(/\\/g, '/')
         const entry = (document.files || []).find(file => file.path === normalized)
         if (!entry) {
             logger.debug(`[SkillDocumentLoader] 附属文件不在收录清单中: ${skillName} -> ${relativePath}`)
-            return null
+            return {
+                ok: false,
+                status: 404,
+                errorCode: 'SKILL_FILE_NOT_LISTED',
+                error: `文件 ${normalized || relativePath} 不在该技能包的扫描白名单中`
+            }
         }
 
+        let descriptor = null
         let realRoot = ''
-        let realTarget = ''
         try {
+            const rootStat = fs.lstatSync(document.directory)
+            if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+                throw new Error('技能包目录不再是普通目录')
+            }
+            if (!sameFileIdentity(toFileIdentity(rootStat), document.directoryIdentity)) {
+                return {
+                    ok: false,
+                    status: 409,
+                    errorCode: 'SKILL_PACKAGE_CHANGED',
+                    error: '技能包目录自上次扫描后已发生变化，请刷新后重试'
+                }
+            }
             realRoot = fs.realpathSync(path.resolve(document.directory))
-            realTarget = fs.realpathSync(path.resolve(realRoot, normalized))
-        } catch (error) {
-            logger.debug(`[SkillDocumentLoader] 解析附属文件路径失败: ${relativePath}, ${error.message}`)
-            return null
-        }
+            if (!this.isWithinScanRoots(realRoot)) throw new Error('技能包目录不在扫描范围内')
 
-        const relative = path.relative(realRoot, realTarget)
-        if (relative.startsWith('..') || path.isAbsolute(relative)) {
-            logger.warn(`[SkillDocumentLoader] 拒绝读取 skill 包之外的文件: ${skillName} -> ${relativePath}`)
-            return null
+            const targetPath = path.resolve(realRoot, normalized)
+            if (!isPathWithin(realRoot, targetPath) || targetPath === realRoot) {
+                throw new Error('附属文件路径越界')
+            }
+            const targetStat = fs.lstatSync(targetPath)
+            if (targetStat.isSymbolicLink() || !targetStat.isFile()) {
+                throw new Error('附属文件不再是普通文件')
+            }
+
+            descriptor = fs.openSync(targetPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0))
+            const openedStat = fs.fstatSync(descriptor)
+            if (!openedStat.isFile()) throw new Error('打开的对象不是普通文件')
+            if (!sameFileIdentity(toFileIdentity(openedStat), entry.identity)) {
+                fs.closeSync(descriptor)
+                descriptor = null
+                return {
+                    ok: false,
+                    status: 409,
+                    errorCode: 'SKILL_FILE_CHANGED',
+                    error: '附属文件自上次扫描后已发生变化，请刷新后重试'
+                }
+            }
+
+            let realFile = ''
+            try {
+                realFile = fs.realpathSync(`/proc/self/fd/${descriptor}`)
+            } catch {
+                realFile = fs.realpathSync(targetPath)
+            }
+            if (!isPathWithin(realRoot, realFile) || realFile === realRoot) {
+                throw new Error('附属文件真实路径位于技能包之外')
+            }
+
+            return { ok: true, descriptor, entry, path: normalized }
+        } catch (error) {
+            if (descriptor !== null) {
+                try {
+                    fs.closeSync(descriptor)
+                } catch {}
+            }
+            logger.debug(`[SkillDocumentLoader] 解析附属文件路径失败: ${relativePath}, ${error.message}`)
+            return {
+                ok: false,
+                status: 409,
+                errorCode: 'SKILL_FILE_UNAVAILABLE',
+                error: '附属文件不可用、越界或已发生变化，请刷新后重试'
+            }
         }
+    }
+
+    /**
+     * 读取 skill 包内已确认的 UTF-8 文本文件。
+     * @param {string} skillName - 技能名称或相对路径
+     * @param {string} relativePath - 相对包根目录的文件路径
+     * @param {number} [maxBytes] - 最大读取字节数，缺省取配置的 maxFileBytes
+     * @returns {{content:string,path:string,size:number,textReadable:true,editable:boolean,downloadable:boolean,mimeType:string}|{ok:false,status:number,errorCode:string,error:string,mimeType?:string,size?:number}|null} 读取结果
+     */
+    readPackageFile(skillName, relativePath, maxBytes) {
+        const opened = this._openCollectedPackageFile(skillName, relativePath)
+        if (!opened.ok) return opened.status === 404 || opened.status === 400 ? null : opened
 
         const config = this.skillsConfig?.getDocumentSkillsConfig?.() || {}
         const limit = Number.isFinite(maxBytes)
@@ -594,18 +1348,81 @@ class SkillDocumentLoader {
               ? config.maxFileBytes
               : 65536
 
-        try {
-            const stat = fs.statSync(realTarget)
-            if (stat.size > limit) {
-                logger.warn(
-                    `[SkillDocumentLoader] 附属文件超出大小上限，已拒绝: ${relativePath} (${stat.size} > ${limit})`
-                )
-                return null
+        if (opened.entry.size > limit) {
+            fs.closeSync(opened.descriptor)
+            return {
+                ok: false,
+                status: 413,
+                errorCode: 'SKILL_FILE_TEXT_LIMIT',
+                error: `文件大小 ${opened.entry.size} 字节超出文本读取上限 ${limit} 字节`,
+                size: opened.entry.size,
+                mimeType: opened.entry.mimeType
             }
-            return { content: fs.readFileSync(realTarget, 'utf8'), path: normalized, size: stat.size }
-        } catch (error) {
-            logger.warn(`[SkillDocumentLoader] 读取附属文件失败: ${relativePath}, ${error.message}`)
-            return null
+        }
+        if (opened.entry.textReadable !== true) {
+            fs.closeSync(opened.descriptor)
+            return {
+                ok: false,
+                status: 415,
+                errorCode: 'SKILL_FILE_NOT_TEXT',
+                error: `文件 ${opened.path} 不是可读取的 UTF-8 文本，请使用下载接口获取原始字节`,
+                size: opened.entry.size,
+                mimeType: opened.entry.mimeType
+            }
+        }
+
+        try {
+            const bytes = fs.readFileSync(opened.descriptor)
+            if (!isReadableUtf8Text(bytes)) {
+                return {
+                    ok: false,
+                    status: 415,
+                    errorCode: 'SKILL_FILE_NOT_TEXT',
+                    error: `文件 ${opened.path} 不是可读取的 UTF-8 文本，请使用下载接口获取原始字节`,
+                    size: opened.entry.size,
+                    mimeType: opened.entry.mimeType
+                }
+            }
+            return {
+                content: new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+                ...this._toPublicPackageFile(opened.entry)
+            }
+        } finally {
+            fs.closeSync(opened.descriptor)
+        }
+    }
+
+    /**
+     * 为 HTTP 下载返回经身份校验的字节流。
+     * @param {string} skillName - 技能名称
+     * @param {string} relativePath - 扫描清单中的相对路径
+     * @returns {{ok:true,stream:fs.ReadStream,path:string,fileName:string,size:number,mimeType:string}|{ok:false,status:number,errorCode:string,error:string}} 下载结果
+     */
+    openPackageFileDownload(skillName, relativePath) {
+        const opened = this._openCollectedPackageFile(skillName, relativePath)
+        if (!opened.ok) return opened
+        if (opened.entry.downloadable !== true) {
+            fs.closeSync(opened.descriptor)
+            return {
+                ok: false,
+                status: 403,
+                errorCode: 'SKILL_FILE_DOWNLOAD_DISABLED',
+                error: '该文件未开放下载能力'
+            }
+        }
+
+        const stream = fs.createReadStream(opened.path, {
+            fd: opened.descriptor,
+            autoClose: true,
+            start: 0
+        })
+        return {
+            ok: true,
+            stream,
+            path: opened.path,
+            fileName: path.basename(opened.path),
+            size: opened.entry.size,
+            mimeType: opened.entry.mimeType || 'application/octet-stream'
         }
     }
 
@@ -620,9 +1437,27 @@ class SkillDocumentLoader {
         const config = this.skillsConfig?.getDocumentSkillsConfig?.() || {}
         const paths = Array.isArray(config.paths) ? config.paths : []
         const roots = []
+        let realPluginRoot = ''
+        try {
+            realPluginRoot = fs.realpathSync(this.pluginRoot)
+        } catch {
+            return roots
+        }
         for (const configuredPath of paths) {
             const root = resolvePath(this.pluginRoot, configuredPath)
-            if (root) roots.push(root)
+            if (!root) continue
+
+            const ancestor = findNearestExistingAncestor(root)
+            if (!ancestor || !isPathWithin(realPluginRoot, ancestor.realPath)) {
+                logger.warn(`[SkillDocumentLoader] 忽略真实路径位于插件外部的扫描根: ${configuredPath}`)
+                continue
+            }
+
+            if (ancestor.path === path.resolve(root)) {
+                roots.push(ancestor.realPath)
+            } else {
+                roots.push(root)
+            }
         }
         return roots
     }
@@ -640,9 +1475,7 @@ class SkillDocumentLoader {
             } catch {
                 continue
             }
-            const relative = path.relative(realRoot, realTarget)
-            if (relative === '') return true
-            if (!relative.startsWith('..') && !path.isAbsolute(relative)) return true
+            if (isPathWithin(realRoot, realTarget)) return true
         }
         return false
     }
@@ -656,12 +1489,11 @@ class SkillDocumentLoader {
         if (roots.length === 0) return null
         const target = roots[0]
         try {
-            fs.mkdirSync(target, { recursive: true })
+            return ensureDirectoryWithinRoot(this.pluginRoot, target)
         } catch (error) {
             logger.warn(`[SkillDocumentLoader] 创建导入目录失败: ${target}, ${error.message}`)
             return null
         }
-        return target
     }
 
     /**
@@ -685,10 +1517,23 @@ class SkillDocumentLoader {
      * @returns {{ok: true, realPath: string}|{ok: false, error: string}} 校验结果
      * @private
      */
-    _prepareWrite(targetPath, content) {
+    _prepareWrite(targetPath, content, expectedIdentity = undefined) {
+        if (typeof content !== 'string') {
+            return { ok: false, error: '内容必须是字符串' }
+        }
+
         let realPath = ''
+        let targetStat = null
         try {
-            realPath = fs.realpathSync(path.resolve(targetPath))
+            const resolvedTarget = path.resolve(targetPath)
+            targetStat = fs.lstatSync(resolvedTarget)
+            if (targetStat.isSymbolicLink() || !targetStat.isFile()) {
+                return { ok: false, error: '目标必须是普通文件，且不能是符号链接' }
+            }
+            if (!sameFileIdentity(toFileIdentity(targetStat), expectedIdentity)) {
+                return { ok: false, error: '目标文件自上次加载后已发生变化，请刷新后重试' }
+            }
+            realPath = fs.realpathSync(resolvedTarget)
         } catch (error) {
             return { ok: false, error: `目标文件不可访问: ${error.message}` }
         }
@@ -704,7 +1549,22 @@ class SkillDocumentLoader {
             return { ok: false, error: `内容大小 ${size} 字节超出上限 ${limit} 字节` }
         }
 
-        return { ok: true, realPath }
+        let realParent = ''
+        let parentStat = null
+        try {
+            realParent = fs.realpathSync(path.dirname(realPath))
+            parentStat = fs.statSync(realParent)
+        } catch (error) {
+            return { ok: false, error: `目标父目录不可访问: ${error.message}` }
+        }
+
+        return {
+            ok: true,
+            realPath,
+            realParent,
+            targetIdentity: toFileIdentity(targetStat),
+            parentIdentity: { dev: parentStat.dev, ino: parentStat.ino }
+        }
     }
 
     /**
@@ -714,18 +1574,559 @@ class SkillDocumentLoader {
      * @returns {{ok: true, size: number}|{ok: false, error: string}} 写入结果
      * @private
      */
-    _writeTextFileAtomic(realPath, content) {
+    _writeTextFileAtomic(realPath, content, options = {}) {
         // 临时文件名刻意不落在 classifySkillFile 能识别的模式上，防止残留文件被当成技能加载
-        const tempPath = `${realPath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        const tempPath = `${realPath}.tmp-${randomUUID()}`
+        let descriptor = null
         try {
-            fs.writeFileSync(tempPath, content, 'utf8')
+            const realParent = fs.realpathSync(path.dirname(realPath))
+            const parentStat = fs.statSync(realParent)
+            if (options.expectedParent && realParent !== options.expectedParent) {
+                throw new Error('目标父目录在写入期间发生变化')
+            }
+            if (
+                options.parentIdentity &&
+                (parentStat.dev !== options.parentIdentity.dev || parentStat.ino !== options.parentIdentity.ino)
+            ) {
+                throw new Error('目标父目录在写入期间已被替换')
+            }
+
+            const flags =
+                fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0)
+            descriptor = fs.openSync(tempPath, flags, 0o600)
+            fs.writeFileSync(descriptor, content, 'utf8')
+            fs.fsyncSync(descriptor)
+            const tempIdentity = fs.fstatSync(descriptor)
+            fs.closeSync(descriptor)
+            descriptor = null
+
+            const currentParent = fs.realpathSync(path.dirname(realPath))
+            const currentParentStat = fs.statSync(currentParent)
+            if (
+                currentParent !== realParent ||
+                currentParentStat.dev !== parentStat.dev ||
+                currentParentStat.ino !== parentStat.ino
+            ) {
+                throw new Error('目标父目录在原子替换前发生变化')
+            }
+
+            if (options.mustExist === false) {
+                try {
+                    fs.lstatSync(realPath)
+                    throw new Error('目标文件在创建期间已存在')
+                } catch (error) {
+                    if (error?.code !== 'ENOENT') throw error
+                }
+            } else {
+                const currentTarget = fs.lstatSync(realPath)
+                if (currentTarget.isSymbolicLink() || !currentTarget.isFile()) {
+                    throw new Error('目标文件在写入期间不再是普通文件')
+                }
+                if (!sameFileIdentity(toFileIdentity(currentTarget), options.targetIdentity)) {
+                    throw new Error('目标文件在写入期间已被替换')
+                }
+            }
+
+            const currentTemp = fs.lstatSync(tempPath)
+            if (
+                currentTemp.isSymbolicLink() ||
+                !currentTemp.isFile() ||
+                currentTemp.dev !== tempIdentity.dev ||
+                currentTemp.ino !== tempIdentity.ino
+            ) {
+                throw new Error('原子写入临时文件在落位前已被替换')
+            }
+
             fs.renameSync(tempPath, realPath)
             return { ok: true, size: Buffer.byteLength(content, 'utf8') }
         } catch (error) {
+            if (descriptor !== null) {
+                try {
+                    fs.closeSync(descriptor)
+                } catch {}
+            }
             try {
                 fs.unlinkSync(tempPath)
             } catch {}
             return { ok: false, error: error.message }
+        }
+    }
+
+    /**
+     * 解析一个受管理的附属文件目标，统一执行目录、扩展名、白名单和真实路径校验。
+     * @param {string} skillName - 技能名称
+     * @param {string} relativePath - 相对技能包根目录的路径
+     * @param {{mustExist?:boolean}} [options] - 是否要求文件已经存在并在扫描清单中
+     * @returns {object} 解析结果
+     * @private
+     */
+    _resolveManagedPackageTarget(skillName, relativePath, options = {}) {
+        const document = this.getDocumentByName(skillName)
+        if (!document || !document.isPackage) {
+            return { ok: false, error: `技能 ${skillName} 不存在或不是包形式`, status: 404 }
+        }
+
+        const normalized = normalizeManagedPackagePath(relativePath, {
+            requireEditable: options.requireEditable !== false
+        })
+        if (!normalized.ok) {
+            return { ok: false, error: normalized.error, status: 400 }
+        }
+
+        let realRoot = ''
+        try {
+            const rootStat = fs.lstatSync(document.directory)
+            if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+                return { ok: false, error: '技能包目录不能是符号链接', status: 400 }
+            }
+            if (!sameFileIdentity(toFileIdentity(rootStat), document.directoryIdentity)) {
+                return { ok: false, error: '技能包目录自上次加载后已发生变化，请刷新后重试', status: 409 }
+            }
+            realRoot = fs.realpathSync(document.directory)
+            const definitionStat = fs.lstatSync(document.path)
+            const realDefinition = fs.realpathSync(document.path)
+            if (
+                definitionStat.isSymbolicLink() ||
+                !definitionStat.isFile() ||
+                path.dirname(realDefinition) !== realRoot
+            ) {
+                return { ok: false, error: '技能定义文件或包目录在加载后发生变化', status: 409 }
+            }
+            if (!sameFileIdentity(toFileIdentity(definitionStat), document.definitionIdentity)) {
+                return { ok: false, error: '技能定义文件自上次加载后已发生变化，请刷新后重试', status: 409 }
+            }
+        } catch (error) {
+            return { ok: false, error: `技能包目录不可访问: ${error.message}`, status: 404 }
+        }
+        if (!this.isWithinScanRoots(realRoot)) {
+            return { ok: false, error: '技能包不在已配置的技能目录内', status: 400 }
+        }
+
+        const targetPath = path.resolve(realRoot, ...normalized.segments)
+        const relative = path.relative(realRoot, targetPath)
+        if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+            return { ok: false, error: '附属文件路径越界，已拒绝', status: 400 }
+        }
+
+        const mustExist = options.mustExist !== false
+        const listedEntry = (document.files || []).find(file => file.path === normalized.path)
+        if (mustExist && !listedEntry) {
+            return { ok: false, error: `文件 ${normalized.path} 不在该技能包的收录清单中`, status: 404 }
+        }
+        if (mustExist && options.requireEditable !== false && listedEntry?.editable !== true) {
+            return {
+                ok: false,
+                error: `文件 ${normalized.path} 未被服务端判定为可编辑 UTF-8 文本`,
+                status: 415
+            }
+        }
+        if (!mustExist && (listedEntry || fs.existsSync(targetPath))) {
+            return { ok: false, error: `文件 ${normalized.path} 已存在`, status: 409 }
+        }
+        if (!mustExist && (document.files || []).length >= MAX_PACKAGE_FILES) {
+            return { ok: false, error: `技能包附属文件数已达到上限 ${MAX_PACKAGE_FILES}`, status: 409 }
+        }
+
+        // 任一既有祖先为符号链接都会让后续 mkdir/write 越过包根，必须逐段拒绝。
+        let currentPath = realRoot
+        for (const segment of normalized.segments.slice(0, -1)) {
+            currentPath = path.join(currentPath, segment)
+            if (!fs.existsSync(currentPath)) continue
+            const stat = fs.lstatSync(currentPath)
+            if (stat.isSymbolicLink()) {
+                return { ok: false, error: `附属目录不能是符号链接: ${segment}`, status: 400 }
+            }
+            if (!stat.isDirectory()) {
+                return { ok: false, error: `附属文件父路径不是目录: ${segment}`, status: 400 }
+            }
+        }
+
+        if (mustExist) {
+            let realTarget = ''
+            let targetStat = null
+            try {
+                targetStat = fs.lstatSync(targetPath)
+                if (targetStat.isSymbolicLink() || !targetStat.isFile()) {
+                    return { ok: false, error: `附属文件不是普通文件: ${normalized.path}`, status: 400 }
+                }
+                if (!sameFileIdentity(toFileIdentity(targetStat), listedEntry?.identity)) {
+                    return { ok: false, error: '附属文件自上次加载后已发生变化，请刷新后重试', status: 409 }
+                }
+                realTarget = fs.realpathSync(targetPath)
+            } catch (error) {
+                return { ok: false, error: `附属文件不可访问: ${error.message}`, status: 404 }
+            }
+            const targetRelative = path.relative(realRoot, realTarget)
+            if (targetRelative.startsWith('..') || path.isAbsolute(targetRelative)) {
+                return { ok: false, error: '附属文件真实路径越界，已拒绝', status: 400 }
+            }
+            return {
+                ok: true,
+                document,
+                path: normalized.path,
+                targetPath: realTarget,
+                realRoot,
+                targetIdentity: toFileIdentity(targetStat)
+            }
+        }
+
+        return { ok: true, document, path: normalized.path, targetPath, realRoot }
+    }
+
+    /**
+     * 将文件或目录原子移动到插件受管备份目录。
+     * @param {string} sourcePath - 已校验的真实源路径
+     * @param {string} label - 备份目录标签
+     * @returns {{ok:true,backup:string,recoverable:true}|{ok:false,error:string}} 结果
+     * @private
+     */
+    _moveToManagedBackup(sourcePath, label, expectedIdentity = undefined) {
+        const safeLabel =
+            String(label || 'skill')
+                .replace(/[^a-zA-Z0-9._-]+/g, '-')
+                .replace(/^-+|-+$/g, '') || 'skill'
+        const backupRoot = path.resolve(this.pluginRoot, 'temp', 'skills-backups')
+        let backupContainer = ''
+
+        try {
+            const realBackupRoot = ensureDirectoryWithinRoot(this.pluginRoot, backupRoot)
+            const backupRootStat = fs.statSync(realBackupRoot)
+            const sourceStat = fs.lstatSync(sourcePath)
+            if (sourceStat.isSymbolicLink()) throw new Error('拒绝备份符号链接目标')
+            if (!sameFileIdentity(toFileIdentity(sourceStat), expectedIdentity)) {
+                throw new Error('备份源在操作期间已被替换')
+            }
+
+            backupContainer = fs.mkdtempSync(path.join(realBackupRoot, `${safeLabel}-${randomUUID()}-`))
+            const realBackupContainer = fs.realpathSync(backupContainer)
+            if (!isPathWithin(realBackupRoot, realBackupContainer)) throw new Error('备份暂存目录真实路径越界')
+            const currentBackupRoot = fs.lstatSync(realBackupRoot)
+            if (
+                currentBackupRoot.isSymbolicLink() ||
+                currentBackupRoot.dev !== backupRootStat.dev ||
+                currentBackupRoot.ino !== backupRootStat.ino
+            ) {
+                throw new Error('备份根目录在操作期间已被替换')
+            }
+            const backupPath = path.join(realBackupContainer, path.basename(sourcePath))
+            const currentSource = fs.lstatSync(sourcePath)
+            if (
+                currentSource.isSymbolicLink() ||
+                !sameFileIdentity(toFileIdentity(currentSource), toFileIdentity(sourceStat))
+            ) {
+                throw new Error('备份源在移动前已被替换')
+            }
+            fs.renameSync(sourcePath, backupPath)
+            return {
+                ok: true,
+                backup: relativeToPlugin(this.pluginRoot, backupPath),
+                recoverable: true
+            }
+        } catch (error) {
+            if (backupContainer) {
+                try {
+                    fs.rmdirSync(backupContainer)
+                } catch {}
+            }
+            return { ok: false, error: `移动到受管备份目录失败: ${error.message}` }
+        }
+    }
+
+    /**
+     * 在本实例内同步刷新刚完成磁盘变更的技能，避免连续管理操作依赖额外 reload。
+     * @param {object} document - 变更前的技能文档
+     * @returns {object|null} 刷新后的文档
+     * @private
+     */
+    _refreshDocumentAfterMutation(document) {
+        const index = this.documents.findIndex(item => item.path === document.path)
+        if (index < 0) return null
+        const refreshed = this.readSkillFile(document.path, this.getMaxFileBytes())
+        if (!refreshed) {
+            this.documents.splice(index, 1)
+            return null
+        }
+        this.documents[index] = refreshed
+        return refreshed
+    }
+
+    /**
+     * 新建标准 SKILL.md 技能包。
+     * @param {object} input - 标准 frontmatter 与正文
+     * @returns {object} 创建结果
+     */
+    createSkillPackage(input = {}) {
+        const name = typeof input.name === 'string' ? input.name.trim() : ''
+        const description = typeof input.description === 'string' ? input.description.trim() : ''
+        const body = typeof input.body === 'string' ? input.body : ''
+        const metadata = { name, description }
+
+        if (typeof input.license === 'string' && input.license.trim()) metadata.license = input.license.trim()
+        if (typeof input.compatibility === 'string' && input.compatibility.trim()) {
+            metadata.compatibility = input.compatibility.trim()
+        }
+        if (Array.isArray(input.allowedTools) && input.allowedTools.length > 0) {
+            metadata['allowed-tools'] = Array.from(
+                new Set(input.allowedTools.map(item => String(item).trim()).filter(Boolean))
+            ).join(' ')
+        }
+        if (input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata)) {
+            metadata.metadata = { ...input.metadata }
+        }
+
+        const content = serializeSkillMarkdown(metadata, body)
+        const contentSize = Buffer.byteLength(content, 'utf8')
+        const maxFileBytes = this.getMaxFileBytes()
+        if (contentSize > maxFileBytes) {
+            return {
+                ok: false,
+                error: `内容大小 ${contentSize} 字节超出上限 ${maxFileBytes} 字节`,
+                status: 400
+            }
+        }
+        const validation = validateSkillSource('markdown', content, {
+            directoryName: name,
+            strictStandard: true
+        })
+        if (!validation.valid) {
+            return { ok: false, error: validation.error, status: 400, validation }
+        }
+        if (this.documents.some(document => document.name === name)) {
+            return { ok: false, error: `技能 ${name} 已存在`, status: 409 }
+        }
+
+        const importRoot = this.getImportRoot()
+        if (!importRoot) {
+            return { ok: false, error: '未找到可用的技能创建目录', status: 500 }
+        }
+
+        let realRoot = ''
+        try {
+            realRoot = fs.realpathSync(importRoot)
+        } catch (error) {
+            return { ok: false, error: `技能创建目录不可访问: ${error.message}`, status: 500 }
+        }
+        if (!this.isWithinScanRoots(realRoot)) {
+            return { ok: false, error: '技能创建目录不在已配置的扫描范围内', status: 400 }
+        }
+
+        const targetDirectory = path.resolve(realRoot, name)
+        const rootRelative = path.relative(realRoot, targetDirectory)
+        if (!rootRelative || rootRelative.startsWith('..') || path.isAbsolute(rootRelative)) {
+            return { ok: false, error: '技能目录越界，已拒绝创建', status: 400 }
+        }
+        if (fs.existsSync(targetDirectory)) {
+            return { ok: false, error: `技能目录 ${name} 已存在`, status: 409 }
+        }
+
+        let stagingDirectory = ''
+        try {
+            const rootStat = fs.statSync(realRoot)
+            stagingDirectory = fs.mkdtempSync(path.join(realRoot, `.${name}.creating-${randomUUID()}-`))
+            const realStagingDirectory = fs.realpathSync(stagingDirectory)
+            if (!isPathWithin(realRoot, realStagingDirectory)) throw new Error('技能暂存目录真实路径越界')
+            const parentStat = fs.statSync(realStagingDirectory)
+            const written = this._writeTextFileAtomic(path.join(realStagingDirectory, 'SKILL.md'), content, {
+                mustExist: false,
+                expectedParent: realStagingDirectory,
+                parentIdentity: { dev: parentStat.dev, ino: parentStat.ino }
+            })
+            if (!written.ok) throw new Error(written.error)
+
+            const currentRoot = fs.lstatSync(realRoot)
+            if (currentRoot.isSymbolicLink() || currentRoot.dev !== rootStat.dev || currentRoot.ino !== rootStat.ino) {
+                throw new Error('技能创建目录在操作期间已被替换')
+            }
+            try {
+                fs.lstatSync(targetDirectory)
+                throw new Error(`技能目录 ${name} 在创建期间已存在`)
+            } catch (error) {
+                if (error?.code !== 'ENOENT') throw error
+            }
+            const currentStaging = fs.lstatSync(realStagingDirectory)
+            if (
+                currentStaging.isSymbolicLink() ||
+                !currentStaging.isDirectory() ||
+                currentStaging.dev !== parentStat.dev ||
+                currentStaging.ino !== parentStat.ino
+            ) {
+                throw new Error('技能暂存目录在最终落位前已被替换')
+            }
+            fs.renameSync(realStagingDirectory, targetDirectory)
+            return {
+                ok: true,
+                name,
+                path: relativeToPlugin(this.pluginRoot, path.join(targetDirectory, 'SKILL.md')),
+                size: written.size,
+                standardCompliant: true
+            }
+        } catch (error) {
+            if (stagingDirectory) {
+                try {
+                    fs.rmSync(stagingDirectory, { recursive: true, force: true })
+                } catch {}
+            }
+            return { ok: false, error: `创建技能包失败: ${error.message}`, status: 500 }
+        }
+    }
+
+    /**
+     * 以结构化 frontmatter 与正文更新标准 SKILL.md。
+     * @param {string} skillName - 技能名称
+     * @param {object} input - metadata 与 body
+     * @returns {object} 更新结果
+     */
+    writeStructuredSkill(skillName, input = {}) {
+        const document = this.getDocumentByName(skillName)
+        if (!document) return { ok: false, error: `技能 ${skillName} 不存在`, status: 404 }
+        if (document.type !== 'markdown') {
+            return { ok: false, error: '结构化编辑仅支持 SKILL.md；YAML/JSON 技能请使用源码编辑', status: 400 }
+        }
+        if (!input.metadata || typeof input.metadata !== 'object' || Array.isArray(input.metadata)) {
+            return { ok: false, error: 'metadata 必须是 frontmatter 键值对象', status: 400 }
+        }
+        if (typeof input.body !== 'string') {
+            return { ok: false, error: 'body 必须是字符串', status: 400 }
+        }
+
+        const content = serializeSkillMarkdown(input.metadata, input.body)
+        return this.writeSkillSource(skillName, content, { strictStandard: true })
+    }
+
+    /**
+     * 新建 references/assets 下的文本附属文件。
+     * @param {string} skillName - 技能名称
+     * @param {string} relativePath - 文件路径
+     * @param {string} content - 文件内容
+     * @returns {object} 创建结果
+     */
+    createPackageFile(skillName, relativePath, content) {
+        if (typeof content !== 'string') {
+            return { ok: false, error: '内容必须是字符串', status: 400 }
+        }
+        const size = Buffer.byteLength(content, 'utf8')
+        const limit = this.getMaxFileBytes()
+        if (size > limit) {
+            return { ok: false, error: `内容大小 ${size} 字节超出上限 ${limit} 字节`, status: 400 }
+        }
+
+        const resolved = this._resolveManagedPackageTarget(skillName, relativePath, { mustExist: false })
+        if (!resolved.ok) return resolved
+
+        try {
+            fs.mkdirSync(path.dirname(resolved.targetPath), { recursive: true, mode: 0o700 })
+            const realParent = fs.realpathSync(path.dirname(resolved.targetPath))
+            const parentRelative = path.relative(resolved.realRoot, realParent)
+            if (parentRelative.startsWith('..') || path.isAbsolute(parentRelative)) {
+                return { ok: false, error: '附属文件父目录越界，已拒绝创建', status: 400 }
+            }
+            const parentStat = fs.statSync(realParent)
+            const written = this._writeTextFileAtomic(resolved.targetPath, content, {
+                mustExist: false,
+                expectedParent: realParent,
+                parentIdentity: { dev: parentStat.dev, ino: parentStat.ino }
+            })
+            if (!written.ok) {
+                return { ok: false, error: `写入失败: ${written.error}`, status: 500 }
+            }
+            const refreshed = this._refreshDocumentAfterMutation(resolved.document)
+            const entry = refreshed?.files?.find(file => file.path === resolved.path)
+            return {
+                ok: true,
+                path: resolved.path,
+                size: written.size,
+                file: entry ? this._toPublicPackageFile(entry) : undefined
+            }
+        } catch (error) {
+            return { ok: false, error: `创建附属文件失败: ${error.message}`, status: 500 }
+        }
+    }
+
+    /**
+     * 删除一个受管理附属文件；实际操作为移动到受管备份目录。
+     * @param {string} skillName - 技能名称
+     * @param {string} relativePath - 文件路径
+     * @returns {object} 删除结果
+     */
+    deletePackageFile(skillName, relativePath) {
+        const resolved = this._resolveManagedPackageTarget(skillName, relativePath, {
+            mustExist: true,
+            requireEditable: false
+        })
+        if (!resolved.ok) return resolved
+        const moved = this._moveToManagedBackup(
+            resolved.targetPath,
+            `${resolved.document.name}-file`,
+            resolved.targetIdentity
+        )
+        if (!moved.ok) return { ...moved, status: 500 }
+        this._refreshDocumentAfterMutation(resolved.document)
+        return { ok: true, path: resolved.path, ...moved }
+    }
+
+    /**
+     * 删除技能定义；包形式移动整个目录，单文件形式移动定义文件。
+     * @param {string} skillName - 技能名称
+     * @returns {object} 删除结果
+     */
+    deleteSkill(skillName) {
+        const document = this.getDocumentByName(skillName)
+        if (!document) return { ok: false, error: `技能 ${skillName} 不存在`, status: 404 }
+
+        const sourcePath = document.isPackage ? document.directory : document.path
+        let realSource = ''
+        let sourceStat = null
+        try {
+            sourceStat = fs.lstatSync(sourcePath)
+            if (sourceStat.isSymbolicLink()) {
+                return { ok: false, error: '技能路径在加载后变成了符号链接', status: 409 }
+            }
+            const expectedSourceIdentity = document.isPackage ? document.directoryIdentity : document.definitionIdentity
+            if (!sameFileIdentity(toFileIdentity(sourceStat), expectedSourceIdentity)) {
+                return { ok: false, error: '技能路径自上次加载后已发生变化，请刷新后重试', status: 409 }
+            }
+            realSource = fs.realpathSync(sourcePath)
+            const definitionStat = fs.lstatSync(document.path)
+            const realDefinition = fs.realpathSync(document.path)
+            if (definitionStat.isSymbolicLink() || !definitionStat.isFile()) {
+                return { ok: false, error: '技能定义文件在加载后发生变化', status: 409 }
+            }
+            if (!sameFileIdentity(toFileIdentity(definitionStat), document.definitionIdentity)) {
+                return { ok: false, error: '技能定义文件自上次加载后已发生变化，请刷新后重试', status: 409 }
+            }
+            if (document.isPackage && path.dirname(realDefinition) !== realSource) {
+                return { ok: false, error: '技能定义文件已不属于原技能包目录', status: 409 }
+            }
+        } catch (error) {
+            return { ok: false, error: `技能文件不可访问: ${error.message}`, status: 404 }
+        }
+        if (!this.isWithinScanRoots(realSource)) {
+            return { ok: false, error: '技能不在已配置的扫描范围内', status: 400 }
+        }
+        let isScanRoot = false
+        if (document.isPackage) {
+            for (const root of this.getScanRoots()) {
+                try {
+                    if (fs.realpathSync(root) === realSource) {
+                        isScanRoot = true
+                        break
+                    }
+                } catch {}
+            }
+        }
+        if (isScanRoot) {
+            return { ok: false, error: '拒绝删除技能扫描根目录', status: 400 }
+        }
+
+        const affectedFiles = document.isPackage ? countPackageTreeFiles(realSource) : 1
+
+        const moved = this._moveToManagedBackup(realSource, document.name, toFileIdentity(sourceStat))
+        if (!moved.ok) return { ...moved, status: 500 }
+        return {
+            ok: true,
+            name: document.name,
+            affectedFiles,
+            ...moved
         }
     }
 
@@ -739,32 +2140,31 @@ class SkillDocumentLoader {
         const document = this.getDocumentByName(skillName)
         if (!document) return null
 
-        let realPath = ''
-        try {
-            realPath = fs.realpathSync(path.resolve(document.path))
-        } catch (error) {
-            logger.warn(`[SkillDocumentLoader] 读取技能定义失败: ${document.path}, ${error.message}`)
+        const expectedPath = path.resolve(document.path)
+        const file = readRegularTextFile(expectedPath, this.getMaxFileBytes(), realPath => {
+            return realPath === expectedPath && this.isWithinScanRoots(realPath)
+        })
+        if (!file) {
+            logger.warn(`[SkillDocumentLoader] 读取技能定义失败、路径已变化或超出大小上限: ${document.path}`)
             return null
         }
-        if (!this.isWithinScanRoots(realPath)) {
-            logger.warn(`[SkillDocumentLoader] 拒绝读取扫描目录之外的定义文件: ${document.path}`)
+        if (!sameFileIdentity(file.identity, document.definitionIdentity)) {
+            logger.warn(`[SkillDocumentLoader] 技能定义自上次加载后已发生变化，请刷新后重试: ${document.path}`)
             return null
         }
 
-        try {
-            const stat = fs.statSync(realPath)
-            return {
-                name: document.name,
-                path: document.path,
-                relativePath: document.relativePath,
-                type: document.type,
-                isPackage: document.isPackage === true,
-                content: fs.readFileSync(realPath, 'utf8'),
-                size: stat.size
-            }
-        } catch (error) {
-            logger.warn(`[SkillDocumentLoader] 读取技能定义失败: ${document.path}, ${error.message}`)
-            return null
+        return {
+            name: document.name,
+            path: document.path,
+            relativePath: document.relativePath,
+            type: document.type,
+            isPackage: document.isPackage === true,
+            content: file.content,
+            size: file.size,
+            metadata: { ...(document.metadata || {}) },
+            body: document.body || '',
+            standardCompliant: document.standardCompliant === true,
+            compatibilityWarnings: [...(document.compatibilityWarnings || [])]
         }
     }
 
@@ -775,35 +2175,92 @@ class SkillDocumentLoader {
      * 语法不合法直接拒绝，不会落盘。
      * @param {string} skillName - 技能名称或相对路径
      * @param {string} content - 完整的新内容（含 frontmatter）
+     * @param {{strictStandard?:boolean}} [options] - 是否强制 Agent Skills 标准校验
      * @returns {{ok: true, name: string, relativePath: string, size: number}|{ok: false, error: string, status?: number}} 写入结果
      */
-    writeSkillSource(skillName, content) {
+    writeSkillSource(skillName, content, options = {}) {
         const document = this.getDocumentByName(skillName)
         if (!document) {
             return { ok: false, error: `技能 ${skillName} 不存在`, status: 404 }
         }
 
-        const validation = validateSkillSource(document.type, content)
-        if (!validation.valid) {
-            return { ok: false, error: validation.error, status: 400 }
+        if (typeof content !== 'string') {
+            return { ok: false, error: '内容必须是字符串', status: 400 }
+        }
+        const contentSize = Buffer.byteLength(content, 'utf8')
+        const maxFileBytes = this.getMaxFileBytes()
+        if (contentSize > maxFileBytes) {
+            return {
+                ok: false,
+                error: `内容大小 ${contentSize} 字节超出上限 ${maxFileBytes} 字节`,
+                status: 400
+            }
         }
 
-        const prepared = this._prepareWrite(document.path, content)
+        const validation = validateSkillSource(document.type, content, {
+            directoryName: document.isPackage ? path.basename(document.directory) : undefined,
+            strictStandard: false
+        })
+        if (!validation.valid) {
+            return { ok: false, error: validation.error, status: 400, validation }
+        }
+
+        const currentDeclaredName = document.metadata?.name
+        const nextDeclaredName = validation.metadata?.name
+        if (!isDeepStrictEqual(currentDeclaredName, nextDeclaredName)) {
+            return {
+                ok: false,
+                errorCode: 'SKILL_NAME_IMMUTABLE',
+                error: '不允许通过编辑器修改 metadata.name；技能包 metadata.name 必须保持不变且与父目录同名，请新建技能后迁移内容',
+                status: 409,
+                validation
+            }
+        }
+
+        const directoryName = document.isPackage ? path.basename(document.directory) : undefined
+        const currentStandard = validateAgentSkillMetadata(document.metadata || {}, { directoryName })
+        const introducedErrors = (validation.errors || []).filter(error => !currentStandard.errors.includes(error))
+        if (introducedErrors.length > 0) {
+            return {
+                ok: false,
+                error: `编辑引入了新的 Agent Skills 规范错误: ${introducedErrors.join('; ')}`,
+                status: 400,
+                validation
+            }
+        }
+        if (options.strictStandard === true && currentStandard.standardCompliant && !validation.standardCompliant) {
+            return {
+                ok: false,
+                error: `Agent Skills 定义不符合规范: ${validation.errors.join('; ')}`,
+                status: 400,
+                validation
+            }
+        }
+
+        const prepared = this._prepareWrite(document.path, content, document.definitionIdentity)
         if (!prepared.ok) {
             return { ok: false, error: prepared.error, status: 400 }
         }
 
-        const written = this._writeTextFileAtomic(prepared.realPath, content)
+        const written = this._writeTextFileAtomic(prepared.realPath, content, {
+            expectedParent: prepared.realParent,
+            parentIdentity: prepared.parentIdentity,
+            targetIdentity: prepared.targetIdentity
+        })
         if (!written.ok) {
             return { ok: false, error: `写入失败: ${written.error}`, status: 500 }
         }
+        this._refreshDocumentAfterMutation(document)
 
-        // frontmatter 里的 name 可被改写，此处回传解析结果，调用方据此更新引用
-        const nextName =
-            document.type === 'markdown' && typeof validation.metadata?.name === 'string'
-                ? validation.metadata.name.trim()
-                : document.name
-        return { ok: true, name: nextName || document.name, relativePath: document.relativePath, size: written.size }
+        // name 是稳定标识，不允许编辑器改写；调用方可继续使用原名称刷新当前技能。
+        return {
+            ok: true,
+            name: document.name,
+            relativePath: document.relativePath,
+            size: written.size,
+            standardCompliant: validation.standardCompliant === true,
+            compatibilityWarnings: validation.warnings || []
+        }
     }
 
     /**
@@ -820,29 +2277,30 @@ class SkillDocumentLoader {
         if (!document || !document.isPackage) {
             return { ok: false, error: `技能 ${skillName} 不存在或不是包形式`, status: 404 }
         }
-        if (!relativePath || typeof relativePath !== 'string') {
-            return { ok: false, error: '缺少文件路径', status: 400 }
-        }
+        const resolved = this._resolveManagedPackageTarget(skillName, relativePath, { mustExist: true })
+        if (!resolved.ok) return resolved
 
-        const normalized = relativePath.trim().replace(/\\/g, '/')
-        const entry = (document.files || []).find(file => file.path === normalized)
-        if (!entry) {
-            return { ok: false, error: `文件 ${normalized} 不在该技能包的收录清单中`, status: 404 }
-        }
-        if (!isEditableSkillFile(normalized)) {
-            return { ok: false, error: `文件类型不支持编辑: ${normalized}`, status: 400 }
-        }
-
-        const prepared = this._prepareWrite(path.resolve(document.directory, normalized), content)
+        const prepared = this._prepareWrite(resolved.targetPath, content, resolved.targetIdentity)
         if (!prepared.ok) {
             return { ok: false, error: prepared.error, status: 400 }
         }
 
-        const written = this._writeTextFileAtomic(prepared.realPath, content)
+        const written = this._writeTextFileAtomic(prepared.realPath, content, {
+            expectedParent: prepared.realParent,
+            parentIdentity: prepared.parentIdentity,
+            targetIdentity: prepared.targetIdentity
+        })
         if (!written.ok) {
             return { ok: false, error: `写入失败: ${written.error}`, status: 500 }
         }
-        return { ok: true, path: normalized, size: written.size }
+        const refreshed = this._refreshDocumentAfterMutation(resolved.document)
+        const entry = refreshed?.files?.find(file => file.path === resolved.path)
+        return {
+            ok: true,
+            path: resolved.path,
+            size: written.size,
+            file: entry ? this._toPublicPackageFile(entry) : undefined
+        }
     }
 
     getMatchingDocuments(options = {}) {
@@ -872,7 +2330,12 @@ class SkillDocumentLoader {
         const disclosure = options.disclosure || config.disclosure || 'progressive'
         const isProgressive = disclosure !== 'full'
 
-        const docs = this.getMatchingDocuments(options)
+        // progressive 是发现层：始终展示全部技能的 name/description，模型再按需读取或加载。
+        // 完整正文与工具约束仍只作用于显式加载或确定匹配的技能。
+        const docs =
+            isProgressive && !Array.isArray(options.selectedNames)
+                ? this.getMatchingDocuments({ ...options, mode: 'all' })
+                : this.getMatchingDocuments(options)
         if (docs.length === 0) return ''
 
         const sections = ['【Agent Skills】']

@@ -124,7 +124,7 @@ export class LlmService {
 
         // 如果提供了事件，设置工具上下文
         if (options.event) {
-            setToolContext({ event: options.event, bot: options.event.bot || Bot })
+            setToolContext({ event: options.event, bot: options.event.bot || globalThis.Bot })
         }
 
         // 如果启用工具，获取工具（包括内置工具）
@@ -140,7 +140,7 @@ export class LlmService {
                     // 原始 MCP 格式 {name, description, inputSchema}，需要转换
                     const { convertMcpTools } = await import('../../core/utils/toolAdapter.js')
                     const requestContext = options.event
-                        ? { event: options.event, bot: options.event.bot || Bot }
+                        ? { event: options.event, bot: options.event.bot || globalThis.Bot }
                         : null
                     tools = convertMcpTools(options.preSelectedTools, requestContext)
                 }

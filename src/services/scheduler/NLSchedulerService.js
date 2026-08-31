@@ -4,6 +4,7 @@
  */
 import { chatLogger } from '../../core/utils/logger.js'
 import { getBot as platformGetBot } from '../../utils/platformAdapter.js'
+import { StandardBotApi, StandardMessage } from '../../core/platform/index.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -346,7 +347,7 @@ class NLSchedulerService {
 
         // 如果有目标用户，先@他
         if (targetId) {
-            message.push({ type: 'at', qq: Number(targetId) })
+            message.push(StandardMessage.at(targetId))
             message.push(' ')
         }
 
@@ -432,9 +433,8 @@ class NLSchedulerService {
      */
     async sendToGroup(bot, groupId, message) {
         try {
-            const { sendGroupMessage } = await import('../../utils/platformAdapter.js')
-            const result = await sendGroupMessage({ bot }, groupId, message)
-            return !!result
+            const result = await new StandardBotApi({ bot }).sendGroup(groupId, message)
+            return result?.success === true
         } catch (err) {
             logger.error('[NLScheduler] 发送消息失败:', err.message)
             return false

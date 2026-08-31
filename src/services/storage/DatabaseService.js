@@ -48,7 +48,25 @@ class DatabaseService {
      * @returns {string} 转义后的值
      */
     escapeLikePattern(value) {
-        return String(value ?? '').replace(/[%_\[\]]/g, '\\$&')
+        return String(value ?? '')
+            .replace(/\\/g, '\\\\')
+            .replace(/[%_\[\]]/g, '\\$&')
+    }
+
+    /**
+     * 收紧 SQLite 主文件及现有 WAL/SHM 文件权限。
+     * @param {string} dbPath - SQLite 主文件绝对路径
+     * @returns {void}
+     */
+    secureDatabaseFiles(dbPath) {
+        for (const filePath of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+            if (!fs.existsSync(filePath)) continue
+            try {
+                fs.chmodSync(filePath, 0o600)
+            } catch (error) {
+                safeLogger.warn(`[Database] 无法收紧文件权限 ${path.basename(filePath)}: ${error.message}`)
+            }
+        }
     }
 
     init(dataDir = null) {
@@ -66,6 +84,7 @@ class DatabaseService {
 
         // Enable WAL mode for better concurrency
         this.db.pragma('journal_mode = WAL')
+        this.secureDatabaseFiles(dbPath)
         // 写锁竞争时等待而非立即抛 SQLITE_BUSY
         this.db.pragma('busy_timeout = 5000')
         try {
@@ -84,6 +103,7 @@ class DatabaseService {
         }
 
         this.createTables()
+        this.secureDatabaseFiles(dbPath)
         this.initialized = true
         this.registerExitHook()
     }
@@ -163,6 +183,8 @@ class DatabaseService {
             CREATE INDEX IF NOT EXISTS idx_kg_entity_id ON kg_entities(entity_id);
             CREATE INDEX IF NOT EXISTS idx_kg_entity_scope ON kg_entities(scope_id, entity_type);
             CREATE INDEX IF NOT EXISTS idx_kg_entity_name ON kg_entities(name);
+            CREATE INDEX IF NOT EXISTS idx_kg_entity_scope_name ON kg_entities(scope_id, name);
+            CREATE INDEX IF NOT EXISTS idx_kg_entity_scope_updated ON kg_entities(scope_id, updated_at DESC, id DESC);
 
             -- 知识图谱: 关系表
             CREATE TABLE IF NOT EXISTS kg_relationships (
@@ -223,6 +245,7 @@ class DatabaseService {
                 created_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_kg_scope_share ON kg_scope_sharing(source_scope_id, target_scope_id);
+            CREATE INDEX IF NOT EXISTS idx_kg_scope_share_target ON kg_scope_sharing(target_scope_id, source_scope_id);
 
             -- 结构化记忆表
             CREATE TABLE IF NOT EXISTS structured_memories (
@@ -503,7 +526,10 @@ class DatabaseService {
             id: message.id,
             parentId: message.parentId,
             content: message.content,
-            toolCalls: message.toolCalls
+            toolCalls: message.toolCalls,
+            // 共享群会话必须保留发送者，记忆总结才能精确区分不同群友。
+            // 旧记录没有该字段时 mapRowToMessage 保持 undefined，由调用方按未知发送者处理。
+            sender: message.sender
         }
         const content = JSON.stringify(fullMessage)
         const metadata = message.metadata ? JSON.stringify(message.metadata) : null
@@ -557,6 +583,50 @@ class DatabaseService {
         return rows.map(this.mapRowToMessage).filter(Boolean)
     }
 
+    /**
+     * 获取某个用户在指定会话中的可归属消息。
+     * 共享群会话按 sender.user_id 切分轮次；旧库中无 sender 的用户消息不会被猜测归属。
+     * 私聊和群用户隔离会话的 ID 已包含用户身份，可兼容读取无 sender 的旧记录。
+     *
+     * @param {string} conversationId - 会话 ID
+     * @param {string|number} userId - 目标用户 ID
+     * @param {number} [limit=100] - 最多返回条数
+     * @returns {Object[]} 按时间升序排列的目标用户轮次消息
+     */
+    getMessagesForUser(conversationId, userId, limit = 100) {
+        const normalizedUserId = String(userId ?? '')
+        if (!conversationId || !normalizedUserId) return []
+
+        const sharedGroupConversation = /^group:[^:]+$/.test(conversationId)
+        if (!sharedGroupConversation) {
+            return this.getMessages(conversationId, limit)
+        }
+
+        const normalizedLimit = Math.max(Number(limit) || 100, 1)
+        const scanLimit = Math.min(normalizedLimit * 10, 1000)
+        const history = this.getMessages(conversationId, scanLimit)
+        const selected = []
+        let belongsToTargetUser = false
+
+        for (const message of history) {
+            if (message.role === 'user') {
+                const senderId = message.sender?.user_id
+                belongsToTargetUser =
+                    senderId !== null && senderId !== undefined && String(senderId) === normalizedUserId
+                if (belongsToTargetUser) selected.push(message)
+                continue
+            }
+
+            // 会话请求按 conversationId 加锁串行执行；下一条 user 消息出现前的 assistant/tool
+            // 均属于当前用户轮次。记忆 prompt 只消费 user/assistant，tool 在此保留也不会误入正文。
+            if (belongsToTargetUser && (message.role === 'assistant' || message.role === 'tool')) {
+                selected.push(message)
+            }
+        }
+
+        return selected.slice(-normalizedLimit)
+    }
+
     mapRowToMessage(row) {
         try {
             const parsed = JSON.parse(row.content)
@@ -570,6 +640,7 @@ class DatabaseService {
                     role: row.role,
                     content: parsed.content,
                     toolCalls: parsed.toolCalls,
+                    sender: parsed.sender,
                     timestamp: row.timestamp,
                     metadata: row.metadata ? JSON.parse(row.metadata) : undefined
                 }
@@ -615,7 +686,7 @@ class DatabaseService {
             WHERE id NOT IN (
                 SELECT id FROM messages 
                 WHERE conversation_id = ? 
-                ORDER BY timestamp DESC 
+                ORDER BY timestamp DESC, id DESC
                 LIMIT ?
             ) AND conversation_id = ?
         `)
@@ -648,7 +719,7 @@ class DatabaseService {
               AND id NOT IN (
                 SELECT id FROM messages
                 WHERE conversation_id = ?
-                ORDER BY timestamp DESC
+                ORDER BY timestamp DESC, id DESC
                 LIMIT ?
               )${keepClause}
         `)
@@ -670,7 +741,7 @@ class DatabaseService {
                 MAX(m.timestamp) as last_timestamp,
                 (SELECT content FROM messages m2 
                  WHERE m2.conversation_id = m.conversation_id 
-                 ORDER BY m2.timestamp DESC LIMIT 1) as last_content
+                 ORDER BY m2.timestamp DESC, m2.id DESC LIMIT 1) as last_content
             FROM messages m
             GROUP BY m.conversation_id
             ORDER BY last_timestamp DESC
@@ -735,10 +806,35 @@ class DatabaseService {
      * @param {string} userIdPattern - 用户ID或完整会话ID
      * @returns {Array<{conversationId: string, messageCount: number, lastMessage: number}>}
      */
-    listUserConversations(userIdPattern) {
+    listUserConversations(userIdPattern, options = {}) {
         this.ensureInit()
         const raw = String(userIdPattern ?? '')
         if (!raw) return []
+        const listOptions = { groupId: undefined, ...options }
+        const groupId = listOptions.groupId
+
+        if (groupId !== null && groupId !== undefined && groupId !== '') {
+            const sharedId = `group:${groupId}`
+            const isolatedId = `group:${groupId}:user:${raw}`
+            const rows = this.db
+                .prepare(
+                    `
+                    SELECT conversation_id, COUNT(*) as message_count, MAX(timestamp) as last_message
+                    FROM messages
+                    WHERE conversation_id = ? OR conversation_id = ?
+                    GROUP BY conversation_id
+                    ORDER BY last_message DESC
+                `
+                )
+                .all(sharedId, isolatedId)
+            return rows.map(row => ({
+                conversationId: row.conversation_id,
+                messageCount: row.message_count,
+                lastMessage: row.last_message,
+                shared: row.conversation_id === sharedId
+            }))
+        }
+
         const escaped = this.escapeLikePattern(raw)
 
         const stmt = this.db.prepare(`

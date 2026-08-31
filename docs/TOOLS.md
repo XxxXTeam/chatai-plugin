@@ -2,6 +2,22 @@
 
 本文档介绍如何为 ChatAI Plugin 开发自定义工具。
 
+## 标准 Bot 接口边界
+
+内置工具统一通过 `src/core/platform/index.js` 访问 Yunzai 的事件、Bot、消息段和文件能力。业务工具不得自行判断 QQBot、ICQQ 或 OneBot，不得直接调用 `pickGroup`、`pickFriend`、`sendApi`，也不得把群号或用户标识直接转为数字。
+
+```js
+import { StandardBotApi, StandardMessage } from '../src/core/platform/index.js'
+
+const api = StandardBotApi.fromContext(ctx)
+const result = await api.sendGroup(args.group_id, [
+    StandardMessage.at(args.user_id),
+    StandardMessage.text(args.message)
+])
+```
+
+文件操作使用 `StandardFileApi`，明确的原始协议包工具使用 `StandardRawApi`。协议端不支持某项能力时会抛出 `UnsupportedBotApiError`；写操作必须保留该失败，不得返回宽松的伪成功结果。
+
 ## 目录
 
 - [工具概述](#工具概述)
@@ -72,6 +88,26 @@ export default {
 ### 2. 重载工具
 
 工具会在插件启动时自动加载。也可以通过管理面板手动重载。
+
+主人也可以让模型调用 `create_custom_tool` 创建工具。该能力属于危险工具：必须启用危险工具，
+并经过主人权限检查。写入使用临时文件校验后原子替换，热加载失败会恢复旧文件；传入
+`invoke_arguments` 可在当前工具调用链立即执行，新一轮客户端则会直接获得新工具定义。
+
+模型创建接口只接受函数体 `handler_code`，生成的工具固定要求主人权限。名称冲突、路径越界、
+非法 JSON Schema、handler 语法错误、热加载后未注册都会失败且不留下半成品。
+
+### Agent Skills 兼容与渐进披露
+
+标准 `SKILL.md` frontmatter 的 `name` 长度为 1-64，只允许小写字母、数字和单连字符，
+并与父目录同名；`description` 长度为 1-1024，负责描述触发场景；标准
+`allowed-tools` 是空格分隔字符串。旧中文名称、目录名不一致和数组形式
+`allowed-tools` 仍兼容加载，但会返回 `standardCompliant: false` 与
+`compatibilityWarnings`。
+
+提示词先渐进披露全部技能的 `name + description`，模型再用 `get_skill_info` 获取正文，
+用 `read_skill_file` 读取 `references/`、`assets/` 等附属文件。`load_skill` 默认只把正文
+返回给当前工具调用链，不写全局状态；只有主人显式传 `persist_global: true` 才会全局持久激活，
+`unload_skill` 同样要求主人权限。
 
 ### 3. 测试工具
 
@@ -226,25 +262,15 @@ parameters: {
 
 ```javascript
 async run(args, context) {
-    // 获取当前事件（消息事件）
     const event = context.getEvent()
+    const api = context.getApi()
+    const message = context.message
     // event.user_id    - 发送者QQ号
     // event.group_id   - 群号（私聊为空）
     // event.message_id - 消息ID
     // event.sender     - 发送者信息
     
-    // 获取 Bot 实例
-    const bot = context.getBot()
-    
-    // 获取适配器信息
-    const adapter = context.getAdapter()
-    // adapter.adapter  - 适配器类型：'icqq'|'napcat'|'onebot'
-    // adapter.isNT     - 是否为 NT 协议
-    
-    // 快捷判断
-    const isIcqq = context.isIcqq()
-    const isNapCat = context.isNapCat()
-    const isNT = context.isNT()
+    // api 统一处理目标 ID、适配器能力、业务错误和 unsupported
 }
 ```
 
@@ -252,27 +278,27 @@ async run(args, context) {
 
 ```javascript
 async run(args, context) {
-    const e = context.getEvent()
+    const api = context.getApi()
+    const message = context.message
     
     // 回复当前消息
-    await e.reply('文本消息')
+    await api.reply(message.text('文本消息'))
     
     // 发送图片
-    await e.reply(segment.image('https://example.com/image.png'))
+    await api.reply(message.image('https://example.com/image.png'))
     
     // 发送多条消息
-    await e.reply([
-        '第一条消息',
-        segment.image('file:///path/to/image.png'),
-        segment.at(12345678)
+    await api.reply([
+        message.text('第一条消息'),
+        message.image('file:///path/to/image.png'),
+        message.at('12345678')
     ])
     
     // 发送到指定群
-    const bot = context.getBot()
-    await bot.pickGroup(群号).sendMsg('消息内容')
+    await api.sendGroup('群号或OpenID', message.text('消息内容'))
     
     // 发送私聊
-    await bot.pickFriend(QQ号).sendMsg('消息内容')
+    await api.sendPrivate('用户号或OpenID', message.text('消息内容'))
 }
 ```
 
@@ -547,7 +573,8 @@ export default {
     },
 
     async run(args, context) {
-        const e = context.getEvent()
+        const api = context.getApi()
+        const message = context.message
         const { category = 'anime' } = args
         
         const apis = {
@@ -562,7 +589,7 @@ export default {
             const data = await response.json()
             const imageUrl = Array.isArray(data) ? data[0].url : data.url
             
-            await e.reply(segment.image(imageUrl))
+            await api.reply(message.image(imageUrl))
             
             return { success: true, message: '图片已发送' }
         } catch (error) {
@@ -1022,7 +1049,7 @@ async run(args, context) {
 
 ```javascript
 async run(args, context) {
-    const e = context.getEvent()
+    const api = context.getApi()
     
     // 方式1：等待完成后返回结果
     const result = await someAsyncOperation()
@@ -1032,7 +1059,7 @@ async run(args, context) {
     // 适用于耗时操作，先给用户反馈
     setImmediate(async () => {
         const result = await longRunningTask()
-        await e.reply(`处理完成: ${result}`)
+        await api.reply(`处理完成: ${result}`)
     })
     return { success: true, message: '正在处理中，请稍候...' }
 }
@@ -1066,15 +1093,9 @@ async run(args, context) {
 #### Q: 如何检查用户权限？
 
 ```javascript
-import { getMasterList } from '../../src/mcp/tools/helpers.js'
-
 async run(args, context) {
     const e = context.getEvent()
-    const bot = context.getBot()
-    
-    // 检查是否为主人
-    const masters = await getMasterList(bot?.uin)
-    const isMaster = masters.includes(Number(e.user_id))
+    const isMaster = typeof context.isMaster === 'function' ? context.isMaster() : context.isMaster === true
     
     // 检查是否为群管理员
     const isAdmin = e.member?.is_admin || e.member?.is_owner
@@ -1121,31 +1142,29 @@ async run(args, context) {
 #### Q: 如何发送各种类型的消息？
 
 ```javascript
-import { compatSegment, sendMessage } from '../../src/mcp/tools/helpers.js'
-
 async run(args, context) {
     const e = context.getEvent()
-    const bot = context.getBot()
+    const api = context.getApi()
+    const message = context.message
     
     // 发送文本
-    await e.reply('Hello World')
+    await api.reply('Hello World')
     
     // 发送图片
-    await e.reply(compatSegment.image('https://example.com/image.png'))
+    await api.reply(message.image('https://example.com/image.png'))
     
     // 发送 @
-    await e.reply([compatSegment.at(e.user_id), ' 你好！'])
+    await api.reply([message.at(e.user_id), message.text(' 你好！')])
     
     // 发送组合消息
-    await e.reply([
-        compatSegment.text('看看这张图: '),
-        compatSegment.image('file:///path/to/image.png'),
-        compatSegment.text('\n觉得怎么样？')
+    await api.reply([
+        message.text('看看这张图: '),
+        message.image('file:///path/to/image.png'),
+        message.text('\n觉得怎么样？')
     ])
     
     // 发送到指定群/用户
-    await sendMessage({
-        bot,
+    await api.send({
         groupId: '123456',  // 群号
         // userId: '789012',  // 或用户QQ
         message: 'Hello'
@@ -1158,26 +1177,19 @@ async run(args, context) {
 #### Q: 如何发送合并转发？
 
 ```javascript
-import { sendForwardMsgEnhanced } from '../../src/mcp/tools/helpers.js'
-
 async run(args, context) {
-    const e = context.getEvent()
-    const bot = context.getBot()
+    const api = context.getApi()
+    const message = context.message
+    const botInfo = api.getBotInfo()
     
-    const result = await sendForwardMsgEnhanced({
-        bot,
-        event: e,
-        messages: [
-            { user_id: '10000', nickname: '系统', content: '这是第一条消息' },
-            { user_id: '10000', nickname: '系统', content: '这是第二条消息' },
-            {
-                user_id: bot.uin,
-                nickname: bot.nickname,
-                content: [
-                    { type: 'text', text: '支持富文本: ' },
-                    { type: 'image', file: 'https://example.com/img.png' }
-                ]
-            }
+    const result = await api.sendForward({
+        nodes: [
+            message.nodeItem('10000', '系统', '这是第一条消息'),
+            message.nodeItem('10000', '系统', '这是第二条消息'),
+            message.nodeItem(botInfo.user_id, botInfo.nickname, [
+                message.text('支持富文本: '),
+                message.image('https://example.com/img.png')
+            ])
         ],
         display: {
             prompt: '点击查看详情',
@@ -1304,8 +1316,6 @@ export default {
 
 ```javascript
 // data/tools/template_admin.js
-import { getMasterList } from '../../src/mcp/tools/helpers.js'
-
 export default {
     name: 'template_admin',
     
@@ -1332,7 +1342,8 @@ export default {
     async run(args, context) {
         const { target_user, action } = args
         const e = context.getEvent()
-        const bot = context.getBot()
+        const api = context.getApi()
+        const message = context.message
         
         // 检查是否在群聊
         if (!e.group_id) {
@@ -1340,8 +1351,7 @@ export default {
         }
         
         // 检查权限
-        const masters = await getMasterList(bot?.uin)
-        const isMaster = masters.includes(Number(e.user_id))
+        const isMaster = typeof context.isMaster === 'function' ? context.isMaster() : context.isMaster === true
         const isAdmin = e.member?.is_admin || e.member?.is_owner
         
         if (!isMaster && !isAdmin) {
@@ -1352,13 +1362,19 @@ export default {
         try {
             switch (action) {
                 case 'warn':
-                    await e.reply([segment.at(target_user), ' 这是一个警告！'])
+                    await api.reply([message.at(target_user), message.text(' 这是一个警告！')])
                     break
                 case 'kick':
-                    // 踢人操作...
+                    await api.kickMember(e.group_id, target_user, false)
                     break
                 case 'ban':
-                    // 禁言操作...
+                    await api.callGroupOrAction({
+                        groupId: e.group_id,
+                        method: 'muteMember',
+                        args: [api.targetId(target_user), 600],
+                        action: 'set_group_ban',
+                        params: { user_id: api.targetId(target_user), duration: 600 }
+                    })
                     break
             }
             
@@ -1406,6 +1422,8 @@ export default {
     async run(args, context) {
         const { message, delay_minutes } = args
         const e = context.getEvent()
+        const api = context.getApi()
+        const segments = context.message
         
         // 验证参数
         if (delay_minutes < 1 || delay_minutes > 60) {
@@ -1418,7 +1436,7 @@ export default {
         // 设置定时器
         const timer = setTimeout(async () => {
             try {
-                await e.reply([segment.at(e.user_id), ` 提醒: ${message}`])
+                await api.sendPrivate(e.user_id, [segments.at(e.user_id), segments.text(` 提醒: ${message}`)])
             } catch (err) {
                 console.error('发送提醒失败:', err)
             } finally {

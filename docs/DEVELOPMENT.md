@@ -455,7 +455,7 @@ const categoryMeta = {
 
 ### 环境要求
 
-- Node.js >= 18
+- Node.js >= 20.18.1
 - pnpm >= 8.0
 - Redis (可选，用于缓存)
 - 编译工具 (用于 better-sqlite3)
@@ -490,6 +490,10 @@ pnpm dev
 
 # 构建
 pnpm build
+
+# 生成并同步 Yunzai 实际托管的静态产物
+# 必须把 frontend/out 同步到 ../resources/web，不能只部署前端源码
+npm run export
 ```
 
 ### 调试配置

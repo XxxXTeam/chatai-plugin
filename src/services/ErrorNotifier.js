@@ -5,7 +5,7 @@
 
 import config from '../../config/config.js'
 import { chatLogger } from '../core/utils/logger.js'
-import { sendGroupMessage, sendPrivateMessage } from '../utils/platformAdapter.js'
+import { StandardBotApi } from '../core/platform/index.js'
 
 const logger = chatLogger
 
@@ -65,21 +65,26 @@ class ErrorNotifier {
     }
 
     /**
-     * 获取主人 QQ 列表
-     * @returns {number[]}
+     * 获取主人目标列表；保留协议端原始标识，QQBot OpenID 不得转成数字。
+     * @returns {(string|number)[]}
      */
     _getMasterQQList() {
         const result = []
+        const seen = new Set()
+        const append = value => {
+            if (value === null || value === undefined || value === '') return
+            const key = String(value)
+            if (seen.has(key)) return
+            seen.add(key)
+            result.push(value)
+        }
         const pluginMasters = config.get('admin.masterQQ') || []
-        result.push(...pluginMasters.map(Number).filter(n => n > 0))
+        for (const id of Array.isArray(pluginMasters) ? pluginMasters : []) append(id)
 
         try {
             const bot = globalThis.Bot
             const botMasters = bot?.config?.masterQQ || bot?.config?.master || []
-            for (const id of botMasters) {
-                const num = Number(id)
-                if (num > 0 && !result.includes(num)) result.push(num)
-            }
+            for (const id of Array.isArray(botMasters) ? botMasters : []) append(id)
         } catch {}
 
         return result
@@ -134,24 +139,25 @@ class ErrorNotifier {
 
         const message = this._buildMessage(error, context)
         const e = context.e || null
+        const api = new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot })
         const targets = cfg.targets || []
         let sent = false
 
         for (const target of targets) {
             try {
                 if (target.type === 'group' && target.id) {
-                    await sendGroupMessage(e, parseInt(target.id), message)
+                    await api.sendGroup(target.id, message)
                     sent = true
                     logger.debug(`[ErrorNotifier] 已通知群 ${target.id}`)
                 } else if (target.type === 'user' && target.id) {
-                    await sendPrivateMessage(e, parseInt(target.id), message)
+                    await api.sendPrivate(target.id, message)
                     sent = true
                     logger.debug(`[ErrorNotifier] 已通知用户 ${target.id}`)
                 } else if (target.type === 'master') {
                     const masters = this._getMasterQQList()
                     for (const masterId of masters) {
                         try {
-                            await sendPrivateMessage(e, masterId, message)
+                            await api.sendPrivate(masterId, message)
                             sent = true
                         } catch (err) {
                             logger.debug(`[ErrorNotifier] 通知主人 ${masterId} 失败: ${err.message}`)

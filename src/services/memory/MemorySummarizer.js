@@ -3,6 +3,7 @@
  * 负责合并、去重、清理和总结记忆
  */
 import { chatLogger } from '../../core/utils/logger.js'
+import config from '../../../config/config.js'
 import { memoryService } from './MemoryService.js'
 import { callMemoryLLM, formatMemoryTime } from './llmHelper.js'
 import { MemoryCategory, CategoryLabels, MemorySource, getCategoryLabel } from './MemoryTypes.js'
@@ -62,78 +63,183 @@ const CONFLICT_PROMPT = `你是一个记忆管理助手，需要在两条冲突�
 
 结果：`
 
-class MemorySummarizer {
-    constructor() {
-        this.llmClient = null
+/**
+ * 将模型输出解析为可直接写入记忆库的纯文本条目。
+ * 兼容逐行文本和字符串数组 JSON，并剔除代码围栏、标题、编号及说明性前缀。
+ *
+ * @param {unknown} response - 模型原始输出
+ * @returns {string[]} 去重后的记忆内容
+ */
+export function parseMemorySummaryResponse(response) {
+    const text = typeof response === 'string' ? response.trim() : ''
+    if (!text) return []
+
+    let lines = text.split(/\r?\n/)
+    if (text.startsWith('[')) {
+        try {
+            const parsed = JSON.parse(text)
+            if (Array.isArray(parsed) && parsed.every(item => typeof item === 'string')) {
+                lines = parsed.map(String)
+            }
+        } catch {}
     }
+
+    const normalized = lines
+        .map(line =>
+            String(line || '')
+                .trim()
+                .replace(/^```(?:json|markdown|text)?\s*$/i, '')
+                .replace(/^#{1,6}\s*/, '')
+                .replace(/^[-*•]+\s*/, '')
+                .replace(/^\d+[.)、]\s*/, '')
+                .replace(/^(?:整理结果|总结结果|结果)[：:]\s*/i, '')
+                .trim()
+        )
+        .filter(line => {
+            if (!line || line === '```' || line === '无') return false
+            if (/^(?:以下是|根据|我将|说明|备注)[：:]?$/i.test(line)) return false
+            return line.length <= 500
+        })
+
+    return [...new Set(normalized)]
+}
+
+class MemorySummarizer {
+    /** @type {Object|null} */
+    llmClient = null
+
+    constructor() {}
 
     /**
      * 设置 LLM 客户端
+     * @param {Object|null} client - 客户端实例；null 表示恢复按配置动态解析
      */
     setLLMClient(client) {
         this.llmClient = client
     }
 
     /**
+     * 获取本次总结使用的 LLM 客户端。
+     * 显式注入的客户端优先；否则按记忆模型和群作用域实时选择渠道，
+     * 避免把某个群的独立渠道客户端缓存后复用于其他群。
+     *
+     * @param {{groupId?: string|number|null, model?: string}} [options] - 解析选项
+     * @param {string} [options.model] - 指定模型
+     * @returns {Promise<Object>} LLM 客户端
+     */
+    async resolveLLMClient(options = {}) {
+        if (this.llmClient) return this.llmClient
+
+        const resolvedOptions = { groupId: undefined, model: undefined, ...options }
+        const { LlmService } = await import('../llm/LlmService.js')
+        const configuredMemoryModel = config.get('memory.model')
+        const model =
+            typeof resolvedOptions.model === 'string' && resolvedOptions.model
+                ? resolvedOptions.model
+                : typeof configuredMemoryModel === 'string' && configuredMemoryModel
+                  ? configuredMemoryModel
+                  : undefined
+        return LlmService.getChatClient({
+            model,
+            ...(resolvedOptions.groupId !== null &&
+            resolvedOptions.groupId !== undefined &&
+            resolvedOptions.groupId !== ''
+                ? { groupId: String(resolvedOptions.groupId) }
+                : {})
+        })
+    }
+
+    /**
      * 总结用户的所有记忆
      * @param {string} userId - 用户ID
-     * @param {Object} options - 选项
+     * @param {{groupId?: string|null, useLLM?: boolean, model?: string}} [options] - 选项
      */
     async summarizeUserMemories(userId, options = {}) {
-        const { groupId = null, useLLM = true } = options
+        const hasGroupId = Object.prototype.hasOwnProperty.call(options, 'groupId')
+        const summaryOptions = { groupId: undefined, useLLM: true, model: undefined, ...options }
+        const groupId = hasGroupId ? summaryOptions.groupId : undefined
+        const { useLLM = true, model } = summaryOptions
 
         try {
             const result = {
+                success: true,
                 userId,
                 originalCount: 0,
                 finalCount: 0,
+                beforeCount: 0,
+                afterCount: 0,
                 mergedCount: 0,
                 removedCount: 0,
                 byCategory: {}
             }
 
             // 1. 先进行简单的去重合并
-            const mergeResult = await memoryService.mergeMemories(userId)
+            const mergeResult = await memoryService.mergeMemories(userId, { groupId })
             result.originalCount = mergeResult.originalCount
+            result.beforeCount = mergeResult.originalCount
             result.mergedCount = mergeResult.mergedCount
             result.removedCount = mergeResult.deletedCount
 
             // 2. 如果启用 LLM，对每个分类进行智能总结
-            if (useLLM && this.llmClient) {
+            if (useLLM) {
                 const tree = await memoryService.getMemoryTree(userId, { groupId })
+                const scopeClients = new Map()
 
                 for (const category of Object.values(MemoryCategory)) {
                     const categoryData = tree[category]
-                    if (!categoryData || categoryData.items.length <= 2) {
+                    if (!categoryData || categoryData.items.length === 0) {
                         result.byCategory[category] = {
-                            count: categoryData?.count || 0,
+                            count: 0,
                             summarized: false
                         }
                         continue
                     }
 
-                    // 对超过一定数量的分类进行 LLM 总结
-                    if (categoryData.items.length > 5) {
-                        const summarized = await this.summarizeCategory(userId, category, categoryData.items, {
-                            groupId
-                        })
-                        result.byCategory[category] = {
-                            count: summarized.length,
-                            summarized: true,
-                            original: categoryData.items.length
+                    // 同一分类仍需按群作用域分别总结，禁止把两个群的用户信息合并到一起。
+                    const scopeBuckets = new Map()
+                    for (const item of categoryData.items) {
+                        const scopedGroupId = item.groupId ?? null
+                        const scopeKey = scopedGroupId === null ? 'global' : `group:${scopedGroupId}`
+                        if (!scopeBuckets.has(scopeKey)) {
+                            scopeBuckets.set(scopeKey, { groupId: scopedGroupId, items: [] })
                         }
-                    } else {
-                        result.byCategory[category] = {
-                            count: categoryData.count,
-                            summarized: false
+                        scopeBuckets.get(scopeKey).items.push(item)
+                    }
+
+                    let finalCategoryCount = 0
+                    let categorySummarized = false
+                    for (const bucket of scopeBuckets.values()) {
+                        if (bucket.items.length > 5) {
+                            const scopeKey = bucket.groupId === null ? 'global' : `group:${bucket.groupId}`
+                            if (!scopeClients.has(scopeKey)) {
+                                scopeClients.set(
+                                    scopeKey,
+                                    await this.resolveLLMClient({ groupId: bucket.groupId, model })
+                                )
+                            }
+                            const summarized = await this.summarizeCategory(userId, category, bucket.items, {
+                                groupId: bucket.groupId,
+                                llmClient: scopeClients.get(scopeKey)
+                            })
+                            finalCategoryCount += summarized.length
+                            categorySummarized ||= summarized !== bucket.items
+                        } else {
+                            finalCategoryCount += bucket.items.length
                         }
+                    }
+
+                    result.byCategory[category] = {
+                        count: finalCategoryCount,
+                        summarized: categorySummarized,
+                        original: categoryData.items.length
                     }
                 }
             }
 
             // 更新最终计数
-            const stats = await memoryService.getStats(userId)
-            result.finalCount = stats.total
+            const finalMemories = await memoryService.getMemoriesByUser(userId, { groupId, limit: 1000 })
+            result.finalCount = finalMemories.length
+            result.afterCount = result.finalCount
 
             logger.info(
                 `[MemorySummarizer] 用户 ${userId} 记忆总结完成: ${result.originalCount} -> ${result.finalCount}`
@@ -148,11 +254,17 @@ class MemorySummarizer {
 
     /**
      * 对单个分类进行总结
+     * @param {string} userId - 用户 ID
+     * @param {string} category - 记忆分类
+     * @param {Object[]} memories - 同一作用域中的旧记忆
+     * @param {{groupId?: string|null, llmClient?: Object|null}} [options] - 总结选项
+     * @returns {Promise<Object[]>} 新记忆；未执行替换时原样返回 memories
      */
     async summarizeCategory(userId, category, memories, options = {}) {
-        const { groupId = null } = options
+        const categoryOptions = { groupId: null, llmClient: this.llmClient, ...options }
+        const { groupId = null, llmClient = this.llmClient } = categoryOptions
 
-        if (!this.llmClient || memories.length <= 2) {
+        if (!llmClient || memories.length <= 2) {
             return memories
         }
 
@@ -163,39 +275,34 @@ class MemorySummarizer {
 
             const prompt = SUMMARY_PROMPT.replace('{categoryLabel}', categoryLabel).replace('{memories}', memoriesText)
 
-            const response = await this.callLLM(prompt)
+            const response = await this.callLLM(prompt, llmClient)
 
             if (!response || response.trim() === '') {
                 return memories
             }
 
             // 解析总结结果
-            const summarizedContents = response
-                .split('\n')
-                .map(line => line.trim())
-                .filter(line => line && !line.startsWith('#'))
+            const summarizedContents = parseMemorySummaryResponse(response)
+
+            if (summarizedContents.length === 0) {
+                return memories
+            }
 
             // 如果总结结果和原来差不多，保留原来的
             if (summarizedContents.length >= memories.length * 0.9) {
                 return memories
             }
 
-            // 批量删除旧记忆
             const oldIds = memories.map(m => m.id)
-            await memoryService.deleteMemoriesBatch(oldIds, true)
-
-            const newMemories = []
-            for (const content of summarizedContents) {
-                const memory = await memoryService.saveMemory({
-                    userId,
-                    groupId,
-                    category,
-                    content,
-                    confidence: 0.85,
-                    source: MemorySource.SUMMARY
-                })
-                newMemories.push(memory)
-            }
+            const newMemories = await memoryService.replaceCategoryMemories({
+                userId,
+                groupId,
+                category,
+                oldIds,
+                contents: summarizedContents,
+                confidence: 0.85,
+                source: MemorySource.SUMMARY
+            })
 
             logger.debug(`[MemorySummarizer] 分类 ${category} 总结: ${memories.length} -> ${newMemories.length}`)
 
@@ -246,16 +353,28 @@ class MemorySummarizer {
     /**
      * 清理低质量记忆
      * @param {string} userId - 用户ID
-     * @param {Object} options - 选项
+     * @param {{groupId?: string|null, minConfidence?: number, maxAge?: number, minContentLength?: number}} [options] - 选项；groupId 未传表示全部作用域，null 表示全局作用域
      */
     async cleanupMemories(userId, options = {}) {
+        const hasGroupId = Object.prototype.hasOwnProperty.call(options, 'groupId')
+        const cleanupOptions = {
+            groupId: undefined,
+            minConfidence: 0.3,
+            maxAge: 90 * 24 * 60 * 60 * 1000,
+            minContentLength: 5,
+            ...options
+        }
         const {
-            minConfidence = 0.3,
-            maxAge = 90 * 24 * 60 * 60 * 1000, // 90天
-            minContentLength = 5
-        } = options
+            groupId,
+            minConfidence,
+            maxAge, // 默认90天
+            minContentLength
+        } = cleanupOptions
 
-        const memories = await memoryService.getMemoriesByUser(userId, { limit: 1000 })
+        const memories = await memoryService.getMemoriesByUser(userId, {
+            ...(hasGroupId ? { groupId } : {}),
+            limit: 1000
+        })
         const now = Date.now()
 
         const toRemoveIds = memories
@@ -306,9 +425,11 @@ class MemorySummarizer {
     /**
      * 衰减记忆可信度
      * 随时间降低未被引用记忆的可信度
+     * @param {{decayRate?: number, minConfidence?: number, daysThreshold?: number}} [options] - 衰减选项
      */
     async decayConfidence(options = {}) {
-        const { decayRate = 0.95, minConfidence = 0.3, daysThreshold = 30 } = options
+        const decayOptions = { decayRate: 0.95, minConfidence: 0.3, daysThreshold: 30, ...options }
+        const { decayRate, minConfidence, daysThreshold } = decayOptions
 
         const { databaseService } = await import('../storage/DatabaseService.js')
         databaseService.init()
@@ -337,8 +458,8 @@ class MemorySummarizer {
     /**
      * 调用 LLM（使用共享辅助函数）
      */
-    async callLLM(prompt) {
-        return callMemoryLLM(this.llmClient, prompt, {
+    async callLLM(prompt, llmClient = this.llmClient) {
+        return callMemoryLLM(llmClient, prompt, {
             maxTokens: 800,
             temperature: 0.3,
             caller: 'MemorySummarizer'
@@ -357,13 +478,12 @@ class MemorySummarizer {
      * 可在对话结束（如 #ai结束对话）时调用此方法
      * @param {string} userId - 用户ID
      * @param {Array} messages - 本次对话消息列表
-     * @param {Object} [options] - 选项
-     * @param {string} [options.groupId] - 群组ID
-     * @param {boolean} [options.summarize=true] - 是否同时执行总结
+     * @param {{groupId?: string|null, summarize?: boolean}} [options] - 选项
      * @returns {Promise<Object>} 提取和总结结果
      */
     async onConversationEnd(userId, messages, options = {}) {
-        const { groupId = null, summarize = true } = options
+        const conversationOptions = { groupId: null, summarize: true, ...options }
+        const { groupId, summarize } = conversationOptions
 
         const result = {
             extractedCount: 0,
@@ -393,11 +513,12 @@ class MemorySummarizer {
                         useLLM: !!this.llmClient
                     })
                     result.summarized = true
-                    result.summaryResult = summaryResult
+                    Object.assign(result, { summaryResult })
                 }
 
                 // 3. 清理低质量记忆
                 const cleanResult = await this.cleanupMemories(userId, {
+                    groupId,
                     minConfidence: 0.3,
                     minContentLength: 3
                 })
@@ -409,7 +530,7 @@ class MemorySummarizer {
             )
         } catch (error) {
             logger.error('[MemorySummarizer] 对话结束处理失败:', error.message)
-            result.error = error.message
+            Object.assign(result, { error: error.message })
         }
 
         return result
@@ -432,7 +553,9 @@ class MemorySummarizer {
             byCategory: {}
         }
 
-        for (const [category, data] of Object.entries(tree)) {
+        for (const [category, rawData] of Object.entries(tree)) {
+            if (!rawData || typeof rawData !== 'object') continue
+            const data = Object.assign({ label: '', count: 0, items: new Array() }, rawData)
             if (data.count > 0) {
                 report.byCategory[category] = {
                     label: data.label,

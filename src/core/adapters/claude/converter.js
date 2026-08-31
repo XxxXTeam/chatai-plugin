@@ -18,6 +18,36 @@ function parseToolInput(input) {
 }
 
 /**
+ * 将内部 MCP 内容块转换为 Claude tool_result 可消费内容。
+ * @param {Object} block - MCP 内容块
+ * @returns {Object} Claude 内容块
+ */
+function toClaudeToolResultBlock(block) {
+    if (!block || typeof block !== 'object') return { type: 'text', text: String(block ?? '') }
+    if (block.type === 'text') return { type: 'text', text: String(block.text || '') }
+    if (block.type === 'image' && block.data) {
+        return {
+            type: 'image',
+            source: {
+                type: 'base64',
+                media_type: block.mimeType || 'image/png',
+                data: block.data
+            }
+        }
+    }
+    if (block.type === 'resource' && typeof block.resource?.text === 'string') {
+        return { type: 'text', text: `[资源 ${block.resource.uri || ''}]\n${block.resource.text}` }
+    }
+    if (block.type === 'resource_link') {
+        return { type: 'text', text: `[资源链接 ${block.name || ''} ${block.uri || ''}]` }
+    }
+    if (block.type === 'audio') {
+        return { type: 'text', text: `[音频 mimeType=${block.mimeType || 'unknown'}]` }
+    }
+    return { type: 'text', text: `[MCP 内容块 type=${block.type || 'unknown'}]` }
+}
+
+/**
  * Convert Chaite IMessage to Claude format
  */
 registerFromChaiteConverter('claude', source => {
@@ -108,11 +138,23 @@ registerFromChaiteConverter('claude', source => {
         }
         case 'tool': {
             const srcContent = Array.isArray(source.content) ? source.content : []
-            const content = srcContent.map(tcr => ({
-                type: 'tool_result',
-                tool_use_id: tcr.tool_call_id,
-                content: tcr.content
-            }))
+            const content = srcContent.map(tcr => {
+                const richContent = Array.isArray(tcr.mcpContent)
+                    ? tcr.mcpContent.map(toClaudeToolResultBlock)
+                    : tcr.content
+                if (Array.isArray(richContent) && tcr.structuredContent !== undefined) {
+                    richContent.push({
+                        type: 'text',
+                        text: `structuredContent: ${JSON.stringify(tcr.structuredContent)}`
+                    })
+                }
+                return {
+                    type: 'tool_result',
+                    tool_use_id: tcr.tool_call_id,
+                    content: richContent,
+                    ...(tcr.isError === true ? { is_error: true } : {})
+                }
+            })
 
             return {
                 role: 'user',

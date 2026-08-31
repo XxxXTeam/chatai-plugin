@@ -14,6 +14,7 @@ import {
     MsgRecordExtractor,
     NapCatMessageUtils
 } from '../src/utils/messageParser.js'
+import { StandardBotApi } from '../src/core/platform/index.js'
 
 /**
  * 获取框架类型
@@ -48,7 +49,7 @@ export class MessageInspector extends plugin {
                     permission: 'master'
                 },
                 {
-                    reg: '^#取\\$(\\d+)$', // 匹配 #取$12345 (明确按seq取)
+                    reg: '^#取\\$([^\\s]+)$', // 匹配 #取$序号或 QQBot message_id
                     fnc: 'inspectBySeq',
                     permission: 'master'
                 },
@@ -93,7 +94,7 @@ export class MessageInspector extends plugin {
      */
     async inspectMessage() {
         const e = this.e
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
 
         // 获取目标消息
         let targetSeq = null
@@ -159,19 +160,16 @@ export class MessageInspector extends plugin {
 
             // 获取消息
             if (getPrevious) {
-                if (e.group_id) {
-                    const group = bot.pickGroup(e.group_id)
-                    if (group?.getChatHistory) {
-                        const history = await group.getChatHistory(0, 2)
-                        rawMsg = history?.length >= 2 ? history[history.length - 2] : history?.[0]
-                    }
-                } else {
-                    const friend = bot.pickFriend(e.user_id)
-                    if (friend?.getChatHistory) {
-                        const history = await friend.getChatHistory(0, 2)
-                        rawMsg = history?.length >= 2 ? history[history.length - 2] : history?.[0]
-                    }
+                const api = new StandardBotApi({ event: e, bot })
+                if (api.isQQBot) {
+                    await this.reply('❌ QQBot 不提供历史消息拉取；请直接引用目标消息后使用 #取', true)
+                    return true
                 }
+                const sequence = api.historySequence(e.seq ?? e.message_seq ?? e.message_id, 0)
+                const history = e.group_id
+                    ? await api.getHistory({ groupId: e.group_id, sequence, count: 2 })
+                    : await api.getHistory({ userId: e.user_id, sequence, count: 2 })
+                rawMsg = history?.length >= 2 ? history[history.length - 2] : history?.[0]
             } else {
                 rawMsg = await this.fetchMessage(bot, e, targetSeq, targetMsgId)
             }
@@ -195,7 +193,7 @@ export class MessageInspector extends plugin {
     }
     async inspectPreviousMessages() {
         const e = this.e
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
         const botId = bot.uin || bot.self_id || 10000
 
         const match = e.msg.match(/#取上(\d+)条?/)
@@ -204,23 +202,15 @@ export class MessageInspector extends plugin {
         try {
             let history = null
 
-            if (e.group_id) {
-                const group = bot.pickGroup(e.group_id)
-                if (group?.getChatHistory) {
-                    history = await group.getChatHistory(0, count + 1) // +1 因为可能包含当前消息
-                } else if (bot?.sendApi) {
-                    const result = await bot.sendApi('get_group_msg_history', {
-                        group_id: e.group_id,
-                        count: count + 1
-                    })
-                    history = result?.data?.messages || result?.messages || []
-                }
-            } else {
-                const friend = bot.pickFriend(e.user_id)
-                if (friend?.getChatHistory) {
-                    history = await friend.getChatHistory(0, count + 1)
-                }
+            const api = new StandardBotApi({ event: e, bot })
+            if (api.isQQBot) {
+                await this.reply('❌ QQBot 不提供历史消息拉取，#取上 仅支持具有历史接口的协议端', true)
+                return true
             }
+            const sequence = api.historySequence(e.seq ?? e.message_seq ?? e.message_id, 0)
+            history = e.group_id
+                ? await api.getHistory({ groupId: e.group_id, sequence, count: count + 1 })
+                : await api.getHistory({ userId: e.user_id, sequence, count: count + 1 })
 
             if (!history || history.length === 0) {
                 await this.reply('❌ 获取历史消息失败', true)
@@ -230,8 +220,8 @@ export class MessageInspector extends plugin {
             // 排除当前命令消息本身（如果存在）
             const messages = history
                 .filter(msg => {
-                    const msgSeq = msg.seq || msg.message_seq
-                    return msgSeq !== e.seq
+                    const msgSeq = msg.seq || msg.message_seq || msg.message_id
+                    return !api.sameHistorySequence(msgSeq, e.seq ?? e.message_seq ?? e.message_id)
                 })
                 .slice(-count)
 
@@ -305,15 +295,15 @@ export class MessageInspector extends plugin {
      */
     async inspectBySeq() {
         const e = this.e
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
 
-        const match = e.msg.match(/#取\$(\d+)/)
+        const match = e.msg.match(/#取\$([^\s]+)/)
         if (!match || !match[1]) {
             await this.reply('❌ 请提供消息seq，如: #取$12345', true)
             return true
         }
 
-        const targetSeq = parseInt(match[1])
+        const targetSeq = match[1]
 
         try {
             const rawMsg = await this.fetchMessage(bot, e, targetSeq, null)
@@ -338,7 +328,7 @@ export class MessageInspector extends plugin {
      */
     async parseMessageComplete(e, rawMsg, options = {}) {
         const { maxDepth = 10, currentDepth = 0 } = options
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
 
         const result = {
             // 基础信息
@@ -461,7 +451,7 @@ export class MessageInspector extends plugin {
      */
     async parseForwardDeep(e, forwardElement, options = {}) {
         const { maxDepth = 10, currentDepth = 0 } = options
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
 
         const result = {
             success: false,
@@ -637,7 +627,7 @@ export class MessageInspector extends plugin {
      * 构建消息检查的详情节点列表（可复用）
      */
     async buildInspectNodes(e, data) {
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
         const botId = bot?.uin || e.self_id || 10000
 
         const nodes = []
@@ -778,7 +768,7 @@ export class MessageInspector extends plugin {
      * 构建转发数据节点（递归）
      */
     async buildForwardDataNode(e, forwardData, depth) {
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
         const botId = bot?.uin || e.self_id || 10000
 
         if (!forwardData?.success) {
@@ -866,7 +856,7 @@ export class MessageInspector extends plugin {
      * 将长文本包裹到子合并转发中
      */
     async wrapInForward(e, title, chunks) {
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
         const botId = bot?.uin || e.self_id || 10000
 
         const chunkArray = Array.isArray(chunks) ? chunks : [chunks]
@@ -883,7 +873,7 @@ export class MessageInspector extends plugin {
      * 创建合并转发节点
      */
     async createForwardNode(e, title, nodes) {
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
         const botId = bot?.uin || e.self_id || 10000
 
         try {
@@ -933,7 +923,7 @@ export class MessageInspector extends plugin {
      * 发送合并转发节点
      */
     async sendForwardNodes(e, nodes) {
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
 
         try {
             // TRSS 框架
@@ -975,8 +965,8 @@ export class MessageInspector extends plugin {
             }
 
             // Bot.makeForwardMsg
-            if (typeof Bot?.makeForwardMsg === 'function') {
-                const forwardMsg = await Bot.makeForwardMsg(nodes)
+            if (typeof globalThis.Bot?.makeForwardMsg === 'function') {
+                const forwardMsg = await globalThis.Bot.makeForwardMsg(nodes)
                 await this.reply(forwardMsg)
                 return true
             }
@@ -992,64 +982,33 @@ export class MessageInspector extends plugin {
      * 获取消息
      */
     async fetchMessage(bot, e, targetSeq, targetMsgId) {
-        let rawMsg = null
+        const api = new StandardBotApi({ event: e, bot })
+        const target = targetMsgId || targetSeq
+        if (!target) return null
 
-        if (e.group_id) {
-            const group = bot.pickGroup(e.group_id)
-
-            // icqq: group.getMsg
-            if (!rawMsg && group?.getMsg) {
-                try {
-                    rawMsg = await group.getMsg(targetSeq || targetMsgId)
-                } catch {}
-            }
-
-            // icqq: group.getChatHistory
-            if (!rawMsg && group?.getChatHistory && targetSeq) {
-                try {
-                    const history = await group.getChatHistory(targetSeq, 1)
-                    rawMsg = history?.[0]
-                } catch {}
-            }
-
-            // NapCat/OneBot: bot.getMsg
-            if (!rawMsg && bot?.getMsg) {
-                try {
-                    rawMsg = await bot.getMsg(targetMsgId || targetSeq)
-                } catch {}
-            }
-
-            // NapCat: sendApi
-            if (!rawMsg && bot?.sendApi) {
-                try {
-                    const result = await bot.sendApi('get_msg', { message_id: targetMsgId || targetSeq })
-                    rawMsg = result?.data || result
-                } catch {}
-            }
-        } else {
-            const friend = bot.pickFriend(e.user_id)
-
-            if (!rawMsg && friend?.getMsg) {
-                try {
-                    rawMsg = await friend.getMsg(targetSeq || targetMsgId)
-                } catch {}
-            }
-
-            if (!rawMsg && friend?.getChatHistory) {
-                try {
-                    const history = await friend.getChatHistory(targetSeq, 1)
-                    rawMsg = history?.[0]
-                } catch {}
-            }
-
-            if (!rawMsg && bot?.getMsg) {
-                try {
-                    rawMsg = await bot.getMsg(targetMsgId || targetSeq)
-                } catch {}
-            }
+        if (targetMsgId) {
+            try {
+                const message = await api.getMessage(targetMsgId, {
+                    ...(e.group_id ? { groupId: e.group_id } : {}),
+                    ...(!e.group_id && e.user_id ? { userId: e.user_id } : {})
+                })
+                if (message) return message.data || message
+            } catch {}
         }
 
-        return rawMsg
+        const sequence = api.historySequence(targetSeq ?? targetMsgId, targetSeq ?? targetMsgId)
+        try {
+            const history = e.group_id
+                ? await api.getHistory({ groupId: e.group_id, sequence, count: 1 })
+                : await api.getHistory({ userId: e.user_id, sequence, count: 1 })
+            const found = history.find(item => {
+                const messageSequence = item.seq || item.message_seq || item.message_id
+                return api.sameHistorySequence(messageSequence, sequence)
+            })
+            return found || history[0] || null
+        } catch {}
+
+        return null
     }
 
     /**
@@ -1151,7 +1110,7 @@ export class MessageInspector extends plugin {
      */
     async buildForwardMessages(e, result, rawMsg) {
         const msgs = []
-        const botId = e.bot?.uin || e.self_id || Bot?.uin || 10000
+        const botId = e.bot?.uin || e.self_id || globalThis.Bot?.uin || 10000
         const nickname = '消息检查器'
 
         // 1. 基本信息
@@ -1243,7 +1202,7 @@ export class MessageInspector extends plugin {
      * 发送合并转发消息
      */
     async sendForwardMsg(e, title, messages) {
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
         const botId = bot?.uin || e.self_id || 10000
         const nickname = title
 
@@ -1294,8 +1253,8 @@ export class MessageInspector extends plugin {
             }
 
             // 尝试使用 Bot.makeForwardMsg
-            if (typeof Bot?.makeForwardMsg === 'function') {
-                const forwardMsg = await Bot.makeForwardMsg(forwardNodes)
+            if (typeof globalThis.Bot?.makeForwardMsg === 'function') {
+                const forwardMsg = await globalThis.Bot.makeForwardMsg(forwardNodes)
                 await this.reply(forwardMsg)
                 return true
             }
@@ -1461,7 +1420,7 @@ export class MessageInspector extends plugin {
      */
     async showDebugInfo() {
         const e = this.e
-        const bot = e.bot || Bot
+        const bot = e.bot || globalThis.Bot
 
         const framework = getBotFramework()
         const adapter = getAdapter(e)

@@ -26,11 +26,8 @@ export default {
   },
 
   async run(args, context) {
-    const e = context.getEvent()  // 当前消息事件
-    const bot = context.getBot()  // 机器人实例
-    
-    // 回复消息
-    await e.reply(`处理完成: ${args.param1}`)
+    const api = context.getApi()
+    await api.reply(context.message.text(`处理完成: ${args.param1}`))
     
     // 返回结果给AI
     return { success: true, message: '操作完成' }
@@ -70,12 +67,34 @@ export default new MyTool()
 
 | 方法 | 说明 |
 |------|------|
+| `context.getApi()` | 标准平台接口，发送、查询、管理统一从这里调用 |
+| `context.message` | 标准 Yunzai 消息段工厂 |
 | `context.getEvent()` | 当前消息事件 (e) |
-| `context.getBot()` | 机器人实例 (Bot) |
-| `context.getAdapter()` | 适配器信息 `{ adapter, isNT }` |
-| `context.isIcqq()` | 是否为 icqq 适配器 |
-| `context.isNapCat()` | 是否为 NapCat 适配器 |
-| `context.isNT()` | 是否为 NT 协议 |
+| `context.isMaster()` | 当前调用者是否为主人 |
+
+`context.getBot()`、`context.getAdapter()`、`context.isIcqq()`、`context.isNapCat()`、
+`context.isNT()` 与 `context.isQQBot()` 仅用于旧工具兼容。新工具不得用它们建立协议分支。
+
+## 由模型创建并立即调用
+
+开启“允许危险工具”后，主人会话可使用 `create_custom_tool`、`update_custom_tool`、
+`invoke_custom_tool`、`delete_custom_tool`。创建接口接收结构化的 `name`、
+`description`、`input_schema` 与 `handler_code`；`handler_code` 是
+`async run(args, context)` 的函数体，不是完整模块源码。
+
+- 写入采用同目录临时文件、语法/schema 校验、原子替换和失败回滚。
+- 新工具固定标记为 `dangerous: true`、`requireMaster: true`，生成的 handler 内也会再次检查主人权限。
+- `create_custom_tool.invoke_arguments` 可在创建完成的同一轮立即执行；也可随后通过稳定的
+  `invoke_custom_tool` 代理调用。下一轮新建客户端会直接包含该工具。
+- 创建时拒绝与内置工具、YAML 工具或远程 MCP 工具同名；更新/删除仅允许命中
+  `custom-tools` 下已注册的 JS 工具。
+- 工具名必须以字母或下划线开头，并且只能包含字母、数字、下划线，以兼容各协议及 JSON 工具调用兜底。
+
+## 协议边界
+
+`context.getApi()` 会保留 QQBot OpenID，并统一处理 QQBot、ICQQ、OneBot 与 NapCat 的标准能力。
+工具不得自行转换 `group_id`/`user_id`，不得直接调用 `pickGroup`、`pickFriend`、`sendApi`，
+也不得自行拼接多套消息段。协议端不支持的能力会明确失败，不会伪造成功。
 
 ## 示例文件
 

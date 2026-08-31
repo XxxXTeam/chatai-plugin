@@ -82,7 +82,7 @@ export class ChatService {
      */
     async sendMessage(options) {
         const fullUserId = String(options.userId || '')
-        const pureUserId = fullUserId.includes('_') ? fullUserId.split('_').pop() : fullUserId
+        const pureUserId = fullUserId
         const groupId = options.groupId || options.event?.group_id || options.event?.data?.group_id || null
         const conversationId = groupId ? `group:${groupId}` : contextManager.getConversationId(pureUserId, null)
         const releaseLock = await contextManager.acquireLock(`chat:${conversationId}`, 1800000)
@@ -180,9 +180,9 @@ export class ChatService {
         // 从选项或事件中获取群组ID以实现正确隔离
         const groupId = options.groupId || event?.group_id || event?.data?.group_id || null
 
-        // 提取纯userId（不带群号前缀）
+        // 保留协议端用户 ID 原值；QQBot OpenID 与频道 ID 可能包含下划线
         const pureUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
-        const cleanUserId = pureUserId?.includes('_') ? pureUserId.split('_').pop() : pureUserId
+        const cleanUserId = pureUserId
 
         // 统一初始化 ScopeManager（整个方法内复用同一实例）
         const sm = await ensureScopeManager()
@@ -474,7 +474,7 @@ export class ChatService {
 
         // 如果提供了事件，设置工具上下文
         if (event) {
-            setToolContext({ event, bot: event.bot || Bot })
+            setToolContext({ event, bot: event.bot || globalThis.Bot })
         }
         await channelManager.init()
         let channel = null
@@ -696,7 +696,7 @@ export class ChatService {
             try {
                 const scopeGroupId = groupId?.toString() || null
                 const scopeUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
-                const pureUserId = scopeUserId.includes('_') ? scopeUserId.split('_').pop() : scopeUserId
+                const pureUserId = scopeUserId
                 const independentResult = await sm.getIndependentPrompt(scopeGroupId, pureUserId, defaultPrompt)
                 systemPrompt = independentResult.prompt
                 if (independentResult.isIndependent) {
@@ -821,6 +821,31 @@ export class ChatService {
                 }
             } catch (err) {
                 logger.warn('[ChatService] 获取记忆上下文失败:', err.message)
+            }
+        }
+        if (config.get('memory.enabled') && !skipPersona) {
+            try {
+                const { knowledgeGraphService } = await import('../storage/KnowledgeGraphService.js')
+                await knowledgeGraphService.init()
+                const graphContext = knowledgeGraphService.getKnowledgeContext(
+                    String(cleanUserId),
+                    groupId ? String(groupId) : null
+                )
+                if (graphContext) {
+                    systemPrompt += '\n\n' + graphContext
+                    logger.debug(`[ChatService] 已添加知识图谱上下文 (${graphContext.length} 字符)`)
+                    if (debugInfo) {
+                        debugInfo.memory.knowledgeGraph = {
+                            hasKnowledge: true,
+                            length: graphContext.length,
+                            preview: graphContext.substring(0, 500) + (graphContext.length > 500 ? '...' : '')
+                        }
+                    }
+                } else if (debugInfo) {
+                    debugInfo.memory.knowledgeGraph = { hasKnowledge: false }
+                }
+            } catch (error) {
+                logger.warn('[ChatService] 获取知识图谱上下文失败:', error.message)
             }
         }
         try {
@@ -1843,13 +1868,6 @@ export class ChatService {
                           }
                         : null
                 })
-
-                // 记录工具调用
-                if (allToolLogs?.length > 0) {
-                    for (const log of allToolLogs) {
-                        statsService.recordToolCall(log.name, !log.isError)
-                    }
-                }
             } catch (e) {
                 logger.warn(`[ChatService] 记录统计失败:`, e.message)
             }
@@ -1873,7 +1891,7 @@ export class ChatService {
             // Auto Memory
             if (config.get('memory.enabled') && config.get('memory.autoExtract') !== false) {
                 memoryManager
-                    .extractMemoryFromConversation(userId, message, textContent)
+                    .extractMemoryFromConversation(userId, message, textContent, { groupId })
                     .catch(err => logger.warn('[ChatService] Automatic memory extraction failed:', err.message))
             }
             const voiceConfig = config.get('features.voiceReply')
@@ -1980,7 +1998,7 @@ export class ChatService {
         if (groupId) {
             conversationId = `group:${groupId}`
         } else {
-            const cleanUserId = String(userId).includes('_') ? String(userId).split('_').pop() : String(userId)
+            const cleanUserId = String(userId)
             conversationId = contextManager.getConversationId(cleanUserId, null)
         }
         presetManager.markContextCleared(conversationId)

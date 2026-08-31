@@ -1,6 +1,36 @@
 import { createRequire } from 'module'
+import { fetchWithLimit } from '../mcp/tools/helpers.js'
+import { StandardBotApi } from '../core/platform/StandardBotApi.js'
 
 const require = createRequire(import.meta.url)
+
+/**
+ * 为消息解析和兼容导出创建唯一的协议边界。
+ * @param {Object} event - Yunzai 事件
+ * @returns {StandardBotApi} 标准 Bot API
+ */
+function createMessageBotApi(event) {
+    return new StandardBotApi({ event, bot: event?.bot || globalThis.Bot })
+}
+
+/**
+ * 通过标准接口补全只有 file_id/file 的图片段。
+ * @param {StandardBotApi} api - 标准 Bot API
+ * @param {Object} data - 消息段数据
+ * @param {string|null} directUrl - 消息段已有 URL
+ * @returns {Promise<string|null>} 图片 URL 或本地引用
+ */
+async function resolveImageUrl(api, data, directUrl = null) {
+    if (directUrl) return directUrl
+    const fileId = data?.file_id
+    const file = data?.file
+    if (!fileId && !file) return null
+    const image = await api.getImage({
+        ...(fileId ? { fileId } : {}),
+        ...(file ? { file } : {})
+    })
+    return typeof image === 'string' ? image : getMediaUrl(image) || image?.url || null
+}
 
 /**
  * @param {Object} segment - 消息段
@@ -113,6 +143,7 @@ export async function parseUserMessage(e, options = {}) {
         includeDebugInfo = false, // 是否包含调试信息
         includeSenderInfo = true // 是否包含发送者信息
     } = options
+    const api = createMessageBotApi(e)
 
     const contents = []
     let text = ''
@@ -194,42 +225,14 @@ export async function parseUserMessage(e, options = {}) {
                         if (e.group_id && qq && qq !== 'all') {
                             logger.debug(`[MessageParser][AT] 开始获取群成员信息: group_id=${e.group_id}, qq=${qq}`)
                             try {
-                                const bot = e.bot || global.Bot
-                                if (bot) {
-                                    const group = bot.pickGroup?.(e.group_id)
-                                    if (group) {
-                                        // 尝试获取成员信息
-                                        const member = group.pickMember?.(parseInt(qq))
-                                        logger.debug(`[MessageParser][AT] pickMember 结果: hasInfo=${!!member?.info}`)
-                                        if (member?.info) {
-                                            memberInfo = member.info
-                                            groupCard = memberInfo.card || ''
-                                            nickname = memberInfo.nickname || nickname
-                                            role = memberInfo.role || ''
-                                            title = memberInfo.title || ''
-                                            logger.debug(
-                                                `[MessageParser][AT] 从 pickMember 获取: card=${groupCard}, nickname=${nickname}, role=${role}`
-                                            )
-                                        }
-                                        if (!memberInfo && group.getMemberMap) {
-                                            try {
-                                                const memberMap = await group.getMemberMap()
-                                                const memberData = memberMap?.get?.(parseInt(qq))
-                                                if (memberData) {
-                                                    groupCard = memberData.card || ''
-                                                    nickname = memberData.nickname || nickname
-                                                    role = memberData.role || ''
-                                                    title = memberData.title || ''
-                                                    logger.debug(
-                                                        `[MessageParser][AT] 从 getMemberMap 获取: card=${groupCard}, nickname=${nickname}, role=${role}`
-                                                    )
-                                                }
-                                            } catch (err) {
-                                                logger.debug(`[MessageParser][AT] getMemberMap 失败: ${err.message}`)
-                                            }
-                                        }
-                                    }
-                                }
+                                memberInfo = await api.getMemberInfo(e.group_id, qq)
+                                groupCard = memberInfo?.card || ''
+                                nickname = memberInfo?.nickname || nickname
+                                role = memberInfo?.role || ''
+                                title = memberInfo?.title || ''
+                                logger.debug(
+                                    `[MessageParser][AT] 标准成员查询成功: card=${groupCard}, nickname=${nickname}, role=${role}`
+                                )
                             } catch (err) {
                                 // 获取群成员信息失败，使用默认值
                                 logger.warn(`[MessageParser][AT] 获取群成员信息失败: ${err.message}`)
@@ -271,29 +274,11 @@ export async function parseUserMessage(e, options = {}) {
 
                 case 'image': {
                     let imgUrl = getMediaUrl(segData, true) || val.url
-                    if (!imgUrl && segData.file_id && e.bot?.sendApi) {
+                    if (!imgUrl && (segData.file_id || segData.file)) {
                         try {
-                            logger.debug(`[MessageParser][Image] 尝试通过 file_id 获取: ${segData.file_id}`)
-                            const fileInfo = await e.bot.sendApi('get_image', { file_id: segData.file_id })
-                            imgUrl = fileInfo?.data?.url || fileInfo?.url
-                            if (imgUrl) {
-                            }
+                            imgUrl = await resolveImageUrl(api, segData)
                         } catch (err) {
-                            logger.warn(`[MessageParser][Image] get_image API 失败:`, err.message)
-                        }
-                    }
-                    if (!imgUrl && segData.file && e.bot?.sendApi) {
-                        try {
-                            logger.debug(`[MessageParser][Image] 尝试通过 file 获取: ${segData.file}`)
-                            const fileInfo = await e.bot.sendApi('get_image', { file: segData.file })
-                            imgUrl = fileInfo?.data?.url || fileInfo?.url
-                            if (imgUrl) {
-                                logger.debug(
-                                    `[MessageParser][Image] 通过 get_image(file) 获取成功: ${imgUrl.substring(0, 80)}...`
-                                )
-                            }
-                        } catch (err) {
-                            logger.debug(`[MessageParser][Image] get_image(file) 失败:`, err.message)
+                            logger.debug('[MessageParser][Image] 标准图片查询失败:', err.message)
                         }
                     }
 
@@ -373,10 +358,9 @@ export async function parseUserMessage(e, options = {}) {
 
                 case 'flash': {
                     let flashUrl = getMediaUrl(segData, true) || val.url
-                    if (!flashUrl && segData.file_id && e.bot?.sendApi) {
+                    if (!flashUrl && (segData.file_id || segData.file)) {
                         try {
-                            const fileInfo = await e.bot.sendApi('get_image', { file_id: segData.file_id })
-                            flashUrl = fileInfo?.data?.url || fileInfo?.url
+                            flashUrl = await resolveImageUrl(api, segData)
                         } catch {}
                     }
                     if (flashUrl) {
@@ -439,7 +423,7 @@ export async function parseUserMessage(e, options = {}) {
                             if (debugInfo) debugInfo.parseSteps.push('解析JSON合并转发消息')
                             try {
                                 const resid = jsonData.meta?.detail?.resid
-                                if (resid && e.group?.getForwardMsg) {
+                                if (resid) {
                                     const forwardResult = await parseForwardMessage(e, { id: resid, resid })
                                     if (forwardResult.text) {
                                         text += forwardResult.text
@@ -480,6 +464,7 @@ export async function parseUserMessage(e, options = {}) {
                     break
 
                 case 'forward':
+                case 'node':
                     // 转发消息
                     if (handleForward) {
                         if (debugInfo) debugInfo.parseSteps.push('解析转发消息')
@@ -672,12 +657,6 @@ export async function parseUserMessage(e, options = {}) {
                     break
                 }
 
-                case 'node': {
-                    // 转发节点 (在forward中使用)
-                    // 通常不单独出现，跳过
-                    break
-                }
-
                 case 'gift': {
                     // 礼物
                     const giftId = segData.id || val.id || ''
@@ -744,9 +723,9 @@ export async function parseUserMessage(e, options = {}) {
 
                 case 'long_msg': {
                     const resId = segData.id || segData.resid || val.id || ''
-                    if (resId && e.bot?.pickGroup?.(e.group_id)?.getForwardMsg) {
+                    if (resId) {
                         try {
-                            const msgs = await e.bot.pickGroup(e.group_id).getForwardMsg(resId)
+                            const msgs = await api.getForwardMessage(resId, { groupId: e.group_id })
                             if (msgs && msgs.length > 0) {
                                 const parts = []
                                 for (const node of msgs.slice(0, 20)) {
@@ -879,121 +858,41 @@ async function parseReplyMessage(e, options) {
     const contents = []
     let text = ''
     const parseLog = [] // 解析日志
-
-    const isNapCatPlatform = NapCatMessageUtils.isNapCat(e)
+    const api = createMessageBotApi(e)
 
     try {
         let replyData = null
         let replySenderId = null
         let replySenderName = null
-        if (e.getReply && typeof e.getReply === 'function') {
-            try {
-                const reply = await e.getReply()
-                if (reply) {
-                    replyData = reply
-                    const replyInfo = reply.data || reply
-                    replySenderId = replyInfo.user_id || replyInfo.sender?.user_id || reply.user_id
-                    replySenderName =
-                        replyInfo.sender?.card || replyInfo.sender?.nickname || replyInfo.nickname || reply.nickname
-                }
-            } catch (err) {}
+        try {
+            replyData = await api.getReplyMessage()
+            if (replyData) parseLog.push('[Reply] 标准引用查询成功')
+        } catch (err) {
+            parseLog.push(`[Reply] 标准引用查询失败: ${err.message}`)
         }
         if (!replyData && e.source) {
             const msgId = e.source.message_id || e.source.id
             const seq = e.isGroup ? e.source.seq || msgId || e.reply_id : e.source.time || e.source.seq
-
             if (seq || msgId) {
-                if (e.isGroup || e.group_id) {
-                    if (!replyData && isNapCatPlatform && msgId) {
-                        try {
-                            const napCatMsg = await NapCatMessageUtils.getFullMessage(e, msgId)
-                            if (napCatMsg) {
-                                replyData = napCatMsg
-                            }
-                        } catch (err) {
-                            parseLog.push(`[Reply] NapCat getFullMessage 失败: ${err.message}`)
-                        }
-                    }
-
-                    // NC/NapCat: 优先使用 bot.getMsg (message_id)
-                    if (!replyData && e.bot?.getMsg && msgId) {
-                        try {
-                            parseLog.push(`[Reply] 尝试 bot.getMsg(message_id=${msgId})`)
-                            replyData = await e.bot.getMsg(msgId)
-                            if (replyData) parseLog.push(`[Reply] bot.getMsg(message_id) 成功`)
-                        } catch (err) {
-                            parseLog.push(`[Reply] bot.getMsg(message_id) 失败: ${err.message}`)
-                        }
-                    }
-                    if (!replyData && e.bot?.sendApi && msgId) {
-                        try {
-                            replyData = await e.bot.sendApi('get_msg', { message_id: msgId })
-                            if (replyData?.data) replyData = replyData.data
-                        } catch (err) {}
-                    }
-                    if (!replyData && e.group?.getMsg) {
-                        try {
-                            replyData = await e.group.getMsg(seq)
-                            if (replyData) parseLog.push(`[Reply] group.getMsg 成功`)
-                        } catch (err) {
-                            parseLog.push(`[Reply] group.getMsg 失败: ${err.message}`)
-                        }
-                    }
-                    if (!replyData && e.group?.getChatHistory && seq) {
-                        try {
-                            const history = await e.group.getChatHistory(seq, 1)
-                            replyData = history?.pop?.() || history?.[0]
-                            if (replyData) parseLog.push(`[Reply] group.getChatHistory 成功`)
-                        } catch (err) {
-                            parseLog.push(`[Reply] group.getChatHistory 失败: ${err.message}`)
-                        }
-                    }
-
-                    // 回退: bot.getMsg (使用 seq)
-                    if (!replyData && e.bot?.getMsg && seq) {
-                        try {
-                            parseLog.push(`[Reply] 尝试 bot.getMsg(seq=${seq})`)
-                            replyData = await e.bot.getMsg(seq)
-                            if (replyData) parseLog.push(`[Reply] bot.getMsg(seq) 成功`)
-                        } catch (err) {
-                            parseLog.push(`[Reply] bot.getMsg(seq) 失败: ${err.message}`)
-                        }
-                    }
-                }
-                // 私聊
-                else {
-                    // NC: bot.getMsg
-                    if (!replyData && e.bot?.getMsg && msgId) {
-                        try {
-                            parseLog.push(`[Reply] 私聊 bot.getMsg(${msgId})`)
-                            replyData = await e.bot.getMsg(msgId)
-                            if (replyData) parseLog.push(`[Reply] 私聊 bot.getMsg 成功`)
-                        } catch (err) {
-                            parseLog.push(`[Reply] 私聊 bot.getMsg 失败: ${err.message}`)
-                        }
-                    }
-
-                    // icqq: friend.getChatHistory
-                    if (!replyData && e.friend?.getChatHistory) {
-                        try {
-                            parseLog.push(`[Reply] 尝试 friend.getChatHistory(${seq})`)
-                            const history = await e.friend.getChatHistory(seq, 1)
-                            replyData = history?.pop?.() || history?.[0]
-                            if (replyData) parseLog.push(`[Reply] friend.getChatHistory 成功`)
-                        } catch (err) {
-                            parseLog.push(`[Reply] friend.getChatHistory 失败: ${err.message}`)
-                        }
-                    }
-                }
-
-                if (replyData) {
-                    // 兼容 NC 格式: 数据可能在 data 字段中
-                    const replyInfo = replyData.data || replyData
-                    replySenderId = replyInfo.user_id || replyInfo.sender?.user_id || replyData.user_id
-                    replySenderName =
-                        replyInfo.sender?.card || replyInfo.sender?.nickname || replyInfo.nickname || replyData.nickname
+                try {
+                    replyData = await MessageApi.getMsg(e, msgId || seq, {
+                        useSeq: !msgId,
+                        seq,
+                        time: e.source.time,
+                        count: 1
+                    })
+                    if (replyData) parseLog.push('[Reply] 标准消息历史查询成功')
+                } catch (err) {
+                    parseLog.push(`[Reply] 标准消息历史查询失败: ${err.message}`)
                 }
             }
+        }
+
+        if (replyData) {
+            const replyInfo = replyData.data || replyData
+            replySenderId = replyInfo.user_id || replyInfo.sender?.user_id || replyData.user_id
+            replySenderName =
+                replyInfo.sender?.card || replyInfo.sender?.nickname || replyInfo.nickname || replyData.nickname
         }
 
         // 方式3: 直接使用 e.source 中的信息 (部分平台 source 包含完整消息)
@@ -1061,14 +960,12 @@ async function parseReplyMessage(e, options) {
                         let imgUrl = getMediaUrl(valData, true) || val.url || val.file
 
                         // 如果没有直接 URL，尝试通过 file_id 获取 (NapCat)
-                        if (!imgUrl && valData.file_id && e.bot?.sendApi) {
+                        if (!imgUrl && (valData.file_id || valData.file)) {
                             try {
-                                parseLog.push(`[Reply][Image] 尝试通过 file_id 获取: ${valData.file_id}`)
-                                const fileInfo = await e.bot.sendApi('get_image', { file_id: valData.file_id })
-                                imgUrl = fileInfo?.data?.url || fileInfo?.url
-                                if (imgUrl) parseLog.push(`[Reply][Image] get_image 成功`)
+                                imgUrl = await resolveImageUrl(api, valData)
+                                if (imgUrl) parseLog.push('[Reply][Image] 标准图片查询成功')
                             } catch (err) {
-                                parseLog.push(`[Reply][Image] get_image 失败: ${err.message}`)
+                                parseLog.push(`[Reply][Image] 标准图片查询失败: ${err.message}`)
                             }
                         }
 
@@ -1142,11 +1039,11 @@ async function parseReplyMessage(e, options) {
                         let fileUrl = ''
                         const fid = valData.fid || val.fid
                         try {
-                            if (e.group?.getFileUrl && fid) {
-                                fileUrl = await e.group.getFileUrl(fid)
-                            } else if (e.friend?.getFileUrl && fid) {
-                                fileUrl = await e.friend.getFileUrl(fid)
-                            }
+                            if (fid)
+                                fileUrl = await api.getFileUrl({
+                                    fileId: fid,
+                                    ...(e.group_id ? { groupId: e.group_id } : { userId: e.user_id })
+                                })
                         } catch {}
                         const fileName = valData.name || val.name || fid || '未知文件'
                         replyTextContent += `[文件: ${fileName}${fileUrl ? ' URL:' + fileUrl : ''}]`
@@ -1206,6 +1103,7 @@ async function parseReplyMessage(e, options) {
                 }
 
                 case 'forward':
+                case 'node':
                     if (handleForward) {
                         try {
                             const fwdResult = await parseForwardMessage(e, val)
@@ -1342,6 +1240,7 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
     let text = ''
     let forwardInfo = null
     const parseLog = [] // 解析日志
+    const api = createMessageBotApi(e)
 
     // 防止无限递归，最多5层嵌套
     const MAX_DEPTH = 50
@@ -1349,9 +1248,6 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
         parseLog.push(`[Forward] 达到最大深度 ${MAX_DEPTH}，停止解析`)
         return { text: '[嵌套转发消息，层级过深]', contents: [], forwardInfo: null }
     }
-
-    // 用于收集所有待解析的转发消息（循环解析）
-    const pendingForwards = []
 
     try {
         // 尝试获取转发消息内容 - 支持多种方式
@@ -1364,7 +1260,10 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
                 parseLog.push(`[Forward] data.content 存在, 长度: ${forwardElement.data.content?.length || 0}`)
             }
         }
-        if (forwardElement.data?.content && Array.isArray(forwardElement.data.content)) {
+        if (forwardElement.type === 'node' && Array.isArray(forwardElement.data)) {
+            forwardMessages = forwardElement.data
+            parseMethod = 'qqbot_node_data'
+        } else if (forwardElement.data?.content && Array.isArray(forwardElement.data.content)) {
             forwardMessages = forwardElement.data.content
             parseMethod = 'data_content'
         } else if (forwardElement.content && Array.isArray(forwardElement.content)) {
@@ -1376,52 +1275,20 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
         } else if (forwardElement.data?.message && Array.isArray(forwardElement.data.message)) {
             forwardMessages = forwardElement.data.message
             parseMethod = 'data_message'
-        } else if (forwardElement.id && e.group?.getForwardMsg) {
-            try {
-                forwardMessages = await e.group.getForwardMsg(forwardElement.id)
-                parseMethod = 'group_getForwardMsg_id'
-            } catch (err) {}
-        } else if (forwardElement.data?.id && e.group?.getForwardMsg) {
-            try {
-                forwardMessages = await e.group.getForwardMsg(forwardElement.data.id)
-                parseMethod = 'group_getForwardMsg_data_id'
-            } catch (err) {}
-        } else if (forwardElement.resid && e.group?.getForwardMsg) {
-            parseLog.push(`[Forward] 尝试通过 resid=${forwardElement.resid} 获取`)
-            try {
-                forwardMessages = await e.group.getForwardMsg(forwardElement.resid)
-                parseMethod = 'group_getForwardMsg_resid'
-            } catch (err) {}
         }
-        if (!forwardMessages && e.bot?.getForwardMsg) {
-            const fwdId = forwardElement.id || forwardElement.data?.id || forwardElement.resid
-            if (fwdId) {
-                try {
-                    forwardMessages = await e.bot.getForwardMsg(fwdId)
-                    parseMethod = 'bot_getForwardMsg'
-                } catch (err) {}
-            }
-        }
-        if (!forwardMessages && e.bot?.sendApi) {
-            const fwdId =
-                forwardElement.id || forwardElement.data?.id || forwardElement.resid || forwardElement.data?.resid
-            if (fwdId) {
-                try {
-                    const result = await e.bot.sendApi('get_forward_msg', { id: fwdId })
-                    const messages =
-                        result?.message || result?.data?.messages || result?.messages || result?.data?.message
-                    if (messages && Array.isArray(messages)) {
-                        forwardMessages = messages
-                        parseMethod = 'sendApi_get_forward_msg'
-                    } else if (result) {
-                    }
-                } catch (err) {}
+        const fwdId = forwardElement.id || forwardElement.data?.id || forwardElement.resid || forwardElement.data?.resid
+        if (!forwardMessages && fwdId) {
+            try {
+                forwardMessages = await api.getForwardMessage(fwdId, { groupId: e.group_id })
+                parseMethod = 'standard_api'
+            } catch (err) {
+                parseLog.push(`[Forward] 标准转发查询失败: ${err.message}`)
             }
         }
         if (!forwardMessages && e.source?.message) {
             const sourceMsg = e.source.message
             if (Array.isArray(sourceMsg)) {
-                const fwdSeg = sourceMsg.find(s => s.type === 'forward')
+                const fwdSeg = sourceMsg.find(s => s.type === 'forward' || s.type === 'node')
                 if (fwdSeg?.data?.content || fwdSeg?.data?.message || fwdSeg?.message) {
                     forwardMessages = fwdSeg.data?.content || fwdSeg.data?.message || fwdSeg.message
                     if (Array.isArray(forwardMessages)) {
@@ -1549,7 +1416,7 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
                         const atQQ = valData.qq || val.qq || ''
                         forwardTexts.push(`${nickname}: @${atQQ}`)
                         msgInfo.content.push({ type: 'at', qq: atQQ })
-                    } else if (valType === 'forward') {
+                    } else if (valType === 'forward' || valType === 'node') {
                         // 递归处理嵌套转发消息
                         try {
                             const nestedResult = await parseForwardMessage(e, val, depth + 1)
@@ -1560,7 +1427,7 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
                             }
                             contents.push(...nestedResult.contents)
                             msgInfo.content.push({ type: 'forward', nested: true, parsed: !!nestedResult.text })
-                        } catch (err) {
+                        } catch {
                             forwardTexts.push(`${nickname}: [嵌套转发消息]`)
                             msgInfo.content.push({ type: 'forward', nested: true })
                         }
@@ -1678,29 +1545,38 @@ function isQQPicUrl(url) {
  * @param {Object} options - 选项
  * @param {string} options.referer - 自定义Referer
  */
+/** 消息图片抓取超时 */
+const MESSAGE_IMAGE_TIMEOUT_MS = 30000
+
+/** 消息图片响应体上限 */
+const MESSAGE_IMAGE_MAX_BYTES = 20 * 1024 * 1024
+
 async function fetchImage(url, options = {}) {
     if (!url) return null
 
     try {
-        // QQ图片需要特殊的 Referer
         const isQQPic = isQQPicUrl(url)
         const referer = options.referer || (isQQPic ? 'https://qzone.qq.com/' : undefined)
-
-        const response = await fetch(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                ...(referer && { Referer: referer })
+        const { response, buffer } = await fetchWithLimit(
+            url,
+            {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    ...(referer && { Referer: referer })
+                }
+            },
+            {
+                timeoutMs: MESSAGE_IMAGE_TIMEOUT_MS,
+                maxBytes: MESSAGE_IMAGE_MAX_BYTES,
+                label: '消息图片'
             }
-        })
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`)
+        )
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+
+        return {
+            base64: buffer.toString('base64'),
+            mimeType: response.headers.get('content-type') || 'image/jpeg'
         }
-
-        const arrayBuffer = await response.arrayBuffer()
-        const base64 = Buffer.from(arrayBuffer).toString('base64')
-        const mimeType = response.headers.get('content-type') || 'image/jpeg'
-
-        return { base64, mimeType }
     } catch (err) {
         logger.warn(`[MessageParser] 获取图片失败: ${url}`, err.message)
         return null
@@ -2155,87 +2031,48 @@ export const MessageApi = {
      */
     async getMsg(e, messageId, options = {}) {
         if (!e || !messageId) return null
-        const bot = e.bot || Bot
+        const api = createMessageBotApi(e)
         const { useSeq = false, seq = undefined, time = undefined, count = 20 } = options
         const groupId = options.groupId || e.group_id
         const userId = options.userId || e.user_id
-
         let rawMsg = null
         let source = 'unknown'
 
-        if (!useSeq && typeof bot?.getMsg === 'function') {
+        if (!useSeq) {
             try {
-                rawMsg = await bot.getMsg(messageId)
-                source = 'bot.getMsg'
+                rawMsg = await api.getMessage(messageId, { groupId, userId: groupId ? undefined : userId })
+                source = 'standard.getMessage'
             } catch (err) {
-                logger.debug('[MessageApi] bot.getMsg failed:', err.message)
+                logger.debug('[MessageApi] 标准消息查询失败:', err.message)
             }
         }
-        if (!rawMsg && !useSeq && typeof bot?.sendApi === 'function') {
-            try {
-                const result = await bot.sendApi('get_msg', { message_id: messageId })
-                rawMsg = result?.data || result
-                source = 'sendApi.get_msg'
-            } catch (err) {
-                logger.debug('[MessageApi] sendApi.get_msg failed:', err.message)
-            }
-        }
-        const parsedSeq = seq !== undefined && seq !== null && seq !== '' ? Number(seq) : undefined
-        const seqValue = Number.isFinite(parsedSeq) ? parsedSeq : undefined
-        if (!rawMsg && typeof bot?.getChatHistory === 'function' && useSeq && seqValue !== undefined) {
-            try {
-                const history = await bot.getChatHistory(seqValue, 1)
-                rawMsg = history?.find?.(msg => Number(msg.seq) === Number(seqValue)) || history?.[0] || null
-                source = 'bot.getChatHistory'
-            } catch (err) {
-                logger.debug('[MessageApi] bot.getChatHistory failed:', err.message)
-            }
-        }
-
         const isGroup = !!(e.isGroup || groupId)
-        if (!rawMsg && isGroup) {
+        const historyAnchor = isGroup ? (seq ?? messageId) : (time ?? seq ?? messageId)
+        if (!rawMsg && historyAnchor !== undefined && historyAnchor !== null && historyAnchor !== '') {
             try {
-                const group = e.group || bot?.pickGroup?.(parseInt(groupId))
-                if (typeof group?.getMsg === 'function' && seqValue !== undefined) {
-                    rawMsg = await group.getMsg(seqValue)
-                    source = 'group.getMsg'
-                }
-                if (!rawMsg && typeof group?.getChatHistory === 'function' && seqValue !== undefined) {
-                    const history = await group.getChatHistory(seqValue, count)
-                    rawMsg =
-                        history?.find?.(msg => Number(msg.seq) === Number(seqValue)) ||
-                        history?.[history.length - 1] ||
-                        history?.[0]
-                    source = 'group.getChatHistory'
-                }
+                const history = await api.getHistory({
+                    ...(isGroup ? { groupId } : { userId }),
+                    sequence: historyAnchor,
+                    count
+                })
+                rawMsg =
+                    history.find?.(msg =>
+                        isGroup
+                            ? String(msg.seq ?? msg.message_id) === String(historyAnchor)
+                            : String(msg.time ?? msg.message_id) === String(historyAnchor)
+                    ) ||
+                    history[history.length - 1] ||
+                    history[0] ||
+                    null
+                source = 'standard.getHistory'
             } catch (err) {
-                logger.debug('[MessageApi] group history fallback failed:', err.message)
-            }
-        }
-        if (!rawMsg && !isGroup && userId) {
-            try {
-                const friend = e.friend || bot?.pickUser?.(parseInt(userId)) || bot?.pickFriend?.(parseInt(userId))
-                if (
-                    typeof friend?.getChatHistory === 'function' &&
-                    time !== undefined &&
-                    time !== null &&
-                    time !== ''
-                ) {
-                    const timeValue = Number(time)
-                    if (Number.isFinite(timeValue)) {
-                        const history = await friend.getChatHistory(timeValue, count)
-                        rawMsg = history?.find?.(msg => Number(msg.time) === Number(timeValue)) || history?.[0]
-                        source = 'friend.getChatHistory'
-                    }
-                }
-            } catch (err) {
-                logger.debug('[MessageApi] private history fallback failed:', err.message)
+                logger.debug('[MessageApi] 标准历史查询失败:', err.message)
             }
         }
 
         if (!rawMsg) return null
 
-        const data = rawMsg.data || rawMsg
+        const data = rawMsg?.data || rawMsg
         return {
             message_id: data.message_id || rawMsg.message_id || messageId,
             seq: data.seq || rawMsg.seq || data.message_seq || 0,
@@ -2265,24 +2102,10 @@ export const MessageApi = {
      */
     async getForwardMsg(e, resid) {
         if (!e || !resid) return null
-        const bot = e.bot || Bot
-
         try {
-            // NapCat/OneBot: sendApi
-            if (typeof bot?.sendApi === 'function') {
-                const result = await bot.sendApi('get_forward_msg', { id: resid })
-                return result?.data?.messages || result?.messages || null
-            }
-            // icqq: group.getForwardMsg
-            if (e.group?.getForwardMsg) {
-                return await e.group.getForwardMsg(resid)
-            }
-            // bot.getForwardMsg
-            if (typeof bot?.getForwardMsg === 'function') {
-                return await bot.getForwardMsg(resid)
-            }
+            return await createMessageBotApi(e).getForwardMessage(resid, { groupId: e.group_id })
         } catch (err) {
-            logger.debug('[MessageApi] getForwardMsg failed:', err.message)
+            logger.debug('[MessageApi] 标准转发查询失败:', err.message)
         }
         return null
     },
@@ -2295,21 +2118,9 @@ export const MessageApi = {
      * @returns {Promise<Object|null>}
      */
     async sendPrivateMsg(e, userId, message) {
-        const bot = e?.bot || Bot
-
         try {
-            if (typeof bot?.sendPrivateMsg === 'function') {
-                return await bot.sendPrivateMsg(userId, message)
-            }
-            if (typeof bot?.sendApi === 'function') {
-                return await bot.sendApi('send_private_msg', { user_id: userId, message })
-            }
-            if (typeof bot?.pickFriend === 'function') {
-                const friend = bot.pickFriend(userId)
-                if (friend?.sendMsg) {
-                    return await friend.sendMsg(message)
-                }
-            }
+            const sent = await createMessageBotApi(e).sendPrivate(userId, message)
+            return sent && typeof sent === 'object' && Object.hasOwn(sent, 'result') ? sent.result : sent
         } catch (err) {
             logger.debug('[MessageApi] sendPrivateMsg failed:', err.message)
         }
@@ -2324,21 +2135,9 @@ export const MessageApi = {
      * @returns {Promise<Object|null>}
      */
     async sendGroupMsg(e, groupId, message) {
-        const bot = e?.bot || Bot
-
         try {
-            if (typeof bot?.sendGroupMsg === 'function') {
-                return await bot.sendGroupMsg(groupId, message)
-            }
-            if (typeof bot?.sendApi === 'function') {
-                return await bot.sendApi('send_group_msg', { group_id: groupId, message })
-            }
-            if (typeof bot?.pickGroup === 'function') {
-                const group = bot.pickGroup(groupId)
-                if (group?.sendMsg) {
-                    return await group.sendMsg(message)
-                }
-            }
+            const sent = await createMessageBotApi(e).sendGroup(groupId, message)
+            return sent && typeof sent === 'object' && Object.hasOwn(sent, 'result') ? sent.result : sent
         } catch (err) {
             logger.debug('[MessageApi] sendGroupMsg failed:', err.message)
         }
@@ -2352,21 +2151,12 @@ export const MessageApi = {
      * @returns {Promise<boolean>}
      */
     async deleteMsg(e, messageId) {
-        const bot = e?.bot || Bot
-
         try {
-            if (typeof bot?.deleteMsg === 'function') {
-                await bot.deleteMsg(messageId)
-                return true
-            }
-            if (typeof bot?.recallMsg === 'function') {
-                await bot.recallMsg(messageId)
-                return true
-            }
-            if (typeof bot?.sendApi === 'function') {
-                await bot.sendApi('delete_msg', { message_id: messageId })
-                return true
-            }
+            await createMessageBotApi(e).recall({
+                messageId,
+                ...(e?.group_id ? { groupId: e.group_id } : { userId: e?.user_id })
+            })
+            return true
         } catch (err) {
             logger.debug('[MessageApi] deleteMsg failed:', err.message)
         }
@@ -2381,26 +2171,8 @@ export const MessageApi = {
      * @returns {Promise<Object|null>}
      */
     async getGroupMemberInfo(e, groupId, userId) {
-        const bot = e?.bot || Bot
-
         try {
-            if (typeof bot?.getGroupMemberInfo === 'function') {
-                return await bot.getGroupMemberInfo(groupId, userId)
-            }
-            if (typeof bot?.sendApi === 'function') {
-                const result = await bot.sendApi('get_group_member_info', {
-                    group_id: groupId,
-                    user_id: userId
-                })
-                return result?.data || result
-            }
-            if (typeof bot?.pickGroup === 'function') {
-                const group = bot.pickGroup(groupId)
-                if (group?.pickMember) {
-                    const member = group.pickMember(userId)
-                    return member?.info || null
-                }
-            }
+            return await createMessageBotApi(e).getMemberInfo(groupId, userId)
         } catch (err) {
             logger.debug('[MessageApi] getGroupMemberInfo failed:', err.message)
         }
@@ -2414,13 +2186,8 @@ export const MessageApi = {
      * @returns {Promise<{url: string}|null>}
      */
     async getImage(e, fileId) {
-        const bot = e?.bot || Bot
-
         try {
-            if (typeof bot?.sendApi === 'function') {
-                const result = await bot.sendApi('get_image', { file_id: fileId })
-                return result?.data || result
-            }
+            return await createMessageBotApi(e).getImage({ fileId })
         } catch (err) {
             logger.debug('[MessageApi] getImage failed:', err.message)
         }
@@ -2714,7 +2481,7 @@ export const ForwardMessageParser = {
         }
 
         try {
-            const bot = e.bot || global.Bot
+            const api = createMessageBotApi(e)
             let forwardMessages = null
             let rawData = null
 
@@ -2740,51 +2507,15 @@ export const ForwardMessageParser = {
 
             // 方式2: 通过 API 获取
             if (!forwardMessages && resid) {
-                // icqq: group.getForwardMsg
-                if (e.group?.getForwardMsg) {
-                    try {
-                        const fwdResult = await e.group.getForwardMsg(resid)
-                        if (fwdResult) {
-                            forwardMessages = Array.isArray(fwdResult) ? fwdResult : [fwdResult]
-                            result.method = 'group.getForwardMsg'
-                            rawData = fwdResult
-                        }
-                    } catch (err) {
-                        result.errors.push(`group.getForwardMsg: ${err.message}`)
+                try {
+                    const messages = await api.getForwardMessage(resid, { groupId: e.group_id })
+                    if (Array.isArray(messages)) {
+                        forwardMessages = messages
+                        result.method = 'standard_api'
+                        rawData = null
                     }
-                }
-
-                // bot.getForwardMsg
-                if (!forwardMessages && bot?.getForwardMsg) {
-                    try {
-                        const fwdResult = await bot.getForwardMsg(resid)
-                        if (fwdResult) {
-                            forwardMessages = Array.isArray(fwdResult) ? fwdResult : [fwdResult]
-                            result.method = 'bot.getForwardMsg'
-                            rawData = fwdResult
-                        }
-                    } catch (err) {
-                        result.errors.push(`bot.getForwardMsg: ${err.message}`)
-                    }
-                }
-
-                // NapCat/OneBot: sendApi get_forward_msg
-                if (!forwardMessages && bot?.sendApi) {
-                    try {
-                        const apiResult = await bot.sendApi('get_forward_msg', { id: resid })
-                        const messages =
-                            apiResult?.message ||
-                            apiResult?.data?.messages ||
-                            apiResult?.messages ||
-                            apiResult?.data?.message
-                        if (messages && Array.isArray(messages)) {
-                            forwardMessages = messages
-                            result.method = 'sendApi.get_forward_msg'
-                            rawData = apiResult
-                        }
-                    } catch (err) {
-                        result.errors.push(`sendApi.get_forward_msg: ${err.message}`)
-                    }
+                } catch (err) {
+                    result.errors.push(`standard_api: ${err.message}`)
                 }
             }
 
@@ -2927,6 +2658,7 @@ export const ForwardMessageParser = {
                         textContent += `@${elemData.qq || ''} `
                         break
                     case 'forward':
+                    case 'node':
                         textContent += '[嵌套转发消息]'
                         break
                     case 'video':
@@ -3004,16 +2736,7 @@ export const NapCatMessageUtils = {
      * @returns {boolean}
      */
     isNapCat(e) {
-        const bot = e?.bot || global.Bot
-        // NapCat 通常有 sendApi 方法
-        if (typeof bot?.sendApi === 'function') {
-            return true
-        }
-        // 检查适配器名称
-        if (bot?.adapter?.name?.toLowerCase?.()?.includes('napcat')) {
-            return true
-        }
-        return false
+        return createMessageBotApi(e).adapterType === 'napcat'
     },
 
     /**
@@ -3023,11 +2746,11 @@ export const NapCatMessageUtils = {
      * @returns {Promise<Object|null>}
      */
     async getFullMessage(e, messageId) {
-        const bot = e?.bot || global.Bot
-        if (!bot?.sendApi) return null
-
         try {
-            const result = await bot.sendApi('get_msg', { message_id: messageId })
+            const result = await createMessageBotApi(e).getMessage(messageId, {
+                groupId: e?.group_id,
+                userId: e?.group_id ? undefined : e?.user_id
+            })
             return result?.data || result
         } catch (err) {
             logger.debug('[NapCatMessageUtils] getFullMessage failed:', err.message)
@@ -3042,14 +2765,11 @@ export const NapCatMessageUtils = {
      * @returns {Promise<Object|null>}
      */
     async getForwardMessage(e, resid) {
-        const bot = e?.bot || global.Bot
-        if (!bot?.sendApi) return null
-
         try {
-            const result = await bot.sendApi('get_forward_msg', { id: resid })
+            const messages = await createMessageBotApi(e).getForwardMessage(resid, { groupId: e?.group_id })
             return {
-                messages: result?.message || result?.data?.messages || result?.messages || [],
-                raw: result
+                messages,
+                raw: null
             }
         } catch (err) {
             logger.debug('[NapCatMessageUtils] getForwardMessage failed:', err.message)

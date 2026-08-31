@@ -9,7 +9,13 @@
  * Node 的 fetch 没有默认超时，外部站点被中间设备黑洞时 await 永不 resolve，
  * 工具 handler 随之挂起，该次 LLM 调用会被无限期阻塞（表现为"机器人不回话了"）。
  */
+import { fetchWithLimit } from './helpers.js'
+import { StandardBotApi } from '../../core/platform/index.js'
+
 const SEARCH_API_TIMEOUT_MS = 10000
+
+/** 网页抓取原始响应体上限 */
+const SEARCH_PAGE_MAX_BYTES = 5 * 1024 * 1024
 
 /**
  * HTML转Markdown工具函数
@@ -110,50 +116,44 @@ function htmlToMarkdown(html) {
 async function fetchUrlToMarkdown(url, options = {}) {
     const { maxLength = 8000, timeout = 10000 } = options
 
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), timeout)
-
     try {
-        const response = await fetch(url, {
-            signal: controller.signal,
-            headers: {
-                'User-Agent':
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+        const {
+            response,
+            buffer,
+            url: finalUrl
+        } = await fetchWithLimit(
+            url,
+            {
+                headers: {
+                    'User-Agent':
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+                }
+            },
+            {
+                timeoutMs: timeout,
+                maxBytes: SEARCH_PAGE_MAX_BYTES,
+                label: '网页抓取'
             }
-        })
+        )
 
-        clearTimeout(timeoutId)
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const html = buffer.toString('utf8')
 
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`)
-        }
-
-        const html = await response.text()
-
-        // 提取标题
         const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
-        const title = titleMatch ? titleMatch[1].trim() : url
+        const title = titleMatch ? titleMatch[1].trim() : finalUrl || url
 
-        // 提取主要内容区域（优先级：article > main > body）
         let mainContent = html
         const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i)
         const mainMatch = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i)
         const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)
 
-        if (articleMatch) {
-            mainContent = articleMatch[1]
-        } else if (mainMatch) {
-            mainContent = mainMatch[1]
-        } else if (bodyMatch) {
-            mainContent = bodyMatch[1]
-        }
+        if (articleMatch) mainContent = articleMatch[1]
+        else if (mainMatch) mainContent = mainMatch[1]
+        else if (bodyMatch) mainContent = bodyMatch[1]
 
-        // 转换为Markdown
         let markdown = htmlToMarkdown(mainContent)
-
-        // 限制长度
         if (markdown.length > maxLength) {
             markdown = markdown.substring(0, maxLength) + '\n\n...[内容已截断]'
         }
@@ -162,11 +162,10 @@ async function fetchUrlToMarkdown(url, options = {}) {
             success: true,
             title,
             content: markdown,
-            url,
+            url: finalUrl || url,
             length: markdown.length
         }
     } catch (err) {
-        clearTimeout(timeoutId)
         return {
             success: false,
             error: err.name === 'AbortError' ? '请求超时' : err.message,
@@ -327,7 +326,7 @@ export const searchTools = [
             },
             required: ['query']
         },
-        handler: async (args, ctx) => {
+        handler: async args => {
             try {
                 const query = args.query
                 const count = args.count || 5
@@ -452,20 +451,22 @@ export const searchTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = args.group_id || e?.group_id
 
                 if (!groupId) {
                     return { success: false, error: '需要群号参数或在群聊中使用' }
                 }
-
-                const group = bot.pickGroup(parseInt(groupId))
-                if (!group?.getChatHistory) {
-                    return { success: false, error: '无法获取聊天记录' }
+                // QQBot 没有数字 seq，适配器只接受当前事件的 message_id 作为本地缓存键。
+                const sequence = api.historySequence(e?.seq ?? e?.message_seq ?? e?.message_id, 0)
+                if (api.isQQBot && !sequence) {
+                    return {
+                        success: false,
+                        error: 'QQBot 只能从当前事件 message_id 查询本地缓存，当前事件没有可用消息 ID'
+                    }
                 }
-
                 // 获取最近的消息
-                const history = await group.getChatHistory(0, 100)
+                const history = await api.getHistory({ groupId, sequence, count: 100 })
                 const keyword = args.keyword.toLowerCase()
                 const limit = args.limit || 10
 

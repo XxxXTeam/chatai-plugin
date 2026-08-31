@@ -12,6 +12,8 @@ import { setBuiltinToolContext, getBuiltinToolContext, builtinMcpServer } from '
 import { getToolIdentity } from '../../core/adapters/tooling.js'
 import { resolveToolPermission } from '../tools/ToolPermission.js'
 import { DEFAULT_CONFIG as SKILLS_DEFAULT_CONFIG } from '../skills/SkillsConfig.js'
+import { normalizeToolExecutionResult } from '../../core/utils/toolResult.js'
+import { isToolResultError } from '../../mcp/tools/helpers.js'
 
 /**
  * @class SkillsAgent
@@ -359,66 +361,41 @@ export class SkillsAgent {
     }
 
     getExecutableSkills(options = {}) {
-        return this.getVisibleSkills(options).map(s => ({
-            name: s.name,
+        return this.getVisibleSkills(options).map(skill => ({
+            name: skill.name,
             type: 'function',
-            identity: s.identity,
-            serverName: s.serverName,
-            source: s.source,
-            isBuiltin: s.isBuiltin,
-            isJsTool: s.isJsTool,
-            isCustom: s.isCustom,
-            isMcpTool: s.isMcpTool,
-            dangerous: s.dangerous,
-            requireMaster: s.requireMaster,
-            requiredPermission: s.requiredPermission,
-            requirePermission: s.requirePermission,
-            permissionRequired: s.permissionRequired,
-            function: { name: s.name, description: s.description, parameters: s.inputSchema },
+            identity: skill.identity,
+            serverName: skill.serverName,
+            source: skill.source,
+            isBuiltin: skill.isBuiltin,
+            isJsTool: skill.isJsTool,
+            isCustom: skill.isCustom,
+            isMcpTool: skill.isMcpTool,
+            dangerous: skill.dangerous,
+            requireMaster: skill.requireMaster,
+            requiredPermission: skill.requiredPermission,
+            requirePermission: skill.requirePermission,
+            permissionRequired: skill.permissionRequired,
+            function: { name: skill.name, description: skill.description, parameters: skill.inputSchema },
             run: async args => {
                 const startTime = Date.now()
                 try {
-                    const result = await this.execute(s.identity || s.name, args)
-                    const duration = Date.now() - startTime
-
-                    // 提取实际内容
-                    let content
-                    const isError = result?.isError === true
-
-                    if (result && typeof result === 'object') {
-                        // 如果已经是格式化的对象且包含 status，提取 content
-                        if (result.status) {
-                            content = result.content
-                        }
-                        // MCP 格式：{ content: [{type: 'text', text: '...'}] }
-                        else if (Array.isArray(result.content)) {
-                            content = result.content
-                                .map(item => (item.type === 'text' ? item.text : JSON.stringify(item)))
-                                .join('\n')
-                        }
-                        // 其他对象格式
-                        else {
-                            content = JSON.stringify(result)
-                        }
-                    } else {
-                        content = result
-                    }
-
-                    // 包装为标准格式
-                    const formattedResult = {
-                        status: isError ? 'error' : 'success',
-                        tool: s.name,
-                        content: content,
-                        metadata: { duration }
-                    }
-                    return JSON.stringify(formattedResult)
-                } catch (error) {
-                    return JSON.stringify({
-                        status: 'error',
-                        tool: s.name,
-                        content: error.message,
-                        metadata: { duration: Date.now() - startTime }
+                    const result = await this.execute(skill.identity || skill.name, args)
+                    return normalizeToolExecutionResult(result, {
+                        toolName: skill.name,
+                        duration: Date.now() - startTime
                     })
+                } catch (error) {
+                    return normalizeToolExecutionResult(
+                        {
+                            content: [{ type: 'text', text: error.message }],
+                            isError: true
+                        },
+                        {
+                            toolName: skill.name,
+                            duration: Date.now() - startTime
+                        }
+                    )
                 }
             }
         }))
@@ -463,12 +440,42 @@ export class SkillsAgent {
         })
     }
 
+    /**
+     * 记录未进入 McpManager 的 Skills 执行拒绝。
+     * @param {string} skillName - 技能名
+     * @param {Object} args - 参数
+     * @param {string} reason - 原因
+     * @param {number} startedAt - 开始时间
+     */
+    async _recordRejectedExecution(skillName, args, reason, startedAt) {
+        try {
+            const { statsService } = await import('../stats/StatsService.js')
+            await statsService.recordToolCallFull({
+                toolName: skillName || 'unknown_tool',
+                request: args,
+                response: { content: [{ type: 'text', text: reason }], isError: true },
+                success: false,
+                error: reason,
+                duration: Date.now() - startedAt,
+                timestamp: startedAt,
+                userId: this.userId,
+                groupId: this.groupId,
+                source: 'skills_agent'
+            })
+        } catch (error) {
+            logger.debug(`[SkillsAgent] 记录拒绝失败: ${error.message}`)
+        }
+    }
+
     async execute(skillName, args = {}) {
+        const attemptStartedAt = Date.now()
         if (!this.initialized) await this.init()
 
         const skill = this.getSkill(skillName)
         if (!skill) {
-            return { content: [{ type: 'text', text: `技能 ${skillName} 不存在` }], isError: true }
+            const reason = `技能 ${skillName} 不存在`
+            await this._recordRejectedExecution(skillName, args, reason, attemptStartedAt)
+            return { content: [{ type: 'text', text: reason }], isError: true }
         }
 
         // 权限检查
@@ -479,6 +486,7 @@ export class SkillsAgent {
             tool: skill
         })
         if (!accessCheck.allowed) {
+            await this._recordRejectedExecution(skillName, args, accessCheck.reason, attemptStartedAt)
             return { content: [{ type: 'text', text: accessCheck.reason }], isError: true }
         }
 
@@ -509,19 +517,26 @@ export class SkillsAgent {
                 const callPromise = mcpManager.callTool(skill.name, filled, {
                     useCache: cacheResults,
                     cacheTTL: cacheTTL,
-                    serverName: skill.serverName
+                    serverName: skill.serverName,
+                    userId: this.userId,
+                    groupId: this.groupId,
+                    userPermission: this.userPermission,
+                    context: this.event ? { event: this.event, bot: this.bot || this.event.bot } : null
                 })
                 const result = await this._withTimeout(callPromise, timeout, skillName)
 
+                const resultIsError = isToolResultError(result)
                 this.executionLog.push({
                     skill: skillName,
                     args: filled,
                     result,
+                    error: resultIsError ? result?.errorMessage || result?.error || '工具返回错误结果' : undefined,
                     duration: Date.now() - startTime,
-                    success: true,
+                    success: !resultIsError,
                     attempts: attempt,
                     timestamp: Date.now()
                 })
+                // 业务错误已由工具返回并记录，不按异常重试，直接交给模型自纠。
                 return result
             } catch (error) {
                 lastError = error
@@ -985,78 +1000,58 @@ function getToolSource(tool) {
 }
 
 export function convertMcpTools(mcpTools, requestContext = null) {
-    return mcpTools.map(t => {
-        const source = getToolSource(t)
+    return mcpTools.map(tool => {
+        const source = getToolSource(tool)
         const identity = getToolIdentity({
-            name: t.name,
-            serverName: t.serverName,
+            name: tool.name,
+            serverName: tool.serverName,
             source,
             isMcpTool: source === 'mcp'
         })
         return {
-            name: t.name,
+            name: tool.name,
             type: 'function',
             identity,
-            serverName: t.serverName,
+            serverName: tool.serverName,
             source,
             isBuiltin: source === 'builtin',
-            isJsTool: t.isJsTool,
+            isJsTool: tool.isJsTool,
             isCustom: source === 'custom',
             isMcpTool: source === 'mcp',
+            dangerous: tool.dangerous,
+            requireMaster: tool.requireMaster,
+            requiredPermission: tool.requiredPermission,
+            requirePermission: tool.requirePermission,
+            permissionRequired: tool.permissionRequired,
             function: {
-                name: t.name,
-                description: t.description,
-                parameters: t.inputSchema || { type: 'object', properties: {} }
+                name: tool.name,
+                description: tool.description,
+                parameters: tool.inputSchema || { type: 'object', properties: {} }
             },
             async run(args) {
                 const startTime = Date.now()
                 try {
-                    const result = await mcpManager.callTool(t.name, args, {
+                    const result = await mcpManager.callTool(tool.name, args, {
                         useCache: true,
                         cacheTTL: 60000,
                         context: requestContext,
-                        serverName: t.serverName
+                        serverName: tool.serverName
                     })
-                    const duration = Date.now() - startTime
-
-                    // 提取实际内容
-                    let content
-                    const isError = result?.isError === true
-
-                    if (result && typeof result === 'object') {
-                        // MCP 格式：{ content: [{type: 'text', text: '...'}] }
-                        if (Array.isArray(result.content)) {
-                            content = result.content
-                                .map(item => (item.type === 'text' ? item.text : JSON.stringify(item)))
-                                .join('\n')
-                        }
-                        // 已格式化的对象
-                        else if (result.status) {
-                            content = result.content
-                        }
-                        // 其他对象
-                        else {
-                            content = typeof result.content === 'string' ? result.content : JSON.stringify(result)
-                        }
-                    } else {
-                        content = typeof result === 'string' ? result : JSON.stringify(result)
-                    }
-
-                    // 包装为标准格式
-                    const formattedResult = {
-                        status: isError ? 'error' : 'success',
-                        tool: t.name,
-                        content: content,
-                        metadata: { duration }
-                    }
-                    return JSON.stringify(formattedResult)
+                    return normalizeToolExecutionResult(result, {
+                        toolName: tool.name,
+                        duration: Date.now() - startTime
+                    })
                 } catch (error) {
-                    return JSON.stringify({
-                        status: 'error',
-                        tool: t.name,
-                        content: error.message,
-                        metadata: { duration: Date.now() - startTime }
-                    })
+                    return normalizeToolExecutionResult(
+                        {
+                            content: [{ type: 'text', text: error.message }],
+                            isError: true
+                        },
+                        {
+                            toolName: tool.name,
+                            duration: Date.now() - startTime
+                        }
+                    )
                 }
             }
         }

@@ -1,10 +1,10 @@
 import config from '../../../config/config.js'
 import { chatLogger } from '../../core/utils/logger.js'
 import { STOP_WORDS } from '../../utils/common.js'
-import { segment } from '../../utils/messageParser.js'
 import { renderService } from '../media/RenderService.js'
 import { ensureScopeManager } from '../scope/ScopeManager.js'
 import { GroupSummaryCore } from './GroupSummaryCore.js'
+import { StandardBotApi, StandardMessage } from '../../core/platform/index.js'
 
 const logger = chatLogger
 
@@ -411,25 +411,11 @@ class GroupSummaryPushService {
      * 发送消息到群
      */
     async _sendToGroup(bot, groupId, text) {
-        const gid = parseInt(groupId)
         try {
-            if (typeof bot.sendGroupMsg === 'function') {
-                return await bot.sendGroupMsg(gid, text)
-            }
-            if (typeof bot.sendApi === 'function') {
-                return await bot.sendApi('send_group_msg', {
-                    group_id: gid,
-                    message: [{ type: 'text', data: { text } }]
-                })
-            }
-            if (typeof bot.pickGroup === 'function') {
-                const group = bot.pickGroup(gid)
-                if (group?.sendMsg) {
-                    return await group.sendMsg(text)
-                }
-            }
+            return await new StandardBotApi({ bot }).sendGroup(groupId, text)
         } catch (err) {
             logger.error(`[GroupSummaryPush] 发送消息到群 ${groupId} 失败:`, err.message)
+            throw err
         }
     }
 
@@ -437,47 +423,34 @@ class GroupSummaryPushService {
      * 发送图片总结到群（与命令行总结一致，优先 pickGroup.sendMsg）
      */
     async _sendImageToGroup(bot, groupId, imageBuffer) {
-        const gid = parseInt(groupId, 10)
-        const imgSeg = segment.image(imageBuffer)
         try {
-            if (typeof bot.pickGroup === 'function') {
-                const group = bot.pickGroup(gid)
-                if (group?.sendMsg) {
-                    return await group.sendMsg(imgSeg)
-                }
-            }
-            if (typeof bot.sendGroupMsg === 'function') {
-                return await bot.sendGroupMsg(gid, imgSeg)
-            }
-            if (typeof bot.sendApi === 'function') {
-                return await bot.sendApi('send_group_msg', { group_id: gid, message: [imgSeg] })
-            }
+            return await new StandardBotApi({ bot }).sendGroup(groupId, StandardMessage.image(imageBuffer))
         } catch (err) {
             logger.error(`[GroupSummaryPush] 发送图片到群 ${groupId} 失败:`, err.message)
             throw err
         }
-        throw new Error('当前 Bot 不支持发送群图片')
     }
 
     /**
      * 获取 Bot 实例
      */
     _getBot() {
-        if (typeof Bot !== 'undefined') {
+        const botRegistry = globalThis.Bot
+        if (botRegistry) {
             // Yunzai v3 多 Bot 支持
-            if (Bot.uin) return Bot
+            if (botRegistry.uin) return botRegistry
             // TRSS 多 Bot
-            if (Bot.lain?.bots) {
-                const bots = Object.values(Bot.lain.bots)
+            if (botRegistry.lain?.bots) {
+                const bots = Object.values(botRegistry.lain.bots)
                 if (bots.length > 0) return bots[0]
             }
             // Bot.adapter
-            if (Bot.adapter) {
-                for (const [, b] of Bot.adapter) {
+            if (botRegistry.adapter) {
+                for (const [, b] of botRegistry.adapter) {
                     if (b) return b
                 }
             }
-            return Bot
+            return botRegistry
         }
         return null
     }

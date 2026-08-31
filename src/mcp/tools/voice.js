@@ -1,6 +1,8 @@
 import axios from 'axios'
 import { randomUUID } from 'crypto'
+import fs from 'node:fs'
 import { chatLogger as logger } from '../../core/utils/logger.js'
+import { StandardBotApi, StandardMessage, StandardRawApi } from '../../core/platform/index.js'
 
 /**
  * 语音消息工具
@@ -46,52 +48,16 @@ function resolveAiVoiceCharacter(character) {
 }
 
 /**
- * 检测Bot适配器类型
- * @param {Object} bot - Bot实例
- * @returns {{ adapter: string, isNT: boolean, canAiVoice: boolean }}
+ * 获取标准语音工具上下文。
+ * @param {Object} ctx - 工具上下文
+ * @returns {{api: StandardBotApi, rawApi: StandardRawApi, adapter: string, isNT: boolean, canAiVoice: boolean}}
  */
-function detectAdapter(bot) {
-    if (!bot) return { adapter: 'unknown', isNT: false, canAiVoice: false }
-
-    const hasIcqqFeatures = !!(bot.pickGroup && bot.pickFriend && bot.fl && bot.gl)
-    const hasNT = typeof bot.sendOidbSvcTrpcTcp === 'function'
-
-    if (hasIcqqFeatures) {
-        return { adapter: 'icqq', isNT: hasNT, canAiVoice: hasNT }
-    }
-
-    if (bot.sendApi) {
-        const isNapCat = !!(
-            bot.adapter?.name?.toLowerCase?.()?.includes?.('napcat') ||
-            bot.config?.protocol === 'napcat' ||
-            bot.version?.app_name?.toLowerCase?.()?.includes?.('napcat')
-        )
-        if (isNapCat) {
-            return { adapter: 'napcat', isNT: true, canAiVoice: true }
-        }
-        return { adapter: 'onebot', isNT: false, canAiVoice: false }
-    }
-
-    return { adapter: 'unknown', isNT: false, canAiVoice: false }
-}
-
-/**
- * 检测协议类型（兼容旧代码）
- */
-function detectProtocol(bot) {
-    return detectAdapter(bot).adapter
-}
-
-/**
- * 获取适配器信息（用于ctx缺少getAdapter时的兼容）
- */
-function getAdapterInfo(ctx) {
-    if (ctx.getAdapter && typeof ctx.getAdapter === 'function') {
-        return ctx.getAdapter()
-    }
-    const e = ctx.getEvent?.() || ctx.event
-    const bot = e?.bot || ctx.getBot?.() || global.Bot
-    return detectAdapter(bot)
+function getVoiceContext(ctx) {
+    const api = StandardBotApi.fromContext(ctx)
+    const rawApi = new StandardRawApi(api)
+    const capabilities = rawApi.capabilities()
+    const isNT = capabilities.sendOidbSvcTrpcTcp
+    return { api, rawApi, adapter: api.adapterType, isNT, canAiVoice: api.supportsCapability('ai_voice') }
 }
 
 function detectLanguage(text = '') {
@@ -124,49 +90,27 @@ export const voiceTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
-                if (!bot) {
+                const { api, adapter: protocol } = getVoiceContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
-
-                const protocol = detectProtocol(bot)
-                const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
+                api.requireCapability('ai_voice')
+                const groupId = args.group_id ? api.targetId(args.group_id) : e?.group_id
                 if (!groupId) {
                     return { success: false, error: '需要指定群号或在群聊中使用' }
                 }
                 const enable = args.enable !== false
-                if (bot.sendApi) {
-                    try {
-                        await bot.sendApi('set_group_ai_record', {
-                            group_id: groupId,
-                            enable: enable,
-                            character: args.character || ''
-                        })
-                        return {
-                            success: true,
-                            protocol,
-                            group_id: groupId,
-                            enabled: enable,
-                            message: enable ? 'AI声聊已开启' : 'AI声聊已关闭'
-                        }
-                    } catch (apiErr) {
-                        // API不存在
-                    }
-                }
-                // 备用方法名
-                if (bot.setGroupAiRecord) {
-                    await bot.setGroupAiRecord(groupId, enable, args.character)
-                    return { success: true, protocol, group_id: groupId, enabled: enable }
-                }
-
+                await api.callAction(
+                    'set_group_ai_record',
+                    { group_id: groupId, enable, character: args.character || '' },
+                    { strict: true }
+                )
                 return {
-                    success: false,
+                    success: true,
                     protocol,
-                    error: 'AI声聊功能需要 NapCat 协议端支持',
-                    hint:
-                        protocol === 'icqq'
-                            ? 'icqq 协议不支持AI声聊，这是QQ原生功能，需要通过NapCat调用'
-                            : '请确认协议端是否支持 set_group_ai_record API'
+                    group_id: groupId,
+                    enabled: enable,
+                    message: enable ? 'AI声聊已开启' : 'AI声聊已关闭'
                 }
             } catch (err) {
                 return { success: false, error: `设置AI声聊失败: ${err.message}` }
@@ -187,13 +131,11 @@ export const voiceTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
-                if (!bot) {
+                const { api, adapter: protocol } = getVoiceContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
-
-                const protocol = detectProtocol(bot)
-                const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
+                const groupId = args.group_id ? api.targetId(args.group_id) : e?.group_id
                 try {
                     const fs = await import('fs')
                     const path = await import('path')
@@ -227,41 +169,26 @@ export const voiceTools = [
                             }
                         }
                     }
-                } catch (configErr) {
+                } catch {
                     // 配置文件不存在或读取失败，尝试API
                 }
 
-                // 方法2: NapCat API: get_ai_characters
-                if (bot.sendApi) {
-                    try {
-                        const result = await bot.sendApi('get_ai_characters', {
-                            group_id: groupId
-                        })
-                        const characters = result?.data || result || []
-
-                        if (Array.isArray(characters) && characters.length > 0) {
-                            return {
-                                success: true,
-                                protocol,
-                                source: 'api',
-                                group_id: groupId,
-                                count: characters.length,
-                                characters: characters.map(c => ({
-                                    id: c.character_id || c.id,
-                                    name: c.character_name || c.name,
-                                    voice_type: c.voice_type,
-                                    description: c.description
-                                }))
-                            }
-                        }
-                    } catch (apiErr) {
-                        // API调用失败
+                const result = await api.callAction('get_ai_characters', { group_id: groupId }, { strict: true })
+                const characters = result?.data || result || []
+                if (Array.isArray(characters) && characters.length > 0) {
+                    return {
+                        success: true,
+                        protocol,
+                        source: 'standard_api',
+                        group_id: groupId,
+                        count: characters.length,
+                        characters: characters.map(c => ({
+                            id: c.character_id || c.id,
+                            name: c.character_name || c.name,
+                            voice_type: c.voice_type,
+                            description: c.description
+                        }))
                     }
-                }
-
-                if (bot.getAiCharacters) {
-                    const characters = await bot.getAiCharacters(groupId)
-                    return { success: true, protocol, source: 'bot_method', characters }
                 }
 
                 return {
@@ -303,12 +230,12 @@ export const voiceTools = [
                 }
 
                 const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
-                if (!bot) {
+                const { api, rawApi, adapter, isNT, canAiVoice } = getVoiceContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
-                const { adapter, isNT, canAiVoice } = getAdapterInfo(ctx)
-                const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
+                api.requireCapability('ai_voice')
+                const groupId = args.group_id ? api.targetId(args.group_id) : e?.group_id
 
                 // 转换角色ID：后续所有适配器分支都必须使用转换后的 character，不能再用 args.character
                 const character = resolveAiVoiceCharacter(args.character)
@@ -322,195 +249,43 @@ export const voiceTools = [
                 if (!character) {
                     return { success: false, error: '需要指定角色ID' }
                 }
-                if (adapter === 'icqq') {
-                    // 方法1: 优先使用 pickGroup().sendAiRecord()
+                let result
+                try {
+                    result = await api.callGroup(groupId, 'sendAiRecord', [character, args.text])
+                } catch {
                     try {
-                        const group = bot.pickGroup?.(groupId)
-                        if (group?.sendAiRecord && typeof group.sendAiRecord === 'function') {
-                            const result = await group.sendAiRecord(character, args.text)
-                            // 检查返回值判断是否成功
-                            if (result && (result.message_id || result.seq || result.rand)) {
-                                return {
-                                    success: true,
-                                    completed: true,
-                                    adapter: 'icqq',
-                                    message: `AI语音已发送到群 ${groupId}`,
-                                    message_id: result.message_id,
-                                    debug: result
-                                }
-                            } else if (result === true || (result && !result.error)) {
-                                return {
-                                    success: true,
-                                    completed: true,
-                                    adapter: 'icqq',
-                                    message: `AI语音已发送到群 ${groupId}`
-                                }
-                            }
-                            // 返回值异常，继续尝试其他方法
-                            logger.debug(`[send_ai_voice] sendAiRecord 返回异常:`, result)
-                        }
-                    } catch (err1) {
-                        logger.debug(`[send_ai_voice] sendAiRecord 失败: ${err1.message}`)
-                    }
-
-                    // 方法2: 直接发送协议包
-                    try {
-                        if (typeof bot.sendOidbSvcTrpcTcp === 'function') {
-                            const rand = Math.floor(Math.random() * 4294967295)
-                            const body = {
+                        result = await api.callAction(
+                            'send_group_ai_record',
+                            { character, group_id: groupId, text: args.text },
+                            { strict: true }
+                        )
+                    } catch (actionError) {
+                        if (!rawApi.capabilities().sendOidbSvcTrpcTcp) throw actionError
+                        const rawResult = await rawApi.send({
+                            method: 'send_oidb_svc_trpc_tcp',
+                            cmd: 'OidbSvcTrpcTcp.0x929b_0',
+                            body: {
                                 1: groupId,
                                 2: character,
                                 3: args.text,
                                 4: 1,
-                                5: { 1: rand }
+                                5: { 1: Math.floor(Math.random() * 4294967295) }
                             }
-                            logger.info(`[send_ai_voice] 发送协议包, group=${groupId}, character=${character}`)
-                            const result = await bot.sendOidbSvcTrpcTcp('OidbSvcTrpcTcp.0x929b_0', body)
-                            const data = result?.toJSON?.() || result
-                            const hasExplicitError = data && (data.error || data.err)
-
-                            if (hasExplicitError) {
-                                const errorMsg = data.error || data.err
-                                logger.info(`[send_ai_voice] 协议包返回错误:`, data)
-                                return {
-                                    success: false,
-                                    adapter: 'icqq',
-                                    error: `AI语音发送失败: ${errorMsg}`,
-                                    debug: data
-                                }
-                            }
-                            const hasVoiceData = data && (data[4] || data['4'] || data[3] || data['3'])
-                            if (hasVoiceData || (data && data[1] !== undefined)) {
-                                logger.info(`[send_ai_voice] AI语音发送成功, group=${groupId}`)
-                                return {
-                                    success: true,
-                                    completed: true,
-                                    adapter: 'icqq',
-                                    message: `AI语音已发送到群 ${groupId}`,
-                                    debug: data
-                                }
-                            }
-                        }
-                    } catch (err2) {
-                        logger.info(`[send_ai_voice] 协议包发送失败: ${err2.message}`)
-                        return {
-                            success: false,
-                            adapter,
-                            error: `icqq发送失败: ${err2.message}`
-                        }
-                    }
-
-                    // 无可用方法
-                    return {
-                        success: false,
-                        adapter,
-                        error: 'icqq 缺少发送方法，请确认使用 QQNT 协议'
-                    }
-                }
-
-                // NapCat 适配器
-                if (adapter === 'napcat') {
-                    try {
-                        const result = await bot.sendApi('send_group_ai_record', {
-                            character,
-                            group_id: groupId,
-                            text: args.text
                         })
-                        logger.debug(`[send_ai_voice] NapCat API 返回:`, result)
-
-                        // 检查返回值判断是否成功
-                        const msgId = result?.message_id || result?.data?.message_id
-                        const isSuccess = msgId || result?.retcode === 0 || result?.status === 'ok'
-                        const hasError = result?.retcode !== 0 && result?.retcode !== undefined
-
-                        if (hasError) {
-                            const errorMsg = result?.message || result?.msg || result?.wording || 'API 返回错误'
-                            return {
-                                success: false,
-                                adapter,
-                                error: `NapCat发送失败: ${errorMsg}`,
-                                retcode: result?.retcode
-                            }
-                        }
-
-                        if (isSuccess) {
-                            return {
-                                success: true,
-                                completed: true,
-                                adapter: 'napcat',
-                                message: `AI语音已发送到群 ${groupId}`,
-                                message_id: msgId
-                            }
-                        }
-
-                        return { success: false, adapter, error: 'NapCat API 返回异常', debug: result }
-                    } catch (err) {
-                        return { success: false, adapter, error: `NapCat发送失败: ${err.message}` }
+                        result = rawResult.response
                     }
                 }
-
-                // 其他 OneBot 实现尝试
-                if (bot.sendApi) {
-                    try {
-                        const result = await bot.sendApi('send_group_ai_record', {
-                            character,
-                            group_id: groupId,
-                            text: args.text
-                        })
-                        logger.debug(`[send_ai_voice] OneBot API 返回:`, result)
-
-                        const msgId = result?.message_id || result?.data?.message_id
-                        const isSuccess = msgId || result?.retcode === 0 || result?.status === 'ok'
-
-                        if (isSuccess) {
-                            return {
-                                success: true,
-                                completed: true,
-                                adapter,
-                                message: `AI语音已发送到群 ${groupId}`,
-                                message_id: msgId
-                            }
-                        }
-
-                        // API 存在但返回失败
-                        if (result?.retcode !== undefined) {
-                            return {
-                                success: false,
-                                adapter,
-                                error: result?.message || result?.msg || 'OneBot API 返回失败',
-                                retcode: result?.retcode
-                            }
-                        }
-                    } catch (e) {
-                        logger.debug(`[send_ai_voice] OneBot API 失败: ${e.message}`)
-                    }
-                }
-
-                // 备用方法
-                if (bot.sendGroupAiRecord) {
-                    try {
-                        const result = await bot.sendGroupAiRecord(groupId, args.text, character)
-                        if (result && (result.message_id || result === true || !result.error)) {
-                            return {
-                                success: true,
-                                completed: true,
-                                message: `AI语音已发送到群 ${groupId}`,
-                                message_id: result?.message_id
-                            }
-                        }
-                    } catch (e) {
-                        logger.debug(`[send_ai_voice] sendGroupAiRecord 失败: ${e.message}`)
-                    }
-                }
-
+                const data = result?.toJSON?.() || result
+                if (data?.error || data?.err) throw new Error(data.error || data.err)
                 return {
-                    success: false,
+                    success: true,
+                    completed: true,
                     adapter,
-                    error: '当前适配器不支持AI声聊',
-                    hint:
-                        adapter === 'onebot'
-                            ? 'OneBot 实现需要支持 send_group_ai_record API'
-                            : '需要 icqq(NT) 或 NapCat 适配器'
+                    is_nt: isNT,
+                    can_ai_voice: canAiVoice,
+                    message: `AI语音已发送到群 ${groupId}`,
+                    message_id: data?.message_id || data?.data?.message_id,
+                    debug: data
                 }
             } catch (err) {
                 return { success: false, error: `发送AI语音失败: ${err.message}` }
@@ -546,20 +321,16 @@ export const voiceTools = [
                 } else {
                     return { success: false, error: '需要提供 url、file 或 base64' }
                 }
-                const recordSeg = {
-                    type: 'record',
-                    file: recordData,
-                    magic: args.magic ? 1 : 0
-                }
-                const result = await e.reply(recordSeg)
+                const recordSeg = { ...StandardMessage.record(recordData), magic: args.magic ? 1 : 0 }
+                const result = await StandardBotApi.fromContext(ctx).reply(recordSeg)
 
                 // 检查发送结果
-                if (result?.message_id || result?.seq || result?.rand) {
+                if (result.success) {
                     return {
                         success: true,
                         completed: true,
                         message: '语音消息已发送',
-                        message_id: result?.message_id
+                        message_id: result.message_id
                     }
                 } else if (result === true || (result && !result.error)) {
                     return { success: true, completed: true, message: '语音消息已发送' }
@@ -630,54 +401,25 @@ export const voiceTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
                 if (!args.file || args.file.trim() === '') {
                     return { success: false, error: '缺少必需参数: file (语音文件标识)' }
                 }
 
-                // OneBot API: get_record
-                if (bot.sendApi) {
-                    const result = await bot.sendApi('get_record', {
-                        file: args.file,
-                        out_format: args.out_format || 'mp3'
-                    })
+                const result = await api.callAction(
+                    'get_record',
+                    { file: args.file, out_format: args.out_format || 'mp3' },
+                    { strict: true }
+                )
 
-                    // 检查返回值
-                    const hasError = result?.retcode !== 0 && result?.retcode !== undefined
-                    if (hasError) {
-                        return {
-                            success: false,
-                            error: result?.message || result?.msg || '获取语音文件失败',
-                            retcode: result?.retcode
-                        }
-                    }
-
-                    const fileData = result?.data?.file || result?.file
-                    const urlData = result?.data?.url || result?.url
-
-                    if (fileData || urlData) {
-                        return {
-                            success: true,
-                            file: fileData,
-                            url: urlData,
-                            format: args.out_format || 'mp3'
-                        }
-                    }
-
-                    return { success: false, error: '获取语音文件失败: 返回数据为空' }
-                }
-                if (bot.getRecord) {
-                    const result = await bot.getRecord(args.file, args.out_format)
-                    if (result && (result.file || result.url)) {
-                        return { success: true, ...result }
-                    }
-                    return { success: false, error: '获取语音文件失败' }
-                }
-                return { success: false, error: '当前协议不支持获取语音文件' }
+                // 检查返回值
+                const fileData = result?.data?.file || result?.file
+                const urlData = result?.data?.url || result?.url
+                if (!fileData && !urlData) return { success: false, error: '获取语音文件失败: 返回数据为空' }
+                return { success: true, file: fileData, url: urlData, format: args.out_format || 'mp3' }
             } catch (err) {
                 return { success: false, error: `获取语音失败: ${err.message}` }
             }
@@ -868,19 +610,19 @@ export const voiceTools = [
                 }
 
                 const e = ctx.getEvent()
-                const bot = ctx.getBot()
-                if (!e && !bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!e && !api.bot) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
 
                 // 确定发送目标
-                const targetGroupId = args.group_id ? parseInt(args.group_id) : null
-                const targetUserId = args.user_id ? parseInt(args.user_id) : null
+                const targetGroupId = args.group_id ? api.targetId(args.group_id) : null
+                const targetUserId = args.user_id ? api.targetId(args.user_id) : null
 
                 // 发送emoji表情反馈（表示正在处理）
-                if (e?.isGroup && typeof e.group?.setMsgEmojiLike === 'function') {
+                if (e?.isGroup) {
                     try {
-                        await e.group.setMsgEmojiLike(e.message_id, '124')
+                        await api.setReaction({ messageId: e.message_id, emojiId: '124', groupId: e.group_id })
                     } catch (emojiErr) {
                         // emoji 发送失败不影响主流程
                         logger.debug(`[send_tts] emoji反馈失败: ${emojiErr.message}`)
@@ -953,78 +695,28 @@ export const voiceTools = [
                 }
 
                 // 发送语音消息
-                const recordSeg = { type: 'record', file: recordData }
-                let result
-                let targetInfo = ''
-
-                if (targetUserId && bot?.pickFriend) {
-                    // 发送到指定用户（私聊）
-                    const friend = bot.pickFriend(targetUserId)
-                    result = await friend.sendMsg(recordSeg)
-                    targetInfo = `私聊 ${targetUserId}`
-                } else if (targetGroupId && bot?.pickGroup) {
-                    // 发送到指定群
-                    const group = bot.pickGroup(targetGroupId)
-                    result = await group.sendMsg(recordSeg)
-                    targetInfo = `群 ${targetGroupId}`
-                } else if (e) {
-                    // 回复当前会话
-                    result = await e.reply(recordSeg)
-                    targetInfo = e.isGroup ? `当前群 ${e.group_id}` : `当前私聊 ${e.user_id}`
-                } else {
-                    return { success: false, error: '无法确定发送目标，请指定 group_id 或 user_id' }
-                }
+                const recordSeg = StandardMessage.record(recordData)
+                const result = await api.send({ groupId: targetGroupId, userId: targetUserId, message: recordSeg })
+                const targetInfo = targetUserId
+                    ? `私聊 ${targetUserId}`
+                    : targetGroupId
+                      ? `群 ${targetGroupId}`
+                      : e?.isGroup
+                        ? `当前群 ${e.group_id}`
+                        : `当前私聊 ${e?.user_id}`
 
                 logger.debug(`[send_tts] 发送目标: ${targetInfo}`)
 
                 // 检查发送结果
-                if (result?.message_id || result?.seq || result?.rand) {
+                if (result.success) {
                     logger.info(`[send_tts] 语音发送成功: message_id=${result.message_id}`)
                     return {
                         success: true,
                         completed: true,
                         message: `VITS语音已发送 (角色: ${speaker})`,
-                        message_id: result?.message_id,
+                        message_id: result.message_id,
                         speaker,
                         text: text.substring(0, 100)
-                    }
-                } else if (result === true) {
-                    logger.info(`[send_tts] 语音发送成功`)
-                    return {
-                        success: true,
-                        completed: true,
-                        message: `VITS语音已发送 (角色: ${speaker})`,
-                        speaker,
-                        text: text.substring(0, 100)
-                    }
-                } else if (
-                    result?.error ||
-                    result?.code < 0 ||
-                    (result?.retcode !== undefined && result?.retcode !== 0)
-                ) {
-                    const errorMsg = result?.error || result?.message || '发送VITS语音失败'
-                    logger.warn(`[send_tts] 发送失败: ${errorMsg} (code: ${result?.code})`)
-                    return {
-                        success: false,
-                        error: errorMsg,
-                        debug: result
-                    }
-                } else if (result && !result.error && result.code === undefined) {
-                    // 只有在没有error且没有负code时才认为成功
-                    logger.info(`[send_tts] 语音发送成功 (无message_id)`)
-                    return {
-                        success: true,
-                        completed: true,
-                        message: `VITS语音已发送 (角色: ${speaker})`,
-                        speaker,
-                        text: text.substring(0, 100)
-                    }
-                } else if (result?.error || (result?.retcode !== undefined && result?.retcode !== 0)) {
-                    logger.warn(`[send_tts] 发送失败: ${result?.error || result?.message}`)
-                    return {
-                        success: false,
-                        error: result?.error || result?.message || '发送VITS语音失败',
-                        debug: result
                     }
                 }
 
@@ -1086,57 +778,31 @@ export const voiceTools = [
                 }
 
                 const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
-                if (!bot) {
+                const { api, adapter } = getVoiceContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
+                api.requireCapability('ai_voice')
 
-                const { adapter } = getAdapterInfo(ctx)
-                const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
-                if (adapter === 'icqq') {
-                    return {
-                        success: false,
-                        adapter,
-                        error: 'icqq适配器不支持获取AI语音数据',
-                        hint: '请直接使用 send_ai_voice 工具发送AI语音到群'
-                    }
+                const groupId = args.group_id ? api.targetId(args.group_id) : e?.group_id
+                const result = await api.callAction(
+                    'get_ai_record',
+                    { group_id: groupId, character: resolveAiVoiceCharacter(args.character), text: args.text },
+                    { strict: true }
+                )
+
+                // 检查返回值
+                const fileData = result?.data?.file || result?.file
+                const urlData = result?.data?.url || result?.url
+                if (!fileData && !urlData) return { success: false, adapter, error: '获取AI语音失败: 返回数据为空' }
+                return {
+                    success: true,
+                    adapter,
+                    text: args.text,
+                    character: resolveAiVoiceCharacter(args.character),
+                    file: fileData,
+                    url: urlData
                 }
-                if (adapter === 'napcat' || adapter === 'onebot') {
-                    const result = await bot.sendApi('get_ai_record', {
-                        group_id: groupId,
-                        character: resolveAiVoiceCharacter(args.character),
-                        text: args.text
-                    })
-
-                    // 检查返回值
-                    const hasError = result?.retcode !== 0 && result?.retcode !== undefined
-                    if (hasError) {
-                        return {
-                            success: false,
-                            adapter,
-                            error: result?.message || result?.msg || '获取AI语音失败',
-                            retcode: result?.retcode
-                        }
-                    }
-
-                    const fileData = result?.data?.file || result?.file
-                    const urlData = result?.data?.url || result?.url
-
-                    if (fileData || urlData) {
-                        return {
-                            success: true,
-                            adapter,
-                            text: args.text,
-                            character: resolveAiVoiceCharacter(args.character),
-                            file: fileData,
-                            url: urlData
-                        }
-                    }
-
-                    return { success: false, adapter, error: '获取AI语音失败: 返回数据为空' }
-                }
-
-                return { success: false, adapter, error: '当前适配器不支持获取AI语音数据' }
             } catch (err) {
                 return { success: false, error: `获取AI语音失败: ${err.message}` }
             }
@@ -1170,149 +836,45 @@ export const voiceTools = [
                 }
 
                 const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
-                if (!bot) {
+                const { api, adapter } = getVoiceContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
+                api.requireCapability('ai_voice')
 
-                const { adapter } = getAdapterInfo(ctx)
-                const userId = parseInt(args.user_id)
-
-                // 方式1: NapCat API: send_private_ai_record
-                if (bot.sendApi) {
-                    try {
-                        const result = await bot.sendApi('send_private_ai_record', {
-                            user_id: userId,
-                            character: resolveAiVoiceCharacter(args.character),
-                            text: args.text
-                        })
-
-                        const msgId = result?.message_id || result?.data?.message_id
-                        const isSuccess = msgId || result?.retcode === 0 || result?.status === 'ok'
-
-                        if (isSuccess) {
-                            return {
-                                success: true,
-                                completed: true,
-                                adapter,
-                                user_id: userId,
-                                message_id: msgId
-                            }
-                        }
-                    } catch (apiErr) {
-                        logger.debug(`[send_private_ai_record] NapCat API 失败: ${apiErr.message}`)
+                const userId = api.targetId(args.user_id)
+                try {
+                    const result = await api.callAction(
+                        'send_private_ai_record',
+                        { user_id: userId, character: resolveAiVoiceCharacter(args.character), text: args.text },
+                        { strict: true }
+                    )
+                    return {
+                        success: true,
+                        completed: true,
+                        adapter,
+                        user_id: userId,
+                        message_id: result?.message_id || result?.data?.message_id
                     }
-                }
-
-                // 方式2: icqq - 先通过群聊生成AI语音，然后转发私聊
-                if (adapter === 'icqq' && typeof bot.sendOidbSvcTrpcTcp === 'function') {
-                    // 需要一个群来生成AI语音
-                    let groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
-                    if (!groupId) {
-                        // 尝试获取bot所在的任意群
-                        const groups = bot.gl || new Map()
-                        const firstGroup = groups.keys().next().value
-                        if (!firstGroup) {
-                            return {
-                                success: false,
-                                adapter,
-                                error: '私聊AI语音需要指定 group_id 来生成语音，或在群聊中使用'
-                            }
-                        }
-                        // 兜底取到的群号必须回写，否则后续协议包会带着 undefined 的群号发出
-                        groupId = parseInt(firstGroup)
-                    }
-
-                    try {
-                        const rand = Math.floor(Math.random() * 4294967295)
-                        const body = {
-                            1: groupId,
-                            2: args.character,
-                            3: args.text,
-                            4: 1,
-                            5: { 1: rand }
-                        }
-
-                        const result = await bot.sendOidbSvcTrpcTcp('OidbSvcTrpcTcp.0x929b_0', body)
-                        const data = result?.toJSON?.() || result
-
-                        // 检查是否有语音数据
-                        const voiceData = data?.[4]?.[1]?.[1]
-                        if (voiceData) {
-                            // 语音已经生成并发送到群，转发到私聊
-                            // 注：icqq 目前不支持直接私聊AI语音，只能通过这种方式
-                            logger.info(`[send_private_ai_record] AI语音已通过群${groupId}生成`)
-                            return {
-                                success: true,
-                                completed: true,
-                                adapter: 'icqq',
-                                user_id: userId,
-                                note: `AI语音已发送到群${groupId}，icqq不支持直接私聊AI语音`
-                            }
-                        }
-                    } catch (err) {
-                        logger.debug(`[send_private_ai_record] icqq 方式失败: ${err.message}`)
-                    }
-                }
-
-                // 方式3: 降级方案 - 获取AI语音文件后发送
-                if (bot.sendApi) {
-                    try {
-                        const aiRecord = await bot.sendApi('get_ai_record', {
-                            character: resolveAiVoiceCharacter(args.character),
-                            text: args.text,
-                            group_id: args.group_id || e?.group_id
-                        })
-
-                        const file = aiRecord?.data?.file || aiRecord?.file
-                        const url = aiRecord?.data?.url || aiRecord?.url
-
-                        if (file || url) {
-                            const friend = bot.pickFriend?.(userId)
-                            if (friend?.sendMsg) {
-                                const recordSeg = { type: 'record', file: file || url }
-                                const result = await friend.sendMsg(recordSeg)
-                                const msgId = result?.message_id || result?.seq
-                                if (msgId || result === true || (result && !result.error)) {
-                                    return {
-                                        success: true,
-                                        completed: true,
-                                        adapter,
-                                        user_id: userId,
-                                        message_id: msgId
-                                    }
-                                }
-                            }
-
-                            // 备用: sendApi 发送
-                            const result = await bot.sendApi('send_private_msg', {
-                                user_id: userId,
-                                message: [{ type: 'record', data: { file: file || url } }]
-                            })
-                            const msgId = result?.message_id || result?.data?.message_id
-                            if (msgId || result?.retcode === 0) {
-                                return {
-                                    success: true,
-                                    completed: true,
-                                    adapter,
-                                    user_id: userId,
-                                    message_id: msgId
-                                }
-                            }
-                        }
-                    } catch (fallbackErr) {
-                        logger.debug(`[send_private_ai_record] 降级方案失败: ${fallbackErr.message}`)
-                    }
-                }
-
+                } catch {}
+                const aiRecord = await api.callAction(
+                    'get_ai_record',
+                    {
+                        character: resolveAiVoiceCharacter(args.character),
+                        text: args.text,
+                        group_id: args.group_id || e?.group_id
+                    },
+                    { strict: true }
+                )
+                const file = aiRecord?.data?.file || aiRecord?.file || aiRecord?.data?.url || aiRecord?.url
+                if (!file) throw new Error('协议端未返回AI语音文件')
+                const sent = await api.sendPrivate(userId, StandardMessage.record(file))
                 return {
-                    success: false,
+                    success: true,
+                    completed: true,
                     adapter,
-                    error: '当前协议不支持私聊AI语音',
-                    hint:
-                        adapter === 'icqq'
-                            ? 'icqq不支持直接私聊AI语音，请在群聊中使用 send_ai_voice'
-                            : '请确认协议端支持 send_private_ai_record 或 get_ai_record API'
+                    user_id: userId,
+                    message_id: sent.message_id
                 }
             } catch (err) {
                 return { success: false, error: `发送私聊AI语音失败: ${err.message}` }
@@ -1332,8 +894,8 @@ export const voiceTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
@@ -1356,20 +918,17 @@ export const voiceTools = [
                     return { success: false, error: '当前消息不包含语音' }
                 }
 
-                // 通过消息ID获取消息内容
-                if (bot.sendApi) {
-                    const msg = await bot.sendApi('get_msg', { message_id: args.message_id })
-                    const message = msg?.data?.message || msg?.message || []
+                const msg = await api.getMessage(args.message_id, { groupId: e?.group_id, userId: e?.user_id })
+                const message = msg?.data?.message || msg?.message || []
 
-                    for (const seg of message) {
-                        if (seg.type === 'record') {
-                            return {
-                                success: true,
-                                type: 'record',
-                                file: seg.data?.file || seg.file,
-                                url: seg.data?.url || seg.url,
-                                path: seg.data?.path || seg.path
-                            }
+                for (const seg of message) {
+                    if (seg.type === 'record') {
+                        return {
+                            success: true,
+                            type: 'record',
+                            file: seg.data?.file || seg.file,
+                            url: seg.data?.url || seg.url,
+                            path: seg.data?.path || seg.path
                         }
                     }
                 }
@@ -1393,39 +952,44 @@ export const voiceTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
 
                 let url = args.url
 
                 // 如果提供了 file_id，先获取 URL
                 if (!url && args.file_id) {
-                    if (bot.sendApi) {
-                        const result = await bot.sendApi('get_record', {
-                            file: args.file_id,
-                            out_format: 'mp3'
-                        })
-                        url = result?.data?.url || result?.url
-                    }
+                    const result = await api.callAction(
+                        'get_record',
+                        { file: args.file_id, out_format: 'mp3' },
+                        { strict: true }
+                    )
+                    url = result?.data?.url || result?.url
                 }
 
                 if (!url) {
                     return { success: false, error: '需要提供 url 或 file_id' }
                 }
 
-                // 下载语音
-                const response = await fetch(url)
-                if (!response.ok) {
-                    return { success: false, error: `下载失败: HTTP ${response.status}` }
-                }
+                /* 与文件/媒体工具共用受限下载链：逐跳校验 URL、超时、大小上限，并在返回前清理临时文件。 */
+                const { cleanupTemporaryDownload, downloadToManagedCache } = await import('./file.js')
+                let downloaded
+                try {
+                    downloaded = await downloadToManagedCache(url, {
+                        filename: 'voice.bin',
+                        maxBytes: 16 * 1024 * 1024
+                    })
+                    const buffer = await fs.promises.readFile(downloaded.filePath)
+                    const base64 = buffer.toString('base64')
 
-                const buffer = await response.arrayBuffer()
-                const base64 = Buffer.from(buffer).toString('base64')
-
-                return {
-                    success: true,
-                    url,
-                    size: buffer.byteLength,
-                    base64: `base64://${base64}`
+                    return {
+                        success: true,
+                        url: downloaded.url,
+                        size: downloaded.size,
+                        content_type: downloaded.contentType,
+                        base64: `base64://${base64}`
+                    }
+                } finally {
+                    if (downloaded?.filePath) await cleanupTemporaryDownload(downloaded.filePath)
                 }
             } catch (err) {
                 return { success: false, error: `下载语音失败: ${err.message}` }
@@ -1445,8 +1009,8 @@ export const voiceTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
-                if (!bot) {
+                const api = StandardBotApi.fromContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
@@ -1454,14 +1018,12 @@ export const voiceTools = [
 
                 // 获取语音文件ID
                 if (args.message_id) {
-                    if (bot.sendApi) {
-                        const msg = await bot.sendApi('get_msg', { message_id: args.message_id })
-                        const message = msg?.data?.message || msg?.message || []
-                        for (const seg of message) {
-                            if (seg.type === 'record') {
-                                fileId = seg.data?.file || seg.file
-                                break
-                            }
+                    const msg = await api.getMessage(args.message_id, { groupId: e?.group_id, userId: e?.user_id })
+                    const message = msg?.data?.message || msg?.message || []
+                    for (const seg of message) {
+                        if (seg.type === 'record') {
+                            fileId = seg.data?.file || seg.file
+                            break
                         }
                     }
                 } else {
@@ -1477,24 +1039,10 @@ export const voiceTools = [
                     return { success: false, error: '未找到语音消息' }
                 }
 
-                // NapCat API: 语音转文字
-                if (bot.sendApi) {
-                    try {
-                        const result = await bot.sendApi('get_record_url', { file: fileId })
-                        // 某些协议可能有语音识别API
-                        const asrResult = await bot.sendApi('asr', { file: fileId }).catch(() => null)
-
-                        if (asrResult?.data?.text || asrResult?.text) {
-                            return {
-                                success: true,
-                                text: asrResult.data?.text || asrResult.text,
-                                file: fileId
-                            }
-                        }
-                    } catch (e) {}
-                }
-
-                return { success: false, error: '当前协议不支持语音转文字' }
+                const asrResult = await api.callAction('asr', { file: fileId }, { strict: true })
+                const text = asrResult?.data?.text || asrResult?.text
+                if (!text) return { success: false, error: '协议端未返回识别文本' }
+                return { success: true, text, file: fileId }
             } catch (err) {
                 return { success: false, error: `语音转文字失败: ${err.message}` }
             }
@@ -1513,75 +1061,43 @@ export const voiceTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = e?.bot || global.Bot
-                if (!bot) {
+                const { api, adapter, isNT, canAiVoice } = getVoiceContext(ctx)
+                if (!api.bot) {
                     return { success: false, error: '无法获取Bot实例' }
                 }
 
-                const { adapter, isNT, canAiVoice } = getAdapterInfo(ctx)
-                const groupId = args.group_id ? parseInt(args.group_id) : e?.group_id
+                const groupId = args.group_id ? api.targetId(args.group_id) : e?.group_id
 
                 if (!groupId) {
                     return { success: false, error: '需要指定群号或在群聊中使用' }
                 }
 
-                // icqq 适配器
-                if (adapter === 'icqq') {
+                if (!canAiVoice) {
                     return {
                         success: true,
                         group_id: groupId,
                         adapter,
                         isNT,
-                        canAiVoice,
-                        note: isNT ? 'icqq(NT)支持AI声聊，使用 send_ai_voice 发送' : 'icqq需要NT协议才能使用AI声聊'
+                        canAiVoice: false,
+                        note: '当前协议端未声明 AI 声聊能力'
                     }
                 }
 
-                // NapCat 适配器
-                if (adapter === 'napcat') {
-                    try {
-                        const result = await bot.sendApi('get_group_ai_record_status', { group_id: groupId })
-                        return {
-                            success: true,
-                            group_id: groupId,
-                            adapter,
-                            canAiVoice: true,
-                            enabled: result?.data?.enabled ?? result?.enabled,
-                            character: result?.data?.character || result?.character
-                        }
-                    } catch (e) {
-                        return {
-                            success: true,
-                            group_id: groupId,
-                            adapter,
-                            canAiVoice: true,
-                            note: 'NapCat支持AI声聊'
-                        }
-                    }
+                const result = await api.callAction('get_group_ai_record_status', { group_id: groupId })
+                const data = result?.data || result || {}
+                const characters = await api.callAction('get_ai_characters', { group_id: groupId })
+                return {
+                    success: true,
+                    group_id: groupId,
+                    adapter,
+                    isNT,
+                    canAiVoice,
+                    enabled: data.enabled,
+                    character: data.character,
+                    character_count: Array.isArray(characters?.data || characters)
+                        ? (characters?.data || characters).length
+                        : undefined
                 }
-
-                // 其他 OneBot
-                if (adapter === 'onebot') {
-                    try {
-                        const chars = await bot.sendApi('get_ai_characters', { group_id: groupId })
-                        return {
-                            success: true,
-                            group_id: groupId,
-                            adapter,
-                            canAiVoice: true,
-                            character_count: (chars?.data || chars || []).length
-                        }
-                    } catch (e) {
-                        return {
-                            success: false,
-                            adapter,
-                            canAiVoice: false,
-                            error: '当前OneBot实现不支持AI声聊'
-                        }
-                    }
-                }
-
-                return { success: false, adapter, canAiVoice: false, error: '未知适配器' }
             } catch (err) {
                 return { success: false, error: `获取AI声聊状态失败: ${err.message}` }
             }
@@ -1655,13 +1171,9 @@ export const voiceTools = [
 
                 const replyId = args.reply_to || e.message_id
 
-                const msg = [
-                    { type: 'reply', id: replyId },
-                    { type: 'record', file: recordData }
-                ]
-
-                const result = await e.reply(msg)
-                return { success: true, message_id: result?.message_id }
+                const msg = [StandardMessage.reply(replyId), StandardMessage.record(recordData)]
+                const result = await StandardBotApi.fromContext(ctx).reply(msg)
+                return { success: true, message_id: result.message_id }
             } catch (err) {
                 return { success: false, error: `发送语音回复失败: ${err.message}` }
             }

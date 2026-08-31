@@ -5,6 +5,9 @@
     "description": "Yunzai AI 聊天插件",
     "license": "MIT",
     "main": "index.js",
+    "engines": {
+        "node": ">=20.18.1"
+    },
     "scripts": {
         "format": "prettier --write \"**/*.{js,ts,tsx}\" --ignore-path .prettierignore",
         "format:check": "prettier --check \"**/*.{js,ts,tsx}\" --ignore-path .prettierignore",
@@ -47,6 +50,7 @@
         "yaml": "^2.6.1"
     },
     "devDependencies": {
+        "acorn": "8.18.0",
         "husky": "^9.1.7",
         "lint-staged": "^16.2.7",
         "prettier": "^3.6.2"

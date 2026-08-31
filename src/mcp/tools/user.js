@@ -3,7 +3,7 @@
  * 获取用户信息、好友列表等
  */
 
-import { icqqFriend, callOneBotApi } from './helpers.js'
+import { StandardBotApi } from '../../core/platform/index.js'
 
 /** 好友列表默认与最大返回数量 */
 const DEFAULT_FRIEND_LIST_LIMIT = 50
@@ -42,60 +42,36 @@ export const userTools = [
             required: ['user_id']
         },
         handler: async (args, ctx) => {
-            const bot = ctx.getBot()
-            const { adapter } = ctx.getAdapter()
-            const userId = parseInt(args.user_id)
-            if (!Number.isFinite(userId)) {
-                return { success: false, adapter, error: `无效的QQ号: ${args.user_id}` }
+            const api = StandardBotApi.fromContext(ctx)
+            const adapter = api.adapterType
+            const userId = api.targetId(args.user_id)
+            if (userId === null || userId === undefined || userId === '') {
+                return { success: false, adapter, error: 'user_id 不能为空' }
             }
 
-            // 尝试获取好友信息
-            const friend = bot.fl?.get(userId)
-            if (friend) {
-                return {
-                    success: true,
-                    adapter,
-                    user_id: userId,
-                    nickname: friend.nickname,
-                    remark: friend.remark || '',
-                    sex: friend.sex,
-                    is_friend: true,
-                    avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
-                }
-            }
-
-            // 尝试获取陌生人信息
             try {
-                let stranger
-                if (adapter === 'icqq') {
-                    stranger = await icqqFriend.getSimpleInfo(bot, userId)
-                } else {
-                    stranger =
-                        (await bot.getStrangerInfo?.(userId)) ||
-                        (await callOneBotApi(bot, 'get_stranger_info', { user_id: userId }))
-                }
-                if (stranger) {
+                const [profile, friendState] = await Promise.all([api.getUserInfo(userId), api.getFriendState(userId)])
+                if (profile) {
                     return {
                         success: true,
                         adapter,
                         user_id: userId,
-                        nickname: stranger.nickname,
-                        sex: stranger.sex,
-                        age: stranger.age,
-                        is_friend: false,
-                        avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
+                        nickname: profile.nickname || profile.name || '',
+                        remark: friendState.friend?.remark || '',
+                        sex: profile.sex,
+                        age: profile.age,
+                        is_friend: friendState.isFriend,
+                        avatar_url: api.userAvatarUrl(userId)
                     }
                 }
-            } catch (e) {
-                // ignore
-            }
+            } catch {}
 
             return {
                 success: false,
                 adapter,
                 error: '无法获取用户信息，QQ号可能不存在',
                 user_id: userId,
-                avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
+                avatar_url: api.userAvatarUrl(userId)
             }
         }
     },
@@ -115,24 +91,20 @@ export const userTools = [
             }
         },
         handler: async (args, ctx) => {
-            const bot = ctx.getBot()
+            const api = StandardBotApi.fromContext(ctx)
             const limit = clampLimit(args.limit, DEFAULT_FRIEND_LIST_LIMIT, MAX_FRIEND_LIST_LIMIT)
-            const fl = bot.fl || new Map()
-
-            const friends = []
-            let count = 0
-            for (const [uid, friend] of fl) {
-                if (count >= limit) break
-                friends.push({
-                    user_id: uid,
+            const allFriends = await api.getFriendList()
+            const friends = allFriends.slice(0, limit).map(friend => {
+                const userId = friend.user_id ?? friend.uid ?? friend.id
+                return {
+                    user_id: userId,
                     nickname: friend.nickname,
                     remark: friend.remark || '',
-                    avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${uid}&s=100`
-                })
-                count++
-            }
+                    avatar_url: api.userAvatarUrl(userId, 100)
+                }
+            })
 
-            return { success: true, total: fl.size, returned: friends.length, friends }
+            return { success: true, total: allFriends.length, returned: friends.length, friends }
         }
     },
 
@@ -154,26 +126,15 @@ export const userTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const { adapter } = ctx.getAdapter()
-                const userId = parseInt(args.user_id)
-                if (!Number.isFinite(userId)) {
-                    return { success: false, error: `无效的QQ号: ${args.user_id}` }
+                const api = StandardBotApi.fromContext(ctx)
+                const adapter = api.adapterType
+                const userId = api.targetId(args.user_id)
+                if (userId === null || userId === undefined || userId === '') {
+                    return { success: false, adapter, error: 'user_id 不能为空' }
                 }
                 const times = clampLimit(args.times, DEFAULT_LIKE_TIMES, MAX_LIKE_TIMES)
 
-                if (adapter === 'icqq') {
-                    await icqqFriend.thumbUp(bot, userId, times)
-                    return { success: true, adapter, user_id: userId, times }
-                }
-
-                // 非 icqq 适配器：优先走 Bot 自带的 sendLike，再回退到 OneBot API
-                if (bot.sendLike) {
-                    await bot.sendLike(userId, times)
-                    return { success: true, adapter, user_id: userId, times }
-                }
-
-                await callOneBotApi(bot, 'send_like', { user_id: userId, times })
+                await api.sendLike(userId, times)
                 return { success: true, adapter, user_id: userId, times }
             } catch (err) {
                 return { success: false, error: `点赞失败: ${err.message}` }
@@ -193,15 +154,16 @@ export const userTools = [
             },
             required: ['type', 'id']
         },
-        handler: async args => {
+        handler: async (args, ctx) => {
+            const api = StandardBotApi.fromContext(ctx)
             const size = args.size || 640
             const id = args.id
 
             let url
             if (args.type === 'user') {
-                url = `https://q1.qlogo.cn/g?b=qq&nk=${id}&s=${size}`
+                url = api.userAvatarUrl(id, size)
             } else if (args.type === 'group') {
-                url = `https://p.qlogo.cn/gh/${id}/${id}/${size}`
+                url = api.groupAvatarUrl(id, size)
             } else {
                 return { success: false, error: '类型必须是 user 或 group' }
             }
@@ -220,7 +182,7 @@ export const userTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 if (!e) {
                     return { success: false, error: '没有可用的会话上下文' }
                 }
@@ -228,6 +190,7 @@ export const userTools = [
                 const userId = e.user_id
                 const sender = e.sender || {}
 
+                const friendState = await api.getFriendState(userId)
                 const result = {
                     success: true,
                     user_id: userId,
@@ -238,15 +201,16 @@ export const userTools = [
                     sex: sender.sex || 'unknown',
                     age: sender.age,
                     level: sender.level,
-                    avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`,
+                    avatar_url: api.userAvatarUrl(userId),
                     is_group: !!e.group_id,
-                    is_friend: bot.fl?.has(userId) || false
+                    is_friend: friendState.isFriend
                 }
 
                 // 如果在群内，添加群相关信息
                 if (e.group_id) {
                     result.group_id = e.group_id
-                    result.group_name = e.group_name || bot.gl?.get(e.group_id)?.group_name || ''
+                    const groupInfo = await api.getGroupInfo(e.group_id)
+                    result.group_name = e.group_name || groupInfo?.group_name || ''
                 }
 
                 return result
@@ -274,13 +238,14 @@ export const userTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const keyword = args.keyword.toLowerCase()
                 const limit = clampLimit(args.limit, DEFAULT_FRIEND_SEARCH_LIMIT, MAX_FRIEND_SEARCH_LIMIT)
-                const fl = bot.fl || new Map()
+                const friendList = await api.getFriendList()
 
                 const matches = []
-                for (const [uid, friend] of fl) {
+                for (const friend of friendList) {
+                    const uid = friend.user_id ?? friend.uid ?? friend.id
                     const nickname = (friend.nickname || '').toLowerCase()
                     const remark = (friend.remark || '').toLowerCase()
 
@@ -290,7 +255,7 @@ export const userTools = [
                             nickname: friend.nickname,
                             remark: friend.remark || '',
                             match_type: remark.includes(keyword) ? 'remark' : 'nickname',
-                            avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${uid}&s=100`
+                            avatar_url: api.userAvatarUrl(uid, 100)
                         })
                         if (matches.length >= limit) break
                     }
@@ -320,15 +285,12 @@ export const userTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const userId = parseInt(args.user_id)
-                if (!Number.isFinite(userId)) {
-                    return { success: false, error: `无效的QQ号: ${args.user_id}` }
+                const api = StandardBotApi.fromContext(ctx)
+                const userId = api.targetId(args.user_id)
+                if (userId === null || userId === undefined || userId === '') {
+                    return { success: false, error: 'user_id 不能为空' }
                 }
-                const fl = bot.fl || new Map()
-
-                const isFriend = fl.has(userId)
-                const friend = fl.get(userId)
+                const { isFriend, friend } = await api.getFriendState(userId)
 
                 return {
                     success: true,
@@ -336,7 +298,7 @@ export const userTools = [
                     is_friend: isFriend,
                     nickname: friend?.nickname || null,
                     remark: friend?.remark || null,
-                    avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
+                    avatar_url: api.userAvatarUrl(userId)
                 }
             } catch (err) {
                 return { success: false, error: `检查失败: ${err.message}` }
@@ -353,19 +315,13 @@ export const userTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
+                const botInfo = api.getBotInfo()
 
                 return {
                     success: true,
-                    user_id: bot.uin || bot.self_id,
-                    nickname: bot.nickname || bot.info?.nickname || '',
-                    sex: bot.sex || bot.info?.sex || 'unknown',
-                    age: bot.age || bot.info?.age,
-                    friend_count: bot.fl?.size || 0,
-                    group_count: bot.gl?.size || 0,
-                    avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${bot.uin || bot.self_id}&s=640`,
-                    status: bot.status || 'online',
-                    platform: bot.platform || 'unknown'
+                    ...botInfo,
+                    platform: botInfo.adapter
                 }
             } catch (err) {
                 return { success: false, error: `获取机器人信息失败: ${err.message}` }
@@ -385,23 +341,15 @@ export const userTools = [
         handler: async (args, ctx) => {
             try {
                 const e = ctx.getEvent()
-                const bot = ctx.getBot()
-                const userId = parseInt(args.user_id || e?.user_id)
+                const api = StandardBotApi.fromContext(ctx)
+                const userId = api.targetId(args.user_id || e?.user_id)
 
-                if (!Number.isFinite(userId) || userId <= 0) {
+                if (userId === null || userId === undefined || userId === '') {
                     return { success: false, error: `需要提供有效的 user_id（收到: ${args.user_id ?? '空'}）` }
                 }
 
-                // 尝试获取详细资料
-                let profile = {}
-                try {
-                    if (bot.getStrangerInfo) {
-                        profile = (await bot.getStrangerInfo(userId)) || {}
-                    }
-                } catch (e) {}
-
-                // 检查是否是好友
-                const friend = bot.fl?.get(userId)
+                const [profile, friendState] = await Promise.all([api.getUserInfo(userId), api.getFriendState(userId)])
+                const friend = friendState.friend
 
                 return {
                     success: true,
@@ -412,9 +360,9 @@ export const userTools = [
                     level: profile.level,
                     sign: profile.sign || profile.signature || '',
                     qid: profile.qid, // Q号ID
-                    is_friend: !!friend,
+                    is_friend: friendState.isFriend,
                     remark: friend?.remark || '',
-                    avatar_url: `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`
+                    avatar_url: api.userAvatarUrl(userId)
                 }
             } catch (err) {
                 return { success: false, error: `获取资料失败: ${err.message}` }

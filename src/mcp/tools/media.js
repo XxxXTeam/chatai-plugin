@@ -3,14 +3,19 @@
  * 图片解析、语音处理、视频处理等
  */
 
-import { segment } from '../../utils/messageParser.js'
-import { resolveSandboxPath, PLUGIN_ROOT, assertSafeUrl } from './helpers.js'
+import fs from 'fs'
+import { StandardBotApi, StandardMessage as segment } from '../../core/platform/index.js'
+import { fetchWithLimit, resolveSandboxPath, PLUGIN_ROOT } from './helpers.js'
+import { cleanupTemporaryDownload, downloadToManagedCache, fetchDownloadResponse, isTemporaryDownload } from './file.js'
 
 /** download_image 请求超时（毫秒） */
 const DOWNLOAD_TIMEOUT_MS = 30000
 
 /** download_image 单文件读取上限（字节） */
 const DOWNLOAD_MAX_BYTES = 20 * 1024 * 1024
+
+/** download_image 可选内联 base64 的硬上限（字节） */
+const DOWNLOAD_IMAGE_INLINE_MAX_BYTES = 1024 * 1024
 
 /**
  * 将本地媒体路径解析为沙箱内的 file:// 引用
@@ -44,6 +49,16 @@ function resolveMediaRef(ref) {
 }
 
 /**
+ * 发送媒体并校验协议端业务结果。
+ * @param {Object} event - 当前事件
+ * @param {unknown} message - 待发送消息
+ * @returns {Promise<string|number|null>} 消息 ID
+ */
+async function replyAndAssert(event, message) {
+    return (await new StandardBotApi({ event }).reply(message)).message_id
+}
+
+/**
  * 下载二进制内容并施加超时与大小上限
  * @param {string} rawUrl - 目标 URL（会经过 SSRF 守卫校验）
  * @param {Object} [options] - fetch 选项
@@ -51,37 +66,28 @@ function resolveMediaRef(ref) {
  * @throws {Error} URL 不安全、请求失败或超出大小上限时抛出
  */
 async function fetchBinaryWithLimit(rawUrl, options = {}) {
-    const safeUrl = await assertSafeUrl(rawUrl)
-    const response = await fetch(safeUrl.href, {
-        ...options,
-        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
-    })
+    const fetchOptions = { headers: {}, method: 'GET', ...options }
+    const { response, buffer, url } = await fetchWithLimit(
+        rawUrl,
+        {
+            headers: fetchOptions.headers,
+            method: fetchOptions.method
+        },
+        {
+            timeoutMs: DOWNLOAD_TIMEOUT_MS,
+            maxBytes: DOWNLOAD_MAX_BYTES,
+            label: '媒体下载'
+        }
+    )
     if (!response.ok) {
         throw new Error(`HTTP ${response.status}`)
     }
 
-    const declared = Number(response.headers.get('content-length'))
-    if (Number.isFinite(declared) && declared > DOWNLOAD_MAX_BYTES) {
-        throw new Error(`文件过大 (${declared} bytes)，超过上限 ${DOWNLOAD_MAX_BYTES} bytes`)
-    }
-
-    const chunks = []
-    let bytes = 0
-    if (response.body) {
-        for await (const chunk of response.body) {
-            bytes += chunk.length
-            if (bytes > DOWNLOAD_MAX_BYTES) {
-                throw new Error(`文件过大，超过上限 ${DOWNLOAD_MAX_BYTES} bytes`)
-            }
-            chunks.push(Buffer.from(chunk))
-        }
-    }
-
     return {
-        buffer: Buffer.concat(chunks),
+        buffer,
         contentType: response.headers.get('content-type') || 'application/octet-stream',
         status: response.status,
-        url: safeUrl.href
+        url
     }
 }
 
@@ -169,7 +175,7 @@ export const mediaTools = [
 
                 const e = ctx.getEvent()
                 if (e) {
-                    await e.reply(segment.image(qrUrl))
+                    await replyAndAssert(e, segment.image(qrUrl))
                 }
 
                 return {
@@ -196,15 +202,15 @@ export const mediaTools = [
         },
         handler: async args => {
             try {
-                const safeUrl = await assertSafeUrl(args.url)
-                const response = await fetch(safeUrl.href, {
+                const { response, finalUrl } = await fetchDownloadResponse(args.url, {
                     method: 'HEAD',
-                    signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
+                    timeoutMs: DOWNLOAD_TIMEOUT_MS
                 })
+                if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
                 return {
                     success: true,
-                    url: safeUrl.href,
+                    url: finalUrl.href,
                     contentType: response.headers.get('content-type'),
                     contentLength: response.headers.get('content-length'),
                     status: response.status
@@ -227,6 +233,7 @@ export const mediaTools = [
             }
         },
         handler: async (args, ctx) => {
+            const cleanupImage = args.url && isTemporaryDownload(args.url)
             try {
                 const e = ctx.getEvent()
                 if (!e) {
@@ -248,13 +255,15 @@ export const mediaTools = [
                     msgParts.push(args.message)
                 }
 
-                const result = await e.reply(msgParts)
+                const messageId = await replyAndAssert(e, msgParts)
                 return {
                     success: true,
-                    message_id: result?.message_id
+                    message_id: messageId
                 }
             } catch (err) {
                 return { success: false, error: `发送图片失败: ${err.message}` }
+            } finally {
+                if (cleanupImage) await cleanupTemporaryDownload(args.url)
             }
         }
     },
@@ -271,6 +280,8 @@ export const mediaTools = [
             }
         },
         handler: async (args, ctx) => {
+            const selectedVideoRef = args.url || args.file
+            const cleanupVideo = selectedVideoRef && isTemporaryDownload(selectedVideoRef)
             try {
                 const e = ctx.getEvent()
                 if (!e) {
@@ -295,13 +306,15 @@ export const mediaTools = [
                     videoSeg.cover = args.cover
                 }
 
-                const result = await e.reply(videoSeg)
+                const messageId = await replyAndAssert(e, videoSeg)
                 return {
                     success: true,
-                    message_id: result?.message_id
+                    message_id: messageId
                 }
             } catch (err) {
                 return { success: false, error: `发送视频失败: ${err.message}` }
+            } finally {
+                if (cleanupVideo) await cleanupTemporaryDownload(selectedVideoRef)
             }
         }
     },
@@ -364,11 +377,11 @@ export const mediaTools = [
                 }
 
                 const diceSeg = { type: 'dice' }
-                const result = await e.reply(diceSeg)
+                const messageId = await replyAndAssert(e, diceSeg)
 
                 return {
                     success: true,
-                    message_id: result?.message_id
+                    message_id: messageId
                 }
             } catch (err) {
                 return { success: false, error: `发送骰子失败: ${err.message}` }
@@ -391,11 +404,11 @@ export const mediaTools = [
                 }
 
                 const rpsSeg = { type: 'rps' }
-                const result = await e.reply(rpsSeg)
+                const messageId = await replyAndAssert(e, rpsSeg)
 
                 return {
                     success: true,
-                    message_id: result?.message_id
+                    message_id: messageId
                 }
             } catch (err) {
                 return { success: false, error: `发送猜拳失败: ${err.message}` }
@@ -455,10 +468,10 @@ export const mediaTools = [
                     }
                 }
 
-                const result = await e.reply(musicSeg)
+                const messageId = await replyAndAssert(e, musicSeg)
                 return {
                     success: true,
-                    message_id: result?.message_id
+                    message_id: messageId
                 }
             } catch (err) {
                 return { success: false, error: `发送音乐失败: ${err.message}` }
@@ -494,10 +507,10 @@ export const mediaTools = [
                     content: args.content || ''
                 }
 
-                const result = await e.reply(locationSeg)
+                const messageId = await replyAndAssert(e, locationSeg)
                 return {
                     success: true,
-                    message_id: result?.message_id
+                    message_id: messageId
                 }
             } catch (err) {
                 return { success: false, error: `发送位置失败: ${err.message}` }
@@ -533,10 +546,10 @@ export const mediaTools = [
                     image: args.image || ''
                 }
 
-                const result = await e.reply(shareSeg)
+                const messageId = await replyAndAssert(e, shareSeg)
                 return {
                     success: true,
-                    message_id: result?.message_id
+                    message_id: messageId
                 }
             } catch (err) {
                 return { success: false, error: `发送分享失败: ${err.message}` }
@@ -571,10 +584,10 @@ export const mediaTools = [
                     msgParts.push(args.message)
                 }
 
-                const result = await e.reply(msgParts)
+                const messageId = await replyAndAssert(e, msgParts)
                 return {
                     success: true,
-                    message_id: result?.message_id,
+                    message_id: messageId,
                     face_id: args.id
                 }
             } catch (err) {
@@ -611,10 +624,10 @@ export const mediaTools = [
                     summary: args.summary || ''
                 }
 
-                const result = await e.reply(mfaceSeg)
+                const messageId = await replyAndAssert(e, mfaceSeg)
                 return {
                     success: true,
-                    message_id: result?.message_id
+                    message_id: messageId
                 }
             } catch (err) {
                 return { success: false, error: `发送商城表情失败: ${err.message}` }
@@ -633,6 +646,8 @@ export const mediaTools = [
             }
         },
         handler: async (args, ctx) => {
+            const selectedImageRef = args.url || args.file
+            const cleanupImage = selectedImageRef && isTemporaryDownload(selectedImageRef)
             try {
                 const e = ctx.getEvent()
                 if (!e) {
@@ -653,13 +668,15 @@ export const mediaTools = [
                     file: imageData
                 }
 
-                const result = await e.reply(flashSeg)
+                const messageId = await replyAndAssert(e, flashSeg)
                 return {
                     success: true,
-                    message_id: result?.message_id
+                    message_id: messageId
                 }
             } catch (err) {
                 return { success: false, error: `发送闪照失败: ${err.message}` }
+            } finally {
+                if (cleanupImage) await cleanupTemporaryDownload(selectedImageRef)
             }
         }
     },
@@ -681,27 +698,16 @@ export const mediaTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const userId = parseInt(args.user_id)
-
-                // NapCat/go-cqhttp API
-                if (bot.sendApi) {
-                    await bot.sendApi('send_group_gift', {
-                        group_id: ctx.getEvent()?.group_id,
-                        user_id: userId,
-                        gift_id: args.gift_id
-                    })
-                    return { success: true, user_id: userId, gift_id: args.gift_id }
-                }
-
-                // icqq 方式
-                const friend = bot.pickFriend?.(userId)
-                if (friend?.sendGift) {
-                    await friend.sendGift(args.gift_id)
-                    return { success: true, user_id: userId, gift_id: args.gift_id }
-                }
-
-                return { success: false, error: '当前协议不支持发送礼物' }
+                const api = StandardBotApi.fromContext(ctx)
+                const userId = api.targetId(args.user_id)
+                await api.callFriendOrAction({
+                    userId,
+                    method: 'sendGift',
+                    args: [args.gift_id],
+                    action: 'send_group_gift',
+                    params: { group_id: ctx.getEvent()?.group_id, gift_id: args.gift_id }
+                })
+                return { success: true, user_id: userId, gift_id: args.gift_id }
             } catch (err) {
                 return { success: false, error: `发送礼物失败: ${err.message}` }
             }
@@ -848,28 +854,56 @@ export const mediaTools = [
 
     {
         name: 'download_image',
-        description: '下载图片并返回本地路径',
+        description: '下载图片到插件受管临时目录并返回本地路径；发送后立即清理，未发送时按TTL清理。',
         inputSchema: {
             type: 'object',
             properties: {
                 url: { type: 'string', description: '图片URL' },
-                filename: { type: 'string', description: '保存的文件名（可选）' }
+                filename: { type: 'string', description: '保存的文件名（可选）' },
+                inline_base64: {
+                    type: 'boolean',
+                    description: `是否额外返回base64；仅限${DOWNLOAD_IMAGE_INLINE_MAX_BYTES}字节以内，默认false`,
+                    default: false
+                }
             },
             required: ['url']
         },
         handler: async args => {
             try {
-                const downloaded = await fetchBinaryWithLimit(args.url)
-                const base64 = downloaded.buffer.toString('base64')
-
-                return {
+                const downloaded = await downloadToManagedCache(args.url, {
+                    filename: args.filename,
+                    maxBytes: DOWNLOAD_MAX_BYTES
+                })
+                const result = {
                     success: true,
                     url: downloaded.url,
-                    size: downloaded.buffer.length,
+                    file: downloaded.filePath,
+                    file_path: downloaded.filePath,
+                    filename: downloaded.fileName,
+                    size: downloaded.size,
                     mime_type: downloaded.contentType,
-                    base64: `base64://${base64}`,
-                    data_url: `data:${downloaded.contentType};base64,${base64}`
+                    expires_at: downloaded.expiresAt,
+                    cleanup: 'after_send_or_ttl'
                 }
+
+                if (args.inline_base64 === true) {
+                    if (downloaded.size <= DOWNLOAD_IMAGE_INLINE_MAX_BYTES) {
+                        const buffer = await fs.promises.readFile(downloaded.filePath)
+                        const base64 = buffer.toString('base64')
+                        return {
+                            ...result,
+                            base64: `base64://${base64}`,
+                            data_url: `data:${downloaded.contentType};base64,${base64}`
+                        }
+                    }
+                    return {
+                        ...result,
+                        base64_omitted: true,
+                        base64_limit: DOWNLOAD_IMAGE_INLINE_MAX_BYTES
+                    }
+                }
+
+                return result
             } catch (err) {
                 return { success: false, error: `下载图片失败: ${err.message}` }
             }

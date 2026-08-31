@@ -105,7 +105,7 @@ export class ChatAgent {
         await mcpManager.init()
 
         // 确定会话ID
-        const cleanUserId = this.userId?.includes('_') ? this.userId.split('_').pop() : this.userId
+        const cleanUserId = this.userId == null ? this.userId : String(this.userId)
 
         this.conversationId = this.groupId
             ? `group:${this.groupId}`
@@ -221,7 +221,7 @@ export class ChatAgent {
 
         const groupId = options.groupId || event?.group_id || null
         const pureUserId = (event?.user_id || userId)?.toString()
-        const cleanUserId = pureUserId?.includes('_') ? pureUserId.split('_').pop() : pureUserId
+        const cleanUserId = pureUserId
 
         // 确定会话ID
         let conversationId
@@ -341,7 +341,7 @@ export class ChatAgent {
 
         // 设置工具上下文
         if (event) {
-            setToolContext({ event, bot: event.bot || Bot })
+            setToolContext({ event, bot: event.bot || globalThis.Bot })
         }
 
         // 获取渠道（支持群独立渠道）
@@ -422,6 +422,7 @@ export class ChatAgent {
                 cleanUserId,
                 debugInfo
             )
+            systemPrompt = await this._addKnowledgeGraphContext(systemPrompt, groupId, cleanUserId, debugInfo)
         }
 
         // 添加知识库上下文
@@ -981,6 +982,46 @@ export class ChatAgent {
     }
 
     /**
+     * 将知识图谱上下文加入系统提示。
+     * @param {string} systemPrompt - 当前系统提示
+     * @param {string|null} groupId - 当前群 ID
+     * @param {string} cleanUserId - 未改写的用户 ID
+     * @param {Object|null} debugInfo - 调试信息
+     * @returns {Promise<string>} 合并后的系统提示
+     */
+    async _addKnowledgeGraphContext(systemPrompt, groupId, cleanUserId, debugInfo) {
+        try {
+            const { knowledgeGraphService } = await import('../storage/KnowledgeGraphService.js')
+            await knowledgeGraphService.init()
+            const graphContext = knowledgeGraphService.getKnowledgeContext(
+                String(cleanUserId),
+                groupId ? String(groupId) : null
+            )
+            if (!graphContext) {
+                if (debugInfo) {
+                    debugInfo.memory = debugInfo.memory || {}
+                    debugInfo.memory.knowledgeGraph = { hasKnowledge: false }
+                }
+                return systemPrompt
+            }
+
+            if (debugInfo) {
+                debugInfo.memory = debugInfo.memory || {}
+                debugInfo.memory.knowledgeGraph = {
+                    hasKnowledge: true,
+                    length: graphContext.length,
+                    preview: graphContext.substring(0, 500) + (graphContext.length > 500 ? '...' : '')
+                }
+            }
+            logger.debug(`[ChatAgent] 已添加知识图谱上下文 (${graphContext.length} 字符)`)
+            return systemPrompt + '\n\n' + graphContext
+        } catch (error) {
+            logger.debug('[ChatAgent] 获取知识图谱上下文失败:', error.message)
+            return systemPrompt
+        }
+    }
+
+    /**
      * 添加知识库上下文
      */
     async _addKnowledgeContext(systemPrompt, presetId, debugInfo) {
@@ -1431,7 +1472,7 @@ export class ChatAgent {
     async _handleAutoClean(options, error) {
         try {
             const fullUserId = String(options.userId)
-            const pureUserId = fullUserId.includes('_') ? fullUserId.split('_').pop() : fullUserId
+            const pureUserId = fullUserId
             const groupId = options.event?.group_id ? String(options.event.group_id) : null
 
             const currentConversationId = contextManager.getConversationId(pureUserId, groupId)

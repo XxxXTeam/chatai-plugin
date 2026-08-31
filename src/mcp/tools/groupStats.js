@@ -4,8 +4,25 @@
  * 参考 yenai-plugin 实现
  */
 
-import { qqWebApi, getGroupMemberList, requireGroupId } from './helpers.js'
+import { qqWebApi, requireGroupId } from './helpers.js'
 import { formatTimeToBeiJing } from '../../utils/common.js'
+import { StandardBotApi } from '../../core/platform/index.js'
+
+/**
+ * 从标准边界构建 QQ Web 请求所需的最小凭据对象。
+ * @param {StandardBotApi} api - 标准 Bot API
+ * @param {string} domain - Cookie 域名
+ * @returns {Promise<Object>} Web API 凭据
+ */
+async function getQqWebContext(api, domain) {
+    const credentials = await api.getCredentials(domain)
+    if (!credentials.cookies) throw new Error(`需要 ${domain} 的 cookies 支持`)
+    return {
+        cookies: { [domain]: credentials.cookies },
+        bkn: credentials.csrfToken,
+        uin: credentials.userId
+    }
+}
 
 /** 群星级星星渲染数量上限（官方当前为 LV1-LV5），防止外部 API 返回异常等级时生成巨型字符串 */
 const MAX_GROUP_LEVEL_STARS = 10
@@ -28,15 +45,13 @@ export const groupStatsTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = requireGroupId(args, ctx)
 
                 // 群星级 API 必须使用 qqweb.qq.com 的 cookie
-                if (!bot.cookies?.['qqweb.qq.com']) {
-                    return { success: false, error: '需要 qqweb.qq.com 的 cookie 才能获取群星级，当前协议可能不支持' }
-                }
+                const webContext = await getQqWebContext(api, 'qqweb.qq.com')
 
-                const result = await qqWebApi.getGroupLevel(bot, groupId)
+                const result = await qqWebApi.getGroupLevel(webContext, groupId)
 
                 // 响应结构: { ec: 0, info: { uiGroupLevel, group_name, group_uin, ... } }
                 if (result?.ec === 0 || result?.errcode === 0) {
@@ -97,14 +112,12 @@ export const groupStatsTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = requireGroupId(args, ctx)
 
-                if (!bot.cookies?.['qun.qq.com']) {
-                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
-                }
+                const webContext = await getQqWebContext(api, 'qun.qq.com')
 
-                const result = await qqWebApi.getDragonKing(bot, groupId)
+                const result = await qqWebApi.getDragonKing(webContext, groupId)
 
                 // 响应结构: { uin, nick, avatar, avatar_size(连续天数) }
                 if (result) {
@@ -146,14 +159,12 @@ export const groupStatsTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = requireGroupId(args, ctx)
 
-                if (!bot.cookies?.['qun.qq.com']) {
-                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
-                }
+                const webContext = await getQqWebContext(api, 'qun.qq.com')
 
-                const result = await qqWebApi.getSignInToday(bot, groupId)
+                const result = await qqWebApi.getSignInToday(webContext, groupId)
 
                 // 响应结构: { retCode: 0, response: { page: [{ total, infos: [...] }] } }
                 // infos 中每个元素: { uid, uidGroupNick, signedTimeStamp }
@@ -217,15 +228,13 @@ export const groupStatsTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = requireGroupId(args, ctx)
                 const weekly = args.weekly || false
 
-                if (!bot.cookies?.['qun.qq.com']) {
-                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
-                }
+                const webContext = await getQqWebContext(api, 'qun.qq.com')
 
-                const result = await qqWebApi.getSpeakRank(bot, groupId, weekly)
+                const result = await qqWebApi.getSpeakRank(webContext, groupId, weekly)
 
                 // 响应结构: { retcode: 0, data: { speakRank: [...] } }
                 // speakRank 中每个元素: { nickname, uin, active(连续活跃天数), msgCount(发言次数) }
@@ -266,15 +275,13 @@ export const groupStatsTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = requireGroupId(args, ctx)
                 const weekly = args.weekly || false
 
-                if (!bot.cookies?.['qun.qq.com']) {
-                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
-                }
+                const webContext = await getQqWebContext(api, 'qun.qq.com')
 
-                const result = await qqWebApi.getGroupData(bot, groupId, weekly)
+                const result = await qqWebApi.getGroupData(webContext, groupId, weekly)
 
                 if (result?.ec === 0 || result?.retcode === 0) {
                     const data = result.data || result
@@ -310,16 +317,14 @@ export const groupStatsTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = requireGroupId(args, ctx)
                 // limit 会直接进入远端 API 请求体，必须钳制上下界
                 const limit = Math.min(Math.max(Math.floor(Number(args.limit)) || 20, 1), MAX_LUCKY_LIST_LIMIT)
 
-                if (!bot.cookies?.['qun.qq.com']) {
-                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
-                }
+                const webContext = await getQqWebContext(api, 'qun.qq.com')
 
-                const result = await qqWebApi.getLuckyList(bot, groupId, 0, limit)
+                const result = await qqWebApi.getLuckyList(webContext, groupId, 0, limit)
 
                 if (result?.retcode === 0 || result?.data?.word_list || result?.word_list) {
                     const data = result.data || result
@@ -378,14 +383,12 @@ export const groupStatsTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = requireGroupId(args, ctx)
 
-                if (!bot.cookies?.['qun.qq.com']) {
-                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
-                }
+                const webContext = await getQqWebContext(api, 'qun.qq.com')
 
-                const result = await qqWebApi.drawLucky(bot, groupId)
+                const result = await qqWebApi.drawLucky(webContext, groupId)
 
                 // 响应结构: { retcode: 0, data: { word_info: { wording, word_id, word_desc } } }
                 // retcode 11004 表示今天已经抽过了
@@ -438,14 +441,12 @@ export const groupStatsTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = requireGroupId(args, ctx)
 
-                if (!bot.cookies?.['qun.qq.com']) {
-                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
-                }
+                const webContext = await getQqWebContext(api, 'qun.qq.com')
 
-                const result = await qqWebApi.equipLucky(bot, groupId, args.word_id)
+                const result = await qqWebApi.equipLucky(webContext, groupId, args.word_id)
 
                 if (result?.retcode === 0) {
                     return {
@@ -476,14 +477,12 @@ export const groupStatsTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = requireGroupId(args, ctx)
 
-                if (!bot.cookies?.['qun.qq.com']) {
-                    return { success: false, error: '需要 cookies 支持，当前协议可能不支持此功能' }
-                }
+                const webContext = await getQqWebContext(api, 'qun.qq.com')
 
-                const result = await qqWebApi.switchLucky(bot, groupId, args.enable)
+                const result = await qqWebApi.switchLucky(webContext, groupId, args.enable)
 
                 // retcode 11111 表示重复开启或关闭
                 if (result?.retcode === 11111) {
@@ -520,7 +519,7 @@ export const groupStatsTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = requireGroupId(args, ctx)
                 // days 不钳制时，负数会让 threshold 退化为 0 且绕过 days === 0 分支，
                 // 过滤条件变成 lastSpeakTime < 0（恒为 false）→ 得出"群里没有不活跃成员"的错误结论
@@ -528,7 +527,7 @@ export const groupStatsTools = [
                 const days = Number.isFinite(rawDays) ? Math.min(Math.max(Math.floor(rawDays), 0), MAX_QUERY_DAYS) : 30
                 const limit = Math.max(Math.floor(Number(args.limit)) || 50, 1)
 
-                const memberList = await getGroupMemberList({ bot, groupId })
+                const memberList = await api.getMemberList(groupId)
 
                 if (!memberList || memberList.length === 0) {
                     return { success: false, error: '无法获取群成员列表' }
@@ -592,7 +591,7 @@ export const groupStatsTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = requireGroupId(args, ctx)
                 // days 为 0/负数/非数字时回落到默认 7 天：负数会让 threshold 变成未来时间点，
                 // 过滤后恒为空 → 得出"最近没有新成员入群"的错误结论
@@ -600,7 +599,7 @@ export const groupStatsTools = [
                 const days = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(Math.floor(rawDays), MAX_QUERY_DAYS) : 7
                 const limit = Math.max(Math.floor(Number(args.limit)) || 50, 1)
 
-                const memberList = await getGroupMemberList({ bot, groupId })
+                const memberList = await api.getMemberList(groupId)
 
                 if (!memberList || memberList.length === 0) {
                     return { success: false, error: '无法获取群成员列表' }
@@ -664,15 +663,11 @@ export const groupStatsTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = requireGroupId(args, ctx)
                 const honorType = args.type || 'all'
 
-                if (!bot.getGroupHonorInfo) {
-                    return { success: false, error: '当前协议不支持获取群荣誉' }
-                }
-
-                const honor = await bot.getGroupHonorInfo(groupId, honorType)
+                const honor = await api.getGroupHonorInfo(groupId, honorType)
 
                 return {
                     success: true,
@@ -698,19 +693,11 @@ export const groupStatsTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = requireGroupId(args, ctx)
 
-                // bot.gl 只有 icqq 系适配器提供；OneBot 适配器没有该属性，
-                // 直接拿它做前置守卫会对任何群都误报"机器人不在此群内"，
-                // 因此仅在 gl 可用时才据其判断，否则交给下面的成员列表拉取兜底
-                const hasGroupList = typeof bot.gl?.get === 'function'
-                const groupInfo = hasGroupList ? bot.gl.get(groupId) : null
-                if (hasGroupList && !groupInfo) {
-                    return { success: false, error: '机器人不在此群内' }
-                }
-
-                const memberList = await getGroupMemberList({ bot, groupId })
+                const groupInfo = await api.getGroupInfo(groupId)
+                const memberList = await api.getMemberList(groupId)
 
                 if (!memberList || memberList.length === 0) {
                     return { success: false, error: '无法获取群成员列表' }
@@ -770,31 +757,28 @@ export const groupStatsTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const groupId = requireGroupId(args, ctx)
                 const count = Math.min(Math.max(args.count || 1, 1), 50)
                 const excludeBot = args.exclude_bot !== false
                 const excludeAdmin = args.exclude_admin === true
                 const roleFilter = args.role_filter || 'all'
 
-                // 与 get_group_stat 同理：无 bot.gl 的适配器不做前置拦截，交给成员列表拉取兜底
-                const hasGroupList = typeof bot.gl?.get === 'function'
-                const groupInfo = hasGroupList ? bot.gl.get(groupId) : null
-                if (hasGroupList && !groupInfo) {
-                    return { success: false, error: '机器人不在此群内' }
-                }
-
-                const memberList = await getGroupMemberList({ bot, groupId })
+                const [memberList, groupInfo] = await Promise.all([
+                    api.getMemberList(groupId),
+                    api.getGroupInfo(groupId)
+                ])
 
                 if (!memberList || memberList.length === 0) {
                     return { success: false, error: '群成员列表为空' }
                 }
 
                 // 过滤成员
+                const botId = api.getBotInfo().user_id
                 let filteredList = memberList.filter(m => {
                     const userId = m.user_id || m.uid
                     const role = m.role || 'member'
-                    if (excludeBot && userId === bot.uin) return false
+                    if (excludeBot && String(userId) === String(botId)) return false
                     if (excludeAdmin && (role === 'admin' || role === 'owner')) return false
                     if (roleFilter === 'member' && role !== 'member') return false
                     if (roleFilter === 'admin' && role !== 'admin') return false

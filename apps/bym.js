@@ -10,13 +10,24 @@ import { renderService } from '../src/services/media/RenderService.js'
 import { ensureScopeManager } from '../src/services/scope/ScopeManager.js'
 import { checkAccessList, sendForwardMsg } from '../src/utils/platformAdapter.js'
 import { statsService } from '../src/services/stats/StatsService.js'
+import { StandardBotApi } from '../src/core/platform/index.js'
 import { emojiThiefService } from './EmojiThief.js'
 
 async function getBymGroupContextMessages(e, groupId, limit = 15) {
-    const group = e.group || e.bot?.pickGroup?.(Number(groupId))
+    const api = StandardBotApi.fromContext({ event: e, bot: e?.bot || globalThis.Bot })
+    let group = e.group
+    if (!group) {
+        try {
+            group = api.group(groupId)
+        } catch {
+            group = null
+        }
+    }
     if (group && typeof group.getChatHistory === 'function') {
         try {
-            const history = await group.getChatHistory(Number(e.seq) || 0, Math.min(limit + 1, 20))
+            const initialSequence = e?.seq ?? e?.message_id ?? 0
+            const sequence = api.isQQBot ? initialSequence : Number(initialSequence) || 0
+            const history = await group.getChatHistory(sequence, Math.min(limit + 1, 20))
             const messages = (history || [])
                 .filter(msg => String(msg.message_id || '') !== String(e.message_id || ''))
                 .map(msg => {

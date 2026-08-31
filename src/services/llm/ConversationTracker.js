@@ -182,8 +182,8 @@ class ConversationTrackerService {
      */
     async isUserTalkingToBot(userMessage, chatHistory = []) {
         try {
-            const botName = config.get('bot.nickname') || Bot?.nickname || '机器人'
-            const botId = Bot?.uin || ''
+            const botName = config.get('bot.nickname') || globalThis.Bot?.nickname || '机器人'
+            const botId = globalThis.Bot?.uin || ''
 
             // 构建对话历史文本
             const historyText =
@@ -307,7 +307,7 @@ class ConversationTrackerService {
      */
     async batchIsUserTalkingToBot(batch) {
         try {
-            const botName = config.get('bot.nickname') || Bot?.nickname || '机器人'
+            const botName = config.get('bot.nickname') || globalThis.Bot?.nickname || '机器人'
 
             const batchWithIds = batch.map((item, i) => ({
                 ...item,

@@ -8,17 +8,188 @@ import { chatLogger } from '../core/utils/logger.js'
 const logger = chatLogger
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import config from '../../config/config.js'
 import { McpClient } from './McpClient.js'
 import { builtinMcpServer, setBuiltinToolContext, resolveDangerousTools } from './BuiltinMcpServer.js'
 import { getToolIdentity as getAdapterToolIdentity } from '../core/adapters/tooling.js'
+import { sanitizeToolResultForLog } from '../core/utils/toolResult.js'
+import {
+    MCP_PROMPT_METADATA_FIELDS,
+    MCP_RESOURCE_METADATA_FIELDS,
+    MCP_RESOURCE_TEMPLATE_METADATA_FIELDS,
+    MCP_TOOL_METADATA_FIELDS,
+    copyMcpDefinitionMetadata
+} from './McpProtocol.js'
+
+export {
+    MCP_PROMPT_METADATA_FIELDS,
+    MCP_RESOURCE_METADATA_FIELDS,
+    MCP_RESOURCE_TEMPLATE_METADATA_FIELDS,
+    MCP_TOOL_METADATA_FIELDS,
+    copyMcpDefinitionMetadata
+} from './McpProtocol.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 /** @constant {string} MCP服务器配置文件路径 */
 const MCP_SERVERS_FILE = path.join(__dirname, '../../data/mcp-servers.json')
+
+/** MCP 配置日志中的脱敏占位符。 */
+const REDACTED_MCP_CONFIG_VALUE = '[REDACTED]'
+
+/**
+ * 判断配置键是否承载认证凭据。
+ * @param {string} key - 原始键名
+ * @returns {boolean} 是否需要隐藏对应值
+ */
+function isSensitiveConfigKey(key) {
+    const words = String(key)
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean)
+    const compact = words.join('')
+    if (
+        words.some(word =>
+            [
+                'auth',
+                'authorization',
+                'authentication',
+                'token',
+                'password',
+                'passwd',
+                'secret',
+                'cookie',
+                'credential'
+            ].includes(word)
+        )
+    ) {
+        return true
+    }
+    if (words.includes('key')) return true
+    return ['apikey', 'accesskey', 'privatekey', 'clientsecret', 'accesstoken', 'refreshtoken', 'bearertoken'].some(
+        marker => compact.includes(marker)
+    )
+}
+
+/**
+ * 深度复制 MCP 配置并隐藏 headers/env 等容器内的认证字段。
+ * @param {*} value - 待记录的配置值
+ * @param {WeakSet<object>} [seen] - 循环引用保护
+ * @returns {*} 可安全写入日志的副本
+ */
+export function redactMcpConfigForLog(value, seen = new WeakSet()) {
+    if (value === null || value === undefined || typeof value !== 'object') return value
+    if (seen.has(value)) return '[Circular]'
+    seen.add(value)
+
+    if (Array.isArray(value)) {
+        return value.map(item => redactMcpConfigForLog(item, seen))
+    }
+
+    const redacted = {}
+    for (const [key, item] of Object.entries(value)) {
+        redacted[key] = isSensitiveConfigKey(key) ? REDACTED_MCP_CONFIG_VALUE : redactMcpConfigForLog(item, seen)
+    }
+    return redacted
+}
+
+/**
+ * 校验并复制 MCP 配置文档，保证保存对象不与调用方共享可变引用。
+ * @param {*} value - 配置文档
+ * @returns {{servers: Record<string, Object>}} JSON 安全副本
+ */
+function normalizeServersDocument(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('MCP 服务器配置必须为 JSON 对象')
+    }
+    const servers = value.servers === undefined ? {} : value.servers
+    if (!servers || typeof servers !== 'object' || Array.isArray(servers)) {
+        throw new Error('MCP 服务器配置的 servers 必须为 JSON 对象')
+    }
+    let serialized
+    try {
+        serialized = JSON.stringify({ ...value, servers })
+    } catch (error) {
+        throw new Error(`MCP 服务器配置无法序列化: ${error.message}`)
+    }
+    return JSON.parse(serialized)
+}
+
+/**
+ * 根据显式配置或 URL 端点推断 MCP 传输类型。
+ *
+ * `/sse` 与 `/message` 属于 2024-11-05 HTTP+SSE；`/mcp` 属于
+ * Streamable HTTP。未知 URL 保持旧版默认 SSE，避免改变既有配置行为。
+ * @param {*} serverConfig - MCP 服务器配置
+ * @returns {string|undefined} 推断出的传输类型
+ */
+export function inferMcpServerType(serverConfig) {
+    if (!serverConfig || typeof serverConfig !== 'object' || Array.isArray(serverConfig)) return undefined
+
+    const explicitType = typeof serverConfig.type === 'string' ? serverConfig.type.toLowerCase() : ''
+    if (['streamable-http', 'http', 'sse', 'stdio', 'npm', 'npx'].includes(explicitType)) return explicitType
+
+    if (serverConfig.url) {
+        let urlPath = String(serverConfig.url).toLowerCase()
+        try {
+            urlPath = new URL(urlPath).pathname.toLowerCase()
+        } catch {
+            urlPath = urlPath.split(/[?#]/, 1)[0]
+        }
+        if (urlPath.endsWith('/sse') || urlPath.endsWith('/message')) return 'sse'
+        if (urlPath === '/mcp' || urlPath.endsWith('/mcp')) return 'streamable-http'
+        return 'sse'
+    }
+    if (serverConfig.package) return 'npm'
+    if (serverConfig.command) return 'stdio'
+    return undefined
+}
+
+/**
+ * 判断 URL 是否明确指向当前插件的 MCP 端点。
+ * 仅凭路径包含 /chatai/mcp 会误伤远程服务；必须同时命中本机回环地址，
+ * 或命中用户配置的 web.publicUrl / loginLinks 来源。
+ * @param {*} value - MCP URL
+ * @returns {boolean} 是否为当前插件自引用
+ */
+export function isSelfReferentialMcpUrl(value) {
+    if (typeof value !== 'string' || !value.trim()) return false
+    let target
+    try {
+        target = new URL(value)
+    } catch {
+        return false
+    }
+
+    const mountSegments = String(config.get('web.mountPath') || '/chatai')
+        .split('/')
+        .filter(Boolean)
+    const mountPath = mountSegments.length > 0 ? `/${mountSegments.join('/')}` : ''
+    const targetPath = target.pathname.replace(/\/+$/, '') || '/'
+    if (targetPath !== `${mountPath}/mcp`) return false
+
+    const hostname = target.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+    if (['localhost', '127.0.0.1', '::1', '0.0.0.0'].includes(hostname)) return true
+
+    const configuredOrigins = [
+        config.get('web.publicUrl'),
+        ...(Array.isArray(config.get('web.loginLinks'))
+            ? config.get('web.loginLinks').map(link => (typeof link === 'string' ? link : link?.baseUrl))
+            : [])
+    ]
+    return configuredOrigins.some(origin => {
+        if (typeof origin !== 'string' || !origin.trim()) return false
+        try {
+            return new URL(origin).origin.toLowerCase() === target.origin.toLowerCase()
+        } catch {
+            return false
+        }
+    })
+}
 
 /**
  * @class McpManager
@@ -47,6 +218,56 @@ const MCP_SERVERS_FILE = path.join(__dirname, '../../data/mcp-servers.json')
 const TOOL_LOG_MAX_CHARS = 2000
 
 /**
+ * 全局工具注册表中不存在指定工具。
+ * 路由层使用稳定错误码区分协议参数错误与工具执行错误。
+ */
+export class McpToolNotFoundError extends Error {
+    /**
+     * @param {string} toolName - 工具名称
+     */
+    constructor(toolName) {
+        super(`Tool not found: ${toolName}`)
+        this.name = 'McpToolNotFoundError'
+        this.code = 'MCP_TOOL_NOT_FOUND'
+        this.toolName = toolName
+    }
+}
+
+/**
+ * 命名空间工具名与显式服务器身份冲突。
+ * 调用方不能通过额外的 serverName 覆盖 `mcp:<server>:<tool>` 中已经编码的来源。
+ */
+export class McpToolIdentityMismatchError extends Error {
+    /**
+     * @param {string} value - 原始命名空间名称
+     * @param {string} embeddedServerName - 名称中编码的服务器
+     * @param {string} explicitServerName - 调用方显式服务器
+     */
+    constructor(value, embeddedServerName, explicitServerName) {
+        super(`MCP 工具身份冲突: ${value} 指向服务器 ${embeddedServerName}，但显式 serverName 为 ${explicitServerName}`)
+        this.name = 'McpToolIdentityMismatchError'
+        this.code = 'MCP_TOOL_IDENTITY_MISMATCH'
+        this.value = value
+        this.embeddedServerName = embeddedServerName
+        this.explicitServerName = explicitServerName
+    }
+}
+
+/**
+ * MCP 资源不存在。
+ * 路由层据此返回 JSON-RPC -32602，而不是把业务未命中误报为内部错误。
+ */
+export class McpResourceNotFoundError extends Error {
+    /** @param {string} uri - 资源 URI */
+    constructor(uri) {
+        super(`Resource not found: ${uri}`)
+        this.name = 'McpResourceNotFoundError'
+        this.code = 'MCP_RESOURCE_NOT_FOUND'
+        this.uri = uri
+    }
+}
+
+/**
  * 压缩工具调用日志中的大字段，只保留可读摘要
  *
  * 绘图、语音、文件读取类工具会返回 base64，直接留存会让 1000 条日志占用 GB 级内存。
@@ -73,7 +294,14 @@ function summarizeToolLogValue(value, maxChars = TOOL_LOG_MAX_CHARS) {
 }
 
 export class McpManager {
-    constructor() {
+    /**
+     * @param {Object} [options] - 可注入依赖，生产环境使用默认实现
+     * @param {string} [options.serversFile] - MCP 服务器配置文件
+     * @param {typeof fs} [options.fileSystem] - 文件系统实现
+     * @param {(config:Object) => McpClient} [options.clientFactory] - MCP 客户端工厂
+     * @param {Object} [options.logger] - 日志实现
+     */
+    constructor(options = {}) {
         /** @type {Map<string, Object>} 工具名称 -> 工具定义 */
         this.tools = new Map()
         /** @type {Map<string, Object>} 工具身份(server:name) -> 工具定义 */
@@ -82,8 +310,16 @@ export class McpManager {
         this.servers = new Map()
         /** @type {Map<string, Object>} 资源URI -> 资源信息 */
         this.resources = new Map()
+        /** @type {Map<string, Object>} 资源身份(server:uri) -> 资源信息 */
+        this.resourceIdentities = new Map()
+        /** @type {Map<string, Object>} 资源模板 URI 模式 -> 模板信息 */
+        this.resourceTemplates = new Map()
+        /** @type {Map<string, Object>} 资源模板身份(server:uriTemplate) -> 模板信息 */
+        this.resourceTemplateIdentities = new Map()
         /** @type {Map<string, Object>} 提示词名称 -> 提示词信息 */
         this.prompts = new Map()
+        /** @type {Map<string, Object>} 提示词身份(server:name) -> 提示词信息 */
+        this.promptIdentities = new Map()
         /** @type {Map<string, Object>} 工具结果缓存 */
         this.toolResultCache = new Map()
         /** @type {Array<Object>} 工具调用日志 */
@@ -98,6 +334,20 @@ export class McpManager {
         this.serverConnectPromises = new Map()
         /** @type {Object} 服务器配置 */
         this.serversConfig = { servers: {} }
+        /** @type {string} MCP 服务器配置文件 */
+        this.serversFile = path.resolve(options.serversFile || MCP_SERVERS_FILE)
+        /** @type {typeof fs} 配置持久化使用的文件系统实现 */
+        this.fileSystem = options.fileSystem || fs
+        /** @type {(config:Object) => McpClient} MCP 客户端工厂 */
+        this.clientFactory = options.clientFactory || (clientConfig => new McpClient(clientConfig))
+        /** @type {Object} 可注入日志实现 */
+        this.configLogger = options.logger || logger
+        /** @type {Promise<number>|null} JS 工具单飞重载 */
+        this.jsToolsReloadPromise = null
+        /** @type {number} 工具注册表版本 */
+        this.toolRegistryVersion = 0
+        /** @type {number} 进程内工具尝试开始顺序 */
+        this.toolAttemptSequence = 0
     }
 
     /**
@@ -112,48 +362,77 @@ export class McpManager {
      * 如果配置文件不存在，自动创建默认配置
      */
     loadServersConfig() {
-        try {
-            // 确保目录存在
-            const dir = path.dirname(MCP_SERVERS_FILE)
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true })
-                logger.debug('[MCP] 创建配置目录:', dir)
-            }
-
-            // 如果文件不存在，创建默认配置
-            if (!fs.existsSync(MCP_SERVERS_FILE)) {
-                this.serversConfig = { servers: {} }
-                this.saveServersConfig()
-                logger.debug('[MCP] 创建默认配置文件:', MCP_SERVERS_FILE)
-                return this.serversConfig
-            }
-
-            const content = fs.readFileSync(MCP_SERVERS_FILE, 'utf-8')
-            this.serversConfig = JSON.parse(content)
-            if (!this.serversConfig.servers) {
-                this.serversConfig.servers = {}
-            }
-        } catch (error) {
-            logger.error('[MCP] 加载服务器配置失败:', error.message)
-            this.serversConfig = { servers: {} }
+        const fileSystem = this.fileSystem
+        const dir = path.dirname(this.serversFile)
+        if (!fileSystem.existsSync(dir)) {
+            fileSystem.mkdirSync(dir, { recursive: true, mode: 0o700 })
+            this.configLogger.debug('[MCP] 创建配置目录:', dir)
         }
-        return this.serversConfig
+
+        if (!fileSystem.existsSync(this.serversFile)) {
+            const initial = { servers: {} }
+            this.saveServersConfig(initial)
+            this.configLogger.debug('[MCP] 创建默认配置文件:', this.serversFile)
+            return this.serversConfig
+        }
+
+        try {
+            const content = fileSystem.readFileSync(this.serversFile, 'utf-8')
+            const parsed = normalizeServersDocument(JSON.parse(content))
+            // 既有文件也收紧权限；失败必须暴露，避免继续把凭据保留为宽权限。
+            fileSystem.chmodSync(this.serversFile, 0o600)
+            this.serversConfig = parsed
+            return this.serversConfig
+        } catch (error) {
+            this.configLogger.error('[MCP] 加载服务器配置失败:', error.message)
+            throw new Error(`加载 MCP 服务器配置失败: ${error.message}`)
+        }
     }
 
     /**
      * 保存 MCP 服务器配置
      */
-    saveServersConfig() {
-        try {
-            const dir = path.dirname(MCP_SERVERS_FILE)
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true })
-            }
-            fs.writeFileSync(MCP_SERVERS_FILE, JSON.stringify(this.serversConfig, null, 2), 'utf-8')
-            logger.debug('[MCP] 服务器配置已保存')
-        } catch (error) {
-            logger.error('[MCP] 保存服务器配置失败:', error.message)
+    saveServersConfig(nextConfig = this.serversConfig) {
+        const normalized = normalizeServersDocument(nextConfig)
+        const serialized = JSON.stringify(normalized, null, 2)
+        const fileSystem = this.fileSystem
+        const dir = path.dirname(this.serversFile)
+        if (!fileSystem.existsSync(dir)) {
+            fileSystem.mkdirSync(dir, { recursive: true, mode: 0o700 })
         }
+
+        const temporaryPath = path.join(
+            dir,
+            `.${path.basename(this.serversFile)}.${process.pid}-${crypto.randomUUID()}.tmp`
+        )
+        let descriptor = null
+        try {
+            descriptor = fileSystem.openSync(temporaryPath, 'wx', 0o600)
+            fileSystem.writeFileSync(descriptor, serialized, 'utf8')
+            fileSystem.fsyncSync(descriptor)
+            fileSystem.closeSync(descriptor)
+            descriptor = null
+            fileSystem.chmodSync(temporaryPath, 0o600)
+            fileSystem.renameSync(temporaryPath, this.serversFile)
+        } catch (error) {
+            if (descriptor !== null) {
+                try {
+                    fileSystem.closeSync(descriptor)
+                } catch {}
+            }
+            try {
+                fileSystem.rmSync(temporaryPath, { force: true })
+            } catch {}
+            try {
+                this.configLogger.error('[MCP] 保存服务器配置失败:', error.message)
+            } catch {}
+            throw new Error(`保存 MCP 服务器配置失败: ${error.message}`)
+        }
+        this.serversConfig = normalized
+        try {
+            this.configLogger.debug('[MCP] 服务器配置已原子保存')
+        } catch {}
+        return this.serversConfig
     }
     async init() {
         // 如果已初始化，直接返回
@@ -247,7 +526,11 @@ export class McpManager {
         this.toolIdentities.clear()
         this.servers.clear()
         this.resources.clear()
+        this.resourceIdentities.clear()
+        this.resourceTemplates.clear()
+        this.resourceTemplateIdentities.clear()
         this.prompts.clear()
+        this.promptIdentities.clear()
         this.toolResultCache.clear()
         this.initialized = false
         this.initPromise = null
@@ -294,6 +577,7 @@ export class McpManager {
                 client: null,
                 tools: builtinTools,
                 resources: [],
+                resourceTemplates: [],
                 prompts: [],
                 connectedAt: Date.now(),
                 isBuiltin: true
@@ -327,6 +611,7 @@ export class McpManager {
                 client: null,
                 tools: jsTools,
                 resources: [],
+                resourceTemplates: [],
                 prompts: [],
                 connectedAt: Date.now(),
                 isBuiltin: false,
@@ -380,21 +665,7 @@ export class McpManager {
      * 2. transport嵌套格式: { transport: { type: 'http', url: '...' } }
      */
     inferServerType(serverConfig) {
-        if (serverConfig.url) {
-            // 根据 URL 路径或显式 type 推断 HTTP 类型
-            if (serverConfig.type === 'streamable-http' || serverConfig.type === 'http') {
-                return serverConfig.type
-            }
-            // 如果 URL 包含 /mcp 或 /sse 但没有显式 type，优先推断为 streamable-http
-            const urlPath = serverConfig.url.toLowerCase()
-            if (urlPath.includes('/mcp') || urlPath.endsWith('/sse')) {
-                return 'streamable-http'
-            }
-            return 'sse'
-        }
-        if (serverConfig.package) return 'npm'
-        if (serverConfig.command) return 'stdio'
-        return undefined
+        return inferMcpServerType(serverConfig)
     }
 
     normalizeNpxServerConfig(serverConfig) {
@@ -403,7 +674,7 @@ export class McpManager {
         const command = String(serverConfig.command || '').toLowerCase()
         const isNpxCommand = command === 'npx' || command === 'npx.cmd'
         const type = String(serverConfig.type || '').toLowerCase()
-        if (!isNpxCommand || (type && type !== 'stdio')) {
+        if (!isNpxCommand || (type && type !== 'stdio' && type !== 'npx')) {
             return serverConfig
         }
 
@@ -418,10 +689,13 @@ export class McpManager {
             return serverConfig
         }
 
-        const { command: _command, ...rest } = serverConfig
+        const rest = { ...serverConfig }
+        delete rest.command
         return {
             ...rest,
-            type: 'npm',
+            // 显式 npx 类型保留原类型；两者在 McpClient 中都走同一
+            // npx 启动器，但保留值可让面板/配置回显不发生语义漂移。
+            type: type === 'npx' ? 'npx' : 'npm',
             package: pkg,
             args
         }
@@ -473,7 +747,10 @@ export class McpManager {
         try {
             // 规范化配置格式
             const normalizedConfig = this.normalizeServerConfig(serverConfig)
-            logger.debug(`[MCP] Connecting to ${name} with config:`, JSON.stringify(normalizedConfig))
+            this.configLogger.debug(
+                `[MCP] Connecting to ${name} with config:`,
+                JSON.stringify(redactMcpConfigForLog(normalizedConfig))
+            )
 
             if (name === 'builtin') {
                 await this.initBuiltinServer()
@@ -486,22 +763,34 @@ export class McpManager {
                 return { success: true, tools: this.servers.get('custom-tools')?.tools?.length || 0 }
             }
 
-            /*
-             * 自引用检测：跳过指向本插件自身 MCP Server 端点的配置
-             * 工具已通过内置服务器提供，自连接会导致启动时序 fetch failed
-             */
-            const serverUrl = normalizedConfig?.url || ''
-            if (serverUrl && /\/chatai\/mcp\b/.test(serverUrl)) {
-                logger.info(`[MCP] 跳过自引用服务器 ${name}: ${serverUrl} (工具已通过内置服务器提供)`)
-                return { success: true, tools: 0, skipped: true }
-            }
-
-            // Disconnect existing server if any
+            // 既有连接必须在自引用判断前断开；否则把在线服务器更新为自引用配置时，
+            // 会持久化新配置却继续运行旧客户端和旧工具。
             if (this.servers.has(name)) {
                 await this.disconnectServer(name)
             }
 
-            client = new McpClient(normalizedConfig)
+            /*
+             * 自引用检测：跳过指向本插件自身 MCP Server 端点的配置
+             * 工具已通过内置服务器提供，自连接会导致启动时序 fetch failed。
+             * 仍登记一个明确的 skipped 状态，使新增/更新接口和配置回显保持一致。
+             */
+            const serverUrl = normalizedConfig?.url || ''
+            if (isSelfReferentialMcpUrl(serverUrl)) {
+                logger.info(`[MCP] 跳过自引用服务器 ${name}: ${serverUrl} (工具已通过内置服务器提供)`)
+                this.servers.set(name, {
+                    status: 'skipped',
+                    config: normalizedConfig,
+                    client: null,
+                    tools: [],
+                    resources: [],
+                    resourceTemplates: [],
+                    prompts: [],
+                    skipped: true
+                })
+                return { success: true, tools: 0, skipped: true }
+            }
+
+            client = this.clientFactory(normalizedConfig)
             await client.connect()
             logger.debug(`[MCP] Client connected for ${name}, fetching tools...`)
 
@@ -513,7 +802,7 @@ export class McpManager {
             let resources = []
             try {
                 resources = await client.listResources()
-            } catch (error) {
+            } catch {
                 // Resources not supported, ignore
             }
 
@@ -521,8 +810,20 @@ export class McpManager {
             let prompts = []
             try {
                 prompts = await client.listPrompts()
-            } catch (error) {
+            } catch {
                 // Prompts not supported, ignore
+            }
+
+            // 资源模板是 resources 能力下的可选清单；旧版客户端没有该方法时
+            // 保持空列表，不能阻断其它工具/资源的连接。
+            let resourceTemplates = []
+            if (typeof client.listResourceTemplates === 'function') {
+                try {
+                    const listedTemplates = await client.listResourceTemplates()
+                    resourceTemplates = Array.isArray(listedTemplates) ? listedTemplates : []
+                } catch {
+                    // Resource templates not supported, ignore
+                }
             }
 
             this.servers.set(name, {
@@ -531,6 +832,7 @@ export class McpManager {
                 client,
                 tools,
                 resources,
+                resourceTemplates,
                 prompts,
                 connectedAt: Date.now()
             })
@@ -547,22 +849,43 @@ export class McpManager {
 
             // Register resources
             for (const resource of resources) {
-                this.resources.set(resource.uri, {
+                const normalizedResource = {
                     ...resource,
                     serverName: name
-                })
+                }
+                this.resources.set(resource.uri, normalizedResource)
+                this.resourceIdentities.set(`${name}:${resource.uri}`, normalizedResource)
+            }
+
+            // 注册资源模板身份，供面板和聚合端保留同名/同模式来源。
+            for (const resourceTemplate of resourceTemplates) {
+                if (typeof resourceTemplate?.uriTemplate !== 'string' || !resourceTemplate.uriTemplate) continue
+                const normalizedTemplate = {
+                    ...resourceTemplate,
+                    serverName: name
+                }
+                this.resourceTemplates.set(resourceTemplate.uriTemplate, normalizedTemplate)
+                this.resourceTemplateIdentities.set(`${name}:${resourceTemplate.uriTemplate}`, normalizedTemplate)
             }
 
             // Register prompts
             for (const prompt of prompts) {
-                this.prompts.set(prompt.name, {
+                const normalizedPrompt = {
                     ...prompt,
                     serverName: name
-                })
+                }
+                this.prompts.set(prompt.name, normalizedPrompt)
+                this.promptIdentities.set(`${name}:${prompt.name}`, normalizedPrompt)
             }
 
             logger.debug(`[MCP] Connected to server: ${name}, loaded ${tools.length} tools`)
-            return { success: true, tools: tools.length, resources: resources.length, prompts: prompts.length }
+            return {
+                success: true,
+                tools: tools.length,
+                resources: resources.length,
+                resourceTemplates: resourceTemplates.length,
+                prompts: prompts.length
+            }
         } catch (err) {
             if (client) {
                 try {
@@ -598,10 +921,37 @@ export class McpManager {
                     this.resources.delete(uri)
                 }
             }
+            for (const [identity, resource] of this.resourceIdentities) {
+                if (resource.serverName === name) this.resourceIdentities.delete(identity)
+            }
+            this.resources.clear()
+            for (const resource of this.resourceIdentities.values()) {
+                if (!this.resources.has(resource.uri)) this.resources.set(resource.uri, resource)
+            }
+            for (const [uriTemplate, resourceTemplate] of this.resourceTemplates) {
+                if (resourceTemplate.serverName === name) this.resourceTemplates.delete(uriTemplate)
+            }
+            for (const [identity, resourceTemplate] of this.resourceTemplateIdentities) {
+                if (resourceTemplate.serverName === name) this.resourceTemplateIdentities.delete(identity)
+            }
+            this.resourceTemplates.clear()
+            for (const resourceTemplate of this.resourceTemplateIdentities.values()) {
+                if (!this.resourceTemplates.has(resourceTemplate.uriTemplate)) {
+                    this.resourceTemplates.set(resourceTemplate.uriTemplate, resourceTemplate)
+                }
+            }
             for (const [promptName, prompt] of this.prompts) {
                 if (prompt.serverName === name) {
                     this.prompts.delete(promptName)
                 }
+            }
+            for (const [identity, prompt] of this.promptIdentities) {
+                if (prompt.serverName === name) this.promptIdentities.delete(identity)
+            }
+            // 同名提示词可能来自多个服务器；删除后重建名称索引，避免留下悬空实现。
+            this.prompts.clear()
+            for (const prompt of this.promptIdentities.values()) {
+                if (!this.prompts.has(prompt.name)) this.prompts.set(prompt.name, prompt)
             }
 
             // Disconnect client
@@ -662,6 +1012,33 @@ export class McpManager {
         return null
     }
 
+    /**
+     * 获取调用选项中的显式服务器身份。
+     * @param {Object} options - 工具调用选项
+     * @returns {string|undefined} 显式服务器名
+     */
+    getExplicitServerName(options = {}) {
+        for (const key of ['serverName', 'server_label', 'server_name']) {
+            const value = options?.[key]
+            if (value !== undefined && value !== null && value !== '') return String(value)
+        }
+        return undefined
+    }
+
+    /**
+     * 校验命名空间名称与显式服务器身份一致。
+     * @param {string} value - 原始名称
+     * @param {Object} options - 调用选项
+     * @param {Object|null} parsedIdentity - 已解析身份
+     * @returns {void}
+     */
+    assertToolIdentityMatch(value, options, parsedIdentity) {
+        const explicitServerName = this.getExplicitServerName(options)
+        if (parsedIdentity && explicitServerName !== undefined && explicitServerName !== parsedIdentity.serverName) {
+            throw new McpToolIdentityMismatchError(value, parsedIdentity.serverName, explicitServerName)
+        }
+    }
+
     registerTool(tool) {
         if (!tool?.name) return
         this.tools.set(tool.name, tool)
@@ -672,7 +1049,9 @@ export class McpManager {
     unregisterTool(name, tool = null) {
         const existing = tool || this.tools.get(name)
         const identity = this.getToolIdentity(name, existing?.serverName)
-        if (identity) this.toolIdentities.delete(identity)
+        // 热重载/重连期间可能仍有旧对象晚到调用 unregisterTool。只有注册表中的
+        // 对象仍是待删除对象时才移除身份，否则会误删同名的新实现。
+        if (identity && this.toolIdentities.get(identity) === existing) this.toolIdentities.delete(identity)
         if (this.tools.get(name) === existing) {
             const replacement = Array.from(this.toolIdentities.values()).find(item => item.name === name)
             if (replacement) {
@@ -685,13 +1064,16 @@ export class McpManager {
 
     getRegisteredTool(name, options = {}) {
         const parsedIdentity = this.parseToolIdentity(name)
+        this.assertToolIdentityMatch(name, options, parsedIdentity)
         const toolName = parsedIdentity?.name || name
-        const serverName =
-            options.serverName || options.server_label || options.server_name || parsedIdentity?.serverName
+        const serverName = this.getExplicitServerName(options) || parsedIdentity?.serverName
         const identity = this.getToolIdentity(toolName, serverName)
         if (identity && this.toolIdentities.has(identity)) {
             return this.toolIdentities.get(identity)
         }
+        // 一旦调用方给出了服务器身份，找不到该精确身份就必须失败，不能
+        // 回退到同名工具；否则 mcp:missing:foo 可能误执行另一服务器的 foo。
+        if (identity) return null
         return this.tools.get(toolName) || null
     }
 
@@ -748,21 +1130,82 @@ export class McpManager {
     }
 
     /**
-     * Add a new server (or update if exists)
+     * 清理一次失败连接留下的 error server 与工具注册。
+     * @param {string} name - 服务器名称
+     * @returns {Promise<void>}
      */
-    async addServer(name, serverConfig) {
-        // 如果已存在，先断开
+    async cleanupFailedServer(name) {
         if (this.servers.has(name)) {
             await this.disconnectServer(name)
         }
+        this.servers.delete(name)
+    }
 
-        // 保存到 JSON 文件
-        this.loadServersConfig()
-        this.serversConfig.servers[name] = serverConfig
-        this.saveServersConfig()
+    /**
+     * 恢复配置变更前的服务器运行态。
+     * @param {string} name - 服务器名称
+     * @param {Object} serverSnapshot - 变更前服务器信息
+     * @param {Object|null} configSnapshot - 变更前连接配置
+     * @returns {Promise<void>}
+     */
+    async restoreServerSnapshot(name, serverSnapshot, configSnapshot) {
+        await this.cleanupFailedServer(name)
+        if (serverSnapshot?.isCustomTools) {
+            await builtinMcpServer.loadJsTools()
+            await this.initCustomToolsServer()
+            return
+        }
+        if (serverSnapshot?.isBuiltin) {
+            await this.initBuiltinServer()
+            return
+        }
+        if (serverSnapshot?.status === 'connected' && configSnapshot) {
+            await this.connectServer(name, configSnapshot)
+            return
+        }
+        this.servers.set(name, serverSnapshot)
+    }
 
-        // Connect
-        await this.connectServer(name, serverConfig)
+    /**
+     * 抛出原操作错误；恢复也失败时同时保留两条证据。
+     * @param {string} action - 操作名称
+     * @param {Error} operationError - 原操作错误
+     * @param {Error|null} restoreError - 恢复错误
+     * @throws {Error|AggregateError} 始终抛出
+     */
+    throwMutationError(action, operationError, restoreError = null) {
+        if (!restoreError) throw operationError
+        throw new AggregateError(
+            [operationError, restoreError],
+            `${action}失败，且恢复原 MCP 服务器连接失败: ${restoreError.message}`
+        )
+    }
+
+    /**
+     * Add a new server (or update if exists)
+     */
+    async addServer(name, serverConfig) {
+        if (this.servers.has(name)) {
+            return await this.updateServer(name, serverConfig)
+        }
+
+        const currentConfig = this.loadServersConfig()
+        const normalizedConfig = this.normalizeServerConfig(serverConfig)
+        try {
+            await this.connectServer(name, normalizedConfig)
+        } catch (error) {
+            await this.cleanupFailedServer(name)
+            throw error
+        }
+
+        const nextConfig = normalizeServersDocument(currentConfig)
+        nextConfig.servers[name] = normalizedConfig
+        try {
+            this.saveServersConfig(nextConfig)
+        } catch (error) {
+            await this.cleanupFailedServer(name)
+            throw error
+        }
         return this.getServer(name)
     }
 
@@ -779,12 +1222,36 @@ export class McpManager {
             throw new Error('Cannot update builtin server')
         }
 
-        this.loadServersConfig()
-        this.serversConfig.servers[name] = serverConfig
-        this.saveServersConfig()
+        const currentConfig = this.loadServersConfig()
+        const oldConfig = currentConfig.servers[name] || server.config || null
+        const serverSnapshot = { ...server }
+        const normalizedConfig = this.normalizeServerConfig(serverConfig)
 
-        await this.disconnectServer(name)
-        await this.connectServer(name, serverConfig)
+        try {
+            await this.connectServer(name, normalizedConfig)
+        } catch (operationError) {
+            let restoreError = null
+            try {
+                await this.restoreServerSnapshot(name, serverSnapshot, oldConfig)
+            } catch (error) {
+                restoreError = error
+            }
+            this.throwMutationError('更新 MCP 服务器', operationError, restoreError)
+        }
+
+        const nextConfig = normalizeServersDocument(currentConfig)
+        nextConfig.servers[name] = normalizedConfig
+        try {
+            this.saveServersConfig(nextConfig)
+        } catch (operationError) {
+            let restoreError = null
+            try {
+                await this.restoreServerSnapshot(name, serverSnapshot, oldConfig)
+            } catch (error) {
+                restoreError = error
+            }
+            this.throwMutationError('保存 MCP 服务器更新', operationError, restoreError)
+        }
         return this.getServer(name)
     }
 
@@ -801,12 +1268,24 @@ export class McpManager {
             throw new Error('Cannot remove builtin server')
         }
 
+        const currentConfig = this.loadServersConfig()
+        const oldConfig = currentConfig.servers[name] || server.config || null
+        const serverSnapshot = { ...server }
         await this.disconnectServer(name)
 
-        // 从 JSON 文件删除
-        this.loadServersConfig()
-        delete this.serversConfig.servers[name]
-        this.saveServersConfig()
+        const nextConfig = normalizeServersDocument(currentConfig)
+        delete nextConfig.servers[name]
+        try {
+            this.saveServersConfig(nextConfig)
+        } catch (operationError) {
+            let restoreError = null
+            try {
+                await this.restoreServerSnapshot(name, serverSnapshot, oldConfig)
+            } catch (error) {
+                restoreError = error
+            }
+            this.throwMutationError('删除 MCP 服务器配置', operationError, restoreError)
+        }
 
         return true
     }
@@ -836,7 +1315,13 @@ export class McpManager {
                     isJsTool: tool.isJsTool,
                     isCustom: tool.isCustom,
                     isMcpTool: tool.isMcpTool,
-                    source: tool.source
+                    source: tool.source,
+                    dangerous: tool.dangerous,
+                    requireMaster: tool.requireMaster,
+                    requiredPermission: tool.requiredPermission,
+                    requirePermission: tool.requirePermission,
+                    permissionRequired: tool.permissionRequired,
+                    ...copyMcpDefinitionMetadata(tool, MCP_TOOL_METADATA_FIELDS)
                 })
             )
         }
@@ -857,7 +1342,9 @@ export class McpManager {
             // `|| []` 救不回默认黑名单，会让危险工具照常暴露给模型，故同样取并集
             if (!builtinConfig.allowDangerous) {
                 const dangerous = resolveDangerousTools(builtinConfig)
-                tools = tools.filter(t => !dangerous.includes(t.name) && !dangerous.includes(t.identity))
+                tools = tools.filter(
+                    t => t.dangerous !== true && !dangerous.includes(t.name) && !dangerous.includes(t.identity)
+                )
             }
 
             // 过滤允许的工具（白名单模式）
@@ -881,22 +1368,47 @@ export class McpManager {
      */
     getPrompts() {
         const prompts = []
-        for (const [name, prompt] of this.prompts) {
+        const identityValues = Array.from(this.promptIdentities.values())
+        const values = identityValues.length
+            ? [...identityValues, ...Array.from(this.prompts.values()).filter(item => !identityValues.includes(item))]
+            : Array.from(this.prompts.values())
+        for (const prompt of values) {
+            const name = prompt.name
             prompts.push({
                 name,
-                description: prompt.description,
-                arguments: prompt.arguments,
-                serverName: prompt.serverName
+                ...(prompt.description !== undefined ? { description: prompt.description } : {}),
+                ...(prompt.arguments !== undefined ? { arguments: prompt.arguments } : {}),
+                serverName: prompt.serverName,
+                ...copyMcpDefinitionMetadata(prompt, MCP_PROMPT_METADATA_FIELDS)
             })
         }
         return prompts
     }
 
     /**
+     * 列出全部提示词的标准别名。
+     * 面板路由与 MCP 聚合路由都使用 listPrompts，统一走同一份身份索引，
+     * 避免调用方各自读取旧的 prompts Map。
+     * @returns {Array<Object>} 提示词清单
+     */
+    listPrompts() {
+        return this.getPrompts()
+    }
+
+    /**
      * Get prompt content
      */
-    async getPrompt(name, args = {}) {
-        const prompt = this.prompts.get(name)
+    async getPrompt(name, args = {}, serverName = undefined) {
+        const parsedIdentity = this.parseToolIdentity(name)
+        this.assertToolIdentityMatch(name, { serverName }, parsedIdentity)
+        if (parsedIdentity) {
+            serverName = parsedIdentity.serverName
+            name = parsedIdentity.name
+        }
+        const prompt = serverName
+            ? this.promptIdentities.get(`${serverName}:${name}`) ||
+              Array.from(this.prompts.values()).find(item => item.name === name && item.serverName === serverName)
+            : this.prompts.get(name)
         if (!prompt) {
             throw new Error(`Prompt not found: ${name}`)
         }
@@ -928,9 +1440,13 @@ export class McpManager {
                 type: info.config?.type || 'stdio',
                 toolsCount: info.tools?.length || 0,
                 resourcesCount: info.resources?.length || 0,
+                resourceTemplatesCount: info.resourceTemplates?.length || 0,
                 promptsCount: info.prompts?.length || 0,
                 connectedAt: info.connectedAt,
-                error: info.error
+                error: info.error,
+                isBuiltin: info.isBuiltin === true,
+                isCustomTools: info.isCustomTools === true,
+                skipped: info.skipped === true
             })
         }
         return servers
@@ -950,9 +1466,13 @@ export class McpManager {
             config: server.config,
             tools: server.tools || [],
             resources: server.resources || [],
+            resourceTemplates: server.resourceTemplates || [],
             prompts: server.prompts || [],
             connectedAt: server.connectedAt,
-            error: server.error
+            error: server.error,
+            isBuiltin: server.isBuiltin === true,
+            isCustomTools: server.isCustomTools === true,
+            skipped: server.skipped === true
         }
     }
 
@@ -961,25 +1481,60 @@ export class McpManager {
      */
     getResources() {
         const resources = []
-        for (const [uri, resource] of this.resources) {
+        const identityValues = Array.from(this.resourceIdentities.values())
+        const values = identityValues.length
+            ? [...identityValues, ...Array.from(this.resources.values()).filter(item => !identityValues.includes(item))]
+            : Array.from(this.resources.values())
+        for (const resource of values) {
+            const uri = resource.uri
             resources.push({
                 uri,
-                name: resource.name,
-                description: resource.description,
-                mimeType: resource.mimeType,
-                serverName: resource.serverName
+                ...(resource.name !== undefined ? { name: resource.name } : {}),
+                ...(resource.description !== undefined ? { description: resource.description } : {}),
+                ...(resource.mimeType !== undefined ? { mimeType: resource.mimeType } : {}),
+                serverName: resource.serverName,
+                ...copyMcpDefinitionMetadata(resource, MCP_RESOURCE_METADATA_FIELDS)
             })
         }
         return resources
     }
 
     /**
+     * 获取全部资源模板清单。
+     * @returns {Array<Object>} 资源模板定义
+     */
+    getResourceTemplates() {
+        const templates = []
+        const identityValues = Array.from(this.resourceTemplateIdentities.values())
+        const values = identityValues.length
+            ? [
+                  ...identityValues,
+                  ...Array.from(this.resourceTemplates.values()).filter(item => !identityValues.includes(item))
+              ]
+            : Array.from(this.resourceTemplates.values())
+        for (const template of values) {
+            templates.push({
+                uriTemplate: template.uriTemplate,
+                ...(template.name !== undefined ? { name: template.name } : {}),
+                ...(template.description !== undefined ? { description: template.description } : {}),
+                ...(template.mimeType !== undefined ? { mimeType: template.mimeType } : {}),
+                serverName: template.serverName,
+                ...copyMcpDefinitionMetadata(template, MCP_RESOURCE_TEMPLATE_METADATA_FIELDS)
+            })
+        }
+        return templates
+    }
+
+    /**
      * Read resource content
      */
-    async readResource(uri) {
-        const resource = this.resources.get(uri)
+    async readResource(uri, serverName = undefined) {
+        const resource = serverName
+            ? this.resourceIdentities.get(`${serverName}:${uri}`) ||
+              Array.from(this.resources.values()).find(item => item.uri === uri && item.serverName === serverName)
+            : this.resources.get(uri)
         if (!resource) {
-            throw new Error(`Resource not found: ${uri}`)
+            throw new McpResourceNotFoundError(uri)
         }
 
         const server = this.servers.get(resource.serverName)
@@ -998,41 +1553,141 @@ export class McpManager {
      * @returns {Promise} Tool result
      */
     async callTool(name, args, options = {}) {
+        const parsedIdentity = this.parseToolIdentity(name)
+        this.assertToolIdentityMatch(name, options, parsedIdentity)
+        if (parsedIdentity) {
+            name = parsedIdentity.name
+            options = {
+                ...options,
+                serverName: parsedIdentity.serverName
+            }
+        }
+        const startTime = Date.now()
+        const startOrder = ++this.toolAttemptSequence
+        const attemptId = options.attemptId || `${startTime}-${Math.random().toString(36).slice(2, 11)}`
+        let normalizedArgs = this.normalizeToolArgs(args)
         let tool = this.getTool(name, options)
         if (!tool) {
             await this.init()
             tool = this.getTool(name, options)
         }
         if (!tool) {
-            const builtinTools = builtinMcpServer.listTools()
-            const builtinTool = builtinTools.find(t => t.name === name)
-            if (builtinTool) {
-                tool = { ...builtinTool, isBuiltin: true, serverName: 'builtin' }
-            }
+            const builtinTool = builtinMcpServer.listTools().find(item => item.name === name)
+            if (builtinTool) tool = { ...builtinTool, isBuiltin: true, serverName: 'builtin' }
         }
         if (!tool && builtinMcpServer.jsTools?.has(name)) {
-            tool = { name, isJsTool: true, serverName: 'custom-tools' }
+            const jsTool = builtinMcpServer.jsTools.get(name)
+            tool = {
+                name,
+                isJsTool: true,
+                isCustom: true,
+                serverName: 'custom-tools',
+                dangerous: jsTool?.dangerous === true,
+                requireMaster: jsTool?.requireMaster === true
+            }
         }
         if (!tool) {
-            const customTools = builtinMcpServer.getCustomTools()
-            const customTool = customTools.find(t => t.name === name)
-            if (customTool) {
-                tool = { ...customTool, isCustom: true, serverName: 'builtin' }
+            const customTool = builtinMcpServer.getCustomTools().find(item => item.name === name)
+            if (customTool) tool = { ...customTool, isCustom: true, serverName: 'builtin' }
+        }
+
+        const event = options.context?.event || options.context?.getEvent?.() || null
+        const userId = options.userId || event?.user_id || options.context?.userId || null
+        const groupId =
+            options.groupId || event?.group_id || options.context?.groupId || normalizedArgs?.group_id || null
+        const toolSource = tool
+            ? tool.isJsTool
+                ? 'custom_js'
+                : tool.isBuiltin || tool.isCustom || ['builtin', 'custom-tools'].includes(tool.serverName)
+                  ? 'builtin_mcp'
+                  : `mcp:${tool.serverName || 'unknown'}`
+            : 'mcp_manager'
+        let detailRecorded = false
+
+        const recordDetail = async ({ result, success, error, source = toolSource }) => {
+            if (detailRecorded || options.skipStats === true) return
+            detailRecorded = true
+            try {
+                const { statsService } = await import('../services/stats/StatsService.js')
+                await statsService.recordToolCallFull({
+                    toolName: name || 'unknown_tool',
+                    request: sanitizeToolResultForLog(normalizedArgs),
+                    response: sanitizeToolResultForLog(result),
+                    success,
+                    error,
+                    duration: Date.now() - startTime,
+                    timestamp: startTime,
+                    attemptId,
+                    startOrder,
+                    userId,
+                    groupId,
+                    source
+                })
+            } catch (statsError) {
+                logger.debug(`[MCP] Failed to record tool call stats: ${statsError.message}`)
             }
         }
 
-        if (!tool) {
-            throw new Error(`Tool not found: ${name}`)
+        const addLog = ({ result, success, error, source = toolSource }) => {
+            this.addToolLog({
+                toolName: name,
+                arguments: sanitizeToolResultForLog(normalizedArgs),
+                timestamp: startTime,
+                attemptId,
+                userId,
+                groupId,
+                source,
+                success,
+                duration: Date.now() - startTime,
+                result: sanitizeToolResultForLog(result),
+                error: error?.message || error || null
+            })
         }
 
-        // 危险工具拦截检查
-        // dangerousTools 取"内置默认黑名单 ∪ 用户配置"：配置中的空数组不得覆盖默认黑名单
+        if (!tool) {
+            const error = new McpToolNotFoundError(name)
+            addLog({ result: null, success: false, error, source: 'mcp_manager' })
+            await recordDetail({ result: null, success: false, error, source: 'mcp_manager' })
+            throw error
+        }
+
         const builtinConfig = config.get('builtinTools') || {}
         const dangerousTools = resolveDangerousTools(builtinConfig)
         const toolIdentity = getAdapterToolIdentity(this.withToolSourceMeta(tool))
-        if ((dangerousTools.includes(name) || dangerousTools.includes(toolIdentity)) && !builtinConfig.allowDangerous) {
-            logger.warn(`[MCP] 危险工具被拦截: ${name}`)
-            return {
+        const disabledTools = Array.isArray(builtinConfig.disabledTools) ? builtinConfig.disabledTools : []
+        const recordPolicyFailure = async (result, message) => {
+            const error = new Error(message)
+            addLog({ result, success: false, error })
+            await recordDetail({ result, success: false, error })
+            return result
+        }
+
+        if (disabledTools.includes(name) || disabledTools.includes(toolIdentity)) {
+            return await recordPolicyFailure(
+                {
+                    content: [{ type: 'text', text: `工具 "${name}" 已被管理员禁用，无法执行` }],
+                    isError: true,
+                    toolDisabled: true
+                },
+                '工具已被管理员禁用'
+            )
+        }
+
+        if (tool.requireMaster === true && !this.hasMasterAuthority(options)) {
+            return await recordPolicyFailure(
+                {
+                    content: [{ type: 'text', text: `工具 "${name}" 仅允许主人调用` }],
+                    isError: true,
+                    permissionDenied: true
+                },
+                '工具仅允许主人调用'
+            )
+        }
+
+        const isDangerous =
+            tool.dangerous === true || dangerousTools.includes(name) || dangerousTools.includes(toolIdentity)
+        if (isDangerous && !builtinConfig.allowDangerous) {
+            const result = {
                 content: [
                     {
                         type: 'text',
@@ -1042,36 +1697,24 @@ export class McpManager {
                 isError: true,
                 isDangerousBlocked: true
             }
+            return await recordPolicyFailure(result, '危险工具未启用')
         }
 
-        args = this.normalizeToolArgs(args)
         const cacheScope = options.serverName || options.server_label || options.server_name || tool.serverName || ''
-
         if (options.useCache) {
-            const cacheKey = `${cacheScope}:${name}:${JSON.stringify(args)}`
+            const cacheKey = `${cacheScope}:${name}:${JSON.stringify(normalizedArgs)}`
             const cached = this.toolResultCache.get(cacheKey)
             if (cached && Date.now() - cached.timestamp < (options.cacheTTL || 60000)) {
-                logger.debug(`[MCP] Using cached result for tool: ${name}`)
-                return cached.result
+                const result = cached.result
+                addLog({ result, success: true, source: `${toolSource}:cache` })
+                await recordDetail({ result, success: true, error: null, source: `${toolSource}:cache` })
+                return result
             }
         }
 
-        const startTime = Date.now()
-        const logEntry = {
-            toolName: name,
-            arguments: args,
-            timestamp: startTime,
-            userId: options.userId || null,
-            success: false,
-            duration: 0,
-            result: null,
-            error: null
-        }
-
         try {
-            const argsPreview = this.truncateArgs(args)
+            const argsPreview = this.truncateArgs(normalizedArgs)
             logger.debug(`[MCP] Calling: ${name} ${argsPreview}`)
-            let result
             const useBuiltin =
                 tool.isBuiltin ||
                 tool.isJsTool ||
@@ -1079,37 +1722,30 @@ export class McpManager {
                 tool.serverName === 'builtin' ||
                 tool.serverName === 'custom-tools'
 
+            let result
             if (useBuiltin) {
-                result = await builtinMcpServer.callTool(name, args, options.context)
+                // 没有请求上下文时显式传 null；BuiltinMcpServer 会创建隔离上下文，
+                // 避免 undefined 回退到上一条聊天残留的全局 ToolContext。
+                const builtinContext =
+                    options.context ??
+                    (options.userPermission === 'master'
+                        ? { event: null, bot: options.bot || global.Bot || null, isMaster: true }
+                        : null)
+                result = await builtinMcpServer.callTool(name, normalizedArgs, builtinContext, {
+                    skipStats: true,
+                    attemptId
+                })
             } else {
                 const server = this.servers.get(tool.serverName)
                 if (!server || !server.client) {
                     throw new Error(`Server not available for tool: ${name}`)
                 }
-                result = await server.client.callTool(name, args)
-                const duration = Date.now() - startTime
-                const isError = result?.isError === true || result?.success === false
-                try {
-                    const { statsService } = await import('../services/stats/StatsService.js')
-                    if (statsService) {
-                        await statsService.recordToolCallFull({
-                            toolName: name,
-                            request: args,
-                            response: result,
-                            success: !isError,
-                            error: isError ? result?.errorMessage || result?.error || 'Tool error' : null,
-                            duration,
-                            userId: options.userId || options.context?.userId,
-                            groupId: options.context?.groupId,
-                            source: `mcp:${tool.serverName}`
-                        })
-                    }
-                } catch (statsErr) {
-                    logger.debug(`[MCP] Failed to record tool call stats: ${statsErr.message}`)
-                }
+                result = await server.client.callTool(name, normalizedArgs, {
+                    inputResponses: options.inputResponses,
+                    requestState: options.requestState
+                })
             }
 
-            // 检查结果是否为错误（包括权限不足、工具禁用等情况）
             const isResultError =
                 result?.isError === true ||
                 result?.success === false ||
@@ -1117,33 +1753,51 @@ export class McpManager {
                 result?.toolDisabled === true
 
             if (options.useCache && !isResultError) {
-                // 只缓存成功的结果
-                const cacheKey = `${cacheScope}:${name}:${JSON.stringify(args)}`
+                const cacheKey = `${cacheScope}:${name}:${JSON.stringify(normalizedArgs)}`
                 this.toolResultCache.set(cacheKey, {
                     result,
                     timestamp: Date.now()
                 })
             }
 
-            // 根据结果内容判断是否成功
-            logEntry.success = !isResultError
-            logEntry.duration = Date.now() - startTime
-            logEntry.result = result
-            if (isResultError) {
-                logEntry.error = result?.errorMessage || result?.error || 'Tool returned error result'
-            }
-            this.addToolLog(logEntry)
-
+            const error = isResultError
+                ? new Error(result?.errorMessage || result?.error || 'Tool returned error result')
+                : null
+            addLog({ result, success: !isResultError, error })
+            await recordDetail({ result, success: !isResultError, error })
             return result
         } catch (error) {
-            // 记录失败日志
-            logEntry.success = false
-            logEntry.duration = Date.now() - startTime
-            logEntry.error = error.message
-            this.addToolLog(logEntry)
-
+            addLog({ result: null, success: false, error })
+            await recordDetail({ result: null, success: false, error })
             logger.error(`[MCP] Tool call failed: ${name}`, error)
             throw error
+        }
+    }
+
+    /**
+     * 判断一次统一工具调用是否具备主人权限。
+     * 显式上下文优先；聊天事件交给内置服务器的标准上下文解析，无上下文时拒绝授权。
+     * @param {Object} options - callTool 调用选项
+     * @returns {boolean} 具备主人权限时返回 true
+     */
+    hasMasterAuthority(options = {}) {
+        const requestContext = options.context
+        const explicitAuthority = requestContext?.isMaster
+        if (explicitAuthority !== undefined) {
+            return (typeof explicitAuthority === 'function' ? explicitAuthority() : explicitAuthority) === true
+        }
+        if (options.userPermission === 'master') return true
+        if (!requestContext) return false
+
+        try {
+            const event = requestContext.event || requestContext.getEvent?.()
+            if (!event) return false
+            const bot = requestContext.bot || requestContext.getBot?.() || event.bot || null
+            const standardContext = builtinMcpServer.createRequestContext({ event, bot })
+            const authority = standardContext?.isMaster
+            return (typeof authority === 'function' ? authority() : authority) === true
+        } catch {
+            return false
         }
     }
 
@@ -1161,24 +1815,17 @@ export class McpManager {
         const startTime = Date.now()
         const toolNames = toolCalls.map(t => t.name).join(', ')
         logger.debug(`[MCP] 并行执行: ${toolNames}`)
-        const serverGroups = new Map()
-        for (const call of toolCalls) {
-            const tool = this.getTool(call.name, call)
-            const serverName = tool?.serverName || 'builtin'
-            if (!serverGroups.has(serverName)) {
-                serverGroups.set(serverName, [])
-            }
-            serverGroups.get(serverName).push(call)
-        }
-
         // 并行执行所有调用
         const results = await Promise.allSettled(
             toolCalls.map(async call => {
                 const callStart = Date.now()
                 try {
+                    const parsedIdentity = this.parseToolIdentity(call.name)
                     const result = await this.callTool(call.name, call.args, {
                         ...options,
-                        serverName: call.serverName
+                        serverName: call.serverName || parsedIdentity?.serverName,
+                        inputResponses: call.inputResponses,
+                        requestState: call.requestState
                     })
                     // 检查结果是否为错误
                     const isResultError =
@@ -1367,43 +2014,74 @@ export class McpManager {
      * 用于在前端修改 JS 工具源码后重新加载
      */
     async reloadJsTools() {
-        try {
-            // 移除旧的 JS 工具
-            for (const [name, tool] of this.tools) {
-                if (tool.isJsTool) {
-                    this.unregisterTool(name, tool)
+        if (this.jsToolsReloadPromise) return await this.jsToolsReloadPromise
+
+        this.jsToolsReloadPromise = (async () => {
+            try {
+                for (const [name, tool] of this.tools) {
+                    if (tool.isJsTool) this.unregisterTool(name, tool)
                 }
-            }
 
-            // 重新加载 JS 工具
-            await builtinMcpServer.loadJsTools()
+                await builtinMcpServer.loadJsTools()
 
-            // 将新的 JS 工具添加到工具列表
-            for (const [name, tool] of builtinMcpServer.jsTools) {
-                const normalizedTool = this.withToolSourceMeta({
-                    name: tool.name || name,
-                    description: tool.description || '自定义 JS 工具',
-                    inputSchema: tool.inputSchema || { type: 'object', properties: {} },
-                    serverName: 'custom-tools',
-                    isJsTool: true,
-                    isCustom: true
-                })
-                this.registerTool(normalizedTool)
-            }
+                for (const [name, tool] of builtinMcpServer.jsTools) {
+                    const normalizedTool = this.withToolSourceMeta({
+                        name: tool.name || name,
+                        description: tool.description || '自定义 JS 工具',
+                        inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+                        serverName: 'custom-tools',
+                        isJsTool: true,
+                        isCustom: true,
+                        dangerous: tool.dangerous === true,
+                        requireMaster: tool.requireMaster === true,
+                        requiredPermission: tool.requiredPermission,
+                        requirePermission: tool.requirePermission,
+                        permissionRequired: tool.permissionRequired,
+                        ...copyMcpDefinitionMetadata(tool, MCP_TOOL_METADATA_FIELDS)
+                    })
+                    this.registerTool(normalizedTool)
+                }
 
-            // 更新自定义工具服务器
-            const customServer = this.servers.get('custom-tools')
-            if (customServer) {
-                customServer.tools = Array.from(builtinMcpServer.jsTools.values()).map(t => ({
-                    name: t.name,
-                    description: t.description,
-                    inputSchema: t.inputSchema
+                const jsTools = Array.from(builtinMcpServer.jsTools.values()).map(tool => ({
+                    name: tool.name,
+                    description: tool.description,
+                    inputSchema: tool.inputSchema,
+                    dangerous: tool.dangerous === true,
+                    requireMaster: tool.requireMaster === true,
+                    ...copyMcpDefinitionMetadata(tool, MCP_TOOL_METADATA_FIELDS)
                 }))
+                if (jsTools.length > 0) {
+                    const customServer = this.servers.get('custom-tools') || {
+                        status: 'connected',
+                        config: { type: 'custom', path: 'data/tools' },
+                        client: null,
+                        resources: [],
+                        resourceTemplates: [],
+                        prompts: [],
+                        connectedAt: Date.now(),
+                        isBuiltin: false,
+                        isCustomTools: true
+                    }
+                    customServer.status = 'connected'
+                    customServer.tools = jsTools
+                    this.servers.set('custom-tools', customServer)
+                } else {
+                    this.servers.delete('custom-tools')
+                }
+
+                this.toolRegistryVersion += 1
+                this.toolResultCache.clear()
+                return builtinMcpServer.jsTools.size
+            } catch (error) {
+                logger.error('[MCP] JS 工具热重载失败:', error)
+                throw error
             }
-            return builtinMcpServer.jsTools.size
-        } catch (error) {
-            logger.error('[MCP] JS 工具热重载失败:', error)
-            throw error
+        })()
+
+        try {
+            return await this.jsToolsReloadPromise
+        } finally {
+            this.jsToolsReloadPromise = null
         }
     }
 
@@ -1524,7 +2202,7 @@ export class McpManager {
                 if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
                     return parsed
                 }
-            } catch (error) {}
+            } catch {}
         }
         return { value: args }
     }

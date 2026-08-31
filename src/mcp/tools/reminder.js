@@ -6,6 +6,7 @@
 
 import schedule from 'node-schedule'
 import { chatLogger as logger } from '../../core/utils/logger.js'
+import { StandardBotApi, StandardMessage } from '../../core/platform/index.js'
 
 /** @type {Map<string, {job: schedule.Job, info: Object}>} */
 const reminders = new Map()
@@ -167,39 +168,41 @@ export const reminderTools = [
                 groupId: groupId,
                 nickname: nickname,
                 type: parsed.type,
+                status: 'scheduled',
                 createdAt: new Date().toISOString()
             }
 
             const sendReminder = async () => {
                 try {
-                    const bot = e.bot || Bot
-                    const atUser = { type: 'at', qq: parseInt(userId) }
+                    const api = new StandardBotApi({ event: e })
+                    const targetUserId = api.targetId(userId)
+                    const targetGroupId = api.targetId(groupId)
+                    const atUser = StandardMessage.at(targetUserId)
                     const reminderText = `⏰ 提醒：${message}`
 
-                    if (target === 'group' && groupId) {
-                        const group = bot.pickGroup?.(parseInt(groupId))
-                        if (group) {
-                            await group.sendMsg([atUser, ' ', reminderText])
+                    if (target === 'group' && targetGroupId) {
+                        await api.sendGroup(targetGroupId, [atUser, ' ', reminderText])
+                    } else if (targetUserId) {
+                        try {
+                            await api.sendPrivate(targetUserId, reminderText)
+                        } catch (error) {
+                            if (!targetGroupId || error?.code !== 'UNSUPPORTED_BOT_API') throw error
+                            await api.sendGroup(targetGroupId, [atUser, ' ', reminderText])
                         }
-                    } else if (userId) {
-                        const friend = bot.pickFriend?.(parseInt(userId))
-                        if (friend) {
-                            await friend.sendMsg(reminderText)
-                        } else if (groupId) {
-                            // 如果无法私聊，在群里提醒
-                            const group = bot.pickGroup?.(parseInt(groupId))
-                            if (group) {
-                                await group.sendMsg([atUser, ' ', reminderText])
-                            }
-                        }
+                    } else {
+                        throw new Error('提醒缺少有效目标')
                     }
 
-                    // 一次性提醒完成后删除
-                    if (parsed.type === 'once') {
-                        reminders.delete(reminderId)
-                    }
+                    // 只有确认发送成功后才删除一次性提醒。
+                    if (parsed.type === 'once') reminders.delete(reminderId)
                 } catch (error) {
-                    logger.error(`[Reminder] 发送提醒失败: ${error.message}`)
+                    const entry = reminders.get(reminderId)
+                    if (entry) {
+                        entry.info.status = 'failed'
+                        entry.info.failedAt = new Date().toISOString()
+                        entry.info.lastError = error.message
+                    }
+                    logger.error(`[Reminder] 发送提醒失败，已标记为 failed: ${error.message}`)
                 }
             }
 
@@ -242,7 +245,7 @@ export const reminderTools = [
             const groupId = e?.group_id?.toString()
 
             const userReminders = []
-            for (const [id, { info }] of reminders) {
+            for (const { info } of reminders.values()) {
                 if (info.userId === userId || (info.groupId === groupId && info.target === 'group')) {
                     userReminders.push(info)
                 }
@@ -257,10 +260,17 @@ export const reminderTools = [
                 responseText += `🔔 ${info.id}\n`
                 responseText += `   内容：${info.message}\n`
                 responseText += `   时间：${info.time}\n`
-                responseText += `   类型：${info.type === 'once' ? '一次性' : info.type === 'daily' ? '每天' : '每周'}\n\n`
+                responseText += `   类型：${info.type === 'once' ? '一次性' : info.type === 'daily' ? '每天' : '每周'}\n`
+                responseText += `   状态：${info.status || 'scheduled'}${info.lastError ? `（${info.lastError}）` : ''}\n\n`
             }
 
-            return { success: true, message: responseText.trim(), reminders: userReminders }
+            return {
+                success: true,
+                message: responseText.trim(),
+                reminders: userReminders,
+                active: userReminders.filter(info => info.status !== 'failed'),
+                failed: userReminders.filter(info => info.status === 'failed')
+            }
         }
     },
     {

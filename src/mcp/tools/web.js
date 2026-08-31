@@ -102,7 +102,7 @@ function cleanHTML(html) {
         'a'
     ]
 
-    html = html.replace(/<\/?([a-zA-Z0-9]+)(\s[^>]*)?>/g, (match, tagName, attrs) => {
+    html = html.replace(/<\/?([a-zA-Z0-9]+)(\s[^>]*)?>/g, (match, tagName) => {
         tagName = tagName.toLowerCase()
         if (allowedTags.includes(tagName)) {
             if (tagName === 'img' || tagName === 'video' || tagName === 'audio' || tagName === 'source') {

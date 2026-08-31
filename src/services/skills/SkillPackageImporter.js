@@ -10,16 +10,18 @@
  * 2. 符号链接条目：zip 能保存 symlink，解开后即是一条指向包外的写入通道，直接拒绝；
  * 3. 解压炸弹：条目数、单条目解压后大小、总解压大小三重上限。声明大小与实际读出的
  *    字节数都要过一遍，防止头部声明撒谎；
- * 4. 内容约束：必须含 SKILL.md，扩展名白名单，可执行文件一律拒绝。
+ * 4. 内容约束：必须且只能含一个定义入口；普通资源走扩展名白名单，scripts/ 仅允许文本脚本且落盘后不赋执行位。
  *
  * 落盘采用两阶段：先解到 temp/ 下的暂存目录，全部校验通过后再整体 rename 到位，
  * 中途失败不会在技能目录里留下半个包。
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import AdmZip from 'adm-zip'
 import YAML from 'yaml'
 import { chatLogger } from '../../core/utils/logger.js'
+import { ensureDirectoryWithinRoot, isPathWithin, validateSkillSource } from './SkillDocumentLoader.js'
 
 const logger = chatLogger
 
@@ -41,9 +43,7 @@ const MAX_ENTRY_DEPTH = 5
 /*
  * 允许解压的扩展名白名单。
  *
- * 只收纯文本与位图：技能包的实际内容就是文档、模板和少量插图。脚本类（.js .sh .py
- * .bat 等）与 .svg 都不在其中 —— 前者是可执行文件，后者是能内嵌脚本的 XML，
- * 而技能包并不需要它们。
+ * 普通目录只收纯文本与位图；脚本扩展名由 scripts/ 的独立白名单处理，.svg 仍拒绝。
  */
 const ALLOWED_ENTRY_EXTENSIONS = new Set([
     '.md',
@@ -61,11 +61,30 @@ const ALLOWED_ENTRY_EXTENSIONS = new Set([
     '.webp'
 ])
 
+/** scripts/ 仅在整包安装时允许落盘，管理 API 仍保持只读且不会执行它们 */
+const ALLOWED_SCRIPT_EXTENSIONS = new Set([
+    '.js',
+    '.mjs',
+    '.cjs',
+    '.ts',
+    '.py',
+    '.sh',
+    '.bash',
+    '.zsh',
+    '.ps1',
+    '.bat',
+    '.cmd',
+    '.rb',
+    '.pl',
+    '.lua'
+])
+
 /** skill 目录名白名单：必须以字母数字开头，因此天然排除 . 与 .. */
 const SKILL_DIR_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
 /** 技能包的入口文件名 */
 const ENTRY_SKILL_FILE = 'SKILL.md'
+const FOLDER_SKILL_FILES = new Set(['skill.yaml', 'skill.yml', 'skill.json'])
 
 /** POSIX 文件类型掩码与符号链接标志，用于识别 zip 条目的 unix mode */
 const S_IFMT = 0o170000
@@ -229,6 +248,7 @@ function collectEntries(entries) {
 
     const prefix = detectRootPrefix(fileEntries.map(item => item.name))
     const files = []
+    const seenPaths = new Set()
     let totalBytes = 0
 
     for (const item of fileEntries) {
@@ -239,7 +259,17 @@ function collectEntries(entries) {
         if (relative.split('/').length > MAX_ENTRY_DEPTH) {
             throw new SkillImportError(`条目层级过深，已拒绝: ${relative}`)
         }
-        if (!ALLOWED_ENTRY_EXTENSIONS.has(path.extname(relative).toLowerCase())) {
+        if (seenPaths.has(relative)) {
+            throw new SkillImportError(`压缩包内含重复的规范化路径，已拒绝: ${relative}`)
+        }
+        seenPaths.add(relative)
+
+        const extension = path.extname(relative).toLowerCase()
+        const topDirectory = relative.split('/')[0]
+        const allowedExtension =
+            ALLOWED_ENTRY_EXTENSIONS.has(extension) ||
+            (topDirectory === 'scripts' && ALLOWED_SCRIPT_EXTENSIONS.has(extension))
+        if (!allowedExtension) {
             throw new SkillImportError(`不支持的文件类型，已拒绝整包: ${relative}`)
         }
 
@@ -276,6 +306,18 @@ function collectEntries(entries) {
         throw new SkillImportError(`压缩包内缺少 ${ENTRY_SKILL_FILE}，不是有效的技能包`)
     }
 
+    const definitionFiles = files.filter(file => {
+        const baseName = path.posix.basename(file.path)
+        return baseName === 'SKILL.md' || FOLDER_SKILL_FILES.has(baseName.toLowerCase())
+    })
+    if (definitionFiles.length !== 1 || definitionFiles[0].path !== ENTRY_SKILL_FILE) {
+        throw new SkillImportError(
+            `技能包必须且只能包含根目录 ${ENTRY_SKILL_FILE} 一个定义入口，当前检测到: ${definitionFiles
+                .map(file => file.path)
+                .join(', ')}`
+        )
+    }
+
     return { files, totalBytes, rootPrefix: prefix }
 }
 
@@ -296,7 +338,7 @@ function writeFiles(files, stagingDir) {
             throw new SkillImportError(`检测到路径穿越，已拒绝整包: ${file.path}`)
         }
         fs.mkdirSync(path.dirname(resolved), { recursive: true })
-        fs.writeFileSync(resolved, file.data)
+        fs.writeFileSync(resolved, file.data, { flag: 'wx', mode: 0o600 })
     }
 }
 
@@ -318,15 +360,28 @@ function cleanup(target) {
  * @param {object} options - 导入选项
  * @param {string} options.importRoot - 技能目录绝对路径（由 SkillDocumentLoader.getImportRoot 提供）
  * @param {string} options.tempRoot - 暂存与备份根目录绝对路径
+ * @param {string} [options.pluginRoot] - 插件根目录，用于约束导入、暂存与备份真实路径
  * @param {string} [options.name] - 用户指定的技能目录名
  * @param {string} [options.originalName] - 上传文件名，用于兜底推导目录名
  * @param {boolean} [options.overwrite] - 同名时是否覆盖
  * @param {string[]} [options.existingNames] - 已加载的技能名列表，用于重名检测
+ * @param {object[]} [options.existingDocuments] - 已加载技能的名称与目录，用于排除覆盖目标自身
+ * @param {number} [options.maxFileBytes] - SKILL.md 加载大小上限
  * @returns {{name: string, directory: string, files: string[], totalBytes: number, overwritten: boolean, backup: string|null}} 导入结果
  * @throws {SkillImportError} 任一校验不通过时抛出
  */
 export function importSkillPackage(buffer, options = {}) {
-    const { importRoot, tempRoot, name, originalName, overwrite = false, existingNames = [] } = options
+    const {
+        importRoot,
+        tempRoot,
+        pluginRoot,
+        name,
+        originalName,
+        overwrite = false,
+        existingNames = [],
+        existingDocuments = [],
+        maxFileBytes
+    } = options
     if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
         throw new SkillImportError('上传内容为空')
     }
@@ -355,8 +410,19 @@ export function importSkillPackage(buffer, options = {}) {
     const skillFile = files.find(file => file.path === ENTRY_SKILL_FILE)
     const declaredName = readSkillNameFromContent(skillFile.data.toString('utf8'))
 
-    // 目录名来源按可信度排序：用户显式指定 > zip 顶层目录名 > frontmatter name > 上传文件名
-    const candidates = [name, rootPrefix, declaredName, String(originalName || '').replace(/\.zip$/i, '')]
+    if (Number.isFinite(maxFileBytes) && skillFile.data.length > maxFileBytes) {
+        throw new SkillImportError(
+            `${ENTRY_SKILL_FILE} 大小 ${skillFile.data.length} 字节超出加载上限 ${maxFileBytes} 字节`
+        )
+    }
+
+    const explicitName = typeof name === 'string' ? name.trim() : ''
+    if (explicitName && explicitName !== declaredName) {
+        throw new SkillImportError('显式目录名必须与 SKILL.md 的 name 完全一致')
+    }
+
+    // 安装目录优先服从 frontmatter name；zip 顶层目录只是打包容器，不能改变技能标识。
+    const candidates = [declaredName, rootPrefix, String(originalName || '').replace(/\.zip$/i, '')]
     let directoryName = ''
     for (const candidate of candidates) {
         directoryName = sanitizeDirectoryName(candidate)
@@ -366,41 +432,180 @@ export function importSkillPackage(buffer, options = {}) {
         directoryName = `skill-${Date.now()}`
     }
 
-    const targetDir = path.resolve(importRoot, directoryName)
-    const importRootWithSep = importRoot.endsWith(path.sep) ? importRoot : importRoot + path.sep
-    if (!targetDir.startsWith(importRootWithSep)) {
+    const validation = validateSkillSource('markdown', skillFile.data.toString('utf8'), {
+        directoryName,
+        strictStandard: true
+    })
+    if (!validation.valid) {
+        throw new SkillImportError(`SKILL.md 校验失败: ${validation.error}`)
+    }
+
+    let realImportRoot = ''
+    let realTempRoot = ''
+    try {
+        if (pluginRoot) {
+            realImportRoot = ensureDirectoryWithinRoot(pluginRoot, importRoot)
+            realTempRoot = ensureDirectoryWithinRoot(pluginRoot, tempRoot)
+        } else {
+            const importStat = fs.lstatSync(importRoot)
+            if (importStat.isSymbolicLink() || !importStat.isDirectory()) {
+                throw new Error('导入根目录必须是普通目录，且不能是符号链接')
+            }
+            realImportRoot = fs.realpathSync(importRoot)
+            fs.mkdirSync(tempRoot, { recursive: true, mode: 0o700 })
+            const tempStat = fs.lstatSync(tempRoot)
+            if (tempStat.isSymbolicLink() || !tempStat.isDirectory()) {
+                throw new Error('暂存根目录必须是普通目录，且不能是符号链接')
+            }
+            realTempRoot = fs.realpathSync(tempRoot)
+        }
+    } catch (error) {
+        throw new SkillImportError(`技能导入目录不可用: ${error.message}`, 500)
+    }
+
+    const targetDir = path.resolve(realImportRoot, directoryName)
+    const targetRelative = path.relative(realImportRoot, targetDir)
+    if (
+        !targetRelative ||
+        targetRelative === '..' ||
+        targetRelative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(targetRelative)
+    ) {
         throw new SkillImportError(`目标目录越界，已拒绝: ${directoryName}`)
     }
 
     const targetExists = fs.existsSync(targetDir)
+    let targetIdentity = null
+    if (targetExists) {
+        const targetStat = fs.lstatSync(targetDir)
+        if (targetStat.isSymbolicLink() || !targetStat.isDirectory()) {
+            throw new SkillImportError(`技能目录 ${directoryName} 不是普通目录，已拒绝覆盖`, 409)
+        }
+        targetIdentity = { dev: targetStat.dev, ino: targetStat.ino }
+    }
     if (targetExists && !overwrite) {
         throw new SkillImportError(`技能目录 ${directoryName} 已存在`, 409, { directory: directoryName, exists: true })
     }
 
     // 目录不同但技能名相同同样是冲突：getDocumentByName 只会命中先加载的那个，
     // 放任重名会让「编辑 A 却改到 B」这类问题在面板上完全看不出来
-    if (!targetExists && declaredName && existingNames.includes(declaredName)) {
+    const conflictsWithOtherDirectory = existingDocuments.some(document => {
+        if (document?.name !== declaredName) return false
+        const existingDirectoryName = document.directoryName || path.basename(document.directory || '')
+        return existingDirectoryName !== directoryName
+    })
+    if (conflictsWithOtherDirectory || (!targetExists && declaredName && existingNames.includes(declaredName))) {
         throw new SkillImportError(`已存在同名技能 ${declaredName}，请先重命名或删除`, 409, {
             skillName: declaredName,
             exists: true
         })
     }
 
-    fs.mkdirSync(tempRoot, { recursive: true })
-    const stagingDir = fs.mkdtempSync(path.join(tempRoot, 'import-'))
+    let importRootIdentity
+    let tempRootIdentity
+    let stagingDir = ''
+    let realStagingDir = ''
+    let stagingIdentity
+    try {
+        importRootIdentity = fs.statSync(realImportRoot)
+        tempRootIdentity = fs.statSync(realTempRoot)
+        stagingDir = fs.mkdtempSync(path.join(realTempRoot, `import-${randomUUID()}-`))
+        realStagingDir = fs.realpathSync(stagingDir)
+        if (!isPathWithin(realTempRoot, realStagingDir)) {
+            throw new Error('技能暂存目录真实路径越界')
+        }
+        const stagingStat = fs.statSync(realStagingDir)
+        stagingIdentity = { dev: stagingStat.dev, ino: stagingStat.ino }
+    } catch (error) {
+        if (stagingDir) cleanup(stagingDir)
+        throw new SkillImportError(`创建技能暂存目录失败: ${error.message}`, 500)
+    }
     let backupDir = null
+    let backupContainer = null
 
     try {
-        writeFiles(files, stagingDir)
+        const currentImportRoot = fs.statSync(realImportRoot)
+        const currentTempRoot = fs.statSync(realTempRoot)
+        if (
+            currentImportRoot.dev !== importRootIdentity.dev ||
+            currentImportRoot.ino !== importRootIdentity.ino ||
+            currentTempRoot.dev !== tempRootIdentity.dev ||
+            currentTempRoot.ino !== tempRootIdentity.ino
+        ) {
+            throw new SkillImportError('技能导入目录在操作期间已被替换', 409)
+        }
+
+        writeFiles(files, realStagingDir)
+
+        const finalImportRootStat = fs.lstatSync(realImportRoot)
+        const finalTempRootStat = fs.lstatSync(realTempRoot)
+        if (
+            finalImportRootStat.isSymbolicLink() ||
+            finalTempRootStat.isSymbolicLink() ||
+            finalImportRootStat.dev !== importRootIdentity.dev ||
+            finalImportRootStat.ino !== importRootIdentity.ino ||
+            finalTempRootStat.dev !== tempRootIdentity.dev ||
+            finalTempRootStat.ino !== tempRootIdentity.ino
+        ) {
+            throw new SkillImportError('技能导入目录在落位前已被替换', 409)
+        }
+        const finalStagingStat = fs.lstatSync(realStagingDir)
+        if (
+            finalStagingStat.isSymbolicLink() ||
+            !finalStagingStat.isDirectory() ||
+            finalStagingStat.dev !== stagingIdentity.dev ||
+            finalStagingStat.ino !== stagingIdentity.ino
+        ) {
+            throw new SkillImportError('技能暂存目录在落位前已被替换', 409)
+        }
 
         if (targetExists) {
             // 覆盖不做递归删除：旧目录整体挪到 temp/ 下留档，出问题还能捞回来
-            backupDir = path.join(tempRoot, `backup-${directoryName}-${Date.now()}`)
+            const currentTarget = fs.lstatSync(targetDir)
+            if (
+                currentTarget.isSymbolicLink() ||
+                !currentTarget.isDirectory() ||
+                currentTarget.dev !== targetIdentity.dev ||
+                currentTarget.ino !== targetIdentity.ino
+            ) {
+                throw new SkillImportError('待覆盖技能目录在导入期间已被替换', 409)
+            }
+            backupContainer = fs.mkdtempSync(path.join(realTempRoot, `backup-${directoryName}-${randomUUID()}-`))
+            const realBackupContainer = fs.realpathSync(backupContainer)
+            if (!isPathWithin(realTempRoot, realBackupContainer)) {
+                throw new SkillImportError('覆盖备份目录真实路径越界', 500)
+            }
+            const backupRootBeforeMove = fs.lstatSync(realTempRoot)
+            if (
+                backupRootBeforeMove.isSymbolicLink() ||
+                backupRootBeforeMove.dev !== tempRootIdentity.dev ||
+                backupRootBeforeMove.ino !== tempRootIdentity.ino
+            ) {
+                throw new SkillImportError('覆盖备份根目录在操作期间已被替换', 409)
+            }
+            backupDir = path.join(realBackupContainer, directoryName)
             fs.renameSync(targetDir, backupDir)
+        } else {
+            try {
+                fs.lstatSync(targetDir)
+                throw new SkillImportError(`技能目录 ${directoryName} 在导入期间已出现`, 409)
+            } catch (error) {
+                if (error instanceof SkillImportError) throw error
+                if (error?.code !== 'ENOENT') throw error
+            }
         }
 
-        fs.mkdirSync(path.dirname(targetDir), { recursive: true })
-        fs.renameSync(stagingDir, targetDir)
+        const stagingBeforeMove = fs.lstatSync(realStagingDir)
+        if (
+            stagingBeforeMove.isSymbolicLink() ||
+            !stagingBeforeMove.isDirectory() ||
+            stagingBeforeMove.dev !== stagingIdentity.dev ||
+            stagingBeforeMove.ino !== stagingIdentity.ino
+        ) {
+            throw new SkillImportError('技能暂存目录在最终落位前已被替换', 409)
+        }
+
+        fs.renameSync(realStagingDir, targetDir)
     } catch (error) {
         cleanup(stagingDir)
         // 落位失败时把备份挪回原处，避免用户丢掉原有技能
@@ -408,9 +613,16 @@ export function importSkillPackage(buffer, options = {}) {
             try {
                 fs.renameSync(backupDir, targetDir)
                 backupDir = null
+                if (backupContainer) fs.rmdirSync(backupContainer)
+                backupContainer = null
             } catch (restoreError) {
                 logger.error(`[SkillPackageImporter] 回滚失败，备份保留在 ${backupDir}: ${restoreError.message}`)
             }
+        }
+        if (backupContainer && (!backupDir || !fs.existsSync(backupDir))) {
+            try {
+                fs.rmdirSync(backupContainer)
+            } catch {}
         }
         if (error instanceof SkillImportError) throw error
         throw new SkillImportError(`写入技能目录失败: ${error.message}`, 500)
@@ -424,7 +636,10 @@ export function importSkillPackage(buffer, options = {}) {
         files: files.map(file => file.path),
         totalBytes,
         overwritten: targetExists,
-        backup: backupDir
+        backup: backupDir,
+        recoverable: Boolean(backupDir),
+        standardCompliant: validation.standardCompliant === true,
+        compatibilityWarnings: validation.warnings || []
     }
 }
 

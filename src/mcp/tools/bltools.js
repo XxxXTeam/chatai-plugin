@@ -2,7 +2,7 @@ import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import config from '../../../config/config.js'
-import { segment } from '../../utils/messageParser.js'
+import { StandardBotApi, StandardMessage as segment } from '../../core/platform/index.js'
 import { chatLogger as logger } from '../../core/utils/logger.js'
 import { pluginRoot } from '../../utils/common.js'
 import { fetchWithLimit } from './helpers.js'
@@ -160,7 +160,7 @@ export const bltoolsTools = [
                     }
                 }
 
-                await e.reply(musicMsg)
+                await StandardBotApi.fromContext(ctx).reply(musicMsg)
 
                 return {
                     success: true,
@@ -235,7 +235,7 @@ export const bltoolsTools = [
 
                 for (const url of selectedUrls) {
                     try {
-                        await e.reply(segment.image(url))
+                        await StandardBotApi.fromContext(ctx).reply(segment.image(url))
                         successCount++
                     } catch (err) {
                         logger.warn(`[search_emoji] 发送图片失败: ${err.message}`)
@@ -325,7 +325,7 @@ export const bltoolsTools = [
 
                 for (const imgUrl of selectedUrls) {
                     try {
-                        await e.reply(segment.image(imgUrl))
+                        await StandardBotApi.fromContext(ctx).reply(segment.image(imgUrl))
                         successCount++
                     } catch (err) {
                         logger.warn(`[search_image_bing] 发送图片失败: ${err.message}`)
@@ -368,7 +368,7 @@ export const bltoolsTools = [
         handler: async (args, ctx) => {
             const { message_id, count = 1 } = args
             const e = ctx?.getEvent?.()
-            const bot = ctx?.getBot?.()
+            const api = StandardBotApi.fromContext(ctx)
 
             if (!e?.group_id) {
                 return { error: '此功能仅支持群聊' }
@@ -397,15 +397,13 @@ export const bltoolsTools = [
                     const emojiId = String(getRandomEmojiId())
 
                     try {
-                        const response = await bot.sendApi('set_msg_emoji_like', {
-                            message_id: String(message_id),
-                            emoji_id: emojiId
+                        await api.setReaction({
+                            messageId: String(message_id),
+                            emojiId,
+                            groupId: e.group_id
                         })
-
-                        if (response?.status === 'ok' || response?.retcode === 0) {
-                            successCount++
-                        }
-                    } catch (err) {
+                        successCount++
+                    } catch {
                         // 忽略单个失败
                     }
 
@@ -498,7 +496,7 @@ export const bltoolsTools = [
 
                 for (const url of selectedUrls) {
                     try {
-                        await e.reply(segment.image(url))
+                        await StandardBotApi.fromContext(ctx).reply(segment.image(url))
                         successCount++
                     } catch (err) {
                         logger.warn(`[search_wallpaper] 发送图片失败: ${err.message}`)
@@ -580,7 +578,7 @@ export const bltoolsTools = [
                     cover: video.pic.startsWith('//') ? 'https:' + video.pic : video.pic
                 }
 
-                await e.reply([
+                await StandardBotApi.fromContext(ctx).reply([
                     segment.image(result.cover),
                     `🎬 ${result.title}\n👤 UP主：${result.author}\n⏱️ 时长：${result.duration}\n👁️ 播放：${result.play}\n🔗 ${result.url}`
                 ])
@@ -605,7 +603,7 @@ export const bltoolsTools = [
             },
             required: ['repo_url']
         },
-        handler: async (args, ctx) => {
+        handler: async args => {
             const { repo_url } = args
 
             try {
@@ -761,17 +759,17 @@ export const bltoolsTools = [
                     const imgUrl = mdMatch[1]
                     if (imgUrl.startsWith('data:image')) {
                         const b64 = imgUrl.replace(/^data:image\/[^;]+;base64,/, '')
-                        await e.reply(segment.image(`base64://${b64}`))
+                        await StandardBotApi.fromContext(ctx).reply(segment.image(`base64://${b64}`))
                         return { success: true, message: '图片编辑成功' }
                     }
-                    await e.reply(segment.image(imgUrl))
+                    await StandardBotApi.fromContext(ctx).reply(segment.image(imgUrl))
                     return { success: true, message: '图片编辑成功' }
                 }
 
                 // 纯base64格式
                 const b64Match = content.match(/data:image\/[^;]+;base64,([A-Za-z0-9+/=]+)/)
                 if (b64Match) {
-                    await e.reply(segment.image(`base64://${b64Match[1]}`))
+                    await StandardBotApi.fromContext(ctx).reply(segment.image(`base64://${b64Match[1]}`))
                     return { success: true, message: '图片编辑成功' }
                 }
 
@@ -804,7 +802,7 @@ export const bltoolsTools = [
             },
             required: ['bvid']
         },
-        handler: async (args, ctx) => {
+        handler: async args => {
             const { bvid } = args
 
             try {
@@ -997,8 +995,11 @@ export const bltoolsTools = [
                             if (e.getReply) {
                                 source = await e.getReply()
                             } else if (e.source && e.group_id) {
-                                const bot = ctx?.getBot?.() || Bot
-                                source = await bot.pickGroup?.(e.group_id)?.getChatHistory?.(e.source.seq, 1)
+                                source = await StandardBotApi.fromContext(ctx).getHistory({
+                                    groupId: e.group_id,
+                                    sequence: e.source.seq,
+                                    count: 1
+                                })
                             }
 
                             if (source) {
@@ -1011,7 +1012,7 @@ export const bltoolsTools = [
                                     videoUrl = quotedVideos[0]
                                 }
                             }
-                        } catch (err) {
+                        } catch {
                             // 忽略获取引用消息失败
                         }
                     }
@@ -1325,7 +1326,7 @@ export const bltoolsTools = [
                 browser = null
 
                 // 发送图片
-                await e.reply(segment.image(outputPath))
+                await StandardBotApi.fromContext(ctx).reply(segment.image(outputPath))
 
                 return {
                     success: true,

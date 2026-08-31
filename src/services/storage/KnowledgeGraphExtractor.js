@@ -550,7 +550,9 @@ class KnowledgeGraphExtractor {
         const entities = knowledgeGraphService.listEntities(scopeId, { limit: 1000 })
 
         // 按类型分组
-        const byType = {}
+        // 类型值来自持久化数据，可能是 `__proto__`、`constructor` 等对象原型键。
+        // 使用无原型对象，避免把继承属性误当成分组数组。
+        const byType = Object.create(null)
         for (const entity of entities) {
             if (!byType[entity.entityType]) {
                 byType[entity.entityType] = []

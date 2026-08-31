@@ -4,6 +4,7 @@ import { memoryManager } from '../storage/MemoryManager.js'
 import { databaseService } from '../storage/DatabaseService.js'
 import { getGroupFeatureModel } from '../scope/ScopeManager.js'
 import { chatLogger } from '../../core/utils/logger.js'
+import { StandardBotApi } from '../../core/platform/index.js'
 
 const logger = chatLogger
 
@@ -26,8 +27,11 @@ export class GroupSummaryCore {
 
         if (bot) {
             try {
-                const group = bot.pickGroup?.(parseInt(groupId))
-                if (group && typeof group.getChatHistory === 'function') {
+                const group = new StandardBotApi({ bot }).group(groupId)
+                const api = new StandardBotApi({ bot })
+                // QQBot 的 getChatHistory 只接受事件 message_id；该后台任务没有当前事件，
+                // 不能传数字 0 伪装成“最新消息”，应直接交给内存缓冲回退。
+                if (!api.isQQBot && group && typeof group.getChatHistory === 'function') {
                     let allChats = []
                     let seq = 0
                     let totalScanned = 0

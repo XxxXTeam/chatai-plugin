@@ -24,10 +24,12 @@ export class CustomTool {
     /**
      * 执行工具
      * @param {Object} args - 参数
-     * @param {Object} context - 上下文 { getEvent(), getBot(), event, bot }
+     * @param {Object} context - 标准上下文；使用 getApi() 执行业务动作，使用 message 构造消息段
      * @returns {Promise<string|Object>}
      */
     async run(args, context) {
+        void args
+        void context
         throw new Error('Not implemented')
     }
 }

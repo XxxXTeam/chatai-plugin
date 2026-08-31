@@ -4,9 +4,8 @@
  * 兼容 icqq（直接读取 bot.cookies）和 NapCat/go-cqhttp（通过 get_cookies API）
  */
 
-import { callOneBotApi, icqqFriend, icqqGroup } from './helpers.js'
-import { callOneBotApiStrict } from '../../utils/eventAdapter.js'
 import { chatLogger as logger } from '../../core/utils/logger.js'
+import { StandardBotApi } from '../../core/platform/index.js'
 
 /** 单条说说最多携带的图片数（QQ 空间侧限制） */
 const MAX_MOOD_IMAGES = 9
@@ -50,45 +49,11 @@ function getCookieValue(cookies, key) {
 /**
  * 获取 QQ 空间认证信息
  * 兼容 icqq（bot.cookies 直接可用）和 NapCat/go-cqhttp（通过 OneBot API）
- * @param {Object} bot - Bot 实例
+ * @param {StandardBotApi} api - 标准 Bot API
  * @returns {Promise<{cookies: string, gtk: number, uin: string}>}
  */
-async function getQzoneAuth(bot) {
-    const uin = String(bot.uin || bot.self_id)
-    let cookies = ''
-    let pskey = ''
-
-    /* 方式1：icqq 直接读取 bot.cookies（优先） */
-    if (bot.cookies) {
-        cookies = bot.cookies['qzone.qq.com'] || bot.cookies['user.qzone.qq.com'] || ''
-        if (cookies) {
-            pskey = getCookieValue(cookies, 'p_skey')
-            if (!pskey) pskey = getCookieValue(cookies, 'skey')
-            const gtk = calcGtk(pskey || '')
-            return { cookies, gtk, uin }
-        }
-    }
-
-    /* 方式2：NapCat / go-cqhttp 通过 OneBot API 获取 */
-    try {
-        const result = await callOneBotApi(bot, 'get_cookies', { domain: 'qzone.qq.com' })
-        cookies = result?.data?.cookies || result?.cookies || ''
-        if (!cookies && result?.data) {
-            cookies = typeof result.data === 'string' ? result.data : ''
-        }
-    } catch {
-        /* get_cookies 不可用 */
-    }
-
-    if (!cookies) {
-        try {
-            const result = await callOneBotApi(bot, 'get_credentials', { domain: 'qzone.qq.com' })
-            cookies = result?.data?.cookies || result?.cookies || ''
-        } catch {
-            /* get_credentials 不可用 */
-        }
-    }
-
+async function getQzoneAuth(api) {
+    const { cookies, userId: uin } = await api.getCredentials('qzone.qq.com')
     if (!cookies) {
         throw new Error(
             '无法获取QQ空间认证信息。' +
@@ -97,7 +62,7 @@ async function getQzoneAuth(bot) {
         )
     }
 
-    pskey = getCookieValue(cookies, 'p_skey')
+    let pskey = getCookieValue(cookies, 'p_skey')
     if (!pskey) pskey = getCookieValue(cookies, 'skey')
     const gtk = calcGtk(pskey || '')
 
@@ -145,8 +110,8 @@ export const qzoneTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const { cookies, gtk, uin } = await getQzoneAuth(bot)
+                const api = StandardBotApi.fromContext(ctx)
+                const { cookies, gtk, uin } = await getQzoneAuth(api)
                 const { content, image_urls = [] } = args
 
                 /* 构建发布参数 */
@@ -170,7 +135,7 @@ export const qzoneTools = [
                 if (image_urls.length > 0) {
                     for (let i = 0; i < Math.min(image_urls.length, MAX_MOOD_IMAGES); i++) {
                         try {
-                            picInfos.push(await uploadQzoneImage(bot, cookies, gtk, uin, image_urls[i]))
+                            picInfos.push(await uploadQzoneImage(cookies, gtk, uin, image_urls[i]))
                         } catch (err) {
                             logger.warn(`[QZone] 上传第${i + 1}张图片失败:`, err.message)
                             uploadErrors.push(`第${i + 1}张: ${err.message}`)
@@ -264,8 +229,8 @@ export const qzoneTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const { cookies, gtk, uin } = await getQzoneAuth(bot)
+                const api = StandardBotApi.fromContext(ctx)
+                const { cookies, gtk, uin } = await getQzoneAuth(api)
                 const targetUin = args?.target_uin || uin
                 const count = Math.min(args?.count || 10, 40)
                 const pos = args?.pos || 0
@@ -356,8 +321,8 @@ export const qzoneTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const { cookies, gtk, uin } = await getQzoneAuth(bot)
+                const api = StandardBotApi.fromContext(ctx)
+                const { cookies, gtk, uin } = await getQzoneAuth(api)
                 const { target_uin, tid } = args
 
                 const params = new URLSearchParams({
@@ -418,8 +383,8 @@ export const qzoneTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const { cookies, gtk, uin } = await getQzoneAuth(bot)
+                const api = StandardBotApi.fromContext(ctx)
+                const { cookies, gtk, uin } = await getQzoneAuth(api)
                 const { tid } = args
 
                 const params = new URLSearchParams({
@@ -476,27 +441,10 @@ export const qzoneTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
+                const api = StandardBotApi.fromContext(ctx)
                 const { content } = args
-
-                /* 用严格版调用，回退层才会真正生效（宽松版不抛异常，第二层过去是死代码） */
-                const attemptErrors = []
-                try {
-                    await callOneBotApiStrict(bot, 'set_self_longnick', { longNick: content })
-                    return { success: true, message: '个性签名设置成功', content }
-                } catch (err) {
-                    attemptErrors.push(`longNick: ${err.message}`)
-                }
-
-                /* 尝试备用参数名 */
-                try {
-                    await callOneBotApiStrict(bot, 'set_self_longnick', { long_nick: content })
-                    return { success: true, message: '个性签名设置成功', content }
-                } catch (err) {
-                    attemptErrors.push(`long_nick: ${err.message}`)
-                }
-
-                return { success: false, error: `设置个性签名失败: ${attemptErrors.join(' | ')}` }
+                await api.callAction('set_self_longnick', { long_nick: content }, { strict: true })
+                return { success: true, message: '个性签名设置成功', content }
             } catch (err) {
                 return { success: false, error: `设置签名失败: ${err.message}` }
             }
@@ -518,42 +466,13 @@ export const qzoneTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const userId = parseInt(args.user_id)
-                if (!Number.isInteger(userId) || userId <= 0) {
+                const api = StandardBotApi.fromContext(ctx)
+                const userId = api.targetId(args.user_id)
+                if (userId === null || userId === undefined || userId === '') {
                     return { success: false, error: `user_id 格式错误: ${args.user_id}` }
                 }
-
-                /* 三层回退，逐层记录失败原因；OneBot 层用严格版，否则后两层永远不会执行 */
-                const attemptErrors = []
-
-                /* 方式1：icqq 原生 poke */
-                if (bot.pickFriend) {
-                    try {
-                        await icqqFriend.poke(bot, userId)
-                        return { success: true, message: '戳一戳成功', user_id: userId }
-                    } catch (err) {
-                        attemptErrors.push(`icqq poke: ${err.message}`)
-                    }
-                }
-
-                /* 方式2：NapCat friend_poke */
-                try {
-                    await callOneBotApiStrict(bot, 'friend_poke', { user_id: userId })
-                    return { success: true, message: '戳一戳成功', user_id: userId }
-                } catch (err) {
-                    attemptErrors.push(`friend_poke: ${err.message}`)
-                }
-
-                /* 方式3：通用 send_poke */
-                try {
-                    await callOneBotApiStrict(bot, 'send_poke', { user_id: userId })
-                    return { success: true, message: '戳一戳成功', user_id: userId }
-                } catch (err) {
-                    attemptErrors.push(`send_poke: ${err.message}`)
-                }
-
-                return { success: false, error: `戳一戳失败: ${attemptErrors.join(' | ')}` }
+                await api.pokeUser(userId)
+                return { success: true, message: '戳一戳成功', user_id: userId }
             } catch (err) {
                 return { success: false, error: `戳一戳失败: ${err.message}` }
             }
@@ -579,46 +498,17 @@ export const qzoneTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-                const groupId = parseInt(args.group_id)
-                const userId = parseInt(args.user_id)
-                if (!Number.isInteger(groupId) || groupId <= 0) {
+                const api = StandardBotApi.fromContext(ctx)
+                const groupId = api.targetId(args.group_id)
+                const userId = api.targetId(args.user_id)
+                if (groupId === null || groupId === undefined || groupId === '') {
                     return { success: false, error: `group_id 格式错误: ${args.group_id}` }
                 }
-                if (!Number.isInteger(userId) || userId <= 0) {
+                if (userId === null || userId === undefined || userId === '') {
                     return { success: false, error: `user_id 格式错误: ${args.user_id}` }
                 }
-
-                /* 三层回退，逐层记录失败原因；OneBot 层用严格版，否则后两层永远不会执行 */
-                const attemptErrors = []
-
-                /* 方式1：icqq 原生 pokeMember */
-                if (bot.pickGroup) {
-                    try {
-                        await icqqGroup.pokeMember(bot, groupId, userId)
-                        return { success: true, message: '群内戳一戳成功', group_id: groupId, user_id: userId }
-                    } catch (err) {
-                        attemptErrors.push(`icqq pokeMember: ${err.message}`)
-                    }
-                }
-
-                /* 方式2：NapCat group_poke */
-                try {
-                    await callOneBotApiStrict(bot, 'group_poke', { group_id: groupId, user_id: userId })
-                    return { success: true, message: '群内戳一戳成功', group_id: groupId, user_id: userId }
-                } catch (err) {
-                    attemptErrors.push(`group_poke: ${err.message}`)
-                }
-
-                /* 方式3：通用 send_poke */
-                try {
-                    await callOneBotApiStrict(bot, 'send_poke', { group_id: groupId, user_id: userId })
-                    return { success: true, message: '群内戳一戳成功', group_id: groupId, user_id: userId }
-                } catch (err) {
-                    attemptErrors.push(`send_poke: ${err.message}`)
-                }
-
-                return { success: false, error: `群内戳一戳失败: ${attemptErrors.join(' | ')}` }
+                await api.pokeMember(groupId, userId)
+                return { success: true, message: '群内戳一戳成功', group_id: groupId, user_id: userId }
             } catch (err) {
                 return { success: false, error: `群内戳一戳失败: ${err.message}` }
             }
@@ -634,9 +524,8 @@ export const qzoneTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-
-                const result = await callOneBotApi(bot, 'get_profile_like', {})
+                const api = StandardBotApi.fromContext(ctx)
+                const result = await api.callAction('get_profile_like', {}, { strict: true })
                 const data = result?.data || result
 
                 return {
@@ -668,12 +557,15 @@ export const qzoneTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-
-                await callOneBotApiStrict(bot, 'create_collection', {
-                    rawData: args.rawData,
-                    brief: args.brief
-                })
+                const api = StandardBotApi.fromContext(ctx)
+                await api.callAction(
+                    'create_collection',
+                    {
+                        rawData: args.rawData,
+                        brief: args.brief
+                    },
+                    { strict: true }
+                )
 
                 return { success: true, message: '收藏创建成功', brief: args.brief }
             } catch (err) {
@@ -700,12 +592,15 @@ export const qzoneTools = [
         },
         handler: async (args, ctx) => {
             try {
-                const bot = ctx.getBot()
-
-                const result = await callOneBotApi(bot, 'get_collection_list', {
-                    category: args?.category || 0,
-                    count: args?.count || 20
-                })
+                const api = StandardBotApi.fromContext(ctx)
+                const result = await api.callAction(
+                    'get_collection_list',
+                    {
+                        category: args?.category || 0,
+                        count: args?.count || 20
+                    },
+                    { strict: true }
+                )
 
                 const data = result?.data || result
                 return {
@@ -757,7 +652,6 @@ async function readBodyWithLimit(response, limit) {
 
 /**
  * 上传图片到QQ空间
- * @param {Object} bot - Bot 实例
  * @param {string} cookies - Cookie 字符串
  * @param {number} gtk - g_tk 令牌
  * @param {string} uin - QQ号
@@ -765,7 +659,7 @@ async function readBodyWithLimit(response, limit) {
  * @returns {Promise<{url: string, bo: string, width: number, height: number, pre: string}>} 上传结果
  * @throws {Error} 下载失败、体积超限、响应解析失败或协议端返回失败；调用方需据此统计实际成功数
  */
-async function uploadQzoneImage(bot, cookies, gtk, uin, imageUrl) {
+async function uploadQzoneImage(cookies, gtk, uin, imageUrl) {
     try {
         /* 下载图片 */
         let imageBuffer
@@ -778,8 +672,9 @@ async function uploadQzoneImage(bot, cookies, gtk, uin, imageUrl) {
         } else {
             const isQQPic = imageUrl.includes('gchat.qpic.cn') || imageUrl.includes('c2cpicdw.qpic.cn')
             const referer = isQQPic ? 'https://qzone.qq.com/' : undefined
-            const response = await fetch(imageUrl, {
-                signal: AbortSignal.timeout(15000),
+            const { fetchDownloadResponse } = await import('./file.js')
+            const { response } = await fetchDownloadResponse(imageUrl, {
+                timeoutMs: 15000,
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                     ...(referer && { Referer: referer })

@@ -1,199 +1,23 @@
 /**
  * @module utils/eventAdapter
  */
-import { detectAdapter, getBot, getBotSelfId, getUserInfo, getMessage } from './platformAdapter.js'
+import { detectAdapter, getBot, getBotSelfId, getUserInfo } from './platformAdapter.js'
+import { StandardBotApi } from '../core/platform/index.js'
 export { getBot, getBotSelfId, detectAdapter }
 
 /**
- * 识别协议端返回体中明确的业务错误
- * @description 仅在出现可确认的失败信号（retcode 为非 0 数字 / status 为 'failed'）时判定为失败。
- *              无法判定时返回 null（视为成功），避免误伤那些直接返回数据、不带 OneBot 响应包装的适配器。
- *              字段名取自本项目已在用的判定（platformAdapter.sendForwardMsg 用 status/retcode，
- *              qzone/admin 工具用 message/msg），不做任何字段名推测
- * @param {any} result - 协议端返回值
- * @returns {string|null} 错误描述；无明确失败信号时为 null
- */
-function detectOneBotBusinessError(result) {
-    if (!result || typeof result !== 'object') return null
-
-    const reason = result.message || result.msg
-
-    if (typeof result.retcode === 'number' && result.retcode !== 0) {
-        return reason ? `retcode=${result.retcode} (${reason})` : `retcode=${result.retcode}`
-    }
-    if (result.status === 'failed') {
-        return reason ? `status=failed (${reason})` : 'status=failed'
-    }
-
-    return null
-}
-
-/**
- * OneBot API 调用的共用实现（回退链）
- * @description 按 icqq 原生方法 -> bot.sendApi -> camelCase 方法 -> 同名方法 -> HTTP baseUrl 的顺序逐级回退，
- *              任一级别成功即返回。各级失败原因收集在 failures 中，供严格模式聚合后抛出，便于排障
+ * @deprecated 新代码请使用 StandardBotApi.callAction。
  * @param {Object} bot - Bot 实例
  * @param {string} action - API 名称
  * @param {Object} params - 参数
- * @returns {Promise<{matched: boolean, value: any, failures: string[]}>}
- *          matched 表示是否有回退级别成功返回；value 为该级别的返回值；failures 为各级失败原因
- */
-async function invokeOneBotApi(bot, action, params) {
-    const failures = []
-    const fail = (stage, reason) => failures.push(`${stage}: ${reason?.message || reason}`)
-
-    const asNumber = value => {
-        if (value === undefined || value === null || value === '') return value
-        const parsed = Number(value)
-        return Number.isNaN(parsed) ? value : parsed
-    }
-
-    const callDirect = async (method, args) => {
-        if (typeof method !== 'function') return undefined
-        return await method.apply(bot, args)
-    }
-
-    const icqqActions = {
-        send_private_msg: () =>
-            callDirect(bot.sendPrivateMsg, [asNumber(params.user_id), params.message, params.source]),
-        send_group_msg: () => callDirect(bot.sendGroupMsg, [asNumber(params.group_id), params.message, params.source]),
-        get_login_info: async () => ({
-            user_id: bot.uin || bot.self_id,
-            nickname: bot.nickname || bot.info?.nickname || ''
-        }),
-        get_status: async () => {
-            const online = bot.isOnline?.() ?? bot.status === 11
-            return { online, good: online === true, stat: bot.stat || {} }
-        },
-        get_stranger_info: () => callDirect(bot.getStrangerInfo, [asNumber(params.user_id)]),
-        get_group_info: () => callDirect(bot.getGroupInfo, [asNumber(params.group_id), params.no_cache]),
-        get_group_member_list: () => callDirect(bot.getGroupMemberList, [asNumber(params.group_id), params.no_cache]),
-        get_msg: () => callDirect(bot.getMsg, [params.message_id]),
-        delete_msg: () => callDirect(bot.deleteMsg, [params.message_id]),
-        send_like: () => callDirect(bot.sendLike, [asNumber(params.user_id), params.times]),
-        set_qq_avatar: () => callDirect(bot.setAvatar, [params.file]),
-        set_group_ban: () =>
-            callDirect(bot.setGroupBan, [asNumber(params.group_id), asNumber(params.user_id), params.duration]),
-        set_group_kick: () =>
-            callDirect(bot.setGroupKick, [
-                asNumber(params.group_id),
-                asNumber(params.user_id),
-                params.reject_add_request,
-                params.message
-            ]),
-        set_group_card: () =>
-            callDirect(bot.setGroupCard, [asNumber(params.group_id), asNumber(params.user_id), params.card]),
-        set_group_whole_ban: () => callDirect(bot.setGroupWholeBan, [asNumber(params.group_id), params.enable]),
-        set_group_admin: () =>
-            callDirect(bot.setGroupAdmin, [asNumber(params.group_id), asNumber(params.user_id), params.enable]),
-        set_group_name: () =>
-            callDirect(bot.setGroupName, [asNumber(params.group_id), params.group_name || params.name]),
-        set_group_special_title: () =>
-            callDirect(bot.setGroupSpecialTitle, [
-                asNumber(params.group_id),
-                asNumber(params.user_id),
-                params.special_title || params.title,
-                params.duration
-            ]),
-        send_group_poke: () => callDirect(bot.sendGroupPoke, [asNumber(params.group_id), asNumber(params.user_id)]),
-        group_poke: () => callDirect(bot.sendGroupPoke, [asNumber(params.group_id), asNumber(params.user_id)]),
-        send_poke: () =>
-            params.group_id
-                ? callDirect(bot.sendGroupPoke, [asNumber(params.group_id), asNumber(params.user_id)])
-                : undefined,
-        get_cookies: () => callDirect(bot.getCookies, [params.domain]),
-        get_credentials: async () => {
-            const domain = params.domain
-            const cookies = typeof bot.getCookies === 'function' ? bot.getCookies(domain) : ''
-            const csrfToken = typeof bot.getCsrfToken === 'function' ? bot.getCsrfToken() : undefined
-            return { cookies, csrf_token: csrfToken, bkn: csrfToken }
-        },
-        set_self_longnick: () => callDirect(bot.setSignature, [params.long_nick || params.longNick])
-    }
-
-    if (icqqActions[action] && (bot.pickGroup || bot.pickFriend || bot.fl || bot.gl)) {
-        try {
-            const result = await icqqActions[action]()
-            if (result !== undefined) return { matched: true, value: result, failures }
-            fail('icqq', '未返回结果（对应原生方法不存在或返回空）')
-        } catch (err) {
-            fail('icqq', err)
-        }
-    }
-
-    if (typeof bot.sendApi === 'function') {
-        try {
-            return { matched: true, value: await bot.sendApi(action, params), failures }
-        } catch (err) {
-            fail('sendApi', err)
-        }
-    } else {
-        fail('sendApi', 'Bot 实例上不存在该方法')
-    }
-
-    const camelAction = action.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
-    if (typeof bot[camelAction] === 'function') {
-        try {
-            return { matched: true, value: await bot[camelAction](params), failures }
-        } catch (err) {
-            fail(`camelCase 方法 ${camelAction}`, err)
-        }
-    } else {
-        fail(`camelCase 方法 ${camelAction}`, 'Bot 实例上不存在该方法')
-    }
-
-    if (typeof bot[action] === 'function') {
-        try {
-            return { matched: true, value: await bot[action](params), failures }
-        } catch (err) {
-            fail(`同名方法 ${action}`, err)
-        }
-    } else {
-        fail(`同名方法 ${action}`, 'Bot 实例上不存在该方法')
-    }
-
-    const baseUrl = bot.config?.baseUrl || bot.adapter?.config?.baseUrl
-    if (baseUrl) {
-        try {
-            const res = await fetch(`${baseUrl}/${action}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(params)
-            })
-            return { matched: true, value: await res.json(), failures }
-        } catch (err) {
-            fail('HTTP baseUrl', err)
-        }
-    } else {
-        fail('HTTP baseUrl', '未配置 baseUrl')
-    }
-
-    return { matched: false, value: null, failures }
-}
-
-/**
- * 调用 OneBot API（宽松模式）
- * @description 逐级回退，全部级别失败时返回 null。返回语义与历史行为保持一致：
- *              调用方可继续用 null 判断“协议端不支持该 action”（能力探测场景）。
- *              需要确知写操作是否真正生效时，请改用 {@link callOneBotApiStrict}
- * @param {Object} bot - Bot 实例
- * @param {string} action - API 名称
- * @param {Object} params - 参数
- * @returns {Promise<any>} 成功级别的返回值；全部失败时为 null
+ * @returns {Promise<any>} 协议端结果
  */
 export async function callOneBotApi(bot, action, params = {}) {
-    if (!bot) return null
-
-    const { matched, value } = await invokeOneBotApi(bot, action, params)
-    return matched ? value : null
+    return await new StandardBotApi({ bot }).callAction(action, params)
 }
 
 /**
- * 调用 OneBot API（严格模式）
- * @description 与 {@link callOneBotApi} 共用同一套回退链，区别仅在于失败处理：
- *              全部回退级别失败、或协议端返回明确的业务错误时抛出异常，而不是返回 null。
- *              仅用于会改变群/账号状态的写操作（禁言、踢人、改名片、发说说等），
- *              避免失败被回退链的空 catch 静默吞掉后被调用方误报成功
+ * @deprecated 新代码请使用 StandardBotApi.callAction(action, params, { strict: true })。
  * @param {Object} bot - Bot 实例
  * @param {string} action - API 名称
  * @param {Object} [params] - 参数
@@ -201,20 +25,7 @@ export async function callOneBotApi(bot, action, params = {}) {
  * @throws {Error} Bot 实例不可用、全部回退级别失败，或协议端返回业务错误
  */
 export async function callOneBotApiStrict(bot, action, params = {}) {
-    if (!bot) throw new Error(`OneBot API [${action}] 调用失败: Bot 实例不可用`)
-
-    const { matched, value, failures } = await invokeOneBotApi(bot, action, params)
-
-    if (!matched) {
-        throw new Error(`OneBot API [${action}] 调用失败: ${failures.join('; ') || '没有任何可用的调用方式'}`)
-    }
-
-    const businessError = detectOneBotBusinessError(value)
-    if (businessError) {
-        throw new Error(`OneBot API [${action}] 返回业务错误: ${businessError}`)
-    }
-
-    return value
+    return await new StandardBotApi({ bot }).callAction(action, params, { strict: true })
 }
 
 /**
@@ -223,83 +34,17 @@ export async function callOneBotApiStrict(bot, action, params = {}) {
  * @param {string|number} [groupId] - 群ID (群聊戳一戳)
  * @returns {Promise<boolean>} 是否成功
  */
+/** @deprecated 请使用 StandardBotApi.pokeMember/pokeUser。 */
 export async function sendPoke(e, userId, groupId = null) {
-    const bot = getBot(e)
-    const platform = detectAdapter(e)
-    userId = parseInt(userId)
-    groupId = groupId ? parseInt(groupId) : null
-
+    const api = new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot })
     try {
-        if (platform === 'icqq' && bot.pickGroup) {
-            if (groupId) {
-                const group = bot.pickGroup(groupId)
-                // 方式1: group.pokeMember
-                if (typeof group?.pokeMember === 'function') {
-                    await group.pokeMember(userId)
-                    return true
-                }
-                // 方式2: pickMember().poke()
-                if (group?.pickMember) {
-                    const member = group.pickMember(userId)
-                    if (typeof member?.poke === 'function') {
-                        await member.poke()
-                        return true
-                    }
-                }
-            } else {
-                const friend = bot.pickFriend?.(userId)
-                if (typeof friend?.poke === 'function') {
-                    await friend.poke()
-                    return true
-                }
-            }
-        }
-
-        if (groupId) {
-            // 尝试多种 API
-            const apis = ['send_group_poke', 'group_poke', 'send_poke']
-            for (const api of apis) {
-                try {
-                    const result = await callOneBotApi(bot, api, {
-                        group_id: groupId,
-                        user_id: userId
-                    })
-                    if (result !== null) return true
-                } catch {}
-            }
-
-            // 尝试直接方法调用
-            if (typeof bot?.sendGroupPoke === 'function') {
-                await bot.sendGroupPoke(groupId, userId)
-                return true
-            }
-
-            // 尝试发送戳一戳消息段
-            try {
-                const pokeMsg = { type: 'poke', data: { qq: String(userId) } }
-                await bot.sendGroupMsg?.(groupId, [pokeMsg])
-                return true
-            } catch {}
-        } else {
-            // 私聊戳一戳
-            const apis = ['send_friend_poke', 'friend_poke', 'send_poke']
-            for (const api of apis) {
-                try {
-                    const result = await callOneBotApi(bot, api, { user_id: userId })
-                    if (result !== null) return true
-                } catch {}
-            }
-
-            if (typeof bot?.sendFriendPoke === 'function') {
-                await bot.sendFriendPoke(userId)
-                return true
-            }
-        }
-    } catch (err) {
-        logger.debug(`[EventAdapter] 发送戳一戳失败: ${err.message}`)
+        if (groupId || e?.group_id) await api.pokeMember(groupId || e.group_id, userId)
+        else await api.pokeUser(userId)
+        return true
+    } catch (error) {
+        logger.debug(`[EventAdapter] 发送戳一戳失败: ${error.message}`)
+        return false
     }
-
-    return false
 }
 
 /**
@@ -310,63 +55,33 @@ export async function sendPoke(e, userId, groupId = null) {
  * @param {number} [emojiType=1] - 表情类型: 1=QQ表情, 2=Unicode表情
  * @returns {Promise<boolean>}
  */
+/** @deprecated 请使用 StandardBotApi.setReaction。 */
 export async function sendReaction(e, messageId, emojiId, isSet = true, emojiType = 1) {
-    const bot = getBot(e)
-    // 优先使用传入的messageId（可能是回复消息的seq），否则使用e.seq
-    const seq = messageId || e.seq
-    logger.debug(`[EventAdapter] sendReaction: seq=${seq}, emojiId=${emojiId}, isSet=${isSet}`)
-
     try {
-        // icqq API: setReaction(seq, id, type) - 只有3个参数
-        // delReaction(seq, id, type) - 删除表情
-        // type: 1=系统表情, 2=emoji表情
-        if (e.group_id && bot?.pickGroup) {
-            try {
-                const group = bot.pickGroup(parseInt(e.group_id))
-                if (isSet) {
-                    if (typeof group?.setReaction === 'function') {
-                        await group.setReaction(seq, String(emojiId), emojiType)
-                        return true
-                    }
-                } else {
-                    if (typeof group?.delReaction === 'function') {
-                        await group.delReaction(seq, String(emojiId), emojiType)
-                        return true
-                    }
-                }
-            } catch (err) {
-                logger.debug(`[EventAdapter] setReaction失败: ${err.message}`)
-            }
-        }
-        const apis = ['set_msg_emoji_like', 'set_group_reaction']
-        for (const api of apis) {
-            try {
-                const result = await callOneBotApi(bot, api, {
-                    group_id: e.group_id,
-                    message_id: messageId,
-                    emoji_id: String(emojiId),
-                    emoji_type: emojiType,
-                    is_set: isSet
-                })
-                if (result !== null) return true
-            } catch {}
-        }
-    } catch (err) {
-        logger.debug(`[EventAdapter] 发送表情回应失败: ${err.message}`)
+        await new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot }).setReaction({
+            messageId,
+            emojiId,
+            isSet,
+            groupId: e?.group_id,
+            sequence: e?.seq || e?.source?.seq,
+            emojiType
+        })
+        return true
+    } catch (error) {
+        logger.debug(`[EventAdapter] 发送表情回应失败: ${error.message}`)
+        return false
     }
-
-    return false
 }
 
 /**
  * @param {Object} e - 事件对象
  * @param {string|number} userId - 用户ID
- * @param {Object} [bot] - Bot 实例
+ * @param {Object} [_bot] - 兼容保留的 Bot 实例参数
  * @returns {Promise<string>}
  */
-export async function getUserNickname(e, userId, bot = null) {
+export async function getUserNickname(e, userId, _bot = null) {
+    void _bot
     if (!userId) return '未知用户'
-    bot = bot || getBot(e)
 
     try {
         if (e?.nickname && e?.user_id == userId) {
@@ -679,53 +394,26 @@ export function parseHonorEvent(e) {
  * @returns {Promise<{content: string, type: string}>}
  */
 export async function getOriginalMessage(e, bot = null, messageCache = null) {
-    bot = bot || getBot(e)
     const messageId = e.message_id || e.seq || e.msg_id
-    const groupId = e.group_id
-
     try {
-        // 1. 从缓存获取
-        if (messageCache && messageId) {
-            const cached = messageCache.get(messageId)
-            if (cached) {
-                const parsed = parseMessageContent(cached.message || cached.raw_message)
-                if (parsed.content) return parsed
-            }
-        }
-
-        // 2. 从事件自带字段获取
-        const eventFields = ['message', 'recall', 'content', 'raw_message', 'recalled_message']
-        for (const field of eventFields) {
-            if (e[field]) {
-                const data = typeof e[field] === 'object' ? e[field].message || e[field].content || e[field] : e[field]
-                const parsed = parseMessageContent(data)
-                if (parsed.content) return parsed
-            }
-        }
-
-        // 3. 通过 API 获取
-        const msg = await getMessage(e, messageId, groupId)
-        if (msg) {
-            const parsed = parseMessageContent(msg.message || msg.raw_message)
+        const cached = messageCache?.get?.(messageId)
+        if (cached) {
+            const parsed = parseMessageContent(cached.message || cached.raw_message)
             if (parsed.content) return parsed
         }
-
-        // 4. icqq: 通过历史记录获取
-        if (bot?.pickGroup && groupId) {
-            const group = bot.pickGroup(parseInt(groupId))
-            if (group?.getChatHistory) {
-                const seq = e.seq || e.message_seq || messageId
-                const history = await group.getChatHistory(parseInt(seq), 1)
-                if (history?.[0]) {
-                    const parsed = parseMessageContent(history[0].message || history[0].raw_message)
-                    if (parsed.content) return parsed
-                }
-            }
+        for (const field of ['message', 'recall', 'content', 'raw_message', 'recalled_message']) {
+            if (!e[field]) continue
+            const value = typeof e[field] === 'object' ? e[field].message || e[field].content || e[field] : e[field]
+            const parsed = parseMessageContent(value)
+            if (parsed.content) return parsed
         }
-    } catch (err) {
-        logger.debug(`[EventAdapter] 获取原消息失败: ${err.message}`)
+        const api = new StandardBotApi({ event: e, bot: bot || e?.bot || globalThis.Bot })
+        const message = await api.getMessage(messageId, { groupId: e.group_id, userId: e.user_id })
+        const parsed = parseMessageContent(message?.message || message?.raw_message)
+        if (parsed.content) return parsed
+    } catch (error) {
+        logger.debug(`[EventAdapter] 获取原消息失败: ${error.message}`)
     }
-
     return { content: '', type: 'unknown' }
 }
 
@@ -867,18 +555,15 @@ export function formatDuration(seconds) {
  * @param {string|Array} message - 消息内容
  * @returns {Promise<Object|null>} 发送结果对象（包含 message_id 等），失败返回 null
  */
+/** @deprecated 请使用 StandardBotApi.sendGroup。 */
 export async function sendGroupMessage(bot, groupId, message) {
     if (!message || !groupId) return null
-
     try {
-        const e = { bot }
-        const { sendGroupMessage: platformSendGroupMessage } = await import('./platformAdapter.js')
-        return await platformSendGroupMessage(e, groupId, message)
-    } catch (err) {
-        logger.warn(`[EventAdapter] 发送群消息失败: ${err.message}`)
+        return (await new StandardBotApi({ bot }).sendGroup(groupId, message)).result
+    } catch (error) {
+        logger.warn(`[EventAdapter] 发送群消息失败: ${error.message}`)
+        return null
     }
-
-    return null
 }
 
 /**

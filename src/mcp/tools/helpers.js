@@ -7,9 +7,25 @@ import * as cheerio from 'cheerio'
 import fs from 'node:fs'
 import path from 'node:path'
 import net from 'node:net'
+import http from 'node:http'
+import https from 'node:https'
+import zlib from 'node:zlib'
 import dns from 'node:dns/promises'
 import { fileURLToPath } from 'node:url'
 import { PLUGIN_DEVELOPERS } from '../../utils/common.js'
+import {
+    StandardBotApi,
+    StandardMessage,
+    detectStandardAdapter,
+    getStandardResultError,
+    normalizeStandardMessage,
+    normalizeStandardSegment,
+    preserveTargetId,
+    isQQBotInstance
+} from '../../core/platform/index.js'
+
+/** @deprecated 新代码请使用 StandardBotApi。 */
+export { isQQBotInstance as isQQBot, preserveTargetId as normalizeBotTargetId } from '../../core/platform/index.js'
 
 const logger = _logger.tag('mcp-helper')
 
@@ -41,22 +57,6 @@ const QQ_HONOR_PAGE_TIMEOUT_MS = 15000
  */
 const QQ_HONOR_PAGE_MAX_BYTES = 2 * 1024 * 1024
 
-/** 群公告文本类接口超时（毫秒） */
-const NOTICE_API_TIMEOUT_MS = 15000
-
-/** 群公告文本类接口响应体大小上限（字节） */
-const NOTICE_API_MAX_BYTES = 5 * 1024 * 1024
-
-/** 群公告图片下载超时（毫秒） */
-const NOTICE_IMAGE_TIMEOUT_MS = 20000
-
-/**
- * 群公告图片大小上限（字节）
- * imageUrl 由模型参数提供，不设硬上限时单张超大图即可打满内存
- * @type {number}
- */
-const NOTICE_IMAGE_MAX_BYTES = 10 * 1024 * 1024
-
 /**
  * 带超时与响应体大小上限的 fetch
  *
@@ -72,43 +72,183 @@ const NOTICE_IMAGE_MAX_BYTES = 10 * 1024 * 1024
  * @returns {Promise<{ response: Response, buffer: Buffer }>} 响应对象与完整响应体
  * @throws {Error} 超时、网络失败或响应体超限时抛出
  */
-export async function fetchWithLimit(url, options = {}, limits) {
-    const { timeoutMs, maxBytes, label = 'fetch' } = limits
-    const response = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) })
-
-    const declared = Number(response.headers.get('content-length'))
-    if (Number.isFinite(declared) && declared > maxBytes) {
-        response.body?.cancel().catch(() => {})
-        throw new Error(`${label} 响应体过大: 声明 ${declared} 字节，上限 ${maxBytes} 字节`)
+/**
+ * 将 fetch body 转为 node:http 可写字节，并补齐 FormData content-type。
+ * @param {*} body - 请求体
+ * @param {Object} headers - 请求头
+ * @returns {Promise<Buffer|null>} 请求体
+ */
+async function normalizePinnedRequestBody(body, headers) {
+    if (body === undefined || body === null) return null
+    if (Buffer.isBuffer(body)) return body
+    if (body instanceof Uint8Array) return Buffer.from(body)
+    if (typeof body === 'string') return Buffer.from(body)
+    if (body instanceof URLSearchParams) return Buffer.from(body.toString())
+    if (typeof Blob !== 'undefined' && body instanceof Blob) {
+        return Buffer.from(await body.arrayBuffer())
     }
-
-    // 个别实现可能不提供可读流，退化为整体读取后再校验
-    if (!response.body) {
-        const buffer = Buffer.from(await response.arrayBuffer())
-        if (buffer.byteLength > maxBytes) {
-            throw new Error(`${label} 响应体过大: ${buffer.byteLength} 字节，上限 ${maxBytes} 字节`)
+    if (typeof FormData !== 'undefined' && body instanceof FormData) {
+        const request = new Request('http://localhost/', { method: 'POST', body })
+        const contentType = request.headers.get('content-type')
+        if (contentType && !Object.keys(headers).some(key => key.toLowerCase() === 'content-type')) {
+            headers['Content-Type'] = contentType
         }
-        return { response, buffer }
+        return Buffer.from(await request.arrayBuffer())
+    }
+    throw new Error('安全抓取不支持该请求体类型')
+}
+
+/**
+ * 使用已校验 DNS 地址发起单跳请求，消除校验与连接之间的二次解析窗口。
+ * @param {URL} safeUrl - assertSafeUrl 返回的 URL
+ * @param {Object} options - 请求选项
+ * @param {AbortSignal} signal - 中止信号
+ * @param {number} maxBytes - 响应体上限
+ * @param {string} label - 日志标签
+ * @returns {Promise<{response:Object, buffer:Buffer}>} 响应
+ */
+async function requestPinnedOnce(safeUrl, options, signal, maxBytes, label) {
+    const addresses = Array.isArray(safeUrl.safeAddresses) ? safeUrl.safeAddresses : []
+    if (addresses.length === 0) throw new Error(`${label} 没有可用的已校验地址`)
+    const selected = addresses[0]
+    const headers =
+        options.headers instanceof Headers
+            ? Object.fromEntries(options.headers.entries())
+            : { ...(options.headers || {}) }
+    if (!Object.keys(headers).some(key => key.toLowerCase() === 'accept-encoding')) {
+        headers['Accept-Encoding'] = 'identity'
+    }
+    const requestBody = await normalizePinnedRequestBody(options.body, headers)
+    if (requestBody && !Object.keys(headers).some(key => key.toLowerCase() === 'content-length')) {
+        headers['Content-Length'] = String(requestBody.byteLength)
     }
 
-    const reader = response.body.getReader()
-    const chunks = []
-    let total = 0
-    try {
-        for (;;) {
-            const { done, value } = await reader.read()
-            if (done) break
-            total += value.byteLength
-            if (total > maxBytes) {
-                throw new Error(`${label} 响应体过大: 已读取 ${total} 字节，上限 ${maxBytes} 字节`)
+    const transport = safeUrl.protocol === 'https:' ? https : http
+    return await new Promise((resolve, reject) => {
+        const request = transport.request(
+            safeUrl,
+            {
+                method: options.method || 'GET',
+                headers,
+                agent: false,
+                signal,
+                ...(safeUrl.protocol === 'https:' ? { servername: safeUrl.hostname } : {}),
+                lookup(_hostname, lookupOptions, callback) {
+                    if (lookupOptions?.all) {
+                        callback(null, addresses)
+                    } else {
+                        callback(null, selected.address, selected.family)
+                    }
+                }
+            },
+            incoming => {
+                const responseHeaders = new Headers()
+                for (const [key, value] of Object.entries(incoming.headers)) {
+                    if (Array.isArray(value)) value.forEach(item => responseHeaders.append(key, item))
+                    else if (value !== undefined) responseHeaders.set(key, String(value))
+                }
+                const response = {
+                    status: incoming.statusCode || 0,
+                    statusText: incoming.statusMessage || '',
+                    ok: (incoming.statusCode || 0) >= 200 && (incoming.statusCode || 0) < 300,
+                    headers: responseHeaders,
+                    body: null
+                }
+
+                if (response.status >= 300 && response.status < 400) {
+                    incoming.resume()
+                    resolve({ response, buffer: Buffer.alloc(0) })
+                    return
+                }
+
+                const chunks = []
+                let total = 0
+                incoming.on('data', chunk => {
+                    total += chunk.length
+                    if (total > maxBytes) {
+                        request.destroy(new Error(`${label} 响应体过大: 已读取 ${total} 字节，上限 ${maxBytes} 字节`))
+                        return
+                    }
+                    chunks.push(Buffer.from(chunk))
+                })
+                incoming.on('end', () => {
+                    try {
+                        let buffer = Buffer.concat(chunks)
+                        const encoding = String(responseHeaders.get('content-encoding') || '').toLowerCase()
+                        if (encoding === 'gzip') buffer = zlib.gunzipSync(buffer, { maxOutputLength: maxBytes })
+                        else if (encoding === 'deflate')
+                            buffer = zlib.inflateSync(buffer, { maxOutputLength: maxBytes })
+                        else if (encoding === 'br')
+                            buffer = zlib.brotliDecompressSync(buffer, { maxOutputLength: maxBytes })
+                        if (buffer.byteLength > maxBytes) {
+                            throw new Error(
+                                `${label} 解压后响应体过大: ${buffer.byteLength} 字节，上限 ${maxBytes} 字节`
+                            )
+                        }
+                        resolve({ response, buffer })
+                    } catch (error) {
+                        reject(error)
+                    }
+                })
+                incoming.on('error', reject)
             }
-            chunks.push(Buffer.from(value))
+        )
+        request.on('error', reject)
+        if (requestBody) request.write(requestBody)
+        request.end()
+    })
+}
+
+export async function fetchWithLimit(url, options = {}, limits) {
+    const { timeoutMs, maxBytes, label = 'fetch', maxRedirects = 5, lookup = dns.lookup } = limits
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new Error(`${label} 请求超时`)), timeoutMs)
+    const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal
+    let currentUrl = String(url)
+    let requestHeaders =
+        options.headers instanceof Headers
+            ? Object.fromEntries(options.headers.entries())
+            : options.headers
+              ? { ...options.headers }
+              : undefined
+
+    try {
+        for (let redirectCount = 0; ; redirectCount++) {
+            const safeUrl = await assertSafeUrl(currentUrl, lookup)
+            const { response, buffer } = await requestPinnedOnce(
+                safeUrl,
+                {
+                    ...options,
+                    ...(requestHeaders ? { headers: requestHeaders } : {})
+                },
+                signal,
+                maxBytes,
+                label
+            )
+
+            if (response.status < 300 || response.status >= 400) {
+                const declared = Number(response.headers.get('content-length'))
+                if (Number.isFinite(declared) && declared > maxBytes) {
+                    throw new Error(`${label} 响应体过大: 声明 ${declared} 字节，上限 ${maxBytes} 字节`)
+                }
+                return { response, buffer, url: currentUrl }
+            }
+
+            const location = response.headers.get('location')
+            if (!location) return { response, buffer, url: currentUrl }
+            if (redirectCount >= maxRedirects) {
+                throw new Error(`${label} 重定向次数超过上限 ${maxRedirects}`)
+            }
+
+            const nextUrl = new URL(location, safeUrl)
+            if (nextUrl.origin !== safeUrl.origin && requestHeaders) {
+                requestHeaders = sanitizeCrossOriginRedirectHeaders(requestHeaders)
+            }
+            currentUrl = nextUrl.toString()
         }
     } finally {
-        // 超限抛出时主动取消以释放连接；正常读完后 cancel 为空操作
-        reader.cancel().catch(() => {})
+        clearTimeout(timer)
     }
-    return { response, buffer: Buffer.concat(chunks) }
 }
 
 /**
@@ -151,10 +291,45 @@ function isBlockedIPv6(ip) {
     const mapped = lower.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/)
     if (mapped) return isBlockedIPv4(mapped[1])
 
+    // IPv4-mapped IPv6 的十六进制形式，例如 ::ffff:7f00:1、::ffff:0a00:1。
+    const groups = lower.split(':')
+    const ffffIndex = groups.lastIndexOf('ffff')
+    if (ffffIndex >= 0 && groups.length - ffffIndex === 3) {
+        const prefix = groups.slice(0, ffffIndex)
+        if (prefix.every(group => group === '' || /^0{1,4}$/.test(group))) {
+            const high = Number.parseInt(groups[ffffIndex + 1], 16)
+            const low = Number.parseInt(groups[ffffIndex + 2], 16)
+            if (
+                Number.isInteger(high) &&
+                high >= 0 &&
+                high <= 0xffff &&
+                Number.isInteger(low) &&
+                low >= 0 &&
+                low <= 0xffff
+            ) {
+                const ipv4 = [high >> 8, high & 0xff, low >> 8, low & 0xff].join('.')
+                return isBlockedIPv4(ipv4)
+            }
+            return true
+        }
+    }
+
+    const compatibleDotted = lower.match(/^::(\d+\.\d+\.\d+\.\d+)$/)
+    if (compatibleDotted) return isBlockedIPv4(compatibleDotted[1])
+    const compatibleGroups = lower.startsWith('::') ? lower.slice(2).split(':').filter(Boolean) : []
+    if (compatibleGroups.length === 2 && compatibleGroups.every(group => /^[0-9a-f]{1,4}$/.test(group))) {
+        const high = Number.parseInt(compatibleGroups[0], 16)
+        const low = Number.parseInt(compatibleGroups[1], 16)
+        const ipv4 = [high >> 8, high & 0xff, low >> 8, low & 0xff].join('.')
+        return isBlockedIPv4(ipv4)
+    }
+
     const firstGroup = parseInt(lower.split(':')[0] || '0', 16)
     if (!Number.isFinite(firstGroup)) return true
+    if ((firstGroup & 0xff00) === 0xff00) return true // ff00::/8 组播
     if ((firstGroup & 0xfe00) === 0xfc00) return true // fc00::/7 唯一本地地址
     if ((firstGroup & 0xffc0) === 0xfe80) return true // fe80::/10 链路本地
+    if ((firstGroup & 0xffc0) === 0xfec0) return true // fec0::/10 废弃站点本地地址
     return false
 }
 
@@ -174,10 +349,11 @@ export function isBlockedIp(ip) {
  * 校验 URL 是否允许由工具发起请求（协议白名单 + SSRF 内网阻断）
  * 主机名会经 DNS 解析后逐个校验，防止通过域名指向内网地址
  * @param {string} rawUrl - 待校验的 URL
- * @returns {Promise<URL>} 校验通过的 URL 对象
+ * @param {Function} [lookup] - DNS 解析函数；测试可注入以验证连接地址绑定
+ * @returns {Promise<URL>} 校验通过且携带 safeAddresses 的 URL 对象
  * @throws {Error} 协议不被允许、指向内网或域名无法解析时抛出
  */
-export async function assertSafeUrl(rawUrl) {
+export async function assertSafeUrl(rawUrl, lookup = dns.lookup) {
     let parsed
     try {
         parsed = new URL(String(rawUrl))
@@ -199,12 +375,13 @@ export async function assertSafeUrl(rawUrl) {
         if (isBlockedIp(hostname)) {
             throw new Error(`禁止访问内网或保留地址: ${hostname}`)
         }
+        parsed.safeAddresses = [{ address: hostname, family: net.isIP(hostname) }]
         return parsed
     }
 
     let addresses
     try {
-        addresses = await dns.lookup(hostname, { all: true })
+        addresses = await lookup(hostname, { all: true })
     } catch (err) {
         throw new Error(`无法解析域名 ${hostname}: ${err.message}`)
     }
@@ -214,11 +391,29 @@ export async function assertSafeUrl(rawUrl) {
             throw new Error(`域名 ${hostname} 指向内网地址 ${item.address}，已拒绝`)
         }
     }
+    parsed.safeAddresses = addresses.map(item => ({ address: item.address, family: item.family }))
     return parsed
 }
 
 /**
- * 过滤调用方传入的请求头，剔除可能导致凭据泄露的敏感项
+ * 跨源重定向仅保留明确无凭据的请求头。
+ * @param {Object} headers - 原请求头
+ * @returns {Object} 安全请求头
+ */
+export function sanitizeCrossOriginRedirectHeaders(headers) {
+    const safeNames = new Set(['accept', 'accept-language', 'user-agent', 'range'])
+    const result = {}
+    if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return result
+    for (const [key, value] of Object.entries(headers)) {
+        if (!safeNames.has(String(key).toLowerCase())) continue
+        if (typeof value !== 'string' && typeof value !== 'number') continue
+        result[key] = String(value)
+    }
+    return result
+}
+
+/**
+ * 过滤调用方传入的请求头，剔除可能导致凭据泄露的敏感项。
  * @param {Object} headers - 原始请求头对象
  * @returns {Object} 过滤后的请求头
  */
@@ -312,526 +507,76 @@ export function isInsideSandbox(targetPath, options = {}) {
     }
 }
 
-/**
- * icqq 群操作封装
- */
+/** @deprecated 新代码请使用 StandardBotApi。 */
 export const icqqGroup = {
-    pick: (bot, groupId) => bot.pickGroup?.(parseInt(groupId)),
-
-    async sendMsg(bot, groupId, content, source) {
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (!group?.sendMsg) throw new Error('icqq: 无法获取群对象')
-        return await group.sendMsg(content, source)
-    },
-
-    async getMemberMap(bot, groupId) {
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (!group?.getMemberMap) throw new Error('icqq: 无法获取群成员')
-        return await group.getMemberMap()
-    },
-
-    getInfo: (bot, groupId) => bot.gl?.get(parseInt(groupId)) || bot.pickGroup?.(parseInt(groupId))?.info,
-
-    async recallMsg(bot, groupId, messageId) {
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (!group?.recallMsg) throw new Error('icqq: 无法撤回消息')
-        return await group.recallMsg(messageId)
-    },
-
-    async getChatHistory(bot, groupId, seq, count = 20) {
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (!group?.getChatHistory) throw new Error('icqq: 无法获取聊天记录')
-        return await group.getChatHistory(seq, count)
-    },
-
-    async setName(bot, groupId, name) {
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (!group?.setName) throw new Error('icqq: 无法设置群名')
-        return await group.setName(name)
-    },
-
-    async muteAll(bot, groupId, enable = true) {
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (!group?.muteAll) throw new Error('icqq: 无法全员禁言')
-        return await group.muteAll(enable)
-    },
-
-    async muteMember(bot, groupId, userId, duration = 600) {
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (!group?.muteMember) throw new Error('icqq: 无法禁言成员')
-        return await group.muteMember(parseInt(userId), duration)
-    },
-
-    async kickMember(bot, groupId, userId, rejectAdd = false) {
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (group?.kickMember) {
-            return await group.kickMember(parseInt(userId), '', rejectAdd)
-        }
-        // 兼容 newer API setGroupKick / setGroupKickBan
-        if (typeof group?.setGroupKick === 'function') {
-            return await group.setGroupKick(parseInt(userId), rejectAdd)
-        }
-        if (typeof group?.setGroupKickBan === 'function') {
-            return await group.setGroupKickBan(parseInt(userId), rejectAdd)
-        }
-        throw new Error('icqq: 无法踢出成员')
-    },
-
-    async setAdmin(bot, groupId, userId, enable = true) {
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (group?.setAdmin) {
-            return await group.setAdmin(parseInt(userId), enable)
-        }
-        if (typeof group?.setGroupAdmin === 'function') {
-            return await group.setGroupAdmin(parseInt(userId), enable)
-        }
-        throw new Error('icqq: 无法设置管理员')
-    },
-
-    async setCard(bot, groupId, userId, card) {
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (!group?.setCard) throw new Error('icqq: 无法设置群名片')
-        return await group.setCard(parseInt(userId), card)
-    },
-
-    async setTitle(bot, groupId, userId, title, duration = -1) {
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (group?.setTitle) {
-            return await group.setTitle(parseInt(userId), title, duration)
-        }
-        if (typeof group?.setGroupSpecialTitle === 'function') {
-            return await group.setGroupSpecialTitle(parseInt(userId), title, duration)
-        }
-        throw new Error('icqq: 无法设置头衔')
-    },
-
-    async pokeMember(bot, groupId, userId) {
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (!group?.pokeMember) throw new Error('icqq: 无法戳一戳')
-        return await group.pokeMember(parseInt(userId))
-    },
-
-    async announce(bot, groupId, content) {
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (!group?.announce) throw new Error('icqq: 无法发送公告')
-        return await group.announce(content)
-    },
-
-    async sendFile(bot, groupId, file, name) {
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (!group?.sendFile) throw new Error('icqq: 无法发送文件')
-        return await group.sendFile(file, '/', name)
-    },
-
-    getFs: (bot, groupId) => bot.pickGroup?.(parseInt(groupId))?.fs
+    pick: (bot, groupId) => new StandardBotApi({ bot }).group(groupId),
+    sendMsg: (bot, groupId, content, source) =>
+        new StandardBotApi({ bot }).callGroup(groupId, 'sendMsg', [content, source]),
+    getMemberMap: async (bot, groupId) =>
+        new Map((await new StandardBotApi({ bot }).getMemberList(groupId)).map(item => [item.user_id, item])),
+    getInfo: (bot, groupId) => new StandardBotApi({ bot }).getGroupInfo(groupId),
+    recallMsg: (bot, groupId, messageId) => new StandardBotApi({ bot }).recall({ groupId, messageId }),
+    getChatHistory: (bot, groupId, sequence, count = 20) =>
+        new StandardBotApi({ bot }).getHistory({ groupId, sequence, count }),
+    setName: (bot, groupId, name) => new StandardBotApi({ bot }).callGroup(groupId, 'setName', [name]),
+    muteAll: (bot, groupId, enable = true) => new StandardBotApi({ bot }).callGroup(groupId, 'muteAll', [enable]),
+    muteMember: (bot, groupId, userId, duration = 600) =>
+        new StandardBotApi({ bot }).callGroup(groupId, 'muteMember', [preserveTargetId(bot, userId), duration]),
+    kickMember: (bot, groupId, userId, rejectAdd = false) =>
+        new StandardBotApi({ bot }).kickMember(groupId, userId, rejectAdd),
+    setAdmin: (bot, groupId, userId, enable = true) =>
+        new StandardBotApi({ bot }).callGroup(groupId, 'setAdmin', [preserveTargetId(bot, userId), enable]),
+    setCard: (bot, groupId, userId, card) =>
+        new StandardBotApi({ bot }).callGroup(groupId, 'setCard', [preserveTargetId(bot, userId), card]),
+    setTitle: (bot, groupId, userId, title, duration = -1) =>
+        new StandardBotApi({ bot }).callGroup(groupId, 'setTitle', [preserveTargetId(bot, userId), title, duration]),
+    pokeMember: (bot, groupId, userId) =>
+        new StandardBotApi({ bot }).callGroup(groupId, 'pokeMember', [preserveTargetId(bot, userId)]),
+    announce: (bot, groupId, content) => new StandardBotApi({ bot }).callGroup(groupId, 'announce', [content]),
+    sendFile: (bot, groupId, file, name) => new StandardBotApi({ bot }).sendFile({ groupId, file, name }),
+    getFs: (bot, groupId) => new StandardBotApi({ bot }).group(groupId).fs
 }
 
-/**
- * icqq 好友/用户操作封装
- */
+/** @deprecated 新代码请使用 StandardBotApi。 */
 export const icqqFriend = {
-    pick: (bot, userId) => bot.pickFriend?.(parseInt(userId)),
-    pickUser: (bot, userId) => bot.pickUser?.(parseInt(userId)),
-
-    async sendMsg(bot, userId, content, source) {
-        const friend = bot.pickFriend?.(parseInt(userId))
-        if (!friend?.sendMsg) throw new Error('icqq: 无法获取好友对象')
-        return await friend.sendMsg(content, source)
-    },
-
-    getInfo: (bot, userId) => bot.fl?.get(parseInt(userId)),
-
-    async recallMsg(bot, userId, messageId) {
-        const friend = bot.pickFriend?.(parseInt(userId))
-        if (!friend?.recallMsg) throw new Error('icqq: 无法撤回消息')
-        return await friend.recallMsg(messageId)
-    },
-
-    async getChatHistory(bot, userId, time, count = 20) {
-        const friend = bot.pickFriend?.(parseInt(userId))
-        if (!friend?.getChatHistory) throw new Error('icqq: 无法获取聊天记录')
-        return await friend.getChatHistory(time, count)
-    },
-
-    async poke(bot, userId) {
-        const friend = bot.pickFriend?.(parseInt(userId))
-        if (!friend?.poke) throw new Error('icqq: 无法戳一戳')
-        return await friend.poke()
-    },
-
-    async thumbUp(bot, userId, times = 10) {
-        const user = bot.pickUser?.(parseInt(userId))
-        if (!user?.thumbUp) throw new Error('icqq: 无法点赞')
-        return await user.thumbUp(times)
-    },
-
-    async sendFile(bot, userId, file, name) {
-        const friend = bot.pickFriend?.(parseInt(userId))
-        if (!friend?.sendFile) throw new Error('icqq: 无法发送文件')
-        return await friend.sendFile(file, name)
-    },
-
-    async getSimpleInfo(bot, userId) {
-        const user = bot.pickUser?.(parseInt(userId))
-        if (!user?.getSimpleInfo) throw new Error('icqq: 无法获取用户信息')
-        return await user.getSimpleInfo()
-    }
+    pick: (bot, userId) => new StandardBotApi({ bot }).friend(userId),
+    pickUser: (bot, userId) => new StandardBotApi({ bot }).friend(userId),
+    sendMsg: (bot, userId, content, source) =>
+        new StandardBotApi({ bot }).callFriend(userId, 'sendMsg', [content, source]),
+    getInfo: (bot, userId) => new StandardBotApi({ bot }).getUserInfo(userId),
+    recallMsg: (bot, userId, messageId) => new StandardBotApi({ bot }).recall({ userId, messageId }),
+    getChatHistory: (bot, userId, sequence, count = 20) =>
+        new StandardBotApi({ bot }).getHistory({ userId, sequence, count }),
+    poke: (bot, userId) => new StandardBotApi({ bot }).callFriend(userId, 'poke'),
+    thumbUp: (bot, userId, times = 10) => new StandardBotApi({ bot }).callFriend(userId, 'thumbUp', [times]),
+    sendFile: (bot, userId, file, name) => new StandardBotApi({ bot }).sendFile({ userId, file, name }),
+    getSimpleInfo: (bot, userId) => new StandardBotApi({ bot }).callFriend(userId, 'getSimpleInfo')
 }
 
-// callOneBotApi 统一使用 eventAdapter 中更完善的实现（支持 camelCase 转换和 HTTP fallback）
-export { callOneBotApi } from '../../utils/eventAdapter.js'
+/** @deprecated 新代码请使用 StandardBotApi.callAction。 */
+export async function callOneBotApi(bot, action, params = {}) {
+    return await new StandardBotApi({ bot }).callAction(action, params)
+}
 
 /**
- * 群公告 API 封装
- * 参考 yenai-plugin 实现，主要使用 QQ Web API
+ * @deprecated 新代码请使用 StandardBotApi 的群公告方法。
  */
 export const groupNoticeApi = {
-    /**
-     * 获取群公告列表
-     * @param {Object} bot - Bot 实例
-     * @param {number} groupId - 群号
-     * @param {number} index - 获取指定序号的公告（0表示获取列表）
-     * @returns {Promise<Array|Object>}
-     */
-    async getNoticeList(bot, groupId, index = 0) {
-        // 方式1: 使用 QQ Web API (主要方式)
-        if (bot.cookies?.['qun.qq.com'] && bot.bkn) {
-            return await this._getNoticeListWeb(bot, groupId, index)
-        }
-
-        // 方式2: NapCat/go-cqhttp API
-        if (bot.sendApi) {
-            try {
-                const result = await bot.sendApi('_get_group_notice', { group_id: groupId })
-                const list = result?.data || result || []
-                if (index > 0 && list?.[index - 1]) {
-                    return {
-                        text: list[index - 1].message?.text || list[index - 1].content || '',
-                        fid: list[index - 1].notice_id || list[index - 1].fid
-                    }
-                }
-                return list
-            } catch (e) {
-                // 尝试另一个 API 名称
-                try {
-                    const result = await bot.sendApi('get_group_notice', { group_id: groupId })
-                    return result?.data || result || []
-                } catch (e2) {}
-            }
-        }
-
-        throw new Error('当前协议不支持获取群公告，需要 cookies 或 NapCat/go-cqhttp')
-    },
-
-    /**
-     * 通过 Web API 获取群公告
-     */
-    async _getNoticeListWeb(bot, groupId, index = 0) {
-        const n = index ? 1 : 20
-        const s = index ? index - 1 : 0
-        const url = `https://web.qun.qq.com/cgi-bin/announce/get_t_list?bkn=${bot.bkn}&qid=${groupId}&ft=23&s=${s}&n=${n}`
-
-        const { buffer } = await fetchWithLimit(
-            url,
-            { headers: { Cookie: bot.cookies['qun.qq.com'] } },
-            { timeoutMs: NOTICE_API_TIMEOUT_MS, maxBytes: NOTICE_API_MAX_BYTES, label: '获取群公告列表' }
-        )
-        const res = JSON.parse(buffer.toString('utf-8'))
-
-        if (res.ec !== 0) {
-            throw new Error(res.em || '获取群公告失败')
-        }
-
-        if (index && res.feeds?.[0]) {
-            return {
-                text: res.feeds[0].msg?.text || '',
-                fid: res.feeds[0].fid
-            }
-        }
-
-        return res.feeds || []
-    },
-
-    /**
-     * 发送群公告
-     * @param {Object} bot - Bot 实例
-     * @param {number} groupId - 群号
-     * @param {string} content - 公告内容
-     * @param {Object} options - 选项
-     * @param {string} options.image - 图片URL
-     * @param {boolean} options.pinned - 是否置顶
-     * @param {boolean} options.confirmRequired - 是否需要确认
-     * @param {boolean} options.showEditCard - 是否显示编辑卡片
-     * @returns {Promise<Object>}
-     */
-    async sendNotice(bot, groupId, content, options = {}) {
-        const { image, pinned = false, confirmRequired = true, showEditCard = true } = options
-
-        // 方式1: 使用 QQ Web API (主要方式)
-        if (bot.cookies?.['qun.qq.com'] && bot.bkn) {
-            return await this._sendNoticeWeb(bot, groupId, content, { image, pinned, confirmRequired, showEditCard })
-        }
-
-        // 方式2: NapCat/go-cqhttp API
-        if (bot.sendApi) {
-            try {
-                return await bot.sendApi('_send_group_notice', {
-                    group_id: groupId,
-                    content,
-                    image
-                })
-            } catch (e) {
-                // 尝试另一个 API
-                try {
-                    return await bot.sendApi('send_group_notice', {
-                        group_id: groupId,
-                        content,
-                        image
-                    })
-                } catch (e2) {}
-            }
-        }
-
-        // 方式3: icqq group.sendNotice (备用)
-        const group = bot.pickGroup?.(parseInt(groupId))
-        if (group?.sendNotice) {
-            return await group.sendNotice(content, image)
-        }
-        if (group?.announce) {
-            return await group.announce(content)
-        }
-
-        throw new Error('当前协议不支持发送群公告，需要 cookies 或 NapCat/go-cqhttp')
-    },
-
-    /**
-     * 通过 Web API 发送群公告
-     */
-    async _sendNoticeWeb(bot, groupId, content, options = {}) {
-        const { image, pinned = false, confirmRequired = true, showEditCard = true } = options
-
-        const data = new URLSearchParams({
-            qid: groupId,
-            bkn: bot.bkn,
-            text: content,
-            pinned: pinned ? 1 : 0,
-            type: 1,
-            settings: JSON.stringify({
-                is_show_edit_card: showEditCard ? 1 : 0,
-                tip_window_type: 1,
-                confirm_required: confirmRequired ? 1 : 0
-            })
-        })
-
-        // 如果有图片，先上传
-        if (image) {
-            try {
-                const imgResult = await this._uploadNoticeImage(bot, image)
-                if (imgResult?.ec === 0 && imgResult?.id) {
-                    const p = JSON.parse(imgResult.id.replace(/&quot;/g, '"'))
-                    data.append('pic', p.id)
-                    data.append('imgWidth', p.w)
-                    data.append('imgHeight', p.h)
-                }
-            } catch (e) {
-                // 图片上传失败，继续发送文字公告
-            }
-        }
-
-        const url = `https://web.qun.qq.com/cgi-bin/announce/add_qun_notice?bkn=${bot.bkn}`
-        const { buffer } = await fetchWithLimit(
-            url,
-            {
-                method: 'POST',
-                headers: {
-                    Cookie: bot.cookies['qun.qq.com'],
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                body: data.toString()
-            },
-            { timeoutMs: NOTICE_API_TIMEOUT_MS, maxBytes: NOTICE_API_MAX_BYTES, label: '发送群公告' }
-        )
-
-        return JSON.parse(buffer.toString('utf-8'))
-    },
-
-    /**
-     * 上传公告图片
-     *
-     * imageUrl 来自模型给出的工具参数，下载阶段必须同时限制耗时与体积：
-     * 原实现直接 arrayBuffer() 读入整张图，一个超大文件即可耗尽内存
-     * @param {Object} bot - Bot 实例
-     * @param {string} imageUrl - 图片地址
-     * @returns {Promise<Object>} 上传接口返回的 JSON
-     */
-    async _uploadNoticeImage(bot, imageUrl) {
-        // 下载图片
-        const { buffer: imageBuffer } = await fetchWithLimit(
-            imageUrl,
-            {},
-            { timeoutMs: NOTICE_IMAGE_TIMEOUT_MS, maxBytes: NOTICE_IMAGE_MAX_BYTES, label: '群公告图片下载' }
-        )
-
-        const formData = new FormData()
-        formData.append('bkn', bot.bkn)
-        formData.append('source', 'troopNotice')
-        formData.append('m', '0')
-        formData.append('pic_up', new Blob([imageBuffer], { type: 'image/png' }), 'image.png')
-
-        const { buffer } = await fetchWithLimit(
-            'https://web.qun.qq.com/cgi-bin/announce/upload_img',
-            {
-                method: 'POST',
-                headers: {
-                    Cookie: bot.cookies['qun.qq.com']
-                },
-                body: formData
-            },
-            { timeoutMs: NOTICE_API_TIMEOUT_MS, maxBytes: NOTICE_API_MAX_BYTES, label: '群公告图片上传' }
-        )
-
-        return JSON.parse(buffer.toString('utf-8'))
-    },
-
-    /**
-     * 删除群公告
-     * @param {Object} bot - Bot 实例
-     * @param {number} groupId - 群号
-     * @param {string|number} fidOrIndex - 公告ID 或 序号
-     * @returns {Promise<Object>}
-     */
-    async deleteNotice(bot, groupId, fidOrIndex) {
-        let fid = fidOrIndex
-        let text = ''
-
-        // 如果是数字序号，先获取对应的 fid
-        if (typeof fidOrIndex === 'number' || /^\d+$/.test(fidOrIndex)) {
-            const index = parseInt(fidOrIndex)
-            if (index > 0 && index <= 100) {
-                const notice = await this.getNoticeList(bot, groupId, index)
-                if (notice?.fid) {
-                    fid = notice.fid
-                    text = notice.text
-                } else {
-                    throw new Error(`未找到序号 ${index} 的公告`)
-                }
-            }
-        }
-
-        // 方式1: 使用 QQ Web API (主要方式)
-        if (bot.cookies?.['qun.qq.com'] && bot.bkn) {
-            return await this._deleteNoticeWeb(bot, groupId, fid, text)
-        }
-
-        // 方式2: NapCat/go-cqhttp API
-        if (bot.sendApi) {
-            try {
-                const result = await bot.sendApi('_del_group_notice', {
-                    group_id: groupId,
-                    notice_id: fid
-                })
-                return { ...result, text }
-            } catch (e) {
-                try {
-                    const result = await bot.sendApi('del_group_notice', {
-                        group_id: groupId,
-                        notice_id: fid
-                    })
-                    return { ...result, text }
-                } catch (e2) {}
-            }
-        }
-
-        throw new Error('当前协议不支持删除群公告，需要 cookies 或 NapCat/go-cqhttp')
-    },
-
-    /**
-     * 通过 Web API 删除群公告
-     */
-    async _deleteNoticeWeb(bot, groupId, fid, text = '') {
-        const url = `https://web.qun.qq.com/cgi-bin/announce/del_feed?bkn=${bot.bkn}`
-
-        const { buffer } = await fetchWithLimit(
-            url,
-            {
-                method: 'POST',
-                headers: {
-                    Cookie: bot.cookies['qun.qq.com'],
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                body: new URLSearchParams({
-                    bkn: bot.bkn,
-                    fid: fid,
-                    qid: groupId
-                }).toString()
-            },
-            { timeoutMs: NOTICE_API_TIMEOUT_MS, maxBytes: NOTICE_API_MAX_BYTES, label: '删除群公告' }
-        )
-
-        const result = JSON.parse(buffer.toString('utf-8'))
-        return { ...result, text }
-    }
+    getNoticeList: (bot, groupId, index = 0) => new StandardBotApi({ bot }).getGroupNotices(groupId, index),
+    sendNotice: (bot, groupId, content, options = {}) =>
+        new StandardBotApi({ bot }).sendGroupNotice(groupId, content, options),
+    deleteNotice: (bot, groupId, noticeId) => new StandardBotApi({ bot }).deleteGroupNotice(groupId, noticeId)
 }
 
 /**
- * 获取群成员列表
- * @param {Object} options
- * @param {Object} options.bot - Bot 实例
- * @param {Object} options.event - 事件对象
- * @param {number|string} options.groupId - 群号
+ * @deprecated 新代码请使用 StandardBotApi.getMemberList。
+ * @param {Object} options - 兼容参数
  * @returns {Promise<Array>} 成员列表
  */
 export async function getGroupMemberList({ bot, event, groupId }) {
-    const gid = groupId || event?.group_id
-    if (!gid) return []
-
-    let memberList = []
-
-    try {
-        // 方式1: 使用 event.group.getMemberMap() (icqq 标准)
-        if (event?.group?.getMemberMap) {
-            const memberMap = await event.group.getMemberMap()
-            memberList = mapToMemberList(memberMap)
-        }
-
-        // 方式2: 使用 bot.pickGroup
-        if (memberList.length === 0 && bot?.pickGroup) {
-            const group = bot.pickGroup(parseInt(gid))
-            if (group?.getMemberMap) {
-                const memberMap = await group.getMemberMap()
-                memberList = mapToMemberList(memberMap)
-            } else if (group?.getMemberList) {
-                memberList = (await group.getMemberList()) || []
-            }
-        }
-
-        // 方式3: bot.getGroupMemberList
-        if (memberList.length === 0 && bot?.getGroupMemberList) {
-            const result = await bot.getGroupMemberList(parseInt(gid))
-            memberList = result instanceof Map ? mapToMemberList(result) : Array.isArray(result) ? result : []
-        }
-    } catch (err) {
-        logger.error('[helpers] 获取群成员列表失败:', err.message)
-    }
-
-    return memberList
-}
-
-/**
- * Map 转成员列表数组
- */
-function mapToMemberList(memberMap) {
-    const list = []
-    if (memberMap instanceof Map) {
-        for (const [uid, member] of memberMap) {
-            list.push({ user_id: uid, ...member })
-        }
-    } else if (memberMap && typeof memberMap === 'object') {
-        for (const [uid, member] of Object.entries(memberMap)) {
-            list.push({ user_id: Number(uid) || uid, ...member })
-        }
-    }
-    return list
+    const api = new StandardBotApi({ bot, event })
+    const targetGroupId = groupId || event?.group_id
+    return targetGroupId ? await api.getMemberList(targetGroupId) : []
 }
 
 /**
@@ -982,22 +727,23 @@ export function formatMemberInfo(member) {
  * @param {Object} options
  * @returns {Promise<Array>} 发送结果
  */
-export async function batchSendMessages({ event, messages, count = 1, interval = 500 }) {
+export async function batchSendMessages({ api, event, messages, count = 1, interval = 500 }) {
     const results = []
+    const platformApi = api || new StandardBotApi({ event, bot: event?.bot || globalThis.Bot })
     const actualCount = Math.min(Math.max(count, 1), 10)
     const actualInterval = Math.max(interval, 200)
 
     for (let i = 0; i < actualCount; i++) {
         try {
-            const result = await event.reply(messages)
+            const result = await platformApi.reply(messages)
             results.push({
                 index: i + 1,
                 success: true,
-                message_id: result?.message_id
+                message_id: result.message_id
             })
 
             if (i < actualCount - 1) {
-                await new Promise(r => setTimeout(r, actualInterval))
+                await new Promise(resolve => setTimeout(resolve, actualInterval))
             }
         } catch (err) {
             results.push({
@@ -1139,63 +885,63 @@ export async function loadYunzaiConfig() {
     if (yunzaiCfg) return yunzaiCfg
     try {
         yunzaiCfg = (await import('../../../../../lib/config/config.js')).default
-    } catch (e) {}
+    } catch {}
     return yunzaiCfg
 }
 
 /**
  * 获取主人QQ列表
  * @param {string|number} botId - Bot的QQ号（可选）
- * @returns {Promise<Array<number>>} 主人QQ列表
+ * @returns {Promise<Array<string|number>>} 主人标识列表；QQBot 可包含 OpenID
  */
 export async function getMasterList(botId) {
     const masters = new Set()
+    // QQBot 的主人标识可能是 OpenID，必须保持字符串，不能经过 Number
+    // 转换后因 NaN 被丢弃；其它适配器沿用原有数字列表语义。
+    const scopedBot =
+        botId !== undefined && botId !== null && globalThis.Bot?.[String(botId)]
+            ? globalThis.Bot[String(botId)]
+            : globalThis.Bot
+    const preserveQqOpenId = isQQBotInstance(scopedBot)
+    const addMaster = value => {
+        if (preserveQqOpenId) {
+            if (value !== null && value !== undefined && String(value) !== '') masters.add(String(value))
+            return
+        }
+        const num = Number(value)
+        if (num) masters.add(num)
+    }
     for (const dev of PLUGIN_DEVELOPERS) {
-        masters.add(dev)
+        addMaster(dev)
     }
     try {
-        const config = global.chatgptPluginConfig
+        const config = globalThis.chatgptPluginConfig
         if (config) {
             const pluginMasters = config.get?.('admin.masterQQ') || []
-            pluginMasters.forEach(m => {
-                const num = Number(m)
-                if (num) masters.add(num)
-            })
+            pluginMasters.forEach(addMaster)
             const authorQQs = config.get?.('admin.pluginAuthorQQ') || []
-            authorQQs.forEach(a => {
-                const num = Number(a)
-                if (num) masters.add(num)
-            })
+            authorQQs.forEach(addMaster)
         }
     } catch {}
 
     try {
         const yzCfg = await loadYunzaiConfig()
         if (yzCfg?.masterQQ?.length > 0) {
-            yzCfg.masterQQ.forEach(m => {
-                const num = Number(m)
-                if (num) masters.add(num)
-            })
+            yzCfg.masterQQ.forEach(addMaster)
         }
         if (yzCfg?.master && botId) {
             const botMasters = yzCfg.master[botId] || yzCfg.master[String(botId)] || []
             if (Array.isArray(botMasters)) {
-                botMasters.forEach(m => {
-                    const num = Number(m)
-                    if (num) masters.add(num)
-                })
+                botMasters.forEach(addMaster)
             }
         }
-        if (global.Bot?.config?.master) {
-            const m = global.Bot.config.master
+        if (globalThis.Bot?.config?.master) {
+            const m = globalThis.Bot.config.master
             if (Array.isArray(m)) {
-                m.forEach(x => {
-                    const num = Number(x)
-                    if (num) masters.add(num)
-                })
+                m.forEach(addMaster)
             }
         }
-    } catch (err) {}
+    } catch {}
 
     return Array.from(masters)
 }
@@ -1210,125 +956,51 @@ export async function getMasterList(botId) {
  * @param {Array|string} options.message - 消息内容
  * @returns {Promise<Object>} 发送结果
  */
-export async function sendMessage({ bot, event, groupId, userId, message }) {
-    if (!bot && !event) {
-        throw new Error('需要提供 bot 或 event')
-    }
-
-    const _bot = bot || event?.bot || global.Bot
-    if (!_bot) {
-        throw new Error('无法获取Bot实例')
-    }
-
-    // 确定目标
-    const targetGroupId = groupId || event?.group_id
-    const targetUserId = userId || event?.user_id
-
-    let result
-
-    if (targetGroupId) {
-        // 群消息
-        if (_bot.sendApi) {
-            result = await _bot.sendApi('send_group_msg', {
-                group_id: parseInt(targetGroupId),
-                message
-            })
-        } else if (_bot.pickGroup) {
-            const group = _bot.pickGroup(parseInt(targetGroupId))
-            result = await group?.sendMsg(message)
-        }
-    } else if (targetUserId) {
-        // 私聊消息
-        if (_bot.sendApi) {
-            result = await _bot.sendApi('send_private_msg', {
-                user_id: parseInt(targetUserId),
-                message
-            })
-        } else if (_bot.pickFriend) {
-            const friend = _bot.pickFriend(parseInt(targetUserId))
-            result = await friend?.sendMsg(message)
-        }
-    } else if (event?.reply) {
-        // 使用事件的reply方法
-        result = await event.reply(message)
-    } else {
-        throw new Error('需要指定 groupId 或 userId')
-    }
-
-    return {
-        success: !!result,
-        message_id: result?.message_id || result?.data?.message_id,
-        result
-    }
+/**
+ * @deprecated 新代码请使用 getStandardResultError。
+ * @param {*} result - 协议端结果
+ * @returns {string|null} 错误信息
+ */
+export function getSendResultError(result) {
+    return getStandardResultError(result)
 }
 
-/**
- * 发送合并转发消息
- * @param {Object} options - 发送选项
- * @param {Object} options.bot - Bot实例
- * @param {Object} options.event - 事件对象（可选）
- * @param {string|number} options.groupId - 群号
- * @param {string|number} options.userId - 用户QQ（私聊转发）
- * @param {Array} options.nodes - 转发节点数组
- * @param {Object} options.options - 额外选项 { prompt, summary, source }
- * @returns {Promise<Object>} 发送结果
- */
-export async function sendForwardMessage({ bot, event, groupId, userId, nodes, options = {} }) {
-    if (!bot && !event) {
-        throw new Error('需要提供 bot 或 event')
-    }
+/** @deprecated 新代码请使用 StandardBotApi.send。 */
+export async function sendMessage({ bot, event, groupId, userId, message }) {
+    return await new StandardBotApi({ bot, event }).send({ groupId, userId, message })
+}
 
-    const _bot = bot || event?.bot || global.Bot
-    if (!_bot) {
-        throw new Error('无法获取Bot实例')
-    }
-
-    const targetGroupId = groupId || event?.group_id
-    const targetUserId = userId || event?.user_id
-    const isGroup = !!targetGroupId
-
-    let result
-
-    // NapCat/OneBot API
-    if (_bot.sendApi) {
-        const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
-        const params = isGroup
-            ? { group_id: parseInt(targetGroupId), messages: nodes }
-            : { user_id: parseInt(targetUserId), messages: nodes }
-
-        if (options.prompt) params.prompt = options.prompt
-        if (options.summary) params.summary = options.summary
-        if (options.source) params.source = options.source
-
-        result = await _bot.sendApi(apiName, params)
-    }
-    // icqq
-    else if (_bot.pickGroup || _bot.pickFriend) {
-        const target = isGroup ? _bot.pickGroup(parseInt(targetGroupId)) : _bot.pickFriend(parseInt(targetUserId))
-
-        if (target?.makeForwardMsg && target?.sendMsg) {
-            // 转换节点格式为 icqq 格式
-            const forwardData = nodes.map(n => ({
-                user_id: parseInt(n.data?.user_id || n.data?.uin) || 10000,
-                nickname: n.data?.nickname || n.data?.name || '用户',
-                message: n.data?.content || n.data?.message || ''
-            }))
-
-            const forwardMsg = await target.makeForwardMsg(forwardData)
-            if (forwardMsg?.data && options) {
-                if (options.prompt) forwardMsg.data.prompt = options.prompt
-                if (options.summary) forwardMsg.data.summary = options.summary
+/** @deprecated 新代码请使用 StandardMessage.node。 */
+export function toQQBotForwardSegment(nodes) {
+    return StandardMessage.node(
+        (Array.isArray(nodes) ? nodes : []).map(node => {
+            const payload = node?.data && !Array.isArray(node.data) ? node.data : node || {}
+            return {
+                user_id: payload.user_id || payload.uin,
+                nickname: payload.nickname || payload.name,
+                message: normalizeStandardMessage(payload.content ?? payload.message ?? node?.message ?? '')
             }
-            result = await target.sendMsg(forwardMsg)
-        }
-    }
+        })
+    )
+}
 
-    return {
-        success: !!result,
-        message_id: result?.message_id || result?.data?.message_id,
-        res_id: result?.res_id || result?.data?.res_id,
-        result
-    }
+/** @deprecated 新代码请使用 StandardBotApi.sendForward。 */
+export async function sendForwardMessage({ bot, event, groupId, userId, nodes, options = {} }) {
+    const normalizedNodes = (Array.isArray(nodes) ? nodes : []).map(node => {
+        const payload = node?.data && !Array.isArray(node.data) ? node.data : node || {}
+        return {
+            user_id: payload.user_id || payload.uin,
+            nickname: payload.nickname || payload.name,
+            message: payload.message ?? payload.content ?? node?.message ?? '',
+            time: payload.time
+        }
+    })
+    return await new StandardBotApi({ bot, event }).sendForward({
+        groupId,
+        userId,
+        nodes: normalizedNodes,
+        display: options
+    })
 }
 
 /**
@@ -1339,105 +1011,57 @@ export async function sendForwardMessage({ bot, event, groupId, userId, nodes, o
  */
 export function parseRichContent(content) {
     if (Array.isArray(content)) {
-        return content.flatMap(seg => {
-            if (typeof seg === 'string') {
-                return parseRichContent(seg)
-            }
-            if (seg.type && !seg.data) {
-                const { type, ...rest } = seg
-                return [{ type, data: rest }]
-            }
-            return [seg]
-        })
+        return content.flatMap(item =>
+            typeof item === 'string' ? parseRichContent(item) : normalizeStandardMessage(item)
+        )
     }
+    if (typeof content !== 'string') return normalizeStandardMessage(content ?? '')
 
-    if (typeof content !== 'string') {
-        return [{ type: 'text', data: { text: String(content || '') } }]
-    }
-
-    // 解析特殊标记 - 支持中英文标记
-    const segments = []
     const patterns = [
-        // 图片: [图片:url] 或 [image:url] 或 [img:url]
-        { regex: /\[(?:图片|image|img):([^\]]+)\]/gi, handler: m => ({ type: 'image', data: { file: m[1].trim() } }) },
-        // 表情: [表情:id] 或 [face:id] 或 [emoji:id]
-        { regex: /\[(?:表情|face|emoji):(\d+)\]/gi, handler: m => ({ type: 'face', data: { id: parseInt(m[1]) } }) },
-        // @用户: [@qq] 或 [at:qq] 或 [@all]
-        { regex: /\[@(\d+|all)\]/gi, handler: m => ({ type: 'at', data: { qq: m[1] } }) },
-        { regex: /\[at:(\d+|all)\]/gi, handler: m => ({ type: 'at', data: { qq: m[1] } }) },
-        // 语音: [语音:url] 或 [record:url]
-        {
-            regex: /\[(?:语音|record|audio):([^\]]+)\]/gi,
-            handler: m => ({ type: 'record', data: { file: m[1].trim() } })
-        },
-        // 视频: [视频:url] 或 [video:url]
-        { regex: /\[(?:视频|video):([^\]]+)\]/gi, handler: m => ({ type: 'video', data: { file: m[1].trim() } }) },
-        // 回复: [reply:id] 或 [回复:id]
-        { regex: /\[(?:回复|reply):(\d+)\]/gi, handler: m => ({ type: 'reply', data: { id: m[1] } }) },
-        // 戳一戳: [poke:type,id]
-        {
-            regex: /\[poke:(\d+),(\d+)\]/gi,
-            handler: m => ({ type: 'poke', data: { type: parseInt(m[1]), id: parseInt(m[2]) } })
-        },
-        // 分享链接: [share:url,title] 或 [share:url,title,content,image]
+        { regex: /\[(?:图片|image|img):([^\]]+)\]/gi, build: match => StandardMessage.image(match[1].trim()) },
+        { regex: /\[(?:表情|face|emoji):(\d+)\]/gi, build: match => StandardMessage.face(match[1]) },
+        { regex: /\[@(\d+|all)\]/gi, build: match => StandardMessage.at(match[1]) },
+        { regex: /\[at:(\d+|all)\]/gi, build: match => StandardMessage.at(match[1]) },
+        { regex: /\[(?:语音|record|audio):([^\]]+)\]/gi, build: match => StandardMessage.record(match[1].trim()) },
+        { regex: /\[(?:视频|video):([^\]]+)\]/gi, build: match => StandardMessage.video(match[1].trim()) },
+        { regex: /\[(?:回复|reply):(\d+)\]/gi, build: match => StandardMessage.reply(match[1]) },
+        { regex: /\[poke:(\d+),(\d+)\]/gi, build: match => StandardMessage.poke(Number(match[1]), Number(match[2])) },
         {
             regex: /\[share:([^,\]]+),([^,\]]+)(?:,([^,\]]+))?(?:,([^\]]+))?\]/gi,
-            handler: m => ({
-                type: 'share',
-                data: { url: m[1].trim(), title: m[2].trim(), content: m[3]?.trim() || '', image: m[4]?.trim() || '' }
-            })
+            build: match =>
+                StandardMessage.share(match[1].trim(), match[2].trim(), match[3]?.trim() || '', match[4]?.trim() || '')
         },
-        // 音乐: [music:type,id] 如 [music:qq,123456]
-        { regex: /\[music:(\w+),(\d+)\]/gi, handler: m => ({ type: 'music', data: { type: m[1], id: m[2] } }) },
-        // 位置: [location:lat,lon,title]
+        { regex: /\[music:(\w+),(\d+)\]/gi, build: match => StandardMessage.music(match[1], match[2]) },
         {
             regex: /\[location:([\d.]+),([\d.]+)(?:,([^\]]+))?\]/gi,
-            handler: m => ({
-                type: 'location',
-                data: { lat: parseFloat(m[1]), lon: parseFloat(m[2]), title: m[3]?.trim() || '' }
-            })
+            build: match =>
+                StandardMessage.location(
+                    Number.parseFloat(match[1]),
+                    Number.parseFloat(match[2]),
+                    match[3]?.trim() || ''
+                )
         }
     ]
-
     const matches = []
-    for (const { regex, handler } of patterns) {
+    for (const { regex, build } of patterns) {
+        const current = new RegExp(regex.source, regex.flags)
         let match
-        const re = new RegExp(regex.source, regex.flags)
-        while ((match = re.exec(content)) !== null) {
-            matches.push({ start: match.index, end: match.index + match[0].length, segment: handler(match) })
+        while ((match = current.exec(content)) !== null) {
+            matches.push({ start: match.index, end: match.index + match[0].length, segment: build(match) })
         }
     }
+    matches.sort((left, right) => left.start - right.start)
 
-    // 按位置排序，去除重叠
-    matches.sort((a, b) => a.start - b.start)
-    const filteredMatches = []
-    let lastEnd = -1
-    for (const m of matches) {
-        if (m.start >= lastEnd) {
-            filteredMatches.push(m)
-            lastEnd = m.end
-        }
+    const segments = []
+    let cursor = 0
+    for (const match of matches) {
+        if (match.start < cursor) continue
+        if (match.start > cursor) segments.push(StandardMessage.text(content.slice(cursor, match.start)))
+        segments.push(match.segment)
+        cursor = match.end
     }
-
-    if (filteredMatches.length === 0) {
-        return [{ type: 'text', data: { text: content } }]
-    }
-
-    lastEnd = 0
-    for (const m of filteredMatches) {
-        if (m.start > lastEnd) {
-            const text = content.substring(lastEnd, m.start)
-            if (text) segments.push({ type: 'text', data: { text } })
-        }
-        segments.push(m.segment)
-        lastEnd = m.end
-    }
-    if (lastEnd < content.length) {
-        const text = content.substring(lastEnd)
-        if (text) segments.push({ type: 'text', data: { text } })
-    }
-
-    return segments
+    if (cursor < content.length) segments.push(StandardMessage.text(content.slice(cursor)))
+    return segments.length ? segments : [StandardMessage.text(content)]
 }
 
 /**
@@ -1446,693 +1070,77 @@ export function parseRichContent(content) {
  * @returns {Array} 节点数组
  */
 export function buildForwardNodes(messages) {
-    return messages.map(msg => ({
-        type: 'node',
-        data: {
-            user_id: String(msg.user_id || msg.uin || '10000'),
-            nickname: msg.nickname || msg.name || String(msg.user_id || '用户'),
-            content: parseRichContent(msg.message || msg.content || '')
-        }
-    }))
+    return (Array.isArray(messages) ? messages : []).map(message =>
+        StandardMessage.nodeItem(
+            String(message.user_id || message.uin || '10000'),
+            message.nickname || message.name || String(message.user_id || '用户'),
+            parseRichContent(message.message || message.content || ''),
+            message.time
+        )
+    )
 }
 
-/**
- * 检测协议端类型
- * @param {Object} bot - Bot实例
- * @returns {string} 协议端类型: 'napcat', 'icqq', 'onebot', 'unknown'
- */
+/** @deprecated 新代码请使用 detectStandardAdapter。 */
 export function detectProtocol(bot) {
-    if (!bot) return 'unknown'
-
-    // NapCat 特征
-    if (bot.sendApi && bot.version?.app_name?.toLowerCase().includes('napcat')) {
-        return 'napcat'
-    }
-
-    // icqq 特征
-    if (bot.pickGroup && bot.pickFriend && bot.gl && bot.fl) {
-        return 'icqq'
-    }
-
-    // OneBot 特征
-    if (bot.sendApi || bot.send_group_msg || bot.send_private_msg) {
-        return 'onebot'
-    }
-
-    return 'unknown'
+    return detectStandardAdapter(bot)
 }
 
-/**
- * 获取Bot信息
- * @param {Object} bot - Bot实例
- * @returns {Object} Bot信息
- */
+/** @deprecated 新代码请使用 StandardBotApi.getBotInfo。 */
 export function getBotInfo(bot) {
-    if (!bot) return { uin: 0, nickname: 'Unknown' }
-
+    const info = new StandardBotApi({ bot }).getBotInfo()
     return {
-        uin: bot.uin || bot.self_id || 0,
-        nickname: bot.nickname || bot.info?.nickname || 'Bot',
-        protocol: detectProtocol(bot),
-        version: bot.version || {},
-        status: bot.status || 'unknown'
+        uin: info.user_id || 0,
+        nickname: info.nickname || 'Unknown',
+        protocol: detectStandardAdapter(bot),
+        version: info.version,
+        status: info.status
     }
 }
 
-/**
- * 统一消息段格式
- * @param {Object} seg - 消息段
- * @param {string} targetFormat - 目标格式: 'icqq' | 'onebot' | 'auto'
- * @param {Object} bot - Bot实例（用于自动检测）
- * @returns {Object} 格式化后的消息段
- */
-export function normalizeSegment(seg, targetFormat = 'auto', bot = null) {
-    if (!seg || !seg.type) return seg
-
-    const format = targetFormat === 'auto' ? detectProtocol(bot) : targetFormat
-    const isIcqq = format === 'icqq'
-
-    // 提取数据
-    const data = seg.data || {}
-    const directData = { ...seg }
-    delete directData.type
-    delete directData.data
-
-    const mergedData = { ...directData, ...data }
-
-    if (isIcqq) {
-        // icqq 格式: { type, ...data }
-        return { type: seg.type, ...mergedData }
-    } else {
-        // OneBot/NapCat 格式: { type, data: {...} }
-        return { type: seg.type, data: mergedData }
-    }
+/** @deprecated 新代码请使用 normalizeStandardSegment。 */
+export function normalizeSegment(segment) {
+    return normalizeStandardSegment(segment)
 }
 
-/**
- * 批量格式化消息段数组
- * @param {Array} segments - 消息段数组
- * @param {string} targetFormat - 目标格式
- * @param {Object} bot - Bot实例
- * @returns {Array}
- */
-export function normalizeSegments(segments, targetFormat = 'auto', bot = null) {
-    if (!Array.isArray(segments)) {
-        if (typeof segments === 'string') {
-            return [{ type: 'text', data: { text: segments } }]
-        }
-        return segments ? [normalizeSegment(segments, targetFormat, bot)] : []
-    }
-    return segments.map(seg => {
-        if (typeof seg === 'string') {
-            return targetFormat === 'icqq' ? { type: 'text', text: seg } : { type: 'text', data: { text: seg } }
-        }
-        return normalizeSegment(seg, targetFormat, bot)
-    })
+/** @deprecated 新代码请使用 normalizeStandardMessage。 */
+export function normalizeSegments(segments) {
+    return normalizeStandardMessage(segments)
 }
 
-/**
- * 创建兼容的消息段（同时包含icqq和OneBot格式字段）
- */
-export const compatSegment = {
-    text: text => ({ type: 'text', text, data: { text } }),
-
-    image: (file, opts = {}) => ({
-        type: 'image',
-        file,
-        ...opts,
-        data: { file, ...opts }
-    }),
-
-    at: (qq, name) => ({
-        type: 'at',
-        qq: String(qq),
-        ...(name ? { name } : {}),
-        data: { qq: String(qq), ...(name ? { name } : {}) }
-    }),
-
-    reply: id => ({
-        type: 'reply',
-        id: String(id),
-        data: { id: String(id) }
-    }),
-
-    face: id => ({
-        type: 'face',
-        id: Number(id),
-        data: { id: Number(id) }
-    }),
-
-    record: (file, magic = false) => ({
-        type: 'record',
-        file,
-        magic: magic ? 1 : 0,
-        data: { file, magic: magic ? 1 : 0 }
-    }),
-
-    video: (file, thumb) => ({
-        type: 'video',
-        file,
-        ...(thumb ? { thumb } : {}),
-        data: { file, ...(thumb ? { thumb } : {}) }
-    }),
-
-    json: data => {
-        const jsonStr = typeof data === 'string' ? data : JSON.stringify(data)
-        // icqq 格式: { type: 'json', data: jsonStr }
-        // onebot 格式: { type: 'json', data: { data: jsonStr } }
-        // 使用 onebot 格式，normalizeSegment 会处理转换
-        return { type: 'json', data: { data: jsonStr } }
-    },
-
-    xml: data => ({
-        type: 'xml',
-        // 使用 onebot 格式，normalizeSegment 会处理转换
-        data: { data }
-    }),
-
-    node: (userId, nickname, content, time) => ({
-        type: 'node',
-        data: {
-            user_id: String(userId),
-            nickname: nickname || String(userId),
-            content: Array.isArray(content) ? content : [{ type: 'text', data: { text: String(content) } }],
-            ...(time ? { time } : {})
-        }
-    }),
-
-    forward: id => ({
-        type: 'forward',
-        id,
-        data: { id }
-    }),
-
-    mface: (emojiPackageId, emojiId, key, summary) => ({
-        type: 'mface',
-        emoji_package_id: emojiPackageId,
-        emoji_id: emojiId,
-        ...(key ? { key } : {}),
-        ...(summary ? { summary } : {}),
-        data: {
-            emoji_package_id: emojiPackageId,
-            emoji_id: emojiId,
-            ...(key ? { key } : {}),
-            ...(summary ? { summary } : {})
-        }
-    }),
-
-    poke: (type, id) => ({
-        type: 'poke',
-        poke_type: type,
-        id,
-        data: { type, id }
-    }),
-
-    share: (url, title, content, image) => ({
-        type: 'share',
-        url,
-        title,
-        ...(content ? { content } : {}),
-        ...(image ? { image } : {}),
-        data: { url, title, ...(content ? { content } : {}), ...(image ? { image } : {}) }
-    }),
-
-    music: (type, id) => ({
-        type: 'music',
-        music_type: type,
-        id: String(id),
-        data: { type, id: String(id) }
-    }),
-
-    musicCustom: (url, audio, title, content, image) => ({
-        type: 'music',
-        music_type: 'custom',
-        url,
-        audio,
-        title,
-        content,
-        image,
-        data: { type: 'custom', url, audio, title, content, image }
-    }),
-
-    location: (lat, lon, title, content) => ({
-        type: 'location',
-        lat,
-        lon,
-        ...(title ? { title } : {}),
-        ...(content ? { content } : {}),
-        data: { lat, lon, ...(title ? { title } : {}), ...(content ? { content } : {}) }
-    }),
-
-    markdown: content => ({
-        type: 'markdown',
-        content,
-        data: { content }
-    }),
-
-    keyboard: rows => ({
-        type: 'keyboard',
-        data: { content: { rows } }
-    }),
-
-    dice: () => ({ type: 'dice', data: {} }),
-    rps: () => ({ type: 'rps', data: {} }),
-    shake: () => ({ type: 'shake', data: {} })
-}
+/** @deprecated 新代码请使用 StandardMessage。 */
+export const compatSegment = StandardMessage
 
 /**
- * 发送合并转发消息
- * 自动适配 icqq/OneBot/NapCat，支持外显自定义
- * @param {Object} options
- * @param {Object} options.bot - Bot实例
- * @param {Object} options.event - 事件对象
- * @param {number|string} options.groupId - 群号
- * @param {number|string} options.userId - 用户QQ（私聊）
- * @param {Array} options.messages - 消息列表 [{user_id, nickname, content}]
- * @param {Object} options.display - 外显选项 {prompt, summary, source}
- * @returns {Promise<Object>}
+ * @deprecated 新代码请使用 StandardBotApi.sendForward。
+ * @param {Object} options - 兼容参数
+ * @returns {Promise<Object>} 标准发送结果
  */
 export async function sendForwardMsgEnhanced({ bot, event, groupId, userId, messages, display = {} }) {
-    const _bot = bot || event?.bot || global.Bot
-    if (!_bot) throw new Error('无法获取Bot实例')
-
-    const targetGroupId = groupId || event?.group_id
-    const targetUserId = userId || event?.user_id
-    const isGroup = !!targetGroupId
-    const protocol = detectProtocol(_bot)
-    const isIcqq = protocol === 'icqq'
-
-    /**
-     * 解析消息内容为消息段数组
-     * 支持字符串、数组、富文本标记
-     */
-    const parseContent = content => {
-        if (!content) return [{ type: 'text', data: { text: '' } }]
-
-        // 已经是数组
-        if (Array.isArray(content)) {
-            return content.flatMap(item => {
-                if (typeof item === 'string') {
-                    return parseRichContent(item)
-                }
-                // 已经是消息段对象
-                if (item.type) {
-                    return [normalizeSegment(item, isIcqq ? 'icqq' : 'onebot', _bot)]
-                }
-                return [{ type: 'text', data: { text: String(item) } }]
-            })
-        }
-
-        // 字符串：解析富文本标记
-        if (typeof content === 'string') {
-            return parseRichContent(content)
-        }
-
-        // 对象：单个消息段
-        if (content.type) {
-            return [normalizeSegment(content, isIcqq ? 'icqq' : 'onebot', _bot)]
-        }
-
-        return [{ type: 'text', data: { text: String(content) } }]
-    }
-
-    // 构建节点 - OneBot 格式
-    const buildOneBotNodes = () =>
-        messages.map(msg => {
-            const uid = String(msg.user_id || msg.uin || '10000')
-            const nick = msg.nickname || msg.name || uid
-            const content = parseContent(msg.message || msg.content)
-            const normalizedContent = normalizeSegments(content, 'onebot', _bot)
-
-            return {
-                type: 'node',
-                data: {
-                    user_id: uid,
-                    nickname: nick,
-                    content: normalizedContent,
-                    ...(msg.time ? { time: msg.time } : {})
-                }
-            }
-        })
-
-    // 构建节点 - icqq 格式
-    const buildIcqqNodes = () =>
-        messages.map(msg => {
-            const uid = parseInt(msg.user_id || msg.uin) || 10000
-            const nick = msg.nickname || msg.name || String(uid)
-            const content = parseContent(msg.message || msg.content)
-            const normalizedContent = normalizeSegments(content, 'icqq', _bot)
-
-            return {
-                user_id: uid,
-                nickname: nick,
-                message: normalizedContent,
-                ...(msg.time ? { time: msg.time } : {})
-            }
-        })
-
-    const nodes = buildOneBotNodes()
-
-    // 检测消息中是否包含 ark/json 类型（需要特殊处理）
-    const hasComplexContent = messages.some(msg => {
-        const content = msg.message || msg.content
-        if (!content) return false
-
-        // 检查数组中的消息段
-        if (Array.isArray(content)) {
-            return content.some(
-                seg => seg.type === 'json' || seg.type === 'xml' || seg.type === 'ark' || seg.type === 'markdown'
-            )
-        }
-
-        // 检查单个对象
-        if (typeof content === 'object' && content.type) {
-            return ['json', 'xml', 'ark', 'markdown'].includes(content.type)
-        }
-
-        return false
+    const nodes = (Array.isArray(messages) ? messages : []).map(message => ({
+        user_id: message.user_id || message.uin,
+        nickname: message.nickname || message.name,
+        message: normalizeStandardMessage(parseRichContent(message.message ?? message.content ?? '')),
+        time: message.time
+    }))
+    return await new StandardBotApi({ bot, event }).sendForward({
+        groupId,
+        userId,
+        nodes,
+        display
     })
-
-    let result = null
-    let method = ''
-    let lastError = null
-
-    // 方式1: NapCat/OneBot sendApi
-    if (_bot.sendApi) {
-        try {
-            // 如果包含ark/json等复杂内容，尝试使用不同的发送方式
-            if (hasComplexContent) {
-                // 方式A: 尝试 send_forward_msg (NapCat 统一接口)
-                try {
-                    const forwardParams = {
-                        messages: nodes,
-                        ...(isGroup ? { group_id: parseInt(targetGroupId) } : { user_id: parseInt(targetUserId) })
-                    }
-                    if (display.prompt) forwardParams.prompt = display.prompt
-                    if (display.summary) forwardParams.summary = display.summary
-                    if (display.source) forwardParams.source = display.source
-
-                    result = await _bot.sendApi('send_forward_msg', forwardParams)
-                    method = 'sendApi_unified'
-
-                    if (
-                        result?.status === 'ok' ||
-                        result?.retcode === 0 ||
-                        result?.message_id ||
-                        result?.data?.message_id
-                    ) {
-                        return {
-                            success: true,
-                            message_id: result.message_id || result.data?.message_id,
-                            res_id: result.res_id || result.data?.res_id,
-                            method,
-                            node_count: nodes.length,
-                            has_complex_content: true,
-                            target: isGroup
-                                ? { type: 'group', id: targetGroupId }
-                                : { type: 'private', id: targetUserId }
-                        }
-                    }
-                } catch (unifiedErr) {
-                    // 继续尝试其他方式
-                }
-
-                // 方式B: 尝试分步发送 - 先上传节点再发送
-                try {
-                    // 使用 upload_forward_msg 上传节点
-                    const uploadResult = await _bot.sendApi('upload_forward_msg', {
-                        messages: nodes
-                    })
-
-                    const resId = uploadResult?.res_id || uploadResult?.data?.res_id
-                    if (resId) {
-                        // 使用 res_id 发送
-                        const sendParams = isGroup
-                            ? { group_id: parseInt(targetGroupId), res_id: resId }
-                            : { user_id: parseInt(targetUserId), res_id: resId }
-
-                        const apiName = isGroup ? 'send_group_msg' : 'send_private_msg'
-                        result = await _bot.sendApi(apiName, {
-                            ...sendParams,
-                            message: [{ type: 'forward', data: { id: resId } }]
-                        })
-                        method = 'upload_forward'
-
-                        if (
-                            result?.status === 'ok' ||
-                            result?.retcode === 0 ||
-                            result?.message_id ||
-                            result?.data?.message_id
-                        ) {
-                            return {
-                                success: true,
-                                message_id: result.message_id || result.data?.message_id,
-                                res_id: resId,
-                                method,
-                                node_count: nodes.length,
-                                has_complex_content: true,
-                                target: isGroup
-                                    ? { type: 'group', id: targetGroupId }
-                                    : { type: 'private', id: targetUserId }
-                            }
-                        }
-                    }
-                } catch (uploadErr) {
-                    // 继续尝试标准方式
-                }
-            }
-
-            // 标准方式: send_group_forward_msg / send_private_forward_msg
-            const apiName = isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
-            const params = isGroup
-                ? { group_id: parseInt(targetGroupId), messages: nodes }
-                : { user_id: parseInt(targetUserId), messages: nodes }
-
-            // 添加外显参数
-            if (display.prompt) params.prompt = display.prompt
-            if (display.summary) params.summary = display.summary
-            if (display.source) params.source = display.source
-
-            result = await _bot.sendApi(apiName, params)
-            method = 'sendApi'
-
-            if (result?.status === 'ok' || result?.retcode === 0 || result?.message_id || result?.data?.message_id) {
-                return {
-                    success: true,
-                    message_id: result.message_id || result.data?.message_id,
-                    res_id: result.res_id || result.data?.res_id,
-                    method,
-                    node_count: nodes.length,
-                    target: isGroup ? { type: 'group', id: targetGroupId } : { type: 'private', id: targetUserId }
-                }
-            }
-        } catch (err) {
-            lastError = err.message
-        }
-    }
-
-    // 方式2: icqq makeForwardMsg
-    if (_bot.pickGroup || _bot.pickFriend) {
-        try {
-            let target = null
-            const icqqNodes = buildIcqqNodes()
-
-            // 自定义外显的辅助函数
-            const applyDisplay = forwardMsg => {
-                if (forwardMsg?.data) {
-                    if (display.prompt) forwardMsg.data.prompt = display.prompt
-                    if (display.summary) forwardMsg.data.summary = display.summary
-                    if (display.source) forwardMsg.data.source = display.source
-                }
-                // 如果 forwardMsg 是数组（某些 icqq 版本）
-                if (Array.isArray(forwardMsg)) {
-                    for (const item of forwardMsg) {
-                        if (item?.data) {
-                            if (display.prompt) item.data.prompt = display.prompt
-                            if (display.summary) item.data.summary = display.summary
-                            if (display.source) item.data.source = display.source
-                        }
-                    }
-                }
-                return forwardMsg
-            }
-
-            if (isGroup) {
-                target = _bot.pickGroup(parseInt(targetGroupId))
-            } else {
-                // 私聊发送合并转发
-                target = _bot.pickFriend(parseInt(targetUserId))
-
-                // icqq 私聊可能没有 makeForwardMsg，尝试借用群来生成
-                if (!target?.makeForwardMsg && _bot.pickGroup) {
-                    const groups = _bot.gl || new Map()
-                    const firstGroupId = groups.keys().next().value
-                    if (firstGroupId) {
-                        const tempGroup = _bot.pickGroup(firstGroupId)
-                        if (tempGroup?.makeForwardMsg) {
-                            const forwardMsg = applyDisplay(await tempGroup.makeForwardMsg(icqqNodes))
-
-                            if (target?.sendMsg) {
-                                result = await target.sendMsg(forwardMsg)
-                                method = 'icqq_private_via_group'
-
-                                if (result) {
-                                    return {
-                                        success: true,
-                                        message_id: result.message_id,
-                                        res_id: result.res_id,
-                                        method,
-                                        node_count: messages.length,
-                                        target: { type: 'private', id: targetUserId }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (target?.makeForwardMsg && target?.sendMsg) {
-                const forwardMsg = applyDisplay(await target.makeForwardMsg(icqqNodes))
-                result = await target.sendMsg(forwardMsg)
-                method = 'icqq'
-
-                if (result) {
-                    return {
-                        success: true,
-                        message_id: result.message_id,
-                        res_id: result.res_id,
-                        method,
-                        node_count: messages.length,
-                        target: isGroup ? { type: 'group', id: targetGroupId } : { type: 'private', id: targetUserId }
-                    }
-                }
-            }
-        } catch (err) {
-            lastError = err.message
-        }
-    }
-
-    // 方式3: 直接Bot方法
-    const legacyMethod = isGroup
-        ? _bot.sendGroupForwardMsg || _bot.send_group_forward_msg
-        : _bot.sendPrivateForwardMsg || _bot.send_private_forward_msg
-
-    if (typeof legacyMethod === 'function') {
-        try {
-            const targetId = isGroup ? parseInt(targetGroupId) : parseInt(targetUserId)
-            result = await legacyMethod.call(_bot, targetId, nodes)
-            method = 'legacy'
-
-            if (result) {
-                return {
-                    success: true,
-                    message_id: result.message_id,
-                    res_id: result.res_id,
-                    method,
-                    node_count: nodes.length,
-                    target: isGroup ? { type: 'group', id: targetGroupId } : { type: 'private', id: targetUserId }
-                }
-            }
-        } catch (err) {
-            lastError = err.message
-        }
-    }
-
-    return {
-        success: false,
-        error: lastError || '当前环境不支持发送合并转发消息',
-        tried_methods: ['sendApi', 'icqq', 'legacy'],
-        target: isGroup ? { type: 'group', id: targetGroupId } : { type: 'private', id: targetUserId }
-    }
 }
 
 /**
- * 发送卡片消息
- * @param {Object} options
- * @param {Object} options.bot - Bot实例
- * @param {Object} options.event - 事件对象
- * @param {number|string} options.groupId - 群号
- * @param {number|string} options.userId - 用户QQ
- * @param {string} options.type - 卡片类型: 'json' | 'xml'
- * @param {string|Object} options.data - 卡片数据
- * @returns {Promise<Object>}
+ * @deprecated 新代码请使用 StandardBotApi.send 和 StandardMessage。
  */
 export async function sendCardMessage({ bot, event, groupId, userId, type = 'json', data }) {
-    const _bot = bot || event?.bot || global.Bot
-    if (!_bot) throw new Error('无法获取Bot实例')
-
-    const targetGroupId = groupId || event?.group_id
-    const targetUserId = userId || event?.user_id
-    const protocol = detectProtocol(_bot)
-    const isIcqq = protocol === 'icqq'
-
-    // 构建卡片消息段
-    let cardData = data
-    if (type === 'json' && typeof data === 'object') {
-        cardData = JSON.stringify(data)
+    const api = new StandardBotApi({ bot, event })
+    try {
+        const message = type === 'xml' ? StandardMessage.xml(data) : StandardMessage.json(data)
+        return await api.send({ groupId, userId, message })
+    } catch (error) {
+        return { success: false, error: error.message, protocol: detectStandardAdapter(api.bot) }
     }
-
-    const cardSeg = isIcqq ? { type, data: cardData } : { type, data: { data: cardData } }
-
-    let result = null
-    let lastError = null
-
-    // 优先 icqq
-    if (isIcqq && (_bot.pickGroup || _bot.pickFriend)) {
-        try {
-            if (targetGroupId && _bot.pickGroup) {
-                result = await _bot.pickGroup(parseInt(targetGroupId))?.sendMsg(cardSeg)
-            } else if (targetUserId && _bot.pickFriend) {
-                result = await _bot.pickFriend(parseInt(targetUserId))?.sendMsg(cardSeg)
-            }
-            if (result?.message_id) {
-                return { success: true, message_id: result.message_id, protocol: 'icqq' }
-            }
-        } catch (err) {
-            lastError = err.message
-        }
-    }
-
-    // sendApi
-    if (_bot.sendApi) {
-        try {
-            if (targetGroupId) {
-                result = await _bot.sendApi('send_group_msg', {
-                    group_id: parseInt(targetGroupId),
-                    message: [cardSeg]
-                })
-            } else if (targetUserId) {
-                result = await _bot.sendApi('send_private_msg', {
-                    user_id: parseInt(targetUserId),
-                    message: [cardSeg]
-                })
-            }
-            if (result?.message_id || result?.data?.message_id) {
-                return {
-                    success: true,
-                    message_id: result.message_id || result.data?.message_id,
-                    protocol: 'onebot'
-                }
-            }
-        } catch (err) {
-            lastError = err.message
-        }
-    }
-
-    // event.reply
-    if (event?.reply) {
-        try {
-            result = await event.reply(cardSeg)
-            if (result?.message_id) {
-                return { success: true, message_id: result.message_id, protocol: 'reply' }
-            }
-        } catch (err) {
-            lastError = err.message
-        }
-    }
-
-    return { success: false, error: lastError || '发送失败' }
 }
 
 /**
@@ -2491,135 +1499,23 @@ export function normalizeMemberRole(role) {
 }
 
 /**
- * 解析 OneBot get_group_member_info 响应
- * @param {Object} info - sendApi 返回值
- * @returns {{ role: 'owner'|'admin'|'member'|'unknown' }|null} 解析失败返回 null；role 不可判定时为 unknown
- */
-function parseOneBotGetGroupMemberInfo(info) {
-    if (!info || info.status === 'failed') return null
-    const retcode = info.retcode ?? info.retCode
-    if (retcode !== undefined && retcode !== 0) return null
-    const roleRaw = info.data?.role ?? info.role
-    if (roleRaw === undefined || roleRaw === null) return null
-    return { role: normalizeMemberRole(roleRaw) }
-}
-
-/**
- * 从 icqq Map 中按 QQ 号取成员（兼容 number / string key）
- * @param {Map|undefined} memberMap
- * @param {number} uid
- * @returns {object|undefined}
- */
-function getMemberFromIcqqMap(memberMap, uid) {
-    if (!memberMap || typeof memberMap.get !== 'function') return undefined
-    return memberMap.get(uid) ?? memberMap.get(String(uid)) ?? memberMap.get(Number(uid))
-}
-
-/**
- * icqq：通过 getMemberMap 拉取成员身份（优先于 gl / 同步 pickMember.info）
- * @returns {Promise<'owner'|'admin'|'member'|null>}
- */
-async function getIcqqMemberRoleFromMemberMap(bot, groupId, userId) {
-    if (!bot?.pickGroup) return null
-    const gid = parseInt(groupId, 10)
-    const uid = parseInt(userId, 10)
-    if (Number.isNaN(gid) || Number.isNaN(uid)) return null
-    try {
-        const group = bot.pickGroup(gid)
-        if (!group?.getMemberMap) return null
-        const memberMap = await group.getMemberMap()
-        const memberData = getMemberFromIcqqMap(memberMap, uid)
-        if (!memberData) return null
-        const roleRaw = memberData.role
-        if (roleRaw === undefined || roleRaw === null) return null
-        return normalizeMemberRole(roleRaw)
-    } catch (e) {
-        logger.debug(`[helpers] getIcqqMemberRoleFromMemberMap: ${e.message}`)
-        return null
-    }
-}
-
-/**
- * 将 icqq 解析出的角色写入 getBotPermission 结果对象
- * @param {object} result - getBotPermission 的结果对象，就地修改
- * @param {'owner'|'admin'|'member'|'unknown'} role - 规范化角色；unknown 会保留在 result 上，由调用方继续兜底
- * @returns {void}
- */
-function applyRoleToBotPermissionResult(result, role) {
-    result.inGroup = true
-    result.role = role
-    result.isOwner = role === 'owner'
-    result.isAdmin = role === 'owner' || role === 'admin'
-}
-
-/**
- * 获取群成员角色（优先 OneBot API，避免 gl 缓存不准）
- * @param {Object} bot
- * @param {number|string} groupId
- * @param {number|string} userId
- * @returns {Promise<'owner'|'admin'|'member'|'unknown'>}
+ * @deprecated 新代码请使用 StandardBotApi.getMemberInfo。
  */
 export async function getGroupMemberRoleFromBot(bot, groupId, userId) {
     if (!bot || groupId == null || userId == null) return 'unknown'
-    const gid = parseInt(groupId, 10)
-    const uid = parseInt(userId, 10)
-    if (Number.isNaN(gid) || Number.isNaN(uid)) return 'unknown'
-
     try {
-        if (bot.sendApi) {
-            try {
-                const info = await bot.sendApi('get_group_member_info', {
-                    group_id: gid,
-                    user_id: uid
-                })
-                const parsed = parseOneBotGetGroupMemberInfo(info)
-                // role 无法判定时不能直接返回，继续走后面的兜底来源
-                if (parsed && parsed.role !== 'unknown') return parsed.role
-            } catch (e) {
-                logger.debug(`[helpers] getGroupMemberRoleFromBot API: ${e.message}`)
-            }
-        }
-
-        const icqqRole = await getIcqqMemberRoleFromMemberMap(bot, gid, uid)
-        if (icqqRole && icqqRole !== 'unknown') return icqqRole
-
-        const groupInfo = bot.gl?.get(gid)
-        if (groupInfo?.owner_id != null && String(groupInfo.owner_id) === String(uid)) {
-            return 'owner'
-        }
-
-        if (bot.pickGroup) {
-            try {
-                const group = bot.pickGroup(gid)
-                const memberInfo = group?.pickMember?.(uid)?.info
-                if (memberInfo?.role) {
-                    const picked = normalizeMemberRole(memberInfo.role)
-                    if (picked !== 'unknown') return picked
-                }
-                const admins = group?.admin_list || []
-                if (admins.some(a => String(a) === String(uid))) return 'admin'
-            } catch (e) {
-                // 忽略
-            }
-        }
-
-        /*
-         * 所有来源都没能定位到该成员时返回 unknown 而非 'member'。
-         * 返回 'member' 意味着"已确认目标是普通成员"，会让上层的群主/管理员保护判定
-         * 直接通过——查询失败与"确认是普通成员"必须区分开，由调用方 fail-closed。
-         */
+        const info = await new StandardBotApi({ bot }).getMemberInfo(groupId, userId)
+        if (info?.is_owner === true) return 'owner'
+        if (info?.is_admin === true) return 'admin'
+        return normalizeMemberRole(info?.role ?? info?.member_role)
+    } catch (error) {
+        logger.debug(`[helpers] getGroupMemberRoleFromBot: ${error.message}`)
         return 'unknown'
-    } catch (e) {
-        logger.debug(`[helpers] getGroupMemberRoleFromBot: ${e.message}`)
     }
-    return 'unknown'
 }
 
 /**
- * 获取 Bot 在指定群内的权限信息
- * @param {Object} bot - Bot实例
- * @param {number|string} groupId - 群号
- * @returns {Promise<{role: 'owner'|'admin'|'member'|'unknown', isAdmin: boolean, isOwner: boolean, canKick: boolean, canMute: boolean, canRecall: boolean}>}
+ * @deprecated 新代码请使用 StandardBotApi 获取标准成员资料。
  */
 export async function getBotPermission(bot, groupId) {
     const result = {
@@ -2633,89 +1529,19 @@ export async function getBotPermission(bot, groupId) {
         canSetTitle: false,
         inGroup: false
     }
-
     if (!bot || !groupId) return result
 
-    const gid = parseInt(groupId)
-    const botId = bot.uin || bot.self_id
-    const botUid = Number.isNaN(Number(botId)) ? botId : Number(botId)
-
-    try {
-        // 优先 OneBot API（与 QQ 侧一致，避免 gl 中 admin_flag 等缓存错误导致误判）
-        if (bot.sendApi) {
-            try {
-                const info = await bot.sendApi('get_group_member_info', {
-                    group_id: gid,
-                    user_id: botUid
-                })
-                const parsed = parseOneBotGetGroupMemberInfo(info)
-                if (parsed) {
-                    result.inGroup = true
-                    result.role = parsed.role
-                    result.isOwner = parsed.role === 'owner'
-                    result.isAdmin = parsed.role === 'owner' || parsed.role === 'admin'
-                }
-            } catch (e) {
-                logger.debug(`[helpers] getBotPermission API: ${e.message}`)
-            }
-        }
-
-        // icqq：getMemberMap 拉取 Bot 自身身份（优先于同步 pickMember.info / gl）
-        if (result.role === 'unknown') {
-            const icqqRole = await getIcqqMemberRoleFromMemberMap(bot, gid, botUid)
-            if (icqqRole) applyRoleToBotPermissionResult(result, icqqRole)
-        }
-
-        // 再尝试同步 pickMember.info
-        if (result.role === 'unknown' && bot.pickGroup) {
-            try {
-                const group = bot.pickGroup(gid)
-                const memberInfo = group?.pickMember?.(botId)?.info ?? group?.pickMember?.(botUid)?.info
-                if (memberInfo) {
-                    const mr = normalizeMemberRole(memberInfo.role)
-                    applyRoleToBotPermissionResult(result, mr)
-                }
-            } catch (e) {
-                // 忽略错误
-            }
-        }
-
-        // 最后使用 gl 缓存
-        if (result.role === 'unknown') {
-            const groupInfo = bot.gl?.get(gid)
-            if (groupInfo) {
-                result.inGroup = true
-                if (groupInfo.owner_id != null && String(groupInfo.owner_id) === String(botId)) {
-                    result.role = 'owner'
-                    result.isOwner = true
-                    result.isAdmin = true
-                } else if (groupInfo.admin_flag) {
-                    result.role = 'admin'
-                    result.isAdmin = true
-                } else {
-                    result.role = 'member'
-                }
-            }
-        }
-
-        // 设置权限能力
-        if (result.isOwner) {
-            result.canKick = true
-            result.canMute = true
-            result.canRecall = true
-            result.canSetCard = true
-            result.canSetTitle = true
-        } else if (result.isAdmin) {
-            result.canKick = true
-            result.canMute = true
-            result.canRecall = true
-            result.canSetCard = true
-            result.canSetTitle = false // 只有群主能设置头衔
-        }
-    } catch (e) {
-        logger.debug(`[helpers] getBotPermission error: ${e.message}`)
-    }
-
+    const api = new StandardBotApi({ bot })
+    const botId = api.getBotInfo().user_id
+    result.role = await getGroupMemberRoleFromBot(bot, groupId, botId)
+    result.inGroup = result.role !== 'unknown'
+    result.isOwner = result.role === 'owner'
+    result.isAdmin = result.isOwner || result.role === 'admin'
+    result.canKick = result.isAdmin
+    result.canMute = result.isAdmin
+    result.canRecall = result.isAdmin
+    result.canSetCard = result.isAdmin
+    result.canSetTitle = result.isOwner
     return result
 }
 
@@ -2785,11 +1611,12 @@ export function toolDisabledError(toolName, reason = '已被管理员禁用') {
  * 从参数或上下文中提取并校验群号
  * @param {Object} args - 工具参数
  * @param {Object} ctx - MCP 上下文
- * @returns {number} 群号
+ * @returns {string|number} 标准群标识；QQBot OpenID 保持字符串
  * @throws {Error} 缺少群号时抛出
  */
 export function requireGroupId(args, ctx) {
-    const gid = args.group_id || ctx.getEvent?.()?.group_id || ctx.getEvent?.()?.group?.group_id
+    const event = ctx.getEvent?.()
+    const gid = args.group_id || event?.group_id || event?.group?.group_id
     if (!gid) throw new Error('缺少群号 group_id')
-    return parseInt(gid)
+    return StandardBotApi.fromContext(ctx).targetId(gid)
 }
