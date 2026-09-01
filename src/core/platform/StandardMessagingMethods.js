@@ -10,6 +10,7 @@ import {
     resolveStandardTarget
 } from './StandardBotIdentity.js'
 import { extractStandardMessageId, UnsupportedBotApiError } from './StandardBotResult.js'
+import { getRecentQQBotMessages } from '../../services/storage/MessageCache.js'
 import {
     normalizeStandardMessage,
     serializeOneBotForwardNode,
@@ -509,24 +510,21 @@ export const StandardMessagingMethods = {
             groupId,
             userId
         })
-        // QQBot 群对象只按当前事件的 message_id 查询本地缓存；0 不是有效的缓存键。
-        const eventSequence = this.event?.seq ?? this.event?.message_seq ?? this.event?.message_id
-        const rawSequence =
-            this.isQQBot &&
-            isProvided(targetGroupId) &&
-            (sequence === undefined || sequence === null || sequence === '' || sequence === 0 || sequence === '0')
-                ? eventSequence
-                : sequence
-        const normalizedSequence = this.historySequence(rawSequence, 0)
-        const missingQQBotSequence =
-            normalizedSequence === undefined ||
-            normalizedSequence === null ||
-            normalizedSequence === '' ||
-            normalizedSequence === 0 ||
-            normalizedSequence === '0'
-        if (this.isQQBot && isProvided(targetGroupId) && missingQQBotSequence) {
-            throw new UnsupportedBotApiError('getChatHistory', 'QQBot 需要明确的 message_id')
+        if (this.isQQBot && isProvided(targetGroupId)) {
+            return getRecentQQBotMessages(targetGroupId, count, this.event?._raw_group_id).map(message => ({
+                message_id: message.message_id,
+                time: message.message_time,
+                sender: message.sender || {
+                    user_id: message.userId,
+                    nickname: message.nickname
+                },
+                message: message.message || [],
+                raw_message: message.content,
+                group_id: message.group_id,
+                _raw_group_id: message._raw_group_id
+            }))
         }
+        const normalizedSequence = this.historySequence(sequence, 0)
         let target = null
         try {
             target = isProvided(targetGroupId)

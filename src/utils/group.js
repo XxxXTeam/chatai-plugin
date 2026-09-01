@@ -5,6 +5,7 @@ import { StandardBotApi } from '../core/platform/index.js'
 import config from '../../config/config.js'
 import { formatTimeToBeiJing } from './common.js'
 import { cleanCQCode } from './messageParser.js'
+import { getRecentQQBotMessages } from '../services/storage/MessageCache.js'
 
 /**
  * 规范化群历史读取数量，避免兼容调用传入无界或非整数值。
@@ -29,7 +30,12 @@ export class GroupContextCollector {
     async collect(bot = globalThis.Bot, groupId, start = 0, length = 20) {
         if (!bot || groupId === undefined || groupId === null || groupId === '') return []
         const api = new StandardBotApi({ bot })
-        if (api.isQQBot && (start === undefined || start === null || start === '' || start === 0)) return []
+        if (api.isQQBot) {
+            return await api.getHistory({
+                groupId,
+                count: normalizeHistoryLength(length)
+            })
+        }
         return await api.getHistory({
             groupId,
             sequence: start,
@@ -55,9 +61,21 @@ export async function getGroupHistory(e, length = 20) {
     const api = new StandardBotApi({ event: e, bot: e.bot || globalThis.Bot })
     const groupId = e.group_id || e.group?.group_id
     if (groupId === undefined || groupId === null || groupId === '') return []
-    const sequence = api.isQQBot ? e.message_id || e.seq || e.source?.message_id || e.source?.seq : undefined
-    if (api.isQQBot && !sequence) return []
-    return await api.getHistory({ groupId, sequence, count: normalizeHistoryLength(length) })
+    if (api.isQQBot) {
+        return getRecentQQBotMessages(groupId, normalizeHistoryLength(length), e._raw_group_id).map(message => ({
+            message_id: message.message_id,
+            time: message.message_time,
+            sender: message.sender || {
+                user_id: message.userId,
+                nickname: message.nickname
+            },
+            message: message.message || [],
+            raw_message: message.content,
+            group_id: message.group_id,
+            _raw_group_id: message._raw_group_id
+        }))
+    }
+    return await api.getHistory({ groupId, sequence: undefined, count: normalizeHistoryLength(length) })
 }
 
 /**

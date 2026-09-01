@@ -185,14 +185,16 @@ export async function deleteMessage(e, messageId) {
 /** @deprecated 请使用 StandardBotApi.getHistory。 */
 export async function getGroupChatHistory(e, groupId, count = 20, messageSeq = 0) {
     const api = new StandardBotApi({ event: e, bot: e?.bot || globalThis.Bot })
-    const sequence = api.isQQBot
-        ? messageSeq || e?.message_id || e?.seq || e?.source?.message_id || e?.source?.seq
-        : messageSeq
-    if (api.isQQBot && !sequence) return []
+    if (api.isQQBot) {
+        return await api.getHistory({
+            groupId,
+            count
+        })
+    }
     return await api.getHistory({
         groupId,
         count,
-        sequence
+        sequence: messageSeq
     })
 }
 

@@ -99,6 +99,147 @@ test('引用读取与文件 URL 查询只经过标准事件和目标接口', asy
     assert.deepEqual(calls, [['getReply'], ['getFileUrl', 'file_openid']])
 })
 
+test('引用消息的合并转发直接解析内联节点，不依赖远程转发接口', async () => {
+    const event = {
+        bot: {
+            adapter: { id: 'OneBot' },
+            async sendApi(action) {
+                throw new Error(`不应调用 ${action}`)
+            }
+        },
+        group_id: '123456',
+        user_id: 'sender',
+        source: { message_id: 'quoted-forward' },
+        async getReply() {
+            return {
+                message_id: 'quoted-forward',
+                user_id: 'quoted-user',
+                sender: { user_id: 'quoted-user', nickname: '引用用户' },
+                message: [
+                    {
+                        type: 'forward',
+                        data: {
+                            nodes: [
+                                {
+                                    user_id: 'node-user',
+                                    nickname: '节点用户',
+                                    content: [{ type: 'text', text: '内联转发正文' }]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        message: [{ type: 'text', text: '当前消息' }]
+    }
+
+    const parsed = await parseUserMessage(event)
+    const text = parsed.content
+        .filter(item => item.type === 'text')
+        .map(item => item.text)
+        .join('\n')
+
+    assert.match(text, /内联转发正文/)
+    assert.equal(parsed.quote.content.includes('内联转发正文'), true)
+})
+
+test('引用接口直接返回 forward 对象时保留外层类型并解析节点内容', async () => {
+    const event = {
+        bot: { adapter: { id: 'OneBot' } },
+        group_id: '123456',
+        user_id: 'sender',
+        source: { message_id: 'quoted-forward-direct' },
+        async getReply() {
+            return {
+                type: 'forward',
+                id: 'inline-forward',
+                data: {
+                    nodes: [
+                        {
+                            user_id: 'node-user',
+                            nickname: '节点用户',
+                            content: [{ type: 'text', text: '直接转发对象正文' }]
+                        }
+                    ]
+                }
+            }
+        },
+        message: [{ type: 'text', text: '当前消息' }]
+    }
+
+    const parsed = await parseUserMessage(event)
+    const text = parsed.content
+        .filter(item => item.type === 'text')
+        .map(item => item.text)
+        .join('\n')
+
+    assert.match(text, /直接转发对象正文/)
+    assert.equal(parsed.quote.content.includes('直接转发对象正文'), true)
+})
+
+test('引用 source 中的 node 数组可以直接解析，不依赖远程转发接口', async () => {
+    const event = {
+        bot: {
+            adapter: { id: 'OneBot' },
+            async sendApi(action) {
+                throw new Error(`不应调用 ${action}`)
+            }
+        },
+        group_id: '123456',
+        user_id: 'sender',
+        source: {
+            message: [
+                {
+                    type: 'node',
+                    data: [
+                        {
+                            user_id: 'node-user',
+                            nickname: '节点用户',
+                            message: [{ type: 'text', text: 'source 节点正文' }]
+                        }
+                    ]
+                }
+            ]
+        },
+        message: [{ type: 'text', text: '当前消息' }]
+    }
+
+    const parsed = await parseUserMessage(event)
+    const text = parsed.content
+        .filter(item => item.type === 'text')
+        .map(item => item.text)
+        .join('\n')
+
+    assert.match(text, /source 节点正文/)
+})
+
+test('标准引用查询失败时从内置消息缓存恢复原消息', async () => {
+    const { cacheGroupMessage, messageCache } = await import('../src/services/storage/MessageCache.js')
+    messageCache.clear()
+    cacheGroupMessage({
+        message_id: 'cached-quote',
+        group_id: 'cached-group',
+        user_id: 'cached-user',
+        sender: { user_id: 'cached-user', nickname: '缓存用户' },
+        message: [{ type: 'text', text: '缓存引用正文' }]
+    })
+
+    const parsed = await parseUserMessage({
+        bot: { adapter: { id: 'QQBot' } },
+        group_id: 'cached-group',
+        user_id: 'current-user',
+        source: { message_id: 'cached-quote' },
+        async getReply() {
+            return null
+        },
+        message: [{ type: 'text', text: '当前消息' }]
+    })
+
+    assert.equal(parsed.quote.sender.nickname, '缓存用户')
+    assert.equal(parsed.quote.content, '缓存引用正文')
+})
+
 test('MessageApi getMsg/getForward/member/send/delete 均保持 QQBot OpenID', async () => {
     const calls = []
     const group = {

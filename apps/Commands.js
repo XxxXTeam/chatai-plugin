@@ -18,6 +18,8 @@ import { getWebServer } from '../src/services/webServer.js'
 import { STOP_WORDS } from '../src/utils/common.js'
 import { contextManager } from '../src/services/llm/ContextManager.js'
 import { StandardBotApi } from '../src/core/platform/index.js'
+import { GroupSummaryCore } from '../src/services/group/GroupSummaryCore.js'
+import { getRecentQQBotMessages } from '../src/services/storage/MessageCache.js'
 
 // Debug模式状态管理（运行时内存，重启后重置）
 const debugSessions = new Map() // key: groupId或`private_${userId}`, value: boolean
@@ -748,80 +750,11 @@ export class AICommands extends plugin {
             const maxChars = config.get('features.groupSummary.maxChars') || 6000
             const groupId = String(e.group_id)
             await memoryManager.init()
-            let messages = []
-            let dataSource = ''
-            try {
-                const history = await getGroupChatHistory(e, maxMessages)
-                if (history && history.length > 0) {
-                    const apiMessages = await Promise.all(
-                        history.map(async msg => {
-                            let nickname = msg.sender?.card || msg.sender?.nickname || '用户'
-                            const contentParts = await Promise.all(
-                                (msg.message || []).map(async part => {
-                                    if (part.type === 'text') return part.text
-                                    if (part.type === 'at') {
-                                        if (part.qq === 'all' || part.qq === 0) return '@全体成员'
-                                        try {
-                                            const info = await getMemberInfo(e, part.qq)
-                                            return `@${info?.card || info?.nickname || part.qq}`
-                                        } catch {
-                                            return `@${part.qq}`
-                                        }
-                                    }
-                                    return ''
-                                })
-                            )
-                            return {
-                                userId: msg.sender?.user_id,
-                                nickname,
-                                content: contentParts.join(''),
-                                timestamp: msg.time ? msg.time * 1000 : Date.now()
-                            }
-                        })
-                    )
-                    messages = apiMessages.filter(m => m.content && m.content.trim())
-                    if (messages.length > 0) dataSource = 'Bot API'
-                }
-            } catch (historyErr) {
-                logger.debug('[AI-Commands] Bot API 获取群聊历史失败:', historyErr.message)
-            }
-            if (messages.length === 0) {
-                const memoryMessages = memoryManager.getGroupMessageBuffer(groupId) || []
-                if (memoryMessages.length > 0) {
-                    messages = memoryMessages
-                    dataSource = '内存缓冲'
-                }
-            }
-            if (messages.length === 0) {
-                try {
-                    databaseService.init()
-                    const conversationId = `group_summary_${groupId}`
-                    const rawDbMessages = databaseService.getMessages(conversationId, maxMessages)
-                    if (rawDbMessages && rawDbMessages.length > 0) {
-                        const dbMessages = rawDbMessages
-                            .map(m => ({
-                                nickname: m.metadata?.nickname || '用户',
-                                content:
-                                    typeof m.content === 'string'
-                                        ? m.content
-                                        : Array.isArray(m.content)
-                                          ? m.content
-                                                .filter(c => c.type === 'text')
-                                                .map(c => c.text)
-                                                .join('')
-                                          : String(m.content),
-                                timestamp: m.timestamp
-                            }))
-                            .filter(m => m.content && m.content.trim())
-                        if (dbMessages.length > 0) {
-                            messages = dbMessages
-                            dataSource = '数据库'
-                        }
-                    }
-                } catch (dbErr) {
-                    logger.debug('[AI-Commands] 从数据库读取群消息失败:', dbErr.message)
-                }
-            }
+            const { messages, dataSource } = await GroupSummaryCore.collectMessages(
+                groupId,
+                maxMessages,
+                e.bot || globalThis.Bot
+            )
 
             if (messages.length < 5) {
                 await this.reply(
@@ -1092,80 +1025,11 @@ ${dialogText}${truncatedNote}`
             const maxChars = config.get('features.groupSummary.maxChars') || 6000
             const groupId = String(e.group_id)
             await memoryManager.init()
-            let messages = []
-            let dataSource = ''
-            try {
-                const history = await getGroupChatHistory(e, maxMessages)
-                if (history && history.length > 0) {
-                    const apiMessages = await Promise.all(
-                        history.map(async msg => {
-                            let nickname = msg.sender?.card || msg.sender?.nickname || '用户'
-                            const contentParts = await Promise.all(
-                                (msg.message || []).map(async part => {
-                                    if (part.type === 'text') return part.text
-                                    if (part.type === 'at') {
-                                        if (part.qq === 'all' || part.qq === 0) return '@全体成员'
-                                        try {
-                                            const info = await getMemberInfo(e, part.qq)
-                                            return `@${info?.card || info?.nickname || part.qq}`
-                                        } catch {
-                                            return `@${part.qq}`
-                                        }
-                                    }
-                                    return ''
-                                })
-                            )
-                            return {
-                                userId: msg.sender?.user_id,
-                                nickname,
-                                content: contentParts.join(''),
-                                timestamp: msg.time ? msg.time * 1000 : Date.now()
-                            }
-                        })
-                    )
-                    messages = apiMessages.filter(m => m.content && m.content.trim())
-                    if (messages.length > 0) dataSource = 'Bot API'
-                }
-            } catch (historyErr) {
-                logger.debug('[AI-Commands] Bot API 获取群聊历史失败:', historyErr.message)
-            }
-            if (messages.length === 0) {
-                const memoryMessages = memoryManager.getGroupMessageBuffer(groupId) || []
-                if (memoryMessages.length > 0) {
-                    messages = memoryMessages
-                    dataSource = '内存缓冲'
-                }
-            }
-            if (messages.length === 0) {
-                try {
-                    databaseService.init()
-                    const conversationId = `group_summary_${groupId}`
-                    const rawDbMessages = databaseService.getMessages(conversationId, maxMessages)
-                    if (rawDbMessages && rawDbMessages.length > 0) {
-                        const dbMessages = rawDbMessages
-                            .map(m => ({
-                                nickname: m.metadata?.nickname || '用户',
-                                content:
-                                    typeof m.content === 'string'
-                                        ? m.content
-                                        : Array.isArray(m.content)
-                                          ? m.content
-                                                .filter(c => c.type === 'text')
-                                                .map(c => c.text)
-                                                .join('')
-                                          : String(m.content),
-                                timestamp: m.timestamp
-                            }))
-                            .filter(m => m.content && m.content.trim())
-                        if (dbMessages.length > 0) {
-                            messages = dbMessages
-                            dataSource = '数据库'
-                        }
-                    }
-                } catch (dbErr) {
-                    logger.debug('[AI-Commands] 从数据库读取群消息失败:', dbErr.message)
-                }
-            }
+            const { messages, dataSource } = await GroupSummaryCore.collectMessages(
+                groupId,
+                maxMessages,
+                e.bot || globalThis.Bot
+            )
 
             if (messages.length < 5) {
                 await this.reply('群聊消息太少，无法生成总结\n\n💡 提示：需要在群里有足够的聊天记录', true)
@@ -2204,6 +2068,20 @@ async function getMemberInfo(e, userId) {
  */
 async function getGroupChatHistory(e, num) {
     const api = StandardBotApi.fromContext({ event: e, bot: e?.bot || globalThis.Bot })
+    if (api.isQQBot) {
+        return getRecentQQBotMessages(e.group_id, num, e._raw_group_id).map(message => ({
+            message_id: message.message_id,
+            time: message.message_time,
+            sender: message.sender || {
+                user_id: message.userId,
+                nickname: message.nickname
+            },
+            message: message.message || [],
+            raw_message: message.content,
+            group_id: message.group_id,
+            _raw_group_id: message._raw_group_id
+        }))
+    }
     let group = e.group
     if (!group) {
         try {
@@ -2265,6 +2143,22 @@ async function getGroupChatHistory(e, num) {
  */
 async function getUserTextHistory(e, userId, num) {
     const api = StandardBotApi.fromContext({ event: e, bot: e?.bot || globalThis.Bot })
+    if (api.isQQBot) {
+        return getRecentQQBotMessages(e.group_id, num, e._raw_group_id)
+            .filter(message => String(message.userId) === String(userId))
+            .map(message => ({
+                message_id: message.message_id,
+                time: message.message_time,
+                sender: message.sender || {
+                    user_id: message.userId,
+                    nickname: message.nickname
+                },
+                message: message.message || [],
+                raw_message: message.content,
+                group_id: message.group_id,
+                _raw_group_id: message._raw_group_id
+            }))
+    }
     let group = e.group
     if (!group) {
         try {

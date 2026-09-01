@@ -5,6 +5,7 @@ import config from './config/config.js'
 import { chatLogger, c, icons } from './src/core/utils/logger.js'
 import { telemetryService } from './src/services/telemetry/index.js'
 import { getFullVersionInfo } from './src/utils/version.js'
+import { registerQQBotMessageCache } from './src/services/storage/MessageCache.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -34,8 +35,7 @@ if (!fs.existsSync(dataDir)) {
 }
 config.startSync(dataDir)
 global.chatgptPluginConfig = config
-
-// 缓存 Yunzai 主人配置到全局，供 platformAdapter.isMaster() 统一使用
+registerQQBotMessageCache()
 try {
     global._yunzaiCfgCache = (await import('../../lib/config/config.js')).default
 } catch {
@@ -60,8 +60,6 @@ initTasks.push(
                 branch: versionInfo.branch,
                 commit: versionInfo.commit
             })
-
-            // 检查版本更新
             try {
                 const versionCheck = await telemetryService.checkVersion()
                 if (versionCheck.success && versionCheck.hasUpdate) {

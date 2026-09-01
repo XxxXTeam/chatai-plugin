@@ -33,80 +33,32 @@ import {
     checkEventProbability
 } from '../src/utils/eventAdapter.js'
 import { getAIResponse } from '../src/utils/common.js'
-const messageCache = new Map()
-const MESSAGE_CACHE_TTL = 10 * 60 * 1000 // 10分钟
-const MESSAGE_CACHE_MAX = 2000
+import {
+    cacheGroupMessage,
+    getCachedMessage,
+    getRecentGroupMessages as getStoredRecentGroupMessages,
+    getGroupMessageCount as getStoredGroupMessageCount,
+    messageCache
+} from '../src/services/storage/MessageCache.js'
 
-// 按群索引的消息缓存
-const groupMessageIndex = new Map() // groupId -> Set<messageId>
-
-export { messageCache }
+export { cacheGroupMessage, getCachedMessage, messageCache }
 export function getGroupRecentActivity(groupId, options = {}) {
-    groupId = String(groupId)
     const {
         windowMs = 60 * 60 * 1000, // 默认1小时窗口
         maxMessages = 200
     } = options
-
-    const messageIds = groupMessageIndex.get(groupId)
-    if (!messageIds || messageIds.size === 0) {
-        return { lastActiveAt: 0, recentCount: 0 }
-    }
-
+    const messages = getStoredRecentGroupMessages(groupId, maxMessages)
     const now = Date.now()
     let lastActiveAt = 0
     let recentCount = 0
-    let scanned = 0
-    for (const msgId of Array.from(messageIds).reverse()) {
-        scanned++
-        if (scanned > maxMessages) break
-        const msg = messageCache.get(msgId)
-        if (!msg) continue
-        const ts = msg.time
-        if (ts > lastActiveAt) lastActiveAt = ts
-        if (now - ts <= windowMs) {
+    for (const message of messages) {
+        if (message.time > lastActiveAt) lastActiveAt = message.time
+        if (now - message.time <= windowMs) {
             recentCount++
-        } else {
-            continue
         }
     }
 
     return { lastActiveAt, recentCount }
-}
-
-export function cacheGroupMessage(e) {
-    if (!e?.message_id || !e?.group_id) return
-
-    const cacheData = {
-        message: e.message,
-        raw_message: e.raw_message || e.msg,
-        time: Date.now(),
-        user_id: e.user_id,
-        group_id: e.group_id,
-        sender: e.sender
-    }
-
-    messageCache.set(e.message_id, cacheData)
-
-    // 维护群消息索引
-    const groupId = String(e.group_id)
-    if (!groupMessageIndex.has(groupId)) {
-        groupMessageIndex.set(groupId, new Set())
-    }
-    groupMessageIndex.get(groupId).add(e.message_id)
-
-    // 清理过期和超量缓存
-    if (messageCache.size > MESSAGE_CACHE_MAX) {
-        const now = Date.now()
-        for (const [key, val] of messageCache) {
-            if (now - val.time > MESSAGE_CACHE_TTL || messageCache.size > MESSAGE_CACHE_MAX) {
-                messageCache.delete(key)
-                // 也从索引中删除
-                const gid = String(val.group_id)
-                groupMessageIndex.get(gid)?.delete(key)
-            }
-        }
-    }
 }
 
 /**
@@ -116,46 +68,14 @@ export function cacheGroupMessage(e) {
  * @returns {Array} 消息列表
  */
 export function getRecentGroupMessages(groupId, limit = 30) {
-    groupId = String(groupId)
-    const messageIds = groupMessageIndex.get(groupId)
-    if (!messageIds || messageIds.size === 0) return []
-
-    const now = Date.now()
-    const messages = []
-
-    for (const msgId of messageIds) {
-        const msg = messageCache.get(msgId)
-        if (msg && now - msg.time < MESSAGE_CACHE_TTL) {
-            messages.push({
-                userId: msg.user_id,
-                nickname: msg.sender?.nickname || msg.sender?.card || '',
-                content: msg.raw_message || '',
-                time: msg.time
-            })
-        }
-    }
-
-    // 按时间排序并取最近的
-    return messages.sort((a, b) => a.time - b.time).slice(-limit)
+    return getStoredRecentGroupMessages(groupId, limit)
 }
 
 /**
  * 获取群消息数量
  */
 export function getGroupMessageCount(groupId) {
-    groupId = String(groupId)
-    return groupMessageIndex.get(groupId)?.size || 0
-}
-
-/**
- * 从缓存获取消息
- */
-function getCachedMessage(messageId) {
-    const cached = messageCache.get(messageId)
-    if (cached && Date.now() - cached.time < MESSAGE_CACHE_TTL) {
-        return cached
-    }
-    return null
+    return getStoredGroupMessageCount(groupId)
 }
 
 async function getUserNickname(e, userId, bot) {

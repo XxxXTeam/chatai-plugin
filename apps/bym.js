@@ -12,9 +12,22 @@ import { checkAccessList, sendForwardMsg } from '../src/utils/platformAdapter.js
 import { statsService } from '../src/services/stats/StatsService.js'
 import { StandardBotApi } from '../src/core/platform/index.js'
 import { emojiThiefService } from './EmojiThief.js'
+import { getRecentQQBotMessages } from '../src/services/storage/MessageCache.js'
 
 async function getBymGroupContextMessages(e, groupId, limit = 15) {
     const api = StandardBotApi.fromContext({ event: e, bot: e?.bot || globalThis.Bot })
+    if (api.isQQBot) {
+        return getRecentQQBotMessages(groupId, limit + 1, e._raw_group_id)
+            .filter(message => String(message.message_id) !== String(e.message_id || ''))
+            .slice(-limit)
+            .map(message => ({
+                nickname: message.nickname || message.userId || '用户',
+                userId: message.userId,
+                content: message.content,
+                timestamp: message.timestamp
+            }))
+            .filter(message => message.content && message.content.trim())
+    }
     let group = e.group
     if (!group) {
         try {

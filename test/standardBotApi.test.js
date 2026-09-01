@@ -956,8 +956,18 @@ test('需要会话目标的标准方法统一拒绝冲突或缺失目标', async
     await assert.rejects(api.recall({ messageId: '1', groupId: '1', userId: '2' }), /不能同时提供/)
 })
 
-test('StandardBotApi 在 QQBot 群历史中保留 message_id 字符串锚点', async () => {
+test('StandardBotApi 在 QQBot 群历史中直接读取本地消息索引', async () => {
     const calls = []
+    const { cacheQQBotMessage, messageCache } = await import('../src/services/storage/MessageCache.js')
+    messageCache.clear()
+    cacheQQBotMessage({
+        bot: { adapter: { id: 'QQBot' } },
+        message_id: 'message-openid',
+        group_id: 'group-openid',
+        user_id: 'user-openid',
+        sender: { user_id: 'user-openid', nickname: '索引用户' },
+        message: [{ type: 'text', text: '索引正文' }]
+    })
     const bot = { adapter: { id: 'QQBot' } }
     const event = {
         bot,
@@ -973,12 +983,13 @@ test('StandardBotApi 在 QQBot 群历史中保留 message_id 字符串锚点', a
     const api = new StandardBotApi({ bot, event })
     const history = await api.getHistory({ groupId: 'group-openid', sequence: 0, count: 1 })
     assert.equal(history[0].message_id, 'message-openid')
-    assert.deepEqual(calls, [['message-openid', 1]])
+    assert.equal(history[0].raw_message, '索引正文')
+    assert.deepEqual(calls, [])
 
     const noAnchor = new StandardBotApi({
         bot: { adapter: { id: 'QQBot' }, pickGroup: () => event.group }
     })
-    await assert.rejects(noAnchor.getHistory({ groupId: 'group-openid', sequence: 0 }), /message_id/)
+    assert.deepEqual(await noAnchor.getHistory({ groupId: 'group-openid', sequence: 0 }), history)
 })
 
 test('事件标准对象不依赖 event.reply 才能被解析', () => {

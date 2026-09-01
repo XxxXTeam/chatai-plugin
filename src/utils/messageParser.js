@@ -1,6 +1,7 @@
 import { createRequire } from 'module'
 import { fetchWithLimit } from '../mcp/tools/helpers.js'
 import { StandardBotApi } from '../core/platform/StandardBotApi.js'
+import { getCachedMessage } from '../services/storage/MessageCache.js'
 
 const require = createRequire(import.meta.url)
 
@@ -870,6 +871,14 @@ async function parseReplyMessage(e, options) {
         } catch (err) {
             parseLog.push(`[Reply] 标准引用查询失败: ${err.message}`)
         }
+        if (!replyData) {
+            const quotedMessageId = e.source?.message_id || e.source?.id || e.reply_id
+            const cachedReply = getCachedMessage(quotedMessageId)
+            if (cachedReply) {
+                replyData = { ...cachedReply, message_id: quotedMessageId }
+                parseLog.push('[Reply] 使用内置消息缓存查询成功')
+            }
+        }
         if (!replyData && e.source) {
             const msgId = e.source.message_id || e.source.id
             const seq = e.isGroup ? e.source.seq || msgId || e.reply_id : e.source.time || e.source.seq
@@ -904,13 +913,23 @@ async function parseReplyMessage(e, options) {
         }
 
         // 提取消息内容 - 兼容多种格式
+        const isForwardReply = replyData?.type === 'forward' || replyData?.type === 'node'
         const replyInfo = replyData?.data || replyData || {}
-        let replyMessage = replyInfo.message || replyInfo.content || replyData?.message || replyData?.content
+        let replyMessage
+        if (isForwardReply) {
+            replyMessage = [replyData]
+        } else {
+            replyMessage = Array.isArray(replyInfo)
+                ? replyInfo
+                : replyInfo.message || replyInfo.content || replyData?.message || replyData?.content
+        }
 
         // 确保是数组
         if (replyMessage && !Array.isArray(replyMessage)) {
             if (typeof replyMessage === 'string') {
                 replyMessage = [{ type: 'text', data: { text: replyMessage } }]
+            } else if (typeof replyMessage === 'object') {
+                replyMessage = [replyMessage]
             } else {
                 replyMessage = []
             }
@@ -1260,9 +1279,18 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
                 parseLog.push(`[Forward] data.content 存在, 长度: ${forwardElement.data.content?.length || 0}`)
             }
         }
-        if (forwardElement.type === 'node' && Array.isArray(forwardElement.data)) {
+        if (
+            (forwardElement.type === 'forward' || forwardElement.type === 'node') &&
+            Array.isArray(forwardElement.data)
+        ) {
             forwardMessages = forwardElement.data
             parseMethod = 'qqbot_node_data'
+        } else if (Array.isArray(forwardElement.data?.nodes)) {
+            forwardMessages = forwardElement.data.nodes
+            parseMethod = 'data_nodes'
+        } else if (Array.isArray(forwardElement.nodes)) {
+            forwardMessages = forwardElement.nodes
+            parseMethod = 'direct_nodes'
         } else if (forwardElement.data?.content && Array.isArray(forwardElement.data.content)) {
             forwardMessages = forwardElement.data.content
             parseMethod = 'data_content'
@@ -1289,8 +1317,21 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
             const sourceMsg = e.source.message
             if (Array.isArray(sourceMsg)) {
                 const fwdSeg = sourceMsg.find(s => s.type === 'forward' || s.type === 'node')
-                if (fwdSeg?.data?.content || fwdSeg?.data?.message || fwdSeg?.message) {
-                    forwardMessages = fwdSeg.data?.content || fwdSeg.data?.message || fwdSeg.message
+                if (
+                    ((fwdSeg?.type === 'forward' || fwdSeg?.type === 'node') && Array.isArray(fwdSeg?.data)) ||
+                    fwdSeg?.data?.nodes ||
+                    fwdSeg?.nodes ||
+                    fwdSeg?.data?.content ||
+                    fwdSeg?.data?.message ||
+                    fwdSeg?.message
+                ) {
+                    forwardMessages =
+                        (Array.isArray(fwdSeg.data) ? fwdSeg.data : null) ||
+                        fwdSeg.data?.nodes ||
+                        fwdSeg.nodes ||
+                        fwdSeg.data?.content ||
+                        fwdSeg.data?.message ||
+                        fwdSeg.message
                     if (Array.isArray(forwardMessages)) {
                         parseMethod = 'source_message'
                     }
@@ -2495,7 +2536,22 @@ export const ForwardMessageParser = {
                       forwardElement?.data?.resid
 
             // 方式1: 直接从元素中获取内容
-            if (forwardElement?.data?.content && Array.isArray(forwardElement.data.content)) {
+            if (
+                (forwardElement?.type === 'forward' || forwardElement?.type === 'node') &&
+                Array.isArray(forwardElement?.data)
+            ) {
+                forwardMessages = forwardElement.data
+                result.method = 'element.data'
+                rawData = forwardElement
+            } else if (Array.isArray(forwardElement?.data?.nodes)) {
+                forwardMessages = forwardElement.data.nodes
+                result.method = 'element.data.nodes'
+                rawData = forwardElement
+            } else if (Array.isArray(forwardElement?.nodes)) {
+                forwardMessages = forwardElement.nodes
+                result.method = 'element.nodes'
+                rawData = forwardElement
+            } else if (forwardElement?.data?.content && Array.isArray(forwardElement.data.content)) {
                 forwardMessages = forwardElement.data.content
                 result.method = 'element.data.content'
                 rawData = forwardElement

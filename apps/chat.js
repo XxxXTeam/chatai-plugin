@@ -13,6 +13,7 @@ import {
 } from '../src/utils/messageDedup.js'
 import { renderService } from '../src/services/media/RenderService.js'
 import { cacheGroupMessage } from './GroupEvents.js'
+import { isQQBotInstance } from '../src/core/platform/index.js'
 import { emojiThiefService } from './EmojiThief.js'
 import { chatService } from '../src/services/llm/ChatService.js'
 import { memoryManager } from '../src/services/storage/MemoryManager.js'
@@ -102,8 +103,8 @@ export class Chat extends plugin {
             return true
         }
 
-        // 缓存群消息
-        if (e.isGroup && e.message_id) {
+        // QQBot 已在插件入口的全局 message 监听中完成一次缓存
+        if (e.isGroup && e.message_id && !isQQBotInstance(e)) {
             try {
                 cacheGroupMessage(e)
             } catch {}

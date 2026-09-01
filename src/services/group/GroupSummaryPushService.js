@@ -7,17 +7,6 @@ import { GroupSummaryCore } from './GroupSummaryCore.js'
 import { StandardBotApi, StandardMessage } from '../../core/platform/index.js'
 
 const logger = chatLogger
-
-/**
- * 群聊总结定时推送服务
- *
- * 每分钟检查一次，根据全局 features.groupSummary.push 和
- * 各群组 summaryPush* 配置决定是否发送总结。
- *
- * 调度策略：
- *  - intervalType === 'day'  → 每天 pushHour 时触发
- *  - intervalType === 'hour' → 每 intervalValue 小时触发
- */
 class GroupSummaryPushService {
     constructor() {
         this._timer = null
@@ -48,8 +37,6 @@ class GroupSummaryPushService {
         this._lastPush.clear()
         this.init()
     }
-
-    // ─── 内部 ───────────────────────────────────
 
     async _tick() {
         if (this._running) return

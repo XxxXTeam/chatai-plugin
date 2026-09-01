@@ -13,6 +13,7 @@ import { databaseService } from '../storage/DatabaseService.js'
 import { MessageApi } from '../../utils/messageParser.js'
 import { StandardBotApi } from '../../core/platform/index.js'
 import { resolveClientTemperature } from './TemperatureResolver.js'
+import { getCachedMessage, getRecentQQBotMessages } from '../storage/MessageCache.js'
 
 /** 请求计数器条目上限，超出后清理已归零的残留键 */
 const REQUEST_COUNTER_MAX_SIZE = 5000
@@ -1082,9 +1083,7 @@ export class ContextManager {
      * @returns {Promise<Array>} 聊天记录数组
      */
     async getChatHistoryGroup(group, num = 20, options = {}) {
-        if (!group || typeof group.getChatHistory !== 'function') {
-            return []
-        }
+        if (!group) return []
 
         const { formatMessages = false } = options
         // QQBot 没有按 offset 拉取历史的协议；其 group.getChatHistory(seq)
@@ -1094,6 +1093,20 @@ export class ContextManager {
         const isQQBot = historyApi.isQQBot
         const allowedMessageTypes = ['text', 'at', 'image', 'video', 'bface', 'forward', 'json', 'reply']
         const seenMessageIds = new Set()
+
+        if (isQQBot) {
+            return getRecentQQBotMessages(group.group_id, num, group._raw_group_id).map(message => ({
+                message_id: message.message_id,
+                time: message.message_time,
+                sender: message.sender || {
+                    user_id: message.userId,
+                    nickname: message.nickname
+                },
+                message: message.message || []
+            }))
+        }
+
+        if (typeof group.getChatHistory !== 'function') return []
 
         try {
             // 处理和过滤消息
@@ -1469,6 +1482,8 @@ export class ContextManager {
         const bot = e.bot || global.Bot
         const isQQBot = new StandardBotApi({ bot: e.group?.bot || bot }).isQQBot
         const getMessage = async (messageId, seq) => {
+            const cached = getCachedMessage(messageId || seq)
+            if (cached) return { ...cached, message_id: messageId || seq }
             const apiMsg = await MessageApi.getMsg(e, messageId || seq, { useSeq: !messageId, seq })
             if (apiMsg) return apiMsg.data || apiMsg
             if (bot?.getMsg && messageId) {
