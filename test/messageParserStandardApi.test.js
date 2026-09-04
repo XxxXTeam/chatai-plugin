@@ -373,6 +373,109 @@ test('NapCat 识别基于精确适配器，读操作仍委托标准边界', asyn
     ])
 })
 
+test('引用 ICQQ long_msg 时解析转发资源内容', async () => {
+    const calls = []
+    const event = {
+        bot: {
+            adapter: { id: 'QQ', name: 'ICQQ' },
+            pickGroup(groupId) {
+                calls.push(['pickGroup', groupId])
+                return {
+                    async getForwardMsg(resid) {
+                        calls.push(['getForwardMsg', resid])
+                        return [
+                            {
+                                user_id: 'quoted-user',
+                                nickname: '引用用户',
+                                message: [{ type: 'text', text: '长消息正文' }]
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        group_id: '123456',
+        user_id: 'current-user',
+        self_id: '10000',
+        source: { message_id: 'current-message' },
+        async getReply() {
+            return {
+                message_id: 'current-message',
+                user_id: 'quoted-user',
+                sender: { user_id: 'quoted-user', nickname: '引用用户' },
+                message: [{ type: 'long_msg', resid: 'long-message-resid' }]
+            }
+        },
+        message: [{ type: 'text', text: '当前消息' }]
+    }
+
+    const parsed = await parseUserMessage(event)
+    const text = parsed.content
+        .filter(item => item.type === 'text')
+        .map(item => item.text)
+        .join('\n')
+
+    assert.match(text, /长消息正文/)
+    assert.match(parsed.quote.content, /长消息正文/)
+    assert.deepEqual(calls, [
+        ['pickGroup', 123456],
+        ['getForwardMsg', 'long-message-resid']
+    ])
+})
+
+test('上下文工具与引用上下文都能展开 ICQQ long_msg', async () => {
+    const group = {
+        async getForwardMsg(resid) {
+            assert.equal(resid, 'context-forward-resid')
+            return [
+                {
+                    user_id: 'quoted-user',
+                    nickname: '引用用户',
+                    message: [{ type: 'text', text: '上下文长消息正文' }]
+                }
+            ]
+        }
+    }
+    const bot = {
+        adapter: { id: 'QQ', name: 'ICQQ' },
+        pickGroup() {
+            return group
+        }
+    }
+    const event = {
+        bot,
+        group,
+        group_id: '123456',
+        user_id: 'current-user',
+        source: { message_id: 'quoted-message' },
+        async getReply() {
+            return {
+                message_id: 'quoted-message',
+                user_id: 'quoted-user',
+                sender: { user_id: 'quoted-user', nickname: '引用用户' },
+                message: [{ type: 'long_msg', resid: 'context-forward-resid' }]
+            }
+        },
+        message: [{ type: 'text', text: '当前消息' }]
+    }
+
+    const { contextTools } = await import('../src/mcp/tools/context.js')
+    const getReplyMessage = contextTools.find(tool => tool.name === 'get_reply_message')
+    const contextResult = await getReplyMessage.handler(
+        { include_chain: false },
+        {
+            getEvent: () => event,
+            getBot: () => bot
+        }
+    )
+    assert.equal(contextResult.success, true)
+    assert.match(contextResult.reply.content, /上下文长消息正文/)
+
+    const { contextManager } = await import('../src/services/llm/ContextManager.js')
+    const quoteResult = await contextManager.getQuoteContent(event, { includeChain: false })
+    assert.match(quoteResult.text, /上下文长消息正文/)
+})
+
 test('协议端读取业务错误不会被 MessageApi 当作正常消息', async () => {
     const messageEvent = {
         bot: {

@@ -5,6 +5,7 @@
 
 import { chatLogger as logger } from '../../core/utils/logger.js'
 import { StandardBotApi } from '../../core/platform/index.js'
+import { ForwardMessageParser } from '../../utils/messageParser.js'
 
 /** 引用链最大递归深度上限，防止 max_depth 传入超大值导致大量协议端调用 */
 const MAX_REPLY_CHAIN_DEPTH = 10
@@ -217,27 +218,80 @@ export const contextTools = [
                 }
 
                 /**
-                 * 提取消息文本内容
+                 * 提取消息文本内容，并展开合并转发资源。
                  */
-                const extractContent = msg => {
+                const extractContent = async msg => {
                     if (!msg) return ''
                     const data = msg.data || msg
-                    if (data.raw_message) return data.raw_message
-                    if (Array.isArray(data.message)) {
-                        return data.message
-                            .map(m => {
-                                if (m.type === 'text') return m.text || m.data?.text || ''
-                                if (m.type === 'at') return `@${m.data?.name || m.data?.qq || ''}`
-                                if (m.type === 'image') return '[图片]'
-                                if (m.type === 'face') return '[表情]'
-                                if (m.type === 'record') return '[语音]'
-                                if (m.type === 'reply') return '' // 忽略引用标记
-                                return `[${m.type}]`
-                            })
-                            .join('')
-                            .trim()
+                    const message = data.message || data.content
+                    if (!Array.isArray(message)) return data.raw_message || ''
+
+                    const parts = []
+                    for (const segment of message) {
+                        if (!segment) continue
+                        const segmentData = segment.data && typeof segment.data === 'object' ? segment.data : segment
+                        const type = segment.type || segmentData.type
+                        let resid = segment.id || segment.resid || segmentData.id || segmentData.resid
+
+                        if (type === 'json') {
+                            try {
+                                const jsonValue = segmentData.data || segment.data
+                                const jsonData = typeof jsonValue === 'string' ? JSON.parse(jsonValue) : jsonValue
+                                if (jsonData?.app === 'com.tencent.multimsg') {
+                                    resid = jsonData.meta?.detail?.resid
+                                }
+                            } catch {}
+                        }
+
+                        if (
+                            type === 'forward' ||
+                            type === 'node' ||
+                            type === 'long_msg' ||
+                            (type === 'json' && resid)
+                        ) {
+                            try {
+                                const parsed = await ForwardMessageParser.parse(
+                                    e,
+                                    resid ? { id: resid, resid } : segment,
+                                    {
+                                        extractProto: false,
+                                        extractSerialized: false,
+                                        maxDepth
+                                    }
+                                )
+                                parts.push(
+                                    parsed.success
+                                        ? ForwardMessageParser.toReadableText(parsed)
+                                        : type === 'long_msg'
+                                          ? '[长消息]'
+                                          : '[转发消息]'
+                                )
+                            } catch {
+                                parts.push(type === 'long_msg' ? '[长消息]' : '[转发消息]')
+                            }
+                            continue
+                        }
+
+                        if (type === 'text') {
+                            parts.push(segmentData.text || segment.text || '')
+                        } else if (type === 'at') {
+                            parts.push('@' + (segmentData.name || segmentData.qq || segment.qq || ''))
+                        } else if (type === 'image') {
+                            parts.push('[图片]')
+                        } else if (type === 'face' || type === 'bface' || type === 'mface') {
+                            parts.push('[表情]')
+                        } else if (type === 'record' || type === 'audio') {
+                            parts.push('[语音]')
+                        } else if (type === 'video') {
+                            parts.push('[视频]')
+                        } else if (type === 'file') {
+                            parts.push('[文件]')
+                        } else if (type && type !== 'reply') {
+                            parts.push('[' + type + ']')
+                        }
                     }
-                    return ''
+
+                    return parts.join('').trim() || data.raw_message || ''
                 }
 
                 /**
@@ -281,7 +335,7 @@ export const contextTools = [
                     reply: {
                         user_id: String(replyInfo.user_id || replyInfo.sender?.user_id || ''),
                         nickname: replyInfo.sender?.nickname || replyInfo.sender?.card || '',
-                        content: extractContent(replyMsg),
+                        content: await extractContent(replyMsg),
                         time: replyInfo.time,
                         message_id: replyInfo.message_id || messageId
                     }
@@ -315,7 +369,7 @@ export const contextTools = [
                             depth: depth + 1,
                             user_id: String(nestedInfo.user_id || nestedInfo.sender?.user_id || ''),
                             nickname: nestedInfo.sender?.nickname || nestedInfo.sender?.card || '',
-                            content: extractContent(nestedMsg),
+                            content: await extractContent(nestedMsg),
                             time: nestedInfo.time,
                             message_id: nestedInfo.message_id
                         })

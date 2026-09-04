@@ -244,9 +244,12 @@ export const StandardMessagingMethods = {
             ...node,
             message: normalizeStandardMessage(node.message ?? node.content ?? '')
         }))
-        const targetNodes = ['onebot', 'napcat', 'go-cqhttp', 'lagrange'].includes(this.adapterType)
-            ? normalizedNodes.map(node => ({ ...node, message: serializeOneBotMessage(node.message) }))
-            : normalizedNodes
+        const oneBotAdapterTypes = ['onebot', 'napcat', 'go-cqhttp', 'lagrange']
+        const oneBotNodes = normalizedNodes.map(node => ({
+            ...node,
+            message: serializeOneBotMessage(node.message)
+        }))
+        const targetNodes = oneBotAdapterTypes.includes(this.adapterType) ? oneBotNodes : normalizedNodes
         const hasDisplay = Object.values(display).some(value => value !== undefined && value !== null && value !== '')
 
         const { groupId: targetGroupId, userId: targetUserId } = resolveStandardTarget(this.event, {
@@ -262,6 +265,29 @@ export const StandardMessagingMethods = {
                   : null
         } catch (error) {
             if (error?.code !== 'UNSUPPORTED_BOT_API') throw error
+        }
+
+        /*
+         * 原生适配器的 makeForwardMsg 接收 Yunzai 扁平消息段；OneBot/NapCat
+         * 的 makeForwardMsg 会返回协议节点数组，必须交给 sendForwardMsg 处理。
+         */
+        const canBuildNativeForward =
+            !oneBotAdapterTypes.includes(this.adapterType) &&
+            typeof target?.makeForwardMsg === 'function' &&
+            typeof target?.sendMsg === 'function'
+        if (canBuildNativeForward) {
+            const forward = await target.makeForwardMsg(normalizedNodes)
+            if (forward && typeof forward === 'object') {
+                Object.assign(forward, display)
+                const result = await target.sendMsg(forward)
+                this.assertResult(result, 'target.sendMsg')
+                return {
+                    success: true,
+                    message_id: extractStandardMessageId(result),
+                    method: 'target.makeForwardMsg',
+                    result
+                }
+            }
         }
 
         if (typeof target?.sendForwardMsg === 'function' && !hasDisplay) {
@@ -283,12 +309,19 @@ export const StandardMessagingMethods = {
             (this.supportsCapability('onebot_action') && (hasDisplay || typeof target.sendForwardMsg !== 'function'))
         ) {
             const action = isProvided(targetGroupId) ? 'send_group_forward_msg' : 'send_private_forward_msg'
-            const oneBotNodes = normalizedNodes.map(serializeOneBotForwardNode)
             const result = await this.callAction(
                 action,
                 isProvided(targetGroupId)
-                    ? { group_id: this.targetId(targetGroupId), messages: oneBotNodes, ...display }
-                    : { user_id: this.targetId(targetUserId), messages: oneBotNodes, ...display },
+                    ? {
+                          group_id: this.targetId(targetGroupId),
+                          messages: normalizedNodes.map(serializeOneBotForwardNode),
+                          ...display
+                      }
+                    : {
+                          user_id: this.targetId(targetUserId),
+                          messages: normalizedNodes.map(serializeOneBotForwardNode),
+                          ...display
+                      },
                 { strict: true }
             )
             return {
@@ -303,8 +336,9 @@ export const StandardMessagingMethods = {
         const forward =
             typeof makeForwardMsg === 'function'
                 ? await makeForwardMsg.call(target || getGlobalBot(), targetNodes)
-                : StandardMessage.node(targetNodes)
+                : StandardMessage.node(normalizedNodes)
         if (forward && typeof forward === 'object') Object.assign(forward, display)
+
         return this.send({ groupId, userId, message: forward })
     },
 

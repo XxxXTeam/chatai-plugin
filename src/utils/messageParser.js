@@ -1141,6 +1141,26 @@ async function parseReplyMessage(e, options) {
                     }
                     break
 
+                case 'long_msg': {
+                    if (handleForward) {
+                        const resid = valData.id || valData.resid || val.id || val.resid
+                        if (resid) {
+                            try {
+                                const fwdResult = await parseForwardMessage(e, { id: resid, resid })
+                                replyTextContent += fwdResult.text || '[长消息:' + resid + ']'
+                                if (fwdResult.contents?.length > 0) {
+                                    contents.push(...fwdResult.contents)
+                                }
+                            } catch {
+                                replyTextContent += '[长消息:' + resid + ']'
+                            }
+                        } else {
+                            replyTextContent += '[长消息]'
+                        }
+                    }
+                    break
+                }
+
                 case 'json':
                     if (handleForward) {
                         try {

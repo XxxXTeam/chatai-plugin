@@ -10,7 +10,7 @@ import { redisClient } from '../../core/cache/RedisClient.js'
 import config from '../../../config/config.js'
 import historyManager from '../../core/utils/history.js'
 import { databaseService } from '../storage/DatabaseService.js'
-import { MessageApi } from '../../utils/messageParser.js'
+import { ForwardMessageParser, MessageApi } from '../../utils/messageParser.js'
 import { StandardBotApi } from '../../core/platform/index.js'
 import { resolveClientTemperature } from './TemperatureResolver.js'
 import { getCachedMessage, getRecentQQBotMessages } from '../storage/MessageCache.js'
@@ -1528,6 +1528,68 @@ export class ContextManager {
         }
 
         /**
+         * 提取引用消息中的可读文本，并展开转发资源。
+         */
+        const extractQuoteText = async msg => {
+            if (!msg) return ''
+            const data = msg.data || msg
+            const message = data.message || data.content
+            if (!Array.isArray(message)) return ''
+
+            const parts = []
+            for (const part of message) {
+                if (!part) continue
+                const partData = part.data && typeof part.data === 'object' ? part.data : part
+                const type = part.type || partData.type
+                let resid = part.id || part.resid || partData.id || partData.resid
+                if (type === 'json') {
+                    try {
+                        const jsonValue = partData.data || part.data
+                        const jsonData = typeof jsonValue === 'string' ? JSON.parse(jsonValue) : jsonValue
+                        if (jsonData?.app === 'com.tencent.multimsg') {
+                            resid = jsonData.meta?.detail?.resid
+                        }
+                    } catch {}
+                }
+
+                if (type === 'forward' || type === 'node' || type === 'long_msg' || (type === 'json' && resid)) {
+                    try {
+                        const parsed = await ForwardMessageParser.parse(e, resid ? { id: resid, resid } : part, {
+                            extractProto: false,
+                            extractSerialized: false,
+                            maxDepth: 5
+                        })
+                        if (parsed.success && parsed.messages.length > 0) {
+                            parts.push(ForwardMessageParser.toReadableText(parsed))
+                        } else {
+                            parts.push(type === 'long_msg' ? '[长消息]' : '[转发消息]')
+                        }
+                    } catch {
+                        parts.push(type === 'long_msg' ? '[长消息]' : '[转发消息]')
+                    }
+                    continue
+                }
+
+                if (type === 'text') {
+                    parts.push(partData.text || part.text || '')
+                } else if (type === 'at') {
+                    parts.push(partData.name ? '@' + partData.name : '@' + (partData.qq || part.qq || ''))
+                } else if (type === 'image') {
+                    parts.push('[图片]')
+                } else if (type === 'video') {
+                    parts.push('[视频]')
+                } else if (type === 'record' || type === 'audio') {
+                    parts.push('[语音]')
+                } else if (type === 'file') {
+                    parts.push('[文件]')
+                } else if (type === 'face' || type === 'bface' || type === 'mface') {
+                    parts.push('[表情]')
+                }
+            }
+            return parts.join('').replace(/\n/g, ' ').trim()
+        }
+
+        /**
          * 检查消息是否包含引用
          */
         const getNestedReply = msg => {
@@ -1577,14 +1639,13 @@ export class ContextManager {
                 } catch {}
             }
 
-            // 深度解析消息内容
-            let originalContent = ''
-            if (originalMsg.raw_message) {
+            // 深度解析消息内容；long_msg/forward 先读取实际转发资源。
+            let originalContent = await extractQuoteText(originalMsg)
+            if (!originalContent && originalMsg.raw_message) {
                 originalContent = originalMsg.raw_message
-            } else if (originalMsg.message) {
+            } else if (!originalContent && originalMsg.message) {
                 originalContent = this._extractMessageText(originalMsg.message, true)
-            } else {
-                // 尝试深度解析整个消息体
+            } else if (!originalContent) {
                 originalContent = this._extractMessageText(originalMsg, true)
             }
 
@@ -1624,8 +1685,11 @@ export class ContextManager {
                     const nestedSenderId = nestedMsg.user_id || nestedMsg.sender?.user_id
                     const nestedSenderName =
                         nestedMsg.sender?.card || nestedMsg.sender?.nickname || nestedSenderId || '未知'
-                    let nestedContent =
-                        nestedMsg.raw_message || this._extractMessageText(nestedMsg.message || nestedMsg, true)
+                    let nestedContent = await extractQuoteText(nestedMsg)
+                    if (!nestedContent) {
+                        nestedContent =
+                            nestedMsg.raw_message || this._extractMessageText(nestedMsg.message || nestedMsg, true)
+                    }
 
                     if (nestedContent.length > 300) {
                         nestedContent = nestedContent.substring(0, 300) + '...'

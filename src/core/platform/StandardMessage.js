@@ -154,6 +154,9 @@ export function normalizeStandardSegment(segment) {
     if (segment === null || segment === undefined) return segment
     if (typeof segment !== 'object') return StandardMessage.text(segment)
     if (!segment.type) return segment
+    if (segment.type === 'text') {
+        return StandardMessage.text(segment.text ?? segment.data?.text ?? '')
+    }
     if (segment.type === 'node') {
         const nodeData = Array.isArray(segment.data)
             ? segment.data

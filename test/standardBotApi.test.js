@@ -538,6 +538,62 @@ test('OneBot 标准 target 统一接收 raw OneBot 消息段', async () => {
     assert.deepEqual(received[7].data, { type: 2, id: 3 })
 })
 
+test('ICQQ 转发构造使用扁平消息段，避免正文变成 undefined', async () => {
+    const calls = []
+    const group = {
+        async makeForwardMsg(nodes) {
+            calls.push(['makeForwardMsg', nodes])
+            const content = nodes[0].message.map(segment => segment.text).join('')
+            return { type: 'node', data: nodes, content }
+        },
+        async sendMsg(message) {
+            calls.push(['sendMsg', message])
+            return success('icqq-forward')
+        }
+    }
+    const api = new StandardBotApi({
+        bot: {
+            adapter: { id: 'QQ', name: 'ICQQ' },
+            pickGroup: () => group
+        }
+    })
+
+    const result = await api.sendForward({
+        groupId: '123',
+        nodes: [{ user_id: '10001', nickname: 'AI 回复', message: '正文' }]
+    })
+
+    assert.equal(result.success, true)
+    assert.equal(result.method, 'target.makeForwardMsg')
+    assert.deepEqual(calls[0][1][0].message, [{ type: 'text', text: '正文' }])
+    assert.equal(calls[0][1][0].message[0].data, undefined)
+    assert.equal(calls[0][1][0].message[0].text, '正文')
+})
+
+test('NapCat 转发发送使用 OneBot data 消息段', async () => {
+    let forwardedNodes
+    const api = new StandardBotApi({
+        bot: {
+            adapter: { id: 'QQ', name: 'NapCat' },
+            pickGroup: () => ({
+                async sendForwardMsg(nodes) {
+                    forwardedNodes = nodes
+                    return [success('napcat-forward')]
+                }
+            })
+        }
+    })
+
+    const result = await api.sendForward({
+        groupId: '123',
+        nodes: [{ user_id: '10001', nickname: 'AI 回复', message: '正文' }]
+    })
+
+    assert.equal(result.success, true)
+    assert.equal(result.method, 'target.sendForwardMsg')
+    assert.deepEqual(forwardedNodes[0].message, [{ type: 'text', data: { text: '正文' } }])
+})
+
 test('OneBot 转发优先标准 target，缺少标准方法时才走 raw action', async () => {
     const calls = []
     let dualTargetNodes

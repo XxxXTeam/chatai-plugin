@@ -70,10 +70,10 @@ export class StandardBotApi {
      */
     get adapterId() {
         return (
-            this.bot?.adapter?.id ||
             this.bot?.adapter?.name ||
-            this.bot?.version?.id ||
+            this.bot?.adapter?.id ||
             this.bot?.version?.name ||
+            this.bot?.version?.id ||
             this.adapter?.adapter ||
             'unknown'
         )

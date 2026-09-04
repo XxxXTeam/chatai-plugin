@@ -90,8 +90,12 @@ export function isQQBotInstance(value) {
 export function detectStandardAdapter(value) {
     const bot = value?.bot || value || getGlobalBotContainer()
     if (isQQBotInstance(bot)) return 'qqbot'
-    const id = bot?.adapter?.id || bot?.adapter?.name || bot?.version?.id || bot?.version?.name
-    if (KNOWN_ADAPTER_TYPES.has(id)) return KNOWN_ADAPTER_TYPES.get(id)
+
+    const adapterName = bot?.adapter?.name || bot?.version?.name
+    if (KNOWN_ADAPTER_TYPES.has(adapterName)) return KNOWN_ADAPTER_TYPES.get(adapterName)
+
+    const adapterId = bot?.adapter?.id || bot?.version?.id
+    if (KNOWN_ADAPTER_TYPES.has(adapterId)) return KNOWN_ADAPTER_TYPES.get(adapterId)
     if (typeof bot?.sendApi === 'function') return 'onebot'
     if (typeof bot?.pickGroup === 'function' && typeof bot?.pickFriend === 'function') return 'standard'
     return 'unknown'
