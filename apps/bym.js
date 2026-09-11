@@ -8,7 +8,7 @@ import {
 } from '../src/utils/messageDedup.js'
 import { renderService } from '../src/services/media/RenderService.js'
 import { ensureScopeManager } from '../src/services/scope/ScopeManager.js'
-import { checkAccessList, sendForwardMsg } from '../src/utils/platformAdapter.js'
+import { checkTriggerAccess, sendForwardMsg } from '../src/utils/platformAdapter.js'
 import { statsService } from '../src/services/stats/StatsService.js'
 import { StandardBotApi } from '../src/core/platform/index.js'
 import { emojiThiefService } from './EmojiThief.js'
@@ -145,7 +145,7 @@ export class bym extends plugin {
         const triggerCfg = config.get('trigger') || {}
         const userId = String(e.user_id || e.sender?.user_id || '')
         const groupId = e.group_id ? String(e.group_id) : ''
-        if (!checkAccessList(userId, groupId, triggerCfg)) {
+        if (!checkTriggerAccess(userId, groupId, triggerCfg)) {
             logger.debug(`[BYM] 黑白名单检查未通过: userId=${userId}, groupId=${groupId}`)
             return false
         }

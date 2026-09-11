@@ -445,6 +445,20 @@ export function checkAccessList(userId, groupId, cfg) {
 }
 
 /**
+ * 按消息类型选择独立的黑白名单配置并检查访问权限。
+ *
+ * @param {string|number} userId - 用户ID
+ * @param {string|number|null} groupId - 群组ID；私聊传 null
+ * @param {Object} triggerCfg - trigger 配置
+ * @returns {boolean} true=允许, false=拒绝
+ */
+export function checkTriggerAccess(userId, groupId, triggerCfg) {
+    const isGroup = groupId !== null && groupId !== undefined && String(groupId) !== ''
+    const accessCfg = isGroup ? triggerCfg?.group : triggerCfg?.private
+    return checkAccessList(userId, isGroup ? groupId : null, accessCfg)
+}
+
+/**
  * 获取消息发送者显示名称
  * @param {Object} e - 事件对象
  * @returns {string}
@@ -550,6 +564,7 @@ export default {
     isPluginAuthor,
     isAdmin,
     checkAccessList,
+    checkTriggerAccess,
     getSenderName,
     isGroupMessage,
     isPrivateMessage,

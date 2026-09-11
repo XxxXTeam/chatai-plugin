@@ -20,7 +20,7 @@ import { memoryManager } from '../src/services/storage/MemoryManager.js'
 import { statsService } from '../src/services/stats/StatsService.js'
 import { ensureScopeManager } from '../src/services/scope/ScopeManager.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
-import { checkAccessList, sendForwardMsg as platformSendForwardMsg } from '../src/utils/platformAdapter.js'
+import { checkTriggerAccess, sendForwardMsg as platformSendForwardMsg } from '../src/utils/platformAdapter.js'
 import { mcpManager } from '../src/mcp/McpManager.js'
 import { setToolContext } from '../src/core/utils/toolAdapter.js'
 import { conversationTracker } from '../src/services/llm/ConversationTracker.js'
@@ -209,7 +209,9 @@ export class Chat extends plugin {
             triggerCfg = {
                 private: {
                     enabled: listenerConfig.privateChat?.enabled ?? true,
-                    mode: listenerConfig.privateChat?.alwaysReply ? 'always' : 'prefix'
+                    mode: listenerConfig.privateChat?.alwaysReply ? 'always' : 'prefix',
+                    blacklistUsers: listenerConfig.blacklistUsers || [],
+                    whitelistUsers: listenerConfig.whitelistUsers || []
                 },
                 group: {
                     enabled: listenerConfig.groupChat?.enabled ?? true,
@@ -218,15 +220,15 @@ export class Chat extends plugin {
                     keyword: triggerMode === 'both',
                     random: triggerMode === 'random',
                     randomRate: listenerConfig.randomReplyRate || 0.1,
-                    replyBot: listenerConfig.groupChat?.replyBot ?? true
+                    replyBot: listenerConfig.groupChat?.replyBot ?? true,
+                    blacklistUsers: listenerConfig.blacklistUsers || [],
+                    whitelistUsers: listenerConfig.whitelistUsers || [],
+                    blacklistGroups: listenerConfig.blacklistGroups || [],
+                    whitelistGroups: listenerConfig.whitelistGroups || []
                 },
                 prefixes,
                 keywords: listenerConfig.triggerKeywords || [],
                 prefixPersonas: listenerConfig.prefixPersonas || [],
-                blacklistUsers: listenerConfig.blacklistUsers || [],
-                whitelistUsers: listenerConfig.whitelistUsers || [],
-                blacklistGroups: listenerConfig.blacklistGroups || [],
-                whitelistGroups: listenerConfig.whitelistGroups || [],
                 collectGroupMsg: listenerConfig.groupChat?.collectMessages ?? true
             }
         }
@@ -238,7 +240,7 @@ export class Chat extends plugin {
      */
     checkAccess(cfg) {
         const e = this.e
-        return checkAccessList(e.user_id, e.isGroup ? e.group_id : null, cfg)
+        return checkTriggerAccess(e.user_id, e.isGroup ? e.group_id : null, cfg)
     }
 
     /**

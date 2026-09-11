@@ -32,6 +32,45 @@ export function assertSafeConfigPath(keys, rawKey) {
 }
 
 /**
+ * 将旧版 trigger 顶层黑白名单迁移到互相独立的私聊/群聊配置。
+ * 已存在的新结构优先，避免覆盖用户已经单独配置的名单。
+ *
+ * @param {Object} loadedConfig - 从配置文件读取的原始配置
+ * @returns {Object} 迁移后的配置
+ */
+export function migrateTriggerAccessLists(loadedConfig) {
+    const trigger = loadedConfig?.trigger
+    if (!trigger || typeof trigger !== 'object' || Array.isArray(trigger)) return loadedConfig
+
+    const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key)
+    const copyList = value => (Array.isArray(value) ? [...value] : [])
+
+    if (!trigger.private || typeof trigger.private !== 'object' || Array.isArray(trigger.private)) {
+        trigger.private = {}
+    }
+    if (!trigger.group || typeof trigger.group !== 'object' || Array.isArray(trigger.group)) {
+        trigger.group = {}
+    }
+
+    for (const key of ['blacklistUsers', 'whitelistUsers']) {
+        if (hasOwn(trigger, key)) {
+            if (!hasOwn(trigger.private, key)) trigger.private[key] = copyList(trigger[key])
+            if (!hasOwn(trigger.group, key)) trigger.group[key] = copyList(trigger[key])
+            delete trigger[key]
+        }
+    }
+
+    for (const key of ['blacklistGroups', 'whitelistGroups']) {
+        if (hasOwn(trigger, key)) {
+            if (!hasOwn(trigger.group, key)) trigger.group[key] = copyList(trigger[key])
+            delete trigger[key]
+        }
+    }
+
+    return loadedConfig
+}
+
+/**
  * Configuration manager for the plugin
  */
 class Config {
@@ -58,6 +97,7 @@ class Config {
         if (fs.existsSync(this.configPath)) {
             const content = fs.readFileSync(this.configPath, 'utf-8')
             const loadedConfig = yaml.parse(content) || {}
+            migrateTriggerAccessLists(loadedConfig)
             this.config = this.mergeConfig(this.getDefaultConfig(), loadedConfig)
             this.save()
         } else {
@@ -794,7 +834,9 @@ class Config {
             trigger: {
                 private: {
                     enabled: true, // 是否响应私聊
-                    mode: 'prefix' // 私聊触发模式: 'always'(总是), 'prefix'(需前缀), 'off'(关闭)
+                    mode: 'prefix', // 私聊触发模式: 'always'(总是), 'prefix'(需前缀), 'off'(关闭)
+                    blacklistUsers: [], // 私聊用户黑名单
+                    whitelistUsers: [] // 私聊用户白名单（空=不限）
                 },
                 group: {
                     enabled: true, // 是否响应群聊
@@ -802,15 +844,15 @@ class Config {
                     prefix: true, // 前缀触发
                     keyword: false, // 关键词触发
                     random: false, // 随机触发
-                    randomRate: 0.05 // 随机触发概率
+                    randomRate: 0.05, // 随机触发概率
+                    blacklistUsers: [], // 群聊用户黑名单
+                    whitelistUsers: [], // 群聊用户白名单（空=不限）
+                    blacklistGroups: [], // 群号黑名单
+                    whitelistGroups: [] // 群号白名单（空=不限）
                 },
                 prefixes: ['#chat'], // 前缀列表
                 keywords: [], // 关键词列表
-                collectGroupMsg: true, // 采集群消息用于记忆
-                blacklistUsers: [], // 用户黑名单
-                whitelistUsers: [], // 用户白名单（空=不限）
-                blacklistGroups: [], // 群黑名单
-                whitelistGroups: [] // 群白名单（空=不限）
+                collectGroupMsg: true // 采集群消息用于记忆
             }
         }
     }
