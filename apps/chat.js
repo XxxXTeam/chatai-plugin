@@ -295,9 +295,15 @@ export class Chat extends plugin {
         // 私聊
         if (!e.isGroup) {
             const privateCfg = cfg.private || {}
-            if (privateCfg.enabled === false) return { triggered: false }
+            const mode = privateCfg.mode || 'prefix'
 
-            // 先检查前缀
+            // off 模式或禁用时完全关闭私聊触发；always 无条件触发；其余（含默认 prefix）需前缀匹配
+            if (privateCfg.enabled === false || mode === 'off') return { triggered: false }
+
+            // always 无需前缀
+            if (mode === 'always') return { triggered: true, msg: rawMsg }
+
+            // 前缀触发
             const prefixResult = this.checkPrefix(rawMsg, cfg.prefixes, cfg.prefixPersonas)
             if (prefixResult.matched) {
                 return {
@@ -306,11 +312,6 @@ export class Chat extends plugin {
                     persona: prefixResult.persona,
                     isPersonaPrefix: prefixResult.isPersonaPrefix
                 }
-            }
-
-            const mode = privateCfg.mode || 'always'
-            if (mode === 'always') {
-                return { triggered: true, msg: rawMsg }
             }
             return { triggered: false }
         }
