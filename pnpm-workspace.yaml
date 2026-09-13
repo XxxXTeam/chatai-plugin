@@ -1,0 +1,7 @@
+allowBuilds:
+  better-sqlite3: true
+  protobufjs: true
+  sharp: true
+  tesseract.js: true
+overrides:
+  node-gyp: ^11.2.0
