@@ -31,6 +31,7 @@ import { resolveChannelSystemPrompt } from './SystemPromptConfig.js'
 import { resolveTemperature } from './TemperatureResolver.js'
 import { applySkillToolConstraints, getSkillToolConstraints } from '../skills/SkillToolConstraints.js'
 import { resolveToolPermission } from '../tools/ToolPermission.js'
+import { normalizeInlineImageContent } from './InlineImageDataUrl.js'
 
 let scopeManager = null
 const ensureScopeManager = async () => {
@@ -42,28 +43,6 @@ const ensureScopeManager = async () => {
         await scopeManager.init()
     }
     return scopeManager
-}
-
-/**
- * 将 messageParser 生成的内联图片对象规范化为 OpenAI 兼容的 data URL。
- *
- * @param {Object} imageRef - `{ type: 'image', image, mimeType }` 图片引用
- * @returns {string|null} 可直接作为 image_url.url 使用的 data URL
- */
-export function normalizeInlineImageDataUrl(imageRef) {
-    if (imageRef?.type !== 'image' || typeof imageRef.image !== 'string') return null
-
-    const image = imageRef.image.trim()
-    if (!image) return null
-    if (image.startsWith('data:image/')) return image
-
-    const mimeType =
-        typeof imageRef.mimeType === 'string' && /^image\/[a-z0-9.+-]+$/i.test(imageRef.mimeType)
-            ? imageRef.mimeType
-            : 'image/jpeg'
-    const base64 = image.startsWith('base64://') ? image.slice('base64://'.length) : image
-
-    return `data:${mimeType};base64,${base64}`
 }
 
 /**
@@ -268,9 +247,9 @@ export class ChatService {
             try {
                 // 如果是 image_url 类型对象（来自 messageParser）
                 if (imageRef && typeof imageRef === 'object') {
-                    const inlineImageUrl = normalizeInlineImageDataUrl(imageRef)
-                    if (inlineImageUrl) {
-                        messageContent.push({ type: 'image_url', image_url: { url: inlineImageUrl } })
+                    const inlineImage = normalizeInlineImageContent(imageRef)
+                    if (inlineImage) {
+                        messageContent.push(inlineImage)
                         continue
                     } else if (imageRef.type === 'image_url' && imageRef.image_url?.url) {
                         // 预检可达性；QQ图床/内网等需转 base64，否则远端读不到
