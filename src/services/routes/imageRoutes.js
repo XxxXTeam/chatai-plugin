@@ -204,7 +204,6 @@ router.delete('/custom-presets/:index', async (req, res) => {
     }
 })
 
-// ==================== 内置预设管理 ====================
 // PUT /builtin-presets/:uid - 更新内置预设
 router.put('/builtin-presets/:uid', async (req, res) => {
     try {
@@ -249,7 +248,6 @@ router.delete('/builtin-presets/:uid', async (req, res) => {
     }
 })
 
-// ==================== 远程预设管理 ====================
 // 根据 source name 查找对应的缓存文件
 function findCacheFileBySourceName(sourceName) {
     const sources = config.get('features.imageGen.presetSources') || []
@@ -415,7 +413,6 @@ router.post('/presets/update', async (req, res) => {
     }
 })
 
-// ==================== 预设来源管理 ====================
 // GET /sources - 获取预设来源列表
 router.get('/sources', (req, res) => {
     try {

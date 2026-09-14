@@ -4,7 +4,7 @@
  */
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'
-import { parsePokeEvent, sendPoke, getUserNickname, getBot, checkEventProbability } from '../src/utils/eventAdapter.js'
+import { parsePokeEvent, sendPoke, getUserNickname, checkEventProbability } from '../src/utils/eventAdapter.js'
 import { getAIResponse } from '../src/utils/common.js'
 
 export class AI_Poke extends plugin {

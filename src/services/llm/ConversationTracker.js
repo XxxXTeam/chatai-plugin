@@ -432,7 +432,7 @@ ${recentHistory || '(无)'}
      * 清理所有追踪数据
      */
     clearAll() {
-        for (const [key, conv] of activeConversations) {
+        for (const [, conv] of activeConversations) {
             if (conv.timer) clearTimeout(conv.timer)
         }
         activeConversations.clear()

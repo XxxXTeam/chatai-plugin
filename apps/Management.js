@@ -6,7 +6,7 @@ import config from '../config/config.js'
 import { getWebServer } from '../src/services/webServer.js'
 import { ensureScopeManager } from '../src/services/scope/ScopeManager.js'
 import { databaseService } from '../src/services/storage/DatabaseService.js'
-import { isMaster, urlToQRCode } from '../src/utils/platformAdapter.js'
+import { isMaster } from '../src/utils/platformAdapter.js'
 import { chatService } from '../src/services/llm/ChatService.js'
 import { renderService } from '../src/services/media/RenderService.js'
 import { segment } from '../src/utils/messageParser.js'
@@ -251,11 +251,10 @@ export class AIManagement extends plugin {
 
         // 使用新的getLoginInfo方法获取完整登录信息
         const loginInfo = webServer.getLoginInfo(permanent, forceNew)
-        const { localUrl, localUrls, localIPv6Urls, publicUrl, customUrls, validity, isPublicUrlConfigured } = loginInfo
+        const { localUrls, localIPv6Urls, publicUrl, customUrls, validity, isPublicUrlConfigured } = loginInfo
 
         const validityText = validity
         const warningText = permanent ? '\n\n⚠️ 请妥善保管此链接，不要泄露给他人！' : ''
-        const newTokenText = forceNew ? '（已重新生成）' : ''
 
         // 构建消息内容
         const messages = []
@@ -891,8 +890,6 @@ export class AIManagement extends plugin {
         return true
     }
 
-    // ==================== 群独立渠道配置 ====================
-
     /**
      * 查看群渠道设置
      */
@@ -1009,8 +1006,6 @@ export class AIManagement extends plugin {
         await this.reply('群独立渠道需要通过管理面板配置\n请使用 #群管理面板 获取管理链接', true)
         return true
     }
-
-    // ==================== 群使用限制 ====================
 
     /**
      * 查看群使用限制设置

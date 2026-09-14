@@ -899,13 +899,15 @@ ${dialogText}
 
         try {
             const storageUserId = this.getScopedMemoryUserId(userId, options?.groupId)
-            // 判断是否包含值得记忆的信息
+            // 判断是否包含值得记忆的信息（放宽触发门槛，让自然陈述也能进入 LLM 兜底判定）
             const importantPatterns = [
-                /我(是|叫|住在|喜欢|讨厌|今年|的生日|工作)/,
-                /我的(名字|职业|年龄|爱好|家人)/,
+                /我(是|叫|住在|喜欢|讨厌|不喜欢|今年|的生日|工作|最近|觉得|需要|想|要|养|做过)/,
+                /我的(名字|职业|年龄|爱好|家人|兴趣|习惯)/,
                 /记住/,
                 /别忘了/,
-                /以后/
+                /以后/,
+                /(不再|改主意|其实|更正)/,
+                /刚(买|换|搬|找到|进)/
             ]
 
             const shouldExtract = importantPatterns.some(p => p.test(userMessage))
@@ -917,8 +919,8 @@ ${dialogText}
 
             const botName = global.Bot?.nickname || config.get('basic.botName') || '助手'
 
-            // 合并式总结prompt
-            const extractPrompt = `你是用户记忆管理专家。请综合现有记忆和新对话，生成更新后的完整记忆列表。
+            // 校验现有记忆，识别否定/纠正（改主意）的情况，避免覆盖式提取丢条或保留矛盾信息
+            const mergePrompt = `你是用户记忆管理专家。请综合现有记忆和新对话，生成更新后的完整记忆列表。
 
 【现有记忆】
 ${existingMemoryList || '暂无'}
@@ -931,8 +933,9 @@ ${existingMemoryList || '暂无'}
 1. 只记录用户（人类）透露的具体个人信息
 2. 助手/${botName}是机器人，不要记录机器人的信息
 3. 合并现有记忆和新信息，删除重复项
-4. 每条记忆必须是具体事实，不超过50字
-5. 不要输出标题、序号或格式说明
+4. 用户推翻旧信息（如"其实我不喜欢X了""我改主意了"）时，用新信息替换旧信息
+5. 每条记忆必须是具体事实，不超过50字
+6. 不要输出标题、序号或格式说明
 
 【输出格式】
 直接输出记忆内容，每行一条，最多10条。无有效信息则输出"无"：`
@@ -949,7 +952,7 @@ ${existingMemoryList || '暂无'}
             const model3 = channelInfo3.model || config.get('llm.defaultModel')
             const _temp3 = resolveClientTemperature(client, 0.3)
             const result = await client.sendMessage(
-                { role: 'user', content: [{ type: 'text', text: extractPrompt }] },
+                { role: 'user', content: [{ type: 'text', text: mergePrompt }] },
                 {
                     model: model3,
                     maxToken: 400,
@@ -972,7 +975,7 @@ ${existingMemoryList || '暂无'}
                     userId,
                     responseText: responseText || '',
                     apiUsage: result.usage,
-                    request: { messages: [{ role: 'user', content: extractPrompt }], model: model3 },
+                    request: { messages: [{ role: 'user', content: mergePrompt }], model: model3 },
                     response: !recordSuccess ? { error: '响应为空' } : null
                 })
             } catch (e) {
@@ -1008,7 +1011,7 @@ ${existingMemoryList || '暂无'}
         if (!config.get('memory.enabled')) return ''
 
         await this.init()
-        const { groupId, includeProfile } = options
+        const { groupId } = options
         // QQBot/OpenID 与频道标识可以合法包含下划线；不能再把最后一段猜成 QQ 号。
         // 调用方传入的 userId 已是存储键，必须原样读取。
         const pureUserId = String(userId ?? '')

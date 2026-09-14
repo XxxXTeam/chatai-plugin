@@ -41,7 +41,7 @@ export async function getKey(apiKey, strategy = 'random', conversationId) {
                 const index = parseInt(hash.substring(0, 8), 16) % apiKey.length
                 return apiKey[index]
             }
-            // fallback to random
+            break
         }
 
         case 'random':

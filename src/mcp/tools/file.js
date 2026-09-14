@@ -111,7 +111,7 @@ function isPathDangerous(targetPath) {
  * @returns {string} 解析后的绝对路径
  * @throws {Error} 越出沙箱或命中系统关键目录时抛出
  */
-function getSafePath(targetPath) {
+export function getSafePath(targetPath) {
     // 沙箱根校验（含符号链接解析），越界直接抛错
     const resolved = resolveSandboxPath(targetPath, { root: PLUGIN_ROOT })
     // 保留原有系统目录黑名单作为额外一层防护

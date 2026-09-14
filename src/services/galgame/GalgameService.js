@@ -14,30 +14,9 @@ import { enforceMaxCharacters } from '../../utils/common.js'
 import chatLogger from '../../core/utils/logger.js'
 
 // 从拆分的模块导入
-import {
-    OPTION_EMOJIS,
-    AFFECTION_LEVELS,
-    TRUST_LEVELS,
-    ENVIRONMENT_PROMPT,
-    INIT_PROMPT,
-    DEFAULT_SYSTEM_PROMPT,
-    GOLD_CONFIG
-} from './constants.js'
-import {
-    parseResponse,
-    parseInitResponse,
-    extractTextFromContent,
-    processEventChoice,
-    processEventWithCustomInput
-} from './ResponseParser.js'
-import {
-    getAffectionLevel,
-    getRelationshipStatus,
-    buildSystemPrompt,
-    buildKnownInfo,
-    buildStoryProgress,
-    buildOpeningPrompt
-} from './PromptBuilder.js'
+import { TRUST_LEVELS, ENVIRONMENT_PROMPT, INIT_PROMPT, GOLD_CONFIG } from './constants.js'
+import { parseResponse, parseInitResponse } from './ResponseParser.js'
+import { getAffectionLevel, buildSystemPrompt, buildOpeningPrompt } from './PromptBuilder.js'
 
 const gameLogger = chatLogger.tag('Game')
 
@@ -330,7 +309,6 @@ class GalgameService {
      */
     async exitGame(groupId, userId) {
         const key = `${groupId || 'private'}_${userId}`
-        const session = this.activeSessions.get(key)
         this.activeSessions.delete(key)
 
         // 持久化到数据库 - 清除该用户在该群组的所有活跃会话
@@ -1316,7 +1294,6 @@ class GalgameService {
             groupId,
             message,
             characterId = 'default',
-            event,
             isOptionChoice = false,
             optionIndex = null,
             imageUrls = []
@@ -1811,9 +1788,6 @@ class GalgameService {
      */
     async handleReaction(userId, characterId, emojiId, emojiName, groupId = null) {
         await this.init()
-
-        const session = await this.getOrCreateSession(userId, characterId, groupId)
-        const character = await this.getCharacter(characterId)
 
         // 构建表情事件消息
         const reactionMessage = `[玩家对你做出了"${emojiName}"的表情回应]`

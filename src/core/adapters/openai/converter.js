@@ -94,7 +94,6 @@ registerFromChaiteConverter('openai', source => {
             }
 
             // Check if content is simple text only (for better compatibility with proxy APIs)
-            const hasOnlyText = userContent.every(t => t.type === 'text')
             const isSingleText = userContent.length === 1 && userContent[0].type === 'text'
 
             // For simple text-only messages, use string format for better compatibility

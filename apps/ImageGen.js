@@ -3,8 +3,7 @@ import { segment, MessageApi } from '../src/utils/messageParser.js'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { getBotIds } from '../src/utils/messageDedup.js'
-import { getAvatarUrl, getUserInfo } from '../src/utils/platformAdapter.js'
+import { getAvatarUrl } from '../src/utils/platformAdapter.js'
 
 import { ensureScopeManager } from '../src/services/scope/ScopeManager.js'
 
@@ -450,16 +449,6 @@ export class ImageGen extends plugin {
         }
 
         const stats = presetMgr.getStats()
-
-        // 构建预设列表
-        const presetLines = presetMgr
-            .getAllPresets()
-            .map((p, i) => {
-                const keys = p.keywords.join(' / ')
-                const sourceTag = p.source === 'builtin' ? '' : p.source === 'custom' ? ' [自定义]' : ` [云端]`
-                return `${i + 1}. ${keys}${sourceTag}`
-            })
-            .join('\n')
 
         const helpLines = [
             '【AI绘图指令帮助】',
@@ -1399,7 +1388,7 @@ export class ImageGen extends plugin {
                                         model: apiConf.model
                                     }
                                 })
-                            } catch (e) {
+                            } catch {
                                 /* 统计失败不影响主流程 */
                             }
                             return {
@@ -2277,7 +2266,7 @@ export class ImageGen extends plugin {
                     }
 
                     // 构建合并转发消息节点
-                    const forwardNodes = splitImages.map((img, idx) => ({
+                    const forwardNodes = splitImages.map(img => ({
                         user_id: botInfo.user_id,
                         nickname: botInfo.nickname,
                         message: [segment.image(img)]

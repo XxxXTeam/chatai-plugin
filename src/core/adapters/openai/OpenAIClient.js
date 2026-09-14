@@ -183,7 +183,6 @@ function validateAndCleanMessages(messages) {
                     delete assistantMsg.tool_calls
                 }
                 if (originalCount !== (assistantMsg.tool_calls?.length || 0)) {
-                    const removedIds = assistantMsg.tool_calls ? [] : Array.from(validToolCallIds)
                     logger.debug(
                         `[消息验证] 修复不完整的 tool_calls: ${originalCount} -> ${assistantMsg.tool_calls?.length || 0}, 未匹配ID: [${Array.from(validToolCallIds).join(', ')}], 已匹配ID: [${Array.from(matchedToolCallIds).join(', ')}]`
                     )
@@ -1350,7 +1349,7 @@ export class OpenAIClient extends AbstractClient {
         }
 
         const timeoutMs = wsConfig.timeout || 60000
-        const { enabled, timeout, url, headers, ResponsesWSClass, ...sdkWsOptions } = wsConfig
+        const { url, headers, ...sdkWsOptions } = wsConfig
         const wsOptions = { ...sdkWsOptions }
         const wsHeaders = headers
         if (wsHeaders && typeof wsHeaders === 'object') {
@@ -1647,7 +1646,7 @@ export class OpenAIClient extends AbstractClient {
             })
         )
         if (requestPayload.tools?.length > 0) {
-            const toolNames = requestPayload.tools.map(t => t.function?.name).filter(Boolean)
+            requestPayload.tools.map(t => t.function?.name).filter(Boolean)
         }
         if (logger.level === 'debug') {
             const sanitizedMessages = this.sanitizeMessagesForLog(requestPayload.messages)
@@ -2139,7 +2138,12 @@ export class OpenAIClient extends AbstractClient {
             throw error
         }
 
-        const self = this
+        const createResponsesStreamState = this.createResponsesStreamState.bind(this)
+        const applyResponsesStreamEvent = this.applyResponsesStreamEvent.bind(this)
+        const upsertChatToolCall = this.upsertChatToolCall.bind(this)
+        const normalizeExecutableToolCalls = this.normalizeExecutableToolCalls.bind(this)
+        const responsesStreamStateToChatCompletion = this.responsesStreamStateToChatCompletion.bind(this)
+
         async function* generator() {
             let allReasoning = '' // 累积所有reasoning_content
             let allContent = '' // 累积content用于<think>标签解析
@@ -2152,12 +2156,12 @@ export class OpenAIClient extends AbstractClient {
             let hasToolCalls = false
             let finalUsage = null // 流式模式下的usage信息
             let streamResponseModel = null
-            const responsesState = useResponsesApi ? self.createResponsesStreamState() : null
+            const responsesState = useResponsesApi ? createResponsesStreamState() : null
             let responsesTextEmitted = 0
 
             for await (const chunk of stream) {
                 if (useResponsesApi) {
-                    const updates = self.applyResponsesStreamEvent(responsesState, chunk)
+                    const updates = applyResponsesStreamEvent(responsesState, chunk)
                     for (const update of updates) {
                         if (update.type === 'text' && update.text) {
                             responsesTextEmitted += update.text.length
@@ -2184,7 +2188,7 @@ export class OpenAIClient extends AbstractClient {
                 // 处理 tool_calls（流式累积）
                 for (const tc of toolCallsDelta) {
                     hasToolCalls = true
-                    self.upsertChatToolCall(toolCallsMap, tc)
+                    upsertChatToolCall(toolCallsMap, tc)
                 }
 
                 // 处理 reasoning_content 字段（优先）
@@ -2232,7 +2236,7 @@ export class OpenAIClient extends AbstractClient {
             // 处理完所有 chunk 后
 
             if (useResponsesApi) {
-                const chatCompletion = self.responsesStreamStateToChatCompletion(responsesState)
+                const chatCompletion = responsesStreamStateToChatCompletion(responsesState)
                 const responseMessage = chatCompletion.choices?.[0]?.message || {}
                 if (responseMessage.content && responsesTextEmitted === 0) {
                     yield { type: 'text', text: responseMessage.content }
@@ -2262,7 +2266,7 @@ export class OpenAIClient extends AbstractClient {
 
             // 输出 tool_calls
             if (hasToolCalls) {
-                const toolCalls = self.normalizeExecutableToolCalls(
+                const toolCalls = normalizeExecutableToolCalls(
                     Array.from(toolCallsMap.values()).filter(tc => tc.id && tc.function.name)
                 )
                 if (toolCalls.length > 0) {
@@ -2455,7 +2459,7 @@ export class OpenAIClient extends AbstractClient {
                 source: 'embedding',
                 request: { inputCount: inputTexts.length, model: options.model }
             })
-        } catch (e) {
+        } catch {
             /* 统计失败不影响主流程 */
         }
 

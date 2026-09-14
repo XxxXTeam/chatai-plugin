@@ -431,7 +431,7 @@ export function processEventChoice(eventInfo, optionIndex, options) {
  * @param {Array} options - 可选项列表（用于获取基准好感度）
  * @returns {Object} 处理结果
  */
-export function processEventWithCustomInput(eventInfo, customInput, options) {
+export function processEventWithCustomInput(eventInfo, customInput, _options) {
     // 如果成功率为null，随机生成
     const successRate = eventInfo.successRate ?? Math.floor(Math.random() * 60) + 20
 

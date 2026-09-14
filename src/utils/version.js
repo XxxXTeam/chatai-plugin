@@ -113,13 +113,11 @@ export function getVersionString() {
  */
 export function getFullVersionInfo() {
     const git = getGitVersion()
-    let packageName = 'ChatAI'
     let packageVersion = '1.0.0'
     try {
         const pkgPath = path.join(pluginRoot, 'package.json')
         if (fs.existsSync(pkgPath)) {
             const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-            packageName = pkg.name || packageName
             packageVersion = pkg.version || packageVersion
         }
     } catch {}

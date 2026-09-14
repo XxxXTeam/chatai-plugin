@@ -7,12 +7,10 @@ import express from 'express'
 import multer from 'multer'
 import { ChaiteResponse } from './shared.js'
 import {
-    SkillsAgent,
     createSkillsAgent,
     getMcpServers,
     getMcpServer,
     connectMcpServer,
-    disconnectMcpServer,
     reloadMcpServer,
     removeMcpServer,
     getToolCategories,
@@ -259,8 +257,6 @@ router.get('/documents', async (req, res) => {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
-
-// ========== 文档技能编辑 ==========
 
 /**
  * POST /documents/validate - 校验技能源码，不写入磁盘
@@ -593,8 +589,6 @@ router.delete('/documents/:name/files', async (req, res) => {
     }
 })
 
-// ========== 技能包导入 ==========
-
 /**
  * zip 上传中间件
  * 内存存储 + 单文件 + 大小上限，避免大文件先落盘再校验
@@ -704,8 +698,6 @@ router.post('/execute', async (req, res) => {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
-
-// ========== 发现 (Discovery) API ==========
 
 // GET /search - 搜索技能
 router.get('/search', async (req, res) => {
@@ -882,8 +874,6 @@ router.post('/disable-all', async (req, res) => {
     }
 })
 
-// ========== MCP 服务器管理 ==========
-
 // GET /mcp/servers - 获取 MCP 服务器列表
 router.get('/mcp/servers', async (req, res) => {
     try {
@@ -991,8 +981,6 @@ router.get('/stats', async (req, res) => {
     }
 })
 
-// ========== 上下文压缩配置 ==========
-
 /**
  * 上下文压缩配置允许更新的字段白名单
  * @type {string[]}
@@ -1041,8 +1029,6 @@ router.post('/context-config', async (req, res) => {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
-
-// ========== 已加载技能管理 ==========
 
 /**
  * GET /loaded - 获取当前已加载（激活）的技能列表

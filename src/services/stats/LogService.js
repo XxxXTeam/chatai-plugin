@@ -178,7 +178,7 @@ class LogService {
      * @param {string} message - 信息消息
      * @param {Object} data - 附加数据
      */
-    info(message, data = null) {
+    info(message, _data = null) {
         // 仅输出到控制台，不写入文件
         if (typeof logger !== 'undefined') {
             logger.info(`[ChatAI] ${message}`)
@@ -192,7 +192,7 @@ class LogService {
      * @param {string} message - 调试消息
      * @param {Object} data - 附加数据
      */
-    debug(message, data = null) {
+    debug(message, _data = null) {
         // 仅输出到控制台，不写入文件
         if (typeof logger !== 'undefined') {
             logger.debug?.(`[ChatAI] ${message}`) || logger.info?.(`[ChatAI] ${message}`)

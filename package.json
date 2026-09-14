@@ -31,6 +31,7 @@
         "express": "^5.2.1",
         "express-rate-limit": "^8.2.1",
         "gpt-tokenizer": "^4.0.0",
+        "highlight.js": "^11.12.0",
         "http-proxy-agent": "^9.1.0",
         "https-proxy-agent": "^9.1.0",
         "ioredis": "^6.0.0",

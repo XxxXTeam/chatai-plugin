@@ -9,7 +9,7 @@ import { chatLogger as logger } from '../src/core/utils/logger.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-const PluginBase = typeof plugin !== 'undefined' ? plugin : class {}
+const pluginBase = typeof plugin !== 'undefined' ? plugin : class {}
 
 /**
  * 表情包小偷服务
@@ -536,7 +536,7 @@ export const emojiThiefService = new EmojiThiefService()
 /**
  * 表情包小偷插件
  */
-export class EmojiThief extends PluginBase {
+export class EmojiThief extends pluginBase {
     constructor() {
         super({
             name: 'AI-表情包小偷',

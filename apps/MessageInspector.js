@@ -1,19 +1,8 @@
-import {
-    detectFramework as getBotFramework,
-    detectAdapter as getAdapter,
-    isMaster
-} from '../src/utils/platformAdapter.js'
+import { detectFramework as getBotFramework, detectAdapter as getAdapter } from '../src/utils/platformAdapter.js'
 import { formatTimeToBeiJing } from '../src/utils/common.js'
 import { renderService } from '../src/services/media/RenderService.js'
 import { statsService } from '../src/services/stats/StatsService.js'
-import { databaseService } from '../src/services/storage/DatabaseService.js'
-import {
-    IcqqMessageUtils,
-    ProtobufUtils,
-    ForwardMessageParser,
-    MsgRecordExtractor,
-    NapCatMessageUtils
-} from '../src/utils/messageParser.js'
+import { IcqqMessageUtils, ProtobufUtils, MsgRecordExtractor } from '../src/utils/messageParser.js'
 import { StandardBotApi } from '../src/core/platform/index.js'
 
 /**
@@ -21,13 +10,6 @@ import { StandardBotApi } from '../src/core/platform/index.js'
  */
 function getFramework() {
     return getBotFramework() // 'trss' 或 'miao'
-}
-
-/**
- * 检测适配器类型 (使用 bot.js 的 getAdapter)
- */
-function detectAdapter(e) {
-    return getAdapter(e)
 }
 
 export class MessageInspector extends plugin {
@@ -328,7 +310,6 @@ export class MessageInspector extends plugin {
      */
     async parseMessageComplete(e, rawMsg, options = {}) {
         const { maxDepth = 10, currentDepth = 0 } = options
-        const bot = e.bot || globalThis.Bot
 
         const result = {
             // 基础信息
@@ -1110,8 +1091,6 @@ export class MessageInspector extends plugin {
      */
     async buildForwardMessages(e, result, rawMsg) {
         const msgs = []
-        const botId = e.bot?.uin || e.self_id || globalThis.Bot?.uin || 10000
-        const nickname = '消息检查器'
 
         // 1. 基本信息
         const basicInfo = [
@@ -1513,7 +1492,7 @@ export class MessageInspector extends plugin {
                 showTimestamp: true
             })
             await this.reply(segment.image(imageBuffer))
-        } catch (err) {
+        } catch {
             // 文本回退
             await this.reply(
                 [

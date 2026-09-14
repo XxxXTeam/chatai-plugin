@@ -277,8 +277,6 @@ router.put('/admin', async (req, res) => {
     }
 })
 
-// ==================== 初始化引导 API ====================
-
 // GET /config/init-status - 获取初始化状态
 router.get('/init-status', (req, res) => {
     try {
@@ -332,8 +330,6 @@ router.post('/init-reset', async (req, res) => {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
-
-// ==================== 功能引导 Tour API ====================
 
 // GET /config/tour-status/:tourId - 获取引导完成状态
 router.get('/tour-status/:tourId', (req, res) => {
@@ -408,7 +404,7 @@ router.post('/tour-reset/:tourId', async (req, res) => {
 // POST /config/quick-setup - 快速配置（一键设置基础配置）
 router.post('/quick-setup', async (req, res) => {
     try {
-        const { channel, model, preset, triggerPrefixes } = req.body
+        const { channel, model, triggerPrefixes } = req.body
 
         // 如果提供了渠道配置，创建渠道
         if (channel) {
@@ -443,8 +439,6 @@ router.post('/quick-setup', async (req, res) => {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
-
-// ==================== MCP Server 暴露管理 ====================
 
 /**
  * GET /config/mcp-server - 获取 MCP Server 配置和运行状态

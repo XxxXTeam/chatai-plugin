@@ -165,7 +165,7 @@ export function calculateDelay(text, options = {}) {
  * @returns {Promise<{messageIds: string[], lastMessageId: string|null}>}
  */
 export async function sendSegmentedMessage(e, text, options = {}) {
-    const { quote = false, recallDelay = 0, segmented = true, onSegmentSent } = options
+    const { quote = false, segmented = true, onSegmentSent } = options
 
     const messageIds = []
     let lastMessageId = null

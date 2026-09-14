@@ -10,7 +10,13 @@ import { MemoryCategory, CategoryLabels, isValidCategory } from '../memory/Memor
 
 const router = express.Router()
 
-// ==================== 统计和用户列表 ====================
+function validateMemoryIdParam(req, res, next) {
+    const value = req.params.id
+    if (!/^\d+$/.test(value)) {
+        return res.status(400).json(ChaiteResponse.fail(null, 'id 必须是数字'))
+    }
+    next()
+}
 
 // GET /users - 获取所有有记忆的用户列表
 router.get('/users', async (req, res) => {
@@ -51,8 +57,6 @@ router.get('/categories', async (req, res) => {
     }
 })
 
-// ==================== 搜索 ====================
-
 // POST /search - 搜索记忆
 router.post('/search', async (req, res) => {
     try {
@@ -71,8 +75,6 @@ router.post('/search', async (req, res) => {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
-
-// ==================== 全局操作 ====================
 
 // DELETE /clear-all - 清空所有用户记忆（危险操作）
 router.delete('/clear-all', async (req, res) => {
@@ -95,8 +97,6 @@ router.delete('/clear-all', async (req, res) => {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
-
-// ==================== 用户记忆操作 ====================
 
 // GET /user/:userId - 获取用户完整记忆（树状结构）
 router.get('/user/:userId', async (req, res) => {
@@ -204,8 +204,6 @@ router.delete('/user/:userId', async (req, res) => {
     }
 })
 
-// ==================== 群组记忆操作 ====================
-
 // GET /group/:groupId - 获取群组记忆
 router.get('/group/:groupId', async (req, res) => {
     try {
@@ -245,10 +243,8 @@ router.get('/user/:userId/group/:groupId', async (req, res) => {
     }
 })
 
-// ==================== 单条记忆操作 ====================
-
 // GET /:id - 获取单条记忆
-router.get('/:id(\\d+)', async (req, res) => {
+router.get('/:id', validateMemoryIdParam, async (req, res) => {
     try {
         const memory = await memoryService.getMemoryById(parseInt(req.params.id))
         if (!memory) {
@@ -261,7 +257,7 @@ router.get('/:id(\\d+)', async (req, res) => {
 })
 
 // PUT /:id - 更新记忆
-router.put('/:id(\\d+)', async (req, res) => {
+router.put('/:id', validateMemoryIdParam, async (req, res) => {
     try {
         const { content, category, subType, confidence, metadata } = req.body
 
@@ -283,7 +279,7 @@ router.put('/:id(\\d+)', async (req, res) => {
 })
 
 // DELETE /:id - 删除记忆
-router.delete('/:id(\\d+)', async (req, res) => {
+router.delete('/:id', validateMemoryIdParam, async (req, res) => {
     try {
         const { hard = false } = req.query
         await memoryService.deleteMemory(parseInt(req.params.id), hard === 'true')
@@ -292,8 +288,6 @@ router.delete('/:id(\\d+)', async (req, res) => {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
-
-// ==================== 批量操作 ====================
 
 // POST /batch - 批量添加记忆
 router.post('/batch', async (req, res) => {
@@ -327,8 +321,6 @@ router.post('/merge/:userId', async (req, res) => {
     }
 })
 
-// ==================== 兼容旧 API ====================
-
 // POST / - 添加记忆（兼容旧接口）
 router.post('/', async (req, res) => {
     try {
@@ -355,7 +347,7 @@ router.post('/', async (req, res) => {
 /*
  * GET /:userId - 获取用户记忆（兼容旧接口，放在最后）
  *
- * 注意：本路由被上方的 GET /:id(\d+) 遮蔽，仅对**非纯数字** userId 可达（已实测）。
+ * 注意：本路由被上方的 GET /:id + validateMemoryIdParam 遮蔽，仅对**非纯数字** userId 可达（已实测）。
  * QQ 号恒为纯数字，因此 GET /api/memory/<QQ号> 走的是「按主键查单条记忆」，
  * 而非「查该用户的记忆列表」。要查用户记忆请使用无歧义的 GET /api/memory/user/:userId
  * （前端 lib/api.ts 用的就是后者）。此处保留是为了不破坏非数字 userId 的旧调用方。
@@ -391,7 +383,7 @@ router.delete('/:userId/:memoryId', async (req, res) => {
 /*
  * DELETE /:userId - 清空用户所有记忆（兼容旧接口）
  *
- * 注意：本路由被上方的 DELETE /:id(\d+) 遮蔽，仅对**非纯数字** userId 可达（已实测）。
+ * 注意：本路由被上方的 DELETE /:id + validateMemoryIdParam 遮蔽，仅对**非纯数字** userId 可达（已实测）。
  * DELETE /api/memory/<QQ号> 实际执行的是「按主键删除单条记忆」——前端 lib/api.ts 的
  * deleteMemory(memoryId) 正是依赖这一语义，故不能调整匹配顺序。
  * 要清空某个用户的全部记忆，请使用 DELETE /api/memory/user/:userId。

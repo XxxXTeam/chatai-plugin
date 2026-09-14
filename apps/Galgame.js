@@ -12,25 +12,16 @@ import {
     getAffectionLevel,
     processEventChoice,
     processEventWithCustomInput,
-    generateRandomRewards,
-    EVENT_TYPES,
     DAILY_EVENTS,
     EXPLORE_EVENTS,
     ITEM_TYPE_LABELS,
     ITEM_TYPE_ICONS
 } from '../src/services/galgame/index.js'
 import { getBotIds, isMessageProcessed, markMessageProcessed, isSelfMessage } from '../src/utils/messageDedup.js'
-import { parseReactionEvent, sendGroupMessage, getBot, sendReaction } from '../src/utils/eventAdapter.js'
+import { parseReactionEvent, sendGroupMessage, sendReaction } from '../src/utils/eventAdapter.js'
 import { parseUserMessage } from '../src/utils/messageParser.js'
 import chatLogger from '../src/core/utils/logger.js'
-import {
-    editSessions,
-    generateUUID,
-    SESSION_EXPIRE_MS,
-    EDITABLE_ENV_FIELDS,
-    EDITABLE_SESSION_FIELDS,
-    PROTECTED_FIELDS
-} from '../src/services/routes/gameRoutes.js'
+import { editSessions, generateUUID, SESSION_EXPIRE_MS } from '../src/services/routes/gameRoutes.js'
 import { getWebServer } from '../src/services/webServer.js'
 
 // 创建Game标签的logger
@@ -56,14 +47,6 @@ function cacheUserMessage(groupId, messageId, userId) {
             userMessageCache.delete(k)
         }
     }
-}
-
-/**
- * 获取缓存的用户消息
- */
-function getCachedUserMessage(groupId, messageId) {
-    const key = `${groupId || 'private'}_${messageId}`
-    return userMessageCache.get(key)
 }
 
 /**
@@ -616,7 +599,6 @@ ${createProgressBar(status.trust || 10, -100, 150)}
 function createProgressBar(value, min, max, length = 10) {
     const normalized = (value - min) / (max - min)
     const filled = Math.round(normalized * length)
-    const empty = length - filled
 
     let bar = ''
     for (let i = 0; i < length; i++) {
@@ -628,23 +610,6 @@ function createProgressBar(value, min, max, length = 10) {
     }
 
     return `[${bar}]`
-}
-
-/**
- * 格式化事件结果
- */
-function formatEventResult(event) {
-    if (!event || !event.result) return ''
-
-    const result = event.result
-    const successEmoji = result.success ? '✨' : '💫'
-    const affectionEmoji = result.affectionChange > 0 ? '💕' : result.affectionChange < 0 ? '💔' : '➖'
-
-    return `
-━━━━━ 事件触发 ━━━━━
-${successEmoji} ${result.eventName}: ${result.success ? '成功！' : '失败...'}
-🎲 判定: ${result.roll}% / ${result.rate}%
-${affectionEmoji} 好感度变化: ${result.affectionChange > 0 ? '+' : ''}${result.affectionChange}`
 }
 
 export class Galgame extends plugin {
@@ -1313,10 +1278,6 @@ export class Galgame extends plugin {
      * 导入游戏数据
      */
     async importGame() {
-        const e = this.e
-        const userId = String(e.user_id)
-        const groupId = e.group_id ? String(e.group_id) : null
-
         // 提示用户发送JSON数据
         await this.reply('📥 请发送导出的JSON数据（60秒内有效）')
 
@@ -1785,8 +1746,6 @@ ${urlText}
      * 创建角色
      */
     async createCharacter() {
-        const e = this.e
-
         await this.reply(`🎭 创建自定义角色
 
 请按以下格式发送角色信息：
@@ -2286,7 +2245,7 @@ ${urlText}
                     try {
                         await sendReaction(e, msgSeq, OPTION_EMOJIS[i].id, true, 1)
                         await new Promise(r => setTimeout(r, 200))
-                    } catch (err) {}
+                    } catch {}
                 }
             }
         } catch (err) {
@@ -2338,7 +2297,7 @@ ${urlText}
                     try {
                         await sendReaction(e, msgSeq, OPTION_EMOJIS[i].id, true, 1)
                         await new Promise(r => setTimeout(r, 200))
-                    } catch (err) {}
+                    } catch {}
                 }
             }
 
@@ -2348,7 +2307,7 @@ ${urlText}
                     try {
                         await sendReaction(e, msgSeq, OPTION_EMOJIS[i].id, true, 1)
                         await new Promise(r => setTimeout(r, 200))
-                    } catch (err) {}
+                    } catch {}
                 }
             }
         } catch (err) {

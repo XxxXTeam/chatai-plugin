@@ -16,20 +16,14 @@
  */
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'
-import { ensureScopeManager, isGroupFeatureEnabled } from '../src/services/scope/ScopeManager.js'
+import { isGroupFeatureEnabled } from '../src/services/scope/ScopeManager.js'
 import {
-    parseRecallEvent,
     parseBanEvent,
-    parseMemberChangeEvent,
-    parseEssenceEvent,
-    parseAdminChangeEvent,
     parseHonorEvent,
     getUserNickname as getAdapterUserNickname,
     getGroupName as getAdapterGroupName,
     getOriginalMessage,
     sendGroupMessage,
-    formatDuration,
-    getBot,
     checkEventProbability
 } from '../src/utils/eventAdapter.js'
 import { getAIResponse } from '../src/utils/common.js'

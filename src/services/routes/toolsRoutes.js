@@ -350,7 +350,6 @@ router.post('/toggle/:name', async (req, res) => {
     }
 })
 
-// ==================== 自定义工具 ====================
 router.get('/custom', async (req, res) => {
     try {
         const customTools = await toolRouteServices.customToolService.listConfiguredTools()
@@ -396,7 +395,6 @@ router.delete('/custom/:name', async (req, res) => {
     }
 })
 
-// ==================== JS工具 ====================
 router.get('/js', async (req, res) => {
     try {
         const jsTools = await toolRouteServices.customToolService.listSources()
@@ -559,7 +557,6 @@ router.post('/test', async (req, res) => {
     }
 })
 
-// ==================== 工具调用日志 ====================
 // GET /logs - 获取工具调用日志
 router.get('/logs', async (req, res) => {
     try {
@@ -587,8 +584,6 @@ router.delete('/logs', async (req, res) => {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
-
-// ==================== 一键操作 & 热重载 ====================
 
 // POST /builtin/enable-all - 一键启用所有工具
 router.post('/builtin/enable-all', async (req, res) => {
@@ -639,8 +634,6 @@ router.get('/stats', async (req, res) => {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
-
-// ==================== 危险工具管理 ====================
 
 // GET /dangerous - 获取危险工具列表和配置
 router.get('/dangerous', async (req, res) => {
@@ -750,8 +743,6 @@ router.post('/dangerous/toggle', async (req, res) => {
     }
 })
 
-// ==================== 事件处理概率配置 ====================
-
 // GET /event-probability - 获取事件处理概率配置
 router.get('/event-probability', async (req, res) => {
     try {
@@ -792,8 +783,6 @@ router.put('/event-probability', async (req, res) => {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
-
-// ==================== 文件监听状态 ====================
 
 // GET /watcher/status - 获取文件监听器状态
 router.get('/watcher/status', async (req, res) => {

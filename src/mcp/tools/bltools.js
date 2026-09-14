@@ -1183,7 +1183,6 @@ export const bltoolsTools = [
         },
         handler: async (args, ctx) => {
             const { prompt, width = 2400, height = 1600 } = args
-            const e = ctx?.getEvent?.()
 
             if (!prompt?.trim()) {
                 return { error: '思维导图描述不能为空' }

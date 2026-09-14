@@ -78,6 +78,20 @@ export class GeminiClient extends AbstractClient {
     constructor(options, context) {
         super(options, context)
         this.name = 'gemini'
+        this._genAICache = new Map() // apiKey -> GoogleGenerativeAI 实例缓存
+    }
+
+    /**
+     * 复用 GoogleGenerativeAI 实例：同一 apiKey 只创建一次，避免每个请求重复初始化 SDK。
+     * @param {string} apiKey - API 密钥
+     * @returns {GoogleGenerativeAI} 缓存的实例
+     */
+    _getGenAI(apiKey) {
+        const key = String(apiKey || '')
+        if (!this._genAICache.has(key)) {
+            this._genAICache.set(key, new GoogleGenerativeAI(apiKey))
+        }
+        return this._genAICache.get(key)
     }
 
     /**
@@ -103,8 +117,8 @@ export class GeminiClient extends AbstractClient {
      * @returns {Promise<HistoryMessage & { usage: ModelUsage }>}
      */
     async _sendMessage(histories, apiKey, options) {
-        // 支持自定义 baseUrl 和端点（用于代理服务）
-        const genAI = new GoogleGenerativeAI(apiKey)
+        // 复用实例（按 apiKey 缓存），避免每个请求重复初始化 SDK
+        const genAI = this._getGenAI(apiKey)
 
         // 支持自定义端点配置
         const customChatPath = this.endpoints?.chat || this.chatPath
@@ -283,7 +297,7 @@ export class GeminiClient extends AbstractClient {
         }
 
         const requestOptions = this.buildGeminiRequestOptions(baseUrl)
-        const genAI = new GoogleGenerativeAI(apiKey, requestOptions)
+        const genAI = this._getGenAI(apiKey)
         const model = resolveModelName(options.model, DEFAULT_GEMINI_MODEL)
 
         /*
@@ -432,7 +446,7 @@ export class GeminiClient extends AbstractClient {
             logger.debug(`[Gemini适配器] 使用自定义嵌入端点: ${baseUrl}`)
         }
 
-        const genAI = new GoogleGenerativeAI(apiKey)
+        const genAI = this._getGenAI(apiKey)
         const requestOptions = this.buildGeminiRequestOptions(baseUrl)
         const model = options.model || 'text-embedding-004'
 

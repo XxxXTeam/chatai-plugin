@@ -580,7 +580,8 @@ export class ChannelManager {
         const src = advanced || {}
         return {
             streaming: {
-                enabled: src.streaming?.enabled === true,
+                // 未显式配置时默认启用流式请求（显式传 false 才关闭）
+                enabled: src.streaming?.enabled !== false,
                 chunkSize: src.streaming?.chunkSize || 1024
             },
             thinking: {
@@ -649,8 +650,6 @@ export class ChannelManager {
         let baseUrlLatencies = {}
         if (normalizedUrls.length > 1) {
             try {
-                // 创建临时渠道对象用于测试
-                const tempChannel = { baseUrls: normalizedUrls, adapterType: channelData.adapterType }
                 const testResults = await Promise.allSettled(normalizedUrls.map(url => this.testBaseUrlLatency(url)))
 
                 const validResults = []
@@ -1242,7 +1241,7 @@ export class ChannelManager {
             throw new Error('Channel not found')
         }
 
-        const { model, skipModelCheck = false } = options
+        const { model } = options
 
         try {
             if (channel.adapterType === 'openai') {

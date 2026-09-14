@@ -880,8 +880,8 @@ export class ScopeManager {
         // 从配置读取优先级顺序
         const { default: config } = await import('../../../config/config.js')
         // 根据场景选择不同的优先级
-        const defaultPriority = isPrivate ? ['private', 'user', 'default'] : ['group_user', 'group', 'user', 'default']
-        const priorityOrder = isPrivate ? defaultPriority : config.get('personality.priority') || defaultPriority
+        const defaultPriority = isPrivate ? ['private', 'user', 'default'] : ['group', 'group_user', 'user', 'default']
+        const priorityOrder = config.get('personality.priority') || defaultPriority
 
         let effectivePrompt = null
         let effectivePresetId = null
@@ -1762,8 +1762,6 @@ export class ScopeManager {
         }
         return false
     }
-
-    // ==================== 群组使用次数限制 ====================
 
     /**
      * 获取群组使用限制配置

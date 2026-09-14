@@ -129,8 +129,6 @@ class KnowledgeGraphService {
         return databaseService.db
     }
 
-    // ========== 实体操作 ==========
-
     /**
      * 创建实体
      * @param {Object} entity - 实体数据
@@ -679,8 +677,6 @@ class KnowledgeGraphService {
             .map(row => this._parseEntityRow(row))
     }
 
-    // ========== 关系操作 ==========
-
     /**
      * 创建关系
      */
@@ -965,8 +961,6 @@ class KnowledgeGraphService {
         return stmt.all(...params).map(row => this._parseRelationshipRow(row))
     }
 
-    // ========== 图查询 ==========
-
     /**
      * 查询子图（N 跳邻居）
      */
@@ -1149,8 +1143,6 @@ class KnowledgeGraphService {
         return { entities, relationships, path: entityIds }
     }
 
-    // ========== 作用域共享 ==========
-
     /**
      * 创建共享配置
      */
@@ -1243,8 +1235,6 @@ class KnowledgeGraphService {
         `)
         return stmt.run(normalizedSourceScopeId, normalizedTargetScopeId).changes > 0
     }
-
-    // ========== 知识上下文获取 ==========
 
     /**
      * 获取用户的知识上下文（用于对话）
@@ -1365,8 +1355,6 @@ class KnowledgeGraphService {
 
         return lines.join('\n')
     }
-
-    // ========== 导入导出 ==========
 
     /**
      * 按稳定顺序迭代作用域实体。
@@ -1527,8 +1515,6 @@ class KnowledgeGraphService {
 
         return runImport()
     }
-
-    // ========== 私有方法 ==========
 
     _generateEntityId(scopeId, name) {
         const hash = crypto.createHash('md5').update(`${scopeId}:${name}`).digest('hex').slice(0, 8)

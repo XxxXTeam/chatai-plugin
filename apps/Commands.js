@@ -1133,7 +1133,10 @@ ${dialogText}${truncatedNote}`
             const emojiCount = recentMessages.filter(m => /[\u{1F300}-\u{1F9FF}]|[😀-🙏]/u.test(m.content || '')).length
             const atmosphere = {
                 positivity: Math.min(95, Math.round(50 + (emojiCount / totalMsgs) * 100 + Math.random() * 20)),
-                activity: Math.min(95, Math.round(30 + Math.min(totalMsgs / 3, 50) + Math.random() * 15)),
+                activity: Math.min(
+                    95,
+                    Math.round(30 + Math.min(totalMsgs / 3, 50) + Math.min(avgMsgLen / 5, 10) + Math.random() * 15)
+                ),
                 interaction: Math.min(
                     95,
                     Math.round(
@@ -2055,7 +2058,7 @@ async function getMemberInfo(e, userId) {
         } catch {}
 
         return null
-    } catch (err) {
+    } catch {
         return null
     }
 }

@@ -185,7 +185,6 @@ export class ChatAgent {
             presetId,
             adapterType,
             event,
-            mode = 'chat',
             debugMode = false,
             prefixPersona = null,
             disableTools = false,
@@ -220,12 +219,13 @@ export class ChatAgent {
         await mcpManager.init()
 
         const groupId = options.groupId || event?.group_id || null
-        const pureUserId = (event?.user_id || userId)?.toString()
+        const pureUserId = String(event?.user_id ?? userId).trim()
         const cleanUserId = pureUserId
 
         // 确定会话ID
         let conversationId
         if (groupId) {
+            // 群聊：始终使用共享上下文
             conversationId = `group:${groupId}`
         } else {
             conversationId = contextManager.getConversationId(cleanUserId, null)
@@ -516,7 +516,7 @@ export class ChatAgent {
         }
 
         /* 温度优先级：模型级覆盖 > 渠道覆盖(禁用/固定) > 调用方 > 渠道默认 > 预设 > 0.7 */
-        const { temperature: resolvedTemperature, source: resolvedTempSource } = resolveTemperature({
+        const { temperature: resolvedTemperature } = resolveTemperature({
             actualModel,
             requestOptions: { temperature: overrideTemperature },
             preset: currentPreset,
@@ -557,6 +557,7 @@ export class ChatAgent {
                 channel,
                 clientOptions,
                 llmModel,
+                baseSystemPrompt,
                 debugInfo,
                 resolveThinkingOptions,
                 resolveToolChoiceForChannel
@@ -603,8 +604,7 @@ export class ChatAgent {
                     ...(topicText ? { recentTopics: [topicText] } : {})
                 })
             }
-
-            // 记忆由模型通过 save_user_memory 工具主动添加，不再自动提取
+            await this._triggerMemoryExtraction(cleanUserId, message, textContent, groupId)
         }
 
         // 收集调试信息
@@ -687,7 +687,7 @@ export class ChatAgent {
     /**
      * 获取作用域配置
      */
-    async _getScopeConfig(groupId, cleanUserId, event) {
+    async _getScopeConfig(groupId, cleanUserId, _event) {
         let scopePresetId = null
         let scopeModelId = null
         let scopeFeatures = {}
@@ -915,7 +915,8 @@ export class ChatAgent {
         if (prefixPersona) {
             const prefixPreset = presetManager.get(prefixPersona)
             if (prefixPreset?.systemPrompt) {
-                systemPrompt = prefixPreset.systemPrompt
+                // 前缀预设存在时拼接到 base 之前
+                systemPrompt = prefixPreset.systemPrompt + (systemPrompt ? '\n\n' + systemPrompt : '')
             } else {
                 systemPrompt = prefixPersona + (systemPrompt ? '\n\n' + systemPrompt : '')
             }
@@ -932,7 +933,8 @@ export class ChatAgent {
             // 优先使用新的结构化记忆服务
             const structuredMemoryContext = await memoryService.buildMemoryContext(cleanUserId, {
                 groupId: groupId ? String(groupId) : null,
-                maxItems: 15
+                maxItems: 15,
+                query: message
             })
 
             if (structuredMemoryContext) {
@@ -1206,7 +1208,7 @@ export class ChatAgent {
      * 构建客户端选项
      */
     async _buildClientOptions(options) {
-        const { model, channel, adapterType, event, presetId, tools, preset, toolChoice } = options
+        const { channel, event, presetId, tools, preset, toolChoice } = options
 
         const clientOptions = {
             enableTools: tools?.length > 0,
@@ -1287,8 +1289,15 @@ export class ChatAgent {
      * 发送请求（带回退）
      */
     async _sendWithFallback(client, userMessage, requestOptions, context) {
-        const { channel, clientOptions, llmModel, debugInfo, resolveThinkingOptions, resolveToolChoiceForChannel } =
-            context
+        const {
+            channel,
+            clientOptions,
+            llmModel,
+            baseSystemPrompt,
+            resolveThinkingOptions,
+            resolveToolChoiceForChannel
+        } = context
+        const resolveChannelPrompt = targetChannel => resolveChannelSystemPrompt(baseSystemPrompt, targetChannel)
 
         const fallbackConfig = config.get('llm.fallback') || {}
         const fallbackEnabled = fallbackConfig.enabled !== false
@@ -1421,11 +1430,7 @@ export class ChatAgent {
             lastError,
             userId,
             groupId,
-            stream,
-            debugInfo,
-            messages,
-            systemPrompt,
-            client
+            stream
         } = options
 
         try {
@@ -1469,7 +1474,7 @@ export class ChatAgent {
     /**
      * 自动清理处理
      */
-    async _handleAutoClean(options, error) {
+    async _handleAutoClean(options, _error) {
         try {
             const fullUserId = String(options.userId)
             const pureUserId = fullUserId

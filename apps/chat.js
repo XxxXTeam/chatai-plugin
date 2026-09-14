@@ -1,8 +1,7 @@
 import config from '../config/config.js'
-import { cleanCQCode, parseUserMessage, segment } from '../src/utils/messageParser.js'
+import { parseUserMessage, segment } from '../src/utils/messageParser.js'
 import { isDebugEnabled } from './Commands.js'
 import {
-    escapeRegExp,
     recordSentMessage,
     markMessageProcessed,
     startProcessingMessage,
@@ -19,7 +18,6 @@ import { chatService } from '../src/services/llm/ChatService.js'
 import { memoryManager } from '../src/services/storage/MemoryManager.js'
 import { statsService } from '../src/services/stats/StatsService.js'
 import { ensureScopeManager } from '../src/services/scope/ScopeManager.js'
-import { databaseService } from '../src/services/storage/DatabaseService.js'
 import { checkTriggerAccess, sendForwardMsg as platformSendForwardMsg } from '../src/utils/platformAdapter.js'
 import { mcpManager } from '../src/mcp/McpManager.js'
 import { setToolContext } from '../src/core/utils/toolAdapter.js'
@@ -332,7 +330,6 @@ export class Chat extends plugin {
                 ))
         if (groupCfg.at && isAtBot) {
             const isReplyToBot = isReplyToBotMessage(e)
-            const hasReply = !!e.source
             const cleanedMsg = this.cleanAtBot(rawMsg)
 
             if (!cleanedMsg.trim()) return { triggered: false }
@@ -551,14 +548,6 @@ export class Chat extends plugin {
         }
 
         const debugLogs = []
-        const addDebugLog = (title, content) => {
-            if (debugMode) {
-                debugLogs.push({
-                    title,
-                    content: typeof content === 'string' ? content : JSON.stringify(content, null, 2)
-                })
-            }
-        }
 
         // 解析消息
         const featuresConfig = config.get('features') || {}
@@ -883,7 +872,7 @@ export class Chat extends plugin {
 
         // 匹配 @数字 或 @名字 的模式（非真实at段）
         // 格式: @123456789 或 @昵称
-        const atPattern = /@(\d{5,12}|[^\s@]{1,20})(?=\s|$|[，。！？,\.!?])/g
+        const atPattern = /@(\d{5,12}|[^\s@]{1,20})(?=\s|$|[，。！？,.!?])/g
 
         const parts = []
         let lastIndex = 0
@@ -1023,25 +1012,80 @@ export class Chat extends plugin {
 
     /**
      * 发送调试信息
+     *
+     * 将各子模块信息通过内层合并转发分组，再包进一个外层大合并转发（嵌套转发），
+     * 单段超过上限时自动分片，避免被 NapCat/icqq 静默截断。
      */
     async sendDebugInfo(debugInfo, debugLogs) {
         const di = debugInfo
-        if (di.channel) debugLogs.push({ title: '📡 渠道信息', content: JSON.stringify(di.channel, null, 2) })
-        if (di.preset) debugLogs.push({ title: '🎭 预设信息', content: JSON.stringify(di.preset, null, 2) })
-        if (di.scope) debugLogs.push({ title: '🎯 Scope信息', content: JSON.stringify(di.scope, null, 2) })
-        if (di.memory) debugLogs.push({ title: '🧠 记忆信息', content: JSON.stringify(di.memory, null, 2) })
+        const truncate = (value, max = 1800) => {
+            const s = typeof value === 'string' ? value : JSON.stringify(value)
+            if (!s) return ''
+            return s.length > max ? `${s.substring(0, max)}...（已截断）` : s
+        }
+        const push = (title, value) => {
+            if (value === undefined || value === null) return
+            debugLogs.push({ title, content: truncate(value) })
+        }
+
+        push('📡 渠道信息', di.channel)
+        if (di.channel?.channelId) push('🔀 渠道切换链', di.switchChain)
+        if (di.channel) push('🔁 重试统计', di.retryStats)
+        if (di.channel)
+            push('🎯 实际模型/渠道', {
+                usedModel: di.usedModel,
+                usedChannel: di.usedChannel,
+                fallbackUsed: di.fallbackUsed
+            })
+        push('🎭 预设信息', di.preset)
+        push('🎯 Scope信息', di.scope)
+        push('🧠 记忆信息', di.memory)
+        push('📚 知识库信息', di.knowledge)
         if (di.request)
             debugLogs.push({
                 title: '📤 请求信息',
-                content: JSON.stringify({ model: di.request?.model, messagesCount: di.request?.messagesCount }, null, 2)
+                content: truncate({ model: di.request?.model, messagesCount: di.request?.messagesCount })
             })
-        if (di.response) debugLogs.push({ title: '📥 响应信息', content: JSON.stringify(di.response, null, 2) })
+        push('🛠️ 可用工具', di.availableTools)
+        push('🔧 工具调用', di.toolCalls)
+        push('📥 响应信息', di.response)
         if (di.timing) debugLogs.push({ title: '⏱️ 耗时', content: `${di.timing.duration}ms` })
 
         if (debugLogs.length > 0) {
             try {
-                const debugMessages = debugLogs.map(log => `【${log.title}】\n${log.content}`)
-                await this.sendForwardMsg('🔍 Debug调试信息', debugMessages)
+                const { StandardMessage } = await import('../src/core/platform/index.js')
+                const selfId = this.e.self_id || this.e.user_id || this.e.bot?.uin || 10000
+
+                // 内层：每个 debug 分组作为一个子合并转发节点；
+                // 单段超长时按 1800 字符分片为多个子节点
+                const splitIntoChunks = (text, size = 1800) => {
+                    const lines = String(text || '').split('\n')
+                    const chunks = []
+                    let current = ''
+                    for (const line of lines) {
+                        if ((current + '\n' + line).trim().length > size && current) {
+                            chunks.push(current)
+                            current = line
+                        } else {
+                            current = current ? `${current}\n${line}` : line
+                        }
+                    }
+                    if (current) chunks.push(current)
+                    return chunks.length ? chunks : ['']
+                }
+
+                const outerNodes = debugLogs.map(log => {
+                    const chunks = splitIntoChunks(`【${log.title}】\n${log.content}`)
+                    const childNodes = chunks.map(part => StandardMessage.nodeItem(selfId, log.title, part))
+                    // 内层合并转发 = 一个 nestedForward 节点
+                    return {
+                        user_id: selfId,
+                        nickname: log.title,
+                        message: StandardMessage.nestedForward(log.title, childNodes)
+                    }
+                })
+
+                await platformSendForwardMsg(this.e, '🔍 Debug调试信息', outerNodes)
             } catch {}
         }
     }

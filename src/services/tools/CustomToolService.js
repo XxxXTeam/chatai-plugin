@@ -104,10 +104,10 @@ export function validateCustomToolHandler(value) {
         throw new CustomToolValidationError('handler_code 不能为空', 'CUSTOM_TOOL_HANDLER_REQUIRED')
     }
     const code = value.trim()
-    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+    const asyncFunctionCtor = Object.getPrototypeOf(async () => {}).constructor
     try {
         // 仅编译函数体，不执行模型生成代码。
-        new AsyncFunction('args', 'ctx', code)
+        new asyncFunctionCtor('args', 'ctx', code)
     } catch (error) {
         throw new CustomToolValidationError(`handler_code 语法错误: ${error.message}`, 'CUSTOM_TOOL_HANDLER_SYNTAX')
     }

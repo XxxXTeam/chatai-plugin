@@ -196,7 +196,7 @@ class KnowledgeGraphExtractor {
     /**
      * 提取实体
      */
-    async extractEntities(conversationText, scopeId) {
+    async extractEntities(conversationText, _scopeId) {
         const client = await this._getLlmClient()
         if (!client) return []
 
@@ -226,7 +226,7 @@ class KnowledgeGraphExtractor {
     /**
      * 提取关系
      */
-    async extractRelationships(conversationText, entities, scopeId) {
+    async extractRelationships(conversationText, entities, _scopeId) {
         const client = await this._getLlmClient()
         if (!client) return []
 
@@ -260,7 +260,7 @@ class KnowledgeGraphExtractor {
     /**
      * 从用户消息模式中提取简单实体（无需 LLM）
      */
-    extractSimpleEntities(text, scopeId) {
+    extractSimpleEntities(text, _scopeId) {
         const entities = []
 
         // 匹配 "我是XXX"、"我叫XXX" 等自我介绍
@@ -563,7 +563,7 @@ class KnowledgeGraphExtractor {
         let mergedCount = 0
 
         // 对每种类型进行去重
-        for (const [type, typeEntities] of Object.entries(byType)) {
+        for (const [, typeEntities] of Object.entries(byType)) {
             for (let i = 0; i < typeEntities.length; i++) {
                 for (let j = i + 1; j < typeEntities.length; j++) {
                     const similarity = this._calculateSimilarity(typeEntities[i].name, typeEntities[j].name)

@@ -392,8 +392,6 @@ export function createGameRoutes(authMiddleware) {
         })
     )
 
-    // ========== 在线编辑会话API (无需认证，使用UUID访问) ==========
-
     // POST /api/game/edit/create - 创建临时编辑会话
     router.post(
         '/edit/create',

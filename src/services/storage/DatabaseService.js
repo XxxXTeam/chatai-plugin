@@ -6,8 +6,6 @@ import { hashContent as hashContentUtil } from '../../utils/common.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-
-// 统一数据目录到插件的 data 文件夹
 const PLUGIN_DATA_DIR = path.resolve(__dirname, '../../../data')
 
 const safeLogger = {
@@ -71,8 +69,6 @@ class DatabaseService {
 
     init(dataDir = null) {
         if (this.initialized) return
-
-        // 始终使用插件的 data 目录
         const targetDir = dataDir || this.dataDir
 
         if (!fs.existsSync(targetDir)) {
@@ -269,6 +265,14 @@ class DatabaseService {
             CREATE INDEX IF NOT EXISTS idx_struct_mem_user_group ON structured_memories(user_id, group_id);
             CREATE INDEX IF NOT EXISTS idx_struct_mem_active ON structured_memories(is_active);
         `)
+        const structCols = this.db.prepare(`PRAGMA table_info(structured_memories)`).all()
+        const hasCol = name => structCols.some(col => col.name === name)
+        if (!hasCol('last_access_at')) {
+            this.db.exec(`ALTER TABLE structured_memories ADD COLUMN last_access_at INTEGER`)
+        }
+        if (!hasCol('access_count')) {
+            this.db.exec(`ALTER TABLE structured_memories ADD COLUMN access_count INTEGER DEFAULT 0`)
+        }
     }
 
     /**
@@ -318,20 +322,11 @@ class DatabaseService {
      */
     searchMemories(userId, query, limit = 10) {
         this.ensureInit()
-        // 修复 "LIKE or GLOB pattern too complex" 错误
-        // 1. 限制查询字符串长度（防止过长导致模式复杂）
-        // 2. 转义特殊字符
         if (!query || typeof query !== 'string') {
             return []
         }
-
-        // 限制查询长度为200字符
         let safeQuery = query.substring(0, 200)
-
-        // 转义 LIKE 特殊字符: % _ [ ]
         safeQuery = safeQuery.replace(/[%_\[\]]/g, '\\$&').trim()
-
-        // 如果查询为空，返回空数组
         if (!safeQuery) {
             return []
         }

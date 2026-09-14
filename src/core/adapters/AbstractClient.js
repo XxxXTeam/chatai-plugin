@@ -8,7 +8,7 @@ import {
     SendMessageOption
 } from '../types/index.js'
 import DefaultHistoryManager from '../utils/history.js'
-import { asyncLocalStorage, extractClassName, getKey } from '../utils/index.js'
+import { asyncLocalStorage, getKey } from '../utils/index.js'
 import { logService } from '../../services/stats/LogService.js'
 import { toolApprovalService } from '../../services/tools/ToolApprovalService.js'
 import { attachToolMetadata, getToolDefinitionName, getToolIdentity } from './tooling.js'
@@ -276,7 +276,7 @@ export function parseXmlToolCalls(text) {
     cleanText = cleanText.replace(invokeRegex, '').trim()
     const fixMalformedJson = jsonStr => {
         let fixed = jsonStr
-        fixed = fixed.replace(/"arguments"\s*:\s*"(\{(?:[^"\\]|\\.)*\})(\}+)"/g, (match, validJson, extraBraces) => {
+        fixed = fixed.replace(/"arguments"\s*:\s*"(\{(?:[^"\\]|\\.)*\})(\}+)"/g, (match, validJson) => {
             let braceCount = 0
             for (const char of validJson) {
                 if (char === '{') braceCount++
@@ -896,7 +896,14 @@ async function urlToBase64(url, defaultMimeType = 'application/octet-stream', op
             // 使定时器残留到超时时长结束才被回收
             const timeoutId = setTimeout(() => controller.abort(), URL_TO_BASE64_CONFIG.timeout)
             try {
-                const isQQPic = url.includes('gchat.qpic.cn') || url.includes('c2cpicdw.qpic.cn')
+                // SSRF 预检
+                const { assertSafeUrl } = await import('../../mcp/tools/helpers.js')
+                await assertSafeUrl(url).catch(() => {})
+                const isQQPic =
+                    url.includes('gchat.qpic.cn') ||
+                    url.includes('c2cpicdw.qpic.cn') ||
+                    url.includes('p.qpic.cn') ||
+                    url.includes('multimedia.nt.qq.com')
                 const referer = isQQPic ? 'https://qzone.qq.com/' : new URL(url).origin + '/'
 
                 const response = await fetch(url, {
@@ -1726,7 +1733,7 @@ export class AbstractClient {
      * @param {SendMessageOption | Partial<SendMessageOption>} [options]
      * @returns {Promise<AsyncGenerator<string, void, unknown>>}
      */
-    async streamMessage(history, options) {
+    async streamMessage(_history, _options) {
         throw new Error('Method not implemented.')
     }
 
@@ -1753,7 +1760,7 @@ export class AbstractClient {
      * @param {string} modelId - Model ID
      * @returns {Promise<Object>}
      */
-    async getModelInfo(modelId) {
+    async getModelInfo(_modelId) {
         throw new Error('Method not implemented.')
     }
 

@@ -1,9 +1,8 @@
-import { marked } from 'marked'
 import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { logService } from '../stats/LogService.js'
-import { generateModernSummaryHtml } from './templates/groupSummaryModern.js'
+import { renderMarkdownToCanvas } from './canvasRenderer.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -11,21 +10,11 @@ const __dirname = path.dirname(__filename)
 // 插件根目录
 const PLUGIN_ROOT = path.join(__dirname, '../../../')
 
-// 加载 puppeteer
-let puppeteer = null
-try {
-    puppeteer = (await import('puppeteer')).default
-} catch (e) {
-    logService.warn('[RenderService] Puppeteer 加载失败，图片渲染将不可用')
-}
-
 let canvasModule = null
 try {
     canvasModule = await import('@napi-rs/canvas')
 } catch (e) {
-    if (e.code === 'ERR_MODULE_NOT_FOUND') {
-    } else {
-    }
+    logService.debug('[RenderService] 可选画布模块不可用:', e?.message)
 }
 
 /**
@@ -34,8 +23,6 @@ try {
  */
 class RenderService {
     constructor() {
-        this.browser = null
-        this.browserLaunchPromise = null
         this.exitHookRegistered = false
         this.defaultTheme = 'light'
         this.templateDir = path.join(__dirname, '../../resources/templates')
@@ -393,91 +380,10 @@ class RenderService {
             showTimestamp
         })
     }
-
-    /**
-     * 获取或创建浏览器实例
-     * 使用 in-flight Promise 去重：判断与赋值之间隔着 await，
-     * 并发调用会各自启动一个 Chromium 并互相覆盖引用，导致进程永不回收
-     * @returns {Promise<Object>} puppeteer 浏览器实例
-     */
-    async getBrowser() {
-        if (this.browser && this.browser.isConnected()) {
-            return this.browser
-        }
-
-        // 已有启动中的请求则复用其结果
-        if (this.browserLaunchPromise) {
-            return await this.browserLaunchPromise
-        }
-
-        this.browserLaunchPromise = (async () => {
-            try {
-                const browser = await puppeteer.launch({
-                    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-                    headless: true,
-                    timeout: 30000
-                })
-                this.browser = browser
-                this.registerExitHook()
-                return browser
-            } finally {
-                this.browserLaunchPromise = null
-            }
-        })()
-
-        return await this.browserLaunchPromise
-    }
-
-    /**
-     * 注册进程退出钩子，确保 Chromium 子进程随主进程一起结束
-     * @returns {void}
-     */
-    registerExitHook() {
-        if (this.exitHookRegistered || typeof process === 'undefined') return
-        this.exitHookRegistered = true
-
-        // exit 事件内无法等待异步操作，只能同步终止子进程
-        process.once('exit', () => {
-            try {
-                const child = this.browser?.process?.()
-                if (child && !child.killed) {
-                    child.kill('SIGKILL')
-                }
-            } catch (e) {}
-        })
-    }
-
-    /**
-     * 关闭浏览器实例
-     * @returns {Promise<void>}
-     */
-    async closeBrowser() {
-        // 若正在启动，先等待其完成，否则关闭后仍会冒出一个游离实例
-        if (this.browserLaunchPromise) {
-            try {
-                await this.browserLaunchPromise
-            } catch (e) {}
-        }
-
-        if (this.browser) {
-            try {
-                await this.browser.close()
-            } catch (e) {
-                logService.warn('[RenderService] 关闭浏览器失败:', e.message)
-            }
-            this.browser = null
-        }
-    }
-
-    /**
-     * 加载字体（Canvas渲染需要）
-     */
     async loadFonts() {
         if (!canvasModule || this.fontLoaded) return
         try {
             const { GlobalFonts } = canvasModule
-
-            // 优先使用插件自带字体
             const pluginFontDir = path.join(PLUGIN_ROOT, 'data/font')
             const pluginFonts = [
                 { path: path.join(pluginFontDir, 'LXGWNeoXiHeiScreen.ttf'), name: 'LXGW' },
@@ -495,8 +401,6 @@ class RenderService {
                     }
                 }
             }
-
-            // 回退到系统字体
             if (!this.fontLoaded) {
                 const systemFontPaths = [
                     '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
@@ -844,156 +748,6 @@ class RenderService {
     }
 
     /**
-     * 保护数学公式，避免被Markdown解析器处理
-     * @param {string} text
-     * @returns {{ text: string, expressions: string[] }}
-     */
-    protectMathExpressions(text) {
-        const expressions = []
-        // 保护块级公式 $$...$$
-        let protected_ = text.replace(/\$\$([\s\S]+?)\$\$/g, match => {
-            expressions.push(match)
-            return `MATHBLOCK${expressions.length - 1}END`
-        })
-        // 保护行内公式 $...$
-        protected_ = protected_.replace(/\$([^$\n]+?)\$/g, match => {
-            expressions.push(match)
-            return `MATHINLINE${expressions.length - 1}END`
-        })
-        return { text: protected_, expressions }
-    }
-
-    /**
-     * 恢复数学公式
-     * @param {string} html
-     * @param {string[]} expressions
-     * @returns {string}
-     */
-    restoreMathExpressions(html, expressions) {
-        let restored = html
-        expressions.forEach((expr, index) => {
-            restored = restored.replace(`MATHBLOCK${index}END`, expr)
-            restored = restored.replace(`MATHINLINE${index}END`, expr)
-        })
-        return restored
-    }
-
-    /**
-     * 获取主题样式
-     * @param {string} theme - 'light' | 'dark' | 'auto'
-     * @returns {string}
-     */
-    getThemeStyles(theme = 'light') {
-        const themes = {
-            light: {
-                bg: '#f7f7f7',
-                containerBg: '#ffffff',
-                text: '#333333',
-                heading: '#1a1a1a',
-                accent: '#0056b3',
-                border: 'rgba(0,0,0,0.1)',
-                codeBg: '#f4f4f4'
-            },
-            dark: {
-                bg: '#1a1a2e',
-                containerBg: '#16213e',
-                text: '#e4e4e4',
-                heading: '#ffffff',
-                accent: '#4da6ff',
-                border: 'rgba(255,255,255,0.1)',
-                codeBg: '#0f0f23'
-            }
-        }
-        const t = themes[theme] || themes.light
-        return `
-            body { 
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif; 
-                padding: 20px; 
-                background-color: ${t.bg}; 
-                color: ${t.text};
-                margin: 0;
-            }
-            h1, h2, h3, h4 { color: ${t.heading}; margin-top: 1.5em; margin-bottom: 0.5em; }
-            h1 { font-size: 1.8em; border-bottom: 2px solid ${t.accent}; padding-bottom: 0.3em; }
-            h2 { font-size: 1.4em; }
-            h3 { font-size: 1.2em; }
-            ul, ol { padding-left: 1.5em; }
-            li { margin-bottom: 0.5em; line-height: 1.6; }
-            strong { color: ${t.accent}; }
-            p { line-height: 1.8; margin: 0.8em 0; }
-            code { 
-                background: ${t.codeBg}; 
-                padding: 0.2em 0.4em; 
-                border-radius: 4px; 
-                font-size: 0.9em;
-            }
-            pre { 
-                background: ${t.codeBg}; 
-                padding: 1em; 
-                border-radius: 8px; 
-                overflow-x: auto;
-            }
-            blockquote {
-                border-left: 4px solid ${t.accent};
-                margin: 1em 0;
-                padding: 0.5em 1em;
-                background: ${t.codeBg};
-                border-radius: 0 8px 8px 0;
-            }
-            hr { 
-                border: none; 
-                border-top: 1px solid ${t.border}; 
-                margin: 1.5em 0;
-            }
-            .container { 
-                max-width: 800px; 
-                margin: auto; 
-                background: ${t.containerBg}; 
-                padding: 30px; 
-                border-radius: 12px; 
-                box-shadow: 0 4px 20px ${t.border};
-            }
-            .header {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                margin-bottom: 20px;
-            }
-            .header-icon {
-                width: 48px;
-                height: 48px;
-                border-radius: 50%;
-                background: linear-gradient(135deg, ${t.accent}, #6366f1);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                color: white;
-                font-size: 24px;
-            }
-            .timestamp {
-                color: ${t.text};
-                opacity: 0.6;
-                font-size: 0.85em;
-                margin-top: 20px;
-                text-align: right;
-            }
-            table {
-                width: 100%;
-                border-collapse: collapse;
-                margin: 1em 0;
-            }
-            th, td {
-                border: 1px solid ${t.border};
-                padding: 0.6em 1em;
-                text-align: left;
-            }
-            th {
-                background: ${t.codeBg};
-            }
-        `
-    }
-
-    /**
      * 渲染Markdown为图片
      * @param {Object} options
      * @param {string} options.markdown - Markdown内容
@@ -1016,147 +770,20 @@ class RenderService {
             showTimestamp = true
         } = options
 
-        const cleanedMd = this.cleanMarkdown(markdown, { stripEmoji: false })
-
-        // 保护数学公式
-        const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
-        let html = marked(protectedMd)
-        // 恢复数学公式
-        html = this.restoreMathExpressions(html, expressions)
-
-        const styles = this.getThemeStyles(theme)
-        const timestamp = new Date().toLocaleString('zh-CN', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-        })
-
-        // 检测是否包含数学公式
-        const hasMath = expressions.length > 0
-
-        // KaTeX 样式优化 - 高亮显示
-        const katexStyles = `
-            /* 行内公式样式 */
-            .katex {
-                font-size: 1.15em !important;
-                color: #1a5276;
-                background: linear-gradient(135deg, rgba(52,152,219,0.08) 0%, rgba(155,89,182,0.08) 100%);
-                padding: 0.15em 0.4em;
-                border-radius: 4px;
-                border: 1px solid rgba(52,152,219,0.2);
-            }
-            /* 块级公式样式 */
-            .katex-display {
-                margin: 1em 0 !important;
-                padding: 0.8em 1em;
-                background: linear-gradient(135deg, #f8f9fa 0%, #e8f4fc 100%);
-                border-radius: 8px;
-                border-left: 4px solid #3498db;
-                overflow-x: auto;
-                overflow-y: hidden;
-                text-align: center;
-            }
-            .katex-display > .katex {
-                background: none;
-                border: none;
-                padding: 0;
-                font-size: 1.25em !important;
-                color: #2c3e50;
-            }
-            /* 公式内元素颜色 */
-            .katex .mord.text { color: #27ae60; }
-            .katex .mbin { color: #e74c3c; }
-            .katex .mrel { color: #9b59b6; }
-        `
-
-        const styledHtml = `
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                ${hasMath ? `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">` : ''}
-                <style>
-                    ${styles}
-                    ${hasMath ? katexStyles : ''}
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    ${
-                        title
-                            ? `
-                    <div class="header">
-                        <div class="header-icon">${icon}</div>
-                        <div>
-                            <h1 style="margin: 0; border: none; padding: 0;">${title}</h1>
-                            ${subtitle ? `<p style="margin: 0.3em 0 0 0; opacity: 0.7; font-size: 0.9em;">${subtitle}</p>` : ''}
-                        </div>
-                    </div>
-                    <hr>
-                    `
-                            : ''
-                    }
-                    ${html}
-                    ${showTimestamp ? `<div class="timestamp">生成时间：${timestamp}</div>` : ''}
-                </div>
-                ${
-                    hasMath
-                        ? `
-                <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-                <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
-                <script>
-                    document.addEventListener("DOMContentLoaded", function() {
-                        renderMathInElement(document.body, {
-                            delimiters: [
-                                {left: '$$', right: '$$', display: true},
-                                {left: '$', right: '$', display: false},
-                                {left: '\\\\[', right: '\\\\]', display: true},
-                                {left: '\\\\(', right: '\\\\)', display: false}
-                            ],
-                            throwOnError: false,
-                            trust: true
-                        });
-                        window.katexRendered = true;
-                    });
-                </script>
-                `
-                        : ''
-                }
-            </body>
-            </html>
-        `
-
-        let browser = null
-        let page = null
-        try {
-            browser = await this.getBrowser()
-            page = await browser.newPage()
-            await page.setViewport({ width, height: 600, deviceScaleFactor: 2 })
-            await page.setContent(styledHtml, { waitUntil: 'networkidle0', timeout: 30000 })
-
-            // 等待 KaTeX 渲染完成
-            if (hasMath) {
-                try {
-                    await page.waitForFunction(() => window.katexRendered === true, { timeout: 5000 })
-                } catch {
-                    // 超时继续
-                }
-                await new Promise(r => setTimeout(r, 200))
-            }
-
-            const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
-            return imageBuffer
-        } catch (error) {
-            logService.error('[RenderService] 渲染图片失败', error)
-            throw error
-        } finally {
-            if (page)
-                try {
-                    await page.close()
-                } catch {}
+        // 纯 Canvas 渲染（mathjax SVG 光栅化公式），不再使用 Puppeteer
+        if (!this.useCanvas) {
+            throw new Error('Canvas 模块未加载，无法渲染图片')
         }
+        await this.loadFonts()
+        return renderMarkdownToCanvas(this.cleanMarkdown(markdown, { stripEmoji: false }), {
+            canvasModule,
+            theme,
+            width,
+            title: title ? `${icon} ${title}` : '',
+            subtitle,
+            showTimestamp,
+            fontFamily: 'LXGW, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif'
+        })
     }
 
     /**
@@ -1172,708 +799,57 @@ class RenderService {
             participantCount = 0,
             topUsers = [],
             hourlyActivity = [],
-            theme = 'light',
             width = 520,
-            fastMode = true // 优先使用Canvas快速渲染
+            _fastMode = true // 保留参数兼容；渲染已统一走 Canvas
         } = options
 
-        // 快速模式：使用 Canvas 渲染（无头像、无图表，但速度快10倍+）
-        if (fastMode && this.useCanvas && topUsers.length === 0 && hourlyActivity.every(v => v === 0)) {
-            try {
-                const lines = this.parseMarkdownToLines(markdown)
-                const statsLine = `📊 消息数: ${messageCount}  |  👥 参与者: ${participantCount}`
-                return await this.renderWithCanvas({
-                    lines: [statsLine, '', ...lines],
-                    width,
-                    title: `📊 ${title}`,
-                    subtitle: subtitle || `基于 ${messageCount} 条消息`,
-                    headerBg: true,
-                    headerHeight: 60,
-                    footerText: '✨ AI 智能生成',
-                    bgColor: '#FFFCFA',
-                    titleColor: '#B85520',
-                    accentColor: '#FFB080'
-                })
-            } catch (e) {
-                logService.warn('[RenderService] Canvas渲染失败，回退到Puppeteer:', e.message)
-            }
+        if (!this.useCanvas) {
+            throw new Error('Canvas 模块未加载，无法渲染图片')
         }
 
-        const cleanedMd = this.cleanMarkdown(markdown, { stripEmoji: false })
-        const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
-        let html = marked(protectedMd)
-        html = this.restoreMathExpressions(html, expressions)
-
-        const now = new Date()
-        const dateStr = now.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
-        const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+        // 24 小时活跃柱状（纯文本可读版）
         const activityData = hourlyActivity.length === 24 ? hourlyActivity : Array(24).fill(0)
-        const maxActivity = Math.max(...activityData, 1)
-        const activityBars = activityData
+        const activityMax = Math.max(...activityData, 1)
+        const activityChart = activityData
             .map((v, i) => {
-                const height = maxActivity > 0 ? Math.max(4, Math.round((v / maxActivity) * 60)) : 4
-                const emptyClass = v === 0 ? ' empty' : ''
-                return `<div class="bar${emptyClass}" style="height:${height}px"></div>`
+                const bar = '█'.repeat(Math.max(1, Math.round((v / activityMax) * 10)))
+                return `${String(i).padStart(2, '0')}时 ${v > 0 ? bar + ' ' + v : '·'}`
             })
-            .join('')
-        const userCardsHtml =
+            .join('\n')
+
+        // 活跃排行（无头像卡片，首字符 + 条数）
+        const userLines =
             topUsers.length > 0
                 ? topUsers
                       .map((u, i) => {
-                          const gradients = [
-                              'linear-gradient(135deg, #FF6B6B 0%, #FF8E8E 100%)',
-                              'linear-gradient(135deg, #4ECDC4 0%, #6EE7DF 100%)',
-                              'linear-gradient(135deg, #A78BFA 0%, #C4B5FD 100%)',
-                              'linear-gradient(135deg, #F59E0B 0%, #FBBF24 100%)',
-                              'linear-gradient(135deg, #10B981 0%, #34D399 100%)'
-                          ]
-                          const bgGradient = gradients[i % gradients.length]
-                          const initial = (u.name || '?').charAt(0).toUpperCase()
-                          const rankBadge = i === 0 ? '👑' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`
-                          // 使用真实头像URL，如果没有则显示首字母
-                          const avatarContent = u.avatar
-                              ? `<img src="${u.avatar}" class="avatar-img" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
-                              : ''
-                          const fallbackContent = `<div class="avatar-fallback" style="background:${bgGradient};display:${u.avatar ? 'none' : 'flex'}">${initial}</div>`
-                          return `
-                <div class="user-card">
-                    <div class="user-rank">${rankBadge}</div>
-                    <div class="user-avatar">
-                        ${avatarContent}
-                        ${fallbackContent}
-                    </div>
-                    <div class="user-name">${u.name || '用户'}</div>
-                    <div class="user-count">${u.count} 条</div>
-                </div>`
+                          const badge = ['👑', '🥈', '🥉'][i] || `#${i + 1}`
+                          return `${badge} ${u.name || '用户'}：${u.count} 条`
                       })
-                      .join('')
+                      .join('\n')
                 : ''
 
-        const beautifulHtml = `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <style>
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
-        @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "WenQuanYi Micro Hei", sans-serif, "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji";
-            background: linear-gradient(135deg, #fdf6f0 0%, #f8f0ea 50%, #fff5f0 100%);
-            min-height: 100vh;
-            padding: 16px;
-            -webkit-font-smoothing: antialiased;
-        }
-        .container {
-            max-width: ${width}px;
-            margin: 0 auto;
-            background: linear-gradient(180deg, #ffffff 0%, #fffcfa 100%);
-            border-radius: 24px;
-            overflow: hidden;
-            box-shadow: 0 4px 24px rgba(180, 120, 80, 0.08), 0 1px 3px rgba(180, 120, 80, 0.05);
-            border: 1px solid rgba(255, 200, 160, 0.2);
-        }
-        /* 顶部头部 - 现代渐变 */
-        .header {
-            background: linear-gradient(135deg, #ff9a56 0%, #ff7b4d 50%, #ff6b3d 100%);
-            padding: 28px 24px 24px;
-            position: relative;
-            overflow: hidden;
-        }
-        .header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 200px;
-            height: 200px;
-            background: radial-gradient(circle, rgba(255,255,255,0.15) 0%, transparent 70%);
-            border-radius: 50%;
-        }
-        .header::after {
-            content: '';
-            position: absolute;
-            bottom: -30%;
-            left: -10%;
-            width: 150px;
-            height: 150px;
-            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
-            border-radius: 50%;
-        }
-        .header-main {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            position: relative;
-            z-index: 1;
-        }
-        .header-left { flex: 1; }
-        .header-title {
-            font-size: 20px;
-            font-weight: 800;
-            color: #fff;
-            margin-bottom: 6px;
-            line-height: 1.3;
-            text-shadow: 0 2px 4px rgba(180, 80, 20, 0.2);
-            letter-spacing: 0.5px;
-        }
-        .header-desc {
-            font-size: 12px;
-            color: rgba(255,255,255,0.85);
-            font-weight: 500;
-        }
-        .header-right {
-            text-align: right;
-            background: rgba(255,255,255,0.2);
-            backdrop-filter: blur(10px);
-            padding: 12px 16px;
-            border-radius: 16px;
-            border: 1px solid rgba(255,255,255,0.25);
-        }
-        .header-date {
-            font-size: 11px;
-            color: rgba(255,255,255,0.9);
-            margin-bottom: 2px;
-        }
-        .header-time {
-            font-size: 24px;
-            font-weight: 800;
-            color: #fff;
-            text-shadow: 0 2px 8px rgba(0,0,0,0.15);
-        }
-        /* 统计卡片 */
-        .stats-row {
-            display: flex;
-            justify-content: center;
-            gap: 12px;
-            padding: 20px 24px;
-            background: linear-gradient(180deg, #fff9f5 0%, #fffbf8 100%);
-            margin-top: -12px;
-            position: relative;
-            z-index: 2;
-        }
-        .stat-card {
-            flex: 1;
-            text-align: center;
-            background: linear-gradient(135deg, #ffffff 0%, #fff8f4 100%);
-            padding: 16px 12px;
-            border-radius: 16px;
-            box-shadow: 0 2px 12px rgba(255, 150, 100, 0.1);
-            border: 1px solid rgba(255, 180, 140, 0.15);
-            transition: transform 0.2s ease;
-        }
-        .stat-card:hover { transform: translateY(-2px); }
-        .stat-icon {
-            font-size: 20px;
-            margin-bottom: 6px;
-        }
-        .stat-num {
-            font-size: 22px;
-            font-weight: 800;
-            background: linear-gradient(135deg, #ff7b4d 0%, #ff9a56 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-        .stat-txt {
-            font-size: 11px;
-            color: #a08070;
-            margin-top: 4px;
-            font-weight: 500;
-        }
-        /* 活动图表 */
-        .chart-section {
-            padding: 20px 24px;
-            background: #fffbf8;
-        }
-        .chart-header {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 16px;
-        }
-        .chart-icon {
-            width: 28px;
-            height: 28px;
-            background: linear-gradient(135deg, #ffb080 0%, #ff9060 100%);
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 14px;
-        }
-        .chart-title {
-            font-size: 13px;
-            font-weight: 600;
-            color: #c06030;
-        }
-        .chart-container {
-            background: linear-gradient(180deg, #fff 0%, #fff8f4 100%);
-            border-radius: 16px;
-            padding: 16px;
-            border: 1px solid rgba(255, 180, 140, 0.12);
-        }
-        .chart-bars {
-            display: flex;
-            align-items: flex-end;
-            gap: 3px;
-            height: 70px;
-            padding: 0 4px;
-        }
-        .bar {
-            flex: 1;
-            min-width: 10px;
-            border-radius: 4px 4px 0 0;
-            background: linear-gradient(180deg, #ffb347 0%, #ffd080 100%);
-            box-shadow: 0 -2px 4px rgba(255, 180, 100, 0.2);
-            transition: all 0.3s ease;
-        }
-        .bar:hover { transform: scaleY(1.05); filter: brightness(1.05); }
-        .bar.empty { background: linear-gradient(180deg, #ffe8d8 0%, #fff0e8 100%); box-shadow: none; }
-        .chart-labels {
-            display: flex;
-            justify-content: space-between;
-            margin-top: 10px;
-            padding: 0 4px;
-        }
-        .chart-labels span {
-            font-size: 10px;
-            color: #b0a090;
-            font-weight: 500;
-        }
-        /* 活跃用户 */
-        .users-section {
-            padding: 20px 24px;
-            background: linear-gradient(180deg, #fff9f5 0%, #fffbf8 100%);
-        }
-        .users-header {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 16px;
-        }
-        .users-icon {
-            width: 28px;
-            height: 28px;
-            background: linear-gradient(135deg, #ff8c60 0%, #ff7040 100%);
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 14px;
-        }
-        .users-title {
-            font-size: 13px;
-            font-weight: 600;
-            color: #c06030;
-        }
-        .users-grid {
-            display: flex;
-            justify-content: center;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        .user-card {
-            width: 80px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            background: linear-gradient(180deg, #ffffff 0%, #fff8f4 100%);
-            padding: 14px 10px 12px;
-            border-radius: 16px;
-            box-shadow: 0 3px 12px rgba(200, 120, 80, 0.08);
-            border: 1px solid rgba(255, 180, 140, 0.12);
-            position: relative;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }
-        .user-card:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 6px 20px rgba(200, 120, 80, 0.12);
-        }
-        .user-rank {
-            position: absolute;
-            top: -8px;
-            right: -4px;
-            font-size: 16px;
-            filter: drop-shadow(0 2px 2px rgba(0,0,0,0.1));
-        }
-        .user-avatar {
-            width: 48px;
-            height: 48px;
-            border-radius: 50%;
-            margin-bottom: 8px;
-            box-shadow: 0 3px 10px rgba(0,0,0,0.12);
-            overflow: hidden;
-            position: relative;
-            border: 3px solid #fff;
-        }
-        .user-card:first-child .user-avatar {
-            border-color: #ffd700;
-            box-shadow: 0 3px 12px rgba(255, 200, 0, 0.3);
-        }
-        .user-card:nth-child(2) .user-avatar {
-            border-color: #c0c0c0;
-        }
-        .user-card:nth-child(3) .user-avatar {
-            border-color: #cd7f32;
-        }
-        .user-avatar .avatar-img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            border-radius: 50%;
-        }
-        .user-avatar .avatar-fallback {
-            width: 100%;
-            height: 100%;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #FFF;
-            font-size: 18px;
-            font-weight: 700;
-        }
-        .user-name {
-            font-size: 11px;
-            font-weight: 600;
-            color: #504030;
-            max-width: 70px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            text-align: center;
-            margin-bottom: 4px;
-        }
-        .user-count {
-            font-size: 10px;
-            color: #ff7b4d;
-            background: linear-gradient(135deg, #fff5f0 0%, #ffe8e0 100%);
-            padding: 3px 8px;
-            border-radius: 10px;
-            font-weight: 600;
-        }
-        /* 内容区 */
-        .content {
-            padding: 24px;
-        }
-        .content h1, .content h2 {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 15px;
-            font-weight: 700;
-            color: #c04510;
-            margin: 24px 0 14px 0;
-            padding: 12px 16px;
-            background: linear-gradient(135deg, #fff5f0 0%, #ffebe0 100%);
-            border-radius: 12px;
-            border-left: 4px solid;
-            border-image: linear-gradient(180deg, #ff8c42, #ffb080) 1;
-            letter-spacing: 0.3px;
-        }
-        .content h1:first-child, .content h2:first-child { margin-top: 0; }
-        .content h3 {
-            font-size: 14px;
-            font-weight: 700;
-            color: #d05820;
-            margin: 18px 0 10px 0;
-            padding-left: 14px;
-            border-left: 3px solid #ffb080;
-            position: relative;
-        }
-        .content h3::before {
-            content: '';
-            position: absolute;
-            left: 0;
-            top: -2px;
-            bottom: -2px;
-            width: 3px;
-            background: linear-gradient(180deg, #ff8c42 0%, #ffb080 100%);
-            border-radius: 2px;
-        }
-        .content h4 {
-            font-size: 13px;
-            font-weight: 600;
-            color: #e06830;
-            margin: 14px 0 8px 0;
-        }
-        .content p {
-            font-size: 13px;
-            color: #4a4035;
-            line-height: 1.9;
-            margin: 12px 0;
-            text-align: justify;
-        }
-        .content ul, .content ol {
-            padding-left: 8px;
-            margin: 12px 0;
-        }
-        .content ul { list-style-type: none; }
-        .content ul li {
-            position: relative;
-            padding-left: 20px;
-            margin: 10px 0;
-        }
-        .content ul li::before {
-            content: '';
-            position: absolute;
-            left: 4px;
-            top: 8px;
-            width: 6px;
-            height: 6px;
-            background: linear-gradient(135deg, #ff9060 0%, #ffb080 100%);
-            border-radius: 50%;
-        }
-        .content ol { 
-            list-style-type: none;
-            counter-reset: item;
-        }
-        .content ol li {
-            counter-increment: item;
-            position: relative;
-            padding-left: 28px;
-            margin: 10px 0;
-        }
-        .content ol li::before {
-            content: counter(item);
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 20px;
-            height: 20px;
-            background: linear-gradient(135deg, #ff9060 0%, #ffb080 100%);
-            color: #fff;
-            font-size: 11px;
-            font-weight: 700;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .content li {
-            font-size: 13px;
-            color: #4a4035;
-            line-height: 1.85;
-        }
-        .content strong {
-            color: #d04510;
-            font-weight: 700;
-            background: linear-gradient(180deg, transparent 55%, rgba(255, 160, 100, 0.25) 55%);
-            padding: 0 3px;
-            border-radius: 2px;
-        }
-        .content em {
-            color: #c06030;
-            font-style: italic;
-        }
-        .content blockquote {
-            background: linear-gradient(135deg, #fff8f2 0%, #ffefe6 100%);
-            border-left: 4px solid;
-            border-image: linear-gradient(180deg, #ff9060, #ffb080) 1;
-            padding: 14px 18px 14px 20px;
-            margin: 16px 0;
-            border-radius: 0 14px 14px 0;
-            font-size: 12.5px;
-            color: #6a5545;
-            box-shadow: 0 2px 10px rgba(255, 144, 96, 0.08);
-            position: relative;
-        }
-        .content blockquote::before {
-            content: '"';
-            position: absolute;
-            top: 8px;
-            left: 10px;
-            font-size: 28px;
-            color: #ffb080;
-            opacity: 0.4;
-            font-family: Georgia, serif;
-            line-height: 1;
-        }
-        .content code {
-            background: linear-gradient(135deg, #fff5ed 0%, #ffe8dc 100%);
-            padding: 3px 8px;
-            border-radius: 6px;
-            font-size: 12px;
-            color: #c04510;
-            font-family: "SF Mono", Monaco, "Cascadia Code", Consolas, monospace;
-            border: 1px solid rgba(255, 140, 66, 0.15);
-        }
-        .content pre {
-            background: linear-gradient(135deg, #2d2d3a 0%, #1f1f2a 100%);
-            padding: 16px 18px;
-            border-radius: 12px;
-            margin: 14px 0;
-            overflow-x: auto;
-            border: 1px solid rgba(100, 100, 120, 0.2);
-        }
-        .content pre code {
-            background: none;
-            border: none;
-            padding: 0;
-            font-size: 12px;
-            color: #e8e8f0;
-        }
-        .content hr {
-            border: none;
-            height: 1px;
-            background: linear-gradient(90deg, transparent 0%, #ffd0b0 20%, #ffb080 50%, #ffd0b0 80%, transparent 100%);
-            margin: 20px 0;
-        }
-        .content a {
-            color: #e05020;
-            text-decoration: none;
-            border-bottom: 1px dashed #ffb080;
-            transition: all 0.2s ease;
-        }
-        .content a:hover { border-bottom-style: solid; }
-        .content table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 14px 0;
-            font-size: 12.5px;
-            border-radius: 12px;
-            overflow: hidden;
-            box-shadow: 0 2px 12px rgba(200, 100, 50, 0.06);
-        }
-        .content th {
-            background: linear-gradient(135deg, #ffe8dc 0%, #ffd8c8 100%);
-            color: #a05020;
-            font-weight: 700;
-            padding: 12px 14px;
-            text-align: left;
-        }
-        .content td {
-            padding: 10px 14px;
-            border-bottom: 1px solid #fff0e8;
-            color: #5a4a40;
-        }
-        .content tr:last-child td { border-bottom: none; }
-        .content tr:nth-child(even) { background: #fffaf6; }
-        /* 底部 */
-        .footer {
-            padding: 16px 24px;
-            background: linear-gradient(135deg, #fff8f4 0%, #fffaf6 50%, #fff5f0 100%);
-            border-top: 1px solid rgba(255, 180, 140, 0.12);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .footer-left {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 11px;
-            color: #b09080;
-            font-weight: 500;
-        }
-        .footer-left::before {
-            content: '✨';
-            font-size: 12px;
-        }
-        .footer-right {
-            font-size: 11px;
-            color: #c0a090;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div class="header-main">
-                <div class="header-left">
-                    <div class="header-title">${title}</div>
-                    <div class="header-desc">${subtitle || '基于最近群聊消息的智能分析'}</div>
-                </div>
-                <div class="header-right">
-                    <div class="header-date">${dateStr}</div>
-                    <div class="header-time">${timeStr}</div>
-                </div>
-            </div>
-        </div>
-        <div class="stats-row">
-            <div class="stat-card">
-                <div class="stat-icon">💬</div>
-                <div class="stat-num">${messageCount || '-'}</div>
-                <div class="stat-txt">消息总数</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon">👥</div>
-                <div class="stat-num">${participantCount || '-'}</div>
-                <div class="stat-txt">参与成员</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon">⚡</div>
-                <div class="stat-num">${messageCount && participantCount ? Math.round(messageCount / participantCount) : '-'}</div>
-                <div class="stat-txt">人均发言</div>
-            </div>
-        </div>
-        <div class="chart-section">
-            <div class="chart-header">
-                <div class="chart-icon">📊</div>
-                <div class="chart-title">24小时活跃分布</div>
-            </div>
-            <div class="chart-container">
-                <div class="chart-bars">${activityBars}</div>
-                <div class="chart-labels">
-                    <span>0:00</span>
-                    <span>6:00</span>
-                    <span>12:00</span>
-                    <span>18:00</span>
-                    <span>24:00</span>
-                </div>
-            </div>
-        </div>
-        ${
-            userCardsHtml
-                ? `
-        <div class="users-section">
-            <div class="users-header">
-                <div class="users-icon">🏆</div>
-                <div class="users-title">活跃排行 TOP${topUsers.length}</div>
-            </div>
-            <div class="users-grid">${userCardsHtml}</div>
-        </div>`
-                : ''
-        }
-        <div class="content">
-            ${html}
-        </div>
-        <div class="footer">
-            <div class="footer-left">AI 智能分析生成</div>
-            <div class="footer-right">${now.toLocaleString('zh-CN')}</div>
-        </div>
-    </div>
-</body>
-</html>`
+        const md = [
+            '### 📊 统计',
+            `消息数: ${messageCount}  |  参与者: ${participantCount}`,
+            '',
+            '### 📈 24小时活跃',
+            '```',
+            activityChart,
+            '```',
+            ...(userLines ? ['', '### 🏆 活跃排行', userLines] : []),
+            '',
+            markdown
+        ].join('\n')
 
-        let browser = null
-        let page = null
-        try {
-            browser = await this.getBrowser()
-            page = await browser.newPage()
-            await page.setViewport({ width: width + 30, height: 800, deviceScaleFactor: 2 })
-            await page.setContent(beautifulHtml, { waitUntil: 'networkidle0', timeout: 30000 })
-            // 等待头像图片加载完成
-            if (topUsers.some(u => u.avatar)) {
-                try {
-                    await page.waitForSelector('.avatar-img', { timeout: 5000 })
-                    await new Promise(r => setTimeout(r, 500))
-                } catch (e) {}
-            }
-            const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
-            return imageBuffer
-        } catch (error) {
-            logService.error('[RenderService] 渲染群聊总结失败', error)
-            throw error
-        } finally {
-            if (page)
-                try {
-                    await page.close()
-                } catch {}
-        }
+        return this.renderMarkdownToImage({
+            markdown: md,
+            title: `📊 ${title}`,
+            subtitle: subtitle || `基于 ${messageCount} 条消息`,
+            icon: '📊',
+            theme: 'light',
+            width,
+            showTimestamp: true
+        })
     }
 
     /**
@@ -1888,61 +864,40 @@ class RenderService {
             subtitle = '',
             messageCount = 0,
             participantCount = 0,
-            topUsers = [],
-            hourlyActivity = [],
+            _topUsers = [],
+            _hourlyActivity = [],
             width = 520,
             topics = [],
             keywords = [],
-            interactions = [],
-            atmosphere = {},
+            _interactions = [],
+            _atmosphere = {},
             quotes = []
         } = options
 
-        const cleanedMd = this.cleanMarkdown(markdown, { stripEmoji: false })
-        const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
-        let html = marked(protectedMd)
-        html = this.restoreMathExpressions(html, expressions)
-
-        const beautifulHtml = generateModernSummaryHtml({
-            title,
-            subtitle,
-            html,
-            messageCount,
-            participantCount,
-            topUsers,
-            hourlyActivity,
-            width,
-            topics,
-            keywords,
-            interactions,
-            atmosphere,
-            quotes
-        })
-
-        let browser = null
-        let page = null
-        try {
-            browser = await this.getBrowser()
-            page = await browser.newPage()
-            await page.setViewport({ width: width + 30, height: 800, deviceScaleFactor: 2 })
-            await page.setContent(beautifulHtml, { waitUntil: 'networkidle0', timeout: 30000 })
-            if (topUsers.some(u => u.avatar)) {
-                try {
-                    await page.waitForSelector('.avatar-img', { timeout: 5000 })
-                    await new Promise(r => setTimeout(r, 500))
-                } catch (e) {}
-            }
-            const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
-            return imageBuffer
-        } catch (error) {
-            logService.error('[RenderService] 渲染深色风格群聊总结失败', error)
-            throw error
-        } finally {
-            if (page)
-                try {
-                    await page.close()
-                } catch {}
+        if (!this.useCanvas) {
+            throw new Error('Canvas 模块未加载，无法渲染图片')
         }
+
+        const md = [
+            `消息数: ${messageCount}  |  参与者: ${participantCount}`,
+            keywords && keywords.length > 0 ? `🏷️ 关键词：${keywords.join(' · ')}` : '',
+            topics && topics.length > 0 ? `📌 话题：${topics.join(' · ')}` : '',
+            quotes && quotes.length > 0 ? `💬 金句：${quotes.join(' · ')}` : '',
+            '',
+            markdown
+        ]
+            .filter(Boolean)
+            .join('\n')
+
+        return this.renderMarkdownToImage({
+            markdown: md,
+            title: `🌙 ${title}`,
+            subtitle: subtitle,
+            icon: '🌙',
+            theme: 'dark',
+            width,
+            showTimestamp: true
+        })
     }
 
     /**
@@ -1953,395 +908,26 @@ class RenderService {
      * @returns {Promise<Buffer>}
      */
     async renderUserProfile(markdown, nickname, options = {}) {
-        const { messageCount = 0, width = 480, userId = null, fastMode = true } = options
+        const { messageCount = 0, width = 480, _fastMode = true } = options
 
-        // 快速模式：使用 Canvas 渲染（无头像，但速度快10倍+）
-        if (fastMode && this.useCanvas) {
-            try {
-                const lines = this.parseMarkdownToLines(markdown)
-                const statsLine = `📈 发言数: ${messageCount}  |  📅 ${new Date().toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}`
-                return await this.renderWithCanvas({
-                    lines: [statsLine, '', ...lines],
-                    width,
-                    title: `👤 ${nickname || '用户'}`,
-                    subtitle: '用户画像分析',
-                    headerBg: true,
-                    headerHeight: 60,
-                    footerText: '✨ AI 智能生成',
-                    bgColor: '#FAFCFF',
-                    textColor: '#3A3A4A',
-                    titleColor: '#4A5690',
-                    accentColor: '#8B9FE8'
-                })
-            } catch (e) {
-                logService.warn('[RenderService] Canvas渲染失败，回退到Puppeteer:', e.message)
-            }
+        if (!this.useCanvas) {
+            throw new Error('Canvas 模块未加载，无法渲染图片')
         }
 
-        const cleanedMd = this.cleanMarkdown(markdown, { stripEmoji: false })
-        const { text: protectedMd, expressions } = this.protectMathExpressions(cleanedMd)
-        let html = marked(protectedMd)
-        html = this.restoreMathExpressions(html, expressions)
+        const statsLine = `📈 发言数: ${messageCount}  |  📅 ${new Date().toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}`
+        const md = `${statsLine}\n\n${markdown}`
 
-        const now = new Date()
-        const dateStr = now.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
-        const initial = (nickname || '?').charAt(0).toUpperCase()
-        // 生成真实头像URL
-        const avatarUrl = userId ? `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=0` : null
-
-        const profileHtml = `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "WenQuanYi Micro Hei", sans-serif, "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji";
-            background: linear-gradient(180deg, #E8F4FD 0%, #F0F7FF 100%);
-            min-height: 100vh;
-            padding: 15px;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-            text-rendering: optimizeLegibility;
-        }
-        .container {
-            max-width: ${width}px;
-            margin: 0 auto;
-            background: #FAFCFF;
-            border-radius: 16px;
-            overflow: hidden;
-            box-shadow: 0 2px 12px rgba(100, 150, 200, 0.12);
-            border: 1px solid rgba(150, 180, 220, 0.2);
-        }
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 24px 20px;
-            text-align: center;
-            position: relative;
-        }
-        .header::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
-            opacity: 0.3;
-        }
-        .avatar {
-            width: 72px;
-            height: 72px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #fff 0%, #f0f0f0 100%);
-            margin: 0 auto 12px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-            position: relative;
-            z-index: 1;
-            overflow: hidden;
-        }
-        .avatar img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            border-radius: 50%;
-        }
-        .avatar img[data-failed="true"] {
-            display: none !important;
-        }
-        .avatar-fallback {
-            width: 100%;
-            height: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 28px;
-            font-weight: 700;
-            color: #667eea;
-            background: linear-gradient(135deg, #f0f4ff 0%, #e8eeff 100%);
-            border-radius: 50%;
-        }
-        .avatar-fallback.show {
-            display: flex !important;
-        }
-        .nickname {
-            font-size: 18px;
-            font-weight: 700;
-            color: #FFF;
-            margin-bottom: 4px;
-            position: relative;
-            z-index: 1;
-        }
-        .subtitle {
-            font-size: 11px;
-            color: rgba(255,255,255,0.8);
-            position: relative;
-            z-index: 1;
-        }
-        .stats-bar {
-            display: flex;
-            justify-content: center;
-            gap: 30px;
-            padding: 14px 20px;
-            background: #F5F8FF;
-            border-bottom: 1px solid rgba(150,180,220,0.15);
-        }
-        .stat-item { text-align: center; }
-        .stat-value {
-            font-size: 16px;
-            font-weight: 700;
-            color: #667eea;
-        }
-        .stat-label {
-            font-size: 10px;
-            color: #8090A0;
-            margin-top: 2px;
-        }
-        .content {
-            padding: 18px 20px;
-        }
-        .content h1, .content h2 {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 14px;
-            font-weight: 600;
-            color: #4A5690;
-            margin: 18px 0 12px 0;
-            padding-bottom: 8px;
-            border-bottom: 2px solid transparent;
-            background: linear-gradient(90deg, #E8EDFF, transparent) border-box;
-            border-image: linear-gradient(90deg, #8B9FE8, transparent) 1;
-            letter-spacing: 0.5px;
-        }
-        .content h1::before, .content h2::before {
-            content: '';
-            width: 4px;
-            height: 16px;
-            background: linear-gradient(180deg, #667eea, #8B9FE8);
-            border-radius: 2px;
-            flex-shrink: 0;
-        }
-        .content h1:first-child, .content h2:first-child { margin-top: 0; }
-        .content h3 {
-            font-size: 13px;
-            font-weight: 600;
-            color: #5A6AA0;
-            margin: 14px 0 8px 0;
-            padding-left: 10px;
-            border-left: 3px solid #8B9FE8;
-        }
-        .content h4 {
-            font-size: 12px;
-            font-weight: 600;
-            color: #6A7AB0;
-            margin: 12px 0 6px 0;
-        }
-        .content p {
-            font-size: 12.5px;
-            color: #3A3A4A;
-            line-height: 1.85;
-            margin: 10px 0;
-            text-align: justify;
-            letter-spacing: 0.3px;
-        }
-        .content ul, .content ol {
-            padding-left: 20px;
-            margin: 10px 0;
-        }
-        .content ul { list-style-type: none; }
-        .content ul li::before {
-            content: '◆';
-            color: #8B9FE8;
-            font-size: 8px;
-            margin-right: 8px;
-            vertical-align: middle;
-        }
-        .content ol { list-style-type: decimal; }
-        .content ol li::marker {
-            color: #667eea;
-            font-weight: 600;
-        }
-        .content li {
-            font-size: 12.5px;
-            color: #3A3A4A;
-            line-height: 1.85;
-            margin: 6px 0;
-            padding-left: 2px;
-        }
-        .content strong {
-            color: #5A6ACA;
-            font-weight: 600;
-            background: linear-gradient(180deg, transparent 60%, rgba(139,159,232,0.25) 60%);
-            padding: 0 2px;
-        }
-        .content em {
-            color: #6A7AB0;
-            font-style: italic;
-        }
-        .content blockquote {
-            background: linear-gradient(135deg, #F5F7FF 0%, #EEF2FF 100%);
-            border-left: 4px solid #667eea;
-            padding: 12px 16px;
-            margin: 14px 0;
-            border-radius: 0 10px 10px 0;
-            font-size: 12px;
-            color: #5A6AA0;
-            box-shadow: 0 2px 8px rgba(102,126,234,0.1);
-            position: relative;
-        }
-        .content blockquote::before {
-            content: '"';
-            position: absolute;
-            top: 6px;
-            left: 8px;
-            font-size: 24px;
-            color: #8B9FE8;
-            opacity: 0.5;
-            font-family: Georgia, serif;
-        }
-        .content code {
-            background: linear-gradient(135deg, #F0F4FF 0%, #E8EDFF 100%);
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 11px;
-            color: #5A6ACA;
-            font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
-            border: 1px solid rgba(102,126,234,0.2);
-        }
-        .content pre {
-            background: linear-gradient(135deg, #F5F7FF 0%, #EEF2FF 100%);
-            padding: 14px 16px;
-            border-radius: 8px;
-            margin: 12px 0;
-            overflow-x: auto;
-            border: 1px solid rgba(102,126,234,0.15);
-        }
-        .content pre code {
-            background: none;
-            border: none;
-            padding: 0;
-            font-size: 11px;
-        }
-        .content hr {
-            border: none;
-            height: 2px;
-            background: linear-gradient(90deg, transparent, #C0D0F0, #8B9FE8, #C0D0F0, transparent);
-            margin: 18px 0;
-            border-radius: 1px;
-        }
-        .content a {
-            color: #667eea;
-            text-decoration: none;
-            border-bottom: 1px dashed #8B9FE8;
-            transition: all 0.2s ease;
-        }
-        .content table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 12px 0;
-            font-size: 12px;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 2px 8px rgba(102,126,234,0.08);
-        }
-        .content th {
-            background: linear-gradient(135deg, #E8EDFF 0%, #D8E0FF 100%);
-            color: #4A5690;
-            font-weight: 600;
-            padding: 10px 12px;
-            text-align: left;
-        }
-        .content td {
-            padding: 8px 12px;
-            border-bottom: 1px solid #EEF2FF;
-            color: #4A4A5A;
-        }
-        .content tr:last-child td { border-bottom: none; }
-        .content tr:nth-child(even) { background: #FAFBFF; }
-        .footer {
-            padding: 12px 20px;
-            background: #F5F8FF;
-            border-top: 1px solid rgba(150,180,220,0.15);
-            display: flex;
-            justify-content: space-between;
-            font-size: 10px;
-            color: #8090A0;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div class="avatar">${avatarUrl ? `<img src="${avatarUrl}" onerror="this.setAttribute('data-failed','true');this.nextElementSibling.classList.add('show')"><div class="avatar-fallback">${initial}</div>` : `<div class="avatar-fallback show">${initial}</div>`}</div>
-            <div class="nickname">${nickname || '用户'}</div>
-            <div class="subtitle">👤 用户画像分析</div>
-        </div>
-        <div class="stats-bar">
-            <div class="stat-item">
-                <div class="stat-value">${messageCount || '-'}</div>
-                <div class="stat-label">发言数</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-value">📊</div>
-                <div class="stat-label">AI分析</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-value">📅</div>
-                <div class="stat-label">${dateStr}</div>
-            </div>
-        </div>
-        <div class="content">
-            ${html}
-        </div>
-        <div class="footer">
-            <span>✨ AI 智能生成</span>
-            <span>${now.toLocaleString('zh-CN')}</span>
-        </div>
-    </div>
-</body>
-</html>`
-
-        let browser = null
-        let page = null
-        try {
-            browser = await this.getBrowser()
-            page = await browser.newPage()
-            await page.setViewport({ width: width + 30, height: 800, deviceScaleFactor: 2 })
-            await page.setContent(profileHtml, { waitUntil: 'networkidle0', timeout: 30000 })
-            // 等待头像图片加载完成
-            if (avatarUrl) {
-                try {
-                    await page.waitForSelector('.avatar img', { timeout: 5000 })
-                    await page.waitForFunction(
-                        () => {
-                            const img = document.querySelector('.avatar img')
-                            return !img || img.complete || img.getAttribute('data-failed') === 'true'
-                        },
-                        { timeout: 5000 }
-                    )
-                    await new Promise(r => setTimeout(r, 300))
-                } catch (e) {
-                    // 图片加载超时，继续使用降级显示
-                }
-            }
-            const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
-            return imageBuffer
-        } catch (error) {
-            logService.error('[RenderService] 渲染用户画像失败', error)
-            throw error
-        } finally {
-            if (page)
-                try {
-                    await page.close()
-                } catch {}
-        }
+        return this.renderMarkdownToImage({
+            markdown: md,
+            title: `👤 ${nickname || '用户'}`,
+            subtitle: '用户画像分析',
+            icon: '👤',
+            theme: 'light',
+            width,
+            showTimestamp: true
+        })
     }
 
-    /**
-     * 渲染分析报告
-     * @param {string} markdown - 报告内容
-     * @param {Object} options - 选项
-     * @returns {Promise<Buffer>}
-     */
     async renderAnalysisReport(markdown, options = {}) {
         return this.renderMarkdownToImage({
             markdown,
@@ -2388,292 +974,81 @@ class RenderService {
         if (!words || words.length === 0) {
             throw new Error('没有足够的词汇生成词云')
         }
+        if (!this.useCanvas) {
+            throw new Error('Canvas 模块未加载，无法渲染图片')
+        }
+        await this.loadFonts()
 
-        // 限制词数，避免太多词导致布局缓慢
+        // 归一化权重并排序
         const maxWords = Math.min(words.length, 120)
-
-        // 归一化权重并按权重降序排序（大的在前，放中间）
         const maxWeight = Math.max(...words.map(w => w.weight))
         const minWeight = Math.min(...words.map(w => w.weight))
         const weightRange = maxWeight - minWeight || 1
-
         const normalizedWords = words
             .slice(0, maxWords)
             .map(w => {
-                // 使用对数缩放让大小差异更明显
                 const normalizedWeight = (w.weight - minWeight) / weightRange
-                const logScale = Math.log10(normalizedWeight * 9 + 1) // 0~1 映射到 log(1)~log(10)
-                return {
-                    ...w,
-                    size: Math.round(20 + logScale * 56) // 20~76px
-                }
+                const logScale = Math.log10(normalizedWeight * 9 + 1)
+                return { ...w, size: Math.round(20 + logScale * 56) }
             })
             .sort((a, b) => b.size - a.size)
 
-        // 更丰富的彩色调色板（按权重分组配色）
-        const highWeightColors = ['#E74C3C', '#9B59B6', '#3498DB', '#1ABC9C', '#F39C12']
-        const midWeightColors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#DDA0DD', '#F7DC6F']
-        const lowWeightColors = ['#85C1E9', '#A9DFBF', '#F5B7B1', '#D7BDE2', '#AED6F1', '#FADBD8']
+        const colors = ['#E74C3C', '#9B59B6', '#3498DB', '#1ABC9C', '#F39C12', '#2ECC71', '#E67E22', '#16A085']
 
-        const timestamp = new Date().toLocaleString('zh-CN', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-        })
+        const { createCanvas } = canvasModule
+        const canvas = createCanvas(width, height)
+        const ctx = canvas.getContext('2d')
 
-        // 词云区域尺寸
-        const cloudWidth = width - 48
-        const cloudHeight = height - 160
+        // 背景
+        ctx.fillStyle = '#f7f7f7'
+        ctx.fillRect(0, 0, width, height)
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(8, 8, width - 16, height - 16)
 
-        const wordCloudHtml = `
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <style>
-                    * { margin: 0; padding: 0; box-sizing: border-box; }
-                    body {
-                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                        min-height: 100vh;
-                        padding: 20px;
-                    }
-                    .container {
-                        background: rgba(255, 255, 255, 0.95);
-                        border-radius: 16px;
-                        padding: 20px;
-                        box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-                    }
-                    .header {
-                        text-align: center;
-                        margin-bottom: 12px;
-                        padding-bottom: 12px;
-                        border-bottom: 2px solid #eee;
-                    }
-                    .header h1 {
-                        font-size: 24px;
-                        color: #333;
-                        margin-bottom: 4px;
-                    }
-                    .header .subtitle {
-                        font-size: 13px;
-                        color: #666;
-                    }
-                    .word-cloud {
-                        width: ${cloudWidth}px;
-                        height: ${cloudHeight}px;
-                        position: relative;
-                        margin: 0 auto;
-                        overflow: hidden;
-                    }
-                    .word {
-                        position: absolute;
-                        white-space: nowrap;
-                        cursor: default;
-                        text-shadow: 1px 1px 2px rgba(0,0,0,0.08);
-                        line-height: 1.1;
-                    }
-                    .footer {
-                        text-align: center;
-                        padding-top: 10px;
-                        border-top: 1px solid #eee;
-                        margin-top: 10px;
-                    }
-                    .footer .credit {
-                        font-size: 11px;
-                        color: #999;
-                    }
-                    .footer .timestamp {
-                        font-size: 10px;
-                        color: #bbb;
-                        margin-top: 2px;
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <h1>☁️ ${title}</h1>
-                        ${subtitle ? `<div class="subtitle">${subtitle}</div>` : ''}
-                    </div>
-                    <div class="word-cloud" id="wordCloud"></div>
-                    <div class="footer">
-                        <div class="credit">Created By Yunzai-Bot and ChatAI-Plugin</div>
-                        <div class="timestamp">生成时间：${timestamp}</div>
-                    </div>
-                </div>
-                <script>
-                    const highColors = ${JSON.stringify(highWeightColors)};
-                    const midColors = ${JSON.stringify(midWeightColors)};
-                    const lowColors = ${JSON.stringify(lowWeightColors)};
-                    
-                    // 词云数据
-                    const words = ${JSON.stringify(
-                        normalizedWords.map((w, i, arr) => {
-                            // 根据排名选择颜色组
-                            const rank = i / arr.length
-                            let colorPool, colorIdx
-                            if (rank < 0.15) {
-                                colorPool = 'high'
-                                colorIdx = i % highWeightColors.length
-                            } else if (rank < 0.5) {
-                                colorPool = 'mid'
-                                colorIdx = (i - Math.floor(arr.length * 0.15)) % midWeightColors.length
-                            } else {
-                                colorPool = 'low'
-                                colorIdx = (i - Math.floor(arr.length * 0.5)) % lowWeightColors.length
-                            }
-                            return {
-                                word: w.word,
-                                size: w.size,
-                                colorPool,
-                                colorIdx
-                            }
-                        })
-                    )};
-                    
-                    const container = document.getElementById('wordCloud');
-                    const containerWidth = ${cloudWidth};
-                    const containerHeight = ${cloudHeight};
-                    const centerX = containerWidth / 2;
-                    const centerY = containerHeight / 2;
-                    
-                    // 已放置的词的边界框
-                    const placedBoxes = [];
-                    
-                    // 检测碰撞（带padding）
-                    function checkCollision(box, padding = 4) {
-                        const expandedBox = {
-                            left: box.left - padding,
-                            top: box.top - padding,
-                            right: box.right + padding,
-                            bottom: box.bottom + padding
-                        };
-                        for (const placed of placedBoxes) {
-                            if (!(expandedBox.right < placed.left || 
-                                  expandedBox.left > placed.right || 
-                                  expandedBox.bottom < placed.top || 
-                                  expandedBox.top > placed.bottom)) {
-                                return true;
-                            }
-                        }
-                        return false;
-                    }
-                    
-                    // 检查是否在边界内
-                    function isInBounds(box, margin = 5) {
-                        return box.left >= margin && 
-                               box.right <= containerWidth - margin &&
-                               box.top >= margin && 
-                               box.bottom <= containerHeight - margin;
-                    }
-                    
-                    // 阿基米德螺旋布局算法（优化版）
-                    function spiralPlace(wordEl, fontSize) {
-                        const wordWidth = wordEl.offsetWidth;
-                        const wordHeight = wordEl.offsetHeight;
-                        
-                        // 从中心开始，使用阿基米德螺旋
-                        const a = 0;  // 起始半径
-                        const b = 3;  // 螺旋扩展速度
-                        const maxAngle = 50 * Math.PI; // 最大旋转角度
-                        const angleStep = fontSize > 50 ? 0.15 : fontSize > 35 ? 0.2 : 0.25;
-                        
-                        for (let angle = 0; angle < maxAngle; angle += angleStep) {
-                            const radius = a + b * angle;
-                            const x = centerX + radius * Math.cos(angle) - wordWidth / 2;
-                            const y = centerY + radius * Math.sin(angle) - wordHeight / 2;
-                            
-                            const box = {
-                                left: x,
-                                top: y,
-                                right: x + wordWidth,
-                                bottom: y + wordHeight
-                            };
-                            
-                            if (isInBounds(box) && !checkCollision(box)) {
-                                wordEl.style.left = x + 'px';
-                                wordEl.style.top = y + 'px';
-                                placedBoxes.push(box);
-                                return true;
-                            }
-                        }
-                        return false;
-                    }
-                    
-                    // 放置所有词（按大小降序，大词优先占据中心位置）
-                    let placedCount = 0;
-                    words.forEach((w, index) => {
-                        const span = document.createElement('span');
-                        span.className = 'word';
-                        span.textContent = w.word;
-                        span.style.fontSize = w.size + 'px';
-                        
-                        // 根据颜色池选择颜色
-                        const colorPools = { high: highColors, mid: midColors, low: lowColors };
-                        span.style.color = colorPools[w.colorPool][w.colorIdx];
-                        
-                        // 大词加粗
-                        span.style.fontWeight = w.size > 50 ? 'bold' : w.size > 35 ? '600' : 'normal';
-                        span.style.opacity = '0';
-                        
-                        container.appendChild(span);
-                        
-                        if (spiralPlace(span, w.size)) {
-                            span.style.opacity = '1';
-                            placedCount++;
-                        } else {
-                            span.remove();
-                        }
-                    });
-                    
-                    console.log('词云已放置 ' + placedCount + '/' + words.length + ' 个词');
-                </script>
-            </body>
-            </html>
-        `
-
-        let browser = null
-        let page = null
-        try {
-            browser = await this.getBrowser()
-            page = await browser.newPage()
-            await page.setViewport({ width, height, deviceScaleFactor: 2 })
-            await page.setContent(wordCloudHtml, { waitUntil: 'networkidle0', timeout: 30000 })
-            // 等待词云布局完成
-            await page
-                .waitForFunction(
-                    () => {
-                        const words = document.querySelectorAll('.word')
-                        return words.length > 0 && Array.from(words).some(w => w.style.opacity === '1')
-                    },
-                    { timeout: 8000 }
-                )
-                .catch(() => {})
-            const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
-            return imageBuffer
-        } catch (error) {
-            logService.error('[RenderService] 渲染词云失败', error)
-            throw error
-        } finally {
-            if (page)
-                try {
-                    await page.close()
-                } catch {}
+        // 标题
+        ctx.fillStyle = '#1a1a1a'
+        ctx.font = `600 26px LXGW, "Noto Sans SC", sans-serif`
+        ctx.textAlign = 'center'
+        ctx.fillText(title, width / 2, 48)
+        if (subtitle) {
+            ctx.fillStyle = '#888'
+            ctx.font = `14px LXGW, "Noto Sans SC", sans-serif`
+            ctx.fillText(subtitle, width / 2, 70)
         }
+        ctx.textAlign = 'left'
+
+        // 简单两行式布局：按权重画多行（类似柱状但保留字词）
+        // 第一行大字，其余按行排布
+        let y = 100
+        ctx.textBaseline = 'middle'
+        const usableWidth = width - 30
+        let x = 0
+        for (const w of normalizedWords) {
+            ctx.font = `${w.size}px LXGW, "Noto Sans SC", sans-serif`
+            const textW = ctx.measureText(w.word).width + 12
+            if (x + textW > usableWidth) {
+                x = 0
+                y += 50
+                if (y > height - 40) break
+            }
+            ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)]
+            const angle = Math.random() < 0.08 ? (Math.random() < 0.5 ? -0.4 : 0.4) : 0
+            if (angle) {
+                ctx.save()
+                ctx.translate(x + textW / 2, y)
+                ctx.rotate(angle)
+                ctx.fillText(w.word, -textW / 2, 0)
+                ctx.restore()
+            } else {
+                ctx.fillText(w.word, x, y)
+            }
+            x += textW
+        }
+        ctx.textBaseline = 'alphabetic'
+
+        return canvas.toBuffer('image/png')
     }
-    /**
-     * 渲染插件帮助图片 - 三列网格布局
-     * @param {Object} options - 渲染选项
-     * @param {Array<{category: string, icon: string, commands: Array<{cmd: string, desc: string, icon?: string}>}>} options.commands - 命令分类列表
-     * @param {string} options.title - 标题
-     * @param {string} options.subtitle - 副标题
-     * @param {string} options.footer - 底部文字
-     * @param {number} options.width - 宽度
-     * @returns {Promise<Buffer>}
-     */
+
     async renderHelpImage(options = {}) {
         const {
             commands = [],
@@ -2683,212 +1058,26 @@ class RenderService {
             width = 540
         } = options
 
-        // 分类颜色配置
-        const categoryColors = [
-            { bg: 'linear-gradient(135deg, #FFE4E1 0%, #FFB6C1 100%)', border: '#FFB6C1', title: '#C44569' },
-            { bg: 'linear-gradient(135deg, #E8F5E9 0%, #A5D6A7 100%)', border: '#A5D6A7', title: '#2E7D32' },
-            { bg: 'linear-gradient(135deg, #E3F2FD 0%, #90CAF9 100%)', border: '#90CAF9', title: '#1565C0' },
-            { bg: 'linear-gradient(135deg, #FFF3E0 0%, #FFCC80 100%)', border: '#FFCC80', title: '#E65100' },
-            { bg: 'linear-gradient(135deg, #F3E5F5 0%, #CE93D8 100%)', border: '#CE93D8', title: '#7B1FA2' },
-            { bg: 'linear-gradient(135deg, #E0F7FA 0%, #80DEEA 100%)', border: '#80DEEA', title: '#00838F' },
-            { bg: 'linear-gradient(135deg, #FFFDE7 0%, #FFF59D 100%)', border: '#FFF59D', title: '#F57F17' },
-            { bg: 'linear-gradient(135deg, #FCE4EC 0%, #F48FB1 100%)', border: '#F48FB1', title: '#C2185B' },
-            { bg: 'linear-gradient(135deg, #E8EAF6 0%, #9FA8DA 100%)', border: '#9FA8DA', title: '#303F9F' }
-        ]
+        const md = [
+            '# ' + title,
+            subtitle ? `> ${subtitle}` : '',
+            '',
+            ...commands.flatMap(cat => {
+                const items = (cat.commands || []).map(cmd => `${cmd.icon || '📌'} **${cmd.cmd}** - ${cmd.desc || ''}`)
+                return [`## ${cat.icon || ''} ${cat.category || ''}`, ...items, '']
+            }),
+            footer ? `---\n${footer}` : ''
+        ].join('\n')
 
-        // 生成命令列表HTML - 三列网格布局
-        const commandsHtml = commands
-            .map((cat, catIdx) => {
-                const color = categoryColors[catIdx % categoryColors.length]
-                const cmdList = cat.commands
-                    .map(cmd => {
-                        const icon = cmd.icon || '📌'
-                        return `<div class="cmd-card">
-                    <div class="cmd-icon">${icon}</div>
-                    <div class="cmd-info">
-                        <div class="cmd-name">${cmd.cmd}</div>
-                        <div class="cmd-desc">${cmd.desc}</div>
-                    </div>
-                </div>`
-                    })
-                    .join('')
-                return `
-                <div class="category" style="--cat-bg: ${color.bg}; --cat-border: ${color.border}; --cat-title: ${color.title};">
-                    <div class="category-header">
-                        <span class="category-icon">${cat.icon}</span>
-                        <span class="category-title">${cat.category}</span>
-                    </div>
-                    <div class="cmd-grid">${cmdList}</div>
-                </div>`
-            })
-            .join('')
-
-        const helpHtml = `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-            background: linear-gradient(180deg, #fce4ec 0%, #f8bbd9 50%, #f48fb1 100%);
-            min-height: 100vh;
-            padding: 12px;
-            -webkit-font-smoothing: antialiased;
-        }
-        .container {
-            max-width: ${width}px;
-            margin: 0 auto;
-            background: rgba(255, 255, 255, 0.92);
-            border-radius: 16px;
-            overflow: hidden;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-            position: relative;
-        }
-        .bg-decor {
-            position: absolute;
-            top: 0;
-            right: 0;
-            width: 45%;
-            height: 100%;
-            background: linear-gradient(180deg, rgba(255,182,193,0.15) 0%, rgba(255,182,193,0.05) 100%);
-            pointer-events: none;
-            z-index: 0;
-        }
-        .header {
-            background: linear-gradient(135deg, rgba(255,182,193,0.3) 0%, rgba(255,218,225,0.5) 100%);
-            padding: 16px 20px;
-            position: relative;
-            z-index: 1;
-            border-bottom: 1px solid rgba(255,182,193,0.3);
-        }
-        .header-title {
-            font-size: 20px;
-            font-weight: 700;
-            color: #C44569;
-            margin-bottom: 2px;
-        }
-        .header-subtitle {
-            font-size: 11px;
-            color: #888;
-        }
-        .content {
-            padding: 10px 12px;
-            position: relative;
-            z-index: 1;
-        }
-        .category {
-            margin-bottom: 10px;
-            background: var(--cat-bg);
-            border-radius: 10px;
-            overflow: hidden;
-            border: 1px solid var(--cat-border);
-        }
-        .category-header {
-            padding: 8px 12px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            border-bottom: 1px solid rgba(0,0,0,0.05);
-        }
-        .category-icon {
-            font-size: 14px;
-        }
-        .category-title {
-            font-size: 13px;
-            font-weight: 600;
-            color: var(--cat-title);
-        }
-        .cmd-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 6px;
-            padding: 8px;
-        }
-        .cmd-card {
-            background: rgba(255,255,255,0.85);
-            border-radius: 6px;
-            padding: 8px;
-            display: flex;
-            align-items: flex-start;
-            gap: 6px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        }
-        .cmd-icon {
-            font-size: 12px;
-            flex-shrink: 0;
-            width: 18px;
-            height: 18px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .cmd-info {
-            flex: 1;
-            min-width: 0;
-        }
-        .cmd-name {
-            font-size: 10px;
-            font-weight: 600;
-            color: #333;
-            line-height: 1.3;
-            word-break: break-all;
-        }
-        .cmd-desc {
-            font-size: 9px;
-            color: #666;
-            line-height: 1.3;
-            margin-top: 2px;
-        }
-        .footer {
-            padding: 10px 16px;
-            text-align: center;
-            position: relative;
-            z-index: 1;
-            border-top: 1px solid rgba(255,182,193,0.3);
-        }
-        .footer-text {
-            font-size: 10px;
-            color: #999;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="bg-decor"></div>
-        <div class="header">
-            <div class="header-title">${title}</div>
-            <div class="header-subtitle">${subtitle}</div>
-        </div>
-        <div class="content">
-            ${commandsHtml}
-        </div>
-        <div class="footer">
-            <div class="footer-text">${footer}</div>
-        </div>
-    </div>
-</body>
-</html>`
-
-        let browser = null
-        let page = null
-        try {
-            browser = await this.getBrowser()
-            page = await browser.newPage()
-            await page.setViewport({ width: width + 24, height: 800, deviceScaleFactor: 2 })
-            await page.setContent(helpHtml, { waitUntil: 'networkidle0', timeout: 30000 })
-            const imageBuffer = await page.screenshot({ fullPage: true, timeout: 30000 })
-            return imageBuffer
-        } catch (error) {
-            logService.error('[RenderService] 渲染帮助图片失败', error)
-            throw error
-        } finally {
-            if (page)
-                try {
-                    await page.close()
-                } catch {}
-        }
+        return this.renderMarkdownToImage({
+            markdown: md,
+            title,
+            subtitle: '',
+            icon: '❓',
+            theme: 'light',
+            width,
+            showTimestamp: false
+        })
     }
 }
 

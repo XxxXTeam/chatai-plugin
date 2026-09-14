@@ -1,4 +1,4 @@
-import { ApiResponse, HttpStatus, ErrorCode } from './ApiResponse.js'
+import { ApiResponse, HttpStatus } from './ApiResponse.js'
 
 /**
  * @param {Function} fn - 异步处理函数

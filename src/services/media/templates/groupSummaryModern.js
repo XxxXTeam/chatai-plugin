@@ -7,7 +7,6 @@ export function generateModernSummaryHtml(options) {
     const {
         title = '今日群聊',
         subtitle = '',
-        markdown = '',
         html = '',
         messageCount = 0,
         participantCount = 0,
@@ -29,7 +28,7 @@ export function generateModernSummaryHtml(options) {
     const activityData = hourlyActivity.length === 24 ? hourlyActivity : Array(24).fill(0)
     const maxActivity = Math.max(...activityData, 1)
     const activityBars = activityData
-        .map((v, i) => {
+        .map(v => {
             const height = maxActivity > 0 ? Math.max(4, Math.round((v / maxActivity) * 50)) : 4
             const opacity = v === 0 ? '0.3' : '1'
             return `<div class="bar" style="height:${height}px;opacity:${opacity}"></div>`

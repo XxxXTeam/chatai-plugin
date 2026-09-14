@@ -141,7 +141,6 @@ export const emojiTools = [
         },
         handler: async (args, context) => {
             const groupId = context?.event?.group_id
-            const e = context?.event
             if (!groupId) return { success: false, error: '仅群聊可用' }
 
             try {
@@ -158,7 +157,7 @@ export const emojiTools = [
                 }
 
                 const emojiMsg = emojiThiefService.buildEmojiMessage(selected.path)
-                await StandardBotApi.fromContext(ctx).sendGroup(groupId, emojiMsg)
+                await StandardBotApi.fromContext(context).sendGroup(groupId, emojiMsg)
                 return { success: true, message: `已发送表情 ${selected.name}`, sent: true }
             } catch (err) {
                 return { success: false, error: err.message }

@@ -602,7 +602,7 @@ class KnowledgeService {
      * @returns {string}
      */
     buildKnowledgePrompt(presetId, options = {}) {
-        const { maxLength = 15000, separator = '\n\n', includeTriples = true } = options
+        const { maxLength = 15000, separator = '\n\n' } = options
 
         const docs = this.getPresetKnowledge(presetId)
         if (docs.length === 0) return ''
@@ -1002,7 +1002,7 @@ class KnowledgeService {
         const parts = [`【查询相关知识】关键词: "${query}"`]
         let totalLength = 0
 
-        for (const { doc, score, matches } of results) {
+        for (const { doc, score } of results) {
             // 提取相关片段而非完整内容
             let relevantContent = this.extractRelevantSection(doc.content, query)
 

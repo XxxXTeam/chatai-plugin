@@ -6,7 +6,7 @@ import { chatLogger } from '../../core/utils/logger.js'
 import config from '../../../config/config.js'
 import { memoryService } from './MemoryService.js'
 import { callMemoryLLM, formatMemoryTime } from './llmHelper.js'
-import { MemoryCategory, CategoryLabels, MemorySource, getCategoryLabel } from './MemoryTypes.js'
+import { MemoryCategory, MemorySource, getCategoryLabel } from './MemoryTypes.js'
 
 const logger = chatLogger
 
@@ -107,8 +107,6 @@ export function parseMemorySummaryResponse(response) {
 class MemorySummarizer {
     /** @type {Object|null} */
     llmClient = null
-
-    constructor() {}
 
     /**
      * 设置 LLM 客户端
@@ -435,20 +433,17 @@ class MemorySummarizer {
         databaseService.init()
         const db = databaseService.db
         const threshold = Date.now() - daysThreshold * 24 * 60 * 60 * 1000
-
-        // 更新长时间未访问的记忆可信度
         const result = db
             .prepare(
                 `
-            UPDATE structured_memories 
-            SET confidence = MAX(confidence * ?, ?),
-                updated_at = ?
-            WHERE is_active = 1 
-            AND updated_at < ?
+            UPDATE structured_memories
+            SET confidence = MAX(confidence * ?, ?)
+            WHERE is_active = 1
+            AND COALESCE(last_access_at, updated_at) < ?
             AND confidence > ?
         `
             )
-            .run(decayRate, minConfidence, Date.now(), threshold, minConfidence)
+            .run(decayRate, minConfidence, threshold, minConfidence)
 
         logger.debug(`[MemorySummarizer] 衰减了 ${result.changes} 条记忆的可信度`)
 
@@ -488,35 +483,49 @@ class MemorySummarizer {
         const result = {
             extractedCount: 0,
             summarized: false,
-            cleanedCount: 0
+            cleanedCount: 0,
+            graphExtracted: false
         }
 
         try {
-            // 1. 从对话中提取记忆
+            // 优先动态解析 LLM 客户端，避免依赖外部注入的空客户端导致自动提取失效
+            let llmClient = this.llmClient
+            if (!llmClient) {
+                try {
+                    llmClient = await this.resolveLLMClient({ groupId, model: config.get('memory.model') })
+                } catch (clientErr) {
+                    logger.debug('[MemorySummarizer] 动态解析 LLM 客户端失败，回退为无 LLM 模式:', clientErr.message)
+                }
+            }
             const { memoryExtractor } = await import('./MemoryExtractor.js')
-            if (this.llmClient && !memoryExtractor.llmClient) {
-                memoryExtractor.setLLMClient(this.llmClient)
+            if (llmClient && !memoryExtractor.llmClient) {
+                memoryExtractor.setLLMClient(llmClient)
             }
 
             const extracted = await memoryExtractor.extractFromSession(userId, messages, {
                 groupId,
-                useLLM: !!this.llmClient
+                useLLM: !!llmClient
             })
             result.extractedCount = extracted.length
-
-            // 2. 如果启用总结且记忆条数超过阈值，执行智能总结
-            if (summarize) {
+            try {
+                const { knowledgeGraphExtractor } = await import('../storage/KnowledgeGraphExtractor.js')
+                const scopeId = groupId ? `group:${groupId}:user:${userId}` : `user:${userId}`
+                await knowledgeGraphExtractor.extractFromConversation(messages, scopeId, { groupId })
+                result.graphExtracted = true
+            } catch (graphErr) {
+                logger.debug('[MemorySummarizer] 知识图谱提取失败:', graphErr.message)
+            }
+            if (summarize && llmClient) {
                 const stats = await memoryService.getStats(userId)
                 if (stats.total > 20) {
                     const summaryResult = await this.summarizeUserMemories(userId, {
                         groupId,
-                        useLLM: !!this.llmClient
+                        useLLM: !!llmClient,
+                        llmClient
                     })
                     result.summarized = true
                     Object.assign(result, { summaryResult })
                 }
-
-                // 3. 清理低质量记忆
                 const cleanResult = await this.cleanupMemories(userId, {
                     groupId,
                     minConfidence: 0.3,
@@ -526,7 +535,7 @@ class MemorySummarizer {
             }
 
             logger.info(
-                `[MemorySummarizer] 对话结束处理完成: userId=${userId}, 提取=${result.extractedCount}, 总结=${result.summarized}, 清理=${result.cleanedCount}`
+                `[MemorySummarizer] 对话结束处理完成: userId=${userId}, 提取=${result.extractedCount}, 图谱=${result.graphExtracted}, 总结=${result.summarized}, 清理=${result.cleanedCount}`
             )
         } catch (error) {
             logger.error('[MemorySummarizer] 对话结束处理失败:', error.message)
@@ -555,7 +564,7 @@ class MemorySummarizer {
 
         for (const [category, rawData] of Object.entries(tree)) {
             if (!rawData || typeof rawData !== 'object') continue
-            const data = Object.assign({ label: '', count: 0, items: new Array() }, rawData)
+            const data = Object.assign({ label: '', count: 0, items: [] }, rawData)
             if (data.count > 0) {
                 report.byCategory[category] = {
                     label: data.label,

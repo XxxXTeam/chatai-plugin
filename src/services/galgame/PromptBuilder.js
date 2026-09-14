@@ -136,7 +136,7 @@ export function buildStageHint(affection, trust, env) {
  * @param {Array} triggeredEvents - 已触发事件
  * @returns {string} 可探索方向文本
  */
-export function buildExploreHints(gameState, env, triggeredEvents) {
+export function buildExploreHints(gameState, env, _triggeredEvents) {
     const hints = []
 
     // 检查 ??? 字段 - 暗示未知信息

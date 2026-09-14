@@ -232,7 +232,7 @@ class StatsService {
      * 记录消息
      * @param {Object} options
      */
-    recordMessage({ type = 'text', groupId, userId, source = 'unknown' }) {
+    recordMessage({ type = 'text', groupId, userId, source: _source = 'unknown' }) {
         this.init()
 
         this.stats.messages.total++

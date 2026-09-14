@@ -18,7 +18,6 @@ const ensureScopeManager = async () => {
     return scopeManager
 }
 
-// ==================== 用户作用域 ====================
 router.get('/users', async (req, res) => {
     try {
         const sm = await ensureScopeManager()
@@ -59,7 +58,6 @@ router.delete('/user/:userId', async (req, res) => {
     }
 })
 
-// ==================== 私聊作用域 ====================
 router.get('/privates', async (req, res) => {
     try {
         const sm = await ensureScopeManager()
@@ -100,7 +98,6 @@ router.delete('/private/:userId', async (req, res) => {
     }
 })
 
-// ==================== 群组作用域 ====================
 router.get('/groups', async (req, res) => {
     try {
         const sm = await ensureScopeManager()
@@ -186,7 +183,6 @@ router.delete('/group/:groupId', async (req, res) => {
     }
 })
 
-// ==================== 群用户组合作用域 ====================
 router.get('/group-users', async (req, res) => {
     try {
         const sm = await ensureScopeManager()
@@ -237,7 +233,6 @@ router.delete('/group/:groupId/user/:userId', async (req, res) => {
     }
 })
 
-// ==================== 群组知识库与继承 ====================
 router.get('/group/:groupId/knowledge', async (req, res) => {
     try {
         const sm = await ensureScopeManager()

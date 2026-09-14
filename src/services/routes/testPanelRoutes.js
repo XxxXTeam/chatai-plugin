@@ -3,6 +3,7 @@ import { channelManager } from '../llm/ChannelManager.js'
 import { statsService } from '../stats/StatsService.js'
 import { ApiResponse } from './shared.js'
 import { chatLogger } from '../../core/utils/logger.js'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 历史遗留导入，暂保留
 import config from '../../../config/config.js'
 import { resolveTemperature, resolveClientTemperature } from '../llm/TemperatureResolver.js'
 
@@ -14,6 +15,7 @@ const activeBatchTests = new Map()
 /**
  * SSE 响应辅助函数
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 历史遗留工具函数，暂保留
 function sseResponse(res) {
     res.setHeader('Content-Type', 'text/event-stream')
     res.setHeader('Cache-Control', 'no-cache')
@@ -292,7 +294,7 @@ router.post('/batch-test-stop', async (req, res) => {
         } else {
             // 停止所有测试
             let stoppedCount = 0
-            for (const [id, state] of activeBatchTests) {
+            for (const [, state] of activeBatchTests) {
                 state.aborted = true
                 stoppedCount++
             }

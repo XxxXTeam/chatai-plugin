@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import crypto from 'node:crypto'
-import { BUILTIN_PRESETS, getPresetCategories, getBuiltinPreset } from './BuiltinPresets.js'
+import { BUILTIN_PRESETS, getPresetCategories } from './BuiltinPresets.js'
 import config from '../../../config/config.js'
 import { chatLogger } from '../../core/utils/logger.js'
 
@@ -568,15 +568,31 @@ export class PresetManager {
         const e = context.event || {}
         result = result.replace(/\$\{([^}]+)\}/g, (match, expression) => {
             try {
-                const safeEval = new Function(
-                    'e',
-                    'vars',
-                    `"use strict"; try { return (${expression}); } catch { return undefined; }`
-                )
-                const value = safeEval(e, vars)
+                const expr = expression.trim()
+                // 只允许简单属性链访问，不允许函数调用、运算等
+                if (!/^[a-zA-Z_$][\w.]*$/.test(expr) || expr.includes('(') || expr.includes('[')) {
+                    logger.debug(`[PresetManager] 表达式语法限制: ${expr}`)
+                    return match
+                }
+                // 安全地按点分路径取值
+                const parts = expr.split('.')
+                let value
+                if (parts[0] === 'e') {
+                    value = e
+                    for (let i = 1; i < parts.length; i++) {
+                        if (value == null || typeof value !== 'object') break
+                        value = value[parts[i]]
+                    }
+                } else if (vars && parts[0] in vars) {
+                    value = vars[parts[0]]
+                    for (let i = 1; i < parts.length; i++) {
+                        if (value == null || typeof value !== 'object') break
+                        value = value[parts[i]]
+                    }
+                }
                 return value !== undefined ? String(value) : match
             } catch (err) {
-                logger.debug(`[PresetManager] 表达式执行失败: ${expression}`, err.message)
+                logger.debug(`[PresetManager] 表达式求值失败: ${expression}`, err.message)
                 return match
             }
         })

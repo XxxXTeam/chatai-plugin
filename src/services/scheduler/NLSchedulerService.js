@@ -300,7 +300,7 @@ class NLSchedulerService {
         const now = Date.now()
         const tasksToExecute = []
 
-        for (const [taskId, task] of this.tasks) {
+        for (const [, task] of this.tasks) {
             if (task.executed) continue
             if (task.executeAt <= now) {
                 tasksToExecute.push(task)

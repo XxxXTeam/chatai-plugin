@@ -330,8 +330,6 @@ ${yamlContent}`
         }
     }
 
-    // ========== 配置获取方法 ==========
-
     /**
      * 获取完整配置
      */
@@ -513,8 +511,6 @@ ${yamlContent}`
             DEFAULT_CONFIG.skills.security.dangerousRequiredPermission
         )
     }
-
-    // ========== 配置修改方法 ==========
 
     /**
      * 更新配置

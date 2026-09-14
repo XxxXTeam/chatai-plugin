@@ -48,7 +48,8 @@ async function fetchPublicIp(endpoint, validator, timeoutMs = 1500) {
         return null
     }
 }
-async function getLocalAddresses(port) {
+
+export async function getLocalAddresses(port) {
     const addresses = { local: [], localIPv6: [], public: null, publicIPv6: null }
 
     try {
@@ -71,7 +72,7 @@ async function getLocalAddresses(port) {
     return addresses
 }
 
-async function getPublicAddresses(port) {
+export async function getPublicAddresses(port) {
     const result = { public: null, publicIPv6: null }
     try {
         const [publicIPv4, publicIPv6] = await Promise.all([
@@ -83,6 +84,7 @@ async function getPublicAddresses(port) {
     } catch {}
     return result
 }
+
 async function getServerAddressesFast(port) {
     const addresses = { local: [], localIPv6: [], public: null, publicIPv6: null }
     try {
@@ -258,22 +260,6 @@ class FingerprintValidator {
     }
 }
 
-class RequestIdValidator {
-    constructor(maxSize = 10000) {
-        this.usedIds = new Set()
-        this.maxSize = maxSize
-    }
-    validate(id) {
-        if (this.usedIds.has(id)) return false
-        this.usedIds.add(id)
-        if (this.usedIds.size > this.maxSize) {
-            const arr = Array.from(this.usedIds)
-            this.usedIds = new Set(arr.slice(-this.maxSize / 2))
-        }
-        return true
-    }
-}
-
 /**
  * 创建基于来源 IP 的简易限流中间件
  *
@@ -369,7 +355,6 @@ class AuthHandler {
 }
 
 const fingerprintValidator = new FingerprintValidator()
-const requestIdValidator = new RequestIdValidator()
 const authHandler = new AuthHandler()
 class WebServer {
     constructor() {
@@ -762,7 +747,7 @@ class WebServer {
         this.router.use(['/api', '/mcp'], (req, res) => {
             res.status(404).json(ChaiteResponse.fail(null, `接口不存在: ${req.method} ${req.originalUrl}`))
         })
-        this.router.get('*', (req, res) => {
+        this.router.use((req, res) => {
             const webDir = path.join(__dirname, '../../resources/web')
             const reqPath = req.path.replace(/\/$/, '') || ''
             const standalonePages = ['game-edit', 'login', 'group-admin']

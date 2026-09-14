@@ -158,7 +158,7 @@ function cleanExpiredSessions() {
 }
 
 // 兼容旧API - 生成直接登录Token（已废弃，保留以兼容）
-export function generateGroupAdminToken(groupId, userId, timeout = 24 * 60 * 60) {
+export function generateGroupAdminToken(groupId, userId, _timeout = 24 * 60 * 60) {
     const { code } = generateGroupAdminLoginCode(groupId, userId)
     return code // 返回登录码而不是JWT
 }
@@ -206,8 +206,6 @@ function groupAdminAuth(req, res, next) {
     }
     next()
 }
-
-// ==================== 群管理员认证 ====================
 
 const loginAttempts = new Map() // IP -> { count, resetAt }
 function loginRateLimit(req, res, next) {
@@ -273,8 +271,6 @@ router.get('/verify', groupAdminAuth, (req, res) => {
         })
     )
 })
-
-// ==================== 群组配置管理 ====================
 
 /**
  * GET /api/group-admin/config - 获取群配置
@@ -693,10 +689,8 @@ router.put('/config', groupAdminAuth, async (req, res) => {
             imageModel: body.models?.vision,
             visionModel: body.models?.vision,
             drawModel: body.models?.image,
-            imageGenModel: body.models?.image,
             searchModel: body.models?.search,
             roleplayModel: body.models?.bym,
-            bymModel: body.models?.bym,
             profileModel: body.models?.profile,
             // 黑白名单
             listMode: body.listMode,
@@ -801,8 +795,6 @@ router.put('/config', groupAdminAuth, async (req, res) => {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
-
-// ==================== 黑白名单管理 ====================
 
 /**
  * GET /api/group-admin/blacklist - 获取黑名单
@@ -984,14 +976,11 @@ router.put('/whitelist', groupAdminAuth, async (req, res) => {
     }
 })
 
-// ==================== 定时任务管理 ====================
-
 /**
  * GET /api/group-admin/scheduler/status - 获取定时任务状态
  */
 router.get('/scheduler/status', groupAdminAuth, async (req, res) => {
     try {
-        const { groupId } = req.groupAdmin
         // 定时任务已重构，返回空状态
         res.json(ChaiteResponse.ok({ enabled: false, message: '定时任务模块已重构' }))
     } catch (error) {
@@ -1004,7 +993,6 @@ router.get('/scheduler/status', groupAdminAuth, async (req, res) => {
  */
 router.post('/scheduler/trigger', groupAdminAuth, async (req, res) => {
     try {
-        const { groupId } = req.groupAdmin
         // 定时任务已重构，此功能待重新实现
         res.json(ChaiteResponse.ok({ success: false, message: '定时总结功能已重构，请使用新的自然语言定时任务' }))
     } catch (error) {
@@ -1178,8 +1166,6 @@ router.delete('/channel', groupAdminAuth, async (req, res) => {
         res.status(500).json(ChaiteResponse.fail(null, error.message))
     }
 })
-
-// ==================== 群使用限制 ====================
 
 /**
  * GET /api/group-admin/usage-limit - 获取群使用限制配置

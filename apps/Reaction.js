@@ -5,13 +5,7 @@
  */
 import config from '../config/config.js'
 import { getBotIds } from '../src/utils/messageDedup.js'
-import {
-    parseReactionEvent,
-    getUserNickname,
-    getOriginalMessage,
-    sendGroupMessage,
-    getBot
-} from '../src/utils/eventAdapter.js'
+import { parseReactionEvent, getUserNickname, getOriginalMessage, sendGroupMessage } from '../src/utils/eventAdapter.js'
 import { galgameService } from '../src/services/galgame/GalgameService.js'
 import { getAIResponse } from '../src/utils/common.js'
 import { StandardBotApi } from '../src/core/platform/index.js'

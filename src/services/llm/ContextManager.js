@@ -6,6 +6,7 @@
 
 import { chatLogger } from '../../core/utils/logger.js'
 const logger = chatLogger
+import crypto from 'node:crypto'
 import { redisClient } from '../../core/cache/RedisClient.js'
 import config from '../../../config/config.js'
 import historyManager from '../../core/utils/history.js'
@@ -119,7 +120,8 @@ export function buildGroupEnvironmentPrompt(options = {}) {
  */
 export class ContextManager {
     constructor() {
-        this.locks = new Map() // 异步锁: key -> { promise, resolve, acquiredAt }
+        this.locks = new Map() // 异步锁: key -> { acquiredAt, token }
+        this.lockQueues = new Map() // 锁等待队列: key -> [{ resolve }]
         this.initialized = false
         this.maxContextMessages = 20 // 最多20条上文
         this.requestCounters = new Map() // 请求计数器（用于检测并发）
@@ -142,78 +144,98 @@ export class ContextManager {
     }
 
     /**
-     * 获取异步锁 - 简洁的 Promise-based 互斥锁
-     * @param {string} key - 锁的key（conversationId）
-     * @param {number} timeout - 超时时间(ms)，默认60秒
-     * @returns {Promise<Function>} 释放锁的函数
+     * 获取异步锁 - 基于 Deferred 队列的 token 化互斥锁。
+     *
+     * 保证同一 key 下按先来后到排队，不会出现两个等待协程先后退出循环后互相覆盖锁对象的情况。
+     * 释放时必需传入 `token`，防止无主释放。
+     *
+     * @param {string} key - 锁的 key（conversationId）
+     * @param {number} timeout - 等待超时(ms)，默认 60 秒
+     * @returns {Promise<{ release: Function, token: string }>} 含释放函数与唯一 token 的对象
      */
     async acquireLock(key, timeout = 60000) {
         const maxLockDuration = Math.max(90000, timeout + 60000)
-        const startTime = Date.now()
 
-        // 等待现有锁释放
-        while (this.locks.has(key)) {
-            const existingLock = this.locks.get(key)
-
-            // 检查现有锁是否过期
-            if (existingLock && Date.now() - existingLock.acquiredAt > maxLockDuration) {
-                // 强制释放过期锁
-                this._forceRelease(key)
-                break
-            }
-
-            // 检查等待超时
-            if (Date.now() - startTime > timeout) {
-                throw new Error(`获取锁超时: ${key}`)
-            }
-
-            // 等待锁释放
-            if (existingLock?.promise) {
-                await Promise.race([
-                    existingLock.promise,
-                    new Promise(r => setTimeout(r, 1000)) // 每秒检查一次
-                ])
-            } else {
-                await new Promise(r => setTimeout(r, 100))
-            }
+        // 等待队列：resolve 函数做解锁操作
+        const waitForTurn = () => {
+            return new Promise(resolve => {
+                const existingLock = this.locks.get(key)
+                if (!existingLock) {
+                    resolve()
+                    return
+                }
+                if (Date.now() - existingLock.acquiredAt > maxLockDuration) {
+                    this._forceRelease(key)
+                    resolve()
+                    return
+                }
+                const queue = this.lockQueues.get(key) || []
+                queue.push({ resolve })
+                this.lockQueues.set(key, queue)
+            })
         }
 
-        // 创建新锁
-        let lockResolve
-        const lockPromise = new Promise(resolve => {
-            lockResolve = resolve
-        })
+        await Promise.race([
+            waitForTurn(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error(`获取锁超时: ${key}`)), timeout))
+        ])
 
+        const token = crypto.randomUUID()
         this.locks.set(key, {
             acquiredAt: Date.now(),
-            promise: lockPromise,
-            resolve: lockResolve
+            token
         })
 
-        // 返回释放函数
         let released = false
-        return () => {
-            if (!released) {
-                released = true
-                this._forceRelease(key)
+        return {
+            token,
+            release: () => {
+                if (!released) {
+                    released = true
+                    this._releaseWithQueue(key, token)
+                }
             }
         }
     }
 
     /**
-     * 内部方法：强制释放锁
+     * 释放锁并唤醒下一个等待者
+     * @private
+     */
+    _releaseWithQueue(key, token) {
+        const lock = this.locks.get(key)
+        if (lock && lock.token !== token) {
+            return
+        }
+        this.locks.delete(key)
+        const queue = this.lockQueues.get(key)
+        if (queue && queue.length > 0) {
+            const next = queue.shift()
+            if (queue.length === 0) this.lockQueues.delete(key)
+            next.resolve()
+        } else {
+            this.lockQueues.delete(key)
+        }
+    }
+
+    /**
+     * 内部方法：强制释放锁（跳过 token 校验）
      * @private
      */
     _forceRelease(key) {
-        const lock = this.locks.get(key)
-        if (lock?.resolve) {
-            lock.resolve()
-        }
         this.locks.delete(key)
+        const queue = this.lockQueues.get(key)
+        if (queue && queue.length > 0) {
+            const next = queue.shift()
+            if (queue.length === 0) this.lockQueues.delete(key)
+            next.resolve()
+        } else {
+            this.lockQueues.delete(key)
+        }
     }
 
     /**
-     * 释放锁（外部调用）
+     * 释放锁（外部调用，仅在需要无条件解锁时使用；建议使用 acquireLock 返回的 release）
      * @param {string} key
      */
     releaseLock(key) {
@@ -548,10 +570,13 @@ export class ContextManager {
         const groupUserIsolation = isolation.groupUserIsolation ?? false
         const privateIsolation = isolation.privateIsolation ?? true
 
+        // 归一化 userId：确保类型与格式一致，防止同一用户产生多个会话键
+        const normalizedUserId = String(userId ?? '').trim()
+
         if (groupId) {
             if (groupUserIsolation) {
                 // 群聊用户隔离：每个用户独立上下文
-                return `group:${groupId}:user:${userId}`
+                return `group:${groupId}:user:${normalizedUserId}`
             }
             // 群聊共享：同一群的所有用户共享上下文
             return `group:${groupId}`
@@ -559,7 +584,7 @@ export class ContextManager {
 
         if (privateIsolation) {
             // 私聊隔离：每用户独立
-            return `user:${userId}`
+            return `user:${normalizedUserId}`
         }
         // 私聊共享（罕见场景）
         return `private:shared`
@@ -628,7 +653,7 @@ export class ContextManager {
      * @param {Object} options - 额外选项
      * @returns {Array} 带用户标签的消息
      */
-    buildLabeledContext(history, currentSender = null, options = {}) {
+    buildLabeledContext(history, _currentSender = null, options = {}) {
         const { includeTimestamp = false, maxAge = 0 } = options
         const now = Date.now()
         // 过滤过期消息
@@ -1038,7 +1063,7 @@ export class ContextManager {
      * @returns {Promise<string>}
      */
     async buildGroupContextSummary(groupId, options = {}) {
-        const { includeMembers = true, includeTopics = true, maxLength = 500 } = options
+        const { maxLength = 500 } = options
 
         const cached = this.getCachedGroupContext(groupId)
         if (cached?.summary) {
@@ -1085,7 +1110,7 @@ export class ContextManager {
     async getChatHistoryGroup(group, num = 20, options = {}) {
         if (!group) return []
 
-        const { formatMessages = false } = options
+        const { formatMessages: _formatMessages = false } = options
         // QQBot 没有按 offset 拉取历史的协议；其 group.getChatHistory(seq)
         // 实际上把 seq 当作 message_id 查本地缓存。必须使用群对象携带的
         // 最新消息 ID 作为锚点，并且全程保留 OpenID 字符串，不能 Number()。
@@ -1716,8 +1741,6 @@ export class ContextManager {
 
         return { text: quoteText, chain }
     }
-
-    // ========== 上下文压缩与 Skills 重注入 ==========
 
     /**
      * 获取上下文压缩配置

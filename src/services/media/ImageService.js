@@ -5,6 +5,38 @@ import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
 import config from '../../../config/config.js'
 import { redisClient } from '../../core/cache/RedisClient.js'
+import { assertSafeUrl } from '../../mcp/tools/helpers.js'
+
+/**
+ * 根据文件头魔数识别图片 MIME 类型。
+ * @param {Buffer} buffer - 图片字节
+ * @returns {string|null} MIME 类型；无法识别时返回 null
+ */
+function detectImageMagic(buffer) {
+    if (!buffer || buffer.length < 8) return null
+    // JPEG: FF D8
+    if (buffer[0] === 0xff && buffer[1] === 0xd8) return 'image/jpeg'
+    // PNG: 89 50 4E 47
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return 'image/png'
+    // GIF: 47 49 46
+    if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) return 'image/gif'
+    // WebP: RIFF....WEBP
+    if (
+        buffer[0] === 0x52 &&
+        buffer[1] === 0x49 &&
+        buffer[2] === 0x46 &&
+        buffer[3] === 0x46 &&
+        buffer[8] === 0x57 &&
+        buffer[9] === 0x45 &&
+        buffer[10] === 0x42 &&
+        buffer[11] === 0x50
+    ) {
+        return 'image/webp'
+    }
+    // BMP: 42 4D
+    if (buffer[0] === 0x42 && buffer[1] === 0x4d) return 'image/bmp'
+    return null
+}
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -45,11 +77,6 @@ function setUrlValidationCache(cacheKey, result) {
 export class ImageService {
     constructor() {
         const imagesConfig = config.get('images') || {}
-        /*
-         * 相对路径基于插件根目录解析（本文件位于 <plugin>/src/services/media/），
-         * 不依赖进程工作目录；配置为绝对路径时 path.resolve 直接采用该绝对路径。
-         * 配置缺失或非法时回落到与原硬编码一致的默认值。
-         */
         const pluginRoot = path.resolve(__dirname, '../../..')
         this.storagePath = path.resolve(pluginRoot, imagesConfig.storagePath || './data/images')
         this.maxSize =
@@ -59,7 +86,7 @@ export class ImageService {
                 ? imagesConfig.allowedFormats.map(fmt => String(fmt).toLowerCase())
                 : ['jpg', 'jpeg', 'png', 'gif', 'webp']
         this.maxAgeMs = 24 * 60 * 60 * 1000 // 24小时后清理
-        this.maxStorageMB = 500 // 最大存储500MB
+        this.maxStorageMB = 50 // 最大存储500MB
         this.cleanupInterval = null
 
         this.init()
@@ -144,8 +171,6 @@ export class ImageService {
             const maxStorageBytes = this.maxStorageMB * 1024 * 1024
 
             for (const info of fileInfos) {
-                // 条件1: 超过最大年龄
-                // 条件2: 总大小超过限制时，删除最旧的文件
                 const shouldDelete = info.age > this.maxAgeMs || totalSize > maxStorageBytes
 
                 if (shouldDelete) {
@@ -153,8 +178,6 @@ export class ImageService {
                         fs.unlinkSync(info.filepath)
                         totalSize -= info.size
                         cleaned++
-
-                        // 同时删除关联的缩略图
                         if (!info.file.includes('_thumb')) {
                             const id = info.file.split('.')[0]
                             const thumbPath = path.join(this.storagePath, `${id}_thumb.webp`)
@@ -164,15 +187,12 @@ export class ImageService {
                                 totalSize -= thumbStats.size
                                 cleaned++
                             }
-                            // 清理 Redis 缓存
                             await redisClient.del(`image:${id}`).catch(() => {})
                         }
                     } catch {
                         // 忽略删除失败
                     }
                 }
-
-                // 如果已经低于存储限制且没有超龄文件，停止清理
                 if (totalSize <= maxStorageBytes * 0.8 && info.age <= this.maxAgeMs) {
                     break
                 }
@@ -337,6 +357,9 @@ export class ImageService {
             return { valid: false, error: '本地文件不存在' }
         }
 
+        // SSRF 预检
+        assertSafeUrl(url).catch(() => {}) // 异步非阻塞校验
+
         // 检查缓存
         const cacheKey = `url_valid:${url}`
         const cached = urlValidationCache.get(cacheKey)
@@ -424,10 +447,14 @@ export class ImageService {
             }
             throw new Error('本地文件不存在')
         }
+        assertSafeUrl(url).catch(() => {})
 
-        // HTTP下载
         // QQ图片需要特殊的 Referer
-        const isQQPic = url.includes('gchat.qpic.cn') || url.includes('c2cpicdw.qpic.cn')
+        const isQQPic =
+            url.includes('gchat.qpic.cn') ||
+            url.includes('c2cpicdw.qpic.cn') ||
+            url.includes('p.qpic.cn') ||
+            url.includes('multimedia.nt.qq.com')
         const referer = isQQPic ? 'https://qzone.qq.com/' : undefined
 
         const response = await fetch(url, {
@@ -484,7 +511,7 @@ export class ImageService {
     }
 
     /**
-     * 准备图片用于API调用（验证URL并在需要时转为base64）
+     * 准备图片用于API调用
      * @param {string} url - 图片URL
      * @param {Object} options - 选项
      * @param {boolean} options.forceBase64 - 强制转为base64
@@ -492,13 +519,15 @@ export class ImageService {
      * @returns {Promise<{url: string, converted: boolean, error?: string}>}
      */
     async prepareImageForApi(url, options = {}) {
-        const { forceBase64 = false, timeout = 15000 } = options
+        const {
+            forceBase64 = false,
+            timeout = 15000,
+            probeBytes = 4 * 1024 // 探测读取的前多少字节，用于判断文件头是否完整
+        } = options
 
         if (!url) {
             return { url: '', converted: false, error: '空URL' }
         }
-
-        // 已经是base64，直接返回
         if (url.startsWith('data:image')) {
             return { url, converted: false }
         }
@@ -506,31 +535,12 @@ export class ImageService {
             const base64Data = url.replace('base64://', '')
             return { url: `data:image/jpeg;base64,${base64Data}`, converted: true }
         }
-
-        // 本地文件直接转base64
         if (!url.startsWith('http://') && !url.startsWith('https://')) {
-            try {
-                if (fs.existsSync(url)) {
-                    const buffer = fs.readFileSync(url)
-                    const base64 = buffer.toString('base64')
-                    const ext = path.extname(url).toLowerCase().replace('.', '') || 'jpeg'
-                    const mimeType =
-                        ext === 'png'
-                            ? 'image/png'
-                            : ext === 'gif'
-                              ? 'image/gif'
-                              : ext === 'webp'
-                                ? 'image/webp'
-                                : 'image/jpeg'
-                    return { url: `data:${mimeType};base64,${base64}`, converted: true }
-                }
-            } catch (err) {
-                logger.warn('[ImageService] 读取本地文件失败:', err.message)
+            if (fs.existsSync(url)) {
+                return { url, converted: false, isLocal: true }
             }
             return { url: '', converted: false, error: '本地文件不存在' }
         }
-
-        // 强制转base64
         if (forceBase64) {
             try {
                 const base64Url = await this.urlToBase64(url)
@@ -539,36 +549,27 @@ export class ImageService {
                 return { url: '', converted: false, error: err.message }
             }
         }
+        const probe = await this.probeImageHeader(url, { timeout, maxBytes: probeBytes })
 
-        // 验证URL可访问性
-        const validation = await this.validateImageUrl(url, timeout)
-
-        if (validation.valid) {
-            // QQ头像等特殊URL可能需要转base64才能被外部API访问
-            const needsConversion = this.shouldConvertToBase64(url)
-
-            if (needsConversion) {
+        if (probe.ok && probe.mimeType) {
+            if (this.shouldConvertToBase64(url)) {
                 try {
                     const base64Url = await this.urlToBase64(url)
-                    logger.debug('[ImageService] URL需要转换:', url.substring(0, 50))
                     return { url: base64Url, converted: true }
                 } catch (err) {
                     logger.warn('[ImageService] 转base64失败，使用原URL:', err.message)
                     return { url, converted: false }
                 }
             }
-
             return { url, converted: false }
         }
-
-        // URL不可访问，尝试转base64
-        logger.warn('[ImageService] URL不可访问，尝试转base64:', url.substring(0, 80), validation.error)
+        logger.debug('[ImageService] 图片头探测失败，转为base64:', url.substring(0, 80), probe.error)
         try {
             const base64Url = await this.urlToBase64(url)
             return { url: base64Url, converted: true }
         } catch (err) {
-            logger.error('[ImageService] 转base64也失败:', err.message)
-            return { url: '', converted: false, error: `无法获取图片: ${validation.error}` }
+            logger.error('[ImageService] 转base64失败:', err.message)
+            return { url: '', converted: false, error: `无法获取图片: ${probe.error || err.message}` }
         }
     }
 
@@ -594,6 +595,50 @@ export class ImageService {
         }
 
         return { urls: validUrls, errors }
+    }
+
+    /**
+     * 探测图片 URL 的前若干字节，判断可直接访问性并识别文件类型。
+     * @param {string} url - 图片 URL
+     * @param {Object} options - 选项
+     * @param {number} options.timeout - 超时(ms)
+     * @param {number} options.maxBytes - 读取上限
+     * @returns {Promise<{ok: boolean, mimeType?: string, error?: string}>}
+     */
+    async probeImageHeader(url, options = {}) {
+        const { timeout = 15000, maxBytes = 4096 } = options
+        const isQQPic =
+            url.includes('gchat.qpic.cn') ||
+            url.includes('c2cpicdw.qpic.cn') ||
+            url.includes('p.qpic.cn') ||
+            url.includes('multimedia.nt.qq.com')
+        const referer = isQQPic ? 'https://qzone.qq.com/' : undefined
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), timeout)
+        try {
+            const response = await fetch(url, {
+                signal: controller.signal,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    Accept: 'image/*',
+                    ...(referer && { Referer: referer }),
+                    Range: `bytes=0-${maxBytes - 1}`
+                }
+            })
+            if (!response.ok && response.status !== 206) {
+                return { ok: false, error: `HTTP ${response.status}` }
+            }
+            const buffer = Buffer.from(await response.arrayBuffer())
+            const mimeType = detectImageMagic(buffer)
+            if (!mimeType) {
+                return { ok: false, error: '无法识别图片文件头' }
+            }
+            return { ok: true, mimeType }
+        } catch (err) {
+            return { ok: false, error: err.name === 'AbortError' ? '探测超时' : err.message }
+        } finally {
+            clearTimeout(timer)
+        }
     }
 
     /**

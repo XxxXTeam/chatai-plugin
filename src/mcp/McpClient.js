@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import crypto from 'node:crypto'
+import { Readable } from 'node:stream'
 import { StringDecoder } from 'node:string_decoder'
 import { EventSource } from 'eventsource'
 import { chatLogger } from '../core/utils/logger.js'
@@ -890,15 +891,28 @@ export class McpClient {
         logger.debug(`[MCP] Connecting to SSE endpoint: ${url}`)
 
         // 使用 node-fetch 以支持现有 ProxyService 的 HTTP Agent。
+        // eventsource v5 要求 fetch 响应 body 是 Web ReadableStream（含 getReader）；
+        // node-fetch 3 的 body 是 Node 流，需用 Readable.toWeb 转换，否则 v5 会以
+        // "Invalid response body" 直接 fail 连接，SSE 完全不可用。
         const eventSourceOptions = {
             fetch: async (input, init) => {
                 const targetUrl = String(input)
                 const nodeFetch = (await import('node-fetch')).default
-                return nodeFetch(targetUrl, {
+                const response = await nodeFetch(targetUrl, {
                     ...init,
                     ...proxyService.getFetchOptions(targetUrl, 'api'),
                     headers: { ...init?.headers, ...headers }
                 })
+                if (response.body && typeof response.body.getReader !== 'function') {
+                    // 仅对成功响应做 Web 流转换；错误响应保持原样便于 v5 读取状态
+                    const webStream = Readable.toWeb(response.body)
+                    return new Response(webStream, {
+                        status: response.status,
+                        statusText: response.statusText,
+                        headers: response.headers
+                    })
+                }
+                return response
             }
         }
 
@@ -1614,8 +1628,6 @@ export class McpClient {
                 })
             }
             return this.validateHttpResult(message.result)
-        } catch (error) {
-            throw error
         } finally {
             clearTimeout(timer)
             this.httpAbortControllers.delete(controller)

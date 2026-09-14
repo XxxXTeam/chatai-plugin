@@ -85,7 +85,7 @@ export class ChatService {
         const pureUserId = fullUserId
         const groupId = options.groupId || options.event?.group_id || options.event?.data?.group_id || null
         const conversationId = groupId ? `group:${groupId}` : contextManager.getConversationId(pureUserId, null)
-        const releaseLock = await contextManager.acquireLock(`chat:${conversationId}`, 1800000)
+        const { release: releaseLock } = await contextManager.acquireLock(`chat:${conversationId}`, 1800000)
 
         try {
             return await this._sendMessageImpl(options)
@@ -143,7 +143,6 @@ export class ChatService {
             presetId,
             adapterType,
             event, // Yunzai事件对象，用于工具上下文
-            mode = 'chat',
             debugMode = false, // 调试模式
             prefixPersona = null, // 前缀人格（独立于普通人设）
             disableTools = false, // 禁用工具调用（用于防止递归）
@@ -181,13 +180,11 @@ export class ChatService {
         const groupId = options.groupId || event?.group_id || event?.data?.group_id || null
 
         // 保留协议端用户 ID 原值；QQBot OpenID 与频道 ID 可能包含下划线
-        const pureUserId = (event?.user_id || event?.sender?.user_id || userId)?.toString()
+        const pureUserId = String(event?.user_id ?? event?.sender?.user_id ?? userId).trim()
         const cleanUserId = pureUserId
 
         // 统一初始化 ScopeManager（整个方法内复用同一实例）
         const sm = await ensureScopeManager()
-
-        // ==================== 群组使用限制检查 ====================
         if (groupId) {
             // 检查使用次数限制
             const usageCheck = await sm.checkUsageLimit(String(groupId), cleanUserId)
@@ -207,7 +204,6 @@ export class ChatService {
             }
         }
 
-        // ==================== 群独立渠道配置 ====================
         let groupChannelConfig = null
         if (groupId) {
             groupChannelConfig = await sm.getGroupChannelConfig(String(groupId))
@@ -227,32 +223,15 @@ export class ChatService {
             }
         }
 
-        // 群聊始终使用共享上下文，确保所有用户能看到彼此的对话
-        // 用户独立人设通过 systemPrompt 实现，而非隔离历史记录
+        // 群聊：始终使用共享的群组上下文 group:${groupId}
+        // 用户独立上下文通过 personalContext 注入 system prompt，而非隔离历史
         let conversationId
         if (groupId) {
-            // 群聊：始终使用共享的群组上下文 group:${groupId}
-            // 这样所有用户的消息都在同一历史中，AI可以看到完整对话
             conversationId = `group:${groupId}`
             logger.debug(`[ChatService] 群聊共享上下文: ${conversationId}`)
         } else {
             // 私聊：使用用户独立上下文
             conversationId = contextManager.getConversationId(cleanUserId, null)
-        }
-
-        // 检查用户是否有独立人设（用于后续 systemPrompt 构建，不影响历史共享）
-        let hasIndependentPersona = false
-        if (groupId) {
-            try {
-                const groupUserSettings = await sm.getGroupUserSettings(String(groupId), cleanUserId)
-                const userSettings = await sm.getUserSettings(cleanUserId)
-                if (groupUserSettings?.systemPrompt || userSettings?.systemPrompt) {
-                    hasIndependentPersona = true
-                    logger.debug(`[ChatService] 用户 ${cleanUserId} 有独立人设，但历史仍共享`)
-                }
-            } catch (e) {
-                logger.debug(`[ChatService] 检查独立人设失败: ${e.message}`)
-            }
         }
 
         // 构建消息内容
@@ -268,18 +247,19 @@ export class ChatService {
                 // 如果是 image_url 类型对象（来自 messageParser）
                 if (imageRef && typeof imageRef === 'object') {
                     if (imageRef.type === 'image_url' && imageRef.image_url?.url) {
-                        // 直接使用URL
-                        messageContent.push({
-                            type: 'image_url',
-                            image_url: { url: imageRef.image_url.url }
+                        // 预检可达性；QQ图床/内网等需转 base64，否则远端读不到
+                        const prepared = await imageService.prepareImageForApi(imageRef.image_url.url, {
+                            timeout: 8000
                         })
+                        if (prepared.url) {
+                            messageContent.push({ type: 'image_url', image_url: { url: prepared.url } })
+                        }
                         continue
                     } else if (imageRef.type === 'url' && imageRef.url) {
-                        // URL引用格式
-                        messageContent.push({
-                            type: 'image_url',
-                            image_url: { url: imageRef.url }
-                        })
+                        const prepared = await imageService.prepareImageForApi(imageRef.url, { timeout: 8000 })
+                        if (prepared.url) {
+                            messageContent.push({ type: 'image_url', image_url: { url: prepared.url } })
+                        }
                         continue
                     } else if (imageRef.type === 'video_info' && imageRef.url) {
                         // 视频信息 - 作为文本描述添加
@@ -298,12 +278,12 @@ export class ChatService {
 
                 // 字符串格式处理
                 if (typeof imageRef === 'string') {
-                    // 如果是HTTP URL，直接使用
+                    // 如果是HTTP URL，先预检可达性，QQ图床/内网转 base64
                     if (imageRef.startsWith('http://') || imageRef.startsWith('https://')) {
-                        messageContent.push({
-                            type: 'image_url',
-                            image_url: { url: imageRef }
-                        })
+                        const prepared = await imageService.prepareImageForApi(imageRef, { timeout: 8000 })
+                        if (prepared.url) {
+                            messageContent.push({ type: 'image_url', image_url: { url: prepared.url } })
+                        }
                         continue
                     }
 
@@ -434,7 +414,6 @@ export class ChatService {
             userId: event?.user_id || userId
         })
         const toolsAllowed = !disableTools && presetEnableTools && scopeToolsEnabled && toolApprovalMode !== 'ask'
-        const hasImages = images.length > 0
         let allTools = []
         const skillToolConstraints = getSkillToolConstraints({ message })
 
@@ -544,7 +523,6 @@ export class ChatService {
                 channel: targetChannel
             })
         const thinkingOptions = resolveThinkingOptions(channel)
-        const effectiveEnableReasoning = thinkingOptions.enableReasoning
         const resolveToolChoiceForChannel = targetChannel => {
             if (!toolsAllowed) return { type: 'none' }
             return resolveConfiguredToolChoice({
@@ -679,6 +657,8 @@ export class ChatService {
         }
         let systemPrompt = defaultPrompt
         let personalTagDefinitions = new Map()
+        let isolatedConversationId = null
+        let lastPersonaSource = null
 
         // skipPersona 模式：跳过人设获取，使用空的 systemPrompt（用于总结等场景）
         if (skipPersona) {
@@ -707,6 +687,26 @@ export class ChatService {
                         logger.debug(`[ChatService] 使用独立人设 (来源: ${independentResult.source})`)
                     }
                 }
+
+                // 独立人设上下文隔离：仅当配置开启且人设来源非默认时生效
+                const isolateCfg = config.get('personality.isolateContext') || {}
+                if (isolateCfg.enabled === true && independentResult.isIndependent) {
+                    isolatedConversationId = `${conversationId}:persona:${independentResult.source}`
+                    if (
+                        isolateCfg.clearOnSwitch === true &&
+                        lastPersonaSource !== null &&
+                        lastPersonaSource !== independentResult.source
+                    ) {
+                        try {
+                            await presetManager.markContextCleared(isolatedConversationId)
+                            logger.debug(`[ChatService] 人设切换，已清除独立上下文: ${isolatedConversationId}`)
+                        } catch (clearErr) {
+                            logger.debug('[ChatService] 清除独立上下文失败:', clearErr.message)
+                        }
+                    }
+                    lastPersonaSource = independentResult.source
+                    logger.debug(`[ChatService] 使用独立人设上下文: ${isolatedConversationId}`)
+                }
                 // 收集 scope 调试信息
                 if (debugInfo) {
                     debugInfo.scope = {
@@ -716,7 +716,7 @@ export class ChatService {
                         promptSource: independentResult.source,
                         presetSource: scopePresetSource || 'default',
                         presetId: scopePresetId || effectivePresetId,
-                        conversationId,
+                        conversationId: isolatedConversationId || conversationId,
                         hasPrefixPersona: !!prefixPersona
                     }
                 }
@@ -733,20 +733,12 @@ export class ChatService {
             // 保存原有的基础人设用于合并
             const basePrompt = systemPrompt
 
-            if (prefixPreset) {
+            if (prefixPreset?.systemPrompt) {
                 prefixPresetId = prefixPersona
-                const prefixPromptText = prefixPreset.systemPrompt || ''
-                // 合并模式：前缀人格 + 基础人设（如果前缀人格不为空）
-                if (prefixPromptText) {
-                    // 前缀人格覆盖基础人设，但保留基础人设作为补充
-                    systemPrompt = prefixPromptText
-                    if (basePrompt && basePrompt !== prefixPromptText) {
-                        // 可选：将基础人设作为额外上下文附加（如果需要保留）
-                        logger.debug(`[ChatService] 前缀人格已覆盖基础人设 (基础人设长度: ${basePrompt.length})`)
-                    }
-                }
+                // 前缀预设存在时拼接到 base 之前，除非显式覆盖
+                systemPrompt = prefixPreset.systemPrompt + (basePrompt ? '\n\n' + basePrompt : '')
                 logger.debug(
-                    `[ChatService] 使用前缀人格预设: ${prefixPresetId} (${prefixPreset.name || prefixPresetId})`
+                    `[ChatService] 使用前缀人格预设 (拼接模式): ${prefixPresetId} (${prefixPreset.name || prefixPresetId})`
                 )
             } else {
                 // 纯文本前缀人格 - 作为附加内容而不是完全覆盖
@@ -1930,7 +1922,6 @@ export class ChatService {
             logger.warn('[ChatService] 检查自动结束失败:', e.message)
         }
 
-        // ==================== 记录群组使用次数 ====================
         if (groupId && finalResponse?.length > 0) {
             try {
                 const usageResult = await sm.incrementUsage(String(groupId), cleanUserId)
@@ -1986,7 +1977,7 @@ export class ChatService {
         yield* response.response
     }
 
-    async getHistory(userId, limit = 20, groupId = null) {
+    async getHistory(userId, _limit = 20, groupId = null) {
         await contextManager.init()
         const conversationId = contextManager.getConversationId(userId, groupId)
         return await historyManager.getHistory(undefined, conversationId)

@@ -193,7 +193,7 @@ export const DefaultLogger = new (class DefaultLogger {
         return `${hours}:${minutes}:${seconds}.${milliseconds}`
     }
 
-    formatMessage(level, msg, args) {
+    formatMessage(level, msg, _args) {
         // 格式化前缀
         const prefix = `[${this.name}][${this.formatDate()}][${level}]`
 

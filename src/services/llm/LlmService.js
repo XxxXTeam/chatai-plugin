@@ -1,6 +1,5 @@
 import config from '../../../config/config.js'
 import { OpenAIClient, GeminiClient, ClaudeClient } from '../../core/adapters/index.js'
-import { mcpManager } from '../../mcp/McpManager.js'
 import { getAllTools, setToolContext } from '../../core/utils/toolAdapter.js'
 import { presetManager, FALLBACK_SYSTEM_PROMPT } from '../preset/PresetManager.js'
 import { channelManager } from './ChannelManager.js'

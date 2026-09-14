@@ -1496,9 +1496,6 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
                         const fileName = valData.name || val.name || '文件'
                         forwardTexts.push(`${nickname}: [文件:${fileName}]`)
                         msgInfo.content.push({ type: 'file', name: fileName })
-                    } else if (valType === 'video') {
-                        forwardTexts.push(`${nickname}: [视频]`)
-                        msgInfo.content.push({ type: 'video' })
                     } else if (valType === 'record') {
                         forwardTexts.push(`${nickname}: [语音]`)
                         msgInfo.content.push({ type: 'record' })
@@ -1597,7 +1594,13 @@ async function parseForwardMessage(e, forwardElement, depth = 0) {
  * 检查是否为QQ图片URL（需要特殊referer处理）
  */
 function isQQPicUrl(url) {
-    return url && (url.includes('gchat.qpic.cn') || url.includes('c2cpicdw.qpic.cn'))
+    return (
+        url &&
+        (url.includes('gchat.qpic.cn') ||
+            url.includes('c2cpicdw.qpic.cn') ||
+            url.includes('p.qpic.cn') ||
+            url.includes('multimedia.nt.qq.com'))
+    )
 }
 
 /**
@@ -1660,97 +1663,45 @@ function escapeRegex(str) {
 function cleanCQCode(text) {
     if (!text) return ''
 
-    return (
-        text
-            // === 先处理HTML实体编码 ===
-            .replace(/&#91;/g, '[')
-            .replace(/&#93;/g, ']')
-            .replace(/&#44;/g, ',')
-            .replace(/&amp;/g, '&')
+    return text
+        .replace(/&#91;/g, '[')
+        .replace(/&#93;/g, ']')
+        .replace(/&#44;/g, ',')
+        .replace(/&amp;/g, '&')
+        .replace(/\[CQ:reply,[^\]]+\]/g, '')
+        .replace(/\[CQ:anonymous[^\]]*\]/g, '')
+        .replace(/\[CQ:at,qq=all\]/g, '@全体成员')
+        .replace(/\[CQ:at,qq=(\d+)(?:,name=([^\],]+))?[^\]]*\]/g, (_, qq, name) => ` @${name || qq} `)
+        .replace(/\[CQ:image,[^\]]*type=flash[^\]]*\]/g, '[闪照]')
+        .replace(/\[CQ:image,[^\]]*type=show[^\]]*\]/g, '[秀图]')
+        .replace(/\[CQ:image,[^\]]+\]/g, '[图片]')
+        .replace(/\[CQ:record,[^\]]+\]/g, '[语音]')
+        .replace(/\[CQ:video,[^\]]+\]/g, '[视频]')
+        .replace(/\[CQ:file,[^\]]+\]/g, '[文件]')
+        .replace(/\[CQ:face,id=(\d+)[^\]]*\]/g, '[表情]')
+        .replace(/\[CQ:poke,qq=(\d+)[^\]]*\]/g, '[戳一戳]')
+        .replace(/\[CQ:gift,[^\]]+\]/g, '[礼物]')
+        .replace(/\[CQ:shake\]/g, '[窗口抖动]')
+        .replace(/\[CQ:rps\]/g, '[猜拳]')
 
-            // === 需要移除的CQ码（不显示任何内容）===
-            // 回复消息 - 移除（已在引用解析中处理）
-            .replace(/\[CQ:reply,[^\]]+\]/g, '')
-            // 匿名消息标记 - 移除
-            .replace(/\[CQ:anonymous[^\]]*\]/g, '')
-
-            // === @消息 ===
-            // [CQ:at,qq=123] 或 [CQ:at,qq=123,name=xxx] 或 [CQ:at,qq=all]
-            .replace(/\[CQ:at,qq=all\]/g, '@全体成员')
-            .replace(/\[CQ:at,qq=(\d+)(?:,name=([^\],]+))?[^\]]*\]/g, (_, qq, name) => ` @${name || qq} `)
-
-            // === 多媒体消息 ===
-            // 图片 [CQ:image,file=xxx,type=flash] - 闪照
-            .replace(/\[CQ:image,[^\]]*type=flash[^\]]*\]/g, '[闪照]')
-            // 图片 [CQ:image,file=xxx,type=show] - 秀图
-            .replace(/\[CQ:image,[^\]]*type=show[^\]]*\]/g, '[秀图]')
-            // 普通图片
-            .replace(/\[CQ:image,[^\]]+\]/g, '[图片]')
-            // 语音
-            .replace(/\[CQ:record,[^\]]+\]/g, '[语音]')
-            // 视频
-            .replace(/\[CQ:video,[^\]]+\]/g, '[视频]')
-            // 文件
-            .replace(/\[CQ:file,[^\]]+\]/g, '[文件]')
-
-            // === 表情类 ===
-            // QQ表情
-            .replace(/\[CQ:face,id=(\d+)[^\]]*\]/g, '[表情]')
-            // 戳一戳
-            .replace(/\[CQ:poke,qq=(\d+)[^\]]*\]/g, '[戳一戳]')
-            // 礼物
-            .replace(/\[CQ:gift,[^\]]+\]/g, '[礼物]')
-            // 窗口抖动
-            .replace(/\[CQ:shake\]/g, '[窗口抖动]')
-
-            // === 互动类 ===
-            // 猜拳
-            .replace(/\[CQ:rps\]/g, '[猜拳]')
-            // 骰子
-            .replace(/\[CQ:dice\]/g, '[骰子]')
-
-            // === 分享类 ===
-            // 链接分享 - 提取标题
-            .replace(/\[CQ:share,[^\]]*title=([^\],]+)[^\]]*\]/g, '[分享:$1]')
-            .replace(/\[CQ:share,[^\]]+\]/g, '[链接分享]')
-            // 音乐分享
-            .replace(/\[CQ:music,[^\]]*type=(\w+)[^\]]*\]/g, '[音乐:$1]')
-            // 位置分享
-            .replace(/\[CQ:location,[^\]]+\]/g, '[位置]')
-            // 推荐联系人/群
-            .replace(/\[CQ:contact,type=qq[^\]]*\]/g, '[推荐好友]')
-            .replace(/\[CQ:contact,type=group[^\]]*\]/g, '[推荐群]')
-
-            // === 卡片消息 ===
-            // JSON卡片
-            .replace(/\[CQ:json,[^\]]+\]/g, '[卡片消息]')
-            // XML卡片
-            .replace(/\[CQ:xml,[^\]]+\]/g, '[XML消息]')
-            // 装逼大图
-            .replace(/\[CQ:cardimage,[^\]]+\]/g, '[大图]')
-
-            // === 转发消息 ===
-            // 转发消息
-            .replace(/\[CQ:forward,[^\]]+\]/g, '[转发消息]')
-            // 合并转发节点
-            .replace(/\[CQ:node,[^\]]+\]/g, '')
-
-            // === 特殊消息 ===
-            // 红包
-            .replace(/\[CQ:redbag,[^\]]*title=([^\],]+)[^\]]*\]/g, '[红包:$1]')
-            .replace(/\[CQ:redbag,[^\]]+\]/g, '[红包]')
-            // TTS语音
-            .replace(/\[CQ:tts,text=([^\]]+)\]/g, '[语音:$1]')
-
-            // === 兜底处理 ===
-            // 其他未知CQ码 - 移除
-            .replace(/\[CQ:[^\]]+\]/g, '')
-
-            // === 清理格式 ===
-            // 清理多余空格
-            .replace(/\s+/g, ' ')
-            .trim()
-    )
+        .replace(/\[CQ:dice\]/g, '[骰子]')
+        .replace(/\[CQ:share,[^\]]*title=([^\],]+)[^\]]*\]/g, '[分享:$1]')
+        .replace(/\[CQ:share,[^\]]+\]/g, '[链接分享]')
+        .replace(/\[CQ:music,[^\]]*type=(\w+)[^\]]*\]/g, '[音乐:$1]')
+        .replace(/\[CQ:location,[^\]]+\]/g, '[位置]')
+        .replace(/\[CQ:contact,type=qq[^\]]*\]/g, '[推荐好友]')
+        .replace(/\[CQ:contact,type=group[^\]]*\]/g, '[推荐群]')
+        .replace(/\[CQ:json,[^\]]+\]/g, '[卡片消息]')
+        .replace(/\[CQ:xml,[^\]]+\]/g, '[XML消息]')
+        .replace(/\[CQ:cardimage,[^\]]+\]/g, '[大图]')
+        .replace(/\[CQ:forward,[^\]]+\]/g, '[转发消息]')
+        .replace(/\[CQ:node,[^\]]+\]/g, '')
+        .replace(/\[CQ:redbag,[^\]]*title=([^\],]+)[^\]]*\]/g, '[红包:$1]')
+        .replace(/\[CQ:redbag,[^\]]+\]/g, '[红包]')
+        .replace(/\[CQ:tts,text=([^\]]+)\]/g, '[语音:$1]')
+        .replace(/\[CQ:[^\]]+\]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
 }
 
 /**

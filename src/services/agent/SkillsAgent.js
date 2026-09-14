@@ -218,8 +218,6 @@ export class SkillsAgent {
         return toolFilterService.getToolCallLimits(presetId)
     }
 
-    // ========== MCP服务器管理 ==========
-
     /**
      * 获取所有MCP服务器状态
      */
@@ -401,10 +399,7 @@ export class SkillsAgent {
         }))
     }
 
-    // ========== 执行 (Execution) ==========
-
     /**
-     * 获取执行配置（从 skills.yaml）
      *
      * Skills 模块未初始化时回退到 SkillsConfig 的 DEFAULT_CONFIG，
      * 避免在此处重复维护一份易漂移的默认值
@@ -583,8 +578,6 @@ export class SkillsAgent {
         }
         return results
     }
-
-    // ========== 发现 (Discovery) ==========
 
     hasSkill(name) {
         return Boolean(this.getSkill(name))
@@ -873,7 +866,7 @@ export class SkillsAgent {
         const custom = []
         const mcp = {}
 
-        for (const [name, skill] of this.skills) {
+        for (const [, skill] of this.skills) {
             if (skill.isBuiltin) {
                 builtin.push(skill)
             } else if (skill.isJsTool || skill.isCustom) {
@@ -927,8 +920,6 @@ export async function checkToolAvailable(toolName, presetId = 'default', options
 export function getToolCallLimits(presetId = 'default') {
     return SkillsAgent.getToolCallLimits(presetId)
 }
-
-// ========== MCP服务器管理导出函数 ==========
 
 export function getMcpServers() {
     return SkillsAgent.getMcpServers()

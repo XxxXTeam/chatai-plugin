@@ -4,7 +4,7 @@
  */
 import { chatLogger } from '../../core/utils/logger.js'
 import { databaseService } from '../storage/DatabaseService.js'
-import { MemoryCategory, CategoryLabels, isValidCategory, getCategoryLabel, getSubTypeLabel } from './MemoryTypes.js'
+import { MemoryCategory, isValidCategory, getCategoryLabel, getSubTypeLabel } from './MemoryTypes.js'
 import { hashContent, isSimilarContent as isSimilarContentUtil } from '../../utils/common.js'
 
 const logger = chatLogger
@@ -103,8 +103,6 @@ class MemoryService {
             await this.init()
         }
     }
-
-    // ==================== 基础 CRUD 操作 ====================
 
     /**
      * 保存结构化记忆
@@ -398,8 +396,6 @@ class MemoryService {
         return rows.filter(Boolean)
     }
 
-    // ==================== 查询方法 ====================
-
     /**
      * 获取用户所有记忆
      * @param {string} userId
@@ -549,8 +545,6 @@ class MemoryService {
         return rows.map(row => this.mapRow(row))
     }
 
-    // ==================== 统计方法 ====================
-
     /**
      * 获取记忆统计
      */
@@ -644,8 +638,6 @@ class MemoryService {
         }))
     }
 
-    // ==================== 批量操作 ====================
-
     /**
      * 批量保存记忆
      */
@@ -731,8 +723,6 @@ class MemoryService {
         }
     }
 
-    // ==================== 辅助方法 ====================
-
     /**
      * 映射数据库行到对象
      */
@@ -750,6 +740,8 @@ class MemoryService {
             createdAt: row.created_at,
             updatedAt: row.updated_at,
             expiresAt: row.expires_at,
+            lastAccessAt: row.last_access_at,
+            accessCount: row.access_count ?? 0,
             isActive: row.is_active
         }
     }
@@ -765,8 +757,6 @@ class MemoryService {
         return hashContent(content)
     }
 
-    // ==================== 上下文构建 ====================
-
     /**
      * 构建记忆上下文（用于传递给 AI）
      * @param {string} userId
@@ -776,7 +766,7 @@ class MemoryService {
     async buildMemoryContext(userId, options = {}) {
         await this.ensureInit()
 
-        const { groupId, maxItems = 15 } = options
+        const { groupId, maxItems = 15, query = '' } = options
 
         // 获取用户记忆
         const memories = await this.getMemoriesByUser(userId, { groupId, limit: maxItems * 2 })
@@ -785,9 +775,31 @@ class MemoryService {
             return ''
         }
 
+        // 若有 query，按与当前消息的相关度重排序（相关记忆优先注入）
+        let ordered = memories
+        if (query && typeof query === 'string' && query.trim()) {
+            const tokens = query
+                .trim()
+                .split(/[\s，。！？,.!?、；;:：]+/)
+                .filter(t => t.length >= 2)
+                .slice(0, 8)
+            ordered = memories
+                .map(memory => {
+                    const content = String(memory.content || '')
+                    const hitCount = tokens.reduce((sum, token) => sum + (content.includes(token) ? 1 : 0), 0)
+                    // 相关度高者优先；无 query 命中者保持原 recency 顺序
+                    return { memory, hitCount }
+                })
+                .sort((a, b) => {
+                    if (b.hitCount !== a.hitCount) return b.hitCount - a.hitCount
+                    return b.memory.confidence - a.memory.confidence
+                })
+                .map(item => item.memory)
+        }
+
         // 按分类组织
         const byCategory = {}
-        for (const memory of memories) {
+        for (const memory of ordered) {
             if (!byCategory[memory.category]) {
                 byCategory[memory.category] = []
             }
@@ -819,6 +831,19 @@ class MemoryService {
                 .join('；')
 
             parts.push(`${label}：${contents}`)
+
+            // 命中注入即更新访问计数（异步，失败不影响主流程）
+            for (const memory of items.slice(0, 5)) {
+                const memoryId = memory.id
+                const db = databaseService.db
+                try {
+                    db.prepare(
+                        'UPDATE structured_memories SET access_count = COALESCE(access_count, 0) + 1, last_access_at = ? WHERE id = ?'
+                    ).run(Date.now(), memoryId)
+                } catch {
+                    // 忽略单条记忆访问计数失败
+                }
+            }
         }
 
         return formatUserMemoryBlock(parts)

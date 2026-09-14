@@ -251,6 +251,8 @@ function createMcpRequestContext(input = {}) {
     return {
         event: null,
         bot: globalThis.Bot || null,
+        // API Key 即主人凭证：MCP Server HTTP 端口仅供主人连接外部客户端，
+        // 持有 API Key 即视为主人，但上下文不伪造聊天事件、用户或群聊。
         isMaster: true,
         userId: null,
         groupId: null,

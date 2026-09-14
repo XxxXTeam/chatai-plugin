@@ -1,5 +1,4 @@
 import config from '../../../config/config.js'
-import { PLUGIN_DEVELOPERS } from '../../utils/common.js'
 import { isMaster as platformIsMaster } from '../../utils/platformAdapter.js'
 
 /**

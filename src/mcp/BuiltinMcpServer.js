@@ -23,8 +23,10 @@ import {
     getBotPermission,
     getGroupMemberRoleFromBot,
     isToolResultError,
-    permissionDeniedError
+    permissionDeniedError,
+    assertSafeUrl
 } from './tools/helpers.js'
+import { getSafePath } from './tools/file.js'
 
 // 懒加载统计服务
 let _statsService = null
@@ -960,11 +962,11 @@ export class BuiltinMcpServer {
      * @throws {Error} handler 抛错或超出等待上限时抛出
      */
     async executeCustomHandler(handlerCode, args, ctx) {
-        const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+        const asyncFunctionCtor = Object.getPrototypeOf(async () => {}).constructor
 
         try {
             const runtime = await this.buildToolRuntime(ctx)
-            const fn = new AsyncFunction(
+            const fn = new asyncFunctionCtor(
                 'args',
                 'ctx',
                 'fetch',
@@ -1140,6 +1142,7 @@ export class BuiltinMcpServer {
                 // HTTP 请求（默认带超时，自定义工具可通过 options.signal 自行接管）
                 http: {
                     get: async (url, options = {}) => {
+                        await assertSafeUrl(url)
                         const res = await fetch(url, {
                             method: 'GET',
                             ...options,
@@ -1148,6 +1151,7 @@ export class BuiltinMcpServer {
                         return res.json()
                     },
                     post: async (url, data, options = {}) => {
+                        await assertSafeUrl(url)
                         const res = await fetch(url, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', ...options.headers },
@@ -1163,9 +1167,15 @@ export class BuiltinMcpServer {
                 // 生成 UUID
                 uuid: () => crypto.randomUUID(),
                 // 读取文件
-                readFile: filePath => fs.readFileSync(filePath, 'utf-8'),
+                readFile: filePath => {
+                    const safePath = getSafePath(filePath)
+                    return fs.readFileSync(safePath, 'utf-8')
+                },
                 // 写入文件
-                writeFile: (filePath, content) => fs.writeFileSync(filePath, content),
+                writeFile: (filePath, content) => {
+                    const safePath = getSafePath(filePath)
+                    return fs.writeFileSync(safePath, content)
+                },
                 // 执行 shell 命令
                 exec: async cmd => {
                     // 危险命令黑名单

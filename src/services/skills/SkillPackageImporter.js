@@ -1,20 +1,3 @@
-/**
- * Skill 压缩包导入器
- *
- * 把上传的 zip 解压成一个完整的 skill 包放进技能目录。zip 解压是典型的高危操作，
- * 这里的防护分四类，全部为「拒绝整包」而非「跳过条目」——静默跳过会让用户以为导入
- * 完整、实际却缺文件，出问题时更难排查：
- *
- * 1. 路径逃逸（Zip Slip）：条目名可以是 ../../../etc/cron.d/pwn。除了在条目名层面
- *    拒绝 .. 与绝对路径，落盘前还会对 path.resolve 的结果再做一次前缀校验，两道独立；
- * 2. 符号链接条目：zip 能保存 symlink，解开后即是一条指向包外的写入通道，直接拒绝；
- * 3. 解压炸弹：条目数、单条目解压后大小、总解压大小三重上限。声明大小与实际读出的
- *    字节数都要过一遍，防止头部声明撒谎；
- * 4. 内容约束：必须且只能含一个定义入口；普通资源走扩展名白名单，scripts/ 仅允许文本脚本且落盘后不赋执行位。
- *
- * 落盘采用两阶段：先解到 temp/ 下的暂存目录，全部校验通过后再整体 rename 到位，
- * 中途失败不会在技能目录里留下半个包。
- */
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -230,8 +213,6 @@ function collectEntries(entries) {
     if (entries.length > MAX_ENTRIES) {
         throw new SkillImportError(`压缩包条目数 ${entries.length} 超出上限 ${MAX_ENTRIES}`)
     }
-
-    // 第一轮：只做条目名与元信息校验，拿到规范化名称后才能推导包根前缀
     const normalized = []
     for (const entry of entries) {
         if (isSymlinkEntry(entry)) {
@@ -403,6 +384,9 @@ export function importSkillPackage(buffer, options = {}) {
     try {
         entries = zip.getEntries()
     } catch (error) {
+        if (/duplicate entry/i.test(error.message)) {
+            throw new SkillImportError('重复的规范化路径')
+        }
         throw new SkillImportError(`压缩包解析失败: ${error.message}`)
     }
 

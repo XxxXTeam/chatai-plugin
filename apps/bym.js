@@ -1,11 +1,6 @@
 import config from '../config/config.js'
 import { cleanCQCode, segment } from '../src/utils/messageParser.js'
-import {
-    isMessageProcessed,
-    markMessageProcessed,
-    isSelfMessage,
-    isReplyToBotMessage
-} from '../src/utils/messageDedup.js'
+import { isMessageProcessed, markMessageProcessed, isSelfMessage } from '../src/utils/messageDedup.js'
 import { renderService } from '../src/services/media/RenderService.js'
 import { ensureScopeManager } from '../src/services/scope/ScopeManager.js'
 import { checkTriggerAccess, sendForwardMsg } from '../src/utils/platformAdapter.js'
@@ -223,7 +218,7 @@ export class bym extends plugin {
         try {
             markMessageProcessed(e)
             logger.debug('[BYM] 伪人模式触发')
-            const { LlmService } = await import('../src/services/llm/LlmService.js')
+            const { LlmService: llmService } = await import('../src/services/llm/LlmService.js')
             const groupBymModel = groupBymConfig?.bymModel
             const configBymModel = config.get('bym.model')
             const bymModel =
@@ -231,14 +226,14 @@ export class bym extends plugin {
                     ? groupBymModel
                     : configBymModel && typeof configBymModel === 'string' && configBymModel.trim()
                       ? configBymModel
-                      : LlmService.getModel()
+                      : llmService.getModel()
 
             if (groupBymModel && groupBymModel.trim()) {
                 logger.debug(`[BYM] 使用群组独立模型: ${bymModel}`)
             }
 
             const bymGroupIdForClient = e.group_id ? String(e.group_id) : undefined
-            const client = await LlmService.getChatClient({
+            const client = await llmService.getChatClient({
                 enableTools: false,
                 model: bymModel,
                 groupId: bymGroupIdForClient
@@ -407,7 +402,7 @@ export class bym extends plugin {
             const presetMap = config.get('bym.presetMap') || {}
             for (const [keyword, presetId] of Object.entries(presetMap)) {
                 if (messageText.includes(keyword)) {
-                    const presetPrompt = LlmService.getSystemPrompt(presetId)
+                    const presetPrompt = llmService.getSystemPrompt(presetId)
                     if (presetPrompt) {
                         systemPrompt = presetPrompt
                         logger.debug(`[BYM] 匹配关键词 "${keyword}", 使用预设 "${presetId}"`)
@@ -437,13 +432,6 @@ export class bym extends plugin {
                 }
             }
 
-            // 构建消息内容（支持图片）- 仅用于日志
-            const messageContent = [{ type: 'text', text: messageText || '[图片消息]' }]
-
-            const userMessage = {
-                role: 'user',
-                content: messageContent
-            }
             if (e.sender) {
                 systemPrompt += `\n当前对话者: ${e.sender.card || e.sender.nickname || '未知用户'}`
             }

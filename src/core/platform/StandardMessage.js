@@ -108,6 +108,25 @@ export const StandardMessage = Object.freeze({
             ...(time ? { time } : {})
         }
     },
+    /**
+     * 构造一个嵌套合并转发节点：外层大转发里的一个节点，本身又是一个合并转发。
+     * @param {string} title - 子转发的标题/昵称
+     * @param {Array} childNodes - 子节点数组（nodeItem 或 { user_id, nickname, message }）
+     */
+    nestedForward(title, childNodes) {
+        const normalizedChildren = Array.isArray(childNodes)
+            ? childNodes.map(child =>
+                  child?.type === 'node' || child?.message
+                      ? {
+                            user_id: child.user_id,
+                            nickname: child.nickname,
+                            message: normalizeStandardMessage(child.message ?? child.content ?? '')
+                        }
+                      : child
+              )
+            : []
+        return { type: 'node', data: normalizedChildren, ...(title ? { title } : {}) }
+    },
     forward(id) {
         return { type: 'forward', id }
     },

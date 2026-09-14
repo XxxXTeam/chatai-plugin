@@ -10,7 +10,6 @@
 import { chatLogger } from '../../core/utils/logger.js'
 import { skillsConfig } from './SkillsConfig.js'
 import { mcpManager } from '../../mcp/McpManager.js'
-import { builtinMcpServer } from '../../mcp/BuiltinMcpServer.js'
 import { skillDocumentLoader } from './SkillDocumentLoader.js'
 import { getToolIdentity } from '../../core/adapters/tooling.js'
 import { hasToolPermission, resolveToolPermission } from '../tools/ToolPermission.js'
@@ -330,8 +329,6 @@ class SkillsLoader {
         return { documents, loaded: this.loadedSkills.size }
     }
 
-    // ========== 工具获取方法 ==========
-
     /**
      * 获取所有工具
      */
@@ -535,8 +532,6 @@ class SkillsLoader {
         return tools
     }
 
-    // ========== 安全检查方法 ==========
-
     /**
      * 检查工具是否为危险工具
      */
@@ -577,8 +572,6 @@ class SkillsLoader {
         return true
     }
 
-    // ========== 工具过滤方法 ==========
-
     /**
      * 根据权限过滤工具
      */
@@ -610,8 +603,6 @@ class SkillsLoader {
 
         return tools.filter(tool => allowedTools.has(tool.name) || allowedTools.has(getToolIdentity(tool)))
     }
-
-    // ========== Skills 懒加载机制 ==========
 
     /**
      * 获取暴露给模型的技能列表（仅名称和描述）
