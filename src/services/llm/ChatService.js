@@ -45,6 +45,28 @@ const ensureScopeManager = async () => {
 }
 
 /**
+ * 将 messageParser 生成的内联图片对象规范化为 OpenAI 兼容的 data URL。
+ *
+ * @param {Object} imageRef - `{ type: 'image', image, mimeType }` 图片引用
+ * @returns {string|null} 可直接作为 image_url.url 使用的 data URL
+ */
+export function normalizeInlineImageDataUrl(imageRef) {
+    if (imageRef?.type !== 'image' || typeof imageRef.image !== 'string') return null
+
+    const image = imageRef.image.trim()
+    if (!image) return null
+    if (image.startsWith('data:image/')) return image
+
+    const mimeType =
+        typeof imageRef.mimeType === 'string' && /^image\/[a-z0-9.+-]+$/i.test(imageRef.mimeType)
+            ? imageRef.mimeType
+            : 'image/jpeg'
+    const base64 = image.startsWith('base64://') ? image.slice('base64://'.length) : image
+
+    return `data:${mimeType};base64,${base64}`
+}
+
+/**
  * Chat Service - 统一的聊天消息处理服务
  *
  * @description 提供 AI 对话功能，支持多模型、工具调用、上下文管理等
@@ -246,7 +268,11 @@ export class ChatService {
             try {
                 // 如果是 image_url 类型对象（来自 messageParser）
                 if (imageRef && typeof imageRef === 'object') {
-                    if (imageRef.type === 'image_url' && imageRef.image_url?.url) {
+                    const inlineImageUrl = normalizeInlineImageDataUrl(imageRef)
+                    if (inlineImageUrl) {
+                        messageContent.push({ type: 'image_url', image_url: { url: inlineImageUrl } })
+                        continue
+                    } else if (imageRef.type === 'image_url' && imageRef.image_url?.url) {
                         // 预检可达性；QQ图床/内网等需转 base64，否则远端读不到
                         const prepared = await imageService.prepareImageForApi(imageRef.image_url.url, {
                             timeout: 8000
